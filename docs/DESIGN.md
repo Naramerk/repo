@@ -36,7 +36,9 @@ class Study(BaseModel):
     request: str
     catalog_version: str       # фиксируется при создании
     hitl_policy: HitlPolicy    # §7.3
-    status: StudyStatus        # §3.1
+    deadline: datetime         # верхняя граница всего study (§3.3)
+    parent_study_id: str | None = None   # «продолжить сессию» (§3.6)
+    # статуса нет: study_view() выводится из задач (§3.2)
 
 class Hypothesis(BaseModel):
     hypothesis_id: str; statement: str; rank: int; prediction: str; selected: bool
@@ -54,26 +56,46 @@ class TaskSpec(BaseModel):
     tools_hint: list[str] = []
     expected_outputs: list[OutputSpec]
     criteria: list[RequirementRef]                     # §5
+    depends_on: list[str] = []                         # task_key
+    inputs: list[InputSpec] = []                       # что берётся от зависимостей
+
+class InputSpec(BaseModel):
+    from_task: str; output: str; schema_ref: str | None
+    simulate: Literal["schema_stub","llm_stub","forbid"] = "schema_stub"
 
 class OutputSpec(BaseModel):
     name: str; media_type: str; schema_ref: str | None; required: bool = True
 
 class Task(BaseModel):
-    task_id: str               # = f"{study_id}/{plan_id}/{task_key}"; уникален (R5)
-    spec: TaskSpec; status: TaskStatus; attempts: list[str]   # attempt_id
+    task_id: str               # = f"{study_id}/{task_key}"; уникален (R5)
+    kind: TaskKind             # spec | hypotheses | literature | plan | experiment | report
+    spec: TaskSpec
+    state: TaskState           # PENDING | RUNNING | DONE
+    outcome: TaskOutcome | None   # SUCCESS | PARTIAL | FAILED | SKIPPED, только при DONE
+    reason: str | None         # для FAILED/SKIPPED: deadline, budget, cancelled, invalid_status, ...
+    deadline: datetime         # у PENDING и RUNNING всегда есть
+    attempts: list[str]
+    inherited_from: str | None = None   # task_id в родительской сессии (§3.6)
+
+class InputBinding(BaseModel):        # как задача получила вход
+    input: str; artifact_id: str
+    source: Literal["real","partial","simulated"]
 
 class Attempt(BaseModel):
     attempt_id: str            # = f"{task_id}#{n}"
-    n: int; status: AttemptStatus
+    n: int                     # попытка — запись внутри RUNNING, не отдельное состояние
     dispatch_id: str           # ключ идемпотентности вызова маршрута
     route_returned: bool       # §3.4
+    closed: bool; close_reason: str | None
     agent_output_digest: str | None
     deadline: datetime
 
 class Result(BaseModel):
     result_id: str             # = f"{attempt_id}:result"; одна запись на попытку
     attempt_id: str
-    outcome: Outcome           # success | partial | failure — ВЫЧИСЛЕН кодом (§4)
+    outcome: Outcome           # SUCCESS | PARTIAL | FAILED — ВЫЧИСЛЕН кодом (§4)
+    inputs: list[InputBinding]
+    simulated: bool            # хоть один вход simulated (транзитивно) → outcome ≤ PARTIAL
     agent_claim: Outcome | None   # что заявил агент
     downgrade: Downgrade | None   # принят, только если claim < вычисленного и есть reason
     computed_outcome: Outcome     # до понижения, хранится всегда
@@ -89,6 +111,7 @@ class Artifact(BaseModel):
     uri: str                   # file:// или s3://
     produced_by: ToolCallRef   # §6; источник обязателен (R30)
     schema_ref: str | None
+    simulated: bool = False    # заглушка или получен из заглушки (наследуется)
 
 class EvidenceRef(BaseModel):          # модель доказательства (п.2 ревью)
     artifact_id: str
@@ -103,87 +126,73 @@ class Node(BaseModel):                 # проекция для графа/ме
 `NodeRequirement.evidence: list[EvidenceRef]`. Проверка ссылается на артефакт по id и, при необходимости,
 по json_pointer; digest фиксирует значение, на котором проверка прошла (повторная проверка на другом значении — новый CheckResult).
 
-## 3. Машина состояний
+## 3. Модель состояний
 
-### 3.1 Статусы
+### 3.1 Состояния (всё пространство)
 
 ```python
-class StudyStatus(StrEnum):
-    DRAFT; SPEC; HYPOTHESES; LITERATURE; PLANNING; PLAN_REVIEW; AWAITING_HUMAN; EXECUTING
-    REPORTING; DONE; UNFULFILLED; FAILED; CANCELLED
-class TaskStatus(StrEnum):
-    PENDING; RUNNING; SUCCEEDED; PARTIAL; FAILED; BLOCKED; SKIPPED; CANCELLED
-class AttemptStatus(StrEnum):
-    DISPATCHED; ROUTE_RETURNED; RECORDED; TIMED_OUT; CRASHED; CANCELLED
+class TaskState(StrEnum): PENDING; RUNNING; DONE
+class TaskOutcome(StrEnum): SUCCESS; PARTIAL; FAILED; SKIPPED      # только при DONE
+class Outcome(StrEnum): SUCCESS; PARTIAL; FAILED                    # результат попытки
 ```
-Нет статуса `unknown`. Значение, которое не отображается в enum (вывод агента, ответ инструмента), — `InvalidStatus`: попытка завершается `ResultRecorded(failure, retryable=True, reason=invalid_status)`, дальше T4-логика повтора. Задача не остаётся RUNNING.
+- Все стадии study — задачи одного DAG: `spec → hypotheses → literature → plan → experiment* → report`. Отдельной машины состояний study нет.
+- Нет BLOCKED, UNKNOWN, AWAITING_HUMAN, CANCELLED. Ожидание человека — открытый HitlRequest внутри RUNNING (со своим deadline). Отмена — DONE(SKIPPED, reason=cancelled).
+- Значение вне enum (из вывода агента или инструмента) → `InvalidStatus` → попытка закрывается FAILED(retryable). Хранить «неизвестный» статус негде.
 
-Терминальные статусы задачи: SUCCEEDED, PARTIAL, FAILED, SKIPPED, CANCELLED. BLOCKED не терминален и обязан выйти по T6a/T6b.
-Study: в EXECUTING добавлен подстатус `awaiting_human: bool` (проекция открытых HitlRequest), отдельный StudyStatus AWAITING_HUMAN используется только для plan_approval.
+### 3.2 Статус study — вычисляется, не хранится
 
-### 3.2 Инварианты (проверяются в `Core.apply()` на каждом событии)
+```python
+def study_view(tasks) -> StudyView:
+    if any(t.state != DONE for t in tasks):
+        return StudyView(phase="running", progress=done/total, awaiting_human=open_hitl > 0)
+    req = [t for t in tasks if t.spec.required]
+    if all(t.outcome == SUCCESS for t in req): verdict = "fulfilled"
+    elif plan_task.outcome in {FAILED, SKIPPED} or all(t.outcome in {FAILED, SKIPPED} for t in req): verdict = "failed"
+    else: verdict = "partial"
+    return StudyView(phase="closed", verdict=verdict, ...)
+```
+B1 невозможен по построению: «closed» требует state=DONE у всех задач, а DONE всегда несёт outcome из enum. Тест: `test_b1_closed_only_when_all_tasks_done`.
 
-- I1. Study → DONE только если все задачи терминальны, все required-задачи SUCCEEDED, нет нетерминальных задач. Иначе → UNFULFILLED (все терминальны, но есть required не SUCCEEDED) или остаётся EXECUTING. (B1)
-- I2. У задачи не больше одной нетерминальной попытки.
-- I3. Result записывается только для попытки в ROUTE_RETURNED; один result_id на попытку.
-- I4. Result.outcome = f(check_results) (§4.2); agent_claim только понижает.
-- I5. task_key уникален в плане и не меняется после принятия плана; восстановление не переназначает ключи. (R5)
-- I6. Попытка с истёкшим deadline не остаётся DISPATCHED/ROUTE_RETURNED дольше одного тика планировщика. (R4)
-- I7. Study в AWAITING_HUMAN имеет `hitl_deadline`; по истечении применяется политика (§7.3). (R2)
-- I8. Каждый Artifact имеет sha256 и produced_by. (R30)
+### 3.3 Переходы
 
-### 3.3 Таблица переходов
-
-| # | Сущность: из → в | Событие | Кто | Условие |
+| # | Переход | Событие | Кто | Условие |
 |---|---|---|---|---|
-| S1 | Study DRAFT → SPEC → HYPOTHESES | `StudyCreated`, `SpecAccepted` | API, код | профиль загружен, каталог валиден; ResearchSpec валиден (§7.5) |
-| S2 | HYPOTHESES → LITERATURE | `HypothesesAccepted` | код | агент вернул `HypothesesOut`, схема ок, ровно одна selected |
-| S3 | LITERATURE → PLANNING | `LiteratureRecorded` | код | `LiteratureOut` записан, проверки литературы посчитаны (не обязательно met) |
-| S4 | PLANNING → PLAN_REVIEW | `PlanProposed` | код | `PlanOut` валиден по схеме; ключи EXP-n назначены |
-| S5 | PLAN_REVIEW → PLANNING | `PlanRejected` | код по вердикту критика | verdict=revise и revision < max_plan_revisions |
-| S6 | PLAN_REVIEW → AWAITING_HUMAN | `HumanApprovalRequested` | код | политика требует человека |
-| S7 | PLAN_REVIEW/AWAITING_HUMAN → EXECUTING | `PlanAccepted` | код (вердикт критика или HITL-решение или политика по таймауту) | §7.3 |
-| S8 | PLAN_REVIEW → FAILED | `PlanRejectedFinal` | код | revision = max_plan_revisions и verdict≠accept |
-| T1 | Task PENDING → RUNNING | `AttemptDispatched` | планировщик (код) | зависимости терминальны, лимит параллельности |
-| T2 | Attempt DISPATCHED → ROUTE_RETURNED | `RouteReturned` | адаптер ADK (код) | агент маршрута вернул ответ; сохранён digest вывода |
-| T3 | Attempt ROUTE_RETURNED → RECORDED; Task → SUCCEEDED/PARTIAL/FAILED | `ResultRecorded` | исполнитель (код) | §4 |
-| T4 | Attempt DISPATCHED → TIMED_OUT; Task → PENDING (retry) или FAILED | `AttemptTimedOut` | планировщик (код) | now > deadline; retry если retryable и n < max_attempts |
-| T6 | Task → BLOCKED | `TaskBlocked` | код | обязательная зависимость FAILED |
-| T7 | Task → SKIPPED | `TaskSkipped` | HITL-решение | только required=false или решение человека с причиной |
-| T8 | Task FAILED/PARTIAL → PENDING | `TaskRetried` | HITL или политика | n < max_attempts; старые попытки сохраняются (R05) |
-| S9 | EXECUTING → REPORTING | `ExecutionClosed` | код | все задачи терминальны |
-| S10 | REPORTING → DONE / UNFULFILLED | `StudyClosed` | код | I1 |
-| S11 | любой нетерминальный → CANCELLED | `StudyCancelled` | API | — |
-| S12 | HYPOTHESES / LITERATURE → FAILED | `StageFailed` | код | вывод агента невалиден после 1 повтора схемы или бюджет стадии исчерпан |
-| S13 | PLAN_REVIEW → FAILED | `PlanRejectedFinal` | код | critic verdict=reject при любой revision (reject ≠ revise) |
-| S14 | AWAITING_HUMAN → PLANNING | `PlanRejected` | HITL decision=revise | revision < max; иначе S15 |
-| S15 | AWAITING_HUMAN → FAILED | `PlanRejectedFinal` | HITL decision=reject; политика on_timeout=reject\|fail; revise при revision=max | — |
-| S16 | AWAITING_HUMAN → AWAITING_HUMAN | `HitlTimedOut(action=pause)` | планировщик | on_timeout=pause: событие с причиной, статус не меняется, ждём бесконечно, но видимо (§7.3) |
-| T4a | Attempt ROUTE_RETURNED → RECORDED (failure, retryable) | `RecordTimedOut` | планировщик | запись не завершена за record_deadline (I6) |
-| T5 | Attempt → CRASHED; Task → PENDING (retryable, n < max_attempts) или FAILED | `AttemptCrashed` | recover | §3.4 |
-| T6a | Task BLOCKED → SKIPPED | `TaskSkipped(reason=dependency_failed)` | код | задача required=false |
-| T6b | Task BLOCKED → FAILED | `TaskFailed(reason=dependency_failed)` | код | задача required=true |
-| T9 | ReviewCheck PENDING → UNASSESSED | `ReviewDeadlineExpired` | планировщик | now > review_deadline; затем повторный compute_outcome |
-| T10 | Task нетерминальная → CANCELLED | `TaskCancelled` | API / HITL | текущая попытка CANCELLED, её job отменяется (§6.4) |
-| T11 | Study EXECUTING: awaiting_human true/false | `HitlRequested` / `HitlResolved` | код | result_acceptance, skip_task; задача ждёт в RUNNING с флагом |
+| P1 | — → PENDING | `TaskCreated` | код | study создан (стадии) или план принят (эксперименты); ключ назначен ядром |
+| P2 | PENDING → RUNNING | `AttemptStarted` | планировщик | все зависимости DONE (с любым outcome), слот свободен |
+| P3 | RUNNING → RUNNING | `AttemptClosed(retryable)` + `AttemptStarted` | исполнитель / таймер | попытка FAILED и retryable, n < max_attempts, deadline не истёк |
+| P4 | RUNNING → DONE(outcome) | `TaskDone` | исполнитель | результат записан (§4); outcome = compute_outcome, при simulated ≤ PARTIAL |
+| P5 | PENDING/RUNNING → DONE(FAILED, deadline) | `TaskDone` | таймер | now > task.deadline; открытая попытка и job закрываются/отменяются |
+| P6 | PENDING/RUNNING → DONE(SKIPPED, cancelled\|budget\|study_deadline) | `TaskDone` | API / бюджет / таймер study | — |
+| P7 | RUNNING → DONE(SKIPPED, human) | `TaskDone` | HITL skip_task | только по решению человека |
 
-Гонка T8 после S9: S9 и T8 проходят через одну очередь записи (§3.7). После `ExecutionClosed` T8 отклоняется (`Rejected(reason=study_closed)`); перезапуск задачи после закрытия — только новой ревизией плана. До S9 T8 атомарно возвращает задачу в нетерминальное состояние, и S9 не срабатывает.
+DONE финален; повторный запуск — только через «продолжить сессию» (§3.6). Поэтому гонки «перезапуск после закрытия» нет.
 
-Свойство (hypothesis, stateful): `test_terminal_reachable_from_any_state` — из любого достижимого состояния study существует последовательность разрешённых событий (включая таймауты и политику HITL) до DONE/UNFULFILLED/FAILED/CANCELLED; `test_no_stuck_blocked` — нет состояния, где все задачи терминальны или BLOCKED и ни одно событие не применимо.
+Критика плана: задача plan внутри RUNNING делает ≤ max_plan_revisions циклов planner→critic (это попытки, не состояния); accept → DONE(SUCCESS) и P1 для экспериментов; reject или исчерпание → DONE(FAILED).
 
-LLM не вызывает ни одного перехода напрямую: у агентов нет инструментов записи состояния.
+Достижимость терминала по построению:
+- у каждой PENDING/RUNNING задачи есть `deadline ≤ study.deadline`; P5/P6 срабатывают безусловно по таймеру;
+- попытки конечны (max_attempts), проверки ревью конечны (review_deadline < attempt deadline → UNASSESSED), HITL-запрос конечен (§7.3);
+- DAG ацикличен (проверка при принятии плана), P2 требует только DONE зависимостей, а не их успеха.
+Тест (hypothesis, stateful): `test_every_study_closes_by_deadline` — случайные DAG, сбои, таймауты, рестарты; при `now = study.deadline + tick` все задачи DONE.
 
-### 3.4 Восстановление и route_returned
+### 3.4 Провал зависимости: частичные и симулированные входы
 
-`route_returned` = «ответ агента маршрута сохранён в журнале (событие RouteReturned с digest и телом)».
-Алгоритм `Core.recover(study_id)` после рестарта (идемпотентен, повторный вызов ничего не меняет):
-1. Перечитать журнал → проекция.
-2. Для каждой попытки:
-   - ROUTE_RETURNED без ResultRecorded → выполнить запись §4 из сохранённого вывода (без повторного вызова агента).
-   - DISPATCHED, deadline не истёк, инструмент с `idempotent=True` → повторить вызов с тем же `dispatch_id`.
-   - DISPATCHED, иначе → `AttemptCrashed(retryable=True)`; новая попытка — только через T4/T8. Повторного выполнения той же попытки нет.
-   - coder job: опросить `JobStore` по job_id (§6.4); не создавать новую задачу кодера.
-3. task_key и номера попыток берутся из журнала, не генерируются заново (R5).
+При P2 для каждого `InputSpec` ядро строит `InputBinding`:
+1. зависимость SUCCESS → `real`;
+2. зависимость PARTIAL/FAILED, но нужный выход есть и проходит schema_valid → `partial`;
+3. иначе, если `simulate != forbid` → заглушка (`schema_stub` — генерация по JSON-схеме; `llm_stub` — роль stubber), артефакт с `simulated=True` → `simulated`;
+4. `simulate=forbid` и данных нет → задача DONE(SKIPPED, reason=input_unavailable) без запуска.
+- Флаг `simulated` наследуется: артефакт, произведённый из simulated-входа, тоже simulated.
+- `compute_outcome`: при любом simulated-входе outcome = min(outcome, PARTIAL). SUCCESS на заглушках невозможен.
+- Отчёт (§10) обязательно содержит три раздела: «Сделано» (real), «Выполнено на заглушках» (задачи и входы simulated/partial), «Требует доработки человеком» (FAILED, SKIPPED, simulated-цепочки с причинами).
+Тесты: `test_failed_dep_runs_dependent_on_partial_data`, `test_simulated_input_caps_at_partial`, `test_simulated_flag_propagates`, `test_report_lists_stub_and_human_sections`.
+
+### 3.5r Восстановление
+`recover(study_id)` идемпотентен:
+- попытка с route_returned и без результата → запись из сохранённого вывода;
+- открытая попытка без ответа: idempotent-инструмент → повтор с тем же dispatch_id; иначе `AttemptClosed(crashed, retryable)` → P3/P4;
+- coder job → опрос JobStore по job_id;
+- ключи и номера берутся из журнала (R5); истёкшие deadline срабатывают на первом тике (кроме HITL, §7.3).
 
 ### 3.5 Хранилище
 
@@ -208,28 +217,44 @@ CREATE TABLE events(
 - Один писатель: все события идут через одну `asyncio.Queue` на study; таймеры, recover, API-команды, JobStore — только через неё. JobStore пишет `JobSubmitted/JobStatusChanged/JobTimedOut/JobCancelled` через ту же очередь (сам воркер джоба в БД не пишет, только отдаёт статус по опросу).
 - Проекции (в той же БД, обновляются в транзакции события): `studies, plans, tasks, attempts, results, artifacts, requirements, jobs, hitl_requests, usage, tool_calls`.
 - `schema_version` у события; старые payload неизменяемы; чтение через `upcasters[type][v] -> v+1`. Тест `test_replay_equals_projection`: fold всего журнала с нуля == текущие проекции (на каждом фикстурном журнале и после property-теста).
-- Нагрузочный тест M0: 10 параллельных попыток, fsync включён, ≥1000 событий; ни одной `database is locked`, p99 записи ≤ 50 мс.
+- ТЗ п.8: ≥10 параллельных задач в ОДНОМ study. Один писатель на study достаточен: LLM/инструменты идут вне очереди, в очередь — только события (≤ 10 КБ, артефакты пишутся в файлы до события). Ожидаемая нагрузка ~ десятки событий/с; ёмкость SQLite WAL с fsync — сотни транзакций/с.
+- Очередь записи ограничена (maxsize=1000, backpressure); группировка событий одной попытки в одну транзакцию.
+- Нагрузочный тест M0: один study, 20 параллельных попыток (запас ×2 к п.8), фиктивные инструменты 0–2 с, fsync включён, ≥5000 событий; 0 `database is locked`, p99 записи ≤ 50 мс, глубина очереди ≤ 100, `test_replay_equals_projection` после теста.
 - Postgres — когда нужны несколько процессов/хостов-писателей, HA или запросы веба через многие study. Порт тот же.
 
-### 3.6 Что происходит при падении на каждом переходе
+### 3.6 Продолжение сессии (fork)
 
-| Падение между | Состояние в журнале | Действие recover |
+```python
+class Clarification(BaseModel):
+    target: str | None          # task_key или None (весь запрос)
+    text: str
+def continue_session(parent_id: str, clarifications: list[Clarification]) -> str  # новый study_id
+```
+1. Новый study с `parent_study_id`; журнал родителя не меняется.
+2. Затронутое подмножество: задачи-цели уточнений + все их потомки в DAG; уточнение без цели → задачи spec и plan + потомки.
+3. Если затронут plan — перепланирование с инструкцией сохранить неизменённые задачи; задачи сопоставляются по `task_key`, новые получают ключи `EXP-(max+1)…` (нумерация продолжает родителя).
+4. Незатронутые задачи создаются сразу DONE с `inherited_from` и ссылками на результаты/артефакты родителя (событие `TaskInherited`, без запуска). Затронутые — PENDING.
+5. Идемпотентность: `idem_key = f"fork:{parent_id}:{digest(clarifications)}"` — повторный вызов возвращает тот же study_id; внутри — `TaskInherited:{task_key}`.
+Тесты: `test_fork_reruns_only_affected_subgraph`, `test_fork_keys_stable_no_duplicates`, `test_fork_idempotent`.
+
+### 3.7 Падение процесса на каждом шаге
+
+| Падение между | В журнале | recover |
 |---|---|---|
-| до `AttemptDispatched` | задача PENDING | ничего; планировщик отправит заново |
-| `AttemptDispatched` и ответом агента | DISPATCHED | idempotent-инструмент → повтор с тем же dispatch_id; иначе CRASHED(retryable) |
-| ответом агента и `RouteReturned` | DISPATCHED (ответ потерян) | как строка выше |
-| `RouteReturned` и `ResultRecorded` | ROUTE_RETURNED | запись из сохранённого вывода, без вызова агента |
-| внутри `ResultRecorded` | транзакция откатилась → ROUTE_RETURNED | как строка выше |
-| артефакт записан на диск, событие нет | файл в `tmp/` | файлы пишутся в `tmp/<call_id>`, переносятся в `cas/` после коммита события; GC удаляет только `tmp/` старше 24 ч и без живой попытки |
-| `ExecutionClosed` и `StudyClosed` | REPORTING | пересчитать I1, сгенерировать отчёт заново (детерминированно) |
-| AWAITING_HUMAN | ждём решения | дедлайн считается от события, не от рестарта (§7.3) |
+| до `AttemptStarted` | PENDING | планировщик запустит |
+| `AttemptStarted` и ответом агента | открытая попытка | idempotent → повтор с dispatch_id; иначе crashed → P3/P4 |
+| ответом агента и `RouteReturned` | открытая попытка | как выше |
+| `RouteReturned` и `TaskDone` | route_returned=true | запись из сохранённого вывода |
+| внутри транзакции записи | откат | как выше |
+| файл артефакта записан, события нет | `tmp/<call_id>` | GC удалит после 24 ч без живой попытки |
+| `TaskInherited` частично | часть задач fork | повтор fork с тем же idem_key дописывает недостающие |
 
 ### 3.8 Артефакты (к концу M1)
 - Хранение content-addressed: `cas/<sha256>`; `Artifact` — запись (id, имя, produced_by) поверх содержимого.
 - Чтение (`read_artifact`, API, проверки) сверяет sha256; несовпадение → `ArtifactCorrupt`, проверка FAILED, событие.
 - Digest значения по JSON pointer = sha256 канонического JSON RFC 8785 (JCS).
 - То же содержимое с другим produced_by: блоб один, записей Artifact две (разные artifact_id = hash + call_id); провенанс не перезаписывается.
-- Артефакт, пришедший от попытки не в DISPATCHED/ROUTE_RETURNED (закрытой, отменённой, timed out), отклоняется `ArtifactRejected(attempt_closed)`.
+- Артефакт, пришедший от попытки с `closed=true` (закрыта по результату, отмене, deadline), отклоняется `ArtifactRejected(attempt_closed)`.
 
 ## 4. Запись результата
 
@@ -249,14 +274,14 @@ class Executor:
 ```
 1. Агент маршрута возвращает `AgentTaskOutput` (ADK `output_schema`). Невалидный JSON → один повтор с ошибкой схемы, затем Result(failure, reason=schema_invalid).
 2. `ArtifactHandle` должен ссылаться на артефакт, уже зарегистрированный слоем инструментов (§6). Агент не создаёт артефакты текстом.
-3. `Executor.record` → `Checks.evaluate(task, out)` → `outcome = compute_outcome(...)` → одно событие `ResultRecorded` с check_results.
+3. `Executor.record` → `Checks.evaluate(task, out)` → `outcome = compute_outcome(...)` → события `ResultRecorded` (с check_results) и `TaskDone` или `AttemptClosed(retryable)` в одной транзакции.
 4. Внутри той же транзакции ставятся в очередь ReviewCheck (§5). Это единственный путь записи, поэтому проверки качества идут всегда (замена хука plugin.py:351).
 5. Инструмента `record_result` у LLM нет.
 
 ### 4.2 Вычисление статуса
 
 ```python
-def compute_outcome(reqs, claim, reason) -> tuple[Outcome | None, Downgrade | None]:
+def compute_outcome(reqs, claim, reason, simulated: bool) -> tuple[Outcome | None, Downgrade | None]:
     """None = ждём CodeCheck/ReviewCheck; задача RUNNING. Чистая функция."""
     req = [r for r in reqs if r.required]
     if not req:
@@ -266,13 +291,14 @@ def compute_outcome(reqs, claim, reason) -> tuple[Outcome | None, Downgrade | No
     ok = {MET, WAIVED, NOT_APPLICABLE}
     code = [r for r in req if r.is_code]; review = [r for r in req if not r.is_code]
     if any(r.status in {FAILED, MIGRATION_ERROR} for r in req):
-        base = PARTIAL if any(r.status in ok for r in req) else FAILURE
+        base = PARTIAL if any(r.status in ok for r in req) else FAILED
     elif all(r.status in ok for r in code) and all(r.status in ok | {UNASSESSED} for r in review) and code:
         base = SUCCESS              # UNASSESSED review не понижает при всех MET CodeCheck (B2b); виден в Result.unassessed
     elif all(r.status in ok for r in req):
         base = SUCCESS
     else:
         base = PARTIAL              # только ReviewCheck и все UNASSESSED
+    if simulated: base = min(base, PARTIAL, key=RANK)    # §3.4
     if claim and RANK[claim] < RANK[base] and reason:
         return claim, Downgrade(from_=base, to=claim, reason=reason)   # B2a
     return base, None               # понижение без reason игнорируется и логируется
@@ -484,9 +510,9 @@ class AgentRun(BaseModel):
 class HitlPolicy(BaseModel):
     mode: Literal["interactive","auto","headless"]
     timeout_s: int = 1800
-    on_timeout: Literal["pause","accept_if_critic_accepted","reject","fail"] = "pause"
-    max_timeout_actions: int = 3            # автодействий по таймауту на study; после — pause
-    defaults: dict[str, str] = {"plan_approval": "pause",
+    on_timeout: Literal["accept_if_critic_accepted","reject"] = "accept_if_critic_accepted"   # pause невозможен: у RUNNING всегда есть deadline
+    max_timeout_actions: int = 3            # после исчерпания on_timeout = reject (план) / deny
+    defaults: dict[str, str] = {"plan_approval": "accept_if_critic_accepted",
         "result_acceptance": "accept_computed",   # принять вычисленный outcome
         "skip_task": "deny"}                       # не пропускать без человека
 
@@ -497,7 +523,7 @@ class HitlDecision(BaseModel):
     request_id: str; decision: Literal["accept","revise","reject"]; by: Literal["human","policy"]; reason: str
 ```
 - headless/auto: запрос к человеку не создаётся; решение = вердикт critic/reviewer; `by="policy"`.
-- interactive: AWAITING_HUMAN с deadline; по истечении — `on_timeout`, по умолчанию pause (`HitlTimedOut(action, reason)` в журнале, веб показывает). Каждое автодействие — событие с причиной и расходует `max_timeout_actions`.
+- interactive: открытый HitlRequest внутри RUNNING задачи с deadline; по истечении — `on_timeout` (`HitlTimedOut(action, reason)` в журнале, в отчёте — «решено политикой, проверить человеку»). Каждое автодействие расходует `max_timeout_actions`. plan reject → задача plan DONE(FAILED) → study verdict failed.
 - После простоя (процесс был выключен) deadline не срабатывает мгновенно: при recover дедлайн = max(исходный, now + grace_s=300) и пишется `HitlDeadlineExtended`.
 - headless: on_timeout не используется — решение принимает critic/reviewer сразу.
 - Отсутствие ревьюера = ошибка конфигурации при старте, а не `fallback_reviewer_unavailable` в рантайме.
@@ -509,10 +535,10 @@ class Budget(BaseModel):
     max_llm_calls: int; max_tokens: int; max_cost_rub: Decimal | None
     max_tool_calls: int; deadline: datetime
 ```
-Бюджеты: на study, на попытку (из RouteConfig), на роль. Превышение → `BudgetExceeded(scope)`: попытка failure(retryable=False), study при превышении своего бюджета → UNFULFILLED через закрытие оставшихся задач CANCELLED.
+Бюджеты: на study, на попытку (из RouteConfig), на роль. Превышение → `BudgetExceeded(scope)`: попытка failure(retryable=False), при превышении бюджета study все не-DONE задачи → DONE(SKIPPED, budget) (P6), study закрывается с verdict partial/failed.
 
 ### 7.5 ТЗ исследования (#1)
-Роль `tz_spec`: вход — запрос, выход `ResearchSpec(object, goal, scope, constraints, success_metrics)`. Стадия `SPEC` между DRAFT и HYPOTHESES (переход `SpecAccepted`; HITL plan_approval-подобный `spec_approval` по политике; ошибка → S12).
+Роль `tz_spec`: вход — запрос, выход `ResearchSpec(object, goal, scope, constraints, success_metrics)`. Задача kind=spec — первая в DAG; `spec_approval` по политике HITL; FAILED → потомки работают по §3.4 (hypotheses на запросе как есть, simulate=forbid не нужен).
 
 ## 8. Профили (R1)
 
@@ -598,19 +624,20 @@ web/           отдельно (M6)
 
 | Сценарий | Вход | Проверка (expected) | Порог |
 |---|---|---|---|
-| two_tasks (×3) | запрос эталона | 2/2 задачи SUCCEEDED; артефакты dataset_overview и chemical_space_clustering по схеме; 2/2 tool_found | 3/3 прогона; 0 ложных статусов |
+| two_tasks (×3) | запрос эталона | 2/2 задачи DONE(SUCCESS), verdict fulfilled; артефакты dataset_overview и chemical_space_clustering по схеме; 2/2 tool_found | 3/3 прогона; 0 ложных статусов |
 | file_handoff (×3) | эталон | 4 задачи; артефакт задачи N читается задачей N+1 по artifact_id | 3/3 |
-| borshevik | эталон | 6 задач; DONE только если все required SUCCEEDED, иначе UNFULFILLED | 0 ложных DONE (B1) |
-| article_small | эталон | 225 соединений = 225 → SUCCEEDED, study DONE | fulfilled (B2) |
+| borshevik | эталон | 6 задач; verdict fulfilled только если все required SUCCESS; провалившиеся зависимости → потомки на partial/simulated, ≤ PARTIAL | 0 ложных fulfilled (B1) |
+| article_small | эталон | 225 соединений = 225 → SUCCESS, verdict fulfilled | fulfilled (B2) |
 | microfluidics | эталон | старт без ошибки, задача выполнена | (R1) |
 | hypothesis_check (headless) | эталон | ревью без человека; вывод «гипотеза опровергнута» (медиана −6 vs −4) | (R2) |
 | alembic_nomcp | фикстура EmptyMcpCatalog, профиль research | ToolResolved=tool_built, инструмент зарегистрирован и вызван | (R3) |
 | coder_timeout | coder job дольше deadline | попытка failure(retryable) ≤ deadline+тик | (R4) |
+| continue_session | borshevik + уточнение к одной задаче | перезапущены только она и потомки; ключи стабильны; 0 дублей | — |
 | recovery | kill -9 после RouteReturned и после Dispatched | уникальные EXP-n, 0 дублей попыток, результат записан 1 раз | (R5) |
 | стоимость | two_tasks | токены и ₽ по прогону и задаче записаны | ≤ эталонной стоимости (после сбора токенов эталона) |
 
 ### 12.3 Тесты
-- Юнит: машина состояний (каждая строка §3.3 и §3.6 — тест), compute_outcome, каталог, router, jobs.
+- Юнит: машина состояний (каждая строка §3.3 и §3.7 — тест), compute_outcome, каталог, router, jobs.
 - Характеризационные: входы/артефакты эталона как фикстуры; LLM заменён записанными ответами (cassette) — детерминированный CI.
 - Живые: сценарии §12.2 с реальной моделью, ночью; текст LLM не сравнивается, сравниваются статусы, артефакты и проверки.
 - Возможность принята = все её тесты зелёные + её сценарий 3/3.
@@ -621,9 +648,9 @@ web/           отдельно (M6)
 
 | Веха | Содержание | Критерий выхода |
 |---|---|---|
-| M0 | репо, CI, domain, EventStore(SQLite), writer queue, lease, machine, recover, import-linter | все строки §3.3/§3.6 покрыты тестами; property-тесты §3.3 зелёные; нагрузочный тест §3.5a; core без ADK |
-| M1 | executor + record + checks (CodeCheck) + артефакты §3.8 + проекции/upcasters §3.5a + ToolRouter(MCP) + adapter + planner/executor-route + CLI | two_tasks 3/3 по §12.2; usage записан; B1/B2 тесты зелёные |
-| M2 | critic + reviewer + HITL policy + каталог Тома Б/R + миграция критериев | hypothesis_check headless (R2); article_small (B2) живой; borshevik (B1) |
+| M0 | репо, CI, domain, EventStore(SQLite), writer queue, lease, machine, recover, import-linter | все строки §3.3/§3.7 покрыты тестами; `test_every_study_closes_by_deadline` зелёный; нагрузочный тест §3.5a (20 попыток в одном study); core без ADK |
+| M1 | executor + record + checks (CodeCheck) + артефакты §3.8 + проекции/upcasters §3.5a + ToolRouter(MCP) + adapter + planner/executor-route + CLI | two_tasks 3/3 по §12.2; usage записан; B1/B2 тесты зелёные; §3.4 тесты зелёные |
+| M2 | continue_session §3.6 + critic + reviewer + HITL policy + каталог Тома Б/R + миграция критериев | hypothesis_check headless (R2); article_small (B2) живой; borshevik (B1) |
 | M3 | coder jobs + alembic fallback + recovery живой | coder_timeout (R4), alembic_nomcp (R3), recovery (R5), file_handoff 3/3 |
 | M4 | профили research (гипотезы, литература), medicine, microfluidics | возможности #2, #3, #12, #13 по CAPABILITIES.md; R1 |
 | M5 | отчёт (MD/HTML/JSON/НИР), S3, API + stream, A2A/MCP-фасад | #16, #17, #21; API контракт-тесты |
@@ -645,32 +672,35 @@ web/           отдельно (M6)
 3. Проверки для problem, model, application, R05, R28, R30 — согласовать с владельцами методики; PDF Тома Б не найдены.
 4. Семантика evaluator_kind (python / llm / expert) в старом коде — не проверена.
 5. max_plan_revisions, max_attempts, deadline маршрутов, HITL timeout по умолчанию — значения?
-6. ~~Хранилище~~ Решено: SQLite WAL, БД на study, за портом EventStore (§3.5a). Открыто: ТЗ п.8 «≥10 параллельных задач» — внутри одного study или по разным study?
+6. ~~Хранилище, ТЗ п.8~~ Решено: SQLite WAL, БД на study, порт EventStore; ≥10 параллельных задач внутри одного study (§3.5a).
 7. Цены AITunnel по моделям для pricing.yaml; отдаёт ли AITunnel стоимость в ответе.
 8. Литература: один MCP-сервис вместо paper_analysis + papers_processing_refactoring — подтвердить.
 9. ~~FEDOT.MAS и codesynapse~~ Решено: все интеграции — опциональные внешние сервисы за контрактом Tool, включаются в профиле (§6.5).
 10. PDF-отчёт и ГОСТ 7.32 — в M5 или отдельно.
 11. Новый: grace_s после простоя и max_timeout_actions — значения по умолчанию.
-12. Новый: при пустом required в рантайме PARTIAL или отказ — нужен ли HITL-запрос вместо молчаливого PARTIAL.
+12. При пустом required в рантайме — PARTIAL; нужен ли HITL-запрос.
+13. Заглушки: `schema_stub` (детерминированно по схеме) по умолчанию, `llm_stub` — только по флагу профиля? Какие выходы помечать `simulate=forbid` (медицина?).
+14. study.deadline и task.deadline по умолчанию (по ТЗ: ≤10 мин до плана).
+15. Продолжение сессии: уточнение без цели — перепланировать всё (как сейчас) или просить LLM указать затронутые задачи?
 
-## 15. Review log (крокодил, ce59fde)
+## 15. Review log
 
-| # | Замечание | Статус | Где |
-|---|---|---|---|
-| 1 | BLOCKED не терминален | сделано: T6a/T6b | §3.1, §3.3 |
-| 2 | пробелы таблицы переходов | сделано: S12–S16, T4a, T5, T9–T11, гонка T8/S9, property-тесты | §3.3 |
-| 3 | InvalidStatus | сделано: failure(retryable) | §3.1 |
-| 4 | пустой required | сделано: CatalogError при принятии плана, PARTIAL в рантайме | §4.2 |
-| 5a | понижение только с причиной | сделано: Result.downgrade, computed_outcome | §2, §4.2 |
-| 5b | UNASSESSED review не понижает | сделано с оговоркой (ниже) | §4.2 |
-| 6 | артефакты | сделано | §3.8, §3.6 |
-| 7 | писатель и журнал | сделано | §3.5a |
-| 8 | HITL | сделано | §7.3 |
-| 9 | убрать forced | сделано: фикстура EmptyMcpCatalog | §6.3, §12.2 |
-| 10 | jobs | сделано | §6.4 |
-| 11 | #1, #21, #22, Budget, cost_rub=None | сделано | §7.4, §7.5, §6.5, §10 |
+### Ревью крокодила (ce59fde), с учётом решений пользователя (2026-10-23)
 
-Оговорки (частичное несогласие):
-- 5b. Правило применяется, только если у задачи есть ≥1 required CodeCheck и все они MET. Если required-проверки только ReviewCheck и все UNASSESSED — PARTIAL: иначе задача без единого доказательства станет SUCCESS, что противоречит R23 и п.4. UNASSESSED всегда показывается в `Result.unassessed`.
-- 8. «Деадлайн не срабатывает мгновенно» реализован через grace после recover, а не через сдвиг всех дедлайнов на время простоя: иначе долгий простой бесконечно откладывает решение.
-- 2 (гонка T8/S9): выбрано «T8 после S9 отклоняется», а не «S9 откатывается»: переоткрытие закрытого исполнения ломает идемпотентность отчёта; путь — новая ревизия плана.
+| # | Замечание | Статус |
+|---|---|---|
+| 1 | BLOCKED не терминален | устарело: BLOCKED удалён; зависимые запускаются на partial/simulated входах (§3.4) |
+| 2 | пробелы таблицы переходов (FAILED со стадий, reject критика, выходы AWAITING_HUMAN, флаг HITL, таймаут ROUTE_RETURNED, review_deadline, T5, отмена задачи, гонка T8/S9) | устарело: стадии — задачи одного DAG с 3 состояниями; любой выход — P4/P5/P6/P7; у каждой не-DONE задачи deadline покрывает route_returned и ревью; DONE финален, гонки нет. Property-тест сохранён: `test_every_study_closes_by_deadline` |
+| 3 | InvalidStatus | сделано: попытка FAILED(retryable) (§3.1) |
+| 4 | пустой required | сделано (§4.2) |
+| 5a/5b | понижение с причиной; UNASSESSED не понижает | сделано (§4.2), + потолок PARTIAL для simulated |
+| 6 | артефакты | сделано (§3.8, §3.7); + флаг simulated |
+| 7 | писатель и журнал | сделано; пересчитано под ≥10 задач в одном study, тест на 20 (§3.5a) |
+| 8 | HITL | частично переопределено пользователем: default pause убран — противоречит правилу «у каждого не-терминального состояния есть deadline». Бюджет автодействий, событие с причиной, defaults result_acceptance/skip_task, grace после простоя — сделано (§7.3) |
+| 9 | убрать forced | сделано |
+| 10 | jobs | сделано (§6.4) |
+| 11 | #1, #21, #22, Budget, cost_rub=None | сделано; #1 — задача kind=spec |
+
+Оговорки:
+- 5b: правило действует, только если есть ≥1 required CodeCheck и все MET; только-ReviewCheck и все UNASSESSED → PARTIAL (иначе SUCCESS без доказательств).
+- 8: grace после recover вместо сдвига всех дедлайнов на время простоя (иначе решение откладывается бесконечно).
