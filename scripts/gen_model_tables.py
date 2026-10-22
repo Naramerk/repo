@@ -1,10 +1,11 @@
-"""Generate RESEARCH_MODEL.md §2/§3/§7 tables from schema/graph_schema.yaml.
+"""Generate RESEARCH_MODEL.md tables (§2, §3, §7) from schema/graph_schema.yaml.
 
 Usage: python scripts/gen_model_tables.py [--check]
 """
 import pathlib
 import re
 import sys
+from typing import Literal, Optional
 
 import yaml
 
@@ -17,20 +18,61 @@ def load():
     return yaml.safe_load(SCHEMA.read_text(encoding="utf-8"))
 
 
-def _alt(xs):
-    return "\\|".join(xs)
+def _esc(s):
+    return str(s).replace("|", "\\|")
+
+
+def _field(f):
+    s = f"**{f['name']}**" if f["required"] else f["name"]
+    s += f": {f['type']}"
+    return s + (f" ({f['note']})" if f.get("note") else "")
 
 
 def render(s):
     n = ["| NodeKind | Префикс | Поля (обязательные — жирным) | Создаёт задача | Из вывода | Смысл |",
          "|---|---|---|---|---|---|"]
-    n += [f"| `{x['kind']}` | {x['prefix']} | {x['fields'].replace('|', chr(92) + '|')} | {x['created_by']} | "
-          f"{x['from_output'].replace('|', chr(92) + '|')} | {x['text_ru']} |" for x in s["nodes"]]
-    e = ["| Ребро | From → To | Кардинальность | Кем выводится |", "|---|---|---|---|"]
-    e += [f"| `{x['name']}` | {_alt(x['from'])} → {_alt(x['to'])} | {x['card']} | {x['by']} |" for x in s["edges"]]
+    n += [f"| `{x['kind']}` | {x['prefix']} | {_esc('; '.join(_field(f) for f in x['fields']))} | "
+          f"{x['created_by']} | {_esc(x['from_output'])} | {x['text_ru']} |" for x in s["nodes"]]
+    e = ["| Ребро | Пары (from → to) | out / in | Кем выводится | Примечание |", "|---|---|---|---|---|"]
+    e += [f"| `{x['name']}` | {', '.join(f'{a} → {b}' for a, b in x['pairs'])} | "
+          f"{x['card']['out']} / {x['card']['in']} | {x['by']} | {_esc(x.get('note', ''))} |" for x in s["edges"]]
+    b = ["| # | id | Узлы | CodeCheck.kind | Проверка |", "|---|---|---|---|---|"]
+    b += [f"| {x['num']} | {x['id']} | {', '.join(x['nodes'])} | {', '.join(x['check_kinds'])} | {_esc(x['check'])} |"
+          for x in s["volume_b"]]
     r = ["| rule_id | Узлы | Проверка |", "|---|---|---|"]
-    r += [f"| `{x['rule_id']}` | {x['nodes']} | {x['check'].replace('|', chr(92) + '|')} |" for x in s["rules"]]
-    return {"nodes": "\n".join(n), "edges": "\n".join(e), "rules": "\n".join(r)}
+    r += [f"| `{x['rule_id']}` | {', '.join(x['nodes'])} | {_esc(x['check'])} |" for x in s["rules"]]
+    return {"nodes": "\n".join(n), "edges": "\n".join(e), "volume_b": "\n".join(b), "rules": "\n".join(r)}
+
+
+def py_type(t):
+    """Map a schema field type to a python annotation (for pydantic.create_model)."""
+    m = re.fullmatch(r"(\w+)\((.*)\)", t)
+    if not m:
+        return {"str": str, "int": int, "bool": bool, "float": float, "datetime": str, "digest": str}[t]
+    head, arg = m.groups()
+    if head == "enum":
+        return Literal[tuple(arg.split("|"))]
+    if head == "ref":
+        return str
+    if head == "list":
+        return list[py_type(arg)]
+    if head == "obj":
+        return dict
+    raise ValueError(t)
+
+
+def models(s=None):
+    from pydantic import create_model
+
+    s = s or load()
+    out = {}
+    for n in s["nodes"]:
+        spec = {}
+        for f in n["fields"]:
+            t = py_type(f["type"])
+            spec[f["name"]] = (t, ...) if f["required"] else (Optional[t], None)
+        out[n["kind"]] = create_model(n["kind"].title(), **spec)
+    return out
 
 
 def apply(text, tables):
@@ -38,7 +80,7 @@ def apply(text, tables):
         pat = re.compile(rf"(<!-- gen:{name}:start -->\n).*?(<!-- gen:{name}:end -->)", re.S)
         if not pat.search(text):
             raise SystemExit(f"marker gen:{name} missing in {DOC}")
-        text = pat.sub(lambda m: m.group(1) + body + "\n" + m.group(2), text)
+        text = pat.sub(lambda m, b=body: m.group(1) + b + "\n" + m.group(2), text)
     return text
 
 

@@ -1,0 +1,1116 @@
+{
+  "schema": "ai4research-reviewed-rules/2",
+  "note": "PDF excerpts and physical page locators verified against the local 2026-08 source SHA. Mapped actions are partial crosswalks; only explicit policy checks are currently automated.",
+  "rules": [
+    {
+      "rule_id": "R17:registered_schema_binding",
+      "namespace": "document",
+      "document_id": "AI4Research",
+      "edition": "2026-08",
+      "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8",
+      "source_refs": [
+        {"document_id": "requirements.md", "locator": "R17"},
+        {"document_id": "AI4Research", "locator": "PDF pp.309-310", "requirement_id": "R17", "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8"},
+        {"document_id": "AI4Research", "locator": "PDF p.6", "requirement_id": "R11", "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8"}
+      ],
+      "source_excerpt": "План устанавливает объекты, критерии, методы, данные, ответственность и сроки верификации и валидации применения ИИ и полученных с его участием результатов.",
+      "engineering_interpretation": "Opt-in structural adaptation: an inline content-pinned bounded Draft 2020-12 schema is agreed before execution, then traced through the exact criterion, method, current assessment and registered immutable JSON bytes. This checks shape, not scientific adequacy, execution or whole-rule compliance.",
+      "interpretation_state": "reviewed",
+      "interpretation_version": "1",
+      "modality": "obligation",
+      "applicability_predicate": {"exists": {"path": "task.id"}},
+      "required_facts": ["task.id"],
+      "unknown_behavior": "defer",
+      "criterion_templates": ["registered_schema_binding"],
+      "evidence_requirements": ["accepted_schema_version_digest", "accepted_criterion", "method_ref", "current_assessment", "registered_material_version_digest"],
+      "evaluator_kind": "python",
+      "evaluator_config": {
+        "check_id": "registered_schema_binding",
+        "implementation_state": "not_automated",
+        "structural_subcheck": "registered_schema_trace_v1",
+        "method_ref": {"ref": "registered-json-schema", "version": "1"},
+        "default_enabled": false,
+        "allowed_outcomes": ["pass", "fail", "insufficient_evidence", "not_evaluated"]
+      },
+      "severity": "major",
+      "allowed_uses_affected": ["scientific_claim", "final_acceptance"],
+      "mapped_actions": ["4.11.01.04", "4.13.01.03"],
+      "mapping_note": "Project structural schema and traceability subcheck adapted from the example verification plan and evidence principle; no complete action or scientific conclusion is assessed."
+    },
+    {
+      "rule_id": "R11:json_pointer_evidence_locator",
+      "namespace": "document",
+      "document_id": "AI4Research",
+      "edition": "2026-08",
+      "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8",
+      "source_refs": [
+        {"document_id": "requirements.md", "locator": "R11"},
+        {"document_id": "AI4Research", "locator": "PDF p.6", "requirement_id": "R11", "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8"}
+      ],
+      "source_excerpt": "Каждое утверждение о выполнении действия подтверждается свидетельством — проверяемым информационным объектом с указанием реквизита. Комментарий без реквизита свидетельством не является.",
+      "engineering_interpretation": "Opt-in structural adaptation: resolve an explicitly approved JSON Pointer in the exact named registered JSON material. Address existence does not establish scientific relevance, sufficiency or whole R11 compliance.",
+      "interpretation_state": "reviewed",
+      "interpretation_version": "1",
+      "modality": "obligation",
+      "applicability_predicate": {"exists": {"path": "task.id"}},
+      "required_facts": ["task.id"],
+      "unknown_behavior": "defer",
+      "criterion_templates": ["json_pointer_evidence_locator"],
+      "evidence_requirements": ["accepted_criterion", "method_ref", "current_assessment", "registered_material_version_digest", "json_pointer"],
+      "evaluator_kind": "python",
+      "evaluator_config": {
+        "check_id": "json_pointer_evidence_locator",
+        "implementation_state": "not_automated",
+        "structural_subcheck": "verified_json_pointer_locator_v1",
+        "method_ref": {"ref": "registered-json-pointer", "version": "1"},
+        "default_enabled": false,
+        "allowed_outcomes": ["pass", "fail", "insufficient_evidence", "not_evaluated"]
+      },
+      "severity": "major",
+      "allowed_uses_affected": ["scientific_claim", "final_acceptance"],
+      "mapped_actions": ["4.11.03.01", "3.08.03.01"],
+      "mapping_note": "Project JSON-address method derived from the direct evidence-locator requirement; no complete action or scientific claim is assessed. Existing R11 byte-locator interpretation remains separate."
+    },
+    {
+      "rule_id": "R02:profile_applicability",
+      "namespace": "document",
+      "document_id": "AI4Research",
+      "edition": "2026-08",
+      "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8",
+      "source_refs": [
+        {
+          "document_id": "requirements.md",
+          "locator": "R02"
+        },
+        {
+          "document_id": "AI4Research",
+          "locator": "PDF p.6",
+          "requirement_id": "R02",
+          "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8"
+        }
+      ],
+      "source_excerpt": "Состав оцениваемых процессов определяется профилем проекта до начала оценки. Профиль строится по классификации исследования и матрице применимости; обязательные процессы не подлежат исключению. Каждое исключение процесса или действия оформляется документированным обоснованием неприменимости. Исключение без обоснования не допускается.",
+      "engineering_interpretation": "Record a versioned applicability decision; exclusion needs an explicit rationale and cannot be inferred from missing resources.",
+      "interpretation_state": "reviewed",
+      "interpretation_version": "1",
+      "modality": "obligation",
+      "applicability_predicate": {
+        "exists": {
+          "path": "task.id"
+        }
+      },
+      "required_facts": [
+        "task.id"
+      ],
+      "unknown_behavior": "defer",
+      "criterion_templates": [
+        "profile_applicability"
+      ],
+      "evidence_requirements": [
+        "profile_version",
+        "applicability_decision",
+        "exclusion_reason",
+        "exclusion_decision_ref"
+      ],
+      "evaluator_kind": "python",
+      "evaluator_config": {
+        "check_id": "profile_applicability",
+        "required_fields": [
+          "profile_version",
+          "applicability_decision",
+          "exclusion_reason",
+          "exclusion_decision_ref"
+        ],
+        "allowed_outcomes": [
+          "pass",
+          "fail",
+          "insufficient_evidence",
+          "not_evaluated"
+        ],
+        "implementation_state": "not_automated"
+      },
+      "severity": "major",
+      "allowed_uses_affected": [
+        "final_acceptance"
+      ],
+      "mapped_actions": [
+        "2.01.03.01",
+        "2.01.03.02"
+      ],
+      "mapping_note": "Partial crosswalk to action-index locator(s); this check does not assess the complete action."
+    },
+    {
+      "rule_id": "R04:process_instance_binding",
+      "namespace": "document",
+      "document_id": "AI4Research",
+      "edition": "2026-08",
+      "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8",
+      "source_refs": [
+        {
+          "document_id": "requirements.md",
+          "locator": "R04"
+        },
+        {
+          "document_id": "AI4Research",
+          "locator": "PDF p.15",
+          "requirement_id": "R04",
+          "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8"
+        }
+      ],
+      "source_excerpt": "Основной единицей является экземпляр выполнения процесса, связанный с определенной работой жизненного цикла, итерацией, объектом применения и установленной ролью ИИ.",
+      "engineering_interpretation": "Check a process instance is bound to work, iteration, object and AI role; an agent call alone is not an instance.",
+      "interpretation_state": "reviewed",
+      "interpretation_version": "2",
+      "modality": "obligation",
+      "applicability_predicate": {
+        "exists": {
+          "path": "task.id"
+        }
+      },
+      "required_facts": [
+        "task.id"
+      ],
+      "unknown_behavior": "defer",
+      "criterion_templates": [
+        "process_instance_binding"
+      ],
+      "evidence_requirements": [
+        "process_code",
+        "work_code",
+        "iteration_id",
+        "object_ref",
+        "ai_role"
+      ],
+      "evaluator_kind": "python",
+      "evaluator_config": {
+        "check_id": "process_instance_binding",
+        "required_fields": [
+          "process_code",
+          "work_code",
+          "iteration_id",
+          "object_ref",
+          "ai_role"
+        ],
+        "allowed_outcomes": [
+          "pass",
+          "fail",
+          "insufficient_evidence",
+          "not_evaluated"
+        ],
+        "implementation_state": "not_automated",
+        "structural_subcheck": "process_binding_v1"
+      },
+      "severity": "major",
+      "allowed_uses_affected": [
+        "final_acceptance"
+      ],
+      "mapped_actions": [
+        "2.01.03.01"
+      ],
+      "mapping_note": "Partial crosswalk to action-index locator(s); this check does not assess the complete action."
+    },
+    {
+      "rule_id": "R05:iteration_reactivation",
+      "namespace": "document",
+      "document_id": "AI4Research",
+      "edition": "2026-08",
+      "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8",
+      "source_refs": [
+        {
+          "document_id": "requirements.md",
+          "locator": "R05"
+        },
+        {
+          "document_id": "AI4Research",
+          "locator": "PDF p.20",
+          "requirement_id": "R05",
+          "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8"
+        }
+      ],
+      "source_excerpt": "Стадии, этапы и работы могут частично перекрываться, выполняться параллельно, повторяться, включать возврат к ранее выполненным работам и уточняться по мере получения новых результатов. Существенное повторение работы сопровождается активацией новых экземпляров соответствующих процессов.",
+      "engineering_interpretation": "On substantial repetition retain the prior iteration and activate new process instances; do not overwrite history.",
+      "interpretation_state": "reviewed",
+      "interpretation_version": "2",
+      "modality": "obligation",
+      "applicability_predicate": {
+        "eq": {
+          "path": "iteration.substantial_repeat",
+          "value": true
+        }
+      },
+      "required_facts": [
+        "iteration.substantial_repeat"
+      ],
+      "unknown_behavior": "defer",
+      "criterion_templates": [
+        "iteration_reactivation"
+      ],
+      "evidence_requirements": [
+        "previous_iteration_ref",
+        "new_iteration_id",
+        "affected_process_instances"
+      ],
+      "evaluator_kind": "python",
+      "evaluator_config": {
+        "check_id": "iteration_reactivation",
+        "required_fields": [
+          "previous_iteration_ref",
+          "new_iteration_id",
+          "affected_process_instances"
+        ],
+        "allowed_outcomes": [
+          "pass",
+          "fail",
+          "insufficient_evidence",
+          "not_evaluated"
+        ],
+        "implementation_state": "not_automated"
+      },
+      "severity": "major",
+      "allowed_uses_affected": [
+        "final_acceptance"
+      ],
+      "mapped_actions": [
+        "2.01.04.03"
+      ],
+      "mapping_note": "Partial crosswalk to action-index locator(s); this check does not assess the complete action."
+    },
+    {
+      "rule_id": "R06:checkpoint_contract",
+      "namespace": "document",
+      "document_id": "AI4Research",
+      "edition": "2026-08",
+      "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8",
+      "source_refs": [
+        {
+          "document_id": "requirements.md",
+          "locator": "R06"
+        },
+        {
+          "document_id": "AI4Research",
+          "locator": "PDF p.20",
+          "requirement_id": "R06",
+          "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8"
+        }
+      ],
+      "source_excerpt": "Для стадий, этапов и при необходимости отдельных работ устанавливаются критерии входа, ожидаемые результаты, критерии завершения, состав проверяемых свидетельств и основания для возврата или повторного выполнения.",
+      "engineering_interpretation": "A checkpoint needs explicit entry, completion, evidence and return conditions; UI stage progression is insufficient.",
+      "interpretation_state": "reviewed",
+      "interpretation_version": "1",
+      "modality": "obligation",
+      "applicability_predicate": {
+        "exists": {
+          "path": "task.id"
+        }
+      },
+      "required_facts": [
+        "task.id"
+      ],
+      "unknown_behavior": "defer",
+      "criterion_templates": [
+        "checkpoint_contract"
+      ],
+      "evidence_requirements": [
+        "entry_criteria",
+        "expected_results",
+        "exit_criteria",
+        "evidence_plan",
+        "return_reason"
+      ],
+      "evaluator_kind": "python",
+      "evaluator_config": {
+        "check_id": "checkpoint_contract",
+        "required_fields": [
+          "entry_criteria",
+          "expected_results",
+          "exit_criteria",
+          "evidence_plan",
+          "return_reason"
+        ],
+        "allowed_outcomes": [
+          "pass",
+          "fail",
+          "insufficient_evidence",
+          "not_evaluated"
+        ],
+        "implementation_state": "not_automated"
+      },
+      "severity": "major",
+      "allowed_uses_affected": [
+        "dependent_use",
+        "final_acceptance"
+      ],
+      "mapped_actions": [
+        "2.01.03.02",
+        "3.02.04.04"
+      ],
+      "mapping_note": "Partial crosswalk to action-index locator(s); this check does not assess the complete action."
+    },
+    {
+      "rule_id": "R11:evidence_locator",
+      "namespace": "document",
+      "document_id": "AI4Research",
+      "edition": "2026-08",
+      "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8",
+      "source_refs": [
+        {
+          "document_id": "requirements.md",
+          "locator": "R11"
+        },
+        {
+          "document_id": "AI4Research",
+          "locator": "PDF p.6",
+          "requirement_id": "R11",
+          "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8"
+        }
+      ],
+      "source_excerpt": "Каждое утверждение о выполнении действия подтверждается свидетельством — проверяемым информационным объектом с указанием реквизита. Комментарий без реквизита свидетельством не является.",
+      "engineering_interpretation": "Check each claimed evidence use points to a registered material version and relevant locator; agent commentary alone is insufficient.",
+      "interpretation_state": "reviewed",
+      "interpretation_version": "2",
+      "modality": "obligation",
+      "applicability_predicate": {
+        "exists": {
+          "path": "task.id"
+        }
+      },
+      "required_facts": [
+        "task.id"
+      ],
+      "unknown_behavior": "defer",
+      "criterion_templates": [
+        "evidence_locator"
+      ],
+      "evidence_requirements": [
+        "material_ref",
+        "material_version",
+        "locator",
+        "access_state"
+      ],
+      "evaluator_kind": "python",
+      "evaluator_config": {
+        "check_id": "evidence_locator",
+        "required_fields": [
+          "material_ref",
+          "material_version",
+          "locator",
+          "access_state"
+        ],
+        "allowed_outcomes": [
+          "pass",
+          "fail",
+          "insufficient_evidence",
+          "not_evaluated"
+        ],
+        "implementation_state": "not_automated",
+        "structural_subcheck": "verified_byte_locator_v1"
+      },
+      "severity": "major",
+      "allowed_uses_affected": [
+        "scientific_claim",
+        "final_acceptance"
+      ],
+      "mapped_actions": [
+        "4.11.03.01",
+        "3.08.03.01"
+      ],
+      "mapping_note": "Partial crosswalk to action-index locator(s); this check does not assess the complete action."
+    },
+    {
+      "rule_id": "R14:configuration_snapshot",
+      "namespace": "document",
+      "document_id": "AI4Research",
+      "edition": "2026-08",
+      "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8",
+      "source_refs": [
+        {
+          "document_id": "requirements.md",
+          "locator": "R14"
+        },
+        {
+          "document_id": "AI4Research",
+          "locator": "PDF p.307",
+          "requirement_id": "R14",
+          "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8"
+        }
+      ],
+      "source_excerpt": "запросы сохраняются дословно либо в форме, позволяющей восстановить их содержание; фиксируются скрытые инструкции и шаблоны, если они доступны исследователю; идентифицируются версии библиотек, зависимостей и вычислительной среды; для недетерминированных средств сохраняются несколько прогонов или параметры случайности; изменения конфигурации сопровождаются основанием и оценкой влияния на ранее полученные результаты.",
+      "engineering_interpretation": "Pin available configuration and record a change impact reference; hash available bytes in the server.",
+      "interpretation_state": "reviewed",
+      "interpretation_version": "1",
+      "modality": "obligation",
+      "applicability_predicate": {
+        "exists": {
+          "path": "task.id"
+        }
+      },
+      "required_facts": [
+        "task.id"
+      ],
+      "unknown_behavior": "defer",
+      "criterion_templates": [
+        "configuration_snapshot"
+      ],
+      "evidence_requirements": [
+        "input_versions",
+        "model_version",
+        "code_version",
+        "parameters",
+        "environment",
+        "result_ref"
+      ],
+      "evaluator_kind": "python",
+      "evaluator_config": {
+        "check_id": "configuration_snapshot",
+        "required_fields": [
+          "input_versions",
+          "model_version",
+          "code_version",
+          "parameters",
+          "environment",
+          "result_ref"
+        ],
+        "allowed_outcomes": [
+          "pass",
+          "fail",
+          "insufficient_evidence",
+          "not_evaluated"
+        ],
+        "implementation_state": "not_automated"
+      },
+      "severity": "major",
+      "allowed_uses_affected": [
+        "dependent_use",
+        "final_acceptance"
+      ],
+      "mapped_actions": [
+        "3.05.02.01",
+        "3.05.04.01"
+      ],
+      "mapping_note": "Partial crosswalk to action-index locator(s); this check does not assess the complete action."
+    },
+    {
+      "rule_id": "R16:verification_validation_split",
+      "namespace": "document",
+      "document_id": "AI4Research",
+      "edition": "2026-08",
+      "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8",
+      "source_refs": [
+        {
+          "document_id": "requirements.md",
+          "locator": "R16"
+        },
+        {
+          "document_id": "AI4Research",
+          "locator": "PDF p.28",
+          "requirement_id": "R16",
+          "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8"
+        }
+      ],
+      "source_excerpt": "13.1. Верификация применения ИИ Проверяется, правильно ли реализован предусмотренный программой исследования способ применения ИИ, соблюдены ли требования к данным, конфигурации, действиям, человеческому контролю и регистрации результатов. 13.2. Валидация результатов Устанавливается, пригодны ли результаты, полученные с применением ИИ, для ответа на исследовательский вопрос и обоснования научного вывода в заданном контексте и с учетом установленных ограничений.",
+      "engineering_interpretation": "Keep technical verification separate from scientific fitness; successful artifact delivery is not validation.",
+      "interpretation_state": "reviewed",
+      "interpretation_version": "1",
+      "modality": "obligation",
+      "applicability_predicate": {
+        "exists": {
+          "path": "task.id"
+        }
+      },
+      "required_facts": [
+        "task.id"
+      ],
+      "unknown_behavior": "defer",
+      "criterion_templates": [
+        "verification_validation_split"
+      ],
+      "evidence_requirements": [
+        "verification_result",
+        "validation_result",
+        "target_context"
+      ],
+      "evaluator_kind": "python",
+      "evaluator_config": {
+        "check_id": "verification_validation_split",
+        "required_fields": [
+          "verification_result",
+          "validation_result",
+          "target_context"
+        ],
+        "allowed_outcomes": [
+          "pass",
+          "fail",
+          "insufficient_evidence",
+          "not_evaluated"
+        ],
+        "implementation_state": "not_automated"
+      },
+      "severity": "major",
+      "allowed_uses_affected": [
+        "scientific_claim",
+        "final_acceptance"
+      ],
+      "mapped_actions": [
+        "4.11.01.04",
+        "4.13.01.03"
+      ],
+      "mapping_note": "Partial crosswalk to action-index locator(s); this check does not assess the complete action."
+    },
+    {
+      "rule_id": "R17:predeclared_check",
+      "namespace": "document",
+      "document_id": "AI4Research",
+      "edition": "2026-08",
+      "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8",
+      "source_refs": [
+        {
+          "document_id": "requirements.md",
+          "locator": "R17"
+        },
+        {
+          "document_id": "AI4Research",
+          "locator": "PDF p.309",
+          "requirement_id": "R17",
+          "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8"
+        }
+      ],
+      "source_excerpt": "План устанавливает объекты, критерии, методы, данные, ответственность и сроки верификации и валидации применения ИИ и полученных с его участием результатов. План разрабатывается до использования существенных выходов ИИ и актуализируется при изменении влияния, риска, данных или средства.",
+      "engineering_interpretation": "Pin check object, criterion, method and expected evidence before using a substantial AI output; retain responsibility and independence.",
+      "interpretation_state": "reviewed",
+      "interpretation_version": "2",
+      "modality": "obligation",
+      "applicability_predicate": {
+        "exists": {
+          "path": "task.id"
+        }
+      },
+      "required_facts": [
+        "task.id"
+      ],
+      "unknown_behavior": "defer",
+      "criterion_templates": [
+        "predeclared_check"
+      ],
+      "evidence_requirements": [
+        "object_version",
+        "criterion_version",
+        "method",
+        "expected_evidence",
+        "responsibility",
+        "independence"
+      ],
+      "evaluator_kind": "python",
+      "evaluator_config": {
+        "check_id": "predeclared_check",
+        "required_fields": [
+          "object_version",
+          "criterion_version",
+          "method",
+          "expected_evidence",
+          "responsibility",
+          "independence"
+        ],
+        "allowed_outcomes": [
+          "pass",
+          "fail",
+          "insufficient_evidence",
+          "not_evaluated"
+        ],
+        "implementation_state": "not_automated",
+        "structural_subcheck": "accepted_check_snapshot_v1"
+      },
+      "severity": "major",
+      "allowed_uses_affected": [
+        "final_acceptance"
+      ],
+      "mapped_actions": [
+        "4.11.01.04",
+        "4.13.01.03"
+      ],
+      "mapping_note": "Partial crosswalk to action-index locator(s); this check does not assess the complete action."
+    },
+    {
+      "rule_id": "R18:scientific_claim_trace",
+      "namespace": "document",
+      "document_id": "AI4Research",
+      "edition": "2026-08",
+      "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8",
+      "source_refs": [
+        {
+          "document_id": "requirements.md",
+          "locator": "R18"
+        },
+        {
+          "document_id": "AI4Research",
+          "locator": "PDF p.312",
+          "requirement_id": "R18",
+          "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8"
+        }
+      ],
+      "source_excerpt": "2. Порядок применения Для каждого существенного научного вывода строится цепочка прослеживаемости от проблемы и гипотезы до данных, методов, выходов ИИ, решений исследователя и свидетельств проверки.",
+      "engineering_interpretation": "Trace a substantial claim across problem or hypothesis, data, method, AI output, researcher decision and check.",
+      "interpretation_state": "reviewed",
+      "interpretation_version": "2",
+      "modality": "obligation",
+      "applicability_predicate": {
+        "eq": {
+          "path": "task.scientific_claim_requested",
+          "value": true
+        }
+      },
+      "required_facts": [
+        "task.scientific_claim_requested"
+      ],
+      "unknown_behavior": "defer",
+      "criterion_templates": [
+        "scientific_claim_trace"
+      ],
+      "evidence_requirements": [
+        "problem_ref",
+        "data_refs",
+        "method_ref",
+        "ai_output_ref",
+        "decision_ref",
+        "verification_ref"
+      ],
+      "evaluator_kind": "python",
+      "evaluator_config": {
+        "check_id": "scientific_claim_trace",
+        "required_fields": [
+          "problem_ref",
+          "data_refs",
+          "method_ref",
+          "ai_output_ref",
+          "decision_ref",
+          "verification_ref"
+        ],
+        "allowed_outcomes": [
+          "pass",
+          "fail",
+          "insufficient_evidence",
+          "not_evaluated"
+        ],
+        "implementation_state": "not_automated",
+        "semantic_sufficiency": "separate_review_required"
+      },
+      "severity": "major",
+      "allowed_uses_affected": [
+        "scientific_claim",
+        "final_acceptance"
+      ],
+      "mapped_actions": [
+        "4.11.03.02",
+        "4.13.03.02"
+      ],
+      "mapping_note": "Partial crosswalk to action-index locator(s); this check does not assess the complete action."
+    },
+    {
+      "rule_id": "R23:unassessed_distinct",
+      "namespace": "document",
+      "document_id": "AI4Research",
+      "edition": "2026-08",
+      "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8",
+      "source_refs": [
+        {
+          "document_id": "requirements.md",
+          "locator": "R23"
+        },
+        {
+          "document_id": "AI4Research",
+          "locator": "PDF p.328",
+          "requirement_id": "R23",
+          "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8"
+        }
+      ],
+      "source_excerpt": "подтвержден. Состояние «не оценен» не преобразуется в ноль автоматически и отражается как ограничение охвата и уверенности.",
+      "engineering_interpretation": "Keep unassessed, failed and not-applicable separate; never turn missing review into zero or N/A.",
+      "interpretation_state": "reviewed",
+      "interpretation_version": "2",
+      "modality": "obligation",
+      "applicability_predicate": {
+        "exists": {
+          "path": "task.id"
+        }
+      },
+      "required_facts": [
+        "task.id"
+      ],
+      "unknown_behavior": "defer",
+      "criterion_templates": [
+        "unassessed_distinct"
+      ],
+      "evidence_requirements": [
+        "applicability",
+        "review_state",
+        "outcome",
+        "coverage"
+      ],
+      "evaluator_kind": "python",
+      "evaluator_config": {
+        "check_id": "unassessed_distinct",
+        "required_fields": [
+          "applicability",
+          "review_state",
+          "outcome",
+          "coverage"
+        ],
+        "allowed_outcomes": [
+          "pass",
+          "fail",
+          "insufficient_evidence",
+          "not_evaluated"
+        ],
+        "implementation_state": "not_automated",
+        "structural_subcheck": "coverage_axes_v1"
+      },
+      "severity": "major",
+      "allowed_uses_affected": [
+        "final_acceptance"
+      ],
+      "mapped_actions": [
+        "3.08.02.02"
+      ],
+      "mapping_note": "Partial crosswalk to action-index locator(s); this check does not assess the complete action."
+    },
+    {
+      "rule_id": "R24:critical_blocker",
+      "namespace": "document",
+      "document_id": "AI4Research",
+      "edition": "2026-08",
+      "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8",
+      "source_refs": [
+        {
+          "document_id": "requirements.md",
+          "locator": "R24"
+        },
+        {
+          "document_id": "AI4Research",
+          "locator": "PDF p.322",
+          "requirement_id": "R24",
+          "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8"
+        }
+      ],
+      "source_excerpt": "Ограничение усреднения. Критическое несоответствие не компенсируется высокими оценками других процессов, работ или свидетельств. Оно отражается отдельно до документированного закрытия.",
+      "engineering_interpretation": "Block only affected uses on open critical nonconformities, without averaging away the blocker.",
+      "interpretation_state": "reviewed",
+      "interpretation_version": "1",
+      "modality": "obligation",
+      "applicability_predicate": {
+        "exists": {
+          "path": "task.id"
+        }
+      },
+      "required_facts": [
+        "task.id"
+      ],
+      "unknown_behavior": "defer",
+      "criterion_templates": [
+        "critical_blocker"
+      ],
+      "evidence_requirements": [
+        "nonconformity_id",
+        "severity",
+        "affected_uses",
+        "status"
+      ],
+      "evaluator_kind": "python",
+      "evaluator_config": {
+        "check_id": "critical_blocker",
+        "required_fields": [
+          "nonconformity_id",
+          "severity",
+          "affected_uses",
+          "status"
+        ],
+        "allowed_outcomes": [
+          "pass",
+          "fail",
+          "insufficient_evidence",
+          "not_evaluated"
+        ],
+        "implementation_state": "automated_policy"
+      },
+      "severity": "critical",
+      "allowed_uses_affected": [
+        "dependent_use",
+        "scientific_claim",
+        "final_acceptance"
+      ],
+      "mapped_actions": [
+        "3.08.04.01",
+        "3.02.04.04"
+      ],
+      "mapping_note": "Partial crosswalk to action-index locator(s); this check does not assess the complete action."
+    },
+    {
+      "rule_id": "R28:corrective_action_closure",
+      "namespace": "document",
+      "document_id": "AI4Research",
+      "edition": "2026-08",
+      "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8",
+      "source_refs": [
+        {
+          "document_id": "requirements.md",
+          "locator": "R28"
+        },
+        {
+          "document_id": "AI4Research",
+          "locator": "PDF p.334",
+          "requirement_id": "R28",
+          "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8"
+        }
+      ],
+      "source_excerpt": "Свидетельства выполнения Способ проверки результативности Решение о закрытии и дата",
+      "engineering_interpretation": "Keep prior assessments and require effectiveness evidence and a closure decision before resolving a finding.",
+      "interpretation_state": "reviewed",
+      "interpretation_version": "2",
+      "modality": "obligation",
+      "applicability_predicate": {
+        "eq": {
+          "path": "correction.action_open",
+          "value": true
+        }
+      },
+      "required_facts": [
+        "correction.action_open"
+      ],
+      "unknown_behavior": "defer",
+      "criterion_templates": [
+        "corrective_action_closure"
+      ],
+      "evidence_requirements": [
+        "nonconformity_ref",
+        "correction_ref",
+        "effectiveness_check_ref",
+        "closure_decision"
+      ],
+      "evaluator_kind": "python",
+      "evaluator_config": {
+        "check_id": "corrective_action_closure",
+        "required_fields": [
+          "nonconformity_ref",
+          "correction_ref",
+          "effectiveness_check_ref",
+          "closure_decision"
+        ],
+        "allowed_outcomes": [
+          "pass",
+          "fail",
+          "insufficient_evidence",
+          "not_evaluated"
+        ],
+        "implementation_state": "not_automated"
+      },
+      "severity": "major",
+      "allowed_uses_affected": [
+        "final_acceptance"
+      ],
+      "mapped_actions": [
+        "3.08.04.02",
+        "3.05.03.06"
+      ],
+      "mapping_note": "Partial crosswalk to action-index locator(s); this check does not assess the complete action."
+    },
+    {
+      "rule_id": "R29:report_completeness",
+      "namespace": "document",
+      "document_id": "AI4Research",
+      "edition": "2026-08",
+      "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8",
+      "source_refs": [
+        {
+          "document_id": "requirements.md",
+          "locator": "R29"
+        },
+        {
+          "document_id": "AI4Research",
+          "locator": "PDF p.337",
+          "requirement_id": "R29",
+          "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8"
+        }
+      ],
+      "source_excerpt": "7. Результаты • оценки экземпляров, процессов, работ, этапов и стадий: • достигнутые и недостигнутые результаты: • качество свидетельств, полнота охвата и уверенность: • динамика повторных оценок: 8. Несоответствия и риски • критические и существенные несоответствия: • причины и последствия: • корректирующие действия, ответственные и сроки:",
+      "engineering_interpretation": "Build report claims from registry records and show coverage, uncertainty, findings and use limits separately.",
+      "interpretation_state": "reviewed",
+      "interpretation_version": "1",
+      "modality": "obligation",
+      "applicability_predicate": {
+        "eq": {
+          "path": "task.has_report_output",
+          "value": true
+        }
+      },
+      "required_facts": [
+        "task.has_report_output"
+      ],
+      "unknown_behavior": "defer",
+      "criterion_templates": [
+        "report_completeness"
+      ],
+      "evidence_requirements": [
+        "scope",
+        "profile",
+        "results",
+        "coverage",
+        "confidence",
+        "nonconformities",
+        "limitations",
+        "decision"
+      ],
+      "evaluator_kind": "python",
+      "evaluator_config": {
+        "check_id": "report_completeness",
+        "required_fields": [
+          "scope",
+          "profile",
+          "results",
+          "coverage",
+          "confidence",
+          "nonconformities",
+          "limitations",
+          "decision"
+        ],
+        "allowed_outcomes": [
+          "pass",
+          "fail",
+          "insufficient_evidence",
+          "not_evaluated"
+        ],
+        "implementation_state": "not_automated"
+      },
+      "severity": "major",
+      "allowed_uses_affected": [
+        "report_release",
+        "final_acceptance"
+      ],
+      "mapped_actions": [
+        "3.08.03.01"
+      ],
+      "mapping_note": "Partial crosswalk to action-index locator(s); this check does not assess the complete action."
+    },
+    {
+      "rule_id": "R30:information_access_integrity",
+      "namespace": "document",
+      "document_id": "AI4Research",
+      "edition": "2026-08",
+      "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8",
+      "source_refs": [
+        {
+          "document_id": "requirements.md",
+          "locator": "R30"
+        },
+        {
+          "document_id": "AI4Research",
+          "locator": "PDF p.134",
+          "requirement_id": "R30",
+          "source_digest": "9511822c9b963c755422efb63ac74abc24258bab0f492deee0721df0d83cefb8"
+        }
+      ],
+      "source_excerpt": "Осуществляются сбор, контроль, обработка, хранение и предоставление информации, подлежащей использованию.",
+      "engineering_interpretation": "Check retained materials exist and are accessible for the requested use; archival applies when needed.",
+      "interpretation_state": "reviewed",
+      "interpretation_version": "1",
+      "modality": "obligation",
+      "applicability_predicate": {
+        "exists": {
+          "path": "task.id"
+        }
+      },
+      "required_facts": [
+        "task.id"
+      ],
+      "unknown_behavior": "defer",
+      "criterion_templates": [
+        "information_access_integrity"
+      ],
+      "evidence_requirements": [
+        "material_ref",
+        "access_state",
+        "storage_status",
+        "archive_ref"
+      ],
+      "evaluator_kind": "python",
+      "evaluator_config": {
+        "check_id": "information_access_integrity",
+        "required_fields": [
+          "material_ref",
+          "access_state",
+          "storage_status",
+          "archive_ref"
+        ],
+        "allowed_outcomes": [
+          "pass",
+          "fail",
+          "insufficient_evidence",
+          "not_evaluated"
+        ],
+        "implementation_state": "not_automated"
+      },
+      "severity": "major",
+      "allowed_uses_affected": [
+        "dependent_use",
+        "final_acceptance"
+      ],
+      "mapped_actions": [
+        "3.06.02.01",
+        "3.06.03.01"
+      ],
+      "mapping_note": "Partial crosswalk to action-index locator(s); this check does not assess the complete action."
+    },
+    {
+      "rule_id": "ENG:registration_integrity",
+      "namespace": "engineering",
+      "document_id": "technical-integration-plan.md",
+      "source_refs": [
+        {
+          "document_id": "technical-integration-plan.md",
+          "locator": "§1 decision 2; §7 registration",
+          "source_digest": "e6825c5d5cb39ed60a269c4123ada207612c348592c2ed672087214847eab844"
+        }
+      ],
+      "source_excerpt": "Ошибки регистрации/целостности сразу препятствуют статусу готовности.",
+      "engineering_interpretation": "Block dependent use when registration or integrity is unconfirmed.",
+      "interpretation_state": "reviewed",
+      "interpretation_version": "1",
+      "modality": "obligation",
+      "applicability_predicate": {
+        "exists": {
+          "path": "task.id"
+        }
+      },
+      "required_facts": [
+        "task.id"
+      ],
+      "unknown_behavior": "defer",
+      "criterion_templates": [
+        "registration_integrity"
+      ],
+      "evidence_requirements": [
+        "registration_receipt"
+      ],
+      "evaluator_kind": "python",
+      "severity": "critical",
+      "allowed_uses_affected": [
+        "dependent_use",
+        "scientific_claim",
+        "final_acceptance"
+      ],
+      "edition": "2026-10-12",
+      "mapped_actions": [
+        "3.06.02.01"
+      ],
+      "mapping_note": "Engineering safeguard aligned with information management; not a claim that the full source action is assessed.",
+      "evaluator_config": {
+        "check_id": "registration_integrity",
+        "implementation_state": "automated_policy",
+        "required_fields": [
+          "registration_status",
+          "normalization_status",
+          "execution_status",
+          "integrity_findings"
+        ]
+      },
+      "source_digest": "e6825c5d5cb39ed60a269c4123ada207612c348592c2ed672087214847eab844"
+    }
+  ]
+}

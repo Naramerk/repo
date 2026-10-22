@@ -41,18 +41,29 @@ class Study(BaseModel):
     hitl_policy: HitlPolicy    # §7.3
     deadline: datetime         # верхняя граница всего study (§3.3)
     parent_study_id: str | None = None   # «продолжить сессию» (§3.6)
+    goal: Goal                 # statement, research_form, trl (заполняет spec)
+    constraints: list[Constraint] = []   # узел constraint — только для проверяемых
+    confirmations_needed: int = 1        # профиль; k для вердикта (RESEARCH_MODEL §4.1)
+    max_replans: int = 2                 # профиль; число задач PLAN-n
     # статуса нет: study_view() выводится из задач (§3.2)
 
 class Hypothesis(BaseModel):
     hypothesis_id: str; statement: str; rank: int; prediction: str; selected: bool
+    addresses: list[str]       # question_id, ≥1, умолчания нет
+    approved_by: Literal["human","critic"] | None = None; delegated_by: Literal["human","timeout"] | None = None
+
+class Need(BaseModel):
+    needed: bool; reason: str
 
 class Plan(BaseModel):
     plan_id: str; study_id: str; revision: int        # новая ревизия = новая запись
-    hypothesis_id: str | None
+    hypotheses: Need; literature: Need                 # решения planner (профиль может обязать)
+    supersedes: str | None = None                      # предыдущая ревизия (PLAN-n или правка HITL)
+    approved_by: Literal["human","critic"] | None = None; delegated_by: Literal["human","timeout"] | None = None
     tasks: list[TaskSpec]                              # порядок = номер задачи
 
 class TaskSpec(BaseModel):
-    task_key: str              # "LIT-<n>" | "EXP-<n>" | "HYP-<n>", n назначает ядро при принятии плана, не меняется (R5)
+    task_key: str              # "LIT-<n>" | "EXP-<n>" | "HYP-<n>" | "PLAN-<n>", n назначает ядро при принятии плана, не меняется (R5)
     title: str; goal: str
     route: str                 # имя маршрута-агента ("experiment", "coder", "medical", ...)
     required: bool = True
@@ -71,7 +82,7 @@ class OutputSpec(BaseModel):
 
 class Task(BaseModel):
     task_id: str               # = f"{study_id}/{task_key}"; уникален (R5)
-    kind: TaskKind             # spec | plan | hypotheses (HYP-n) | experiment (LIT-n = method literature_search, EXP-n) | report
+    kind: TaskKind             # spec | plan (PL-0, PLAN-n) | hypotheses (HYP-n) | experiment (LIT-n = method literature_search, EXP-n) | report
     spec: TaskSpec
     state: TaskState           # PENDING | RUNNING | DONE
     outcome: TaskOutcome | None   # SUCCESS | PARTIAL | FAILED | SKIPPED, только при DONE
@@ -119,8 +130,13 @@ class Artifact(BaseModel):
 
 class EvidenceRef(BaseModel):          # модель доказательства (п.2 ревью)
     artifact_id: str
-    json_pointer: str | None = None    # RFC 6901, напр. "/rows/0/ld50"
-    digest: str                        # sha256 значения по указателю (или всего артефакта)
+    json_pointer: str                  # RFC 6901, обязателен; "" = весь документ
+    digest: str                        # sha256(JCS(значение по указателю))
+
+class SourceQuote(BaseModel):          # доказательство из литературы
+    artifact_id: str                   # artifact(role=paper)
+    locator: str                       # страница или раздел
+    quote: str; digest: str            # digest = sha256(JCS(quote)); проверка quote_in_source
 
 class Node(BaseModel):                 # проекция для графа/метамодели/веба
     node_id: str; kind: NodeKind; parent_id: str | None; ref_id: str
@@ -150,7 +166,8 @@ def study_view(tasks) -> StudyView:
     if any(t.state != DONE for t in tasks):
         return StudyView(phase="running", progress=done/total, awaiting_human=open_hitl > 0)
     req = [t for t in tasks if t.spec.required]
-    if all(t.outcome == SUCCESS for t in req): verdict = "fulfilled"
+    if all(t.outcome == SUCCESS for t in req) and all(question_verdict(q) != "untested" for q in questions):
+        verdict = "fulfilled"          # вердикт гипотезы или ответа на вопрос, RESEARCH_MODEL §4.1
     elif plan_task.outcome in {FAILED, SKIPPED} or all(t.outcome in {FAILED, SKIPPED} for t in req): verdict = "failed"
     else: verdict = "partial"
     return StudyView(phase="closed", verdict=verdict, stub_share=..., ...)   # verdict: fulfilled | partial | simulated | failed
@@ -350,7 +367,8 @@ class MethodSource(BaseModel):     # Том Б
 
 class CodeCheck(BaseModel):
     kind: Literal["artifact_exists","schema_valid","json_pointer","source_link",
-                  "metric_threshold","value_matches"]
+                  "metric_threshold","value_matches","graph_shape","quote_in_source",
+                  "min_sources","question_coverage","recency"]   # = schema/graph_schema.yaml code_check_kinds
     output: str | None; schema_ref: str | None; pointer: str | None
     metric: str | None; op: Literal["<","<=","==",">=",">","in"] | None; target: Any = None
     tolerance: float | None = None
@@ -505,7 +523,7 @@ class JobStore(Protocol):
 | Роль | Вход | Выход (output_schema) | Инструменты |
 |---|---|---|---|
 | hypothesizer | StudyContext | HypothesesOut(hypotheses: list[Hypothesis]) | литература read_only |
-| researcher | StudyContext, Hypothesis | LiteratureOut(sources, claims) | papers_search, download, parse |
+| researcher | StudyContext, Hypothesis?, query_plan | LiteratureOut(papers, quotes, claims) | papers_search, download, parse |
 | planner | StudyContext, LiteratureOut, Hypothesis | PlanOut(tasks: list[TaskSpecDraft]) | каталог инструментов read_only |
 | critic | PlanOut | CriticVerdict(decision: accept\|revise\|reject, issues) | нет |
 | executor-route | TaskSpec, контекст зависимостей | AgentTaskOutput | инструменты задачи (через ToolRouter) |
@@ -541,7 +559,9 @@ class HitlPolicy(BaseModel):
 class GateConfig(BaseModel):
     enabled: bool = True
     timeout_s: int                     # spec 120, plan 180 (до плана ≤ 300 с на человека), прочие 1800
-    on_timeout: Literal["delegate","fail"] = "delegate"   # delegate: решает critic, отметка «timeout→agent»
+    on_timeout: Literal["delegate","delegate_capped","fail"] = "delegate"   # delegate: решает critic, «timeout→agent»
+    # costly_or_nonreal: по умолчанию "fail"; delegate_capped — critic в пределах Budget(delegated_costly), ₽;
+    # delegate без лимита — только явно в профиле. Явное «реши сам» подчиняется тем же режимам.
 
 class HitlRequest(BaseModel):
     request_id: str; kind: str         # имя шлюза из HitlPolicy.gates
@@ -549,13 +569,15 @@ class HitlRequest(BaseModel):
 class HitlDecision(BaseModel):
     request_id: str; decision: Literal["accept","revise","reject","delegate"]; author: str
     approved_by: Literal["human","critic"]; delegated_by: Literal["human","timeout"] | None; reason: str
-    edits_ref: str | None              # plan: новая ревизия plan (derived_from); hypotheses: ревизия + supersedes
+    edits_ref: str | None              # plan и hypotheses: новая ревизия + supersedes
 ```
 - Решение — событие `HitlDecided` с автором; на узле (plan, hypothesis, report, experiment) хранится `approved_by`, `delegated_by`.
 - headless/auto: запрос к человеку не создаётся; решение = вердикт critic/reviewer; `approved_by="critic"`, `delegated_by=None`.
 - interactive, «реши сам»: человек делегирует → решает critic; `approved_by="critic"`, `delegated_by="human"`.
 - interactive, таймаут: `on_timeout=delegate` (по умолчанию) → решает critic, событие `HitlTimedOut`, `delegated_by="timeout"` (в веб и отчёте «timeout→agent»). `on_timeout=fail` → задача DONE(FAILED, human_timeout); потомки → DONE(SKIPPED, input_unavailable) без заглушек (§3.4 п.5); study verdict failed, возобновление через fork. result_acceptance по таймауту → принимается вычисленный outcome; skip_task → не пропускать.
-- Шлюз plan показывает plan.literature/plan.hypotheses с причинами и список LIT/HYP/EXP; правка маршрута (добавить/удалить задачу) = новая ревизия plan с `derived_from` к предыдущей, ключи уже выданных задач не меняются (R5).
+- Шлюз costly_or_nonreal: `fail` (по умолчанию) — таймаут → FAILED(human_timeout), потомки SKIPPED, продолжение fork, «реши сам» недоступен; `delegate_capped` — решает critic, траты из `Budget(delegated_costly)`, при исчерпании DONE(SKIPPED, budget); `delegate` — critic без лимита. Всегда событие `HitlDecided`/`HitlTimedOut` с reason и `spent_rub`; отчёт и веб показывают, что решил critic, и сумму.
+- Перепланирование: каждая задача PLAN-n (≤ `max_replans`) имеет deadline ≤ study.deadline и долю бюджета study (`Budget.replan_share`); исчерпание max_replans → planner работает с текущей ревизией.
+- Шлюз plan показывает plan.literature/plan.hypotheses с причинами и список LIT/HYP/EXP; правка маршрута (добавить/удалить задачу) = новая ревизия plan + `supersedes`, ключи уже выданных задач не меняются (R5).
 - Бюджет 10 мин ТЗ до плана: deadline задачи plan = study.created_at + 600 с; HITL-таймауты spec и plan вычитаются из него и обрезаются его остатком.
 - После простоя deadline не срабатывает мгновенно: при recover `hitl_deadline = min(max(исходный, now + grace_s=60), task.deadline, study.deadline)` и пишется `HitlDeadlineExtended`. Продление никогда не выходит за deadline задачи и study; если они уже истекли — срабатывает P5.
 - headless/auto: таймаута нет — решение принимает critic/reviewer сразу (accept_if_critic_accepted; reject → DONE(FAILED)).
@@ -745,7 +767,7 @@ web/           отдельно (M6)
 | 5a/5b | понижение с причиной; UNASSESSED не понижает | сделано (§4.2), + потолок PARTIAL для simulated |
 | 6 | артефакты | сделано (§3.8, §3.7); + флаг simulated |
 | 7 | писатель и журнал | сделано; пересчитано под ≥10 задач в одном study, тест на 20 (§3.5a) |
-| 8 | HITL | переопределено решением пользователя (d6c2e43→): interactive по таймауту → FAILED(human_timeout) + fork; headless → вердикт critic. Бюджет автодействий больше не нужен (автодействий в interactive нет) |
+| 8 | HITL | переопределено решениями пользователя (v0.3): шлюзы plan, hypotheses, costly_or_nonreal, report; «реши сам» → critic; on_timeout по умолчанию delegate («timeout→agent»), у costly_or_nonreal — fail (FAILED(human_timeout) + fork), опционально delegate_capped с Budget(delegated_costly) в ₽ или delegate; headless → critic (§7.3) |
 | 9 | убрать forced | сделано |
 | 10 | jobs | сделано (§6.4) |
 | 11 | #1, #21, #22, Budget, cost_rub=None | сделано; #1 — задача kind=spec |
@@ -787,4 +809,16 @@ web/           отдельно (M6)
 | 7 | Том Б | Code-проверки п.1, 8, 11, 12; п.7 config_digest |
 | 8 | приёмочные тесты | RT1, H1, recovery внутри стадии (§4.2, §12.2) |
 | + | решения пользователя | гипотезы и литература опциональны (HYP-n, LIT-n, plan.hypotheses/literature); HITL-шлюзы с «реши сам» и on_timeout=delegate |
+
+### Ревью крокодила v0.3 (2026-10-23)
+
+| # | Замечание | Статус |
+|---|---|---|
+| 1 | stance вычисляется; k из разных попыток/артефактов; потолок по q; «по литературе» на пустом списке; claim не создаётся задачей report | сделано (RESEARCH_MODEL §4.1, tests/refmodel.py) |
+| 2 | PlanValidator: каждый question покрыт LIT/EXP; fulfilled ⇔ нет untested | сделано (§3.2, RESEARCH_MODEL §5) |
+| 3 | max_replans, задачи PLAN-n с deadline и долей бюджета | сделано (§2, §7.3) |
+| 4 | HITL по умолчанию; строка 8 §15 | решено пользователем; строка 8 обновлена |
+| 5 | CI, вендоринг с sha256, пары рёбер, структурированные поля | сделано (.github/workflows/ci.yml, vendor/ai4research, schema) |
+| 6 | синхронизация §2, CodeCheck.kind, §7.1 | сделано |
+| + | ревизия plan — supersedes; таблица Тома Б генерируется; тесты RT1, H1, дедупликация paper — реальные; recovery — xfail до M0 PR #1 | сделано |
 
