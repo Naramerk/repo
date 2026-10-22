@@ -744,3 +744,7 @@ web/           отдельно (M6)
 | M2-4 | fork: task_key+spec_digest; nonce; JCS; GC родителя; simulated/STALE при смене каталога | записано (§3.6) |
 
 Несогласий нет. Уточнение: 10 мин ТЗ трактуются как бюджет от создания study до DONE задачи plan, включая HITL; если человек не уложился, план проваливается с human_timeout, а не продлевается.
+
+## 16. Научная модель (граф)
+
+Научные сущности (goal, question, criterion, hypothesis, source, evidence, claim, experiment, run, artifact, conclusion, report) — узлы одного графа, который рисует веб и на котором проверяется каталог. Узлы и рёбра строит код (`GraphBuilder`) из типизированных выводов ролей; `research_commit` нет; статусы узлов вычисляются. `NodeKind` в §2 заменяется списком из RESEARCH_MODEL.md §2. Подробно: [RESEARCH_MODEL.md](RESEARCH_MODEL.md).
