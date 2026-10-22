@@ -146,23 +146,99 @@ def test_check_cardinality(impl):
     assert "derived_from out E2=0" in bad and "measured_by in CR0=2" in bad
 
 
-@pytest.mark.xfail(reason="runtime-only: needs event log + recover(); covered by M0 PR #1 (cursor/m0-state-core-38bb)",
-                   strict=False)
-def test_recovery_stage_task_not_rerun():
-    from coscientist_next.core import recover  # noqa: F401  (M0)
-    raise NotImplementedError
+@pytest.mark.asyncio
+async def test_recovery_stage_task_not_rerun(tmp_path, clock):
+    """Task with ResultRecorded inside a stage: recover adds 0 attempts and 0 nodes."""
+    from datetime import timedelta
+
+    from coscientist.core.domain import TaskState
+    from coscientist.core.ids import result_id
+    from coscientist.core.recover import recover
+    from coscientist.core.runtime_factory import close_runtime, open_runtime
+    from tests.helpers import attach_executor, record_success
+
+    rt = await open_runtime(tmp_path, "st_rec_mr", clock=clock)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(minutes=30),
+        sid="st_rec_mr",
+    )
+    nodes_before = len(rt.graph.all_nodes())
+    _, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("SPEC")
+    await record_success(rt, aid, arts)
+    assert result_id(aid) in rt.results or aid in rt.results
+    n_attempts_before = len(rt.tasks["st_rec_mr/SPEC"].attempts)
+    await recover(rt)
+    assert len(rt.tasks["st_rec_mr/SPEC"].attempts) == n_attempts_before
+    assert rt.tasks["st_rec_mr/SPEC"].state == TaskState.DONE
+    assert len(rt.graph.all_nodes()) == nodes_before
+    starts = [e for e in rt.store.read_all() if e.type == "AttemptStarted"]
+    assert len(starts) == 1
+    await close_runtime(rt)
 
 
-@pytest.mark.xfail(reason="runtime-only: report rendering of delegated spend; M5", strict=False)
-def test_costly_gate_budget_spent_shown_in_report():
-    from coscientist_next.report import render  # noqa: F401  (M5)
-    raise NotImplementedError
+@pytest.mark.asyncio
+async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
+    """DelegatedBudget debit after attempt is visible in the report."""
+    from datetime import timedelta
+    from decimal import Decimal
+
+    from coscientist.core.domain import Budget, GateConfig, HitlPolicy
+    from coscientist.core.report import render
+    from coscientist.core.runtime_factory import close_runtime, open_runtime
+    from tests.helpers import attach_executor, record_success
+
+    policy = HitlPolicy(
+        mode="interactive",
+        gates={
+            "costly_or_nonreal": GateConfig(
+                enabled=True, timeout_s=1, on_timeout="delegate_capped"
+            )
+        },
+    )
+    budget = Budget(
+        delegated_costly=Decimal("1000"), deadline=clock.now() + timedelta(hours=1)
+    )
+    rt = await open_runtime(tmp_path, "st_cost", clock=clock)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(minutes=30),
+        sid="st_cost",
+        hitl_policy=policy,
+        budget=budget,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("SPEC")
+    await record_success(rt, aid, arts)
+    rid = await rt.open_hitl("PLAN", kind="costly_or_nonreal", timeout_s=1, cost_rub=500)
+    clock.advance(timedelta(seconds=2))
+    await rt.tick()
+    assert rt.hitl[rid].open is False
+    settled = await rt.settle_delegated_spend(rid, actual_rub=500)
+    assert settled["spent_rub"] == 500
+    assert rt.delegated_budget is not None
+    assert rt.delegated_budget.spent_rub == 500
+    report = render(rt.store.read_all())
+    assert report["hitl_spend"]["total_spent_rub"] == 500.0
+    assert any(d["spent_rub"] == 500.0 for d in report["hitl_spend"]["decisions"])
+    assert "500" in report["summary"]
+    await close_runtime(rt)
 
 
-@pytest.mark.parametrize("required_ok,verdicts", [(True, {"Q1": "refuted"}), (True, {"Q1": "untested"}),
-                                                  (False, {"Q1": "supported"})])
+@pytest.mark.parametrize(
+    "required_ok,verdicts",
+    [(True, {"Q1": "refuted"}), (True, {"Q1": "untested"}), (False, {"Q1": "supported"})],
+)
 def test_core_study_view_matches_refmodel(required_ok, verdicts):
     import refmodel
-    core = pytest.importorskip("coscientist.core.rules", reason="coscientist.core.rules not present yet (M0)")
+
+    core = pytest.importorskip(
+        "coscientist.core.rules", reason="coscientist.core.rules not present yet (M0)"
+    )
     got = core.study_view_verdict(required_ok, verdicts) == "fulfilled"
     assert got == refmodel.study_fulfilled(verdicts, required_ok)

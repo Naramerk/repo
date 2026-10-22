@@ -39,6 +39,7 @@ EventType = Literal[
     "HitlDecided",
     "HitlTimedOut",
     "HitlDeadlineExtended",
+    "BudgetDebited",
     "ArtifactRegistered",
     "LateWriteRejected",
     "CatalogErrorRaised",

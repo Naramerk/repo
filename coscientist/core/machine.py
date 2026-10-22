@@ -64,6 +64,9 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
         self.dep_outputs: dict[str, dict[str, str]] = {}
         self.dep_provenance: dict[str, Provenance] = {}
         self._delegated_costly_spent: float = 0.0
+        self.delegated_budget: Any | None = None
+        self._pending_costly_events: dict[str, dict[str, Any]] = {}
+        self._hitl_notices: list[dict[str, Any]] = []
 
     async def _append(self, events: list[EventEnvelope]) -> None:
         if self._lease_lost:
@@ -80,6 +83,20 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
         p = ev.payload
         if ev.type == "StudyCreated":
             self.study = Study.model_validate(p)
+            from coscientist.core.rules import DelegatedBudget
+
+            if self.study.budget and self.study.budget.delegated_costly is not None:
+                self.delegated_budget = DelegatedBudget(
+                    float(self.study.budget.delegated_costly)
+                )
+        elif ev.type == "BudgetDebited":
+            from coscientist.core.rules import DelegatedBudget
+
+            if p.get("budget"):
+                self.delegated_budget = DelegatedBudget.from_state(p["budget"])
+            spent = float(p.get("spent_rub") or 0.0)
+            if spent > 0:
+                self._delegated_costly_spent += spent
         elif ev.type in ("TaskCreated", "TaskInherited"):
             self.tasks[p["task_id"]] = Task.model_validate(p)
         elif ev.type == "AttemptStarted":
@@ -111,9 +128,12 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
         elif ev.type == "HitlOpened":
             self.hitl[p["request_id"]] = HitlRequest.model_validate(p)
         elif ev.type in ("HitlDecided", "HitlTimedOut"):
-            h = self.hitl.get(p["request_id"])
-            if h:
-                self.hitl[p["request_id"]] = h.model_copy(update={"open": False})
+            if p.get("keep_open") or p.get("effect") == "WAIT":
+                self._hitl_notices.append(dict(p))
+            else:
+                h = self.hitl.get(p["request_id"])
+                if h:
+                    self.hitl[p["request_id"]] = h.model_copy(update={"open": False})
             spent = float(p.get("spent_rub") or 0.0)
             if spent > 0:
                 self._delegated_costly_spent += spent

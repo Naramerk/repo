@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from coscientist.core.costly_gate import costly_gate
+from coscientist.core.costly_gate import DelegatedBudget, costly_gate, settle
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import Clarification, HitlRequest, Task, TaskOutcome, TaskState
 from coscientist.core.events import EventEnvelope, make_idem
@@ -102,13 +102,57 @@ class HitlForkMixin:
             ]
         )
 
-    def _budget_left_rub(self) -> float:
+    def _delegated_budget(self) -> DelegatedBudget | None:
+        return getattr(self, "delegated_budget", None)
+
+    def _ensure_delegated_budget(self) -> DelegatedBudget | None:
+        """Lazy-init from study.budget.delegated_costly when present."""
+        existing = self._delegated_budget()
+        if existing is not None:
+            return existing
         assert self.study is not None
         bud = self.study.budget
         if bud is None or bud.delegated_costly is None:
-            return 0.0
-        spent = float(getattr(self, "_delegated_costly_spent", 0.0) or 0.0)
-        return max(0.0, float(bud.delegated_costly) - spent)
+            return None
+        self.delegated_budget = DelegatedBudget(float(bud.delegated_costly))
+        return self.delegated_budget
+
+    async def settle_delegated_spend(
+        self, request_id: str, actual_rub: float
+    ) -> dict:
+        """Debit actual spend after a delegated attempt; persist via BudgetDebited."""
+        assert self.study is not None
+        pending = getattr(self, "_pending_costly_events", {}).get(request_id)
+        if not pending:
+            return {"spent_rub": 0.0}
+        budget = self._ensure_delegated_budget()
+        settled = settle(dict(pending), budget, actual_rub)
+        now = self.clock.now()
+        await self._append(
+            [
+                EventEnvelope(
+                    study_id=self.study.study_id,
+                    type="BudgetDebited",
+                    entity_key=request_id,
+                    idem_key=make_idem(
+                        "BudgetDebited", request_id, str(actual_rub), str(settled["spent_rub"])
+                    ),
+                    payload={
+                        "request_id": request_id,
+                        "actual_rub": actual_rub,
+                        "spent_rub": settled["spent_rub"],
+                        "cost_estimate_rub": pending.get("cost_estimate_rub"),
+                        "decided_by": settled.get("decided_by"),
+                        "delegated_by": settled.get("delegated_by"),
+                        "reason": settled.get("reason"),
+                        "budget": budget.to_state() if budget else None,
+                    },
+                    ts=now,
+                )
+            ]
+        )
+        getattr(self, "_pending_costly_events", {}).pop(request_id, None)
+        return settled
 
     async def _apply_costly_or_nonreal(
         self,
@@ -121,18 +165,45 @@ class HitlForkMixin:
         gate = self.study.hitl_policy.gate("costly_or_nonreal")
         mode = gate.on_timeout
         cost = float(h.cost_rub)
-        left = self._budget_left_rub()
+        budget = self._ensure_delegated_budget()
         effect, ev = costly_gate(
-            mode, answer, cost_rub=cost, budget_left_rub=left, critic_accepts=critic_accepts
+            mode,
+            answer,
+            cost_estimate_rub=cost,
+            budget=budget,
+            critic_accepts=critic_accepts,
         )
         now = self.clock.now()
-        spent = float(ev.get("spent_rub") or 0.0)
 
         if effect == "WAIT":
-            # Gate stays open (delegation disabled under fail mode).
+            # Gate stays open; surface reason to the human immediately.
+            await self._append(
+                [
+                    EventEnvelope(
+                        study_id=h.study_id,
+                        type="HitlDecided",
+                        entity_key=h.request_id,
+                        idem_key=make_idem(
+                            "HitlDecided", h.request_id, "WAIT", str(ev.get("reason")), str(now)
+                        ),
+                        payload={
+                            "request_id": h.request_id,
+                            "decision": "delegate",
+                            "by": "human",
+                            "decided_by": ev.get("decided_by"),
+                            "delegated_by": ev.get("delegated_by"),
+                            "reason": ev["reason"],
+                            "spent_rub": 0.0,
+                            "human_message": ev.get("human_message"),
+                            "effect": "WAIT",
+                            "keep_open": True,
+                        },
+                        ts=now,
+                    )
+                ]
+            )
             return
 
-        # Prefer HitlDecided when there is a decided_by; otherwise HitlTimedOut alone.
         use_decided = answer is not None or ev.get("decided_by") is not None
         if answer is None:
             await self._append(
@@ -147,8 +218,8 @@ class HitlForkMixin:
                             "reason": ev["reason"],
                             "decided_by": ev.get("decided_by"),
                             "delegated_by": ev.get("delegated_by"),
-                            # spent_rub lives on HitlDecided when critic decides after timeout
-                            "spent_rub": 0.0 if use_decided else spent,
+                            "spent_rub": 0.0,
+                            "human_message": ev.get("human_message"),
                             "effect": effect,
                         },
                         ts=now,
@@ -156,6 +227,31 @@ class HitlForkMixin:
                 ]
             )
         if use_decided:
+            payload = {
+                "request_id": h.request_id,
+                "decision": (
+                    "accept"
+                    if effect == "RUN"
+                    else (
+                        "reject"
+                        if effect.startswith("SKIPPED") or effect.startswith("FAILED")
+                        else "delegate"
+                    )
+                ),
+                "by": "human" if ev.get("decided_by") == "human" else "policy",
+                "decided_by": ev.get("decided_by"),
+                "approved_by": (
+                    "human"
+                    if ev.get("decided_by") == "human"
+                    else ("critic" if ev.get("decided_by") == "critic" else None)
+                ),
+                "delegated_by": ev.get("delegated_by"),
+                "reason": ev["reason"],
+                "spent_rub": 0.0,
+                "cost_estimate_rub": ev.get("cost_estimate_rub", cost),
+                "human_message": ev.get("human_message"),
+                "effect": effect,
+            }
             await self._append(
                 [
                     EventEnvelope(
@@ -163,36 +259,19 @@ class HitlForkMixin:
                         type="HitlDecided",
                         entity_key=h.request_id,
                         idem_key=make_idem(
-                            "HitlDecided", h.request_id, str(ev.get("reason")), str(spent)
+                            "HitlDecided", h.request_id, str(ev.get("reason")), effect
                         ),
-                        payload={
-                            "request_id": h.request_id,
-                            "decision": (
-                                "accept"
-                                if effect == "RUN"
-                                else (
-                                    "reject"
-                                    if effect.startswith("SKIPPED")
-                                    or effect.startswith("FAILED")
-                                    else "delegate"
-                                )
-                            ),
-                            "by": "human" if ev.get("decided_by") == "human" else "policy",
-                            "decided_by": ev.get("decided_by"),
-                            "approved_by": (
-                                "human"
-                                if ev.get("decided_by") == "human"
-                                else ("critic" if ev.get("decided_by") == "critic" else None)
-                            ),
-                            "delegated_by": ev.get("delegated_by"),
-                            "reason": ev["reason"],
-                            "spent_rub": spent,
-                            "effect": effect,
-                        },
+                        payload=payload,
                         ts=now,
                     )
                 ]
             )
+            if effect == "RUN" and ev.get("decided_by") == "critic":
+                pending = getattr(self, "_pending_costly_events", None)
+                if pending is None:
+                    self._pending_costly_events = {}
+                    pending = self._pending_costly_events
+                pending[h.request_id] = dict(payload)
 
         task = self.tasks[h.task_id]
         if effect == "RUN":
@@ -202,8 +281,10 @@ class HitlForkMixin:
                 await self._fail_task_human_timeout(h, task)
             return
         if effect.startswith("SKIPPED"):
-            reason = "budget" if "budget" in effect else (
-                "human_rejected" if "human_rejected" in effect else "critic_rejected"
+            reason = (
+                "budget"
+                if "budget" in effect
+                else ("human_rejected" if "human_rejected" in effect else "critic_rejected")
             )
             if task.state != TaskState.DONE:
                 await self._append(
