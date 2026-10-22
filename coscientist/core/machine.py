@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from coscientist.core.clock import Clock, SystemClock
@@ -22,6 +22,7 @@ from coscientist.core.graph import GraphNode, GraphStore, KindRegistry, default_
 from coscientist.core.ids import attempt_id, task_id
 from coscientist.core.inputs import InputUnavailable, bind_inputs
 from coscientist.core.lifecycle import LifecycleMixin
+from coscientist.core.rules import DelegatedBudget
 from coscientist.core.runtime_ext import HitlForkMixin
 from coscientist.core.store import SqliteEventStore
 from coscientist.core.study_view import study_view
@@ -64,9 +65,10 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
         self.dep_outputs: dict[str, dict[str, str]] = {}
         self.dep_provenance: dict[str, Provenance] = {}
         self._delegated_costly_spent: float = 0.0
-        self.delegated_budget: Any | None = None
+        self.delegated_budget: DelegatedBudget | None = None
         self._pending_costly_events: dict[str, dict[str, Any]] = {}
         self._hitl_notices: list[dict[str, Any]] = []
+        self._retry_at: dict[str, datetime] = {}
 
     async def _append(self, events: list[EventEnvelope]) -> None:
         if self._lease_lost:
@@ -83,15 +85,11 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
         p = ev.payload
         if ev.type == "StudyCreated":
             self.study = Study.model_validate(p)
-            from coscientist.core.rules import DelegatedBudget
-
             if self.study.budget and self.study.budget.delegated_costly is not None:
                 self.delegated_budget = DelegatedBudget(
                     float(self.study.budget.delegated_costly)
                 )
         elif ev.type == "BudgetDebited":
-            from coscientist.core.rules import DelegatedBudget
-
             if p.get("budget"):
                 self.delegated_budget = DelegatedBudget.from_state(p["budget"])
             spent = float(p.get("spent_rub") or 0.0)
@@ -106,13 +104,25 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
             if p["attempt_id"] not in attempts:
                 attempts.append(p["attempt_id"])
             self.tasks[p["task_id"]] = t.model_copy(
-                update={"state": TaskState.RUNNING, "attempts": attempts}
+                update={"state": TaskState.RUNNING, "attempts": attempts, "reason": None}
             )
+            self._retry_at.pop(p["task_id"], None)
         elif ev.type == "AttemptClosed":
             att = self.attempts.get(p["attempt_id"], {})
             att.update(p)
             att["closed"] = True
             self.attempts[p["attempt_id"]] = att
+            tid = p.get("task_id") or att.get("task_id")
+            if tid and p.get("retry_at"):
+                t = self.tasks[tid]
+                if t.state != TaskState.DONE:
+                    retry_at = p["retry_at"]
+                    if isinstance(retry_at, str):
+                        retry_at = datetime.fromisoformat(retry_at)
+                    self._retry_at[tid] = retry_at
+                    self.tasks[tid] = t.model_copy(
+                        update={"state": TaskState.PENDING, "reason": "retry_scheduled"}
+                    )
         elif ev.type == "ResultRecorded":
             self.results[p["result_id"]] = dict(p)
             self.results[p["attempt_id"]] = dict(p)
@@ -125,6 +135,7 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
                     "reason": p.get("reason"),
                 }
             )
+            self._retry_at.pop(p["task_id"], None)
         elif ev.type == "HitlOpened":
             self.hitl[p["request_id"]] = HitlRequest.model_validate(p)
         elif ev.type in ("HitlDecided", "HitlTimedOut"):
@@ -289,6 +300,16 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
                     ts=now,
                 )
             )
+        else:
+            # P3: leave PENDING with retry_at — never RUNNING without an open attempt.
+            events[0] = events[0].model_copy(
+                update={
+                    "payload": {
+                        **events[0].payload,
+                        "retry_at": (now + timedelta(seconds=RETRY_BACKOFF_S)).isoformat(),
+                    }
+                }
+            )
         await self._append(events)
         if can_retry:
             self._schedule_retry(tid, str(att.get("provenance", "real")))
@@ -306,28 +327,7 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
             ]
             if open_atts:
                 return
-            try:
-                await self.start_attempt(tid, provenance=provenance)  # type: ignore[arg-type]
-            except Exception:
-                if self.tasks[tid].state == TaskState.RUNNING:
-                    # last resort: mark failed so task does not sit RUNNING empty
-                    now = self.clock.now()
-                    await self._append(
-                        [
-                            EventEnvelope(
-                                study_id=self.study.study_id,  # type: ignore[union-attr]
-                                type="TaskDone",
-                                entity_key=tid,
-                                idem_key=make_idem("TaskDone", tid),
-                                payload={
-                                    "task_id": tid,
-                                    "outcome": TaskOutcome.FAILED.value,
-                                    "reason": "retry_failed",
-                                },
-                                ts=now,
-                            )
-                        ]
-                    )
+            await self.start_attempt(tid, provenance=provenance)  # type: ignore[arg-type]
 
         old = self._retry_tasks.pop(tid, None)
         if old:

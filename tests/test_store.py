@@ -35,9 +35,48 @@ async def test_idempotent_same_payload(tmp_path: Path, clock: FakeClock):
         ts=clock.now(),
         payload_digest=payload_digest(payload),
     )
-    await store.append(ev)
-    with pytest.raises(Idempotent):
+    first = await store.append(ev)
+    assert first.seq == 1
+    with pytest.raises(Idempotent) as ei:
         await store.append(ev)
+    assert ei.value.seq == 1
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_same_owner_reacquire_keeps_epoch(tmp_path: Path, clock: FakeClock):
+    store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock)
+    epoch1 = await store.acquire_lease("o1", ttl_s=30)
+    assert epoch1 == 1
+    epoch2 = await store.acquire_lease("o1", ttl_s=30)
+    assert epoch2 == 1
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_writer_idempotent_append_returns_existing(
+    tmp_path: Path, clock: FakeClock
+):
+    from coscientist.core.writer import StudyWriter
+
+    store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock)
+    await store.acquire_lease("o1")
+    writer = StudyWriter(store)
+    writer.start()
+    payload = {"study_id": "st1", "x": 1}
+    ev = EventEnvelope(
+        study_id="st1",
+        type="StudyCreated",
+        entity_key="st1",
+        idem_key="StudyCreated:st1",
+        payload=payload,
+        ts=clock.now(),
+        payload_digest=payload_digest(payload),
+    )
+    a = await writer.append(ev)
+    b = await writer.append(ev)
+    assert a.seq == b.seq == 1
+    await writer.stop()
     store.close()
 
 

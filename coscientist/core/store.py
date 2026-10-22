@@ -53,6 +53,12 @@ def _parse_iso(s: str) -> datetime:
     return datetime.fromisoformat(s)
 
 
+def _json_default(obj: Any) -> str:
+    if isinstance(obj, datetime):
+        return _iso(obj)
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
 class SqliteEventStore:
     """One DB per study. All writes go through append/append_many under lease fencing."""
 
@@ -110,11 +116,19 @@ class SqliteEventStore:
                         raise LeaseLost(
                             f"lease held by {row['owner']} until {row['expires_at']}"
                         )
-                    epoch = int(row["epoch"]) + 1
-                    self._conn.execute(
-                        "UPDATE lease SET owner=?, epoch=?, expires_at=? WHERE study_id=?",
-                        (owner, epoch, _iso(expires), self.study_id),
-                    )
+                    if row["owner"] == owner and exp > now:
+                        # Same owner still holding: renew in place, do not bump epoch.
+                        epoch = int(row["epoch"])
+                        self._conn.execute(
+                            "UPDATE lease SET expires_at=? WHERE study_id=?",
+                            (_iso(expires), self.study_id),
+                        )
+                    else:
+                        epoch = int(row["epoch"]) + 1
+                        self._conn.execute(
+                            "UPDATE lease SET owner=?, epoch=?, expires_at=? WHERE study_id=?",
+                            (owner, epoch, _iso(expires), self.study_id),
+                        )
                 self._conn.commit()
                 self.owner = owner
                 self.epoch = epoch
@@ -170,14 +184,32 @@ class SqliteEventStore:
             raise LeaseLost("epoch fencing rejected write")
 
     async def append(self, event: EventEnvelope) -> EventEnvelope:
-        results = await self.append_many([event])
-        if not results:
-            raise Idempotent(0)
-        return results[0]
+        """Append one event. Idempotent replay raises Idempotent(stored_seq)."""
+        async with self._lock:
+            try:
+                self._fence()
+                stored, idem = self._insert_one(event)
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+            if idem is not None:
+                raise Idempotent(idem.seq)
+            assert stored is not None
+            return stored
 
     async def append_many(self, events: list[EventEnvelope]) -> list[EventEnvelope]:
         async with self._lock:
             return self._append_many_sync(events)
+
+    def _fetch_by_idem(self, idem_key: str) -> EventEnvelope:
+        cur = self._conn.execute(
+            "SELECT * FROM events WHERE idem_key=?", (idem_key,)
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise KeyError(idem_key)
+        return self._row_to_event(row)
 
     def _append_many_sync(self, events: list[EventEnvelope]) -> list[EventEnvelope]:
         out: list[EventEnvelope] = []
@@ -186,6 +218,9 @@ class SqliteEventStore:
             for ev in events:
                 stored, idem = self._insert_one(ev)
                 if idem is not None:
+                    # Return the already-stored envelope (real seq) so callers
+                    # never see an empty result on pure idempotent batches.
+                    out.append(self._fetch_by_idem(ev.idem_key))
                     continue
                 assert stored is not None
                 out.append(stored)
@@ -278,7 +313,7 @@ class SqliteEventStore:
         self._conn.execute(
             "INSERT INTO projections(table_name, row_key, data) VALUES (?,?,?) "
             "ON CONFLICT(table_name, row_key) DO UPDATE SET data=excluded.data",
-            (table, key, json.dumps(data, sort_keys=True, default=str)),
+            (table, key, json.dumps(data, sort_keys=True, default=_json_default)),
         )
 
     def _apply_projection(self, event: EventEnvelope) -> None:

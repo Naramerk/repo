@@ -46,18 +46,26 @@ async def test_p3_retry_then_done(tmp_path, clock):
     _, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
     await rt.fail_attempt(aid, retryable=True)
-    assert rt.tasks["st_tr/SPEC"].state == TaskState.RUNNING
-    # wait for scheduled retry
+    # P3: PENDING with retry_at — never RUNNING without an open attempt
+    assert rt.tasks["st_tr/SPEC"].state == TaskState.PENDING
+    assert rt.tasks["st_tr/SPEC"].reason == "retry_scheduled"
+    assert "st_tr/SPEC" in rt._retry_at
+    open_during_backoff = [
+        a
+        for a in rt.tasks["st_tr/SPEC"].attempts
+        if not rt.attempts.get(a, {}).get("closed")
+    ]
+    assert open_during_backoff == []
     import asyncio
 
     await asyncio.sleep(0.1)
-    # new open attempt should exist
     open_aids = [
         a
         for a in rt.tasks["st_tr/SPEC"].attempts
         if not rt.attempts.get(a, {}).get("closed")
     ]
     assert len(open_aids) == 1
+    assert rt.tasks["st_tr/SPEC"].state == TaskState.RUNNING
     await record_success(rt, open_aids[0], arts)
     assert rt.tasks["st_tr/SPEC"].outcome == TaskOutcome.SUCCESS
     await close_runtime(rt)
@@ -101,7 +109,8 @@ async def test_recover_closes_open_attempt(tmp_path, clock):
     result = await recover(rt)
     assert result["closed"] >= 1
     t = rt.tasks["st_tr/SPEC"]
-    assert t.state in (TaskState.DONE, TaskState.RUNNING)
+    # P3 retryable close → PENDING(+retry_at) until backoff starts the next attempt
+    assert t.state in (TaskState.DONE, TaskState.RUNNING, TaskState.PENDING)
     await close_runtime(rt)
 
 
@@ -160,4 +169,23 @@ async def test_hitl_delegate_records_critic(tmp_path, clock):
     decided = [e for e in rt.store.read_all() if e.type == "HitlDecided"]
     assert any(e.payload.get("approved_by") == "critic" for e in decided)
     assert any(e.payload.get("delegated_by") == "timeout" for e in decided)
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_hitl_human_delegate_records_critic(tmp_path, clock):
+    """Non-costly answer_hitl('delegate') → critic + delegated_by=human (§7.3)."""
+    rt = await _boot(tmp_path, clock, seconds=120)
+    _, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("SPEC")
+    await record_success(rt, aid, arts)
+    rid = await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
+    await rt.answer_hitl(rid, "delegate")
+    assert rt.hitl[rid].open is False
+    decided = [
+        e for e in rt.store.read_all() if e.type == "HitlDecided" and e.entity_key == rid
+    ]
+    assert len(decided) == 1
+    assert decided[0].payload.get("approved_by") == "critic"
+    assert decided[0].payload.get("delegated_by") == "human"
     await close_runtime(rt)

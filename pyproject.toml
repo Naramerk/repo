@@ -47,6 +47,10 @@ ignore_missing_imports = true
 warn_unused_ignores = false
 exclude = "(?x)(lifecycle\\.py|runtime_ext\\.py)"
 
+[[tool.mypy.overrides]]
+module = "yaml"
+ignore_missing_imports = true
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

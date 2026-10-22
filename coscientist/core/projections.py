@@ -44,6 +44,22 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         att = _get(proj, "attempts", event.entity_key) or {}
         att = {**att, **p, "closed": True}
         _put(proj, "attempts", event.entity_key, att)
+        # P3: retryable close → task PENDING with retry_at (no RUNNING without attempt)
+        tid = p.get("task_id") or att.get("task_id")
+        if tid and p.get("retry_at"):
+            task = _get(proj, "tasks", tid)
+            if task is not None and task.get("state") != "DONE":
+                _put(
+                    proj,
+                    "tasks",
+                    tid,
+                    {
+                        **task,
+                        "state": "PENDING",
+                        "reason": "retry_scheduled",
+                        "retry_at": p["retry_at"],
+                    },
+                )
     elif t == "RouteReturned":
         att = _get(proj, "attempts", event.entity_key) or {}
         att = {**att, "route_returned": True, "agent_output_digest": p.get("agent_output_digest")}
@@ -65,7 +81,8 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         _put(proj, "hitl_requests", event.entity_key, {**p, "open": True})
     elif t in ("HitlDecided", "HitlTimedOut"):
         hitl = _get(proj, "hitl_requests", event.entity_key) or {}
-        hitl = {**hitl, **p, "open": False}
+        keep_open = bool(p.get("keep_open") or p.get("effect") == "WAIT")
+        hitl = {**hitl, **p, "open": keep_open}
         _put(proj, "hitl_requests", event.entity_key, hitl)
     elif t == "HitlDeadlineExtended":
         hitl = _get(proj, "hitl_requests", event.entity_key) or {}

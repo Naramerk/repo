@@ -33,7 +33,7 @@ def compute_outcome(
         return r.status
 
     def is_code(r: NodeRequirement | CheckResult) -> bool:
-        return bool(getattr(r, "is_code", True))
+        return r.is_code
 
     if any(status(r) == ReqStatus.PENDING for r in req):
         return None, None

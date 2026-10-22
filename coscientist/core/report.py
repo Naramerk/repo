@@ -6,15 +6,29 @@ from collections.abc import Iterable
 from typing import Any
 
 
+def _event_type(e: Any) -> str | None:
+    if isinstance(e, dict):
+        t = e.get("type")
+        return str(t) if t is not None else None
+    t = getattr(e, "type", None)
+    return str(t) if t is not None else None
+
+
+def _event_payload(e: Any) -> dict[str, Any]:
+    if isinstance(e, dict):
+        p = e.get("payload")
+        return p if isinstance(p, dict) else {}
+    p = getattr(e, "payload", None)
+    return p if isinstance(p, dict) else {}
+
+
 def render_hitl_spend(events: Iterable[Any]) -> dict[str, Any]:
     """Aggregate critic/human HITL decisions and spent_rub for report/web."""
     decisions: list[dict[str, Any]] = []
     total = 0.0
     for e in events:
-        typ = getattr(e, "type", None) or (e.get("type") if isinstance(e, dict) else None)
-        payload = getattr(e, "payload", None) or (
-            e.get("payload") if isinstance(e, dict) else {}
-        )
+        typ = _event_type(e)
+        payload = _event_payload(e)
         if typ == "BudgetDebited":
             spent = float(payload.get("spent_rub") or 0.0)
             total += spent
@@ -32,7 +46,6 @@ def render_hitl_spend(events: Iterable[Any]) -> dict[str, Any]:
         if typ not in ("HitlDecided", "HitlTimedOut"):
             continue
         spent = float(payload.get("spent_rub") or 0.0)
-        # Prefer BudgetDebited for totals; still list gate decisions.
         decisions.append(
             {
                 "type": typ,
