@@ -108,7 +108,10 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
             1
             for t in self.tasks.values()
             if t.state == TaskState.DONE
-            and any(self.attempts.get(a, {}).get("simulated") for a in t.attempts)
+            and any(
+                self.attempts.get(a, {}).get("provenance", "real") != "real"
+                for a in t.attempts
+            )
         )
         return study_view(self.tasks.values(), open_hitl=open_hitl, simulated_done=sim)
 
@@ -124,7 +127,11 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
         return True
 
     async def start_attempt(
-        self, task_key_or_id: str, *, simulated: bool = False, hang: bool = False
+        self,
+        task_key_or_id: str,
+        *,
+        provenance: str = "real",
+        hang: bool = False,
     ) -> str:
         task = self._resolve_task(task_key_or_id)
         if task.state != TaskState.PENDING and not (
@@ -155,7 +162,7 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
             "route_returned": False,
             "closed": False,
             "close_reason": None,
-            "simulated": simulated,
+            "provenance": provenance,
             "agent_output_digest": None,
             "deadline": deadline.isoformat(),
             "task_id": task.task_id,

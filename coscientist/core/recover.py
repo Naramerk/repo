@@ -39,7 +39,8 @@ async def recover(runtime: StudyRuntime) -> dict[str, Any]:
         ):
             try:
                 await runtime.start_attempt(
-                    task.task_id, simulated=bool(att.get("simulated"))
+                    task.task_id,
+                    provenance=str(att.get("provenance", "real")),
                 )
                 retried += 1
             except Exception:

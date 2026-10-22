@@ -42,9 +42,9 @@ def _req(status: ReqStatus, *, code: bool = True, required: bool = True, i: int 
 
 def test_empty_required_never_success():
     with pytest.raises(CatalogError):
-        compute_outcome([], None, None, False)
+        compute_outcome([], None, None, "real")
     with pytest.raises(CatalogError):
-        compute_outcome([_req(ReqStatus.MET, required=False)], None, None, False)
+        compute_outcome([_req(ReqStatus.MET, required=False)], None, None, "real")
 
 
 def test_b2b_article_small_unassessed_review_does_not_downgrade():
@@ -52,21 +52,21 @@ def test_b2b_article_small_unassessed_review_does_not_downgrade():
         _req(ReqStatus.MET, code=True, i=0),
         _req(ReqStatus.UNASSESSED, code=False, i=1),
     ]
-    out, dg = compute_outcome(reqs, None, None, False)
+    out, dg = compute_outcome(reqs, None, None, "real")
     assert out == Outcome.SUCCESS
     assert dg is None
 
 
 def test_b2a_article_small_claim_partial_without_reason_stays_success():
     reqs = [_req(ReqStatus.MET, code=True)]
-    out, dg = compute_outcome(reqs, Outcome.PARTIAL, None, False)
+    out, dg = compute_outcome(reqs, Outcome.PARTIAL, None, "real")
     assert out == Outcome.SUCCESS
     assert dg is None
 
 
 def test_b2a_article_small_downgrade_with_reason_stored():
     reqs = [_req(ReqStatus.MET, code=True)]
-    out, dg = compute_outcome(reqs, Outcome.PARTIAL, "agent unsure", False)
+    out, dg = compute_outcome(reqs, Outcome.PARTIAL, "agent unsure", "real")
     assert out == Outcome.PARTIAL
     assert dg is not None
     assert dg.from_ == Outcome.SUCCESS
@@ -75,18 +75,20 @@ def test_b2a_article_small_downgrade_with_reason_stored():
 
 def test_agent_claim_only_downgrades():
     only_review = [_req(ReqStatus.UNASSESSED, code=False)]
-    out, _ = compute_outcome(only_review, Outcome.SUCCESS, "x", False)
+    out, _ = compute_outcome(only_review, Outcome.SUCCESS, "x", "real")
     assert out == Outcome.PARTIAL
 
     reqs = [_req(ReqStatus.MET, code=True)]
-    out2, dg2 = compute_outcome(reqs, Outcome.FAILED, "bad", False)
+    out2, dg2 = compute_outcome(reqs, Outcome.FAILED, "bad", "real")
     assert out2 == Outcome.FAILED and dg2 is not None
 
 
 def test_simulated_input_caps_at_partial():
     reqs = [_req(ReqStatus.MET, code=True)]
-    out, _ = compute_outcome(reqs, None, None, True)
+    out, _ = compute_outcome(reqs, None, None, "simulated")
     assert out == Outcome.PARTIAL
+    out_p, _ = compute_outcome(reqs, None, None, "partial")
+    assert out_p == Outcome.PARTIAL
 
 
 def test_b1_closed_only_when_all_tasks_done():
@@ -158,7 +160,7 @@ async def test_b2_matching_value_in_raw_artifact_is_success(tmp_path, catalog):
         {
             "attempt_id": "st_b2/EXP-1#1",
             "closed": False,
-            "simulated": False,
+            "provenance": "real",
             "task_id": task.task_id,
             "study_id": "st_b2",
         }
@@ -218,7 +220,7 @@ async def test_review_scheduled_on_every_record_path(tmp_path, catalog):
         {
             "attempt_id": "st_r/EXP-1#1",
             "closed": False,
-            "simulated": False,
+            "provenance": "real",
             "task_id": task.task_id,
             "study_id": "st_r",
         }
@@ -254,7 +256,7 @@ async def test_closed_attempt_rejects_record(tmp_path, catalog):
         {
             "attempt_id": "a#1",
             "closed": True,
-            "simulated": False,
+            "provenance": "real",
             "task_id": "t",
             "study_id": "st_c",
         }

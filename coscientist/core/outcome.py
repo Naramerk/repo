@@ -10,6 +10,7 @@ from coscientist.core.domain import (
     Downgrade,
     NodeRequirement,
     Outcome,
+    Provenance,
     ReqStatus,
 )
 from coscientist.core.errors import CatalogError
@@ -21,7 +22,7 @@ def compute_outcome(
     reqs: Sequence[NodeRequirement | CheckResult],
     claim: Outcome | None,
     reason: str | None,
-    simulated: bool,
+    provenance: Provenance = "real",
 ) -> tuple[Outcome | None, Downgrade | None]:
     """None = still waiting on CodeCheck/ReviewCheck; task stays RUNNING."""
     req = [r for r in reqs if r.required]
@@ -59,7 +60,7 @@ def compute_outcome(
         # only ReviewCheck and all UNASSESSED → PARTIAL
         base = Outcome.PARTIAL
 
-    if simulated:
+    if provenance != "real":
         if OUTCOME_RANK[base] > OUTCOME_RANK[Outcome.PARTIAL]:
             base = Outcome.PARTIAL
 

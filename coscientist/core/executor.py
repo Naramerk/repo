@@ -96,9 +96,10 @@ class Executor:
             if not out.downgrade.refs:
                 reason = None  # free text without refs ignored (M1 strictness soft in M0)
 
+        provenance = getattr(attempt, "provenance", None) or "real"
         try:
             computed, downgrade = compute_outcome(
-                checks, claim, reason, attempt.simulated
+                checks, claim, reason, provenance
             )
         except CatalogError as e:
             rid = result_id(attempt_id)
@@ -108,7 +109,7 @@ class Executor:
                 "outcome": Outcome.PARTIAL.value,
                 "computed_outcome": Outcome.PARTIAL.value,
                 "reason": "catalog_error",
-                "simulated": attempt.simulated,
+                "provenance": provenance,
                 "check_results": [],
                 "unassessed": [],
                 "artifacts": [h.artifact_id for h in out.outputs.values()],
@@ -145,7 +146,7 @@ class Executor:
             "outcome": final.value,
             "computed_outcome": computed.value,
             "reason": None,
-            "simulated": attempt.simulated,
+            "provenance": provenance,
             "check_results": [c.model_dump(mode="json") for c in checks],
             "unassessed": unassessed,
             "artifacts": [h.artifact_id for h in out.outputs.values()],
@@ -212,7 +213,7 @@ class Executor:
             result_id=payload["result_id"],
             attempt_id=attempt.attempt_id,
             outcome=Outcome(payload["outcome"]),
-            simulated=bool(payload.get("simulated")),
+            provenance=payload.get("provenance", "real"),
             agent_claim=Outcome(payload["agent_claim"]) if payload.get("agent_claim") else None,
             computed_outcome=Outcome(payload["computed_outcome"]),
             artifacts=list(payload.get("artifacts", [])),

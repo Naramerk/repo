@@ -58,6 +58,9 @@ class ReqStatus(StrEnum):
     STALE = "STALE"
 
 
+Provenance = Literal["real", "partial", "simulated"]
+
+
 class HitlPolicy(Frozen):
     mode: Literal["interactive", "auto", "headless"] = "headless"
     timeout_s: dict[str, int] = Field(
@@ -68,6 +71,8 @@ class HitlPolicy(Frozen):
             "skip_task": 1800,
         }
     )
+    # RESEARCH_MODEL / DESIGN §7.3: on gate timeout, delegate to critic or fail.
+    on_timeout: Literal["delegate", "fail"] = "delegate"
     defaults: dict[str, str] = Field(
         default_factory=lambda: {
             "plan_approval": "human_timeout",
@@ -162,7 +167,7 @@ class Attempt(Frozen):
     route_returned: bool = False
     closed: bool = False
     close_reason: str | None = None
-    simulated: bool = False
+    provenance: Provenance = "real"
     agent_output_digest: str | None = None
     deadline: datetime
     task_id: str
@@ -204,7 +209,7 @@ class Result(Frozen):
     attempt_id: str
     outcome: Outcome
     inputs: list[InputBinding] = Field(default_factory=list)
-    simulated: bool = False
+    provenance: Provenance = "real"
     agent_claim: Outcome | None = None
     downgrade: Downgrade | None = None
     computed_outcome: Outcome

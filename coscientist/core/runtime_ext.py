@@ -94,32 +94,39 @@ class HitlForkMixin:
                 )
             ]
         )
-        if h.kind in ("plan_approval", "spec_approval"):
-            task = self.tasks[h.task_id]
-            if task.state != TaskState.DONE:
-                await self._append(
-                    [
-                        EventEnvelope(
-                            study_id=h.study_id,
-                            type="TaskDone",
-                            entity_key=h.task_id,
-                            idem_key=make_idem("TaskDone", h.task_id),
-                            payload={
-                                "task_id": h.task_id,
-                                "outcome": TaskOutcome.FAILED.value,
-                                "reason": "human_timeout",
-                            },
-                            ts=now,
-                        )
-                    ]
-                )
-                for t in list(self.tasks.values()):
-                    if t.state == TaskState.DONE:
-                        continue
-                    if task.spec.task_key in t.spec.depends_on or self._depends_transitively(
-                        t, task.spec.task_key
-                    ):
-                        await self.cancel_task(t.task_id, reason="input_unavailable")
+        if h.kind not in ("plan_approval", "spec_approval"):
+            return
+        # M0: on_timeout=delegate → close gate without failing (critic stub);
+        # on_timeout=fail → FAILED(human_timeout) + descendants SKIPPED.
+        policy = self.study.hitl_policy if self.study else None
+        on_timeout = policy.on_timeout if policy else "delegate"
+        if on_timeout == "delegate":
+            return
+        task = self.tasks[h.task_id]
+        if task.state != TaskState.DONE:
+            await self._append(
+                [
+                    EventEnvelope(
+                        study_id=h.study_id,
+                        type="TaskDone",
+                        entity_key=h.task_id,
+                        idem_key=make_idem("TaskDone", h.task_id),
+                        payload={
+                            "task_id": h.task_id,
+                            "outcome": TaskOutcome.FAILED.value,
+                            "reason": "human_timeout",
+                        },
+                        ts=now,
+                    )
+                ]
+            )
+            for t in list(self.tasks.values()):
+                if t.state == TaskState.DONE:
+                    continue
+                if task.spec.task_key in t.spec.depends_on or self._depends_transitively(
+                    t, task.spec.task_key
+                ):
+                    await self.cancel_task(t.task_id, reason="input_unavailable")
 
     def _depends_transitively(self: StudyRuntime, task: Task, key: str) -> bool:
         seen: set[str] = set()
