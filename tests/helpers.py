@@ -14,7 +14,7 @@ from coscientist.core.domain import (
     TaskSpec,
 )
 from coscientist.core.executor import Executor
-from coscientist.core.machine import StudyRuntime
+from coscientist.experimental.runtime import StudyRuntime
 
 
 def attach_executor(rt: StudyRuntime, tmp: Path) -> tuple[Executor, LocalArtifactStore]:

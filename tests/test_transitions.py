@@ -13,7 +13,6 @@ from coscientist.core.clock import FakeClock
 from coscientist.core.domain import (
     AgentTaskOutput,
     ArtifactHandle,
-    HitlPolicy,
     RequirementRef,
     TaskOutcome,
     TaskState,
@@ -21,7 +20,7 @@ from coscientist.core.domain import (
 from coscientist.core.errors import AttemptClosedError
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.recover import recover
-from coscientist.core.runtime_factory import close_runtime, open_runtime
+from coscientist.experimental.runtime_factory import close_runtime, open_runtime
 from tests.helpers import attach_executor, exp_spec, record_success
 
 
@@ -370,44 +369,4 @@ async def test_accept_plan_creates_experiments(tmp_path, clock):
     await rt.accept_plan([exp_spec("EXP-1"), exp_spec("EXP-2", ["EXP-1"])])
     assert "st_tr/EXP-1" in rt.tasks
     assert rt.tasks["st_tr/PLAN"].state == TaskState.DONE
-    await close_runtime(rt)
-
-
-@pytest.mark.asyncio
-async def test_hitl_delegate_records_critic(tmp_path, clock):
-    rt = await _boot(
-        tmp_path,
-        clock,
-        seconds=60,
-        hitl_policy=HitlPolicy(on_timeout="delegate"),
-    )
-    _, arts = attach_executor(rt, tmp_path)
-    aid = await rt.start_attempt("SPEC")
-    await record_success(rt, aid, arts)
-    rid = await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=1)
-    clock.advance(timedelta(seconds=2))
-    await rt.tick()
-    assert rt.hitl[rid].open is False
-    decided = [e for e in rt.store.read_all() if e.type == "HitlDecided"]
-    assert any(e.payload.get("approved_by") == "critic" for e in decided)
-    assert any(e.payload.get("delegated_by") == "timeout" for e in decided)
-    await close_runtime(rt)
-
-
-@pytest.mark.asyncio
-async def test_hitl_human_delegate_records_critic(tmp_path, clock):
-    """Non-costly answer_hitl('delegate') → critic + delegated_by=human (§7.3)."""
-    rt = await _boot(tmp_path, clock, seconds=120)
-    _, arts = attach_executor(rt, tmp_path)
-    aid = await rt.start_attempt("SPEC")
-    await record_success(rt, aid, arts)
-    rid = await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
-    await rt.answer_hitl(rid, "delegate")
-    assert rt.hitl[rid].open is False
-    decided = [
-        e for e in rt.store.read_all() if e.type == "HitlDecided" and e.entity_key == rid
-    ]
-    assert len(decided) == 1
-    assert decided[0].payload.get("approved_by") == "critic"
-    assert decided[0].payload.get("delegated_by") == "human"
     await close_runtime(rt)

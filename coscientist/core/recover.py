@@ -20,7 +20,10 @@ async def recover(runtime: StudyRuntime) -> dict[str, Any]:
     """
     closed = 0
     retried = 0
-    await runtime.recover_after_idle()
+    # HITL idle grace lives on experimental StudyRuntime (pre-M2); core has no HITL.
+    recover_idle = getattr(runtime, "recover_after_idle", None)
+    if recover_idle is not None:
+        await recover_idle()
 
     for aid, att in list(runtime.attempts.items()):
         if att.get("closed"):

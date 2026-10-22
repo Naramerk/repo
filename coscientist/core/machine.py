@@ -1,38 +1,32 @@
-"""Task state machine + study runtime (DESIGN §3.3)."""
+"""Task state machine + study runtime shell (DESIGN §3.3).
+
+Attempt lifecycle lives in ``attempts``; local fold in ``local_project``;
+create/accept_plan in ``lifecycle``. HITL / costly / fork / report are
+``coscientist.experimental`` (pre-M2 / pre-M5), not part of the M0 core API.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
+from coscientist.core.attempts import AttemptsMixin
 from coscientist.core.clock import Clock, SystemClock
-from coscientist.core.domain import (
-    HitlRequest,
-    Provenance,
-    Study,
-    Task,
-    TaskOutcome,
-    TaskState,
-)
+from coscientist.core.domain import Provenance, Study, Task, TaskOutcome, TaskState
 from coscientist.core.errors import LeaseLost
 from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.graph import GraphNode, GraphStore, KindRegistry, default_execution_registry
-from coscientist.core.ids import attempt_id, task_id
-from coscientist.core.inputs import InputUnavailable, bind_inputs
+from coscientist.core.graph import GraphStore, KindRegistry, default_execution_registry
 from coscientist.core.lifecycle import LifecycleMixin
-from coscientist.core.rules import DelegatedBudget
-from coscientist.core.runtime_ext import HitlForkMixin
+from coscientist.core.local_project import LocalProjectMixin
 from coscientist.core.store import SqliteEventStore
 from coscientist.core.study_view import study_view
 from coscientist.core.writer import StudyWriter
 
-RETRY_BACKOFF_S = 0.05
 
-
-class StudyRuntime(LifecycleMixin, HitlForkMixin):
-    """In-process owner of one study: store, writer, tasks, timers."""
+class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
+    """In-process owner of one study: store, writer, tasks, timers (M0 state-core)."""
 
     def __init__(
         self,
@@ -57,17 +51,12 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
         self.tasks: dict[str, Task] = {}
         self.attempts: dict[str, dict[str, Any]] = {}
         self.results: dict[str, dict[str, Any]] = {}
-        self.hitl: dict[str, HitlRequest] = {}
         self._attempt_tasks: dict[str, asyncio.Task[Any]] = {}
         self._retry_tasks: dict[str, asyncio.Task[Any]] = {}
         self._lease_lost = False
         self.executor: Any | None = None
         self.dep_outputs: dict[str, dict[str, str]] = {}
         self.dep_provenance: dict[str, Provenance] = {}
-        self._delegated_costly_spent: float = 0.0
-        self.delegated_budget: DelegatedBudget | None = None
-        self._pending_costly_events: dict[str, dict[str, Any]] = {}
-        self._hitl_notices: list[dict[str, Any]] = []
         self._retry_at: dict[str, datetime] = {}
 
     async def _append(self, events: list[EventEnvelope]) -> None:
@@ -81,94 +70,7 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
         for ev in events:
             self._project_local(ev)
 
-    def _project_local(self, ev: EventEnvelope) -> None:
-        p = ev.payload
-        if ev.type == "StudyCreated":
-            self.study = Study.model_validate(p)
-            if self.study.budget and self.study.budget.delegated_costly is not None:
-                self.delegated_budget = DelegatedBudget(
-                    float(self.study.budget.delegated_costly)
-                )
-        elif ev.type == "BudgetDebited":
-            if p.get("budget"):
-                self.delegated_budget = DelegatedBudget.from_state(p["budget"])
-            spent = float(p.get("spent_rub") or 0.0)
-            if spent > 0:
-                self._delegated_costly_spent += spent
-        elif ev.type in ("TaskCreated", "TaskInherited"):
-            self.tasks[p["task_id"]] = Task.model_validate(p)
-        elif ev.type == "AttemptStarted":
-            self.attempts[p["attempt_id"]] = dict(p)
-            t = self.tasks[p["task_id"]]
-            attempts = list(t.attempts)
-            if p["attempt_id"] not in attempts:
-                attempts.append(p["attempt_id"])
-            self.tasks[p["task_id"]] = t.model_copy(
-                update={"state": TaskState.RUNNING, "attempts": attempts, "reason": None}
-            )
-            self._retry_at.pop(p["task_id"], None)
-        elif ev.type == "AttemptClosed":
-            att = self.attempts.get(p["attempt_id"], {})
-            att.update(p)
-            att["closed"] = True
-            self.attempts[p["attempt_id"]] = att
-            tid = p.get("task_id") or att.get("task_id")
-            if tid and p.get("retry_at"):
-                t = self.tasks[tid]
-                if t.state != TaskState.DONE:
-                    retry_at = p["retry_at"]
-                    if isinstance(retry_at, str):
-                        retry_at = datetime.fromisoformat(retry_at)
-                    self._retry_at[tid] = retry_at
-                    self.tasks[tid] = t.model_copy(
-                        update={"state": TaskState.PENDING, "reason": "retry_scheduled"}
-                    )
-        elif ev.type == "RouteReturned":
-            aid = p.get("attempt_id") or ev.entity_key
-            att = self.attempts.get(aid, {})
-            att = {
-                **att,
-                "route_returned": True,
-                "agent_output_digest": p.get("agent_output_digest"),
-            }
-            self.attempts[aid] = att
-        elif ev.type == "ResultRecorded":
-            self.results[p["result_id"]] = dict(p)
-            self.results[p["attempt_id"]] = dict(p)
-        elif ev.type == "TaskDone":
-            t = self.tasks[p["task_id"]]
-            self.tasks[p["task_id"]] = t.model_copy(
-                update={
-                    "state": TaskState.DONE,
-                    "outcome": TaskOutcome(p["outcome"]),
-                    "reason": p.get("reason"),
-                }
-            )
-            self._retry_at.pop(p["task_id"], None)
-        elif ev.type == "HitlOpened":
-            self.hitl[p["request_id"]] = HitlRequest.model_validate(p)
-        elif ev.type in ("HitlDecided", "HitlTimedOut"):
-            if p.get("keep_open") or p.get("effect") == "WAIT":
-                self._hitl_notices.append(dict(p))
-            else:
-                h = self.hitl.get(p["request_id"])
-                if h:
-                    self.hitl[p["request_id"]] = h.model_copy(update={"open": False})
-            spent = float(p.get("spent_rub") or 0.0)
-            if spent > 0:
-                self._delegated_costly_spent += spent
-        elif ev.type == "HitlDeadlineExtended":
-            h = self.hitl.get(p["request_id"])
-            if h and "deadline" in p:
-                dl = p["deadline"]
-                if isinstance(dl, str):
-                    dl = datetime.fromisoformat(dl)
-                self.hitl[p["request_id"]] = h.model_copy(update={"deadline": dl})
-        elif ev.type == "GraphNodeUpserted":
-            self.graph.upsert_node(GraphNode.model_validate(p))
-
     def view(self):
-        open_hitl = sum(1 for h in self.hitl.values() if h.open)
         sim = sum(
             1
             for t in self.tasks.values()
@@ -178,215 +80,7 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
                 for a in t.attempts
             )
         )
-        return study_view(self.tasks.values(), open_hitl=open_hitl, simulated_done=sim)
-
-    def _deps_done(self, task: Task) -> bool:
-        for d in task.spec.depends_on:
-            dep_id = task_id(self.study.study_id, d) if self.study else d
-            dep = self.tasks.get(dep_id) or self.tasks.get(d)
-            if dep is None:
-                matches = [t for t in self.tasks.values() if t.spec.task_key == d]
-                dep = matches[0] if matches else None
-            if dep is None or dep.state != TaskState.DONE:
-                return False
-        return True
-
-    def _dep_map(self) -> dict[str, Task]:
-        return {t.spec.task_key: t for t in self.tasks.values()}
-
-    async def start_attempt(
-        self,
-        task_key_or_id: str,
-        *,
-        provenance: Provenance | None = None,
-    ) -> str:
-        task = self._resolve_task(task_key_or_id)
-        if task.state == TaskState.DONE:
-            raise RuntimeError("task already DONE")
-        if not self._deps_done(task):
-            raise RuntimeError("dependencies not DONE")
-        open_atts = [
-            a for a in task.attempts if not self.attempts.get(a, {}).get("closed")
-        ]
-        if open_atts:
-            raise RuntimeError("already has open attempt")
-        n = len(task.attempts) + 1
-        if n > self.max_attempts:
-            raise RuntimeError("max_attempts exceeded")
-
-        try:
-            _bindings, derived = bind_inputs(
-                task,
-                dep_tasks=self._dep_map(),
-                dep_outputs=self.dep_outputs,
-                dep_provenance=self.dep_provenance,
-            )
-        except InputUnavailable:
-            await self.cancel_task(task.task_id, reason="input_unavailable")
-            raise
-
-        prov: Provenance = provenance if provenance is not None else derived
-        if prov not in ("real", "partial", "simulated"):
-            raise ValueError(f"invalid provenance: {prov}")
-
-        aid = attempt_id(task.task_id, n)
-        now = self.clock.now()
-        assert self.study is not None
-        deadline = min(task.deadline, self.study.deadline)
-        payload = {
-            "attempt_id": aid,
-            "n": n,
-            "dispatch_id": f"dispatch:{aid}",
-            "route_returned": False,
-            "closed": False,
-            "close_reason": None,
-            "provenance": prov,
-            "agent_output_digest": None,
-            "deadline": deadline.isoformat(),
-            "task_id": task.task_id,
-            "study_id": self.study.study_id,
-        }
-        await self._append(
-            [
-                EventEnvelope(
-                    study_id=self.study.study_id,
-                    type="AttemptStarted",
-                    entity_key=aid,
-                    idem_key=make_idem("AttemptStarted", aid),
-                    payload=payload,
-                    ts=now,
-                )
-            ]
-        )
-        return aid
-
-    def _resolve_task(self, key_or_id: str) -> Task:
-        if key_or_id in self.tasks:
-            return self.tasks[key_or_id]
-        matches = [t for t in self.tasks.values() if t.spec.task_key == key_or_id]
-        if not matches:
-            raise KeyError(key_or_id)
-        return matches[0]
-
-    async def fail_attempt(
-        self, aid: str, *, retryable: bool = True, close_reason: str = "failed"
-    ) -> None:
-        att = self.attempts[aid]
-        if att.get("closed"):
-            raise RuntimeError("attempt closed")
-        now = self.clock.now()
-        sid = att["study_id"]
-        tid = att["task_id"]
-        task = self.tasks[tid]
-        events = [
-            EventEnvelope(
-                study_id=sid,
-                type="AttemptClosed",
-                entity_key=aid,
-                idem_key=make_idem("AttemptClosed", aid, close_reason),
-                payload={
-                    "attempt_id": aid,
-                    "closed": True,
-                    "close_reason": close_reason,
-                    "retryable": retryable,
-                    "task_id": tid,
-                },
-                ts=now,
-            )
-        ]
-        n = int(att["n"])
-        can_retry = retryable and n < self.max_attempts and now < task.deadline
-        if not can_retry:
-            events.append(
-                EventEnvelope(
-                    study_id=sid,
-                    type="TaskDone",
-                    entity_key=tid,
-                    idem_key=make_idem("TaskDone", tid),
-                    payload={
-                        "task_id": tid,
-                        "outcome": TaskOutcome.FAILED.value,
-                        "reason": "failed",
-                    },
-                    ts=now,
-                )
-            )
-        else:
-            # P3: leave PENDING with retry_at — never RUNNING without an open attempt.
-            events[0] = events[0].model_copy(
-                update={
-                    "payload": {
-                        **events[0].payload,
-                        "retry_at": (now + timedelta(seconds=RETRY_BACKOFF_S)).isoformat(),
-                    }
-                }
-            )
-        await self._append(events)
-        if can_retry:
-            self._schedule_retry(tid, str(att.get("provenance", "real")))
-
-    def _schedule_retry(self, tid: str, provenance: str) -> None:
-        async def _retry() -> None:
-            await asyncio.sleep(RETRY_BACKOFF_S)
-            if self._lease_lost:
-                return
-            task = self.tasks.get(tid)
-            if task is None or task.state == TaskState.DONE:
-                return
-            open_atts = [
-                a for a in task.attempts if not self.attempts.get(a, {}).get("closed")
-            ]
-            if open_atts:
-                return
-            await self.start_attempt(tid, provenance=provenance)  # type: ignore[arg-type]
-
-        old = self._retry_tasks.pop(tid, None)
-        if old:
-            old.cancel()
-        self._retry_tasks[tid] = asyncio.create_task(_retry())
-
-    async def cancel_task(self, task_key_or_id: str, reason: str = "cancelled") -> None:
-        task = self._resolve_task(task_key_or_id)
-        if task.state == TaskState.DONE:
-            return
-        now = self.clock.now()
-        assert self.study is not None
-        events: list[EventEnvelope] = []
-        for aid in task.attempts:
-            if not self.attempts.get(aid, {}).get("closed"):
-                events.append(
-                    EventEnvelope(
-                        study_id=self.study.study_id,
-                        type="AttemptClosed",
-                        entity_key=aid,
-                        idem_key=make_idem("AttemptClosed", aid, reason),
-                        payload={
-                            "attempt_id": aid,
-                            "closed": True,
-                            "close_reason": reason,
-                            "task_id": task.task_id,
-                        },
-                        ts=now,
-                    )
-                )
-                t = self._attempt_tasks.pop(aid, None)
-                if t:
-                    t.cancel()
-        events.append(
-            EventEnvelope(
-                study_id=self.study.study_id,
-                type="TaskDone",
-                entity_key=task.task_id,
-                idem_key=make_idem("TaskDone", task.task_id),
-                payload={
-                    "task_id": task.task_id,
-                    "outcome": TaskOutcome.SKIPPED.value,
-                    "reason": reason,
-                },
-                ts=now,
-            )
-        )
-        await self._append(events)
+        return study_view(self.tasks.values(), open_hitl=0, simulated_done=sim)
 
     async def ensure_lease(self, ttl_s: float = 30.0) -> None:
         if self._lease_lost:
@@ -398,14 +92,12 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
             raise
 
     async def tick(self) -> None:
+        """Apply task/study deadline cancellations (P5/P6). HITL timeouts are experimental."""
         if self.study is None or self._lease_lost:
             return
         await self.ensure_lease()
         now = self.clock.now()
         sid = self.study.study_id
-        for _hid, h in list(self.hitl.items()):
-            if h.open and now > h.deadline:
-                await self._hitl_timeout(h)
         for task in list(self.tasks.values()):
             if task.state == TaskState.DONE:
                 continue

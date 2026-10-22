@@ -1,4 +1,4 @@
-"""Minimal study report surfaces for M0 (HITL spend); full report is M5."""
+"""Minimal study report surfaces (experimental / pre-M5)."""
 
 from __future__ import annotations
 

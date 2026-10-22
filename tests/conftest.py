@@ -16,7 +16,10 @@ from coscientist.checks.catalog import minimal_test_catalog  # noqa: E402
 from coscientist.core.artifacts import LocalArtifactStore  # noqa: E402
 from coscientist.core.clock import FakeClock  # noqa: E402
 from coscientist.core.graph import default_execution_registry  # noqa: E402
-from coscientist.core.runtime_factory import close_runtime, open_runtime  # noqa: E402
+from coscientist.experimental.runtime_factory import (  # noqa: E402
+    close_runtime,
+    open_runtime,
+)
 
 CORE_RULES = "coscientist.core.rules"  # required API: tests/README.md
 
@@ -26,7 +29,8 @@ def impl(request):
     """Implementation under test: the executable reference or the M0 core.
 
     For ``core``, Graph/Claim come from refmodel via ``core_rules_adapter`` so
-    verdict / validate_plan / cardinality / dedupe exercise ``core.rules``.
+    verdict / validate_plan / cardinality exercise ``core.rules``. Paper dedupe
+    (``add_paper``) is refmodel-only — see ``test_paper_dedupe_two_lits_same_doi``.
     """
     if request.param == "refmodel":
         import refmodel
@@ -55,6 +59,7 @@ def registry():
 
 @pytest.fixture
 async def runtime(tmp_path: Path, clock: FakeClock):
+    # Experimental runtime: M0 core + HITL/costly needed by integration fixtures.
     rt = await open_runtime(tmp_path, "st_test", owner="t1", clock=clock)
     yield rt
     await close_runtime(rt)

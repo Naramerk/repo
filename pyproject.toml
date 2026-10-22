@@ -64,7 +64,7 @@ include_external_packages = true
 [[tool.importlinter.contracts]]
 name = "core must not import ADK, httpx, or web"
 type = "forbidden"
-source_modules = ["coscientist.core", "coscientist.checks"]
+source_modules = ["coscientist.core", "coscientist.checks", "coscientist.experimental"]
 forbidden_modules = [
   "google",
   "httpx",

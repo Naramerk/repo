@@ -803,10 +803,13 @@ web/           отдельно (M6)
 | 3 | Digests = sha256 of RFC 8785 JCS via `rfc8785` | Matches DESIGN §3.8 / §3.6 digest requirements. |
 | 4 | `fork()` computes affected subgraph only (stub); no child journal yet | Property-test coverage of the rule; full §3.6 inheritance is M2. |
 | 5 | Load test asserts ≥100 events in CI (p99 ≤ 50 ms, 20 parallel attempts, fsync); scale to ≥5000 locally by raising fake-tool sleep | Keeps CI fast; same code path as §3.5a. |
-| 6 | `StudyRuntime` split across `machine.py` / `lifecycle.py` / `runtime_ext.py` | Honour ≤500 lines/file budget (§11). |
+| 6 | `StudyRuntime` split across `machine.py` / `attempts.py` / `local_project.py` / `lifecycle.py`; HITL/fork in `experimental/` | Honour ≤500 lines/file budget (§11); core API = M0 only. |
 | 7 | `test_llm_hang_past_deadline` uses a hanging asyncio task (no httpx/OpenAI server) | M0 forbids LLM/ADK/httpx in core; cancellation + late-write rejection still covered. |
 | 8 | `Attempt.provenance: real\|partial\|simulated`; `GateConfig.on_timeout: fail\|delegate_capped\|delegate` (costly_or_nonreal default fail); `Budget.delegated_costly` + `spent_rub` on HITL events | Aligns with RESEARCH_MODEL v0.3 / DESIGN §7.3; recovery + spent_rub report tests pass. |
 | 9 | PR #1 review: all writes via StudyWriter; Result+Close+Done atomic; recover never re-runs after ResultRecorded; finish_attempt outcome removed; lease owner=uuid, BEGIN IMMEDIATE, fence uses ttl; P3 asyncio backoff; InputBinding modes; delegate→critic | See commits after review. |
+| 10 | Structural cleanup after PR #1: `machine.py` split into `attempts` / `local_project` / `lifecycle` (each ≤500); HITL gates, `DelegatedBudget`/`costly_gate`, report moved to `coscientist.experimental/` (pre-M2/M5); catalog stays in `coscientist.checks` (M1). Core API = M0 state-core only. | This PR. |
+| 11 | `costly_gate(..., critic_accepts=True)` is a **stub**: no real critic agent until M2; the bool simulates accept/reject. Documented on the function and in oracle `tests/refmodel.py`. | Explicit until M2 critic role. |
+| 12 | `test_paper_dedupe_two_lits_same_doi` is refmodel-only (`Graph.add_paper`); dual `impl=core` would still call refmodel.Graph. Core paper dedupe lands with GraphBuilder in M1. | Honest skip of false dual-impl. |
 
 ## 16. Научная модель (граф)
 

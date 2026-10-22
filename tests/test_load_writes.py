@@ -13,7 +13,7 @@ import pytest
 from coscientist.core.clock import SystemClock
 from coscientist.core.events import EventEnvelope
 from coscientist.core.projections import fold_events
-from coscientist.core.runtime_factory import close_runtime, open_runtime
+from coscientist.experimental.runtime_factory import close_runtime, open_runtime
 from tests.helpers import attach_executor, exp_spec, record_success
 
 

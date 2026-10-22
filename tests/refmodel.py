@@ -108,6 +108,11 @@ class DelegatedBudget:
         return actual_rub
 
 def costly_gate(mode, answer, cost_estimate_rub=0.0, budget=None, critic_accepts=True):
+    """Oracle costly_or_nonreal gate.
+
+    ``critic_accepts`` is a **stub**: no real critic agent in the oracle; True/False
+    simulates accept vs reject. Real critic wiring is M2 (see docs/DESIGN.md).
+    """
     if answer in ("approve", "reject"):
         return ("RUN" if answer == "approve" else "SKIPPED(human_rejected)",
                 {"decided_by": "human", "delegated_by": None, "reason": answer, "spent_rub": 0.0})
@@ -122,6 +127,7 @@ def costly_gate(mode, answer, cost_estimate_rub=0.0, budget=None, critic_accepts
             ev = {"decided_by": None, "delegated_by": by, "spent_rub": 0.0, "human_message": why}
             if mode == "fail": return "WAIT", {**ev, "reason": "delegation_disabled"}
             return ("SKIPPED(budget)", {**ev, "decided_by": "critic", "reason": "delegated_costly_exhausted"})
+    # stub: critic_accepts stands in for a real critic verdict (M2)
     return (("RUN" if critic_accepts else "SKIPPED(critic_rejected)"),
             {"decided_by": "critic", "delegated_by": by, "reason": f"critic:{mode}",
              "spent_rub": 0.0, "cost_estimate_rub": cost_estimate_rub})

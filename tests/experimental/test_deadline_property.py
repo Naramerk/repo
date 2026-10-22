@@ -23,7 +23,7 @@ from coscientist.core.domain import Clarification, TaskSpec, TaskState
 from coscientist.core.errors import LeaseLost
 from coscientist.core.projections import fold_events
 from coscientist.core.recover import recover
-from coscientist.core.runtime_factory import close_runtime, open_runtime
+from coscientist.experimental.runtime_factory import close_runtime, open_runtime
 
 
 class StudyClosesMachine(RuleBasedStateMachine):

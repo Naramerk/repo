@@ -1,4 +1,4 @@
-"""HITL + fork extensions for StudyRuntime (keeps machine.py under size budget)."""
+"""HITL + fork extensions (experimental / pre-M2)."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from typing import Any, Self
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import Clarification, HitlRequest, Task
 from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.hitl_costly import CostlyHitlMixin
 from coscientist.core.ids import hitl_request_id, study_id
+from coscientist.experimental.hitl_costly import CostlyHitlMixin
 
 
 class HitlForkMixin(CostlyHitlMixin):
