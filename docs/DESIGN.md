@@ -28,7 +28,7 @@
 
 ```python
 class NodeKind(StrEnum):
-    # = schema/graph_schema.yaml (RESEARCH_MODEL.md §2); тест сверяет
+    # = coscientist/schema/graph_schema.yaml (RESEARCH_MODEL.md §2); тест сверяет
     STUDY = "study"; CONSTRAINT = "constraint"; QUESTION = "question"; CRITERION = "criterion"
     HYPOTHESIS = "hypothesis"; PLAN = "plan"; EXPERIMENT = "experiment"; ARTIFACT = "artifact"
     EVIDENCE = "evidence"; CLAIM = "claim"; CONCLUSION = "conclusion"; REPORT = "report"
@@ -348,7 +348,7 @@ def compute_outcome(reqs, claim, reason, provenance: str) -> tuple[Outcome | Non
 ```
 - Задача терминальна только когда все required-проверки получили вердикт или истёк review_deadline (тогда ReviewCheck → UNASSESSED; влияние на outcome — строго по compute_outcome выше; R23 показывается отдельно).
 - Пустой список required: план с такой задачей отклоняется при принятии (`PlanValidator`, `CatalogError` → попытка задачи plan FAILED(retryable)). В рантайме (`Executor.record`) `CatalogError` ловится в `record()`: Result(outcome=PARTIAL, reason=catalog_error), событие `CatalogErrorRaised`; никогда SUCCESS.
-- Закрытая попытка: `record()` первым шагом проверяет `attempt.closed`; при true → `AttemptClosedError`, ничего не пишется (событие `LateWriteRejected` для трассировки). Проверка повторяется внутри транзакции записи.
+- Закрытая попытка: `record()` первым шагом проверяет `attempt.closed`; при true → `AttemptClosedError`, ничего не пишется (событие `LateWriteRejected` для трассировки). Проверка повторяется внутри транзакции записи (`require_open_attempt`). Повторный `record` после успешной записи (попытка уже closed через Result+Close+Done) тоже даёт `AttemptClosedError` — не `Idempotent`: идемпотентность журнала относится к повторной доставке того же `idem_key`, а не к повторному вызову `record` с новым payload.
 - `AgentTaskOutput` получает поле `downgrade: DowngradeClaim | None`, где `DowngradeClaim(to: Outcome, refs: list[str | EvidenceRef])` — непустой список id CheckResult или EvidenceRef из этой попытки; свободный текст без refs отклоняется (M1).
 - B2: `metric_threshold`/`value_matches` на сыром JSON-артефакте с EvidenceRef — достаточное доказательство (MET). ReviewCheck не может перевести MET CodeCheck в FAILED; он добавляет свой отдельный результат.
 
@@ -794,16 +794,30 @@ web/           отдельно (M6)
 
 Несогласий нет. Уточнение: 10 мин ТЗ трактуются как бюджет от создания study до DONE задачи plan, включая HITL; если человек не уложился, план проваливается с human_timeout, а не продлевается.
 
+### M0 implementation notes (2026-10-22)
+
+| # | Choice | Rationale |
+|---|---|---|
+| 1 | Generic `KindRegistry` + `GraphNode`/`GraphEdge`; kinds loaded from packaged `coscientist/schema/graph_schema.yaml` (12 nodes / 16 edges) — not hard-coded in Python | Matches RESEARCH_MODEL single source of truth; core stays domain-agnostic (§1). No research semantics beyond registration in M0. |
+| 2 | `RequirementTemplate.text_ru` + `check` on the same template | One source for human-readable text and the machine check (§5); unknown `kind` / `reviewer_role` / unregistered `applies_to` → `CatalogError`. |
+| 3 | Digests = sha256 of RFC 8785 JCS via `rfc8785` | Matches DESIGN §3.8 / §3.6 digest requirements. |
+| 4 | `fork()` computes affected subgraph only (stub); no child journal yet | Property-test coverage of the rule; full §3.6 inheritance is M2. |
+| 5 | Load test asserts ≥100 events in CI (p99 ≤ 50 ms, 20 parallel attempts, fsync); scale to ≥5000 locally by raising fake-tool sleep | Keeps CI fast; same code path as §3.5a. |
+| 6 | `StudyRuntime` split across `machine.py` / `lifecycle.py` / `runtime_ext.py` | Honour ≤500 lines/file budget (§11). |
+| 7 | `test_llm_hang_past_deadline` uses a hanging asyncio task (no httpx/OpenAI server) | M0 forbids LLM/ADK/httpx in core; cancellation + late-write rejection still covered. |
+| 8 | `Attempt.provenance: real\|partial\|simulated`; `GateConfig.on_timeout: fail\|delegate_capped\|delegate` (costly_or_nonreal default fail); `Budget.delegated_costly` + `spent_rub` on HITL events | Aligns with RESEARCH_MODEL v0.3 / DESIGN §7.3; recovery + spent_rub report tests pass. |
+| 9 | PR #1 review: all writes via StudyWriter; Result+Close+Done atomic; recover never re-runs after ResultRecorded; finish_attempt outcome removed; lease owner=uuid, BEGIN IMMEDIATE, fence uses ttl; P3 asyncio backoff; InputBinding modes; delegate→critic | See commits after review. |
+
 ## 16. Научная модель (граф)
 
-Научные сущности (study, constraint, question, criterion, hypothesis, plan, experiment, artifact, evidence, claim, conclusion, report — 12 типов, 16 рёбер; источник истины `schema/graph_schema.yaml`) — узлы одного графа, который рисует веб и на котором проверяется каталог. Узлы и рёбра строит код (`GraphBuilder`) из типизированных выводов ролей; `research_commit` нет; статусы узлов вычисляются. `NodeKind` в §2 совпадает со схемой. Подробно: [RESEARCH_MODEL.md](RESEARCH_MODEL.md).
+Научные сущности (study, constraint, question, criterion, hypothesis, plan, experiment, artifact, evidence, claim, conclusion, report — 12 типов, 16 рёбер; источник истины `coscientist/schema/graph_schema.yaml`) — узлы одного графа, который рисует веб и на котором проверяется каталог. Узлы и рёбра строит код (`GraphBuilder`) из типизированных выводов ролей; `research_commit` нет; статусы узлов вычисляются. `NodeKind` в §2 совпадает со схемой. Подробно: [RESEARCH_MODEL.md](RESEARCH_MODEL.md).
 
 ### Ревью крокодила v0.2 научной модели (2026-10-23)
 
 | # | Замечание | Статус |
 |---|---|---|
 | 1 | §7 по реальным rule_id | сделано (RESEARCH_MODEL §7, из reviewed-rules.json dev_1) |
-| 2 | единый источник истины | `schema/graph_schema.yaml` + `scripts/gen_model_tables.py` + `tests/test_graph_schema.py` |
+| 2 | единый источник истины | `coscientist/schema/graph_schema.yaml` + `scripts/gen_model_tables.py` + `tests/test_graph_schema.py` |
 | 3 | правило вердикта | RESEARCH_MODEL §4.1 (confirmations_needed, provenance, «по литературе») |
 | 4 | упрощение | goal/constraint → поля study (constraint-узел только с проверкой); run → attempts[]; claim к критериям убран |
 | 5 | отрицательный вывод | based_on → experiment; experiment.limitations[] |
@@ -822,6 +836,6 @@ web/           отдельно (M6)
 | 4 | HITL по умолчанию; строка 8 §15 | решено пользователем; строка 8 обновлена |
 | 5 | CI, вендоринг с sha256, пары рёбер, структурированные поля | сделано (.github/workflows/ci.yml, vendor/ai4research, schema) |
 | 6 | синхронизация §2, CodeCheck.kind, §7.1 | сделано |
-| + | ревизия plan — supersedes; таблица Тома Б генерируется; тесты RT1, H1, дедупликация paper — реальные; recovery — xfail до M0 PR #1 | сделано |
+| + | ревизия plan — supersedes; таблица Тома Б генерируется; тесты RT1, H1, дедупликация paper — реальные; recovery + spent_rub — runtime в M0 PR #1 | сделано |
 
 Ревью v0.4: stance — computed (во входе роли запрещён, extra=forbid); модели frozen, Ref[NodeKind], datetime, сверка с §2 тестом; «реши сам» в режиме fail — по бюджету, счётчик Budget(delegated_costly); фикстура `impl` (refmodel | core, API — tests/README.md); check_cardinality; ключи PLAN-0..n; версии в CI закреплены.

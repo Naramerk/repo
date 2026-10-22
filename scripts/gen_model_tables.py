@@ -1,4 +1,6 @@
-"""Generate RESEARCH_MODEL.md tables (§2, §3, §7) from schema/graph_schema.yaml.
+"""Generate RESEARCH_MODEL.md tables (§2, §3, §7) from packaged graph_schema.yaml.
+
+Single source: coscientist/schema/graph_schema.yaml (packaged with the wheel).
 
 Usage: python scripts/gen_model_tables.py [--check]
 """
@@ -12,7 +14,7 @@ from typing import Annotated, Literal, Optional
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SCHEMA = ROOT / "schema" / "graph_schema.yaml"
+SCHEMA = ROOT / "coscientist" / "schema" / "graph_schema.yaml"
 DOC = ROOT / "docs" / "RESEARCH_MODEL.md"
 
 
