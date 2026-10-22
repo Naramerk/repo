@@ -1,0 +1,18 @@
+# vendored from aimclub/CoScientist_dev@dev_1 CoScientist/research_quality/rules/ai4research/reviewed-rules.json (2026-10-22)
+ENG:registration_integrity
+R02:profile_applicability
+R04:process_instance_binding
+R05:iteration_reactivation
+R06:checkpoint_contract
+R11:evidence_locator
+R11:json_pointer_evidence_locator
+R14:configuration_snapshot
+R16:verification_validation_split
+R17:predeclared_check
+R17:registered_schema_binding
+R18:scientific_claim_trace
+R23:unassessed_distinct
+R24:critical_blocker
+R28:corrective_action_closure
+R29:report_completeness
+R30:information_access_integrity
