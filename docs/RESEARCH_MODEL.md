@@ -1,11 +1,11 @@
 # CoScientist-next — научная модель исследования (граф)
 
-Статус: черновик v0.3 (2026-10-23). Дополняет DESIGN.md §2, §5, §7.3. Один граф = научная модель = то, что рисует веб = то, на чём проверяется каталог требований.
+Статус: черновик v0.4 (2026-10-23). Дополняет DESIGN.md §2, §5, §7.3. Один граф = научная модель = то, что рисует веб = то, на чём проверяется каталог требований.
 Источник истины для типов, рёбер, кардинальностей и правил — `schema/graph_schema.yaml`; таблицы §2, §3, §7 (Том Б и правила R) между маркерами `gen:*` генерирует `scripts/gen_model_tables.py`; поля и кардинальности структурированы (name, type, required), из них строятся pydantic-модели (`gen_model_tables.models()`). CI (`.github/workflows/ci.yml`): ruff, `gen --check`, pytest. Тесты сверяют таблицы, rule_id и 14 id Тома Б с вендоренными `vendor/ai4research/*.json` (sha256 в SHA256SUMS), допустимые пары (from,to) рёбер, CodeCheck.kind и NodeKind с DESIGN. Исполняемая спецификация правил — `tests/refmodel.py`.
 
 ## 0. Глоссарий (простыми словами)
 
-Стадии DAG: `spec → plan → [HYP-n | LIT-n | EXP-n | PLAN-n]* → report`; после HYP/LIT planner может перепланировать: каждое перепланирование — своя задача PLAN-n (не больше `max_replans` из профиля; deadline ≤ study.deadline; доля бюджета study), результат — новая ревизия plan + `supersedes`. Гипотезы и литература не обязательны: planner решает (`plan.hypotheses`, `plan.literature` = {needed, reason}), профиль может обязать.
+Стадии DAG: `spec → plan → [HYP-n | LIT-n | EXP-n | PLAN-n]* (`PLAN-0` — первый план; ключи всех серий с 0) → report`; после HYP/LIT planner может перепланировать: каждое перепланирование — своя задача PLAN-n (не больше `max_replans` из профиля; deadline ≤ study.deadline; доля бюджета study), результат — новая ревизия plan + `supersedes`. Гипотезы и литература не обязательны: planner решает (`plan.hypotheses`, `plan.literature` = {needed, reason}), профиль может обязать.
 
 | Понятие | Что это | Когда появляется (стадия DAG) | Кто создаёт | Что от него зависит |
 |---|---|---|---|---|
@@ -55,11 +55,11 @@
 | `question` | Q | **formulation**: str; gap: str; scope: str | spec | ResearchSpecOut.questions[] (≥1, иначе schema_invalid) | Исследовательский вопрос; без гипотез вердикт получает ответ на него |
 | `criterion` | CR | **metric**: str; **op**: enum(<\|<=\|==\|>=\|>\|in); **target**: str; tolerance: float; **check**: enum(code\|review); frozen_at_seq: int | spec (study), plan (experiment) | ResearchSpecOut.success_metrics[], TaskSpec.criteria | Измеримая планка; статус = NodeRequirement (met/not_met/unassessed) |
 | `hypothesis` | H | **statement**: str; **prediction**: str; rationale: str; rank: int; **selected**: bool; approved_by: enum(human\|critic); delegated_by: enum(human\|timeout) | задача HYP-n (опционально) | HypothesesOut (+ правка в HITL-шлюзе hypotheses) | Проверяемое утверждение; вердикт вычисляется |
-| `plan` | PL | **revision**: int; **hypotheses**: obj(Need) ({needed, reason}); **literature**: obj(Need) ({needed, reason}); critic_decision: enum(accept\|revise\|reject); approved_by: enum(human\|critic); delegated_by: enum(human\|timeout) | задача plan (PL-0) и перепланирования PLAN-n (≤ max_replans) | PlanOut + CriticVerdict + HitlDecision | Ревизия плана (маршрута); правка = новая ревизия + supersedes |
-| `experiment` | X | **task_key**: str (LIT-n \| EXP-n); **title**: str; **goal**: str; **method**: enum(computational\|statistical\|laboratory\|literature_search\|expert); query_plan: list(str) (для literature_search); **route**: str; **required**: bool; costly: bool; baselines: list(str); tool_resolution: enum(tool_found\|tool_built\|coder\|tool_missing); **attempts**: list(obj(Attempt)) (n, outcome, close_reason, provenance, config_digest); limitations: list(obj(Limitation)) | plan / PLAN-n (при accept) | TaskSpec | Задача DAG (LIT-n/EXP-n) с попытками внутри |
+| `plan` | PL | **revision**: int; **hypotheses**: obj(Need) ({needed, reason}); **literature**: obj(Need) ({needed, reason}); critic_decision: enum(accept\|revise\|reject); approved_by: enum(human\|critic); delegated_by: enum(human\|timeout) | задача PLAN-0 и перепланирования PLAN-1..n (n ≤ max_replans) | PlanOut + CriticVerdict + HitlDecision | Ревизия плана (маршрута); правка = новая ревизия + supersedes |
+| `experiment` | X | **task_key**: str (LIT-n \| EXP-n); **title**: str; **goal**: str; **method**: enum(computational\|statistical\|laboratory\|literature_search\|expert); query_plan: list(str) (для literature_search); **route**: str; **required**: bool; costly: bool; baselines: list(str); tool_resolution: enum(tool_found\|tool_built\|coder\|tool_missing); **attempts**: list(obj(Attempt)) (n, outcome, close_reason, provenance, config_digest); limitations: list(obj(Limitation)) | PLAN-n (при accept) | TaskSpec | Задача DAG (LIT-n/EXP-n) с попытками внутри |
 | `artifact` | A | **artifact_id**: str; **role**: enum(paper\|data\|code\|figure\|table\|log\|report); media_type: str; sha256: digest; doi_or_url: str (обяз. для paper; идентичность); title: str; year: int; status: enum(parsed\|download_failed) (paper); version: str (обяз. для data); hash: digest (обяз. для data) | любая (слой инструментов) | ToolOutput; LiteratureOut.papers (только найденные инструментом) | Файл или статья (бывший source); paper дедуплицируется по DOI/URL |
 | `evidence` | E | **kind**: enum(literature\|computational\|experimental\|expert); **statement**: str; **ref**: obj(EvidenceRef\|SourceQuote); measured_on: str | experiment (LIT-n, EXP-n) | LiteratureOut.quotes, AgentTaskOutput.evidence | Адресуемое наблюдение |
-| `claim` | CL | **target**: ref(hypothesis\|question); **checked_against**: ref(criterion); **stance**: enum(supports\|refutes\|inconclusive) (вычисляется: met→supports, not_met→refutes, unassessed→inconclusive); reason: str | experiment (LIT-n, EXP-n) | AgentTaskOutput.claims[], LiteratureOut.claims[] (target + cites + checked_against; stance вычисляет код) | Утверждение со ссылкой на доказательство и критерий |
+| `claim` | CL | **target**: ref(hypothesis\|question); **checked_against**: ref(criterion); **stance**: enum(supports\|refutes\|inconclusive) [computed] (вычисляет код: met→supports, not_met→refutes, unassessed→inconclusive; во входе роли запрещено); reason: str | experiment (LIT-n, EXP-n) | AgentTaskOutput.claims[], LiteratureOut.claims[] (target + cites + checked_against; stance вычисляет код) | Утверждение со ссылкой на доказательство и критерий |
 | `conclusion` | CN | **synthesis**: str; how_established: str; **validity_bounds**: str; open_questions: list(str) | report | ReportProse | Ответ на вопрос |
 | `report` | RP | **artifact_id**: str; **format**: str; approved_by: enum(human\|critic); delegated_by: enum(human\|timeout) | report | рендер кода + HITL-шлюз report | Документ из графа |
 <!-- gen:nodes:end -->
@@ -85,9 +85,9 @@ class SourceQuote(BaseModel):    # literature
 |---|---|---|---|---|
 | `asks` | study → question | 1..n / 1..1 | spec |  |
 | `constrained_by` | study → constraint | 0..n / 1..1 | spec |  |
-| `measured_by` | study → criterion, constraint → criterion, experiment → criterion | 1..n / 1..1 | spec/plan | experiment: ≥1 если required |
-| `addresses` | hypothesis → question, experiment → question | 0..n / 0..n | HYP-n/plan | hypothesis ≥1; ref обязателен, умолчания нет |
-| `plans` | plan → experiment | 1..n / 1..1 | plan/PLAN-n |  |
+| `measured_by` | study → criterion, constraint → criterion, experiment → criterion | 1..n (experiment: 0..n) / 1..1 | spec/plan | experiment: ≥1 если required |
+| `addresses` | hypothesis → question, experiment → question | 0..n (hypothesis: 1..n) / 0..n | HYP-n/plan | hypothesis ≥1; ref обязателен, умолчания нет |
+| `plans` | plan → experiment | 1..n / 1..1 | PLAN-n |  |
 | `tests` | experiment → hypothesis | 0..n / 0..n | plan | у experiment ≥1 из tests/addresses |
 | `depends_on` | experiment → experiment | 0..n / 0..n | plan | ацикл. |
 | `uses_input` | experiment → artifact | 0..n / 0..n | ядро (P2) | provenance на ребре |
@@ -145,7 +145,7 @@ Study `fulfilled` только если все required задачи SUCCESS и 
 |---|---|---|---|
 | (ядро) | запрос | — | study |
 | spec | study | ResearchSpecOut | поля study.goal/constraints[], constraint*, question+, criterion(study)+; asks, constrained_by, measured_by |
-| plan / PLAN-n | study, question, (hypothesis, выходы LIT/HYP при перепланировании) | PlanOut + CriticVerdict (+ HitlDecision) | plan(hypotheses, literature), experiment+, criterion(experiment)+; plans, tests, addresses, depends_on, measured_by, supersedes (plan→plan) |
+| PLAN-0..n | study, question, (hypothesis, выходы LIT/HYP при перепланировании) | PlanOut + CriticVerdict (+ HitlDecision) | plan(hypotheses, literature), experiment+, criterion(experiment)+; plans, tests, addresses, depends_on, measured_by, supersedes (plan→plan) |
 | HYP-n (опц.) | question, constraint, выходы LIT | HypothesesOut | hypothesis+; addresses (ref обязателен) |
 | LIT-n (experiment, literature_search) | question, hypothesis?, query_plan, выходы depends_on | LiteratureOut | artifact(paper)*, evidence(literature)*, claim*; produced, derived_from, cites, about |
 | EXP-n | experiment, его входы | AgentTaskOutput | artifact*, evidence*, claim*; uses_input, produced, derived_from, cites, about |
@@ -177,10 +177,11 @@ Study `fulfilled` только если все required задачи SUCCESS и 
 - «Реши сам»: решает critic (агент) → `approved_by=critic, delegated_by=human`.
 - Interactive, истёк deadline шлюза: `on_timeout=delegate` → решает critic, отметка «timeout→agent» (`approved_by=critic`, `delegated_by=timeout`); `on_timeout=fail` → задача FAILED(human_timeout), зависимые SKIPPED(input_unavailable), заглушки запрещены, продолжение — fork.
 - Шлюз `costly_or_nonreal`, режимы `on_timeout` (ими же подчиняется явное «реши сам»):
-  - `fail` (по умолчанию): таймаут → FAILED(human_timeout), зависимые SKIPPED, продолжение — fork; «реши сам» в этом режиме недоступен (событие с reason=delegation_disabled, шлюз ждёт человека);
-  - `delegate_capped`: решает critic в пределах `Budget(delegated_costly)` в ₽; при исчерпании → DONE(SKIPPED, reason=budget);
+  - `fail` (по умолчанию): таймаут → FAILED(human_timeout), зависимые SKIPPED, продолжение — fork. Явное «реши сам» допустимо, только если в профиле задан `Budget(delegated_costly)` и оценка стоимости ≤ остатка: тогда решает critic, `delegated_by=human`. Иначе событие reason=delegation_disabled, шлюз ждёт человека, и человеку сразу показывается причина: «нет бюджета», «превышает остаток» или «перерасход: делегирование заблокировано»;
+  - `delegate_capped`: решает critic (по таймауту или «реши сам») в пределах того же бюджета; при отказе → DONE(SKIPPED, reason=budget);
   - `delegate`: critic без лимита — только если явно включено в профиле.
-  - В каждом режиме пишется событие с reason; отчёт и веб показывают, что решил critic, и потраченную сумму. Тесты: `test_costly_gate_modes`.
+  - `Budget(delegated_costly)` — счётчик с состоянием: после каждой попытки списывается фактическая сумма (не оценка); если факт > оценки, дальнейшие делегирования блокируются до решения человека.
+  - В каждом режиме пишется событие с reason; отчёт и веб показывают, кто решил (`decided_by`, `delegated_by`) и `spent_rub`. Исполняемая версия — `refmodel.costly_gate`, `DelegatedBudget`, `settle`; тесты `test_costly_gate_modes`, `test_delegated_budget_counter`.
 - Headless: решает critic (`approved_by=critic`); для costly_or_nonreal — по тем же режимам (fail → задача не запускается, FAILED(human_timeout)).
 
 ## 6. Провенанс и валидность доказательств

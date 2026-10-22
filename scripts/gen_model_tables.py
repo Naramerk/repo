@@ -5,7 +5,9 @@ Usage: python scripts/gen_model_tables.py [--check]
 import pathlib
 import re
 import sys
-from typing import Literal, Optional
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Annotated, Literal, Optional
 
 import yaml
 
@@ -22,9 +24,14 @@ def _esc(s):
     return str(s).replace("|", "\\|")
 
 
+def _card(c):
+    extra = "".join(f" ({k}: {v})" for k, v in c.get("out_by_src", {}).items())
+    return f"{c['out']}{extra} / {c['in']}"
+
+
 def _field(f):
     s = f"**{f['name']}**" if f["required"] else f["name"]
-    s += f": {f['type']}"
+    s += f": {f['type']}" + (" [computed]" if f.get("computed") else "")
     return s + (f" ({f['note']})" if f.get("note") else "")
 
 
@@ -35,7 +42,7 @@ def render(s):
           f"{x['created_by']} | {_esc(x['from_output'])} | {x['text_ru']} |" for x in s["nodes"]]
     e = ["| Ребро | Пары (from → to) | out / in | Кем выводится | Примечание |", "|---|---|---|---|---|"]
     e += [f"| `{x['name']}` | {', '.join(f'{a} → {b}' for a, b in x['pairs'])} | "
-          f"{x['card']['out']} / {x['card']['in']} | {x['by']} | {_esc(x.get('note', ''))} |" for x in s["edges"]]
+          f"{_card(x['card'])} | {x['by']} | {_esc(x.get('note', ''))} |" for x in s["edges"]]
     b = ["| # | id | Узлы | CodeCheck.kind | Проверка |", "|---|---|---|---|---|"]
     b += [f"| {x['num']} | {x['id']} | {', '.join(x['nodes'])} | {', '.join(x['check_kinds'])} | {_esc(x['check'])} |"
           for x in s["volume_b"]]
@@ -44,16 +51,22 @@ def render(s):
     return {"nodes": "\n".join(n), "edges": "\n".join(e), "volume_b": "\n".join(b), "rules": "\n".join(r)}
 
 
+@dataclass(frozen=True)
+class RefTo:
+    """Annotated marker: the str is an id of a node of one of these kinds (Ref[NodeKind])."""
+    kinds: tuple
+
+
 def py_type(t):
     """Map a schema field type to a python annotation (for pydantic.create_model)."""
     m = re.fullmatch(r"(\w+)\((.*)\)", t)
     if not m:
-        return {"str": str, "int": int, "bool": bool, "float": float, "datetime": str, "digest": str}[t]
+        return {"str": str, "int": int, "bool": bool, "float": float, "datetime": datetime, "digest": str}[t]
     head, arg = m.groups()
     if head == "enum":
         return Literal[tuple(arg.split("|"))]
     if head == "ref":
-        return str
+        return Annotated[str, RefTo(tuple(arg.split("|")))]
     if head == "list":
         return list[py_type(arg)]
     if head == "obj":
@@ -62,16 +75,20 @@ def py_type(t):
 
 
 def models(s=None):
-    from pydantic import create_model
+    """Role-input models: frozen, extra='forbid'; computed fields are excluded (passing them is an error)."""
+    from pydantic import ConfigDict, create_model
 
     s = s or load()
+    cfg = ConfigDict(frozen=True, extra="forbid")
     out = {}
     for n in s["nodes"]:
         spec = {}
         for f in n["fields"]:
+            if f.get("computed"):
+                continue
             t = py_type(f["type"])
             spec[f["name"]] = (t, ...) if f["required"] else (Optional[t], None)
-        out[n["kind"]] = create_model(n["kind"].title(), **spec)
+        out[n["kind"]] = create_model(n["kind"].title(), __config__=cfg, **spec)
     return out
 
 

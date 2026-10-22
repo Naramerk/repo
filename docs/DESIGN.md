@@ -44,11 +44,12 @@ class Study(BaseModel):
     goal: Goal                 # statement, research_form, trl (заполняет spec)
     constraints: list[Constraint] = []   # узел constraint — только для проверяемых
     confirmations_needed: int = 1        # профиль; k для вердикта (RESEARCH_MODEL §4.1)
-    max_replans: int = 2                 # профиль; число задач PLAN-n
+    max_replans: int = 2                 # профиль; перепланирования PLAN-1..n
     # статуса нет: study_view() выводится из задач (§3.2)
 
 class Hypothesis(BaseModel):
     hypothesis_id: str; statement: str; rank: int; prediction: str; selected: bool
+    rationale: str | None = None
     addresses: list[str]       # question_id, ≥1, умолчания нет
     approved_by: Literal["human","critic"] | None = None; delegated_by: Literal["human","timeout"] | None = None
 
@@ -58,6 +59,7 @@ class Need(BaseModel):
 class Plan(BaseModel):
     plan_id: str; study_id: str; revision: int        # новая ревизия = новая запись
     hypotheses: Need; literature: Need                 # решения planner (профиль может обязать)
+    critic_decision: Literal["accept","revise","reject"] | None = None
     supersedes: str | None = None                      # предыдущая ревизия (PLAN-n или правка HITL)
     approved_by: Literal["human","critic"] | None = None; delegated_by: Literal["human","timeout"] | None = None
     tasks: list[TaskSpec]                              # порядок = номер задачи
@@ -82,7 +84,7 @@ class OutputSpec(BaseModel):
 
 class Task(BaseModel):
     task_id: str               # = f"{study_id}/{task_key}"; уникален (R5)
-    kind: TaskKind             # spec | plan (PL-0, PLAN-n) | hypotheses (HYP-n) | experiment (LIT-n = method literature_search, EXP-n) | report
+    kind: TaskKind             # spec | plan (PLAN-0..n) | hypotheses (HYP-n) | experiment (LIT-n = method literature_search, EXP-n) | report
     spec: TaskSpec
     state: TaskState           # PENDING | RUNNING | DONE
     outcome: TaskOutcome | None   # SUCCESS | PARTIAL | FAILED | SKIPPED, только при DONE
@@ -575,8 +577,8 @@ class HitlDecision(BaseModel):
 - headless/auto: запрос к человеку не создаётся; решение = вердикт critic/reviewer; `approved_by="critic"`, `delegated_by=None`.
 - interactive, «реши сам»: человек делегирует → решает critic; `approved_by="critic"`, `delegated_by="human"`.
 - interactive, таймаут: `on_timeout=delegate` (по умолчанию) → решает critic, событие `HitlTimedOut`, `delegated_by="timeout"` (в веб и отчёте «timeout→agent»). `on_timeout=fail` → задача DONE(FAILED, human_timeout); потомки → DONE(SKIPPED, input_unavailable) без заглушек (§3.4 п.5); study verdict failed, возобновление через fork. result_acceptance по таймауту → принимается вычисленный outcome; skip_task → не пропускать.
-- Шлюз costly_or_nonreal: `fail` (по умолчанию) — таймаут → FAILED(human_timeout), потомки SKIPPED, продолжение fork, «реши сам» недоступен; `delegate_capped` — решает critic, траты из `Budget(delegated_costly)`, при исчерпании DONE(SKIPPED, budget); `delegate` — critic без лимита. Всегда событие `HitlDecided`/`HitlTimedOut` с reason и `spent_rub`; отчёт и веб показывают, что решил critic, и сумму.
-- Перепланирование: каждая задача PLAN-n (≤ `max_replans`) имеет deadline ≤ study.deadline и долю бюджета study (`Budget.replan_share`); исчерпание max_replans → planner работает с текущей ревизией.
+- Шлюз costly_or_nonreal: `fail` (по умолчанию) — таймаут → FAILED(human_timeout), потомки SKIPPED, продолжение fork; явное «реши сам» — только при заданном `Budget(delegated_costly)` и оценке ≤ остатка, иначе delegation_disabled с причиной человеку сразу (RESEARCH_MODEL §5.2); `delegate_capped` — решает critic, траты из `Budget(delegated_costly)` (счётчик: списывается факт, факт > оценки блокирует делегирование), при отказе DONE(SKIPPED, budget); `delegate` — critic без лимита. Всегда событие `HitlDecided`/`HitlTimedOut` с reason и `spent_rub`; отчёт и веб показывают, что решил critic, и сумму.
+- Ключи задач: `PLAN-0..n`, `HYP-n`, `LIT-n`, `EXP-n` (нумерация с 0 в каждой серии). Перепланирование: каждая задача PLAN-n, n = 1..`max_replans`, имеет deadline ≤ study.deadline и долю бюджета study (`Budget.replan_share`); исчерпание max_replans → planner работает с текущей ревизией.
 - Шлюз plan показывает plan.literature/plan.hypotheses с причинами и список LIT/HYP/EXP; правка маршрута (добавить/удалить задачу) = новая ревизия plan + `supersedes`, ключи уже выданных задач не меняются (R5).
 - Бюджет 10 мин ТЗ до плана: deadline задачи plan = study.created_at + 600 с; HITL-таймауты spec и plan вычитаются из него и обрезаются его остатком.
 - После простоя deadline не срабатывает мгновенно: при recover `hitl_deadline = min(max(исходный, now + grace_s=60), task.deadline, study.deadline)` и пишется `HitlDeadlineExtended`. Продление никогда не выходит за deadline задачи и study; если они уже истекли — срабатывает P5.
@@ -822,3 +824,4 @@ web/           отдельно (M6)
 | 6 | синхронизация §2, CodeCheck.kind, §7.1 | сделано |
 | + | ревизия plan — supersedes; таблица Тома Б генерируется; тесты RT1, H1, дедупликация paper — реальные; recovery — xfail до M0 PR #1 | сделано |
 
+Ревью v0.4: stance — computed (во входе роли запрещён, extra=forbid); модели frozen, Ref[NodeKind], datetime, сверка с §2 тестом; «реши сам» в режиме fail — по бюджету, счётчик Budget(delegated_costly); фикстура `impl` (refmodel | core, API — tests/README.md); check_cardinality; ключи PLAN-0..n; версии в CI закреплены.

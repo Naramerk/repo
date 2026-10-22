@@ -1,12 +1,16 @@
 import hashlib
 import json
 import re
+from datetime import datetime
 
 import gen_model_tables as g
+import pydantic
+import pytest
 from conftest import ROOT
 
 VENDOR = ROOT / "vendor" / "ai4research"
 S = g.load()
+DESIGN = (ROOT / "docs" / "DESIGN.md").read_text(encoding="utf-8")
 
 
 def _vendored(name):
@@ -64,4 +68,23 @@ def test_design_nodekind_matches_schema():
 def test_pydantic_models_generate():
     m = g.models(S)
     assert set(m) == {n["kind"] for n in S["nodes"]}
-    m["claim"](target="H1", checked_against="CR1", stance="supports")
+    c = m["claim"](target="H1", checked_against="CR1")
+    with pytest.raises(pydantic.ValidationError):
+        c.reason = "x"                                                  # frozen
+    with pytest.raises(pydantic.ValidationError):
+        m["claim"](target="H1", checked_against="CR1", bogus=1)        # extra='forbid'
+    ann = m["claim"].model_fields["target"].metadata
+    assert any(isinstance(a, g.RefTo) and a.kinds == ("hypothesis", "question") for a in ann)
+    assert g.py_type("datetime") is datetime
+
+
+def _design_fields(cls):
+    body = re.search(rf"^class {cls}\(BaseModel\):\n(.*?)(?=^\S|\Z)", DESIGN, re.M | re.S).group(1)
+    return set(re.findall(r"(?:^|;)\s*(\w+):", body, re.M))
+
+
+@pytest.mark.parametrize("kind,cls", [("study", "Study"), ("hypothesis", "Hypothesis"), ("plan", "Plan")])
+def test_schema_fields_match_design(kind, cls):
+    """Generated models agree with DESIGN §2: every schema field of these kinds is declared there."""
+    fields = {f["name"] for n in S["nodes"] if n["kind"] == kind for f in n["fields"]}
+    assert fields <= _design_fields(cls)

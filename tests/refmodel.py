@@ -133,24 +133,88 @@ def study_fulfilled(question_verdicts, all_required_success):
     return all_required_success and all(v != "untested" for v in question_verdicts.values())
 
 
-def costly_gate(mode, answer, cost_rub=0.0, budget_left_rub=0.0, critic_accepts=True):
+class DelegatedBudget:
+    """Budget(delegated_costly), ₽: stateful counter; actual spend is debited after each attempt.
+
+    Overspend (actual > estimate) blocks further delegations until a human resets the budget.
+    """
+
+    def __init__(self, limit_rub):
+        self.limit_rub, self.spent_rub, self.blocked = float(limit_rub), 0.0, False
+
+    @property
+    def remaining_rub(self):
+        return max(self.limit_rub - self.spent_rub, 0.0)
+
+    def refuse_reason(self, estimate_rub):
+        if self.blocked:
+            return "перерасход: делегирование заблокировано"
+        if estimate_rub > self.remaining_rub:
+            return "превышает остаток"
+        return None
+
+    def debit(self, actual_rub, estimate_rub):
+        self.spent_rub += actual_rub
+        if actual_rub > estimate_rub:
+            self.blocked = True
+        return actual_rub
+
+
+def costly_gate(mode, answer, cost_estimate_rub=0.0, budget=None, critic_accepts=True):
     """HITL gate costly_or_nonreal. answer: approve | reject | delegate | None (timeout).
 
-    Returns (task_effect, event) where event always carries decided_by, reason and spent_rub.
+    Returns (task_effect, event); event carries decided_by, delegated_by, reason, spent_rub
+    (0 at the gate; set by settle() after the attempt). human_message is shown to the human at once.
     """
     if answer in ("approve", "reject"):
         eff = "RUN" if answer == "approve" else "SKIPPED(human_rejected)"
-        return eff, {"decided_by": "human", "reason": answer, "spent_rub": 0.0}
-    delegated_by = "human" if answer == "delegate" else "timeout"
-    if mode == "fail":
-        if answer == "delegate":                    # delegation disabled in this mode: gate stays open
-            return "WAIT", {"decided_by": None, "reason": "delegation_disabled", "spent_rub": 0.0}
-        return "FAILED(human_timeout)", {"decided_by": None, "reason": "human_timeout", "spent_rub": 0.0}
-    if mode == "delegate_capped" and cost_rub > budget_left_rub:
-        return "SKIPPED(budget)", {"decided_by": "critic", "delegated_by": delegated_by,
-                                   "reason": "delegated_costly_exhausted", "spent_rub": 0.0}
-    if mode not in ("delegate_capped", "delegate"):
+        return eff, {"decided_by": "human", "delegated_by": None, "reason": answer, "spent_rub": 0.0}
+    if mode not in ("fail", "delegate_capped", "delegate"):
         raise ValueError(mode)
+    delegated_by = "human" if answer == "delegate" else "timeout"
+    if mode == "fail" and answer is None:
+        return "FAILED(human_timeout)", {"decided_by": None, "delegated_by": None, "reason": "human_timeout",
+                                         "spent_rub": 0.0}
+    if mode != "delegate":                          # fail (explicit «реши сам») and delegate_capped need budget
+        why = "нет бюджета" if budget is None else budget.refuse_reason(cost_estimate_rub)
+        if why:
+            ev = {"decided_by": None, "delegated_by": delegated_by, "spent_rub": 0.0, "human_message": why}
+            if mode == "fail":                      # gate stays open, human sees the reason now
+                return "WAIT", {**ev, "reason": "delegation_disabled"}
+            return "SKIPPED(budget)", {**ev, "decided_by": "critic", "reason": "delegated_costly_exhausted"}
     eff = "RUN" if critic_accepts else "SKIPPED(critic_rejected)"
-    spent = cost_rub if critic_accepts else 0.0
-    return eff, {"decided_by": "critic", "delegated_by": delegated_by, "reason": f"critic:{mode}", "spent_rub": spent}
+    return eff, {"decided_by": "critic", "delegated_by": delegated_by, "reason": f"critic:{mode}",
+                 "spent_rub": 0.0, "cost_estimate_rub": cost_estimate_rub}
+
+
+def settle(event, budget, actual_rub):
+    """After the attempt: debit actual spend (if budgeted) and record it for the report."""
+    if budget is not None and event.get("decided_by") == "critic":
+        budget.debit(actual_rub, event.get("cost_estimate_rub", 0.0))
+    event["spent_rub"] = actual_rub
+    return event
+
+
+def _bounds(card):
+    lo, hi = card.split("..")
+    return int(lo), (None if hi == "n" else int(hi))
+
+
+def check_cardinality(gr):
+    """Check edge out/in cardinality from the schema on a complete graph. Returns a list of violations."""
+    bad = []
+    for e in SCHEMA["edges"]:
+        name, card = e["name"], e["card"]
+        for src_kind in {a for a, _ in e["pairs"]}:
+            lo, hi = _bounds(card.get("out_by_src", {}).get(src_kind, card["out"]))
+            for nid in gr.of(src_kind):
+                n = len(gr.out(name, nid))
+                if n < lo or (hi is not None and n > hi):
+                    bad.append(f"{name} out {nid}={n}")
+        lo, hi = _bounds(card["in"])
+        for dst_kind in {b for _, b in e["pairs"]}:
+            for nid in gr.of(dst_kind):
+                n = len(gr.inc(name, nid))
+                if n < lo or (hi is not None and n > hi):
+                    bad.append(f"{name} in {nid}={n}")
+    return bad
