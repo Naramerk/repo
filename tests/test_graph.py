@@ -1,4 +1,4 @@
-"""Generic Node/Edge registry loaded from schema/graph_schema.yaml."""
+"""Generic Node/Edge registry loaded from packaged coscientist.schema."""
 
 from __future__ import annotations
 

@@ -798,7 +798,7 @@ web/           отдельно (M6)
 
 | # | Choice | Rationale |
 |---|---|---|
-| 1 | Generic `KindRegistry` + `GraphNode`/`GraphEdge`; kinds loaded from `schema/graph_schema.yaml` (12 nodes / 16 edges) — not hard-coded in Python | Matches RESEARCH_MODEL single source of truth; core stays domain-agnostic (§1). No research semantics beyond registration in M0. |
+| 1 | Generic `KindRegistry` + `GraphNode`/`GraphEdge`; kinds loaded from packaged `coscientist/schema/graph_schema.yaml` (12 nodes / 16 edges) — not hard-coded in Python | Matches RESEARCH_MODEL single source of truth; core stays domain-agnostic (§1). No research semantics beyond registration in M0. |
 | 2 | `RequirementTemplate.text_ru` + `check` on the same template | One source for human-readable text and the machine check (§5); unknown `kind` / `reviewer_role` / unregistered `applies_to` → `CatalogError`. |
 | 3 | Digests = sha256 of RFC 8785 JCS via `rfc8785` | Matches DESIGN §3.8 / §3.6 digest requirements. |
 | 4 | `fork()` computes affected subgraph only (stub); no child journal yet | Property-test coverage of the rule; full §3.6 inheritance is M2. |
@@ -810,14 +810,14 @@ web/           отдельно (M6)
 
 ## 16. Научная модель (граф)
 
-Научные сущности (study, constraint, question, criterion, hypothesis, plan, experiment, artifact, evidence, claim, conclusion, report — 12 типов, 16 рёбер; источник истины `schema/graph_schema.yaml`) — узлы одного графа, который рисует веб и на котором проверяется каталог. Узлы и рёбра строит код (`GraphBuilder`) из типизированных выводов ролей; `research_commit` нет; статусы узлов вычисляются. `NodeKind` в §2 совпадает со схемой. Подробно: [RESEARCH_MODEL.md](RESEARCH_MODEL.md).
+Научные сущности (study, constraint, question, criterion, hypothesis, plan, experiment, artifact, evidence, claim, conclusion, report — 12 типов, 16 рёбер; источник истины `coscientist/schema/graph_schema.yaml`) — узлы одного графа, который рисует веб и на котором проверяется каталог. Узлы и рёбра строит код (`GraphBuilder`) из типизированных выводов ролей; `research_commit` нет; статусы узлов вычисляются. `NodeKind` в §2 совпадает со схемой. Подробно: [RESEARCH_MODEL.md](RESEARCH_MODEL.md).
 
 ### Ревью крокодила v0.2 научной модели (2026-10-23)
 
 | # | Замечание | Статус |
 |---|---|---|
 | 1 | §7 по реальным rule_id | сделано (RESEARCH_MODEL §7, из reviewed-rules.json dev_1) |
-| 2 | единый источник истины | `schema/graph_schema.yaml` + `scripts/gen_model_tables.py` + `tests/test_graph_schema.py` |
+| 2 | единый источник истины | `coscientist/schema/graph_schema.yaml` + `scripts/gen_model_tables.py` + `tests/test_graph_schema.py` |
 | 3 | правило вердикта | RESEARCH_MODEL §4.1 (confirmations_needed, provenance, «по литературе») |
 | 4 | упрощение | goal/constraint → поля study (constraint-узел только с проверкой); run → attempts[]; claim к критериям убран |
 | 5 | отрицательный вывод | based_on → experiment; experiment.limitations[] |

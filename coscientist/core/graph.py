@@ -1,6 +1,6 @@
 """Generic typed Node/Edge graph keyed by a kind registry.
 
-Kinds load from packaged schema/graph_schema.yaml (RESEARCH_MODEL.md).
+Kinds load from packaged coscientist/schema/graph_schema.yaml (RESEARCH_MODEL.md).
 """
 
 from __future__ import annotations
