@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "coscientist"
+version = "0.1.0"
+description = "CoScientist-next: multi-agent research system (state-owned core)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2.7,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2",
+  "pytest-asyncio>=0.23",
+  "hypothesis>=6.100",
+  "import-linter>=2.0",
+  "ruff>=0.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["coscientist"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+  "slow: long-running load or integration tests",
+]
+testpaths = ["tests"]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.importlinter]
+root_packages = ["coscientist"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "core must not import ADK, httpx, or web"
+type = "forbidden"
+source_modules = ["coscientist.core", "coscientist.checks"]
+forbidden_modules = [
+  "google",
+  "httpx",
+  "fastapi",
+  "coscientist.api",
+  "coscientist.agents",
+  "web",
+]
