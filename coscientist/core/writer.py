@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
-from coscientist.core.errors import Idempotent, LeaseLost
 from coscientist.core.events import EventEnvelope
 from coscientist.core.store import SqliteEventStore
 
@@ -18,7 +18,6 @@ WriteFn = Callable[[], Awaitable[Any]]
 class _Item:
     coro_factory: WriteFn
     future: asyncio.Future[Any]
-    events: list[EventEnvelope] = field(default_factory=list)
 
 
 class StudyWriter:
@@ -29,7 +28,7 @@ class StudyWriter:
         self.queue: asyncio.Queue[_Item | None] = asyncio.Queue(maxsize=maxsize)
         self._task: asyncio.Task[None] | None = None
         self._depth_high_water = 0
-        self.write_latencies_ms: list[float] = []
+        self._latencies_ms: deque[float] = deque(maxlen=10_000)
 
     @property
     def depth(self) -> int:
@@ -39,9 +38,14 @@ class StudyWriter:
     def depth_high_water(self) -> int:
         return self._depth_high_water
 
+    def latency_samples_ms(self) -> list[float]:
+        return list(self._latencies_ms)
+
     def start(self) -> None:
         if self._task is None:
-            self._task = asyncio.create_task(self._run(), name=f"writer:{self.store.study_id}")
+            self._task = asyncio.create_task(
+                self._run(), name=f"writer:{self.store.study_id}"
+            )
 
     async def stop(self) -> None:
         if self._task is None:
@@ -61,56 +65,28 @@ class StudyWriter:
                 result = await item.coro_factory()
                 if not item.future.done():
                     item.future.set_result(result)
-            except Idempotent as e:
-                if not item.future.done():
-                    item.future.set_result(e)
             except Exception as e:
                 if not item.future.done():
                     item.future.set_exception(e)
             finally:
-                dt = (loop.time() - t0) * 1000
-                self.write_latencies_ms.append(dt)
+                self._latencies_ms.append((loop.time() - t0) * 1000)
                 self.queue.task_done()
 
     async def submit(self, factory: WriteFn) -> Any:
+        if self._task is None:
+            raise RuntimeError("StudyWriter not started")
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[Any] = loop.create_future()
-        item = _Item(coro_factory=factory, future=fut)
-        await self.queue.put(item)
+        await self.queue.put(_Item(coro_factory=factory, future=fut))
         self._depth_high_water = max(self._depth_high_water, self.queue.qsize())
         return await fut
 
-    async def append(self, event: EventEnvelope) -> EventEnvelope | Idempotent:
-        async def _do() -> EventEnvelope:
-            try:
-                return await self.store.append(event)
-            except Idempotent as e:
-                return e  # type: ignore[return-value]
-
-        result = await self.submit(_do)
-        return result
+    async def append(self, event: EventEnvelope) -> EventEnvelope:
+        out = await self.append_many([event])
+        return out[0]
 
     async def append_many(self, events: list[EventEnvelope]) -> list[EventEnvelope]:
         async def _do() -> list[EventEnvelope]:
-            out: list[EventEnvelope] = []
-            pending = list(events)
-            # batch in one store transaction
-            try:
-                return await self.store.append_many(pending)
-            except Idempotent:
-                # fall back one-by-one for mixed idempotent batches
-                for ev in pending:
-                    try:
-                        out.append(await self.store.append(ev))
-                    except Idempotent:
-                        continue
-                return out
+            return await self.store.append_many(events)
 
         return await self.submit(_do)
-
-    async def guarded(self, factory: WriteFn) -> Any:
-        """Run a write; LeaseLost propagates and stops further writers from succeeding."""
-        try:
-            return await self.submit(factory)
-        except LeaseLost:
-            raise

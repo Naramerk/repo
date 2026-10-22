@@ -82,8 +82,8 @@ class StudyClosesMachine(RuleBasedStateMachine):
             t = self.rt.tasks.get(f"{self.sid}/{key}")
             if t and t.state == TaskState.PENDING:
                 try:
-                    aid = self._run(self.rt.start_attempt(key))
-                    self._run(self.rt.finish_attempt(aid))
+                    self._run(self.rt.start_attempt(key))
+                    self._run(self.rt.cancel_task(key, reason="prop_advance"))
                 except Exception:
                     pass
         if not any(k.startswith("EXP-") for k in (t.spec.task_key for t in self.rt.tasks.values())):
@@ -123,7 +123,11 @@ class StudyClosesMachine(RuleBasedStateMachine):
         if self.lost_lease or aid == "none" or self.rt is None:
             return
         try:
-            self._run(self.rt.finish_attempt(aid))
+            # cancel path for property coverage (record path covered in unit tests)
+            att = self.rt.attempts.get(aid, {})
+            tid = att.get("task_id")
+            if tid:
+                self._run(self.rt.cancel_task(tid, reason="prop_finish"))
         except Exception:
             pass
 
@@ -135,11 +139,6 @@ class StudyClosesMachine(RuleBasedStateMachine):
             self._run(self.rt.fail_attempt(aid, retryable=True))
         except Exception:
             pass
-
-    @rule(aid=attempt_ids)
-    def hang_attempt(self, aid):
-        # hang is only at start; noop here
-        return
 
     @rule(delta=st.integers(min_value=1, max_value=30))
     def advance_clock(self, delta):
@@ -265,8 +264,8 @@ class StudyClosesMachine(RuleBasedStateMachine):
             proj = {}
             for r in proj_rows:
                 for f in (
-                    "attempt_id",
                     "result_id",
+                    "attempt_id",
                     "request_id",
                     "node_id",
                     "edge_id",

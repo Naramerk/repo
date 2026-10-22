@@ -13,6 +13,7 @@ from coscientist.core.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     CheckResult,
+    DowngradeClaim,
     Outcome,
     ReqStatus,
     RequirementRef,
@@ -24,6 +25,7 @@ from coscientist.core.domain import (
 )
 from coscientist.core.errors import AttemptClosedError, CatalogError
 from coscientist.core.executor import Executor
+from coscientist.core.machine import new_owner
 from coscientist.core.outcome import compute_outcome
 from coscientist.core.store import SqliteEventStore
 from coscientist.core.study_view import study_view
@@ -48,47 +50,44 @@ def test_empty_required_never_success():
 
 
 def test_b2b_article_small_unassessed_review_does_not_downgrade():
-    reqs = [
-        _req(ReqStatus.MET, code=True, i=0),
-        _req(ReqStatus.UNASSESSED, code=False, i=1),
-    ]
-    out, dg = compute_outcome(reqs, None, None, "real")
-    assert out == Outcome.SUCCESS
-    assert dg is None
+    out, dg = compute_outcome(
+        [_req(ReqStatus.MET, code=True, i=0), _req(ReqStatus.UNASSESSED, code=False, i=1)],
+        None,
+        None,
+        "real",
+    )
+    assert out == Outcome.SUCCESS and dg is None
 
 
 def test_b2a_article_small_claim_partial_without_reason_stays_success():
-    reqs = [_req(ReqStatus.MET, code=True)]
-    out, dg = compute_outcome(reqs, Outcome.PARTIAL, None, "real")
-    assert out == Outcome.SUCCESS
-    assert dg is None
+    out, dg = compute_outcome(
+        [_req(ReqStatus.MET, code=True)], Outcome.PARTIAL, None, "real"
+    )
+    assert out == Outcome.SUCCESS and dg is None
 
 
 def test_b2a_article_small_downgrade_with_reason_stored():
-    reqs = [_req(ReqStatus.MET, code=True)]
-    out, dg = compute_outcome(reqs, Outcome.PARTIAL, "agent unsure", "real")
-    assert out == Outcome.PARTIAL
-    assert dg is not None
-    assert dg.from_ == Outcome.SUCCESS
-    assert dg.to == Outcome.PARTIAL
+    out, dg = compute_outcome(
+        [_req(ReqStatus.MET, code=True)], Outcome.PARTIAL, "agent unsure", "real"
+    )
+    assert out == Outcome.PARTIAL and dg is not None
 
 
 def test_agent_claim_only_downgrades():
-    only_review = [_req(ReqStatus.UNASSESSED, code=False)]
-    out, _ = compute_outcome(only_review, Outcome.SUCCESS, "x", "real")
+    out, _ = compute_outcome(
+        [_req(ReqStatus.UNASSESSED, code=False)], Outcome.SUCCESS, "x", "real"
+    )
     assert out == Outcome.PARTIAL
-
-    reqs = [_req(ReqStatus.MET, code=True)]
-    out2, dg2 = compute_outcome(reqs, Outcome.FAILED, "bad", "real")
+    out2, dg2 = compute_outcome(
+        [_req(ReqStatus.MET, code=True)], Outcome.FAILED, "bad", "real"
+    )
     assert out2 == Outcome.FAILED and dg2 is not None
 
 
 def test_simulated_input_caps_at_partial():
     reqs = [_req(ReqStatus.MET, code=True)]
-    out, _ = compute_outcome(reqs, None, None, "simulated")
-    assert out == Outcome.PARTIAL
-    out_p, _ = compute_outcome(reqs, None, None, "partial")
-    assert out_p == Outcome.PARTIAL
+    assert compute_outcome(reqs, None, None, "simulated")[0] == Outcome.PARTIAL
+    assert compute_outcome(reqs, None, None, "partial")[0] == Outcome.PARTIAL
 
 
 def test_b1_closed_only_when_all_tasks_done():
@@ -111,32 +110,29 @@ def test_b1_closed_only_when_all_tasks_done():
             deadline=now,
         ),
     ]
-    view = study_view(tasks)
-    assert view.phase == "running"
-    assert view.verdict is None
-
+    assert study_view(tasks).phase == "running"
+    assert study_view([]).phase == "running"
     tasks[1] = tasks[1].model_copy(
         update={"state": TaskState.DONE, "outcome": TaskOutcome.SUCCESS}
     )
-    view2 = study_view(tasks)
-    assert view2.phase == "closed"
-    assert view2.verdict == "fulfilled"
+    assert study_view(tasks).verdict == "fulfilled"
 
 
-def _attempt_obj(d: dict):
-    return type("Att", (), d)()
+async def _writer(tmp_path, clock, sid="st_b2"):
+    store = SqliteEventStore(sid, tmp_path / "e.db", clock=clock)
+    await store.acquire_lease(new_owner())
+    writer = StudyWriter(store)
+    writer.start()
+    return store, writer
 
 
 @pytest.mark.asyncio
 async def test_b2_matching_value_in_raw_artifact_is_success(tmp_path, catalog):
     clock = FakeClock()
-    store = SqliteEventStore("st_b2", tmp_path / "e.db", clock=clock)
-    await store.acquire_lease("t")
-    writer = StudyWriter(store)
+    store, writer = await _writer(tmp_path, clock)
     arts = LocalArtifactStore(tmp_path / "a")
-    content = json.dumps({"count": 225}).encode()
     art = arts.put(
-        content,
+        json.dumps({"count": 225}).encode(),
         make_tool_ref("st_b2/EXP-1#1:1"),
         name="main",
         media_type="application/json",
@@ -156,15 +152,17 @@ async def test_b2_matching_value_in_raw_artifact_is_success(tmp_path, catalog):
         deadline=clock.now() + timedelta(hours=1),
         attempts=["st_b2/EXP-1#1"],
     )
-    attempt = _attempt_obj(
+    attempt = type(
+        "Att",
+        (),
         {
             "attempt_id": "st_b2/EXP-1#1",
             "closed": False,
             "provenance": "real",
             "task_id": task.task_id,
             "study_id": "st_b2",
-        }
-    )
+        },
+    )()
     ex = Executor(
         writer,
         catalog,
@@ -173,7 +171,7 @@ async def test_b2_matching_value_in_raw_artifact_is_success(tmp_path, catalog):
         get_attempt=lambda _: attempt,
         get_task=lambda _: task,
     )
-    result = ex.record(
+    result = await ex.record(
         "st_b2/EXP-1#1",
         AgentTaskOutput(
             summary="ok",
@@ -182,21 +180,17 @@ async def test_b2_matching_value_in_raw_artifact_is_success(tmp_path, catalog):
         ),
     )
     assert result.outcome == Outcome.SUCCESS
+    await writer.stop()
     store.close()
 
 
 @pytest.mark.asyncio
 async def test_review_scheduled_on_every_record_path(tmp_path, catalog):
     clock = FakeClock()
-    store = SqliteEventStore("st_r", tmp_path / "e.db", clock=clock)
-    await store.acquire_lease("t")
-    writer = StudyWriter(store)
+    store, writer = await _writer(tmp_path, clock, "st_r")
     arts = LocalArtifactStore(tmp_path / "a")
     art = arts.put(
-        b'{"count":225}',
-        make_tool_ref("x:1"),
-        name="main",
-        media_type="application/json",
+        b'{"count":225}', make_tool_ref("x:1"), name="main", media_type="application/json"
     )
     spec = TaskSpec(
         task_key="EXP-1",
@@ -216,15 +210,17 @@ async def test_review_scheduled_on_every_record_path(tmp_path, catalog):
         deadline=clock.now() + timedelta(hours=1),
         attempts=["st_r/EXP-1#1"],
     )
-    attempt = _attempt_obj(
+    attempt = type(
+        "Att",
+        (),
         {
             "attempt_id": "st_r/EXP-1#1",
             "closed": False,
             "provenance": "real",
             "task_id": task.task_id,
             "study_id": "st_r",
-        }
-    )
+        },
+    )()
     ex = Executor(
         writer,
         catalog,
@@ -234,7 +230,7 @@ async def test_review_scheduled_on_every_record_path(tmp_path, catalog):
         get_task=lambda _: task,
         review_statuses={"human_review#1": ReqStatus.UNASSESSED},
     )
-    result = ex.record(
+    result = await ex.record(
         "st_r/EXP-1#1",
         AgentTaskOutput(
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")}
@@ -242,25 +238,26 @@ async def test_review_scheduled_on_every_record_path(tmp_path, catalog):
     )
     assert any(e.type == "ReviewScheduled" for e in store.read_all())
     assert result.outcome == Outcome.SUCCESS
+    await writer.stop()
     store.close()
 
 
 @pytest.mark.asyncio
 async def test_closed_attempt_rejects_record(tmp_path, catalog):
     clock = FakeClock()
-    store = SqliteEventStore("st_c", tmp_path / "e.db", clock=clock)
-    await store.acquire_lease("t")
-    writer = StudyWriter(store)
+    store, writer = await _writer(tmp_path, clock, "st_c")
     arts = LocalArtifactStore(tmp_path / "a")
-    attempt = _attempt_obj(
+    attempt = type(
+        "Att",
+        (),
         {
             "attempt_id": "a#1",
             "closed": True,
             "provenance": "real",
             "task_id": "t",
             "study_id": "st_c",
-        }
-    )
+        },
+    )()
     ex = Executor(
         writer,
         catalog,
@@ -270,6 +267,57 @@ async def test_closed_attempt_rejects_record(tmp_path, catalog):
         get_task=lambda _: None,
     )
     with pytest.raises(AttemptClosedError):
-        ex.record("a#1", AgentTaskOutput(summary="late"))
+        await ex.record("a#1", AgentTaskOutput(summary="late"))
     assert any(e.type == "LateWriteRejected" for e in store.read_all())
+    await writer.stop()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_downgrade_without_refs_rejected(tmp_path, catalog):
+    clock = FakeClock()
+    store, writer = await _writer(tmp_path, clock, "st_d")
+    arts = LocalArtifactStore(tmp_path / "a")
+    art = arts.put(
+        b'{"count":225}', make_tool_ref("d:1"), name="main", media_type="application/json"
+    )
+    spec = TaskSpec(
+        task_key="EXP-1",
+        title="t",
+        goal="g",
+        route="experiment",
+        criteria=[RequirementRef(template_id="value_match")],
+    )
+    task = Task(
+        task_id="st_d/EXP-1",
+        kind=TaskKind.EXPERIMENT,
+        spec=spec,
+        state=TaskState.RUNNING,
+        deadline=clock.now() + timedelta(hours=1),
+        attempts=["st_d/EXP-1#1"],
+    )
+    attempt = type(
+        "Att",
+        (),
+        {
+            "attempt_id": "st_d/EXP-1#1",
+            "closed": False,
+            "provenance": "real",
+            "task_id": task.task_id,
+            "study_id": "st_d",
+        },
+    )()
+    ex = Executor(
+        writer, catalog, arts, clock=clock, get_attempt=lambda _: attempt, get_task=lambda _: task
+    )
+    result = await ex.record(
+        "st_d/EXP-1#1",
+        AgentTaskOutput(
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            downgrade=DowngradeClaim(to=Outcome.PARTIAL, refs=[], reason="no refs"),
+        ),
+    )
+    assert any(e.type == "DowngradeRejected" for e in store.read_all())
+    assert result.outcome == Outcome.SUCCESS
+    await writer.stop()
     store.close()

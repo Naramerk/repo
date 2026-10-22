@@ -15,20 +15,6 @@ from coscientist.core.errors import Conflict, Idempotent, LeaseLost
 from coscientist.core.events import EventEnvelope
 from coscientist.core.upcasters import upcast
 
-PROJECTION_TABLES = (
-    "studies",
-    "plans",
-    "tasks",
-    "attempts",
-    "results",
-    "artifacts",
-    "requirements",
-    "jobs",
-    "hitl_requests",
-    "usage",
-    "tool_calls",
-)
-
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events(
   seq INTEGER PRIMARY KEY,
@@ -54,10 +40,6 @@ CREATE TABLE IF NOT EXISTS projections(
   data JSON NOT NULL,
   PRIMARY KEY (table_name, row_key)
 );
-CREATE TABLE IF NOT EXISTS meta(
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
 """
 
 
@@ -82,6 +64,7 @@ class SqliteEventStore:
         *,
         owner: str | None = None,
         epoch: int = 0,
+        lease_ttl_s: float = 30.0,
     ) -> None:
         self.study_id = study_id
         self.db_path = Path(db_path)
@@ -89,6 +72,7 @@ class SqliteEventStore:
         self.clock = clock or SystemClock()
         self.owner = owner
         self.epoch = epoch
+        self.lease_ttl_s = lease_ttl_s
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -101,51 +85,60 @@ class SqliteEventStore:
     def close(self) -> None:
         self._conn.close()
 
-    # --- lease -------------------------------------------------------------
-
-    async def acquire_lease(self, owner: str, ttl_s: float = 30.0) -> int:
+    async def acquire_lease(self, owner: str, ttl_s: float | None = None) -> int:
+        ttl = self.lease_ttl_s if ttl_s is None else ttl_s
         async with self._lock:
-            now = self.clock.now()
-            expires = now + timedelta(seconds=ttl_s)
-            cur = self._conn.execute(
-                "SELECT owner, epoch, expires_at FROM lease WHERE study_id=?",
-                (self.study_id,),
-            )
-            row = cur.fetchone()
-            if row is None:
-                epoch = 1
-                self._conn.execute(
-                    "INSERT INTO lease(study_id, owner, epoch, expires_at) VALUES (?,?,?,?)",
-                    (self.study_id, owner, epoch, _iso(expires)),
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                now = self.clock.now()
+                expires = now + timedelta(seconds=ttl)
+                cur = self._conn.execute(
+                    "SELECT owner, epoch, expires_at FROM lease WHERE study_id=?",
+                    (self.study_id,),
                 )
-            else:
-                exp = _parse_iso(row["expires_at"])
-                if row["owner"] != owner and exp > now:
-                    raise LeaseLost(
-                        f"lease held by {row['owner']} until {row['expires_at']}"
+                row = cur.fetchone()
+                if row is None:
+                    epoch = 1
+                    self._conn.execute(
+                        "INSERT INTO lease(study_id, owner, epoch, expires_at) "
+                        "VALUES (?,?,?,?)",
+                        (self.study_id, owner, epoch, _iso(expires)),
                     )
-                epoch = int(row["epoch"]) + 1
-                self._conn.execute(
-                    "UPDATE lease SET owner=?, epoch=?, expires_at=? WHERE study_id=?",
-                    (owner, epoch, _iso(expires), self.study_id),
-                )
-            self._conn.commit()
-            self.owner = owner
-            self.epoch = epoch
-            return epoch
+                else:
+                    exp = _parse_iso(row["expires_at"])
+                    if row["owner"] != owner and exp > now:
+                        raise LeaseLost(
+                            f"lease held by {row['owner']} until {row['expires_at']}"
+                        )
+                    epoch = int(row["epoch"]) + 1
+                    self._conn.execute(
+                        "UPDATE lease SET owner=?, epoch=?, expires_at=? WHERE study_id=?",
+                        (owner, epoch, _iso(expires), self.study_id),
+                    )
+                self._conn.commit()
+                self.owner = owner
+                self.epoch = epoch
+                self.lease_ttl_s = ttl
+                return epoch
+            except Exception:
+                self._conn.rollback()
+                raise
 
-    async def renew_lease(self, owner: str, epoch: int, ttl_s: float = 30.0) -> None:
+    async def renew_lease(self, owner: str, epoch: int, ttl_s: float | None = None) -> None:
+        ttl = self.lease_ttl_s if ttl_s is None else ttl_s
         async with self._lock:
             now = self.clock.now()
-            expires = now + timedelta(seconds=ttl_s)
+            expires = now + timedelta(seconds=ttl)
             cur = self._conn.execute(
                 "UPDATE lease SET expires_at=? "
                 "WHERE study_id=? AND owner=? AND epoch=? AND expires_at>?",
                 (_iso(expires), self.study_id, owner, epoch, _iso(now)),
             )
             if cur.rowcount == 0:
+                self._conn.rollback()
                 raise LeaseLost("renew failed: lease lost or epoch mismatch")
             self._conn.commit()
+            self.lease_ttl_s = ttl
 
     def current_lease(self) -> tuple[str | None, int, datetime | None]:
         cur = self._conn.execute(
@@ -157,15 +150,16 @@ class SqliteEventStore:
             return None, 0, None
         return row["owner"], int(row["epoch"]), _parse_iso(row["expires_at"])
 
-    def _fence(self) -> None:
+    def _fence(self, ttl_s: float | None = None) -> None:
         if self.owner is None:
             raise LeaseLost("no lease owner set")
+        ttl = self.lease_ttl_s if ttl_s is None else ttl_s
         now = self.clock.now()
         cur = self._conn.execute(
             "UPDATE lease SET expires_at=? "
             "WHERE study_id=? AND owner=? AND epoch=? AND expires_at>?",
             (
-                _iso(now + timedelta(seconds=30)),
+                _iso(now + timedelta(seconds=ttl)),
                 self.study_id,
                 self.owner,
                 self.epoch,
@@ -175,30 +169,11 @@ class SqliteEventStore:
         if cur.rowcount == 0:
             raise LeaseLost("epoch fencing rejected write")
 
-    # --- append ------------------------------------------------------------
-
     async def append(self, event: EventEnvelope) -> EventEnvelope:
-        async with self._lock:
-            self._fence()
-            try:
-                stored, idem = self._insert_one(event)
-                if idem is not None:
-                    self._conn.rollback()
-                    raise idem
-                self._conn.commit()
-                assert stored is not None
-                return stored
-            except Conflict:
-                self._conn.rollback()
-                raise
-            except LeaseLost:
-                self._conn.rollback()
-                raise
-            except Idempotent:
-                raise
-            except Exception:
-                self._conn.rollback()
-                raise
+        results = await self.append_many([event])
+        if not results:
+            raise Idempotent(0)
+        return results[0]
 
     async def append_many(self, events: list[EventEnvelope]) -> list[EventEnvelope]:
         async with self._lock:
@@ -211,7 +186,6 @@ class SqliteEventStore:
             for ev in events:
                 stored, idem = self._insert_one(ev)
                 if idem is not None:
-                    # same payload: skip; keep batch going
                     continue
                 assert stored is not None
                 out.append(stored)
@@ -226,7 +200,7 @@ class SqliteEventStore:
     ) -> tuple[EventEnvelope | None, Idempotent | None]:
         digest = event.payload_digest or payload_digest(event.payload)
         cur = self._conn.execute(
-            "SELECT seq, payload_digest, payload FROM events WHERE idem_key=?",
+            "SELECT seq, payload_digest FROM events WHERE idem_key=?",
             (event.idem_key,),
         )
         existing = cur.fetchone()
@@ -253,14 +227,12 @@ class SqliteEventStore:
                 digest,
             ),
         )
-        seq = int(cur.lastrowid)
+        seq = int(cur.lastrowid or 0)
         stored = event.model_copy(
             update={"seq": seq, "epoch": self.epoch, "payload_digest": digest, "ts": ts}
         )
         self._apply_projection(stored)
         return stored, None
-
-    # --- read / projections ------------------------------------------------
 
     def read_all(self) -> list[EventEnvelope]:
         return self.read_after(0)
@@ -315,7 +287,6 @@ class SqliteEventStore:
         apply_event(self, event)
 
     def fold_from_events(self) -> dict[str, dict[str, dict[str, Any]]]:
-        """Rebuild all projections from the journal (for replay equality tests)."""
         from coscientist.core.projections import fold_events
 
         return fold_events(self.read_all())

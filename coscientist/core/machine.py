@@ -3,20 +3,31 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import datetime
 from typing import Any
 
 from coscientist.core.clock import Clock, SystemClock
-from coscientist.core.domain import HitlRequest, Study, Task, TaskOutcome, TaskState
-from coscientist.core.errors import Idempotent, LeaseLost
+from coscientist.core.domain import (
+    HitlRequest,
+    Provenance,
+    Study,
+    Task,
+    TaskOutcome,
+    TaskState,
+)
+from coscientist.core.errors import LeaseLost
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.graph import GraphNode, GraphStore, KindRegistry, default_execution_registry
 from coscientist.core.ids import attempt_id, task_id
+from coscientist.core.inputs import InputUnavailable, bind_inputs
 from coscientist.core.lifecycle import LifecycleMixin
 from coscientist.core.runtime_ext import HitlForkMixin
 from coscientist.core.store import SqliteEventStore
 from coscientist.core.study_view import study_view
 from coscientist.core.writer import StudyWriter
+
+RETRY_BACKOFF_S = 0.05
 
 
 class StudyRuntime(LifecycleMixin, HitlForkMixin):
@@ -30,8 +41,10 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
         clock: Clock | None = None,
         registry: KindRegistry | None = None,
         max_attempts: int = 3,
-        owner: str = "runtime",
+        owner: str,
     ) -> None:
+        if not owner:
+            raise ValueError("lease owner is required")
         self.store = store
         self.writer = writer
         self.clock = clock or SystemClock()
@@ -42,9 +55,14 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
         self.study: Study | None = None
         self.tasks: dict[str, Task] = {}
         self.attempts: dict[str, dict[str, Any]] = {}
+        self.results: dict[str, dict[str, Any]] = {}
         self.hitl: dict[str, HitlRequest] = {}
         self._attempt_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._retry_tasks: dict[str, asyncio.Task[Any]] = {}
         self._lease_lost = False
+        self.executor: Any | None = None
+        self.dep_outputs: dict[str, dict[str, str]] = {}
+        self.dep_provenance: dict[str, Provenance] = {}
 
     async def _append(self, events: list[EventEnvelope]) -> None:
         if self._lease_lost:
@@ -54,8 +72,6 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
         except LeaseLost:
             self._lease_lost = True
             raise
-        except Idempotent:
-            return
         for ev in events:
             self._project_local(ev)
 
@@ -68,7 +84,9 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
         elif ev.type == "AttemptStarted":
             self.attempts[p["attempt_id"]] = dict(p)
             t = self.tasks[p["task_id"]]
-            attempts = list(t.attempts) + [p["attempt_id"]]
+            attempts = list(t.attempts)
+            if p["attempt_id"] not in attempts:
+                attempts.append(p["attempt_id"])
             self.tasks[p["task_id"]] = t.model_copy(
                 update={"state": TaskState.RUNNING, "attempts": attempts}
             )
@@ -77,6 +95,9 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
             att.update(p)
             att["closed"] = True
             self.attempts[p["attempt_id"]] = att
+        elif ev.type == "ResultRecorded":
+            self.results[p["result_id"]] = dict(p)
+            self.results[p["attempt_id"]] = dict(p)
         elif ev.type == "TaskDone":
             t = self.tasks[p["task_id"]]
             self.tasks[p["task_id"]] = t.model_copy(
@@ -126,21 +147,18 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
                 return False
         return True
 
+    def _dep_map(self) -> dict[str, Task]:
+        return {t.spec.task_key: t for t in self.tasks.values()}
+
     async def start_attempt(
         self,
         task_key_or_id: str,
         *,
-        provenance: str = "real",
-        hang: bool = False,
+        provenance: Provenance | None = None,
     ) -> str:
         task = self._resolve_task(task_key_or_id)
-        if task.state != TaskState.PENDING and not (
-            task.state == TaskState.RUNNING
-            and task.attempts
-            and self.attempts.get(task.attempts[-1], {}).get("closed")
-        ):
-            if task.state == TaskState.DONE:
-                raise RuntimeError("task already DONE")
+        if task.state == TaskState.DONE:
+            raise RuntimeError("task already DONE")
         if not self._deps_done(task):
             raise RuntimeError("dependencies not DONE")
         open_atts = [
@@ -151,6 +169,22 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
         n = len(task.attempts) + 1
         if n > self.max_attempts:
             raise RuntimeError("max_attempts exceeded")
+
+        try:
+            _bindings, derived = bind_inputs(
+                task,
+                dep_tasks=self._dep_map(),
+                dep_outputs=self.dep_outputs,
+                dep_provenance=self.dep_provenance,
+            )
+        except InputUnavailable:
+            await self.cancel_task(task.task_id, reason="input_unavailable")
+            raise
+
+        prov: Provenance = provenance if provenance is not None else derived
+        if prov not in ("real", "partial", "simulated"):
+            raise ValueError(f"invalid provenance: {prov}")
+
         aid = attempt_id(task.task_id, n)
         now = self.clock.now()
         assert self.study is not None
@@ -162,7 +196,7 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
             "route_returned": False,
             "closed": False,
             "close_reason": None,
-            "provenance": provenance,
+            "provenance": prov,
             "agent_output_digest": None,
             "deadline": deadline.isoformat(),
             "task_id": task.task_id,
@@ -180,15 +214,6 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
                 )
             ]
         )
-        if hang:
-
-            async def _hang() -> None:
-                try:
-                    await asyncio.sleep(10_000)
-                except asyncio.CancelledError:
-                    return
-
-            self._attempt_tasks[aid] = asyncio.create_task(_hang())
         return aid
 
     def _resolve_task(self, key_or_id: str) -> Task:
@@ -198,52 +223,6 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
         if not matches:
             raise KeyError(key_or_id)
         return matches[0]
-
-    async def finish_attempt(
-        self,
-        aid: str,
-        *,
-        outcome: TaskOutcome = TaskOutcome.SUCCESS,
-        reason: str | None = None,
-    ) -> None:
-        att = self.attempts[aid]
-        if att.get("closed"):
-            raise RuntimeError("attempt closed")
-        now = self.clock.now()
-        sid = att["study_id"]
-        tid = att["task_id"]
-        await self._append(
-            [
-                EventEnvelope(
-                    study_id=sid,
-                    type="AttemptClosed",
-                    entity_key=aid,
-                    idem_key=make_idem("AttemptClosed", aid, "finish"),
-                    payload={
-                        "attempt_id": aid,
-                        "closed": True,
-                        "close_reason": "result",
-                        "task_id": tid,
-                    },
-                    ts=now,
-                ),
-                EventEnvelope(
-                    study_id=sid,
-                    type="TaskDone",
-                    entity_key=tid,
-                    idem_key=make_idem("TaskDone", tid),
-                    payload={
-                        "task_id": tid,
-                        "outcome": outcome.value,
-                        "reason": reason,
-                    },
-                    ts=now,
-                ),
-            ]
-        )
-        t = self._attempt_tasks.pop(aid, None)
-        if t:
-            t.cancel()
 
     async def fail_attempt(self, aid: str, *, retryable: bool = True) -> None:
         att = self.attempts[aid]
@@ -269,8 +248,9 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
                 ts=now,
             )
         ]
-        n = att["n"]
-        if not (retryable and n < self.max_attempts and now < task.deadline):
+        n = int(att["n"])
+        can_retry = retryable and n < self.max_attempts and now < task.deadline
+        if not can_retry:
             events.append(
                 EventEnvelope(
                     study_id=sid,
@@ -286,6 +266,49 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
                 )
             )
         await self._append(events)
+        if can_retry:
+            self._schedule_retry(tid, str(att.get("provenance", "real")))
+
+    def _schedule_retry(self, tid: str, provenance: str) -> None:
+        async def _retry() -> None:
+            await asyncio.sleep(RETRY_BACKOFF_S)
+            if self._lease_lost:
+                return
+            task = self.tasks.get(tid)
+            if task is None or task.state == TaskState.DONE:
+                return
+            open_atts = [
+                a for a in task.attempts if not self.attempts.get(a, {}).get("closed")
+            ]
+            if open_atts:
+                return
+            try:
+                await self.start_attempt(tid, provenance=provenance)  # type: ignore[arg-type]
+            except Exception:
+                if self.tasks[tid].state == TaskState.RUNNING:
+                    # last resort: mark failed so task does not sit RUNNING empty
+                    now = self.clock.now()
+                    await self._append(
+                        [
+                            EventEnvelope(
+                                study_id=self.study.study_id,  # type: ignore[union-attr]
+                                type="TaskDone",
+                                entity_key=tid,
+                                idem_key=make_idem("TaskDone", tid),
+                                payload={
+                                    "task_id": tid,
+                                    "outcome": TaskOutcome.FAILED.value,
+                                    "reason": "retry_failed",
+                                },
+                                ts=now,
+                            )
+                        ]
+                    )
+
+        old = self._retry_tasks.pop(tid, None)
+        if old:
+            old.cancel()
+        self._retry_tasks[tid] = asyncio.create_task(_retry())
 
     async def cancel_task(self, task_key_or_id: str, reason: str = "cancelled") -> None:
         task = self._resolve_task(task_key_or_id)
@@ -336,10 +359,10 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
         try:
             await self.store.renew_lease(self.owner, self.store.epoch, ttl_s=ttl_s)
         except LeaseLost:
-            await self.store.acquire_lease(self.owner, ttl_s=ttl_s)
+            self._lease_lost = True
+            raise
 
     async def tick(self) -> None:
-        """Fire due deadlines (P5/P6) and HITL timeouts."""
         if self.study is None or self._lease_lost:
             return
         await self.ensure_lease()
@@ -392,3 +415,7 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
                     )
                 )
                 await self._append(events)
+
+
+def new_owner() -> str:
+    return str(uuid.uuid4())

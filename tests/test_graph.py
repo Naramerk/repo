@@ -16,7 +16,7 @@ from coscientist.core.graph import (
 
 
 def test_schema_loads_twelve_nodes_sixteen_edges():
-    reg = registry_from_schema()
+    reg = registry_from_schema()  # packaged coscientist.schema
     assert len(reg.node_kinds()) == 12
     assert len(reg.edge_kinds()) == 16
     assert "hypothesis" in reg.node_kinds()

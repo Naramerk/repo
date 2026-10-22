@@ -12,6 +12,7 @@ from coscientist.core.domain import (
     AgentTaskOutput,
     Catalog,
     Outcome,
+    Provenance,
     ReqStatus,
     Result,
     TaskOutcome,
@@ -25,6 +26,15 @@ from coscientist.core.writer import StudyWriter
 log = logging.getLogger(__name__)
 
 
+def _provenance(attempt: Any) -> Provenance:
+    p = getattr(attempt, "provenance", None)
+    if p is None and isinstance(attempt, dict):
+        p = attempt.get("provenance")
+    if p not in ("real", "partial", "simulated"):
+        raise ValueError(f"invalid attempt provenance: {p!r}")
+    return p  # type: ignore[return-value]
+
+
 class Executor:
     def __init__(
         self,
@@ -35,6 +45,7 @@ class Executor:
         clock: Any,
         get_attempt: Any,
         get_task: Any,
+        on_events: Any | None = None,
         review_statuses: dict[str, ReqStatus] | None = None,
     ) -> None:
         self.writer = writer
@@ -43,29 +54,36 @@ class Executor:
         self.clock = clock
         self.get_attempt = get_attempt
         self.get_task = get_task
+        self.on_events = on_events  # callback after successful append (project local)
         self.review_statuses = review_statuses or {}
         self._scheduled_reviews: list[str] = []
 
-    def record(self, attempt_id: str, out: AgentTaskOutput) -> Result:
-        """Synchronous API used by tests; schedules async write via writer when running."""
+    async def record(self, attempt_id: str, out: AgentTaskOutput) -> Result:
         attempt = self.get_attempt(attempt_id)
         if attempt is None:
             raise KeyError(attempt_id)
-        if attempt.closed:
-            # late write rejected
-            self._emit_sync(
-                EventEnvelope(
-                    study_id=attempt.study_id,
-                    type="LateWriteRejected",
-                    entity_key=attempt_id,
-                    idem_key=make_idem("LateWriteRejected", attempt_id, str(self.clock.now())),
-                    payload={"attempt_id": attempt_id, "reason": "attempt_closed"},
-                    ts=self.clock.now(),
-                )
+        closed = attempt.closed if hasattr(attempt, "closed") else attempt.get("closed")
+        study_id = attempt.study_id if hasattr(attempt, "study_id") else attempt["study_id"]
+        task_id = attempt.task_id if hasattr(attempt, "task_id") else attempt["task_id"]
+
+        if closed:
+            await self._append(
+                [
+                    EventEnvelope(
+                        study_id=study_id,
+                        type="LateWriteRejected",
+                        entity_key=attempt_id,
+                        idem_key=make_idem(
+                            "LateWriteRejected", attempt_id, str(self.clock.now())
+                        ),
+                        payload={"attempt_id": attempt_id, "reason": "attempt_closed"},
+                        ts=self.clock.now(),
+                    )
+                ]
             )
             raise AttemptClosedError(attempt_id)
 
-        task = self.get_task(attempt.task_id)
+        task = self.get_task(task_id)
         checks = evaluate_task_checks(
             self.catalog,
             task.spec,
@@ -73,69 +91,84 @@ class Executor:
             self.artifacts,
             review_statuses=self.review_statuses,
         )
-        # schedule reviews
         for c in checks:
             if not c.is_code and c.status == ReqStatus.UNASSESSED:
                 self._scheduled_reviews.append(c.check_id)
-                self._emit_sync(
-                    EventEnvelope(
-                        study_id=attempt.study_id,
-                        type="ReviewScheduled",
-                        entity_key=attempt_id,
-                        idem_key=make_idem("ReviewScheduled", attempt_id, c.check_id),
-                        payload={"check_id": c.check_id, "attempt_id": attempt_id},
-                        ts=self.clock.now(),
-                    )
-                )
 
         claim = out.claim
-        reason = None
+        reason: str | None = None
         if out.downgrade is not None:
-            claim = out.downgrade.to
-            reason = out.downgrade.reason or None
-            if not out.downgrade.refs:
-                reason = None  # free text without refs ignored (M1 strictness soft in M0)
-
-        provenance = getattr(attempt, "provenance", None) or "real"
-        try:
-            computed, downgrade = compute_outcome(
-                checks, claim, reason, provenance
-            )
-        except CatalogError as e:
-            rid = result_id(attempt_id)
-            payload = {
-                "result_id": rid,
-                "attempt_id": attempt_id,
-                "outcome": Outcome.PARTIAL.value,
-                "computed_outcome": Outcome.PARTIAL.value,
-                "reason": "catalog_error",
-                "provenance": provenance,
-                "check_results": [],
-                "unassessed": [],
-                "artifacts": [h.artifact_id for h in out.outputs.values()],
-                "payload_digest": "",
-                "agent_claim": claim.value if claim else None,
-                "inputs": [],
-            }
-            payload["payload_digest"] = payload_digest(payload)
-            self._emit_sync(
-                EventEnvelope(
-                    study_id=attempt.study_id,
-                    type="CatalogErrorRaised",
-                    entity_key=attempt_id,
-                    idem_key=make_idem("CatalogErrorRaised", attempt_id),
-                    payload={"error": str(e)},
-                    ts=self.clock.now(),
+            if not out.downgrade.refs or not out.downgrade.reason:
+                await self._append(
+                    [
+                        EventEnvelope(
+                            study_id=study_id,
+                            type="DowngradeRejected",
+                            entity_key=attempt_id,
+                            idem_key=make_idem("DowngradeRejected", attempt_id),
+                            payload={
+                                "attempt_id": attempt_id,
+                                "reason": "downgrade requires reason and refs",
+                            },
+                            ts=self.clock.now(),
+                        )
+                    ]
                 )
+            else:
+                claim = out.downgrade.to
+                reason = out.downgrade.reason
+
+        provenance = _provenance(attempt)
+        try:
+            computed, downgrade = compute_outcome(checks, claim, reason, provenance)
+        except CatalogError as e:
+            return await self._commit_failure(
+                attempt_id,
+                study_id,
+                task_id,
+                out,
+                provenance,
+                claim,
+                reason="catalog_error",
+                detail=str(e),
             )
-            return self._commit_result(attempt, task, payload, TaskOutcome.PARTIAL, "catalog_error")
 
         if computed is None:
-            # still waiting — leave RUNNING (M0 tests usually force review statuses)
-            raise RuntimeError("compute_outcome pending; supply review statuses or wait")
+            await self._append(
+                [
+                    EventEnvelope(
+                        study_id=study_id,
+                        type="ResultPending",
+                        entity_key=attempt_id,
+                        idem_key=make_idem(
+                            "ResultPending", attempt_id, str(self.clock.now())
+                        ),
+                        payload={
+                            "attempt_id": attempt_id,
+                            "reason": "required_checks_pending",
+                        },
+                        ts=self.clock.now(),
+                    )
+                ]
+            )
+            raise RuntimeError("compute_outcome pending")
 
-        if claim and reason is None and out.downgrade is not None:
-            log.info("downgrade without reason ignored claim=%s", claim)
+        for c in checks:
+            if not c.is_code and c.status == ReqStatus.UNASSESSED:
+                await self._append(
+                    [
+                        EventEnvelope(
+                            study_id=study_id,
+                            type="ReviewScheduled",
+                            entity_key=attempt_id,
+                            idem_key=make_idem(
+                                "ReviewScheduled", attempt_id, c.check_id
+                            ),
+                            payload={"check_id": c.check_id, "attempt_id": attempt_id},
+                            ts=self.clock.now(),
+                        )
+                    ]
+                )
 
         unassessed = [c.check_id for c in checks if c.status == ReqStatus.UNASSESSED]
         rid = result_id(attempt_id)
@@ -151,70 +184,123 @@ class Executor:
             "unassessed": unassessed,
             "artifacts": [h.artifact_id for h in out.outputs.values()],
             "agent_claim": claim.value if claim else None,
-            "downgrade": downgrade.model_dump(mode="json", by_alias=True) if downgrade else None,
+            "downgrade": (
+                downgrade.model_dump(mode="json", by_alias=True) if downgrade else None
+            ),
             "inputs": [],
         }
         payload["payload_digest"] = payload_digest(payload)
-        task_outcome = TaskOutcome(final.value)
-        return self._commit_result(attempt, task, payload, task_outcome, None)
+        return await self._commit_result(
+            attempt_id, study_id, task_id, payload, TaskOutcome(final.value), None
+        )
 
-    def _commit_result(
+    async def _commit_failure(
         self,
-        attempt: Any,
-        task: Any,
+        attempt_id: str,
+        study_id: str,
+        task_id: str,
+        out: AgentTaskOutput,
+        provenance: Provenance,
+        claim: Outcome | None,
+        *,
+        reason: str,
+        detail: str,
+    ) -> Result:
+        rid = result_id(attempt_id)
+        payload = {
+            "result_id": rid,
+            "attempt_id": attempt_id,
+            "outcome": Outcome.FAILED.value,
+            "computed_outcome": Outcome.FAILED.value,
+            "reason": reason,
+            "provenance": provenance,
+            "check_results": [],
+            "unassessed": [],
+            "artifacts": [h.artifact_id for h in out.outputs.values()],
+            "agent_claim": claim.value if claim else None,
+            "inputs": [],
+            "detail": detail,
+        }
+        payload["payload_digest"] = payload_digest(payload)
+        await self._append(
+            [
+                EventEnvelope(
+                    study_id=study_id,
+                    type="CatalogErrorRaised",
+                    entity_key=attempt_id,
+                    idem_key=make_idem("CatalogErrorRaised", attempt_id),
+                    payload={"error": detail, "reason": reason},
+                    ts=self.clock.now(),
+                )
+            ]
+        )
+        return await self._commit_result(
+            attempt_id, study_id, task_id, payload, TaskOutcome.FAILED, reason
+        )
+
+    async def _commit_result(
+        self,
+        attempt_id: str,
+        study_id: str,
+        task_id: str,
         payload: dict[str, Any],
         task_outcome: TaskOutcome,
         reason: str | None,
     ) -> Result:
-        # re-check closed inside the "transaction" (sync path)
-        fresh = self.get_attempt(attempt.attempt_id)
-        if fresh is not None and fresh.closed:
-            raise AttemptClosedError(attempt.attempt_id)
+        fresh = self.get_attempt(attempt_id)
+        closed = (
+            fresh.closed
+            if fresh is not None and hasattr(fresh, "closed")
+            else (fresh or {}).get("closed")
+        )
+        if fresh is not None and closed:
+            raise AttemptClosedError(attempt_id)
 
+        now = self.clock.now()
         events = [
             EventEnvelope(
-                study_id=attempt.study_id,
+                study_id=study_id,
                 type="ResultRecorded",
                 entity_key=payload["result_id"],
                 idem_key=make_idem("ResultRecorded", payload["result_id"]),
                 payload=payload,
-                ts=self.clock.now(),
+                ts=now,
             ),
             EventEnvelope(
-                study_id=attempt.study_id,
+                study_id=study_id,
                 type="AttemptClosed",
-                entity_key=attempt.attempt_id,
-                idem_key=make_idem("AttemptClosed", attempt.attempt_id, "result"),
+                entity_key=attempt_id,
+                idem_key=make_idem("AttemptClosed", attempt_id, "result"),
                 payload={
-                    "attempt_id": attempt.attempt_id,
+                    "attempt_id": attempt_id,
                     "closed": True,
                     "close_reason": "result",
-                    "task_id": attempt.task_id,
+                    "task_id": task_id,
                 },
-                ts=self.clock.now(),
+                ts=now,
             ),
             EventEnvelope(
-                study_id=attempt.study_id,
+                study_id=study_id,
                 type="TaskDone",
-                entity_key=task.task_id,
-                idem_key=make_idem("TaskDone", task.task_id),
+                entity_key=task_id,
+                idem_key=make_idem("TaskDone", task_id),
                 payload={
-                    "task_id": task.task_id,
+                    "task_id": task_id,
                     "outcome": task_outcome.value,
                     "reason": reason,
                 },
-                ts=self.clock.now(),
+                ts=now,
             ),
         ]
-        for ev in events:
-            self._emit_sync(ev)
-
+        await self._append(events)
         return Result(
             result_id=payload["result_id"],
-            attempt_id=attempt.attempt_id,
+            attempt_id=attempt_id,
             outcome=Outcome(payload["outcome"]),
-            provenance=payload.get("provenance", "real"),
-            agent_claim=Outcome(payload["agent_claim"]) if payload.get("agent_claim") else None,
+            provenance=payload["provenance"],
+            agent_claim=(
+                Outcome(payload["agent_claim"]) if payload.get("agent_claim") else None
+            ),
             computed_outcome=Outcome(payload["computed_outcome"]),
             artifacts=list(payload.get("artifacts", [])),
             unassessed=list(payload.get("unassessed", [])),
@@ -222,11 +308,9 @@ class Executor:
             reason=reason,
         )
 
-    def _emit_sync(self, event: EventEnvelope) -> None:
-        """Append synchronously (record is sync; DESIGN §4.1)."""
-        from coscientist.core.errors import Idempotent
-
-        try:
-            self.writer.store._append_many_sync([event])  # noqa: SLF001
-        except Idempotent:
-            return
+    async def _append(self, events: list[EventEnvelope]) -> None:
+        stored = await self.writer.append_many(events)
+        if self.on_events is not None:
+            for ev in events:
+                self.on_events(ev)
+        _ = stored

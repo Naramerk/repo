@@ -1,21 +1,15 @@
-"""Canonical digests (sha256 of JSON; RFC 8785-style key sorting)."""
+"""Canonical digests via RFC 8785 JCS."""
 
 from __future__ import annotations
 
 import hashlib
-import json
 from typing import Any
+
+import rfc8785
 
 
 def canonical_json(obj: Any) -> bytes:
-    """Deterministic JSON encoding (sorted keys, no whitespace).
-
-    M0 note: full RFC 8785 JCS is deferred; sorted-keys JSON is sufficient for
-    idempotency and spec digests until M2 fork JCS requirements land.
-    """
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
-        "utf-8"
-    )
+    return rfc8785.dumps(obj)
 
 
 def sha256_hex(data: bytes | str) -> str:

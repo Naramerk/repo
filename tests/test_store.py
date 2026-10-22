@@ -91,6 +91,8 @@ async def test_lease_epoch_fencing(tmp_path: Path, clock: FakeClock):
 
 @pytest.mark.asyncio
 async def test_replay_equals_projection(tmp_path: Path, clock: FakeClock):
+    from tests.helpers import attach_executor, exp_spec, record_success
+
     rt = await open_runtime(tmp_path, "st_replay", owner="o", clock=clock)
     await rt.create_study(
         profile="research",
@@ -99,35 +101,20 @@ async def test_replay_equals_projection(tmp_path: Path, clock: FakeClock):
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_replay",
     )
-    # finish stage tasks quickly via cancel/skip remaining after ticking past? finish SPEC..PLAN
+    _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
         aid = await rt.start_attempt(key)
-        await rt.finish_attempt(aid)
-    from coscientist.core.domain import TaskSpec
-
-    await rt.accept_plan(
-        [
-            TaskSpec(
-                task_key="EXP-1",
-                title="e",
-                goal="g",
-                route="experiment",
-                depends_on=["PLAN"],
-            )
-        ]
-    )
+        await record_success(rt, aid, arts)
+    await rt.accept_plan([exp_spec("EXP-1")])
     aid = await rt.start_attempt("EXP-1")
-    await rt.finish_attempt(aid)
-    # report
-    aid = await rt.start_attempt("REPORT")
-    await rt.finish_attempt(aid)
+    await record_success(rt, aid, arts)
+    await rt.cancel_task("REPORT", reason="budget")
 
     folded = fold_events(rt.store.read_all())
     for table, rows in folded.items():
-        proj = { _key(table, r): r for r in rt.store.get_projection(table) }
+        proj = {_key(table, r): r for r in rt.store.get_projection(table)}
         for key, data in rows.items():
             assert key in proj, f"missing {table}/{key}"
-            # compare core fields
             for k, v in data.items():
                 assert proj[key].get(k) == v or str(proj[key].get(k)) == str(v)
 
@@ -137,8 +124,8 @@ async def test_replay_equals_projection(tmp_path: Path, clock: FakeClock):
 def _key(table: str, row: dict) -> str:
     # Prefer the entity's own id (attempt_id before task_id — attempts embed task_id).
     for f in (
-        "attempt_id",
         "result_id",
+        "attempt_id",
         "request_id",
         "node_id",
         "edge_id",

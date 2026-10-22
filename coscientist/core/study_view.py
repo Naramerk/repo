@@ -4,12 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from coscientist.core.domain import (
-    StudyView,
-    Task,
-    TaskOutcome,
-    TaskState,
-)
+from coscientist.core.domain import StudyView, Task, TaskOutcome, TaskState
 
 
 def study_view(
@@ -19,7 +14,10 @@ def study_view(
     simulated_done: int | None = None,
 ) -> StudyView:
     tasks = list(tasks)
-    total = len(tasks) or 1
+    if not tasks:
+        return StudyView(phase="running", progress=0.0, awaiting_human=open_hitl > 0)
+
+    total = len(tasks)
     done = sum(1 for t in tasks if t.state == TaskState.DONE)
     if any(t.state != TaskState.DONE for t in tasks):
         return StudyView(
@@ -33,10 +31,10 @@ def study_view(
     if simulated_done is not None and done:
         stub_share = simulated_done / done
 
-    if req and all(t.outcome == TaskOutcome.SUCCESS for t in req):
-        verdict: str = "fulfilled"
-    elif not req:
-        verdict = "failed"
+    if not req:
+        verdict: str = "partial"
+    elif all(t.outcome == TaskOutcome.SUCCESS for t in req):
+        verdict = "fulfilled"
     elif all(t.outcome in {TaskOutcome.FAILED, TaskOutcome.SKIPPED} for t in req):
         verdict = "failed"
     elif any(
@@ -44,14 +42,12 @@ def study_view(
         for t in tasks
     ):
         verdict = "failed"
+    elif stub_share > 0 and all(
+        t.outcome in {TaskOutcome.SUCCESS, TaskOutcome.PARTIAL} for t in req
+    ):
+        verdict = "simulated"
     else:
-        # simulated verdict when success blocked only by stub ceiling
-        if stub_share > 0 and all(
-            t.outcome in {TaskOutcome.SUCCESS, TaskOutcome.PARTIAL} for t in req
-        ):
-            verdict = "simulated"
-        else:
-            verdict = "partial"
+        verdict = "partial"
 
     return StudyView(
         phase="closed",

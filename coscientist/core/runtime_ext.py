@@ -18,7 +18,7 @@ class HitlForkMixin:
     """Mixin: open/answer HITL, idle grace, continue-session fork stub."""
 
     async def open_hitl(
-        self: StudyRuntime,
+        self,
         task_key_or_id: str,
         kind: str = "plan_approval",
         timeout_s: int | None = None,
@@ -53,7 +53,7 @@ class HitlForkMixin:
         return rid
 
     async def answer_hitl(
-        self: StudyRuntime, request_id: str, decision: str = "accept"
+        self, request_id: str, decision: str = "accept"
     ) -> None:
         h = self.hitl[request_id]
         if not h.open:
@@ -77,7 +77,7 @@ class HitlForkMixin:
             ]
         )
 
-    async def _hitl_timeout(self: StudyRuntime, h: HitlRequest) -> None:
+    async def _hitl_timeout(self, h: HitlRequest) -> None:
         now = self.clock.now()
         await self._append(
             [
@@ -96,11 +96,10 @@ class HitlForkMixin:
         )
         if h.kind not in ("plan_approval", "spec_approval"):
             return
-        # M0: on_timeout=delegate → close gate without failing (critic stub);
-        # on_timeout=fail → FAILED(human_timeout) + descendants SKIPPED.
         policy = self.study.hitl_policy if self.study else None
         on_timeout = policy.on_timeout if policy else "delegate"
         if on_timeout == "delegate":
+            await self._critic_decide(h, decision="accept", delegated_by="timeout")
             return
         task = self.tasks[h.task_id]
         if task.state != TaskState.DONE:
@@ -128,7 +127,36 @@ class HitlForkMixin:
                 ):
                     await self.cancel_task(t.task_id, reason="input_unavailable")
 
-    def _depends_transitively(self: StudyRuntime, task: Task, key: str) -> bool:
+    async def _critic_decide(
+        self,
+        h: HitlRequest,
+        *,
+        decision: str,
+        delegated_by: str,
+    ) -> None:
+        """Critic decision path for on_timeout=delegate (DESIGN §7.3)."""
+        now = self.clock.now()
+        await self._append(
+            [
+                EventEnvelope(
+                    study_id=h.study_id,
+                    type="HitlDecided",
+                    entity_key=h.request_id,
+                    idem_key=make_idem("HitlDecided", h.request_id, "critic"),
+                    payload={
+                        "request_id": h.request_id,
+                        "decision": decision,
+                        "by": "policy",
+                        "approved_by": "critic",
+                        "delegated_by": delegated_by,
+                        "reason": f"timeout→agent ({delegated_by})",
+                    },
+                    ts=now,
+                )
+            ]
+        )
+
+    def _depends_transitively(self, task: Task, key: str) -> bool:
         seen: set[str] = set()
 
         def walk(k: str) -> bool:
@@ -147,7 +175,7 @@ class HitlForkMixin:
 
         return any(walk(d) for d in task.spec.depends_on)
 
-    async def recover_after_idle(self: StudyRuntime, grace_s: float = 60.0) -> None:
+    async def recover_after_idle(self, grace_s: float = 60.0) -> None:
         """Extend open HITL deadlines within task/study bounds."""
         if self.study is None:
             return
@@ -182,7 +210,7 @@ class HitlForkMixin:
             )
 
     async def fork(
-        self: StudyRuntime, clarifications: list[Clarification], *, nonce: str = ""
+        self, clarifications: list[Clarification], *, nonce: str = ""
     ) -> StudyRuntime:
         """M0 stub: compute affected subgraph; full fork lands in M2."""
         assert self.study is not None
@@ -215,7 +243,7 @@ class HitlForkMixin:
         }
         return self
 
-    def invariant_open_attempts(self: StudyRuntime) -> bool:
+    def invariant_open_attempts(self) -> bool:
         for t in self.tasks.values():
             open_n = sum(
                 1 for a in t.attempts if not self.attempts.get(a, {}).get("closed")
@@ -224,7 +252,7 @@ class HitlForkMixin:
                 return False
         return True
 
-    def invariant_deadlines(self: StudyRuntime) -> bool:
+    def invariant_deadlines(self) -> bool:
         if self.study is None:
             return True
         sd = self.study.deadline

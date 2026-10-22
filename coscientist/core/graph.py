@@ -1,20 +1,17 @@
 """Generic typed Node/Edge graph keyed by a kind registry.
 
-Scientific kinds load from schema/graph_schema.yaml (RESEARCH_MODEL.md);
-the core does not hard-code the ontology beyond that file.
+Kinds load from packaged schema/graph_schema.yaml (RESEARCH_MODEL.md).
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 from functools import lru_cache
-from pathlib import Path
+from importlib import resources
 from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
-
-_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schema" / "graph_schema.yaml"
 
 
 class Frozen(BaseModel):
@@ -22,19 +19,14 @@ class Frozen(BaseModel):
 
 
 class KindSpec(Frozen):
-    """Registration entry for a node or edge kind."""
-
     kind: str
-    layer: str = "research"  # research | execution | system
+    layer: str = "research"
     schema_ref: str | None = None
     description: str = ""
     prefix: str | None = None
-    allowed_attr_keys: frozenset[str] | None = None
 
 
 class KindRegistry:
-    """Mutable registry of node/edge kinds. Unknown kind → KeyError at write time."""
-
     def __init__(self) -> None:
         self._nodes: dict[str, KindSpec] = {}
         self._edges: dict[str, KindSpec] = {}
@@ -95,8 +87,6 @@ class GraphEdge(Frozen):
 
 
 class GraphStore:
-    """In-memory / projection-backed typed graph. Validates kinds via registry."""
-
     def __init__(self, registry: KindRegistry) -> None:
         self.registry = registry
         self._nodes: dict[str, GraphNode] = {}
@@ -132,20 +122,16 @@ class GraphStore:
     def all_edges(self) -> list[GraphEdge]:
         return list(self._edges.values())
 
-    def clear(self) -> None:
-        self._nodes.clear()
-        self._edges.clear()
+
+def load_schema() -> dict[str, Any]:
+    pkg = resources.files("coscientist.schema")
+    text = (pkg / "graph_schema.yaml").read_text(encoding="utf-8")
+    return yaml.safe_load(text)
 
 
-def load_schema(path: Path | None = None) -> dict[str, Any]:
-    p = path or _SCHEMA_PATH
-    return yaml.safe_load(p.read_text(encoding="utf-8"))
-
-
-@lru_cache(maxsize=4)
-def registry_from_schema(path: str | None = None) -> KindRegistry:
-    """Load node/edge kinds from graph_schema.yaml (single source of truth)."""
-    data = load_schema(Path(path) if path else _SCHEMA_PATH)
+@lru_cache(maxsize=1)
+def registry_from_schema() -> KindRegistry:
+    data = load_schema()
     reg = KindRegistry()
     for n in data.get("nodes", []):
         reg.register_node(
@@ -158,15 +144,10 @@ def registry_from_schema(path: str | None = None) -> KindRegistry:
         )
     for e in data.get("edges", []):
         reg.register_edge(
-            KindSpec(
-                kind=e["name"],
-                layer="research",
-                description=str(e.get("card", "")),
-            )
+            KindSpec(kind=e["name"], layer="research", description=str(e.get("card", "")))
         )
     return reg
 
 
 def default_execution_registry() -> KindRegistry:
-    """Registry for runtimes: schema kinds (copy so callers may extend)."""
     return registry_from_schema().copy()

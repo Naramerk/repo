@@ -20,7 +20,7 @@ from coscientist.core.graph import GraphNode
 from coscientist.core.ids import plan_id, study_id, task_id
 
 if TYPE_CHECKING:
-    from coscientist.core.machine import StudyRuntime
+    pass
 
 STAGE_KEYS = [
     ("SPEC", TaskKind.SPEC),
@@ -33,7 +33,7 @@ STAGE_KEYS = [
 
 class LifecycleMixin:
     async def create_study(
-        self: StudyRuntime,
+        self,
         *,
         profile: str,
         request: str,
@@ -122,7 +122,7 @@ class LifecycleMixin:
         return sid
 
     async def accept_plan(
-        self: StudyRuntime, tasks: list[TaskSpec], *, revision: int = 1
+        self, tasks: list[TaskSpec], *, revision: int = 1
     ) -> str:
         assert self.study is not None
         sid = self.study.study_id

@@ -800,12 +800,13 @@ web/           отдельно (M6)
 |---|---|---|
 | 1 | Generic `KindRegistry` + `GraphNode`/`GraphEdge`; kinds loaded from `schema/graph_schema.yaml` (12 nodes / 16 edges) — not hard-coded in Python | Matches RESEARCH_MODEL single source of truth; core stays domain-agnostic (§1). No research semantics beyond registration in M0. |
 | 2 | `RequirementTemplate.text_ru` + `check` on the same template | One source for human-readable text and the machine check (§5); unknown `kind` / `reviewer_role` / unregistered `applies_to` → `CatalogError`. |
-| 3 | Digests = sha256 of sorted-keys JSON (not full RFC 8785 JCS yet) | Sufficient for idempotency and M0 forks stub; full JCS deferred to M2 with continue_session. |
+| 3 | Digests = sha256 of RFC 8785 JCS via `rfc8785` | Matches DESIGN §3.8 / §3.6 digest requirements. |
 | 4 | `fork()` computes affected subgraph only (stub); no child journal yet | Property-test coverage of the rule; full §3.6 inheritance is M2. |
 | 5 | Load test asserts ≥100 events in CI (p99 ≤ 50 ms, 20 parallel attempts, fsync); scale to ≥5000 locally by raising fake-tool sleep | Keeps CI fast; same code path as §3.5a. |
 | 6 | `StudyRuntime` split across `machine.py` / `lifecycle.py` / `runtime_ext.py` | Honour ≤500 lines/file budget (§11). |
 | 7 | `test_llm_hang_past_deadline` uses a hanging asyncio task (no httpx/OpenAI server) | M0 forbids LLM/ADK/httpx in core; cancellation + late-write rejection still covered. |
 | 8 | `Attempt.provenance: real\|partial\|simulated` (replaces bool `simulated`); `HitlPolicy.on_timeout: delegate\|fail` | Aligns with RESEARCH_MODEL v0.2 / DESIGN §3.4 / §7.3; no GraphBuilder / critic / claim semantics beyond that. |
+| 9 | PR #1 review: all writes via StudyWriter; Result+Close+Done atomic; recover never re-runs after ResultRecorded; finish_attempt outcome removed; lease owner=uuid, BEGIN IMMEDIATE, fence uses ttl; P3 asyncio backoff; InputBinding modes; delegate→critic | See commits after review. |
 
 ## 16. Научная модель (граф)
 

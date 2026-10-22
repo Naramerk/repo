@@ -93,7 +93,7 @@ class InputSpec(Frozen):
     from_task: str
     output: str
     schema_ref: str | None = None
-    simulate: Literal["schema_stub", "llm_stub", "forbid"] = "schema_stub"
+    mode: Literal["use_partial", "simulate", "forbid"] = "use_partial"
 
 
 class RequirementRef(Frozen):
@@ -149,7 +149,7 @@ class Task(Frozen):
 class InputBinding(Frozen):
     input: str
     artifact_id: str
-    source: Literal["real", "partial", "simulated"]
+    source: Provenance
 
 
 class ToolCallRef(Frozen):
