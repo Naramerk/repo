@@ -7,7 +7,7 @@ from typing import Any
 
 from coscientist.checks.evaluate import evaluate_task_checks
 from coscientist.core.artifacts import LocalArtifactStore
-from coscientist.core.digest import payload_digest
+from coscientist.core.digest import canonical_json, payload_digest
 from coscientist.core.domain import (
     AgentTaskOutput,
     Catalog,
@@ -57,6 +57,34 @@ class Executor:
         self.on_events = on_events  # callback after successful append (project local)
         self.review_statuses = review_statuses or {}
         self._scheduled_reviews: list[str] = []
+
+    async def mark_route_returned(self, attempt_id: str, out: AgentTaskOutput) -> str:
+        """Persist agent output in CAS and emit RouteReturned with its digest."""
+        attempt = self.get_attempt(attempt_id)
+        if attempt is None:
+            raise KeyError(attempt_id)
+        closed = attempt.closed if hasattr(attempt, "closed") else attempt.get("closed")
+        study_id = attempt.study_id if hasattr(attempt, "study_id") else attempt["study_id"]
+        if closed:
+            raise AttemptClosedError(attempt_id)
+        content = canonical_json(out.model_dump(mode="json"))
+        digest = self.artifacts.put_cas(content, tmp_name=f"route:{attempt_id}")
+        await self._append(
+            [
+                EventEnvelope(
+                    study_id=study_id,
+                    type="RouteReturned",
+                    entity_key=attempt_id,
+                    idem_key=make_idem("RouteReturned", attempt_id),
+                    payload={
+                        "attempt_id": attempt_id,
+                        "agent_output_digest": digest,
+                    },
+                    ts=self.clock.now(),
+                )
+            ]
+        )
+        return digest
 
     async def record(self, attempt_id: str, out: AgentTaskOutput) -> Result:
         attempt = self.get_attempt(attempt_id)
@@ -247,15 +275,7 @@ class Executor:
         task_outcome: TaskOutcome,
         reason: str | None,
     ) -> Result:
-        fresh = self.get_attempt(attempt_id)
-        closed = (
-            fresh.closed
-            if fresh is not None and hasattr(fresh, "closed")
-            else (fresh or {}).get("closed")
-        )
-        if fresh is not None and closed:
-            raise AttemptClosedError(attempt_id)
-
+        # Attempt-open check runs inside the write transaction (_append_many_sync).
         now = self.clock.now()
         events = [
             EventEnvelope(
@@ -292,7 +312,7 @@ class Executor:
                 ts=now,
             ),
         ]
-        await self._append(events)
+        await self._append(events, require_open_attempt=attempt_id)
         return Result(
             result_id=payload["result_id"],
             attempt_id=attempt_id,
@@ -308,8 +328,15 @@ class Executor:
             reason=reason,
         )
 
-    async def _append(self, events: list[EventEnvelope]) -> None:
-        stored = await self.writer.append_many(events)
+    async def _append(
+        self,
+        events: list[EventEnvelope],
+        *,
+        require_open_attempt: str | None = None,
+    ) -> None:
+        stored = await self.writer.append_many(
+            events, require_open_attempt=require_open_attempt
+        )
         if self.on_events is not None:
             for ev in events:
                 self.on_events(ev)

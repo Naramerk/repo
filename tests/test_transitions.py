@@ -108,9 +108,155 @@ async def test_recover_closes_open_attempt(tmp_path, clock):
     await rt.start_attempt("SPEC")
     result = await recover(rt)
     assert result["closed"] >= 1
+    assert result["retried"] >= 1
     t = rt.tasks["st_tr/SPEC"]
     # P3 retryable close → PENDING(+retry_at) until backoff starts the next attempt
     assert t.state in (TaskState.DONE, TaskState.RUNNING, TaskState.PENDING)
+    assert rt.attempts[next(iter(rt.attempts))]["close_reason"] == "crashed"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_recover_records_from_cas_route_returned(tmp_path, clock):
+    """RouteReturned + CAS digest → recover rebuilds AgentTaskOutput (no invented summary)."""
+    from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
+
+    rt = await _boot(tmp_path, clock, seconds=120)
+    ex, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("SPEC")
+    content = b'{"count": 225}'
+    art = arts.put(
+        content,
+        __import__("coscientist.core.artifacts", fromlist=["make_tool_ref"]).make_tool_ref(
+            f"{aid}:1"
+        ),
+        name="main",
+        media_type="application/json",
+    )
+    task = rt.tasks[rt.attempts[aid]["task_id"]]
+    rt.tasks[task.task_id] = task.model_copy(
+        update={
+            "spec": task.spec.model_copy(
+                update={"criteria": [RequirementRef(template_id="value_match")]}
+            )
+        }
+    )
+    out = AgentTaskOutput(
+        summary="from-agent",
+        outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+        values={"count": 225},
+    )
+    digest = await ex.mark_route_returned(aid, out)
+    assert rt.attempts[aid]["route_returned"] is True
+    assert rt.attempts[aid]["agent_output_digest"] == digest
+    assert arts.read_cas(digest)
+
+    # Simulate crash before TaskDone: recover must record from CAS, not invent output.
+    result = await recover(rt)
+    assert result["closed"] >= 1
+    assert rt.tasks["st_tr/SPEC"].state == TaskState.DONE
+    assert rt.tasks["st_tr/SPEC"].outcome == TaskOutcome.SUCCESS
+    assert rt.attempts[aid]["closed"] is True
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_recover_missing_cas_crashes_retryable(tmp_path, clock):
+    """route_returned without CAS blob → crashed/retryable, no invented AgentTaskOutput."""
+    from coscientist.core.events import EventEnvelope, make_idem
+
+    rt = await _boot(tmp_path, clock, seconds=120)
+    attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("SPEC")
+    await rt._append(
+        [
+            EventEnvelope(
+                study_id="st_tr",
+                type="RouteReturned",
+                entity_key=aid,
+                idem_key=make_idem("RouteReturned", aid),
+                payload={"attempt_id": aid, "agent_output_digest": "missing" * 8},
+                ts=clock.now(),
+            )
+        ]
+    )
+    result = await recover(rt)
+    assert result["closed"] >= 1
+    assert result["retried"] >= 1
+    assert rt.attempts[aid]["closed"] is True
+    assert rt.attempts[aid]["close_reason"] == "crashed"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_record_vs_deadline_race(tmp_path, clock):
+    """Stale in-memory attempt still open: store txn must reject record after deadline close."""
+    from coscientist.core.artifacts import make_tool_ref
+    from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
+    from coscientist.core.errors import AttemptClosedError
+    from coscientist.core.events import EventEnvelope, make_idem
+
+    rt = await _boot(tmp_path, clock, seconds=30)
+    ex, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("SPEC")
+    art = arts.put(
+        b'{"count": 225}',
+        make_tool_ref(f"{aid}:1"),
+        name="main",
+        media_type="application/json",
+    )
+    task = rt.tasks[rt.attempts[aid]["task_id"]]
+    rt.tasks[task.task_id] = task.model_copy(
+        update={
+            "spec": task.spec.model_copy(
+                update={"criteria": [RequirementRef(template_id="value_match")]}
+            )
+        }
+    )
+    out = AgentTaskOutput(
+        summary="race",
+        outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+        values={"count": 225},
+    )
+
+    # Deadline wins first (journal + store projection), but leave in-memory attempt open
+    # so Executor.record's early get_attempt() still sees closed=False — the old bug path.
+    now = clock.now()
+    await rt.writer.append_many(
+        [
+            EventEnvelope(
+                study_id="st_tr",
+                type="AttemptClosed",
+                entity_key=aid,
+                idem_key=make_idem("AttemptClosed", aid, "deadline"),
+                payload={
+                    "attempt_id": aid,
+                    "closed": True,
+                    "close_reason": "deadline",
+                    "task_id": task.task_id,
+                },
+                ts=now,
+            ),
+            EventEnvelope(
+                study_id="st_tr",
+                type="TaskDone",
+                entity_key=task.task_id,
+                idem_key=make_idem("TaskDone", task.task_id),
+                payload={
+                    "task_id": task.task_id,
+                    "outcome": TaskOutcome.FAILED.value,
+                    "reason": "deadline",
+                },
+                ts=now,
+            ),
+        ]
+    )
+    assert rt.store.get_row("attempts", aid)["closed"] is True
+    assert rt.attempts[aid].get("closed") is not True  # stale memory
+
+    with pytest.raises(AttemptClosedError):
+        await ex.record(aid, out)
+    assert not any(e.type == "ResultRecorded" for e in rt.store.read_all())
     await close_runtime(rt)
 
 

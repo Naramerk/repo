@@ -11,7 +11,15 @@ def test_edge_pairs_enforced(impl):
     assert not impl.edge_allowed("produced", "plan", "artifact")
 
 
+def _oracle(impl):
+    """Graph/Claim/add_paper live in the refmodel oracle, not runtime rules."""
+    if not hasattr(impl, "Graph") or not hasattr(impl, "Claim"):
+        pytest.skip("Graph/Claim/add_paper are refmodel-only")
+    return impl
+
+
 def _plan(impl, questions=("Q1",), cover=("Q1",)):
+    impl = _oracle(impl)
     gr = impl.Graph()
     gr.add("ST", "study")
     for q in questions:
@@ -26,6 +34,7 @@ def _plan(impl, questions=("Q1",), cover=("Q1",)):
 
 def test_rt1_task_linked_to_plan(impl):
     """RT1 (old completion.py:165): a task with no plan linkage must be rejected."""
+    impl = _oracle(impl)
     gr = _plan(impl)
     impl.validate_plan(gr, "PL")
     gr.add("X9", "experiment", task_key="EXP-9")                  # orphan task
@@ -34,6 +43,7 @@ def test_rt1_task_linked_to_plan(impl):
 
 
 def test_plan_rejected_when_question_uncovered(impl):
+    impl = _oracle(impl)
     with pytest.raises(impl.PlanInvalid, match="Q2"):
         impl.validate_plan(_plan(impl, questions=("Q1", "Q2"), cover=("Q1",)), "PL")
 
@@ -41,7 +51,8 @@ def test_plan_rejected_when_question_uncovered(impl):
 def test_h1_hypothesis_gets_verdict(impl):
     """H1 (old completion.py:95): study closed with untested hypothesis. Done experiments ⇒ verdict ≠ untested."""
     assert impl.verdict([], any_experiment_done=True)[0] == "inconclusive"
-    assert impl.verdict([impl.Claim("met")], any_experiment_done=True)[0] == "supported"
+    if hasattr(impl, "Claim"):
+        assert impl.verdict([impl.Claim("met")], any_experiment_done=True)[0] == "supported"
     assert not impl.study_fulfilled({"Q1": "untested"}, all_required_success=True)
     assert impl.study_fulfilled({"Q1": "refuted"}, all_required_success=True)
 
@@ -52,10 +63,21 @@ def test_stance_computed_from_criterion(impl):
         claim_in(target="H1", checked_against="CR1", stance="supports")        # role may not set stance
     c = claim_in(target="H1", checked_against="CR1")
     assert not hasattr(c, "stance")
-    assert [impl.Claim(s).stance for s in ("met", "not_met", "unassessed")] == ["supports", "refutes", "inconclusive"]
+    assert [impl.claim_stance(s) for s in ("met", "not_met", "unassessed")] == [
+        "supports",
+        "refutes",
+        "inconclusive",
+    ]
+    if hasattr(impl, "Claim"):
+        assert [impl.Claim(s).stance for s in ("met", "not_met", "unassessed")] == [
+            "supports",
+            "refutes",
+            "inconclusive",
+        ]
 
 
 def test_k_confirmations_need_distinct_attempts_and_artifacts(impl):
+    impl = _oracle(impl)
     same = [impl.Claim("met"), impl.Claim("met")]
     assert impl.verdict(same, True, k=2)[0] == "inconclusive"
     two = [impl.Claim("met"), impl.Claim("met", attempt_id="X2#1", artifact_id="A2")]
@@ -63,6 +85,7 @@ def test_k_confirmations_need_distinct_attempts_and_artifacts(impl):
 
 
 def test_conflict_and_caps(impl):
+    impl = _oracle(impl)
     conflict = [impl.Claim("met"), impl.Claim("not_met", attempt_id="X2#1", artifact_id="A2")]
     assert impl.verdict(conflict, True)[0] == "inconclusive"
     assert impl.verdict([impl.Claim("met", provenance="simulated")], True)[0] == "inconclusive"
@@ -72,6 +95,7 @@ def test_conflict_and_caps(impl):
 
 
 def test_literature_verdict_flag(impl):
+    impl = _oracle(impl)
     lit = impl.Claim("met", evidence_kind="literature", lit_own_criterion=True)
     assert impl.verdict([lit], True) == ("supported", True)
     assert impl.verdict([impl.Claim("met", evidence_kind="literature")], True) == ("inconclusive", False)
@@ -79,6 +103,7 @@ def test_literature_verdict_flag(impl):
 
 
 def test_paper_dedupe_two_lits_same_doi(impl):
+    impl = _oracle(impl)
     gr = impl.Graph()
     gr.add("LIT0", "experiment", task_key="LIT-0")
     gr.add("LIT1", "experiment", task_key="LIT-1")
@@ -125,6 +150,7 @@ def test_delegated_budget_counter(impl):
 
 
 def _full_graph(impl):
+    impl = _oracle(impl)
     gr = impl.Graph()
     for nid, kind in [("ST", "study"), ("Q1", "question"), ("CR0", "criterion"), ("PL", "plan"),
                       ("X0", "experiment"), ("A1", "artifact"), ("E1", "evidence"),
@@ -138,6 +164,7 @@ def _full_graph(impl):
 
 
 def test_check_cardinality(impl):
+    impl = _oracle(impl)
     gr = _full_graph(impl)
     assert impl.check_cardinality(gr) == []
     gr.add("E2", "evidence")                                         # evidence without derived_from

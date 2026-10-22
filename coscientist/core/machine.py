@@ -123,6 +123,15 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
                     self.tasks[tid] = t.model_copy(
                         update={"state": TaskState.PENDING, "reason": "retry_scheduled"}
                     )
+        elif ev.type == "RouteReturned":
+            aid = p.get("attempt_id") or ev.entity_key
+            att = self.attempts.get(aid, {})
+            att = {
+                **att,
+                "route_returned": True,
+                "agent_output_digest": p.get("agent_output_digest"),
+            }
+            self.attempts[aid] = att
         elif ev.type == "ResultRecorded":
             self.results[p["result_id"]] = dict(p)
             self.results[p["attempt_id"]] = dict(p)
@@ -259,7 +268,9 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
             raise KeyError(key_or_id)
         return matches[0]
 
-    async def fail_attempt(self, aid: str, *, retryable: bool = True) -> None:
+    async def fail_attempt(
+        self, aid: str, *, retryable: bool = True, close_reason: str = "failed"
+    ) -> None:
         att = self.attempts[aid]
         if att.get("closed"):
             raise RuntimeError("attempt closed")
@@ -272,11 +283,11 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
                 study_id=sid,
                 type="AttemptClosed",
                 entity_key=aid,
-                idem_key=make_idem("AttemptClosed", aid, "fail"),
+                idem_key=make_idem("AttemptClosed", aid, close_reason),
                 payload={
                     "attempt_id": aid,
                     "closed": True,
-                    "close_reason": "failed",
+                    "close_reason": close_reason,
                     "retryable": retryable,
                     "task_id": tid,
                 },

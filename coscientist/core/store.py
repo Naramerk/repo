@@ -11,7 +11,7 @@ from typing import Any
 
 from coscientist.core.clock import Clock, SystemClock
 from coscientist.core.digest import payload_digest
-from coscientist.core.errors import Conflict, Idempotent, LeaseLost
+from coscientist.core.errors import AttemptClosedError, Conflict, Idempotent, LeaseLost
 from coscientist.core.events import EventEnvelope
 from coscientist.core.upcasters import upcast
 
@@ -198,9 +198,16 @@ class SqliteEventStore:
             assert stored is not None
             return stored
 
-    async def append_many(self, events: list[EventEnvelope]) -> list[EventEnvelope]:
+    async def append_many(
+        self,
+        events: list[EventEnvelope],
+        *,
+        require_open_attempt: str | None = None,
+    ) -> list[EventEnvelope]:
         async with self._lock:
-            return self._append_many_sync(events)
+            return self._append_many_sync(
+                events, require_open_attempt=require_open_attempt
+            )
 
     def _fetch_by_idem(self, idem_key: str) -> EventEnvelope:
         cur = self._conn.execute(
@@ -211,10 +218,19 @@ class SqliteEventStore:
             raise KeyError(idem_key)
         return self._row_to_event(row)
 
-    def _append_many_sync(self, events: list[EventEnvelope]) -> list[EventEnvelope]:
+    def _append_many_sync(
+        self,
+        events: list[EventEnvelope],
+        *,
+        require_open_attempt: str | None = None,
+    ) -> list[EventEnvelope]:
         out: list[EventEnvelope] = []
         try:
             self._fence()
+            if require_open_attempt is not None:
+                row = self.get_row("attempts", require_open_attempt)
+                if row is None or row.get("closed"):
+                    raise AttemptClosedError(require_open_attempt)
             for ev in events:
                 stored, idem = self._insert_one(ev)
                 if idem is not None:

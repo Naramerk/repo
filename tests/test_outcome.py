@@ -24,6 +24,7 @@ from coscientist.core.domain import (
     TaskState,
 )
 from coscientist.core.errors import AttemptClosedError, CatalogError
+from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.executor import Executor
 from coscientist.core.machine import new_owner
 from coscientist.core.outcome import compute_outcome
@@ -126,6 +127,33 @@ async def _writer(tmp_path, clock, sid="st_b2"):
     return store, writer
 
 
+async def _seed_open_attempt(writer: StudyWriter, attempt: object, clock: FakeClock) -> None:
+    """Projection must contain an open attempt — record checks closed inside the write txn."""
+    aid = attempt.attempt_id  # type: ignore[attr-defined]
+    await writer.append(
+        EventEnvelope(
+            study_id=attempt.study_id,  # type: ignore[attr-defined]
+            type="AttemptStarted",
+            entity_key=aid,
+            idem_key=make_idem("AttemptStarted", aid),
+            payload={
+                "attempt_id": aid,
+                "n": 1,
+                "dispatch_id": f"dispatch:{aid}",
+                "route_returned": False,
+                "closed": False,
+                "close_reason": None,
+                "provenance": attempt.provenance,  # type: ignore[attr-defined]
+                "agent_output_digest": None,
+                "deadline": clock.now().isoformat(),
+                "task_id": attempt.task_id,  # type: ignore[attr-defined]
+                "study_id": attempt.study_id,  # type: ignore[attr-defined]
+            },
+            ts=clock.now(),
+        )
+    )
+
+
 @pytest.mark.asyncio
 async def test_b2_matching_value_in_raw_artifact_is_success(tmp_path, catalog):
     clock = FakeClock()
@@ -163,6 +191,7 @@ async def test_b2_matching_value_in_raw_artifact_is_success(tmp_path, catalog):
             "study_id": "st_b2",
         },
     )()
+    await _seed_open_attempt(writer, attempt, clock)
     ex = Executor(
         writer,
         catalog,
@@ -221,6 +250,7 @@ async def test_review_scheduled_on_every_record_path(tmp_path, catalog):
             "study_id": "st_r",
         },
     )()
+    await _seed_open_attempt(writer, attempt, clock)
     ex = Executor(
         writer,
         catalog,
@@ -307,6 +337,7 @@ async def test_downgrade_without_refs_rejected(tmp_path, catalog):
             "study_id": "st_d",
         },
     )()
+    await _seed_open_attempt(writer, attempt, clock)
     ex = Executor(
         writer, catalog, arts, clock=clock, get_attempt=lambda _: attempt, get_task=lambda _: task
     )

@@ -88,8 +88,15 @@ class StudyWriter:
         # Defensive: append_many always returns stored envelopes (incl. idempotent).
         raise RuntimeError(f"append produced no result for idem_key={event.idem_key}")
 
-    async def append_many(self, events: list[EventEnvelope]) -> list[EventEnvelope]:
+    async def append_many(
+        self,
+        events: list[EventEnvelope],
+        *,
+        require_open_attempt: str | None = None,
+    ) -> list[EventEnvelope]:
         async def _do() -> list[EventEnvelope]:
-            return await self.store.append_many(events)
+            return await self.store.append_many(
+                events, require_open_attempt=require_open_attempt
+            )
 
         return await self.submit(_do)

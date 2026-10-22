@@ -22,6 +22,26 @@ class LocalArtifactStore:
         self.tmp.mkdir(parents=True, exist_ok=True)
         self._index: dict[str, Artifact] = {}
 
+    def put_cas(self, content: bytes, *, tmp_name: str = "cas") -> str:
+        """Write raw bytes to content-addressed storage; return sha256 hex digest."""
+        digest = sha256_hex(content)
+        blob = self.cas / digest
+        if not blob.exists():
+            safe = tmp_name.replace("/", "_").replace(":", "_")
+            tmp = self.tmp / f"{safe}.{digest[:12]}"
+            tmp.write_bytes(content)
+            tmp.replace(blob)
+        return digest
+
+    def read_cas(self, digest: str) -> bytes:
+        blob = self.cas / digest
+        if not blob.exists():
+            raise FileNotFoundError(digest)
+        data = blob.read_bytes()
+        if sha256_hex(data) != digest:
+            raise ArtifactCorrupt(f"sha256 mismatch for cas/{digest}")
+        return data
+
     def put(
         self,
         content: bytes,
@@ -34,12 +54,7 @@ class LocalArtifactStore:
     ) -> Artifact:
         if attempt_closed:
             raise ArtifactRejected("attempt_closed")
-        digest = sha256_hex(content)
-        blob = self.cas / digest
-        if not blob.exists():
-            tmp = self.tmp / produced_by.call_id.replace("/", "_").replace(":", "_")
-            tmp.write_bytes(content)
-            tmp.replace(blob)
+        digest = self.put_cas(content, tmp_name=produced_by.call_id)
         call_part = sha256_hex(produced_by.call_id)[:8]
         artifact_id = f"art_{digest[:16]}_{call_part}"
         art = Artifact(
@@ -48,7 +63,7 @@ class LocalArtifactStore:
             media_type=media_type,
             sha256=digest,
             size=len(content),
-            uri=f"file://{blob}",
+            uri=f"file://{self.cas / digest}",
             produced_by=produced_by,
             schema_ref=schema_ref,
         )
@@ -72,10 +87,7 @@ class LocalArtifactStore:
         art = self.get_meta(artifact_id)
         if art is None:
             raise FileNotFoundError(artifact_id)
-        blob = self.cas / art.sha256
-        data = blob.read_bytes()
-        if sha256_hex(data) != art.sha256:
-            raise ArtifactCorrupt(f"sha256 mismatch for {artifact_id}")
+        data = self.read_cas(art.sha256)
         return data
 
     def read_json(self, artifact_id: str) -> object:

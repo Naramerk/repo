@@ -1,12 +1,12 @@
-"""Research-model rules API (DESIGN / RESEARCH_MODEL) — must match tests/refmodel.py.
+"""Runtime research-model rules (DESIGN / RESEARCH_MODEL).
 
-See tests/README.md for the required surface. Runtime and reports import from here.
+Graph / add_paper / Claim-with-test-defaults live in tests/refmodel.py (oracle).
+This module keeps only what the M0 runtime and reports need.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from coscientist.core.graph import load_schema
 
@@ -18,46 +18,17 @@ def edge_allowed(name: str, src_kind: str, dst_kind: str) -> bool:
     return (src_kind, dst_kind) in PAIRS.get(name, set())
 
 
-@dataclass
-class Graph:
-    nodes: dict = field(default_factory=dict)
-    edges: list = field(default_factory=list)
-
-    def add(self, nid, kind, **f):
-        self.nodes[nid] = {"kind": kind, **f}
-        return nid
-
-    def link(self, name, src, dst, **attrs):
-        if not edge_allowed(name, self.nodes[src]["kind"], self.nodes[dst]["kind"]):
-            raise ValueError(
-                f"edge {name}: {self.nodes[src]['kind']} -> {self.nodes[dst]['kind']} not allowed"
-            )
-        self.edges.append((name, src, dst, attrs))
-
-    def out(self, name, src):
-        return [d for n, s, d, _ in self.edges if n == name and s == src]
-
-    def inc(self, name, dst):
-        return [s for n, s, d, _ in self.edges if n == name and d == dst]
-
-    def of(self, kind):
-        return [k for k, v in self.nodes.items() if v["kind"] == kind]
-
-    def add_paper(self, producer, doi_or_url, attempt_n=1):
-        key = doi_or_url.strip().lower().removeprefix("https://doi.org/")
-        for nid, v in self.nodes.items():
-            if v["kind"] == "artifact" and v.get("role") == "paper" and v["doi_or_url"] == key:
-                return nid
-        nid = self.add(f"A-{key}", "artifact", role="paper", doi_or_url=key)
-        self.link("produced", producer, nid, attempt_n=attempt_n)
-        return nid
-
-
 class PlanInvalid(ValueError):
     pass
 
 
-def validate_plan(gr: Graph, plan_id: str) -> None:
+class _GraphLike(Protocol):
+    def out(self, name: str, src: str) -> list[str]: ...
+    def inc(self, name: str, dst: str) -> list[str]: ...
+    def of(self, kind: str) -> list[str]: ...
+
+
+def validate_plan(gr: _GraphLike, plan_id: str) -> None:
     exps = gr.out("plans", plan_id)
     for x in gr.of("experiment"):
         if len(gr.inc("plans", x)) != 1:
@@ -82,34 +53,26 @@ def claim_stance(criterion_status: str) -> Literal["supports", "refutes", "incon
     return STANCE[criterion_status]  # type: ignore[return-value]
 
 
-@dataclass
-class Claim:
-    criterion_status: str
-    accepted: bool = True
-    evidence_kind: str = "computational"
-    provenance: str = "real"
-    frozen: bool = True
-    attempt_outcome: str = "SUCCESS"
-    attempt_id: str = "X1#1"
-    artifact_id: str = "A1"
-    lit_own_criterion: bool = False
+class _ClaimLike(Protocol):
+    accepted: bool
+    provenance: str
 
     @property
-    def stance(self):
-        return claim_stance(self.criterion_status)
+    def stance(self) -> str: ...
 
     @property
-    def is_lit(self):
-        return self.evidence_kind == "literature"
+    def is_lit(self) -> bool: ...
 
-    def counts(self):
-        ok_kind = self.evidence_kind in ("computational", "experimental") or (
-            self.is_lit and self.lit_own_criterion
-        )
-        return self.accepted and ok_kind and self.frozen and self.attempt_outcome == "SUCCESS"
+    def counts(self) -> bool: ...
+
+    @property
+    def attempt_id(self) -> str: ...
+
+    @property
+    def artifact_id(self) -> str: ...
 
 
-def verdict(claims, any_experiment_done, k=1):
+def verdict(claims: list[_ClaimLike], any_experiment_done: bool, k: int = 1):
     acc = [c for c in claims if c.accepted]
     if not acc and not any_experiment_done:
         return "untested", False
@@ -117,7 +80,7 @@ def verdict(claims, any_experiment_done, k=1):
     sup = [c for c in q if c.stance == "supports"]
     ref = [c for c in q if c.stance == "refutes"]
 
-    def distinct(cs):
+    def distinct(cs: list[_ClaimLike]) -> int:
         return (
             min(len({c.attempt_id for c in cs}), len({c.artifact_id for c in cs}))
             if cs
@@ -138,14 +101,12 @@ def verdict(claims, any_experiment_done, k=1):
     return v, bool(decisive) and all(c.is_lit for c in decisive)
 
 
-def study_fulfilled(question_verdicts, all_required_success):
+def study_fulfilled(question_verdicts: dict[str, str], all_required_success: bool) -> bool:
     return all_required_success and all(v != "untested" for v in question_verdicts.values())
 
 
 def study_view_verdict(all_required_success: bool, question_verdicts: dict[str, str]) -> str:
     """Wrapper aligned with study_view(): fulfilled iff study_fulfilled(...)."""
-    # study_view() needs Task rows; for question-verdict checks the fulfilled bit
-    # must match study_fulfilled (tests/README.md / test_core_study_view_matches_refmodel).
     if study_fulfilled(question_verdicts, all_required_success):
         return "fulfilled"
     if not all_required_success:
@@ -156,21 +117,21 @@ def study_view_verdict(all_required_success: bool, question_verdicts: dict[str, 
 class DelegatedBudget:
     """Budget(delegated_costly), ₽: stateful counter; actual spend is debited after each attempt."""
 
-    def __init__(self, limit_rub):
+    def __init__(self, limit_rub: float) -> None:
         self.limit_rub, self.spent_rub, self.blocked = float(limit_rub), 0.0, False
 
     @property
-    def remaining_rub(self):
+    def remaining_rub(self) -> float:
         return max(self.limit_rub - self.spent_rub, 0.0)
 
-    def refuse_reason(self, estimate_rub):
+    def refuse_reason(self, estimate_rub: float) -> str | None:
         if self.blocked:
             return "перерасход: делегирование заблокировано"
         if estimate_rub > self.remaining_rub:
             return "превышает остаток"
         return None
 
-    def debit(self, actual_rub, estimate_rub):
+    def debit(self, actual_rub: float, estimate_rub: float) -> float:
         self.spent_rub += actual_rub
         if actual_rub > estimate_rub:
             self.blocked = True
@@ -191,7 +152,13 @@ class DelegatedBudget:
         return b
 
 
-def costly_gate(mode, answer, cost_estimate_rub=0.0, budget=None, critic_accepts=True):
+def costly_gate(
+    mode: str,
+    answer: str | None,
+    cost_estimate_rub: float = 0.0,
+    budget: DelegatedBudget | None = None,
+    critic_accepts: bool = True,
+):
     """HITL gate costly_or_nonreal. answer: approve | reject | delegate | None (timeout)."""
     if answer in ("approve", "reject"):
         eff = "RUN" if answer == "approve" else "SKIPPED(human_rejected)"
@@ -246,7 +213,7 @@ def costly_gate(mode, answer, cost_estimate_rub=0.0, budget=None, critic_accepts
     )
 
 
-def settle(event, budget, actual_rub):
+def settle(event: dict[str, Any], budget: DelegatedBudget | None, actual_rub: float):
     """After the attempt: debit actual spend (if budgeted) and record it for the report."""
     if budget is not None and event.get("decided_by") == "critic":
         budget.debit(actual_rub, event.get("cost_estimate_rub", 0.0))
@@ -254,12 +221,12 @@ def settle(event, budget, actual_rub):
     return event
 
 
-def _bounds(card):
+def _bounds(card: str) -> tuple[int, int | None]:
     lo, hi = card.split("..")
     return int(lo), (None if hi == "n" else int(hi))
 
 
-def check_cardinality(gr: Graph) -> list[str]:
+def check_cardinality(gr: _GraphLike) -> list[str]:
     bad: list[str] = []
     for e in SCHEMA["edges"]:
         name, card = e["name"], e["card"]

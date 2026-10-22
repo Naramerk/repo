@@ -12,8 +12,8 @@ from coscientist.core.machine import StudyRuntime
 async def recover(runtime: StudyRuntime) -> dict[str, Any]:
     """
     - ResultRecorded present → task already projected DONE; never re-run
-    - route_returned + saved digest, no result → Executor.record from saved output
-    - open attempt without reply → AttemptClosed(crashed, retryable) then P3
+    - route_returned + CAS digest, no result → Executor.record from saved output
+    - open attempt without saved output → AttemptClosed(crashed, retryable) then P3
     """
     closed = 0
     retried = 0
@@ -21,9 +21,6 @@ async def recover(runtime: StudyRuntime) -> dict[str, Any]:
 
     for aid, att in list(runtime.attempts.items()):
         if att.get("closed"):
-            # if result recorded, ensure we never schedule a re-run
-            if result_id(aid) in runtime.results or aid in runtime.results:
-                continue
             continue
 
         task = runtime.tasks.get(att["task_id"])
@@ -38,21 +35,45 @@ async def recover(runtime: StudyRuntime) -> dict[str, Any]:
             closed += 1
             continue
 
-        if att.get("route_returned") and att.get("agent_output_digest"):
+        digest = att.get("agent_output_digest")
+        if att.get("route_returned") and digest:
             if runtime.executor is None:
                 raise RuntimeError("recover requires runtime.executor for record path")
-            # Reconstruct minimal output; digest already stored on attempt
-            out = AgentTaskOutput(summary="recovered", claim=None)
+            out = _load_agent_output(runtime, digest)
+            if out is None:
+                await runtime.fail_attempt(aid, retryable=True, close_reason="crashed")
+                closed += 1
+                if _retry_scheduled(runtime, att["task_id"]):
+                    retried += 1
+                continue
             await runtime.executor.record(aid, out)
             closed += 1
             continue
 
-        await runtime.fail_attempt(aid, retryable=True)
+        await runtime.fail_attempt(aid, retryable=True, close_reason="crashed")
         closed += 1
-        # P3 scheduled inside fail_attempt when retryable
-        task_after = runtime.tasks[att["task_id"]]
-        if task_after.state == TaskState.RUNNING:
+        if _retry_scheduled(runtime, att["task_id"]):
             retried += 1
 
     await runtime.tick()
     return {"closed": closed, "retried": retried}
+
+
+def _retry_scheduled(runtime: StudyRuntime, task_id: str) -> bool:
+    task = runtime.tasks.get(task_id)
+    return (
+        task is not None
+        and task.state == TaskState.PENDING
+        and task.reason == "retry_scheduled"
+    )
+
+
+def _load_agent_output(runtime: StudyRuntime, digest: str) -> AgentTaskOutput | None:
+    arts = getattr(runtime.executor, "artifacts", None)
+    if arts is None:
+        return None
+    try:
+        raw = arts.read_cas(digest)
+    except (FileNotFoundError, OSError):
+        return None
+    return AgentTaskOutput.model_validate_json(raw)
