@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from coscientist.core.domain import (
+    Budget,
     HitlPolicy,
     Plan,
     Study,
@@ -42,6 +43,7 @@ class LifecycleMixin:
         deadline: datetime | None = None,
         parent_study_id: str | None = None,
         sid: str | None = None,
+        budget: Budget | None = None,
     ) -> str:
         sid = sid or self.store.study_id or study_id()
         now = self.clock.now()
@@ -55,6 +57,7 @@ class LifecycleMixin:
             deadline=dl,
             created_at=now,
             parent_study_id=parent_study_id,
+            budget=budget,
         )
         events: list[EventEnvelope] = [
             EventEnvelope(

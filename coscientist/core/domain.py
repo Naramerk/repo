@@ -59,10 +59,45 @@ class ReqStatus(StrEnum):
 
 
 Provenance = Literal["real", "partial", "simulated"]
+OnTimeout = Literal["delegate", "delegate_capped", "fail"]
+HitlGateKind = Literal[
+    "spec_approval",
+    "plan",
+    "plan_approval",
+    "hypotheses",
+    "costly_or_nonreal",
+    "report",
+    "result_acceptance",
+    "skip_task",
+]
+
+
+class GateConfig(Frozen):
+    """Per-gate HITL config (DESIGN §7.3 / RESEARCH_MODEL §5.2)."""
+
+    enabled: bool = True
+    timeout_s: int = 1800
+    # costly_or_nonreal defaults to fail; others to delegate (via HitlPolicy.gate).
+    on_timeout: OnTimeout = "delegate"
+
+
+def _default_gates() -> dict[str, GateConfig]:
+    return {
+        "spec_approval": GateConfig(timeout_s=120, on_timeout="delegate"),
+        "plan": GateConfig(timeout_s=180, on_timeout="delegate"),
+        "plan_approval": GateConfig(timeout_s=180, on_timeout="delegate"),
+        "hypotheses": GateConfig(timeout_s=1800, on_timeout="delegate"),
+        "costly_or_nonreal": GateConfig(timeout_s=1800, on_timeout="fail"),
+        "report": GateConfig(timeout_s=1800, on_timeout="delegate"),
+        "result_acceptance": GateConfig(timeout_s=1800, on_timeout="delegate"),
+        "skip_task": GateConfig(timeout_s=1800, on_timeout="delegate"),
+    }
 
 
 class HitlPolicy(Frozen):
     mode: Literal["interactive", "auto", "headless"] = "headless"
+    gates: dict[str, GateConfig] = Field(default_factory=_default_gates)
+    # Legacy flat map kept for callers/tests; gate() prefers gates then these.
     timeout_s: dict[str, int] = Field(
         default_factory=lambda: {
             "spec_approval": 120,
@@ -71,8 +106,8 @@ class HitlPolicy(Frozen):
             "skip_task": 1800,
         }
     )
-    # RESEARCH_MODEL / DESIGN §7.3: on gate timeout, delegate to critic or fail.
-    on_timeout: Literal["delegate", "fail"] = "delegate"
+    # Policy-level default for gates not listed; costly_or_nonreal still defaults to fail.
+    on_timeout: OnTimeout = "delegate"
     defaults: dict[str, str] = Field(
         default_factory=lambda: {
             "plan_approval": "human_timeout",
@@ -80,6 +115,21 @@ class HitlPolicy(Frozen):
             "skip_task": "deny",
         }
     )
+
+    def gate(self, kind: str) -> GateConfig:
+        if kind in self.gates:
+            return self.gates[kind]
+        alias = {"plan": "plan_approval", "plan_approval": "plan"}.get(kind)
+        if alias and alias in self.gates:
+            return self.gates[alias]
+        default_ot: OnTimeout = (
+            "fail" if kind == "costly_or_nonreal" else self.on_timeout
+        )
+        return GateConfig(
+            enabled=True,
+            timeout_s=self.timeout_s.get(kind, 1800),
+            on_timeout=default_ot,
+        )
 
 
 class OutputSpec(Frozen):
@@ -115,6 +165,16 @@ class TaskSpec(Frozen):
     inputs: list[InputSpec] = Field(default_factory=list)
 
 
+class Budget(Frozen):
+    max_llm_calls: int = 100
+    max_tokens: int = 1_000_000
+    max_cost_rub: Decimal | None = None
+    max_tool_calls: int = 500
+    deadline: datetime | None = None
+    # RUB cap for critic decisions on costly_or_nonreal (delegate_capped).
+    delegated_costly: Decimal | None = None
+
+
 class Study(Frozen):
     study_id: str
     profile: str
@@ -124,6 +184,7 @@ class Study(Frozen):
     deadline: datetime
     created_at: datetime
     parent_study_id: str | None = None
+    budget: Budget | None = None
 
 
 class Plan(Frozen):
@@ -238,19 +299,23 @@ class Clarification(Frozen):
 
 class HitlRequest(Frozen):
     request_id: str
-    kind: Literal["plan_approval", "result_acceptance", "skip_task", "spec_approval"]
+    kind: HitlGateKind
     payload_ref: str
     deadline: datetime
     study_id: str
     task_id: str
     open: bool = True
+    cost_rub: float = 0.0
 
 
 class HitlDecision(Frozen):
     request_id: str
-    decision: Literal["accept", "revise", "reject"]
+    decision: Literal["accept", "revise", "reject", "delegate"]
     by: Literal["human", "policy"]
     reason: str
+    approved_by: Literal["human", "critic"] | None = None
+    delegated_by: Literal["human", "timeout"] | None = None
+    spent_rub: float = 0.0
 
 
 class RuleRef(Frozen):
@@ -342,14 +407,6 @@ class StudyView(Frozen):
     awaiting_human: bool = False
     verdict: Literal["fulfilled", "partial", "simulated", "failed"] | None = None
     stub_share: float = 0.0
-
-
-class Budget(Frozen):
-    max_llm_calls: int = 100
-    max_tokens: int = 1_000_000
-    max_cost_rub: Decimal | None = None
-    max_tool_calls: int = 500
-    deadline: datetime
 
 
 class Usage(Frozen):

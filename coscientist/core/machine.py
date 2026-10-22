@@ -63,6 +63,7 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
         self.executor: Any | None = None
         self.dep_outputs: dict[str, dict[str, str]] = {}
         self.dep_provenance: dict[str, Provenance] = {}
+        self._delegated_costly_spent: float = 0.0
 
     async def _append(self, events: list[EventEnvelope]) -> None:
         if self._lease_lost:
@@ -113,6 +114,9 @@ class StudyRuntime(LifecycleMixin, HitlForkMixin):
             h = self.hitl.get(p["request_id"])
             if h:
                 self.hitl[p["request_id"]] = h.model_copy(update={"open": False})
+            spent = float(p.get("spent_rub") or 0.0)
+            if spent > 0:
+                self._delegated_costly_spent += spent
         elif ev.type == "HitlDeadlineExtended":
             h = self.hitl.get(p["request_id"])
             if h and "deadline" in p:

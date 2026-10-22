@@ -805,7 +805,7 @@ web/           отдельно (M6)
 | 5 | Load test asserts ≥100 events in CI (p99 ≤ 50 ms, 20 parallel attempts, fsync); scale to ≥5000 locally by raising fake-tool sleep | Keeps CI fast; same code path as §3.5a. |
 | 6 | `StudyRuntime` split across `machine.py` / `lifecycle.py` / `runtime_ext.py` | Honour ≤500 lines/file budget (§11). |
 | 7 | `test_llm_hang_past_deadline` uses a hanging asyncio task (no httpx/OpenAI server) | M0 forbids LLM/ADK/httpx in core; cancellation + late-write rejection still covered. |
-| 8 | `Attempt.provenance: real\|partial\|simulated` (replaces bool `simulated`); `HitlPolicy.on_timeout: delegate\|fail` | Aligns with RESEARCH_MODEL v0.2 / DESIGN §3.4 / §7.3; no GraphBuilder / critic / claim semantics beyond that. |
+| 8 | `Attempt.provenance: real\|partial\|simulated`; `GateConfig.on_timeout: fail\|delegate_capped\|delegate` (costly_or_nonreal default fail); `Budget.delegated_costly` + `spent_rub` on HITL events | Aligns with RESEARCH_MODEL v0.3 / DESIGN §7.3; recovery + spent_rub report tests pass. |
 | 9 | PR #1 review: all writes via StudyWriter; Result+Close+Done atomic; recover never re-runs after ResultRecorded; finish_attempt outcome removed; lease owner=uuid, BEGIN IMMEDIATE, fence uses ttl; P3 asyncio backoff; InputBinding modes; delegate→critic | See commits after review. |
 
 ## 16. Научная модель (граф)
@@ -836,6 +836,6 @@ web/           отдельно (M6)
 | 4 | HITL по умолчанию; строка 8 §15 | решено пользователем; строка 8 обновлена |
 | 5 | CI, вендоринг с sha256, пары рёбер, структурированные поля | сделано (.github/workflows/ci.yml, vendor/ai4research, schema) |
 | 6 | синхронизация §2, CodeCheck.kind, §7.1 | сделано |
-| + | ревизия plan — supersedes; таблица Тома Б генерируется; тесты RT1, H1, дедупликация paper — реальные; recovery — xfail до M0 PR #1 | сделано |
+| + | ревизия plan — supersedes; таблица Тома Б генерируется; тесты RT1, H1, дедупликация paper — реальные; recovery + spent_rub — runtime в M0 PR #1 | сделано |
 
 Ревью v0.4: stance — computed (во входе роли запрещён, extra=forbid); модели frozen, Ref[NodeKind], datetime, сверка с §2 тестом; «реши сам» в режиме fail — по бюджету, счётчик Budget(delegated_costly); фикстура `impl` (refmodel | core, API — tests/README.md); check_cardinality; ключи PLAN-0..n; версии в CI закреплены.
