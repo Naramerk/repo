@@ -143,7 +143,9 @@ def study_fulfilled(question_verdicts, all_required_success):
 
 
 def study_view_verdict(all_required_success: bool, question_verdicts: dict[str, str]) -> str:
-    """Map question verdicts + required-task success onto StudyView.verdict labels."""
+    """Wrapper aligned with study_view(): fulfilled iff study_fulfilled(...)."""
+    # study_view() needs Task rows; for question-verdict checks the fulfilled bit
+    # must match study_fulfilled (tests/README.md / test_core_study_view_matches_refmodel).
     if study_fulfilled(question_verdicts, all_required_success):
         return "fulfilled"
     if not all_required_success:
