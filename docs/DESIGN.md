@@ -28,7 +28,7 @@
 
 ```python
 class NodeKind(StrEnum):
-    # = schema/graph_schema.yaml (RESEARCH_MODEL.md §2); тест сверяет
+    # = coscientist/schema/graph_schema.yaml (RESEARCH_MODEL.md §2); тест сверяет
     STUDY = "study"; CONSTRAINT = "constraint"; QUESTION = "question"; CRITERION = "criterion"
     HYPOTHESIS = "hypothesis"; PLAN = "plan"; EXPERIMENT = "experiment"; ARTIFACT = "artifact"
     EVIDENCE = "evidence"; CLAIM = "claim"; CONCLUSION = "conclusion"; REPORT = "report"
