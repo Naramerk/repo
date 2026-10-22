@@ -13,6 +13,7 @@
 | Критерий успеха | Измеримая планка: метрика, сравнение, порог («R² ≥ 0.7»). Замораживается, как только по нему пошли данные. | spec (для цели) и plan (для эксперимента) | tz_spec / planner → код; проверяет код | Статус эксперимента, вердикт гипотезы, итог исследования |
 | Гипотеза | Проверяемое утверждение с предсказанием («кластер A токсичнее B»). | hypotheses | hypothesizer → код | Литература, эксперименты, вердикт (подтверждена/опровергнута) |
 | Источник литературы | Статья/датасет/база, найденные и прочитанные (DOI, PMC id). | literature | researcher (через инструмент поиска) → код | Доказательства из литературы |
+| Литературный поиск | Задача DAG, как эксперимент: по вопросам, гипотезам и плану запросов найти источники и выписать цитаты-доказательства. Первая такая задача (LIT-0) — стадия literature; planner может добавить ещё (LIT-n). | literature (LIT-0, до плана); plan (LIT-n) | Код создаёт задачу; выполняет researcher через инструменты поиска; узлы создаёт код | Источники, доказательства из литературы, план; эксперименты могут зависеть от LIT-n |
 | План | Набор экспериментов с зависимостями (ревизия, одобренная критиком/человеком). | plan | planner + critic → код | Эксперименты |
 | Эксперимент (задача) | Один шаг плана: что делаем, каким методом и инструментом, на каких данных, с какими критериями. | plan (создаётся при принятии плана) | planner → код (ключ EXP-n даёт код) | Запуски, результаты, доказательства |
 | Запуск (попытка) | Одно реальное выполнение эксперимента; бывает повтор. | experiment | Код (исполнитель) | Артефакты, результат |
@@ -56,7 +57,7 @@
 | `hypothesis` | H | **statement**, **prediction**, rationale, rank, selected | hypotheses | HypothesesOut |
 | `source` | S | **title**, **locator** (doi/pmcid/url), artifact_id (PDF), year | literature | LiteratureOut.sources (только найденные инструментом) |
 | `plan` | PL | **revision**, hypothesis_id, critic_decision, hitl_decision | plan | PlanOut + CriticVerdict |
-| `experiment` | X | **task_key** (EXP-n), **title**, **goal**, **method** (enum: computational/statistical/laboratory/literature_review/expert), **route**, tools_hint, dataset, baselines, required, tool_resolution (tool_found/tool_built/coder/tool_missing) | plan (при accept) | TaskSpec |
+| `experiment` | X | **task_key** (EXP-n), **title**, **goal**, **method** (enum: computational/statistical/laboratory/literature_search/expert), query_plan (для literature_search), **route**, tools_hint, dataset, baselines, required, tool_resolution (tool_found/tool_built/coder/tool_missing) | plan (при accept) | TaskSpec |
 | `run` | RN | **attempt_n**, outcome, close_reason, simulated | experiment (ядро) | Attempt |
 | `artifact` | A | **artifact_id**, media_type, sha256, role (data/code/figure/report/spec) | любая (слой инструментов) | ToolOutput |
 | `evidence` | E | **kind** (literature/computational/experimental/expert), **statement**, **ref: EvidenceRef \| SourceQuote**, measured_on (обяз. для computational/experimental — код берёт из ToolCallRef/dataset) | literature, experiment | LiteratureOut.claims, AgentTaskOutput.claims |
@@ -116,12 +117,28 @@
 | (ядро) | запрос | — | study |
 | spec | study | ResearchSpecOut | goal, constraint*, question+, criterion(study)+; has_goal, constrained_by, asks, measured_by |
 | hypotheses | goal, question, constraint | HypothesesOut | hypothesis+; addresses |
-| literature | hypothesis(selected), question | LiteratureOut | source*, evidence(literature)*, claim*; informs, derived_from, about, cites |
+| literature = experiment LIT-0 (method=literature_search) | question, hypothesis(selected), query_plan | LiteratureOut | run, source*, evidence(literature)*, claim*; ran_as, informs, derived_from, about, cites |
+| experiment LIT-n (из плана) | то же + depends_on | LiteratureOut | то же; другие experiment могут `depends_on` LIT-n |
 | plan | всё выше | PlanOut + CriticVerdict | plan, experiment+, criterion(experiment)+; plans, tests, depends_on, measured_by |
 | experiment EXP-n | experiment, его входы | AgentTaskOutput | run, artifact*, evidence*, claim*; ran_as, uses_input, produced, derived_from, cites, about |
 | report | вся проекция (read-only) | ReportProse | conclusion, report; answers, based_on, renders |
 
 Валидация вывода (до записи): ссылки ⊂ id входного контекста; enum; обязательные поля. Ошибка → повтор с ошибкой схемы, затем Result FAILED(schema_invalid). Частично валидный вывод не пишется.
+
+### 5.1 Литературный поиск
+
+Решение: отдельного NodeKind нет. Литературный поиск — узел `experiment` с `method=literature_search` и route `literature`; стадия literature DESIGN §3.1 — это просто первая такая задача `LIT-0`, которую код создаёт до плана (ключи `LIT-n` нумеруются отдельно от `EXP-n`).
+
+| | LIT-0 (стадия) | LIT-n (из плана) |
+|---|---|---|
+| Кто создаёт | код при создании study | planner, при accept плана |
+| Вход | question, hypothesis(selected), query_plan (строит researcher в той же попытке) | то же + query_plan из TaskSpec + выходы depends_on |
+| Зачем | обоснование гипотез и плана | догоняющий поиск: baselines, параметры, данные, проверка результата |
+| Зависимые | plan | любые experiment через depends_on |
+
+- Выход: `source` (title, locator) и `evidence(kind=literature)` с `ref = SourceQuote(source_id, locator — страница/раздел, quote, quote_digest = sha256(JCS(quote)))`; цитата должна находиться в тексте источника (CodeCheck `quote_in_source` по скачанному артефакту), иначе evidence invalid.
+- Повторы — обычные попытки (P3); fork перезапускает задачу как любую другую.
+- Критерии (criterion на experiment, шаблоны каталога, пороги — в профиле): `min_sources` (≥ N source с валидным locator), `question_coverage` (каждый question имеет ≥1 valid evidence через hypothesis/claim или `about`), `recency` (доля источников не старше K лет ≥ p), `quote_valid` (все цитаты проходят quote_in_source).
 
 ## 6. Провенанс simulated/partial
 
@@ -142,7 +159,7 @@
 | 2 goals | goal, criterion | Code graph_shape: goal −measured_by→ ≥1 criterion с metric/op/target |
 | 3 planning | plan, experiment | Code: DAG ацикличен, у каждого required experiment ≥1 criterion; каждая selected hypothesis имеет ≥1 входящее `tests` |
 | 4 resources | constraint(resource), experiment.tool_resolution | Code: tool_resolution ≠ tool_missing у required; бюджет не превышен |
-| 5 knowledge | source, evidence(literature) | Code: ≥N source с locator; evidence −derived_from→ source (source_link) |
+| 5 knowledge | experiment(literature_search), source, evidence(literature) | Code: min_sources, question_coverage, recency, quote_valid (§5.1) |
 | 6 data | artifact(data), uses_input | Code: schema_valid на входах; source=real у required |
 | 7 config | run, artifact | Code: параметры запуска = ToolCallRef.args_digest сохранён |
 | 8 model | experiment(method), artifact(code) | Review: метод соответствует вопросу (open Q) |
@@ -171,7 +188,7 @@
 
 | Вид | Что рисуется |
 |---|---|
-| Колонки (ELK layered, слева направо) | 0 study/goal/constraint · 1 question/criterion · 2 hypothesis · 3 source/plan/experiment · 4 run/artifact/evidence · 5 claim · 6 conclusion/report |
+| Колонки (ELK layered, слева направо) | 0 study/goal/constraint · 1 question/criterion · 2 hypothesis · 3 source/plan/experiment (LIT-n — отдельная дорожка) · 4 run/artifact/evidence · 5 claim · 6 conclusion/report |
 | Цвет рамки | node_status (§4) |
 | Штриховка/значок | provenance partial/simulated |
 | Значки | NodeRequirement: MET/FAILED/UNASSESSED/STALE |
