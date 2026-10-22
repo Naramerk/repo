@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from coscientist.core.domain import Provenance, Task, TaskOutcome, TaskState
@@ -27,7 +27,7 @@ class AttemptsMixin:
     _attempt_tasks: dict[str, asyncio.Task[Any]]
     _retry_tasks: dict[str, asyncio.Task[Any]]
     _lease_lost: bool
-    _retry_at: dict[str, Any]
+    _retry_at: dict[str, datetime]
 
     async def _append(self, events: list[EventEnvelope]) -> None:
         raise NotImplementedError

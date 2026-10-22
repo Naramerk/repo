@@ -810,6 +810,7 @@ web/           отдельно (M6)
 | 10 | Structural cleanup after PR #1: `machine.py` split into `attempts` / `local_project` / `lifecycle` (each ≤500); HITL gates, `DelegatedBudget`/`costly_gate`, report moved to `coscientist.experimental/` (pre-M2/M5); catalog stays in `coscientist.checks` (M1). Core API = M0 state-core only. | This PR. |
 | 11 | `costly_gate(..., critic_accepts=True)` is a **stub**: no real critic agent until M2; the bool simulates accept/reject. Documented on the function and in oracle `tests/refmodel.py`. | Explicit until M2 critic role. |
 | 12 | `test_paper_dedupe_two_lits_same_doi` is refmodel-only (`Graph.add_paper`); dual `impl=core` would still call refmodel.Graph. Core paper dedupe lands with GraphBuilder in M1. | Honest skip of false dual-impl. |
+| 13 | **Core drops HITL; experimental is unchanged.** Core `tick` does not process HITL timeouts; `view()` always reports `open_hitl=0`; there is no `recover_after_idle`. Opening/recovering a journal that still has open HITL gates with core raises `HitlUnsupported` (loud fail — not silent ignore). Integration tests parameterize `runtime_kind` over `[core, experimental]`; HITL-specific tests skip on core with an explicit reason. | Review fix on PR #2. |
 
 ## 16. Научная модель (граф)
 

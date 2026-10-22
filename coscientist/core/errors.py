@@ -43,3 +43,20 @@ class ArtifactRejected(CoreError):
 
 class InvalidStatus(CoreError):
     """Value outside the allowed status enum."""
+
+
+class HitlUnsupported(CoreError):
+    """Core StudyRuntime cannot process a journal with open HITL gates.
+
+    Core drops HITL: ``tick`` ignores HITL deadlines, ``view()`` reports
+    ``open_hitl=0``, and there is no ``recover_after_idle``. Open an
+    experimental runtime (pre-M2) for journals that still have open gates.
+    """
+
+    def __init__(self, request_ids: list[str]):
+        self.request_ids = list(request_ids)
+        ids = ", ".join(self.request_ids) or "(unknown)"
+        super().__init__(
+            f"core StudyRuntime cannot open/recover journal with open HITL "
+            f"gate(s): {ids}; use coscientist.experimental.StudyRuntime"
+        )

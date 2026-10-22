@@ -40,14 +40,16 @@ def test_delegated_budget_counter(impl):
 
 
 @pytest.mark.asyncio
-async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
+async def test_costly_gate_budget_spent_shown_in_report(
+    tmp_path, clock, runtime_cls, require_hitl
+):
     """fail-mode «реши сам», DelegatedBudget debit via events, report shows spent_rub."""
     from datetime import timedelta
     from decimal import Decimal
 
     from coscientist.core.domain import Budget, GateConfig, HitlPolicy, TaskOutcome
+    from coscientist.core.runtime_factory import close_runtime, open_runtime
     from coscientist.experimental.report import render
-    from coscientist.experimental.runtime_factory import close_runtime, open_runtime
     from tests.helpers import attach_executor, record_success
 
     policy = HitlPolicy(
@@ -63,7 +65,9 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
     )
 
     # No budget configured → WAIT + human_message, gate stays open
-    rt0 = await open_runtime(tmp_path / "nb", "st_nb", clock=clock)
+    rt0 = await open_runtime(
+        tmp_path / "nb", "st_nb", clock=clock, runtime_cls=runtime_cls
+    )
     await rt0.create_study(
         profile="research",
         request="q",
@@ -82,7 +86,9 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
     assert any(e.payload.get("human_message") == "нет бюджета" for e in note0)
     await close_runtime(rt0)
 
-    rt = await open_runtime(tmp_path, "st_cost", clock=clock)
+    rt = await open_runtime(
+        tmp_path, "st_cost", clock=clock, runtime_cls=runtime_cls
+    )
     await rt.create_study(
         profile="research",
         request="q",

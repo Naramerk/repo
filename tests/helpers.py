@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from coscientist.checks.catalog import minimal_test_catalog
 from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
@@ -14,10 +15,9 @@ from coscientist.core.domain import (
     TaskSpec,
 )
 from coscientist.core.executor import Executor
-from coscientist.experimental.runtime import StudyRuntime
 
 
-def attach_executor(rt: StudyRuntime, tmp: Path) -> tuple[Executor, LocalArtifactStore]:
+def attach_executor(rt: Any, tmp: Path) -> tuple[Executor, LocalArtifactStore]:
     catalog = minimal_test_catalog()
     arts = LocalArtifactStore(tmp / "arts")
     ex = Executor(
@@ -50,7 +50,7 @@ def attach_executor(rt: StudyRuntime, tmp: Path) -> tuple[Executor, LocalArtifac
 
 
 async def record_success(
-    rt: StudyRuntime, aid: str, arts: LocalArtifactStore, *, count: int = 225
+    rt: Any, aid: str, arts: LocalArtifactStore, *, count: int = 225
 ) -> None:
     assert rt.executor is not None
     content = json.dumps({"count": count}).encode()

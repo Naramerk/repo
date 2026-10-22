@@ -23,7 +23,8 @@ from coscientist.core.domain import Clarification, TaskSpec, TaskState
 from coscientist.core.errors import LeaseLost
 from coscientist.core.projections import fold_events
 from coscientist.core.recover import recover
-from coscientist.experimental.runtime_factory import close_runtime, open_runtime
+from coscientist.core.runtime_factory import close_runtime, open_runtime
+from coscientist.experimental.runtime import StudyRuntime as ExperimentalStudyRuntime
 
 
 class StudyClosesMachine(RuleBasedStateMachine):
@@ -53,7 +54,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
         seconds = data.draw(st.integers(min_value=20, max_value=120))
         self.study_deadline = self.clock.now() + timedelta(seconds=seconds)
         self.rt = self._run(
-            open_runtime(self.tmp, self.sid, owner="owner-a", clock=self.clock)
+            open_runtime(self.tmp, self.sid, owner="owner-a", clock=self.clock, runtime_cls=ExperimentalStudyRuntime)
         )
         self._run(
             self.rt.create_study(
@@ -210,7 +211,12 @@ class StudyClosesMachine(RuleBasedStateMachine):
         self.clock.advance(timedelta(seconds=31))
         other = self._run(
             open_runtime(
-                self.tmp, self.sid, owner="owner-b", clock=self.clock, acquire=True
+                self.tmp,
+                self.sid,
+                owner="owner-b",
+                clock=self.clock,
+                acquire=True,
+                runtime_cls=ExperimentalStudyRuntime,
             )
         )
         # poison first runtime lease
@@ -313,7 +319,11 @@ class StudyClosesMachine(RuleBasedStateMachine):
             pass
         self.rt = self._run(
             open_runtime(
-                self.tmp, self.sid, owner="owner-final", clock=self.clock
+                self.tmp,
+                self.sid,
+                owner="owner-final",
+                clock=self.clock,
+                runtime_cls=ExperimentalStudyRuntime,
             )
         )
         self.lost_lease = False
@@ -327,7 +337,9 @@ class StudyClosesMachine(RuleBasedStateMachine):
 
 
 @pytest.mark.asyncio
-async def test_every_study_closes_by_deadline():
+async def test_every_study_closes_by_deadline(runtime_kind, require_hitl):
+    """Property test uses HITL/fork rules — experimental runtime only."""
+
     def run():
         class M(StudyClosesMachine):
             def teardown(self):

@@ -23,10 +23,11 @@ No LLM, ADK, or web in this milestone. `coscientist.core` must not import `googl
 ## Layout
 
 ```
-coscientist/core/          M0 state-core (machine split: machine/attempts/local_project/lifecycle)
+coscientist/core/          M0 state-core (no HITL: tick/view/recover ignore or refuse gates)
 coscientist/checks/        M1 requirement catalog + CodeCheck evaluation
 coscientist/experimental/  pre-M2/M5: HITL gates, DelegatedBudget/costly_gate, report stub
 coscientist/schema/        graph_schema.yaml (packaged)
-tests/                     M0 unit/property/load; experimental/ and checks/ alongside
+tests/                     dual runtime_kind=[core,experimental]; HITL tests skip on core
 docs/                      DESIGN.md, CAPABILITIES.md
 ```
+

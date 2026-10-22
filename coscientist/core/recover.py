@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from coscientist.core.domain import AgentTaskOutput, TaskState
 from coscientist.core.errors import ArtifactCorrupt
+from coscientist.core.hitl_guard import reject_open_hitl_if_unsupported
 from coscientist.core.ids import result_id
 from coscientist.core.machine import StudyRuntime
 
@@ -17,13 +18,16 @@ async def recover(runtime: StudyRuntime) -> dict[str, Any]:
     - ResultRecorded present → task already projected DONE; never re-run
     - route_returned + CAS digest, no result → Executor.record from saved output
     - open attempt without saved output → AttemptClosed(crashed, retryable) then P3
+    - core + open HITL gates → HitlUnsupported (experimental handles HITL idle grace)
     """
     closed = 0
     retried = 0
-    # HITL idle grace lives on experimental StudyRuntime (pre-M2); core has no HITL.
     recover_idle = getattr(runtime, "recover_after_idle", None)
     if recover_idle is not None:
         await recover_idle()
+    else:
+        # Core has no HITL: refuse journals that still have open gates.
+        reject_open_hitl_if_unsupported(runtime, runtime.store.read_all())
 
     for aid, att in list(runtime.attempts.items()):
         if att.get("closed"):

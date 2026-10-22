@@ -12,6 +12,10 @@
 - HITL / `DelegatedBudget` / `costly_gate` / report — `coscientist.experimental` (pre-M2/M5);
   тесты в `tests/experimental/`. Каталог — `coscientist.checks` (M1); тесты в `tests/checks/`.
 - `critic_accepts` в `costly_gate` — **stub** (нет реального critic до M2); см. DESIGN §15.
+- Фикстура `runtime_kind` (`[core, experimental]`) гоняет интеграционные тесты на обоих
+  рантаймах. **Core drops HITL** (tick без HITL-таймаутов, `view` → `open_hitl=0`);
+  HITL-тесты skip на `rt_core` с явной причиной (`require_hitl`). Журнал с открытыми
+  HITL-гейтами → `HitlUnsupported` при `open_runtime`/`recover` на core.
 
 ## Требуемый API `coscientist.core.rules` (M0 runtime)
 

@@ -13,15 +13,15 @@ import pytest
 from coscientist.core.clock import SystemClock
 from coscientist.core.events import EventEnvelope
 from coscientist.core.projections import fold_events
-from coscientist.experimental.runtime_factory import close_runtime, open_runtime
+from coscientist.core.runtime_factory import close_runtime, open_runtime
 from tests.helpers import attach_executor, exp_spec, record_success
 
 
 @pytest.mark.slow
 @pytest.mark.asyncio
-async def test_twenty_parallel_attempts_fsync(tmp_path: Path):
+async def test_twenty_parallel_attempts_fsync(tmp_path: Path, runtime_cls: type):
     clock = SystemClock()
-    rt = await open_runtime(tmp_path, "st_load", clock=clock)
+    rt = await open_runtime(tmp_path, "st_load", clock=clock, runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="load",
