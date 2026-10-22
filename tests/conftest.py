@@ -23,12 +23,19 @@ CORE_RULES = "coscientist.core.rules"  # required API: tests/README.md
 
 @pytest.fixture(params=["refmodel", "core"])
 def impl(request):
-    """Implementation under test: the executable reference or the M0 core."""
+    """Implementation under test: the executable reference or the M0 core.
+
+    For ``core``, Graph/Claim come from refmodel via ``core_rules_adapter`` so
+    verdict / validate_plan / cardinality / dedupe exercise ``core.rules``.
+    """
     if request.param == "refmodel":
         import refmodel
 
         return refmodel
-    return pytest.importorskip(CORE_RULES, reason=f"{CORE_RULES} not present yet (M0)")
+    pytest.importorskip(CORE_RULES, reason=f"{CORE_RULES} not present yet (M0)")
+    from core_rules_adapter import make_core_impl
+
+    return make_core_impl()
 
 
 @pytest.fixture

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import ValidationError
+
 from coscientist.core.domain import AgentTaskOutput, TaskState
+from coscientist.core.errors import ArtifactCorrupt
 from coscientist.core.ids import result_id
 from coscientist.core.machine import StudyRuntime
 
@@ -74,6 +77,6 @@ def _load_agent_output(runtime: StudyRuntime, digest: str) -> AgentTaskOutput | 
         return None
     try:
         raw = arts.read_cas(digest)
-    except (FileNotFoundError, OSError):
+        return AgentTaskOutput.model_validate_json(raw)
+    except (FileNotFoundError, OSError, ArtifactCorrupt, ValidationError):
         return None
-    return AgentTaskOutput.model_validate_json(raw)

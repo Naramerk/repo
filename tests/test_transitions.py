@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
+from coscientist.core.artifacts import make_tool_ref
 from coscientist.core.clock import FakeClock
-from coscientist.core.domain import HitlPolicy, TaskOutcome, TaskState
+from coscientist.core.domain import (
+    AgentTaskOutput,
+    ArtifactHandle,
+    HitlPolicy,
+    RequirementRef,
+    TaskOutcome,
+    TaskState,
+)
+from coscientist.core.errors import AttemptClosedError
+from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.recover import recover
 from coscientist.core.runtime_factory import close_runtime, open_runtime
 from tests.helpers import attach_executor, exp_spec, record_success
@@ -116,23 +127,7 @@ async def test_recover_closes_open_attempt(tmp_path, clock):
     await close_runtime(rt)
 
 
-@pytest.mark.asyncio
-async def test_recover_records_from_cas_route_returned(tmp_path, clock):
-    """RouteReturned + CAS digest → recover rebuilds AgentTaskOutput (no invented summary)."""
-    from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
-
-    rt = await _boot(tmp_path, clock, seconds=120)
-    ex, arts = attach_executor(rt, tmp_path)
-    aid = await rt.start_attempt("SPEC")
-    content = b'{"count": 225}'
-    art = arts.put(
-        content,
-        __import__("coscientist.core.artifacts", fromlist=["make_tool_ref"]).make_tool_ref(
-            f"{aid}:1"
-        ),
-        name="main",
-        media_type="application/json",
-    )
+def _spec_with_value_match(rt, aid: str) -> None:
     task = rt.tasks[rt.attempts[aid]["task_id"]]
     rt.tasks[task.task_id] = task.model_copy(
         update={
@@ -141,11 +136,30 @@ async def test_recover_records_from_cas_route_returned(tmp_path, clock):
             )
         }
     )
-    out = AgentTaskOutput(
-        summary="from-agent",
-        outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+
+
+def _success_output(art_id: str, *, summary: str = "ok") -> AgentTaskOutput:
+    return AgentTaskOutput(
+        summary=summary,
+        outputs={"main": ArtifactHandle(artifact_id=art_id, name="main")},
         values={"count": 225},
     )
+
+
+@pytest.mark.asyncio
+async def test_recover_records_from_cas_route_returned(tmp_path, clock):
+    """RouteReturned + CAS digest → recover rebuilds AgentTaskOutput (no invented summary)."""
+    rt = await _boot(tmp_path, clock, seconds=120)
+    ex, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("SPEC")
+    art = arts.put(
+        b'{"count": 225}',
+        make_tool_ref(f"{aid}:1"),
+        name="main",
+        media_type="application/json",
+    )
+    _spec_with_value_match(rt, aid)
+    out = _success_output(art.artifact_id, summary="from-agent")
     digest = await ex.mark_route_returned(aid, out)
     assert rt.attempts[aid]["route_returned"] is True
     assert rt.attempts[aid]["agent_output_digest"] == digest
@@ -163,8 +177,6 @@ async def test_recover_records_from_cas_route_returned(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_recover_missing_cas_crashes_retryable(tmp_path, clock):
     """route_returned without CAS blob → crashed/retryable, no invented AgentTaskOutput."""
-    from coscientist.core.events import EventEnvelope, make_idem
-
     rt = await _boot(tmp_path, clock, seconds=120)
     attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
@@ -189,13 +201,33 @@ async def test_recover_missing_cas_crashes_retryable(tmp_path, clock):
 
 
 @pytest.mark.asyncio
+async def test_recover_corrupt_cas_crashes_retryable(tmp_path, clock):
+    """Corrupt CAS blob must not raise out of recover — close as crashed/retryable."""
+    rt = await _boot(tmp_path, clock, seconds=120)
+    ex, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("SPEC")
+    art = arts.put(
+        b'{"count": 225}',
+        make_tool_ref(f"{aid}:1"),
+        name="main",
+        media_type="application/json",
+    )
+    _spec_with_value_match(rt, aid)
+    digest = await ex.mark_route_returned(aid, _success_output(art.artifact_id))
+    (arts.cas / digest).write_bytes(b"tampered-not-matching-sha256")
+
+    result = await recover(rt)
+    assert result["closed"] >= 1
+    assert result["retried"] >= 1
+    assert rt.attempts[aid]["closed"] is True
+    assert rt.attempts[aid]["close_reason"] == "crashed"
+    assert not any(e.type == "ResultRecorded" for e in rt.store.read_all())
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
 async def test_record_vs_deadline_race(tmp_path, clock):
     """Stale in-memory attempt still open: store txn must reject record after deadline close."""
-    from coscientist.core.artifacts import make_tool_ref
-    from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
-    from coscientist.core.errors import AttemptClosedError
-    from coscientist.core.events import EventEnvelope, make_idem
-
     rt = await _boot(tmp_path, clock, seconds=30)
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
@@ -205,19 +237,9 @@ async def test_record_vs_deadline_race(tmp_path, clock):
         name="main",
         media_type="application/json",
     )
+    _spec_with_value_match(rt, aid)
+    out = _success_output(art.artifact_id, summary="race")
     task = rt.tasks[rt.attempts[aid]["task_id"]]
-    rt.tasks[task.task_id] = task.model_copy(
-        update={
-            "spec": task.spec.model_copy(
-                update={"criteria": [RequirementRef(template_id="value_match")]}
-            )
-        }
-    )
-    out = AgentTaskOutput(
-        summary="race",
-        outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
-        values={"count": 225},
-    )
 
     # Deadline wins first (journal + store projection), but leave in-memory attempt open
     # so Executor.record's early get_attempt() still sees closed=False — the old bug path.
@@ -261,6 +283,60 @@ async def test_record_vs_deadline_race(tmp_path, clock):
 
 
 @pytest.mark.asyncio
+async def test_mark_route_returned_vs_deadline_race(tmp_path, clock):
+    """mark_route_returned also checks require_open_attempt inside the write txn."""
+    rt = await _boot(tmp_path, clock, seconds=30)
+    ex, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("SPEC")
+    art = arts.put(
+        b'{"count": 225}',
+        make_tool_ref(f"{aid}:1"),
+        name="main",
+        media_type="application/json",
+    )
+    task = rt.tasks[rt.attempts[aid]["task_id"]]
+    now = clock.now()
+    await rt.writer.append_many(
+        [
+            EventEnvelope(
+                study_id="st_tr",
+                type="AttemptClosed",
+                entity_key=aid,
+                idem_key=make_idem("AttemptClosed", aid, "deadline"),
+                payload={
+                    "attempt_id": aid,
+                    "closed": True,
+                    "close_reason": "deadline",
+                    "task_id": task.task_id,
+                },
+                ts=now,
+            ),
+        ]
+    )
+    assert rt.attempts[aid].get("closed") is not True  # stale memory
+    with pytest.raises(AttemptClosedError):
+        await ex.mark_route_returned(aid, _success_output(art.artifact_id))
+    assert not any(e.type == "RouteReturned" for e in rt.store.read_all())
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_repeated_record_after_success_raises_attempt_closed(tmp_path, clock):
+    """Second record after Result+Close+Done is AttemptClosedError, not Idempotent."""
+    rt = await _boot(tmp_path, clock, seconds=120)
+    ex, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("SPEC")
+    await record_success(rt, aid, arts)
+    assert rt.attempts[aid]["closed"] is True
+    with pytest.raises(AttemptClosedError):
+        await ex.record(aid, _success_output("art_unused", summary="again"))
+    results = [e for e in rt.store.read_all() if e.type == "ResultRecorded"]
+    assert len(results) == 1
+    assert any(e.type == "LateWriteRejected" for e in rt.store.read_all())
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
 async def test_llm_hang_past_deadline(tmp_path, clock):
     """Test double: cancel attempt work via deadline (no hang flag in prod API)."""
     rt = await _boot(tmp_path, clock, seconds=5)
@@ -274,7 +350,7 @@ async def test_llm_hang_past_deadline(tmp_path, clock):
         except asyncio.CancelledError:
             return
 
-    rt._attempt_tasks[aid] = __import__("asyncio").create_task(_work())
+    rt._attempt_tasks[aid] = asyncio.create_task(_work())
     clock.advance(timedelta(seconds=6))
     await rt.tick()
     t = rt.tasks["st_tr/SPEC"]

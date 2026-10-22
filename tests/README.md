@@ -2,6 +2,8 @@
 
 - `refmodel.py` — исполняемая эталонная модель правил RESEARCH_MODEL.md (уровень валидатора, без runtime).
 - Фикстура `impl` (conftest.py) прогоняет тесты правил на `refmodel` и на ядре `coscientist.core.rules`.
+- `impl=core` использует `core_rules_adapter.py`: Graph/Claim из refmodel + функции из `core.rules`
+  (verdict / validate_plan / cardinality / dedupe без skip).
 - `Graph` / `add_paper` / `Claim` (с тестовыми дефолтами X1#1/A1) живут только в `refmodel`;
   runtime `coscientist.core.rules` держит edge_allowed, validate_plan/check_cardinality (duck-typed),
   claim_stance/verdict/study_*, DelegatedBudget/costly_gate/settle.

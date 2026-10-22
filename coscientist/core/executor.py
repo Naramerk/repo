@@ -82,7 +82,8 @@ class Executor:
                     },
                     ts=self.clock.now(),
                 )
-            ]
+            ],
+            require_open_attempt=attempt_id,
         )
         return digest
 
