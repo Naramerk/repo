@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import Any
 
 from coscientist.core.domain import (
     Budget,
@@ -20,9 +20,6 @@ from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.graph import GraphNode
 from coscientist.core.ids import plan_id, study_id, task_id
 
-if TYPE_CHECKING:
-    pass
-
 STAGE_KEYS = [
     ("SPEC", TaskKind.SPEC),
     ("HYP", TaskKind.HYPOTHESES),
@@ -33,6 +30,16 @@ STAGE_KEYS = [
 
 
 class LifecycleMixin:
+    """Attribute stubs so mypy accepts mixin use on StudyRuntime."""
+
+    store: Any
+    clock: Any
+    study: Study | None
+    tasks: dict[str, Task]
+
+    async def _append(self, events: list[EventEnvelope]) -> None:
+        raise NotImplementedError
+
     async def create_study(
         self,
         *,

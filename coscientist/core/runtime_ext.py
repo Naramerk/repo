@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import Any, Self
 
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import Clarification, HitlRequest, Task
@@ -11,12 +11,14 @@ from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.hitl_costly import CostlyHitlMixin
 from coscientist.core.ids import hitl_request_id, study_id
 
-if TYPE_CHECKING:
-    from coscientist.core.machine import StudyRuntime
-
 
 class HitlForkMixin(CostlyHitlMixin):
     """Mixin: open/answer HITL, idle grace, continue-session fork stub."""
+
+    attempts: dict[str, dict[str, Any]]
+
+    def _resolve_task(self, task_key_or_id: str) -> Task:
+        raise NotImplementedError
 
     async def open_hitl(
         self,
@@ -236,7 +238,7 @@ class HitlForkMixin(CostlyHitlMixin):
 
     async def fork(
         self, clarifications: list[Clarification], *, nonce: str = ""
-    ) -> StudyRuntime:
+    ) -> Self:
         """M0 stub: compute affected subgraph; full fork lands in M2."""
         assert self.study is not None
         digest = sha256_hex(
@@ -270,9 +272,10 @@ class HitlForkMixin(CostlyHitlMixin):
 
     def invariant_open_attempts(self) -> bool:
         for t in self.tasks.values():
-            open_n = sum(
-                1 for a in t.attempts if not self.attempts.get(a, {}).get("closed")
-            )
+            open_n = 0
+            for a in t.attempts:
+                if not self.attempts.get(a, {}).get("closed"):
+                    open_n += 1
             if open_n > 1:
                 return False
         return True

@@ -45,7 +45,6 @@ filterwarnings = [
 python_version = "3.11"
 ignore_missing_imports = true
 warn_unused_ignores = false
-exclude = "(?x)(lifecycle\\.py|runtime_ext\\.py)"
 
 [[tool.mypy.overrides]]
 module = "yaml"
