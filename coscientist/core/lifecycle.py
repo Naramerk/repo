@@ -114,23 +114,9 @@ class LifecycleMixin:
                     ts=now,
                 )
             )
-            events.append(
-                EventEnvelope(
-                    study_id=sid,
-                    type="GraphNodeUpserted",
-                    entity_key=f"{sid}:node:{key}",
-                    idem_key=make_idem("GraphNodeUpserted", f"{sid}:node:{key}"),
-                    payload=GraphNode(
-                        node_id=f"{sid}:node:{key}",
-                        kind="task",
-                        study_id=sid,
-                        parent_id=f"{sid}:study",
-                        ref_id=tid,
-                        created_at=now,
-                    ).model_dump(mode="json"),
-                    ts=now,
-                )
-            )
+            # Graph nodes for stages: only schema kinds. SPEC/HYP/LIT are DAG
+            # tasks; experiment/plan/report nodes are added when those stages
+            # produce research entities (GraphBuilder in later milestones).
         await self._append(events)
         self.store.study_id = sid
         return sid

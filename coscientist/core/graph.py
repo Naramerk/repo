@@ -1,15 +1,20 @@
-"""Generic typed Node/Edge graph keyed by a kind registry (DESIGN + upcoming RESEARCH_MODEL).
+"""Generic typed Node/Edge graph keyed by a kind registry.
 
-Scientific ontology (goal, hypothesis, evidence, …) plugs in by registering kinds;
-the core does not hard-code those types.
+Scientific kinds load from schema/graph_schema.yaml (RESEARCH_MODEL.md);
+the core does not hard-code the ontology beyond that file.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
+import yaml
 from pydantic import BaseModel, ConfigDict, Field
+
+_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schema" / "graph_schema.yaml"
 
 
 class Frozen(BaseModel):
@@ -23,6 +28,7 @@ class KindSpec(Frozen):
     layer: str = "research"  # research | execution | system
     schema_ref: str | None = None
     description: str = ""
+    prefix: str | None = None
     allowed_attr_keys: frozenset[str] | None = None
 
 
@@ -73,7 +79,7 @@ class GraphNode(Frozen):
     kind: str
     study_id: str
     parent_id: str | None = None
-    ref_id: str | None = None  # link to Task/Attempt/Result/Artifact id when applicable
+    ref_id: str | None = None
     attrs: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime | None = None
 
@@ -131,23 +137,36 @@ class GraphStore:
         self._edges.clear()
 
 
-def default_execution_registry() -> KindRegistry:
-    """Minimal kinds needed by the execution DAG. Scientific kinds register later."""
+def load_schema(path: Path | None = None) -> dict[str, Any]:
+    p = path or _SCHEMA_PATH
+    return yaml.safe_load(p.read_text(encoding="utf-8"))
+
+
+@lru_cache(maxsize=4)
+def registry_from_schema(path: str | None = None) -> KindRegistry:
+    """Load node/edge kinds from graph_schema.yaml (single source of truth)."""
+    data = load_schema(Path(path) if path else _SCHEMA_PATH)
     reg = KindRegistry()
-    for kind, desc in (
-        ("request", "User research request"),
-        ("study", "Study root"),
-        ("task", "Executable task node"),
-        ("plan", "Accepted plan"),
-        ("report", "Study report"),
-        ("artifact", "Produced artifact handle"),
-    ):
-        reg.register_node(KindSpec(kind=kind, layer="execution", description=desc))
-    for kind, desc in (
-        ("contains", "Parent contains child"),
-        ("depends_on", "Task dependency"),
-        ("produces", "Task/attempt produces artifact"),
-        ("evidences", "Requirement evidenced by artifact"),
-    ):
-        reg.register_edge(KindSpec(kind=kind, layer="execution", description=desc))
+    for n in data.get("nodes", []):
+        reg.register_node(
+            KindSpec(
+                kind=n["kind"],
+                layer="research",
+                description=str(n.get("text_ru", "")),
+                prefix=n.get("prefix"),
+            )
+        )
+    for e in data.get("edges", []):
+        reg.register_edge(
+            KindSpec(
+                kind=e["name"],
+                layer="research",
+                description=str(e.get("card", "")),
+            )
+        )
     return reg
+
+
+def default_execution_registry() -> KindRegistry:
+    """Registry for runtimes: schema kinds (copy so callers may extend)."""
+    return registry_from_schema().copy()

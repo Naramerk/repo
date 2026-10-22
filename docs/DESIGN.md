@@ -794,6 +794,18 @@ web/           отдельно (M6)
 
 Несогласий нет. Уточнение: 10 мин ТЗ трактуются как бюджет от создания study до DONE задачи plan, включая HITL; если человек не уложился, план проваливается с human_timeout, а не продлевается.
 
+### M0 implementation notes (2026-10-22)
+
+| # | Choice | Rationale |
+|---|---|---|
+| 1 | Generic `KindRegistry` + `GraphNode`/`GraphEdge`; kinds loaded from `schema/graph_schema.yaml` (12 nodes / 16 edges) — not hard-coded in Python | Matches RESEARCH_MODEL single source of truth; core stays domain-agnostic (§1). No research semantics beyond registration in M0. |
+| 2 | `RequirementTemplate.text_ru` + `check` on the same template | One source for human-readable text and the machine check (§5); unknown `kind` / `reviewer_role` / unregistered `applies_to` → `CatalogError`. |
+| 3 | Digests = sha256 of sorted-keys JSON (not full RFC 8785 JCS yet) | Sufficient for idempotency and M0 forks stub; full JCS deferred to M2 with continue_session. |
+| 4 | `fork()` computes affected subgraph only (stub); no child journal yet | Property-test coverage of the rule; full §3.6 inheritance is M2. |
+| 5 | Load test asserts ≥100 events in CI (p99 ≤ 50 ms, 20 parallel attempts, fsync); scale to ≥5000 locally by raising fake-tool sleep | Keeps CI fast; same code path as §3.5a. |
+| 6 | `StudyRuntime` split across `machine.py` / `lifecycle.py` / `runtime_ext.py` | Honour ≤500 lines/file budget (§11). |
+| 7 | `test_llm_hang_past_deadline` uses a hanging asyncio task (no httpx/OpenAI server) | M0 forbids LLM/ADK/httpx in core; cancellation + late-write rejection still covered. |
+
 ## 16. Научная модель (граф)
 
 Научные сущности (study, constraint, question, criterion, hypothesis, plan, experiment, artifact, evidence, claim, conclusion, report — 12 типов, 16 рёбер; источник истины `schema/graph_schema.yaml`) — узлы одного графа, который рисует веб и на котором проверяется каталог. Узлы и рёбра строит код (`GraphBuilder`) из типизированных выводов ролей; `research_commit` нет; статусы узлов вычисляются. `NodeKind` в §2 совпадает со схемой. Подробно: [RESEARCH_MODEL.md](RESEARCH_MODEL.md).

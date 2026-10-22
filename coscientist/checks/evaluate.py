@@ -242,8 +242,8 @@ def evaluate_task_checks(
     results: list[CheckResult] = []
     refs = list(spec.criteria)
     if not refs:
-        # apply defaults for 'task' kind
-        for tid in catalog.defaults.get("task", []):
+        # apply defaults for experiment kind (schema NodeKind)
+        for tid in catalog.defaults.get("experiment", []):
             refs.append(RequirementRef(template_id=tid))
 
     for i, ref in enumerate(refs):

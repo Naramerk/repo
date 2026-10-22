@@ -136,7 +136,7 @@ def minimal_test_catalog() -> Catalog:
                     "text_ru": "Требуемый артефакт должен существовать.",
                     "rule_ids": ["R23"],
                     "method_sources": ["test"],
-                    "applies_to": ["task"],
+                    "applies_to": ["experiment"],
                     "check": {"kind": "artifact_exists", "output": "main"},
                     "required": True,
                 },
@@ -146,7 +146,7 @@ def minimal_test_catalog() -> Catalog:
                     "text_ru": "Значение в артефакте совпадает с целевым.",
                     "rule_ids": ["R23"],
                     "method_sources": ["test"],
-                    "applies_to": ["task"],
+                    "applies_to": ["experiment"],
                     "check": {
                         "kind": "value_matches",
                         "output": "main",
@@ -161,7 +161,7 @@ def minimal_test_catalog() -> Catalog:
                     "text_ru": "Ревьюер оценивает качество результата.",
                     "rule_ids": ["R23"],
                     "method_sources": ["test"],
-                    "applies_to": ["task"],
+                    "applies_to": ["experiment"],
                     "check": {
                         "reviewer_role": "reviewer",
                         "question": "Is the result adequate?",
@@ -169,6 +169,6 @@ def minimal_test_catalog() -> Catalog:
                     "required": True,
                 },
             ],
-            "defaults": {"task": ["artifact_present"]},
+            "defaults": {"experiment": ["artifact_present"]},
         }
     )
