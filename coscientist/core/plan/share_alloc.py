@@ -15,6 +15,7 @@ from coscientist.core.plan.shares import (
     shares_present,
 )
 
+
 def _raw_budget(spec: TaskSpec) -> float | None:
     v = getattr(spec, "budget_share", None)
     return None if v is None else float(v)

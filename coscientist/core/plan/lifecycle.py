@@ -14,6 +14,8 @@ from coscientist.core.events.events import (
     EventEnvelope,
     make_idem,
 )
+from coscientist.core.events.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
+from coscientist.core.events.ports import EventStore
 from coscientist.core.events.schema_versions import (
     GRAPH_EDGE_ADDED_SCHEMA_VERSION,
     GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
@@ -23,8 +25,6 @@ from coscientist.core.events.schema_versions import (
     TASK_CREATED_SCHEMA_VERSION,
     TASK_DONE_SCHEMA_VERSION,
 )
-from coscientist.core.events.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
-from coscientist.core.events.ports import EventStore
 from coscientist.core.execution.domain import (
     Budget,
     HitlPolicy,

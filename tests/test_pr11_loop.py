@@ -1600,11 +1600,8 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
     """Corrupt plan loops → real pydantic ValidationError → internal_error finalize."""
     import coscientist.core.plan.loop_predicates as lp
     from coscientist.core.claims.reasons import TerminalReason
-    from coscientist.core.events.schema_versions import (
-        PLAN_ACCEPTED_SCHEMA_VERSION,
-        EventEnvelope,
-        make_idem,
-    )
+    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.schema_versions import PLAN_ACCEPTED_SCHEMA_VERSION
 
     name = f"test_plugin_keep_running_{runtime_cls.__name__}"
     lp._REGISTRY.pop(name, None)

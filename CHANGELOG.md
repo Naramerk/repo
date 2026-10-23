@@ -2,12 +2,22 @@
 
 ## Unreleased
 
+<<<<<<< HEAD
 ### M2 PR A1 — thin LLM client
 - New package `coscientist/llm/`: typed `LlmRequest`/`LlmResponse`/`Usage`, `ProviderAdapter` + OpenAI-compatible provider, `LlmClient` with timeout/retry/limits from required `LlmConfig` fields (no guessed defaults), typed errors, API key only from env named in config; no logging/printing of secrets or bodies.
 - Transport is injected (`Transport` protocol); unit tests use a fake transport (no network). Required injections: `clock`, `sleep`, `wait_for`, `rng` (no unseeded default).
 - Retry: exponential backoff + jitter (`retry_backoff_max_s` caps backoff only); `Retry-After` parsed only when `honor_retry_after` and status is retryable; OWS = SP/HTAB only; delta-seconds = ASCII `1*DIGIT` (int→float; OverflowError/ValueError → `LlmRetryAfterError`); HTTP-date = strict IMF-fixdate (`GMT` exact; leap second/`gmt`/day-name mismatch rejected; RFC 850/asctime rejected; past → delay 0 per RFC 9110); invalid → `LlmRetryAfterError` (never masks `LlmProviderError`); not clamped to backoff max — only `total_deadline_s`; `attempt_timeout` to transport; HTTP success = 200 only; naive/unknown-`utcoffset` clock → `LlmClockError`.
 - import-linter: `llm` ↛ `core`/`tools`/`agents`/`api`/`checks`/`experimental`/`google`/`httpx`; `tools` ↛ `agents`/`llm`; layers `agents` above `tools | llm`.
 - `docs/DESIGN.md` §7 rewritten: no ADK; thin client; all agent state in the event journal.
+=======
+### Breaking: schema v1 baseline
+- Pre-release collapse: every event type is writer **schema v1**. Production upcasters that injected guessed defaults are deleted (`TaskCreated` mode/kind, `final_type` coercion, `rollup=all`, `StudyCreated` defaults, `AttemptStarted` share_renorm / tainted_context / attempt_role, `StudyFinalized` hypothesis_report, and the rest of the chains).
+- `upcast()` raises if the version is above the writer's, the type is unknown, or the chain has a gap. `register_upcaster` / `assert_upcaster_chain_continuous` stay; covered by a synthetic dummy type.
+- Writers take `schema_version` only from constants derived from the `UPCASTERS` registry (`writer_schema_version`). No `schema_version=<digit>` literals in `coscientist/core`.
+- Shared `map_spec_dict_list` traverses spec `inputs` / `expected_outputs`. **Post-release rule:** upcasters may only add provably exact values via that helper (or a mechanical rename of stored bytes); guessed defaults require an explicit migration.
+- Journal store-format marker (`journal_meta.store_format`). Opening a dev journal that has events but no matching marker raises `JournalFormatError` (avoids `payload_digest` Conflict on reopen).
+- Fixture `tests/fixtures/journals/reclassified_fetch_old` rebuilt at v1 from JSON via `scripts/gen_reclassified_fetch_old_journal.py`.
+>>>>>>> ad80dac (fix(schema): v1 baseline changelog, store close, writer versions)
 
 ### Core layout
 - Move flat `coscientist/core/*.py` into subpackages `events/`, `plan/`, `claims/`, `execution/`, `finalize/` (`git mv`); update imports, import-linter contracts, and tests. No logic changes.

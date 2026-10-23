@@ -25,13 +25,13 @@ from typing import Any
 
 from coscientist.core.events.errors import ArtifactRejected, FetchToolReclassified
 from coscientist.core.events.events import EventEnvelope, make_idem
-from coscientist.core.events.writer import StudyWriter
-from coscientist.core.execution.domain import Catalog, CodeCheck, RequirementRef, TaskSpec
 from coscientist.core.events.schema_versions import (
     ATTEMPT_TAINTED_SCHEMA_VERSION,
     FETCH_INTEGRITY_RAISED_SCHEMA_VERSION,
     SOURCE_FETCHED_SCHEMA_VERSION,
 )
+from coscientist.core.events.writer import StudyWriter
+from coscientist.core.execution.domain import Catalog, CodeCheck, RequirementRef, TaskSpec
 
 VerifyFetchCap = Callable[..., "FetchCapability"]
 AssertFetchCap = Callable[..., "FetchCapability"]

@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from coscientist.core.events.events import EventEnvelope
 from coscientist.core.execution.domain import Artifact, StudyView
 
+
 class EventStore(Protocol):
     study_id: str
     owner: str | None

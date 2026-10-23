@@ -6,10 +6,6 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from coscientist.core.events.schema_versions import (
-    GRAPH_EDGE_ADDED_SCHEMA_VERSION,
-    GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
-)
 from coscientist.core.claims.claims import (
     namespaced_claim_id,
     producer_attempt_failed,
@@ -20,6 +16,10 @@ from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id
+from coscientist.core.events.schema_versions import (
+    GRAPH_EDGE_ADDED_SCHEMA_VERSION,
+    GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
+)
 from coscientist.core.execution.domain import (
     VALID_PROVENANCE,
     InputBinding,

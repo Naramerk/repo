@@ -74,9 +74,13 @@ class SqliteEventStore:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=FULL")
             self._conn.execute("PRAGMA busy_timeout=5000")
-            ensure_journal_store_format(self._conn)
-            self._ensure_lease_nonce_column()
-            self._conn.commit()
+            try:
+                ensure_journal_store_format(self._conn)
+                self._ensure_lease_nonce_column()
+                self._conn.commit()
+            except Exception:
+                self._conn.close()
+                raise
         self._read_conn = _open_conn(self.db_path, readonly=True)
 
     def _ensure_lease_nonce_column(self) -> None:

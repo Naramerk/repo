@@ -28,6 +28,7 @@ from coscientist.core.events.schema_versions import ARTIFACT_REGISTERED_SCHEMA_V
 from coscientist.core.execution._attempt_frame import attempt_active
 from coscientist.core.execution.domain import Artifact
 
+
 def _make_issued_registry() -> tuple[
     Any, Any, Any
 ]:

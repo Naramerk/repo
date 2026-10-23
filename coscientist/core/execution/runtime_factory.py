@@ -10,15 +10,15 @@ from typing import Any
 from coscientist.core.claims.graph import KindRegistry, default_execution_registry
 from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.schema_versions import (
+    TASK_DONE_SCHEMA_VERSION,
+)
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.hitl_guard import reject_open_hitl_if_unsupported
 from coscientist.core.execution.machine import StudyRuntime, new_owner
 from coscientist.core.execution.tool_loader import ensure_core_tools_ready
-from coscientist.core.events.schema_versions import (
-    TASK_DONE_SCHEMA_VERSION,
-)
 
 log = logging.getLogger(__name__)
 

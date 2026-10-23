@@ -12,11 +12,6 @@ from typing import Any
 from coscientist.checks.evaluate import evaluate_task_checks, role_from_catalog
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.digest import canonical_json, payload_digest, sha256_hex
-from coscientist.core.events.schema_versions import (
-    ATTEMPT_CLOSED_SCHEMA_VERSION,
-    RESULT_RECORDED_SCHEMA_VERSION,
-    TASK_DONE_SCHEMA_VERSION,
-)
 from coscientist.core.events.errors import (
     AttemptClosedError,
     CatalogError,
@@ -25,6 +20,11 @@ from coscientist.core.events.errors import (
 )
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import criterion_node_id, result_id
+from coscientist.core.events.schema_versions import (
+    ATTEMPT_CLOSED_SCHEMA_VERSION,
+    RESULT_RECORDED_SCHEMA_VERSION,
+    TASK_DONE_SCHEMA_VERSION,
+)
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.attempts import RETRY_BACKOFF_S

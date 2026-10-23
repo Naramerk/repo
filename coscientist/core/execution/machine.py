@@ -19,24 +19,27 @@ from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.events import EventEnvelope, make_idem
-from coscientist.core.events.store import SqliteEventStore
-from coscientist.core.events.writer import StudyWriter
-from coscientist.core.execution.attempts import AttemptsMixin
-from coscientist.core.execution.domain import Provenance, Study, Task, TaskOutcome, TaskState
-from coscientist.core.execution.local_project import LocalProjectMixin
 from coscientist.core.events.schema_versions import (
     ATTEMPT_CLOSED_SCHEMA_VERSION,
     BUDGET_EXCEEDED_SCHEMA_VERSION,
     TASK_DONE_SCHEMA_VERSION,
 )
+from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.events.writer import StudyWriter
+from coscientist.core.execution.attempts import AttemptsMixin
+from coscientist.core.execution.domain import Provenance, Study, Task, TaskOutcome, TaskState
+from coscientist.core.execution.local_project import LocalProjectMixin
 from coscientist.core.finalize.finalize import (
     FinalizeTrigger,
-    finalize as _finalize,
     pick_finalize_trigger,
+)
+from coscientist.core.finalize.finalize import (
+    finalize as _finalize,
 )
 from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.cancel import cancel_study as _cancel_study
 from coscientist.core.plan.intake import IntakeRefuse
+
 
 class StudyRuntime(LocalProjectMixin, AttemptsMixin):
     """In-process owner of one study: store, writer, tasks, timers.

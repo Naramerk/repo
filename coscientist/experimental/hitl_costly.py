@@ -6,6 +6,7 @@ from typing import Any, Protocol
 
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.schema_versions import TASK_DONE_SCHEMA_VERSION
 from coscientist.core.execution.domain import HitlRequest, Task, TaskOutcome, TaskState
 from coscientist.experimental.costly import DelegatedBudget, costly_gate, settle
 
@@ -233,7 +234,7 @@ class CostlyHitlMixin:
                                 "reason": reason,
                             },
                             ts=now,
-                            schema_version=2,
+                            schema_version=TASK_DONE_SCHEMA_VERSION,
                         )
                     ]
                 )
@@ -254,7 +255,7 @@ class CostlyHitlMixin:
                         "reason": "human_timeout",
                     },
                     ts=now,
-                    schema_version=2,
+                    schema_version=TASK_DONE_SCHEMA_VERSION,
                 )
             ]
         )

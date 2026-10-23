@@ -18,10 +18,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from coscientist.core.events.schema_versions import (
-    QUESTION_DISPOSED_SCHEMA_VERSION,
-    QUESTION_DISPOSE_REJECTED_SCHEMA_VERSION,
-)
 from coscientist.core.claims.experiment_design import (
     MISSING_DESIGN_LINE,
     MISSING_DESIGN_REASON,
@@ -30,6 +26,10 @@ from coscientist.core.claims.experiment_design import (
 from coscientist.core.claims.reasons import Disposition
 from coscientist.core.events.digest import sha256_hex
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.schema_versions import (
+    QUESTION_DISPOSE_REJECTED_SCHEMA_VERSION,
+    QUESTION_DISPOSED_SCHEMA_VERSION,
+)
 
 ExplicitDisposition = Literal["needs_more_data", "infeasible"]
 EXPLICIT_DISPOSITIONS: frozenset[str] = frozenset({"needs_more_data", "infeasible"})

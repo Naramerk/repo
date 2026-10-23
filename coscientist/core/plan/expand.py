@@ -14,11 +14,11 @@ from coscientist.core.events.events import (
     EventEnvelope,
     make_idem,
 )
+from coscientist.core.events.ids import plan_id, task_id
 from coscientist.core.events.schema_versions import (
     PLAN_EXPANDED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
 )
-from coscientist.core.events.ids import plan_id, task_id
 from coscientist.core.execution.domain import (
     ExpansionRequest,
     Plan,

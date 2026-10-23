@@ -430,7 +430,7 @@ class AttemptsMixin:
                 idem_key=make_idem("AttemptStarted", aid),
                 payload=payload,
                 ts=now,
-                # v8 = #23 inputs_digest; v9 = PR20 attempt_role (schema_versions).
+                # schema_version from UPCASTERS (schema v1 baseline = writer v1).
                 schema_version=ATTEMPT_STARTED_SCHEMA_VERSION,
             )
         ]
