@@ -442,6 +442,12 @@ async def _journal_attempt_tainted(
     cache: dict[str, bool] | None = getattr(writer, "_pr18_taint_by_attempt", None)
     if cache is not None:
         cache[attempt_id] = True
+    # Keep SourceFetchIndex cache in sync when open/finalize warmed it — otherwise
+    # a later SourceFetched Δ fold can advance seq past this AttemptTainted and
+    # leave fetch_calls empty (quote_in_source would miss the digest).
+    from coscientist.core.source_fetch import _cache_note_fetch
+
+    _cache_note_fetch(writer, stored)
     if on_event is not None:
         on_event(stored)
     return stored
