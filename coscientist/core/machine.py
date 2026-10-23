@@ -201,6 +201,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         except LeaseLost:
             self._lease_lost = True
             raise
+        # Project in durable append order (no ``asyncio.sleep(0)`` — see Executor._append).
         done_ids: list[str] = []
         for ev in events:
             self._project_local(ev)

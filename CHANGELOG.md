@@ -7,6 +7,13 @@
 - Replay pairing trusts journaled `AttemptTainted.{tool,is_fetch}`. Same-name reclassified `is_fetch=False` → domain `FetchToolReclassified` (caught on fold): paired `SourceFetched` uncounted. `FetchIntegrityRaised` journaled only on open/finalize; finalize fold fallback still puts `internal_error` in the report if reconcile fails. Proven by committed old-schema fixture + natural `tick` finalize (`tests/fixtures/journals/reclassified_fetch_old`).
 - `fetch_integrity` projection rows survive without `call_id` (key via tool/row_key).
 
+### Perf / journal write SLO
+- Restored honest DESIGN §3.5a measurement: 20 parallel attempts on real-disk `tmp_path`, full `StudyWriter` path (queue → `to_thread` → fence/insert/commit), `writer.latency_samples_ms`, 50ms p99, no retries/skips.
+- **Root cause (why only rt_exp tailed):** `projections.apply_event` rewrote *every* row in affected tables on each append (thousands of upserts per load) on the fsync-critical path. Experimental `_project_local` (HITL fold) made the writer queue wait longer between commits, so the O(n²) upsert tax showed up as rt_exp p99 spikes (165–356ms) while rt_core stayed ~6ms. Fix: load only needed tables and upsert keys ``_put`` marks dirty (ContextVar — not `id(row)`). Local measure: dirty-keys alone → p99 ~2–3ms for both runtimes; `asyncio.sleep(0)` after append was **not** required and is omitted so in-memory projection stays seq-ordered with the durable batch.
+- **Behavior:** `SourceFetched` `apply_event` now loads `fetch_calls` so journaled pairs land in the SQLite projection (previously the truncated table list left pairs invisible on the write path). Rebase on #26 keeps `AttemptTainted` → `(attempts, fetch_calls, fetch_integrity)`, `FetchIntegrityRaised`, `_row_key` for `fetch_integrity`, and `FetchToolReclassified` fold handling (no `QuestionDisposed` stub — that belongs in #28).
+- Equivalence: after the 20-parallel load plus seeded AttemptTainted/SourceFetched/FetchIntegrityRaised/HitlOpened, SQLite projections match `fold_events` with non-empty `source_fetches` / `fetch_calls` / `fetch_integrity` / `hitl_requests`. Canon is strict JSON (no `default=str`).
+- Removed store commit-only / shm / wal-autocheckpoint / GC test knobs (those hollowed the SLO).
+
 ### Sandbox (host CPU sample order)
 - `_watch_process`: sample host-tree CPU via `/proc` **before** `poll()` (poll reaps the child and `/proc` vanishes). Keeps no-cgroup SIGXCPU classification accurate; retains the max sample while the guest is alive. Split out of PR14 so quote work stays focused.
 - **M2 notes:** `_host_tree_cpu_s` returns `0.0` (not `None`) when `/proc` is readable but idle; missing `CONFIG_PROC_CHILDREN` silently drops descendants; cgroup idle path untested on CI without delegation.

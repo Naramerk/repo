@@ -1423,6 +1423,10 @@ class Executor:
         require_open_attempt: str | None = None,
     ) -> None:
         stored = await self.writer.append_many(events, require_open_attempt=require_open_attempt)
+        # Project in append order (same seq order as the durable batch). Do not
+        # ``asyncio.sleep(0)`` here — a yield can let another task's ``_project_local``
+        # run before this batch, scrambling in-memory fold order. Dirty-key
+        # upserts alone keep the fsync p99 under the §3.5a SLO.
         if self.on_events is not None:
             for ev in events:
                 self.on_events(ev)

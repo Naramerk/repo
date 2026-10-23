@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Any
 
 from coscientist.core.events import EventEnvelope
@@ -10,9 +11,17 @@ from coscientist.core.reasons import TaskReason
 # table -> row_key -> data
 ProjectionMap = dict[str, dict[str, dict[str, Any]]]
 
+# When set, ``_put`` records (table, key) for dirty-only SQLite upserts.
+_DIRTY_KEYS: ContextVar[set[tuple[str, str]] | None] = ContextVar(
+    "projection_dirty_keys", default=None
+)
+
 
 def _put(proj: ProjectionMap, table: str, key: str, data: dict[str, Any]) -> None:
     proj.setdefault(table, {})[key] = data
+    dirty = _DIRTY_KEYS.get()
+    if dirty is not None:
+        dirty.add((table, key))
 
 
 def _get(proj: ProjectionMap, table: str, key: str) -> dict[str, Any] | None:
@@ -249,42 +258,59 @@ def fold_events(events: list[EventEnvelope]) -> ProjectionMap:
     return proj
 
 
+def _projection_load_tables(event_type: str) -> tuple[str, ...]:
+    """Tables ``apply_to_map`` may read or write for this event (not the world)."""
+    affected = _affected_tables(event_type)
+    # Read deps that are not always in the write set.
+    extra: tuple[str, ...] = ()
+    if event_type == "SourceFetched":
+        extra = ("fetch_calls",)
+    # Dedup preserve order.
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in (*affected, *extra):
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return tuple(out)
+
+
 def apply_event(store: Any, event: EventEnvelope) -> None:
     """Apply one event into the store's projection table (in-txn write connection).
 
     Uses ``_get_projection_write`` / ``_upsert_projection_write`` when present so
     projection updates stay on the fenced writer connection inside append.
+
+    Only loads tables this event needs and only upserts rows ``apply_to_map``
+    actually changed. The previous full-table rewrite (every attempt/task on
+    every ``RouteReturned``) sat on the fsync-critical path and produced
+    O(n²) SQLite work under the §3.5a parallel load — the rt_exp p99 tail.
     """
     get_rows = getattr(store, "_get_projection_write", None)
     put_row = getattr(store, "_upsert_projection_write", None)
     if get_rows is None or put_row is None:
         raise TypeError("apply_event requires a write-capable store (_get_projection_write / _upsert_projection_write)")
+    load_tables = _projection_load_tables(event.type)
+    if not load_tables:
+        return
     scratch: ProjectionMap = {}
-    for table in (
-        "studies",
-        "plans",
-        "tasks",
-        "attempts",
-        "results",
-        "artifacts",
-        "effects",
-        "source_fetches",
-        "fetch_calls",
-        "fetch_integrity",
-        "requirements",
-        "hitl_requests",
-        "graph_nodes",
-        "graph_edges",
-        "meta",
-    ):
+    for table in load_tables:
         for row in get_rows(table):
             key = _row_key(table, row)
             if key:
                 scratch.setdefault(table, {})[key] = row
-    apply_to_map(scratch, event)
-    affected = _affected_tables(event.type)
-    for table in affected:
-        for key, data in scratch.get(table, {}).items():
+    dirty: set[tuple[str, str]] = set()
+    token = _DIRTY_KEYS.set(dirty)
+    try:
+        apply_to_map(scratch, event)
+    finally:
+        _DIRTY_KEYS.reset(token)
+    affected = set(_affected_tables(event.type))
+    for table, key in dirty:
+        if table not in affected:
+            continue
+        data = scratch.get(table, {}).get(key)
+        if data is not None:
             put_row(table, key, data)
 
 
