@@ -3,9 +3,11 @@
 ## Unreleased
 
 ### M1 PR10
-- `TaskSpec.foreach` (selected/all hypothesis|question of a source task): core materializes N `EXP-<n>` at source `TaskDone` via `PlanExpanded(foreach=true)` — no planner, no expansion quota; restart/recover resumes; report lines in Russian.
-- `InputSpec.quorum` fan-in: start when ≥ quorum inputs bind as real/partial; gaps → `AttemptStarted.limitations[]` (RU); miss → `SKIPPED(input_unavailable)` + `не выполнено: кворум входов` on `StudyFinalized`.
-- Upcasters: TaskCreated v7, PlanAccepted v5, AttemptStarted v4.
+- `TaskSpec.foreach` (selected/all hypothesis|question of a source task): core materializes N `EXP-<n>` via `PlanExpanded(foreach=true)` — no planner, no expansion quota; restart/recover resumes; report lines in Russian.
+- Expand at source `TaskDone` **and** at `accept_plan` / after `PlanExpanded` when `of_task` is already DONE (B1; live == replay). `validate_foreach_specs` in `validate_expansion`.
+- Selector requires `source_task == of_task`; children sorted numerically-aware (`H2 < H10`); deterministic `pl_foreach_*` + idem; `Study.max_foreach_children` cap (StudyCreated **v8**); empty refute → explicit «проверка опровержения не выполнена»; errors → `ExpansionRefused` (no silent swallow).
+- `InputSpec.quorum` (≥1 or `"all"`) fan-in **per input** (required never softened): start when ≥ quorum real/partial members; 0 children / 0 counted → `SKIPPED` (never provenance `real`); gaps → `AttemptStarted.limitations[]` (RU); miss → `не выполнено: кворум входов` on `StudyFinalized`.
+- Upcasters: TaskCreated v7, PlanAccepted v5, AttemptStarted v4, StudyCreated v8.
 
 ### M1 PR9
 - `PlanExpanded` + H-g trigger (`expand_after` / `AgentTaskOutput.expansion_request` / HITL).
