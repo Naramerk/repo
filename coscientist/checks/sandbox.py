@@ -620,7 +620,18 @@ def _watch_process(
     cpu_budget_usec = int(_cpu_budget_seconds(lim.timeout_s) * 1_000_000)
     last_usage: int | None = None
     tree_cpu_s: float | None = None
-    while proc.poll() is None:
+    while True:
+        # Sample /proc *before* poll() — poll reaps the child and /proc vanishes.
+        if cgroup_leaf is None and proc.pid:
+            sampled = _host_tree_cpu_s(proc.pid)
+            if sampled is not None:
+                tree_cpu_s = (
+                    sampled
+                    if tree_cpu_s is None
+                    else max(float(tree_cpu_s), float(sampled))
+                )
+        if proc.poll() is not None:
+            break
         if overflow[0]:
             _kill_group_term_then_kill(proc)
             break
@@ -637,15 +648,7 @@ def _watch_process(
                 kill_cause = "cpu"
                 _kill_group_term_then_kill(proc)
                 break
-        # Sample host tree CPU while the guest is still alive (for SIGXCPU path).
-        if cgroup_leaf is None and proc.pid:
-            sampled = _host_tree_cpu_s(proc.pid)
-            if sampled is not None:
-                tree_cpu_s = sampled
         time.sleep(0.02)
-    # Final sample before/around reap (guest may already be gone).
-    if cgroup_leaf is None and proc.pid and tree_cpu_s is None:
-        tree_cpu_s = _host_tree_cpu_s(proc.pid)
     try:
         proc.wait(timeout=5)
     except Exception:  # noqa: BLE001
