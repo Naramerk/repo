@@ -502,6 +502,20 @@ def evaluate_task_checks(
         tmpl = by_id.get(ref.template_id)
         cid = f"{ref.template_id}#{i}"
         role = role_from_template(tmpl)
+        # M1 PLAN-n critic markers: evaluated by expand_critic, not CodeCheck.
+        if str(ref.template_id or "").startswith("plan_expansion_"):
+            results.append(
+                CheckResult(
+                    check_id=cid,
+                    template_id=ref.template_id,
+                    status=ReqStatus.MET,
+                    is_code=True,
+                    required=ref.required,
+                    role="validity",
+                    detail="m1_deterministic_critic",
+                )
+            )
+            continue
         if tmpl is None:
             results.append(
                 CheckResult(

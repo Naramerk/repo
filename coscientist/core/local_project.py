@@ -37,6 +37,7 @@ class LocalProjectMixin:
     _expand_requests: dict[str, dict[str, Any]]
     _expansion_refusals: list[dict[str, Any]]
     _hitl_decisions: dict[str, dict[str, Any]]
+    _hitl_requests: dict[str, dict[str, Any]]
     _hitl_expand_used: set[str]
 
     def _clear_expand_request(
@@ -106,6 +107,13 @@ class LocalProjectMixin:
                 after_task=str(p.get("after_task") or "") or None,
                 plan_key=p.get("plan_key"),
             )
+        elif ev.type == "HitlOpened":
+            rid = str(p.get("request_id") or ev.entity_key)
+            opens = getattr(self, "_hitl_requests", None)
+            if not isinstance(opens, dict):
+                self._hitl_requests = {}
+                opens = self._hitl_requests
+            opens[rid] = dict(p)
         elif ev.type == "HitlDecided":
             rid = str(p.get("request_id") or ev.entity_key)
             decisions = getattr(self, "_hitl_decisions", None)

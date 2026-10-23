@@ -48,17 +48,36 @@ def _result_row_for_attempt(runtime: StudyRuntime, aid: str) -> dict[str, Any]:
 
 def result_expansion_request(runtime: StudyRuntime, tid: str) -> ExpansionRequest | None:
     """Read ExpansionRequest from the FINAL attempt only (MJ3)."""
+    req, _err = parse_plan_n_expansion(runtime, tid)
+    return req
+
+
+def parse_plan_n_expansion(
+    runtime: StudyRuntime, tid: str
+) -> tuple[ExpansionRequest | None, str | None]:
+    """Parse PLAN-n / task final-attempt expansion_request.
+
+    Returns ``(req, None)`` on success, ``(None, detail)`` when missing/malformed
+    (caller maps detail to ``ExpansionRefused(invalid, …)``).
+    """
     aid = _final_attempt_id(runtime, tid)
     if not aid:
-        return None
+        return None, "missing_planner_output"
     row = _result_row_for_attempt(runtime, aid)
+    if "expansion_request" not in row:
+        return None, "missing_planner_output"
     raw = row.get("expansion_request")
-    if isinstance(raw, dict):
-        try:
-            return ExpansionRequest.model_validate(raw)
-        except Exception:  # noqa: BLE001 — totality
-            return None
-    return None
+    if raw is None:
+        return None, "missing_planner_output"
+    if not isinstance(raw, dict):
+        return None, "malformed_planner_output"
+    try:
+        req = ExpansionRequest.model_validate(raw)
+    except Exception as e:  # noqa: BLE001 — schema gate
+        return None, f"malformed_planner_output:{type(e).__name__}"
+    if not req.tasks:
+        return None, "empty_planner_expansion"
+    return req, None
 
 
 def _final_result_class(runtime: StudyRuntime, tid: str) -> str | None:

@@ -297,9 +297,27 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
 
         rid = f"hitl_prop_{rev}"
         now = self.rt.clock.now()
+        tid0 = next(iter(self.rt.tasks))
         self._call(
             self.rt._append(
                 [
+                    EventEnvelope(
+                        study_id=self.rt.study.study_id,
+                        type="HitlOpened",
+                        entity_key=rid,
+                        idem_key=make_idem("HitlOpened", rid),
+                        payload={
+                            "request_id": rid,
+                            "kind": "plan_approval",
+                            "payload_ref": tid0,
+                            "deadline": now.isoformat(),
+                            "study_id": self.rt.study.study_id,
+                            "task_id": tid0,
+                            "open": True,
+                            "cost_rub": 0.0,
+                        },
+                        ts=now,
+                    ),
                     EventEnvelope(
                         study_id=self.rt.study.study_id,
                         type="HitlDecided",
@@ -315,7 +333,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                             "spent_rub": 0.0,
                         },
                         ts=now,
-                    )
+                    ),
                 ]
             )
         )

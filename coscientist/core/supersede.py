@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from coscientist.core.domain import TaskState
 from coscientist.core.ids import (
@@ -11,6 +11,8 @@ from coscientist.core.ids import (
     hypothesis_node_id,
     question_node_id,
 )
+
+TestsIntent = Literal["confirm", "refute"]
 
 
 def plan_node_id(study_id: str, pid: str) -> str:
@@ -43,11 +45,7 @@ def criterion_is_superseded(graph: Any, study_id: str, criterion_key: str) -> bo
 
 
 def countable_refutation_n(runtime: Any, target_id: str) -> int:
-    """Count claims that ``counts()`` and are inconsistent for this target.
-
-    Uses ``RuntimeClaim.counts()`` directly (same filter as the verdict path).
-    Threshold is ≥1 countable refutation — not ``k_ref``.
-    """
+    """Count claims that ``counts()`` and are inconsistent for this target."""
     study = getattr(runtime, "study", None)
     graph = getattr(runtime, "graph", None)
     if study is None or graph is None or not target_id:
@@ -68,36 +66,60 @@ def countable_refutation_n(runtime: Any, target_id: str) -> int:
     return n
 
 
-def task_has_refute_intent(runtime: Any, task: Any) -> bool:
-    """True when the task declares or carries tests.intent=refute.
+def derive_tests_intent(runtime: Any, spec: Any) -> TestsIntent | None:
+    """Core-derived tests.intent from catalog check roles (not planner alone).
 
-    Plan-side ``TaskSpec.tests_intent`` covers PENDING tasks before an experiment
-    node exists; graph ``tests`` edges cover materialized experiments.
+    - Graph / catalog prediction-role criteria are required for ``refute``.
+    - Planner ``TaskSpec.tests_intent=refute`` is ignored without a prediction role.
+    - ``predicts_null`` templates imply refute.
     """
+    planner = getattr(spec, "tests_intent", None)
+    catalog = getattr(runtime, "catalog", None)
+    by_id = {t.id: t for t in getattr(catalog, "templates", []) or []} if catalog else {}
+    has_prediction = False
+    predicts_null = False
+    for ref in getattr(spec, "criteria", None) or []:
+        tid = getattr(ref, "template_id", None)
+        tmpl = by_id.get(tid) if tid else None
+        role = getattr(tmpl, "role", None) if tmpl is not None else getattr(ref, "role", None)
+        if role == "prediction":
+            has_prediction = True
+        if tmpl is not None and bool(getattr(tmpl, "predicts_null", False)):
+            predicts_null = True
+            has_prediction = True
+    if predicts_null:
+        return "refute"
+    if planner == "refute":
+        return "refute" if has_prediction else None
+    if planner == "confirm" and has_prediction:
+        return "confirm"
+    if has_prediction:
+        return "confirm"
+    return None
+
+
+def task_has_refute_intent(runtime: Any, task: Any) -> bool:
+    """True when the task carries tests.intent=refute (edge or core-derived)."""
     spec = getattr(task, "spec", task)
-    if getattr(spec, "tests_intent", None) == "refute":
-        return True
     study = getattr(runtime, "study", None)
     graph = getattr(runtime, "graph", None)
-    if study is None or graph is None:
-        return False
-    key = getattr(spec, "task_key", None) or (
-        spec.get("task_key") if isinstance(spec, dict) else None
-    )
-    if not key:
-        return False
-    exp_id = experiment_node_id(study.study_id, str(key))
-    for e in graph.edges_from(exp_id):
-        if e.kind == "tests" and (e.attrs or {}).get("intent") == "refute":
-            return True
-    return False
+    if study is not None and graph is not None:
+        key = getattr(spec, "task_key", None) or (
+            spec.get("task_key") if isinstance(spec, dict) else None
+        )
+        if key:
+            exp_id = experiment_node_id(study.study_id, str(key))
+            for e in graph.edges_from(exp_id):
+                if e.kind == "tests" and (e.attrs or {}).get("intent") == "refute":
+                    return True
+    return derive_tests_intent(runtime, spec) == "refute"
 
 
 def has_open_refute_task(runtime: Any, target_id: str) -> bool:
     """True when a non-DONE task has tests.intent=refute toward this target.
 
-    PENDING tasks without an experiment node are still protected via
-    ``TaskSpec.tests_intent`` (or a tests edge once the node exists).
+    PENDING tasks without an experiment node are protected via core-derived
+    ``tests_intent`` from check roles.
     """
     study = getattr(runtime, "study", None)
     graph = getattr(runtime, "graph", None)
@@ -111,7 +133,6 @@ def has_open_refute_task(runtime: Any, target_id: str) -> bool:
         if not task_has_refute_intent(runtime, task):
             continue
         addrs = list(task.spec.addresses or [])
-        # Hypothesis target: tests edge to that hyp, or addresses the hyp id.
         if graph is not None:
             exp_id = experiment_node_id(sid, task.spec.task_key)
             for e in graph.edges_from(exp_id):
@@ -120,18 +141,11 @@ def has_open_refute_task(runtime: Any, target_id: str) -> bool:
                         return True
         if target_id in addrs:
             return True
-        # Empty addresses + refute intent: blocks any agent supersede of this task
-        # (checked in expand_critic); for target match, empty addrs still block
-        # hypothesis targets when the tests edge points at them (above).
     return False
 
 
 def target_blocks_agent_supersede(runtime: Any, target_id: str) -> str | None:
-    """Agent-path block reason, or None if supersede/SKIP is allowed.
-
-    Blocks when ≥1 countable refutation (via ``counts()``) OR an open task with
-    ``tests.intent=refute`` for that question/hypothesis.
-    """
+    """Agent-path block reason, or None if supersede/SKIP is allowed."""
     if countable_refutation_n(runtime, target_id) >= 1:
         return "has_refutation"
     if has_open_refute_task(runtime, target_id):
@@ -198,11 +212,7 @@ def should_skip_for_question_supersede(
     blocked_questions: set[str] | None = None,
     refute_keys: set[str] | None = None,
 ) -> bool:
-    """True when an open task solely addresses superseded questions and is not shared.
-
-    Agent path: never SKIP tasks that address a blocked question, or open refute
-    tasks (including those with empty addresses).
-    """
+    """True when an open task solely addresses superseded questions and is not shared."""
     key = getattr(task, "task_key", None) or (
         task.get("task_key") if isinstance(task, dict) else None
     )

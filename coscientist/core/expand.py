@@ -54,10 +54,16 @@ def _quota_kind(delegated_by: DelegatedBy) -> Literal["agent", "human"]:
     return "human" if delegated_by == "human" else "agent"
 
 
+_PLAN_EXPAND_HITL_KINDS = frozenset({"plan", "plan_approval", "hypotheses"})
+
+
 def _delegated_by_from_hitl(
     runtime: StudyRuntime, hitl_request_id: str
 ) -> DelegatedBy | str:
-    """Derive delegated_by from HitlDecided only. Return error detail if missing/reused."""
+    """Derive delegated_by from HitlDecided only. Return error detail if missing/reused.
+
+    HitlOpened kind must be a plan-expansion gate (plan / plan_approval / hypotheses).
+    """
     used = getattr(runtime, "_hitl_expand_used", None)
     if isinstance(used, set) and hitl_request_id in used:
         return "hitl_already_used"
@@ -67,6 +73,21 @@ def _delegated_by_from_hitl(
         row = decisions.get(hitl_request_id)
     if row is None:
         return "missing_hitl_decided"
+    opened = getattr(runtime, "_hitl_requests", None) or {}
+    req = opened.get(hitl_request_id) if isinstance(opened, dict) else None
+    if req is None:
+        hitl = getattr(runtime, "hitl", None) or {}
+        h = hitl.get(hitl_request_id) if isinstance(hitl, dict) else None
+        if h is not None:
+            req = {
+                "kind": getattr(h, "kind", None),
+                "task_id": getattr(h, "task_id", None),
+            }
+    if req is None:
+        return "missing_hitl_opened"
+    kind = str(req.get("kind") or "")
+    if kind not in _PLAN_EXPAND_HITL_KINDS:
+        return f"hitl_wrong_kind:{kind or 'unknown'}"
     db = row.get("delegated_by")
     if db in ("human", "timeout"):
         return db  # type: ignore[return-value]
@@ -393,24 +414,62 @@ async def _expand_plan(
     return pid
 
 
+def _resolve_plan_n_request(
+    runtime: StudyRuntime, plan_key: str, meta: dict
+) -> tuple[ExpansionRequest | None, str | None]:
+    """Planner output first; seed ``pending`` only when planner wrote nothing.
+
+    Returns ``(req, None)`` or ``(None, refuse_detail)`` — caller uses
+    ``ExpansionRefused(invalid, detail)``.
+    """
+    from coscientist.core.expand_trigger import parse_plan_n_expansion
+    from coscientist.core.ids import task_id as make_task_id
+
+    sid = runtime.study.study_id if runtime.study is not None else ""
+    plan_tid = make_task_id(sid, plan_key) if sid else ""
+    if plan_tid and plan_tid in runtime.tasks:
+        task = runtime.tasks[plan_tid]
+        wrote_output = False
+        if task.attempts:
+            aid = task.attempts[-1]
+            row = dict(runtime.results.get(aid) or runtime.results.get(f"result:{aid}") or {})
+            wrote_output = "expansion_request" in row
+        req, err = parse_plan_n_expansion(runtime, plan_tid)
+        if req is not None:
+            return req, None
+        if wrote_output:
+            # Malformed / empty planner blob — do not fall back to seed.
+            return None, err or "malformed_planner_output"
+        # No planner expansion_request field → allow seed from expansion_request trigger.
+    raw = meta.get("pending")
+    if isinstance(raw, dict):
+        try:
+            return ExpansionRequest.model_validate(raw), None
+        except Exception:  # noqa: BLE001
+            return None, "pending_bad"
+    return None, "missing_planner_output"
+
+
 async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str | None:
-    """Run M1 critic gate, then apply queued ExpansionRequest after PLAN-n SUCCESS."""
+    """Run M1 critic gate, then apply ExpansionRequest after PLAN-n SUCCESS.
+
+    Prefers PLAN-n planner output (final attempt); falls back to seed
+    ``pending`` from ``expansion_request`` triggers. ``expand_after`` has no
+    seed — planner output is required (DESIGN_M1 §4 / H-g).
+    """
     reqs = getattr(runtime, "_expand_requests", None) or {}
     meta = reqs.get(plan_key) if isinstance(reqs, dict) else None
     if not isinstance(meta, dict):
         return None
     after = str(meta.get("after_task") or plan_key)
-    raw = meta.get("pending")
-    if not isinstance(raw, dict):
+    req, err = _resolve_plan_n_request(runtime, plan_key, meta)
+    if req is None:
         await refuse_expansion(
-            runtime, after, reason="critic_rejected", detail="no_pending", plan_key=plan_key
-        )
-        return None
-    try:
-        req = ExpansionRequest.model_validate(raw)
-    except Exception:  # noqa: BLE001
-        await refuse_expansion(
-            runtime, after, reason="critic_rejected", detail="pending_bad", plan_key=plan_key
+            runtime,
+            after,
+            reason="invalid",
+            detail=str(err or "missing_planner_output")[:200],
+            plan_key=plan_key,
         )
         return None
     reject = critic_gate(runtime, req, after_task=after)
