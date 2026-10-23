@@ -143,11 +143,19 @@ class HitlPolicy(Frozen):
         )
 
 
+ArtifactRole = Literal["paper", "data", "code", "figure", "table", "log", "report"]
+# Who stored the artifact bytes. Sets effect.trusted (reporting tag); M1
+# verdicts gate on countable core catalog eval, not trusted. Sandbox not wired.
+ArtifactProducer = Literal["agent", "core", "sandbox"]
+
+
 class OutputSpec(Frozen):
     name: str
     media_type: str
     schema_ref: str | None = None
     required: bool = True
+    # Plan-accepted role (core-owned after accept_plan); independence code-vs-data.
+    role: ArtifactRole | None = None
 
 
 class InputSpec(Frozen):
@@ -261,9 +269,15 @@ class Study(Frozen):
     budget: Budget | None = None
     finalize_reserve_s: int = Field(default=30, ge=0)
     # PR 6 / DESIGN_M1 §3: fixed at create (like catalog_version); change only via fork.
-    confirmations_needed: int = Field(default=1, ge=1)  # k for supported
+    # PR8: confirmations_needed is snapshot ``k`` (digest / bind); not the severe gate.
+    confirmations_needed: int = Field(default=1, ge=1)
     refutations_needed: int = Field(default=1, ge=1)  # k_ref
     refutation_priority: bool = False
+    # PR8b: severe-support threshold (|con| ≥ supported_needed with capable refute).
+    supported_needed: int = Field(default=2, ge=2)
+    # M1: count only; e-value aggregation deferred (rejected at StudyCreated).
+    aggregate: Literal["count"] = "count"
+    evalue_alpha: float = Field(default=0.05, gt=0.0, le=1.0)
 
     def effective_deadline(self) -> datetime:
         """Last instant usable by tasks/attempts/HITL (deadline − finalize reserve)."""
@@ -352,6 +366,9 @@ class CheckResult(Frozen):
     role: CheckRole  # from catalog template; never defaulted to validity
     evidence: list[EvidenceRef] = Field(default_factory=list)
     detail: str | None = None
+    # Core-only numeric effect from evaluation (never agent claim attrs / free detail).
+    effect: dict[str, Any] | None = None
+    used_sesoi: bool = False
 
 
 class Result(Frozen):
@@ -379,6 +396,9 @@ class Artifact(Frozen):
     uri: str
     produced_by: ToolCallRef
     schema_ref: str | None = None
+    role: ArtifactRole | None = None
+    # Core-stamped; agent ``put`` always ``agent``. Never settable by AgentTaskOutput.
+    producer: ArtifactProducer = "agent"
 
 
 class Clarification(Frozen):
@@ -438,12 +458,17 @@ class ReviewCheck(Frozen):
     max_calls: int = 1
 
 
+PredictedDirection = Literal["positive", "negative", "two_sided"]
+
+
 class RequirementTemplate(Frozen):
     """One source: human-readable text_ru + machine check together.
 
     ``role`` (Duhem–Quine) is catalog-authored only:
     - ``prediction`` — FAILED → ``not_met`` → counting refute
     - ``validity`` — FAILED → claim invalid; experiment capped at inconclusive
+
+    SESOI / ``predicts_null`` are catalog-only (never ``RequirementRef.params``).
     """
 
     id: str
@@ -456,6 +481,13 @@ class RequirementTemplate(Frozen):
     role: Literal["prediction", "validity"]
     required: bool = True
     version: str = "1"
+    # Severe / TOST threshold — catalog-authored only.
+    uses_sesoi: bool = False
+    sesoi: float | None = None
+    sesoi_min: float | None = None
+    sesoi_max: float | None = None
+    predicts_null: bool = False
+    predicted_direction: PredictedDirection = "two_sided"
 
 
 class Catalog(Frozen):
@@ -465,6 +497,9 @@ class Catalog(Frozen):
     rules: list[RuleRef] = Field(default_factory=list)
     templates: list[RequirementTemplate] = Field(default_factory=list)
     defaults: dict[str, list[str]] = Field(default_factory=dict)  # node_kind -> template ids
+    # Independence code-vs-data: names listed here are code; else data.
+    # ResultRecorded.output_kinds is filled from this list (planner role ignored).
+    code_output_names: list[str] = Field(default_factory=list)
 
 
 class NodeRequirement(Frozen):

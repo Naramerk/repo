@@ -74,6 +74,50 @@ def load_catalog(
             raise CatalogError(
                 f"template {t.get('id')!r} needs role prediction|validity, got {role!r}"
             )
+        uses_sesoi = bool(t.get("uses_sesoi", False))
+        sesoi = t.get("sesoi")
+        sesoi_min = t.get("sesoi_min")
+        sesoi_max = t.get("sesoi_max")
+        predicts_null = bool(t.get("predicts_null", False))
+        direction = t.get("predicted_direction", "two_sided")
+        if direction not in ("positive", "negative", "two_sided"):
+            raise CatalogError(
+                f"template {t.get('id')!r} bad predicted_direction {direction!r}"
+            )
+        if "min_power" in t:
+            raise CatalogError(
+                f"template {t.get('id')!r}: min_power is not supported in M1 "
+                "(deferred until the core computes power)"
+            )
+        try:
+            sesoi_f = float(sesoi) if sesoi is not None else None
+            sesoi_min_f = float(sesoi_min) if sesoi_min is not None else None
+            sesoi_max_f = float(sesoi_max) if sesoi_max is not None else None
+        except (TypeError, ValueError) as e:
+            raise CatalogError(
+                f"template {t.get('id')!r}: sesoi bounds must be numeric"
+            ) from e
+        if uses_sesoi:
+            if sesoi_f is None:
+                raise CatalogError(
+                    f"template {t.get('id')!r}: uses_sesoi requires sesoi"
+                )
+            if sesoi_min_f is not None and sesoi_f < sesoi_min_f:
+                raise CatalogError(
+                    f"template {t.get('id')!r}: sesoi {sesoi_f} < sesoi_min {sesoi_min_f}"
+                )
+            if sesoi_max_f is not None and sesoi_f > sesoi_max_f:
+                raise CatalogError(
+                    f"template {t.get('id')!r}: sesoi {sesoi_f} > sesoi_max {sesoi_max_f}"
+                )
+        elif sesoi_f is not None:
+            raise CatalogError(
+                f"template {t.get('id')!r}: sesoi set but uses_sesoi is false"
+            )
+        if predicts_null and not uses_sesoi:
+            raise CatalogError(
+                f"template {t.get('id')!r}: predicts_null requires uses_sesoi"
+            )
         templates.append(
             RequirementTemplate(
                 id=t["id"],
@@ -86,6 +130,12 @@ def load_catalog(
                 role=role,
                 required=bool(t.get("required", True)),
                 version=str(t.get("version", "1")),
+                uses_sesoi=uses_sesoi,
+                sesoi=sesoi_f,
+                sesoi_min=sesoi_min_f,
+                sesoi_max=sesoi_max_f,
+                predicts_null=predicts_null,
+                predicted_direction=direction,
             )
         )
 
@@ -111,6 +161,7 @@ def load_catalog(
             if tid not in tmpl_ids:
                 raise CatalogError(f"defaults[{kind}] unknown template {tid}")
 
+    code_outputs = [str(x) for x in data.get("code_output_names", []) or []]
     return Catalog(
         catalog_version=str(data["catalog_version"]),
         edition=str(data.get("edition", "")),
@@ -118,6 +169,7 @@ def load_catalog(
         rules=rules,
         templates=templates,
         defaults=defaults,
+        code_output_names=code_outputs,
     )
 
 
@@ -164,6 +216,54 @@ def minimal_test_catalog() -> Catalog:
                     "required": True,
                 },
                 {
+                    "id": "value_match_sesoi",
+                    "title": "Effect exceeds SESOI",
+                    "text_ru": "Эффект превышает SESOI в предсказанном направлении.",
+                    "rule_ids": ["R23"],
+                    "method_sources": ["test"],
+                    "applies_to": ["experiment"],
+                    "check": {
+                        "kind": "metric_threshold",
+                        "output": "main",
+                        "metric": "effect",
+                        "pointer": "/effect",
+                        "op": ">",
+                        "target": 0,
+                    },
+                    "role": "prediction",
+                    "required": True,
+                    "uses_sesoi": True,
+                    "sesoi": 0.5,
+                    "sesoi_min": 0.0,
+                    "sesoi_max": 100.0,
+                    "predicts_null": False,
+                    "predicted_direction": "positive",
+                },
+                {
+                    "id": "tost_equivalence",
+                    "title": "TOST equivalence (null prediction)",
+                    "text_ru": "Эффект эквивалентен нулю по TOST (CI внутри SESOI).",
+                    "rule_ids": ["R23"],
+                    "method_sources": ["test"],
+                    "applies_to": ["experiment"],
+                    "check": {
+                        "kind": "metric_threshold",
+                        "output": "main",
+                        "metric": "effect",
+                        "pointer": "/effect",
+                        "op": "==",
+                        "target": 0,
+                    },
+                    "role": "prediction",
+                    "required": True,
+                    "uses_sesoi": True,
+                    "sesoi": 0.5,
+                    "sesoi_min": 0.0,
+                    "sesoi_max": 100.0,
+                    "predicts_null": True,
+                    "predicted_direction": "two_sided",
+                },
+                {
                     "id": "human_review",
                     "title": "Human/LLM review",
                     "text_ru": "Ревьюер оценивает качество результата.",
@@ -179,5 +279,7 @@ def minimal_test_catalog() -> Catalog:
                 },
             ],
             "defaults": {"experiment": ["artifact_present"]},
+            # Only catalog-declared names are code for independence; else DATA.
+            "code_output_names": ["code", "script", "program", "model", "source"],
         }
     )

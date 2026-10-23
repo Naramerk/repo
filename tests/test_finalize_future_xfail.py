@@ -78,6 +78,23 @@ def test_question_disposition_computed_from_verdict():
             "lit_own_criterion": False,
             "accepted": True,
             "artifact_id": "A1",
+            "sesoi": 0.5,
+            "uses_sesoi": True,
+            "used_sesoi": True,
+            "predicted_direction": "positive",
+            "effect": {
+                "est": 1.5,
+                "ci_low": 1.5,
+                "ci_high": 1.5,
+                "producer": "agent",
+                "trusted": False,
+                "core_evaluated": True,
+                "countable": True,
+            },
+            "claim_outcome": "consistent",
+            "severe": True,
+            "check_role": "prediction",
+            "refute_capable": True,
         },
     )
     assert drops == []
@@ -122,7 +139,8 @@ def test_question_disposition_computed_from_verdict():
         study=study,
         results={aid: {"outcome": "SUCCESS"}},
     )
-    assert d["Q1"]["disposition"] == "answered"
+    # PR8b: single severe confirm → survived (answered needs supported).
+    assert d["Q1"]["disposition"] == "survived"
 
 
 @pytest.mark.xfail(

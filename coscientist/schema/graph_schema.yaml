@@ -54,11 +54,14 @@ nodes:
       - {name: tolerance, type: float, required: false}
       - {name: check, type: enum(code|review), required: true}
       - {name: frozen_at_seq, type: int, required: false}
+      - {name: sesoi, type: float, required: false, note: "PR8b smallest effect size of interest"}
+      - {name: min_power, type: float, required: false, note: "PR8b e.g. 0.8; frozen with criterion"}
+      - {name: alpha, type: float, required: false, default: 0.05, note: "PR8b"}
   - kind: hypothesis
     prefix: H
     created_by: задача HYP-n (опционально)
     from_output: HypothesesOut (+ правка в HITL-шлюзе hypotheses)
-    text_ru: Проверяемое утверждение; вердикт вычисляется
+    text_ru: Проверяемое утверждение; вердикт вычисляется (PR8b projection + VerdictSnapshotsRecorded)
     fields:
       - {name: statement, type: str, required: true}
       - {name: prediction, type: str, required: true}
@@ -67,6 +70,7 @@ nodes:
       - {name: selected, type: bool, required: true}
       - {name: approved_by, type: enum(human|critic), required: false}
       - {name: delegated_by, type: enum(human|timeout), required: false}
+      - {name: verdict, type: enum(supported|survived|refuted|inconclusive|untested), required: false, computed: true, note: "PR8b projection; also persisted via VerdictSnapshotsRecorded"}
   - kind: plan
     prefix: PL
     created_by: задача PLAN-0 и перепланирования PLAN-1..n (n ≤ max_replans)
@@ -134,6 +138,17 @@ nodes:
       - {name: checked_against, type: ref(criterion), required: true}
       - {name: stance, type: enum(supports|refutes|inconclusive), required: true, computed: true, note: "вычисляет код: met→supports, not_met→refutes, unassessed→inconclusive; во входе роли запрещено"}
       - {name: reason, type: str, required: false}
+      - {name: validity_ok, type: bool, required: false, computed: true, note: "PR8/PR8b; false → invalid"}
+      - {name: claim_outcome, type: enum(consistent|inconsistent|indeterminate), required: false, computed: true, note: "PR8b; null when invalid"}
+      - {name: severe, type: bool, required: false, computed: true, note: "PR8b Mayo severe gate"}
+      - {name: independence_key, type: str, required: false, computed: true, note: "PR8b sha256(experiment_id); merge by root-data overlap / shared templates"}
+      - {name: data_digests, type: list(str), required: false, computed: true, note: "PR8b root data content digests (artifact meta; transitive walk)"}
+      - {name: criterion_template_ids, type: list(str), required: false, computed: true, note: "PR8b structural independence share-any (no goal/title/plan_id)"}
+      - {name: p_value, type: float, required: false}
+      - {name: power, type: float, required: false}
+      - {name: sesoi, type: float, required: false, note: "from catalog template uses_sesoi"}
+      - {name: uses_sesoi, type: bool, required: false, computed: true}
+      - {name: used_sesoi, type: bool, required: false, computed: true}
   - kind: conclusion
     prefix: CN
     created_by: report

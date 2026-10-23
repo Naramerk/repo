@@ -20,13 +20,8 @@ from coscientist.core.ids import (
     hypothesis_node_id,
     question_node_id,
 )
-from coscientist.core.rules import (
-    DEFAULT_TESTS_INTENT,
-    TestsIntent,
-    claim_stance,
-    priority_refuted_support_note,
-    verdict,
-)
+from coscientist.core.rules import priority_refuted_support_note, verdict
+from coscientist.core.stance import DEFAULT_TESTS_INTENT, TestsIntent, claim_stance
 
 # Agent-supplied fields only. Counting controls (criterion_status, frozen,
 # evidence_kind, lit_own_criterion, intent, R17, accepted) are core-derived.
@@ -54,6 +49,23 @@ _CORE_CLAIM_ATTRS: frozenset[str] = frozenset(
         "validity_ok",
         "check_role",
         "exclusion_reason",
+        "claim_outcome",
+        "severe",
+        "independence_key",
+        "experiment_id",
+        "refute_capable",
+        "p_value",
+        "power",
+        "sesoi",
+        "uses_sesoi",
+        "used_sesoi",
+        "predicts_null",
+        "predicted_direction",
+        "data_digests",
+        "criterion_template_ids",
+        "study_id",
+        "effect",
+        "alpha",
     }
 )
 
@@ -90,6 +102,24 @@ class RuntimeClaim:
     validity_ok: bool = True
     check_role: str = "unknown"
     exclusion_reason: str | None = None
+    # PR8b claim classification (DESIGN_HYP_DELTA).
+    claim_outcome: str | None = None  # consistent|inconsistent|indeterminate|None
+    severe: bool | None = None
+    independence_key: str = ""
+    experiment_id: str = ""
+    refute_capable: bool | None = None
+    p_value: float | None = None
+    power: float | None = None
+    sesoi: float | None = None
+    uses_sesoi: bool | None = None
+    used_sesoi: bool | None = None
+    predicts_null: bool = False
+    predicted_direction: str = "two_sided"
+    data_digests: list[str] | None = None
+    criterion_template_ids: list[str] | None = None
+    study_id: str = ""
+    effect: dict[str, Any] | None = None
+    validity: str | None = None  # valid|invalid (mirrors validity_ok)
 
     def __post_init__(self) -> None:
         if self.intent not in ("confirm", "refute"):
@@ -112,16 +142,20 @@ class RuntimeClaim:
         return self.evidence_kind == "literature"
 
     def counts(self) -> bool:
-        """Counting set q (RM §4.1 + PR8): accepted scientific result.
+        """PR8b counting filter: real ∧ valid ∧ consistent|inconsistent ∧ not lit.
 
-        Attempt outcome may be SUCCESS / PARTIAL / FAILED when failure is
-        prediction not_met (scientific). Validity failures set ``validity_ok``
-        False so the claim never counts. Infra failures never set ``accepted``.
+        Stubs/partials are excluded **before** counting (no provenance ceiling).
+        Literature never counts. Validity failures never count.
         """
-        ok = self.evidence_kind in ("computational", "experimental") or (
-            self.is_lit and self.lit_own_criterion
-        )
-        return self.accepted and self.validity_ok and ok and self.frozen
+        if not (self.accepted and self.validity_ok and self.frozen):
+            return False
+        if self.provenance != "real":
+            return False
+        if self.is_lit or self.evidence_kind not in ("computational", "experimental"):
+            return False
+        from coscientist.core.verdict import effective_outcome
+
+        return effective_outcome(self) in ("consistent", "inconsistent")
 
 
 def whitelist_claim_attrs(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -334,8 +368,14 @@ def runtime_claim_from_node(
     study_id: str,
     results: Mapping[str, Mapping[str, Any]] | None = None,
     graph: GraphStore | None = None,
+    artifact_lookup: Any | None = None,
 ) -> tuple[RuntimeClaim | None, str | None]:
-    """Build a RuntimeClaim; on garbage attrs return ``(None, reason)`` — never raise."""
+    """Build a RuntimeClaim; on garbage attrs return ``(None, reason)`` — never raise.
+
+    When ``artifact_lookup`` is provided, effect ``trusted``/``countable`` are
+    recomputed from live artifact metadata. Journal-only replay falls back to
+    effect-stamped provenance facts written at eval from that same meta.
+    """
     try:
         attrs = dict(node.attrs or {})
         aid = _coerce_str(attrs.get("attempt_id"), allow_empty=True) or ""
@@ -372,9 +412,107 @@ def runtime_claim_from_node(
         if check_role not in ("prediction", "validity", "unknown"):
             check_role = "unknown"
         excl_raw = _coerce_str(attrs.get("exclusion_reason"), allow_empty=True)
-        exclusion_reason = (
-            excl_raw if excl_raw in ("validity_failed", "unknown_role") else None
+        _EXCL = (
+            "validity_failed",
+            "unknown_role",
+            "stub",
+            "partial",
+            "invalid",
+            "indeterminate",
+            "lit",
+            "r17",
+            "superseded",
+            "foreign_artifact",
+            "output_not_submitted",
+            "artifact_missing",
+            "pointer_empty",
         )
+        exclusion_reason = excl_raw if excl_raw in _EXCL else None
+        claim_outcome_raw = _coerce_str(attrs.get("claim_outcome"), allow_empty=True) or (
+            _coerce_str(attrs.get("outcome"), allow_empty=True)
+        )
+        claim_outcome = (
+            claim_outcome_raw
+            if claim_outcome_raw in ("consistent", "inconsistent", "indeterminate")
+            else None
+        )
+        # Never trust stored severe/refute_capable — recompute after attrs load.
+        # Absent severe on legacy journals ⇒ treat as False until recomputed (V5).
+        independence_key = (
+            _coerce_str(attrs.get("independence_key"), allow_empty=True) or ""
+        )
+        experiment_id = (
+            _coerce_str(attrs.get("experiment_id"), allow_empty=True) or ""
+        )
+        if not independence_key:
+            from coscientist.core.verdict import independence_key_for
+
+            # Legacy: key from experiment_id (task), never attempt_id (retries).
+            legacy_exp = experiment_id
+            if not legacy_exp:
+                aid = _coerce_str(attrs.get("attempt_id"), allow_empty=True) or ""
+                legacy_exp = aid.rsplit("#", 1)[0] if aid else node.node_id
+            independence_key = independence_key_for(experiment_id=legacy_exp)
+        p_value = attrs.get("p_value")
+        if p_value is not None:
+            try:
+                p_value = float(p_value)
+            except (TypeError, ValueError):
+                p_value = None
+        power = attrs.get("power")
+        if power is not None:
+            try:
+                power = float(power)
+            except (TypeError, ValueError):
+                power = None
+        sesoi = attrs.get("sesoi")
+        if sesoi is not None:
+            try:
+                sesoi = float(sesoi)
+            except (TypeError, ValueError):
+                sesoi = None
+        uses_sesoi = _coerce_bool(attrs.get("uses_sesoi"))
+        used_sesoi = _coerce_bool(attrs.get("used_sesoi"))
+        predicts_null = bool(attrs.get("predicts_null", False))
+        pd_raw = attrs.get("predicted_direction")
+        predicted_direction = (
+            str(pd_raw)
+            if pd_raw in ("positive", "negative", "two_sided")
+            else "two_sided"
+        )
+        raw_digests = attrs.get("data_digests")
+        data_digests: list[str] | None
+        if isinstance(raw_digests, list):
+            data_digests = [str(x) for x in raw_digests if x]
+        else:
+            data_digests = None
+        raw_tmpls = attrs.get("criterion_template_ids")
+        criterion_template_ids: list[str] | None
+        if isinstance(raw_tmpls, list):
+            criterion_template_ids = [str(x) for x in raw_tmpls if x]
+        else:
+            criterion_template_ids = None
+        study_id_attr = _coerce_str(attrs.get("study_id"), allow_empty=True) or ""
+        effect_raw = attrs.get("effect")
+        effect: dict[str, Any] | None
+        if isinstance(effect_raw, dict):
+            from coscientist.core.verdict import recompute_effect_provenance
+
+            # Prefer live artifact meta; else effect-stamped provenance facts.
+            meta = None
+            art_id = effect_raw.get("artifact_id") or attrs.get("artifact_id")
+            if artifact_lookup is not None and art_id:
+                try:
+                    meta = artifact_lookup(str(art_id))
+                except Exception:  # noqa: BLE001 — totality
+                    meta = None
+            effect = recompute_effect_provenance(
+                dict(effect_raw),
+                attempt_id=aid or None,
+                artifact_meta=meta,
+            )
+        else:
+            effect = None
         frozen = _coerce_bool(attrs.get("frozen"))
         if frozen is None:
             return None, "bad_frozen"
@@ -431,31 +569,79 @@ def runtime_claim_from_node(
             target_kind=target_kind,
         )
         art = _coerce_str(attrs.get("artifact_id"), allow_empty=True) or node.node_id
-        return (
-            RuntimeClaim(
-                criterion_status=status,
-                accepted=accepted,
-                evidence_kind=ek,
-                provenance=str(prov),
-                frozen=frozen,
-                attempt_outcome=outcome,
-                attempt_id=aid or node.node_id,
-                artifact_id=art,
-                lit_own_criterion=lit_own,
-                intent=intent,
-                criterion_frozen_at_seq=frozen_seq,
-                first_cited_evidence_seq=first_ev,
-                confirming_evidence_ids=conf,
-                threshold_source_evidence_ids=thr,
-                target=target,
-                target_kind=target_kind,  # type: ignore[arg-type]
-                node_id=node.node_id,
-                validity_ok=bool(validity_ok),
-                check_role=check_role,
-                exclusion_reason=exclusion_reason,
-            ),
-            None,
+        # Never trust stored severe/refute_capable=True (forged journals).
+        # Absent or explicit False ⇒ never-severe (V5); True is ignored and recomputed.
+        from coscientist.core.verdict import (
+            claim_is_severe,
+            effect_has_interval,
+            effect_is_countable,
         )
+
+        sesoi_f = sesoi if isinstance(sesoi, float) else None
+        stored_severe = attrs.get("severe")
+        # Seed False when absent/explicit False so claim_is_severe short-circuits (V5).
+        # Seed None when stored True so forgery cannot win without check evidence.
+        probe_severe: bool | None
+        if stored_severe is False or "severe" not in attrs:
+            probe_severe = False
+        else:
+            probe_severe = None
+        stored_refute = attrs.get("refute_capable")
+        probe = RuntimeClaim(
+            criterion_status=status,
+            accepted=accepted,
+            evidence_kind=ek,
+            provenance=str(prov),
+            frozen=frozen,
+            attempt_outcome=outcome,
+            attempt_id=aid or node.node_id,
+            artifact_id=art,
+            lit_own_criterion=lit_own,
+            intent=intent,
+            criterion_frozen_at_seq=frozen_seq,
+            first_cited_evidence_seq=first_ev,
+            confirming_evidence_ids=conf,
+            threshold_source_evidence_ids=thr,
+            target=target,
+            target_kind=target_kind,  # type: ignore[arg-type]
+            node_id=node.node_id,
+            validity_ok=bool(validity_ok),
+            check_role=check_role,
+            exclusion_reason=exclusion_reason,
+            claim_outcome=claim_outcome,
+            severe=probe_severe,
+            independence_key=independence_key,
+            p_value=p_value if isinstance(p_value, float) else None,
+            power=power if isinstance(power, float) else None,
+            sesoi=sesoi_f,
+            uses_sesoi=uses_sesoi,
+            used_sesoi=used_sesoi,
+            predicts_null=predicts_null,
+            predicted_direction=predicted_direction,
+            data_digests=data_digests,
+            criterion_template_ids=criterion_template_ids,
+            study_id=study_id_attr or study_id,
+            effect=effect,
+            experiment_id=experiment_id,
+            refute_capable=False if stored_refute is False else None,
+        )
+        severe_coerced = claim_is_severe(probe)
+        if stored_refute is False:
+            refute_capable = False
+        else:
+            # Recompute — ignore stored True; require countable evidence (null → CI).
+            refute_capable = bool(
+                frozen
+                and check_role == "prediction"
+                and uses_sesoi is True
+                and sesoi_f is not None
+                and used_sesoi is True
+                and effect_is_countable(effect)
+                and (effect_has_interval(effect) if predicts_null else True)
+            )
+        probe.severe = severe_coerced
+        probe.refute_capable = refute_capable
+        return probe, None
     except Exception:  # noqa: BLE001 — totality: never raise into finalize/view
         return None, "coerce_error"
 
@@ -472,6 +658,7 @@ def filtered_claims_by_target(
     *,
     study_id: str,
     results: Mapping[str, Mapping[str, Any]] | None = None,
+    artifact_lookup: Any | None = None,
 ) -> dict[str, list[RuntimeClaim]]:
     """Group claims by ``{kind}:{logical}``; about + coerce applied uniformly.
 
@@ -482,7 +669,11 @@ def filtered_claims_by_target(
     grouped: dict[str, list[RuntimeClaim]] = defaultdict(list)
     for node in graph.nodes_by_kind("claim"):
         rc, _reason = runtime_claim_from_node(
-            node, study_id=study_id, results=results, graph=graph
+            node,
+            study_id=study_id,
+            results=results,
+            graph=graph,
+            artifact_lookup=artifact_lookup,
         )
         if rc is None or not rc.target:
             continue
@@ -568,6 +759,7 @@ def compute_verdict_snapshots(
         if k is not None
         else (study.confirmations_needed if study is not None else 1)
     )
+    supp_k = study.supported_needed if study is not None else 2
     by_target = filtered_claims_by_target(
         graph, study_id=study_id, results=results
     )
@@ -593,14 +785,13 @@ def compute_verdict_snapshots(
             conf_k,
             refutations_needed=k_ref,
             refutation_priority=priority,
+            supported_needed=supp_k,
         )
         validity_excl = [e for e in excluded if e["reason"] == "validity_failed"]
         # Only when no valid claims remain: inconclusive + validity_failed.
-        # unknown_role alone never forces a verdict (align with dispositions).
-        if not counting and validity_excl:
+        # Only-excluded (stub/partial/lit) → inconclusive, not untested.
+        if not counting and (validity_excl or excluded):
             v = "inconclusive"
-        elif not counting and excluded:
-            v = "untested"
         provs: list[Provenance] = [
             c.provenance  # type: ignore[misc]
             for c in counting
@@ -616,6 +807,7 @@ def compute_verdict_snapshots(
             "refutations_needed": k_ref,
             "refutation_priority": priority,
             "k": conf_k,
+            "supported_needed": supp_k,
         }
         if excluded:
             snap["excluded_claims"] = excluded
@@ -627,6 +819,7 @@ def compute_verdict_snapshots(
             conf_k,
             refutations_needed=k_ref,
             refutation_priority=priority,
+            supported_needed=supp_k,
         )
         if note is not None:
             snap["note"] = note
@@ -640,21 +833,16 @@ def compute_verdict_snapshots(
 
 
 def exclusion_reason_for_claim(claim: RuntimeClaim) -> str | None:
-    """Per-experiment exclusion: ``validity_failed`` or ``unknown_role``."""
-    if claim.counts() or getattr(claim, "validity_ok", True) is not False:
-        return None
-    stored = getattr(claim, "exclusion_reason", None)
-    if stored in ("validity_failed", "unknown_role"):
-        return stored
-    if getattr(claim, "check_role", "unknown") == "unknown":
-        return "unknown_role"
-    return "validity_failed"
+    """Why a claim is out of the counting set (PR8b + PR8 roles)."""
+    from coscientist.core.verdict import exclusion_reason as _excl
+
+    return _excl(claim)
 
 
 def excluded_claims_report(
     claims: Sequence[RuntimeClaim],
 ) -> list[dict[str, Any]]:
-    """List non-counting invalid claims for the report payload."""
+    """List non-counting claims for the report payload."""
     out: list[dict[str, Any]] = []
     for c in claims:
         reason = exclusion_reason_for_claim(c)

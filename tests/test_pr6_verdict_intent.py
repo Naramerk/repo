@@ -19,11 +19,14 @@ from tests.helpers import close_runtime, open_runtime
 
 
 def test_refute_intent_met_is_survived(impl):
-    """tests.intent=refute + met → stance supports, verdict survived."""
+    """tests.intent=refute + met → stance supports; defaults → survived."""
     c = impl.Claim("met", intent="refute")
     assert c.stance == "supports"
+    # supported_needed default 2: one severe refute-intent claim → survived.
     assert impl.verdict([c], True)[0] == "survived"
-    assert impl.verdict([impl.Claim("met", intent="confirm")], True)[0] == "supported"
+    assert impl.verdict([c], True, supported_needed=2)[0] == "survived"
+    # Confirm alone never reaches supported (needs capable intent=refute).
+    assert impl.verdict([impl.Claim("met", intent="confirm")], True)[0] == "survived"
 
 
 def test_refutation_priority_k_ref(impl):
@@ -31,7 +34,8 @@ def test_refutation_priority_k_ref(impl):
     sup = impl.Claim("met", attempt_id="S1", artifact_id="AS")
     ref1 = impl.Claim("not_met", attempt_id="R1", artifact_id="AR1")
     ref2 = impl.Claim("not_met", attempt_id="R2", artifact_id="AR2")
-    assert impl.verdict([sup, ref1], True)[0] == "inconclusive"
+    # Without priority: conflict → inconclusive.
+    assert impl.verdict([sup, ref1], True, refutation_priority=False)[0] == "inconclusive"
     assert (
         impl.verdict(
             [sup, ref1],
@@ -66,6 +70,7 @@ def test_refutation_priority_k_ref(impl):
         attempt_id="L1",
         artifact_id="AL",
     )
+    # Lit never counts → only severe confirm remains → survived.
     assert (
         impl.verdict(
             [sup, lit_ref],
@@ -73,11 +78,12 @@ def test_refutation_priority_k_ref(impl):
             refutations_needed=1,
             refutation_priority=True,
         )[0]
-        == "inconclusive"
+        == "survived"
     )
     stub_ref = impl.Claim(
         "not_met", provenance="stub", attempt_id="Z1", artifact_id="AZ"
     )
+    # Stub excluded → only severe confirm → survived.
     assert (
         impl.verdict(
             [sup, stub_ref],
@@ -85,12 +91,12 @@ def test_refutation_priority_k_ref(impl):
             refutations_needed=1,
             refutation_priority=True,
         )[0]
-        == "inconclusive"
+        == "survived"
     )
 
 
 def test_priority_refuted_not_capped_by_stub_supports(impl):
-    """≥ k_ref real refs stay refuted; stub/partial supports must not provenance-cap."""
+    """PR8b: stubs excluded before counting; ≥ k_ref real refs → refuted + note."""
     from coscientist.core.rules import priority_refuted_support_note
 
     stub_sup = impl.Claim(
@@ -108,8 +114,8 @@ def test_priority_refuted_not_capped_by_stub_supports(impl):
         )[0]
         == "refuted"
     )
-    # Without priority, stub support + real ref → inconclusive (ceiling).
-    assert impl.verdict([stub_sup, real_ref], True)[0] == "inconclusive"
+    # Without priority, stub excluded → only real ref → still refuted.
+    assert impl.verdict([stub_sup, real_ref], True, refutation_priority=False)[0] == "refuted"
     note = priority_refuted_support_note(
         [stub_sup, real_ref],
         True,
@@ -117,6 +123,7 @@ def test_priority_refuted_not_capped_by_stub_supports(impl):
         refutation_priority=True,
     )
     assert note == "refuted; 1 supporting results were stub/partial"
+    # Note also when priority=False (excluded stubs still reported).
     assert (
         priority_refuted_support_note(
             [stub_sup, real_ref],
@@ -124,7 +131,7 @@ def test_priority_refuted_not_capped_by_stub_supports(impl):
             refutations_needed=1,
             refutation_priority=False,
         )
-        is None
+        == "refuted; 1 supporting results were stub/partial"
     )
 
 
@@ -189,7 +196,8 @@ def test_r17_claim_excluded_from_verdict(impl):
         threshold_source_evidence_ids=frozenset({"ev_paper"}),
     )
     assert good.counts() is True
-    assert impl.verdict([good], True)[0] == "supported"
+    # PR8b: single severe confirm → survived (supported needs ≥2 + refute intent).
+    assert impl.verdict([good], True)[0] == "survived"
 
     # Refuting claim with empty confirming set still counts (R17 is confirm-only).
     ref_empty = impl.Claim(
@@ -230,11 +238,13 @@ def test_upcast_study_created_k_ref_defaults():
             "finalize_reserve_s": 30,
         },
     )
-    # v2→v3 (k_ref) then v3→v4 (confirmations_needed)
-    assert v == 4
+    # v2→…→v6 (supported_needed)
+    assert v == 6
     assert p["refutations_needed"] == 1
     assert p["refutation_priority"] is False
     assert p["confirmations_needed"] == 1
+    assert p["aggregate"] == "count"
+    assert p["supported_needed"] == 2
 
 
 def test_upcast_study_created_confirmations_needed_v3_to_v4():
@@ -249,10 +259,12 @@ def test_upcast_study_created_confirmations_needed_v3_to_v4():
             "refutation_priority": True,
         },
     )
-    assert v == 4
+    assert v == 6
     assert p["confirmations_needed"] == 1
     assert p["refutations_needed"] == 2
     assert p["refutation_priority"] is True
+    assert p["aggregate"] == "count"
+    assert p["supported_needed"] == 2
 
 
 @pytest.mark.asyncio
@@ -275,9 +287,11 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
     assert rt.study.refutations_needed == 3
     assert rt.study.refutation_priority is True
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 4
+    assert created.schema_version == 6
     assert created.payload["refutations_needed"] == 3
     assert created.payload["confirmations_needed"] == 1
+    assert created.payload["aggregate"] == "count"
+    assert created.payload["supported_needed"] == 2
     await close_runtime(rt)
 
 

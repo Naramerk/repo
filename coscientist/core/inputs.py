@@ -379,10 +379,109 @@ def claim_nodes_from_attempt(
             role if role in ("prediction", "validity", "unknown") else "unknown"
         )
         excl = core.get("exclusion_reason")
-        if excl in ("validity_failed", "unknown_role"):
+        if excl in (
+            "validity_failed",
+            "unknown_role",
+            "stub",
+            "partial",
+            "invalid",
+            "indeterminate",
+            "lit",
+            "r17",
+            "superseded",
+            "foreign_artifact",
+            "output_not_submitted",
+            "artifact_missing",
+            "pointer_empty",
+        ):
             attrs["exclusion_reason"] = excl
+        oc = core.get("claim_outcome") or core.get("outcome")
+        if oc not in ("consistent", "inconsistent", "indeterminate"):
+            # Derive from criterion_status when static derived= omits PR8b fields.
+            status = str(attrs.get("criterion_status") or "unassessed")
+            oc = {
+                "met": "consistent",
+                "not_met": "inconsistent",
+                "unassessed": "indeterminate",
+            }.get(status)
+        if oc in ("consistent", "inconsistent", "indeterminate"):
+            attrs["claim_outcome"] = oc
+            attrs["outcome"] = oc
+        # sesoi only from core (catalog-frozen criterion) — never stamp 0.0 freely.
+        for num_key in ("p_value", "power", "sesoi", "alpha"):
+            if core.get(num_key) is not None:
+                try:
+                    attrs[num_key] = float(core[num_key])
+                except (TypeError, ValueError):
+                    pass
+        for flag in ("uses_sesoi", "used_sesoi", "predicts_null"):
+            if flag in core:
+                attrs[flag] = bool(core.get(flag))
+        if core.get("predicted_direction") in ("positive", "negative", "two_sided"):
+            attrs["predicted_direction"] = str(core["predicted_direction"])
+        if isinstance(core.get("data_digests"), list):
+            attrs["data_digests"] = [str(x) for x in core["data_digests"]]
+        if isinstance(core.get("criterion_template_ids"), list):
+            attrs["criterion_template_ids"] = [
+                str(x) for x in core["criterion_template_ids"] if x
+            ]
+        if isinstance(core.get("independence_notes"), list) and core["independence_notes"]:
+            attrs["independence_notes"] = [str(x) for x in core["independence_notes"]]
+        if core.get("study_id"):
+            attrs["study_id"] = str(core["study_id"])
+        if core.get("experiment_id"):
+            attrs["experiment_id"] = str(core["experiment_id"])
+        else:
+            # attempt_id = "{task_id}#{n}" → experiment_id = task_id
+            attrs["experiment_id"] = (
+                attempt_id.rsplit("#", 1)[0] if attempt_id else ""
+            )
+        if core.get("independence_key"):
+            attrs["independence_key"] = str(core["independence_key"])
+        else:
+            from coscientist.core.verdict import independence_key_for
+
+            attrs["independence_key"] = independence_key_for(
+                experiment_id=str(attrs.get("experiment_id") or "")
+            )
+        if "refute_capable" in core:
+            attrs["refute_capable"] = bool(core.get("refute_capable"))
+        if "severe" in core:
+            attrs["severe"] = bool(core.get("severe"))
+        elif not attrs.get("validity_ok", True):
+            attrs["severe"] = False
+        else:
+            from coscientist.core.verdict import claim_is_severe
+
+            probe = type(
+                "P",
+                (),
+                {
+                    "claim_outcome": attrs.get("claim_outcome"),
+                    "validity_ok": attrs.get("validity_ok", True),
+                    "frozen": attrs.get("frozen", False),
+                    "sesoi": attrs.get("sesoi"),
+                    "uses_sesoi": attrs.get("uses_sesoi"),
+                    "used_sesoi": attrs.get("used_sesoi"),
+                    "predicts_null": attrs.get("predicts_null", False),
+                    "predicted_direction": attrs.get(
+                        "predicted_direction", "two_sided"
+                    ),
+                    "effect": (
+                        dict(core["effect"])
+                        if isinstance(core.get("effect"), dict)
+                        else None
+                    ),
+                    "severe": None,
+                    "criterion_frozen_at_seq": None,
+                    "first_cited_evidence_seq": None,
+                },
+            )()
+            attrs["severe"] = claim_is_severe(probe)
         if core.get("artifact_id"):
             attrs["artifact_id"] = core["artifact_id"]
+        if isinstance(core.get("effect"), dict):
+            attrs["effect"] = dict(core["effect"])
 
         node = GraphNode(
             node_id=cid,
@@ -531,11 +630,17 @@ def validate_input_specs(tasks: list[TaskSpec]) -> None:
                 raise ValueError(f"unknown InputSpec.kind: {kind!r}")
 
 
-def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
-    """Reject unknown templates and plan roles that disagree with the catalog.
+_FORBIDDEN_THRESHOLD_PARAMS = frozenset(
+    {"sesoi", "min_power", "predicts_null", "power", "uses_sesoi", "predicted_direction"}
+)
 
-    Role is catalog-authored; an explicit ``RequirementRef.role`` is accepted
-    only when it matches the template. Unknown ``template_id`` → reject.
+
+def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
+    """Reject unknown templates, role mismatches, and planner-set SESOI params.
+
+    Role / sesoi / predicts_null are catalog-authored. ``RequirementRef.params``
+    must not carry threshold fields; out-of-range catalog sesoi is rejected at
+    catalog load. Unknown ``template_id`` → reject.
     """
     if catalog is None:
         raise ValueError("accept_plan requires catalog to validate criteria")
@@ -549,6 +654,30 @@ def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
                     f"(task {spec.task_key!r})"
                 )
             tmpl = by_id[tid]
+            params = dict(getattr(ref, "params", None) or {})
+            bad = sorted(_FORBIDDEN_THRESHOLD_PARAMS & set(params))
+            if bad:
+                raise ValueError(
+                    f"criterion params {bad} must come from the catalog template "
+                    f"{tid!r}, not RequirementRef.params (task {spec.task_key!r})"
+                )
+            # Catalog sesoi already validated at load; re-check bounds here.
+            if getattr(tmpl, "uses_sesoi", False):
+                sesoi = getattr(tmpl, "sesoi", None)
+                lo = getattr(tmpl, "sesoi_min", None)
+                hi = getattr(tmpl, "sesoi_max", None)
+                if sesoi is None:
+                    raise ValueError(
+                        f"template {tid!r} uses_sesoi but sesoi is unset"
+                    )
+                if lo is not None and float(sesoi) < float(lo):
+                    raise ValueError(
+                        f"template {tid!r} sesoi {sesoi} < sesoi_min {lo}"
+                    )
+                if hi is not None and float(sesoi) > float(hi):
+                    raise ValueError(
+                        f"template {tid!r} sesoi {sesoi} > sesoi_max {hi}"
+                    )
             plan_role = getattr(ref, "role", None)
             if plan_role is None:
                 continue

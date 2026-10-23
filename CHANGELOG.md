@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### M1 PR8b
+- Hypothesis verdict model (`docs/DESIGN_HYP_DELTA.md`): claim `validity`/`outcome`/`severe`/`independence_key`; stub|partial|lit|invalid excluded **before** counting.
+- `independence_key` base = `experiment_id`; count-time merge by **transitive root-data** digest overlap (code vs data from **`ResultRecorded.output_kinds`** via catalog **`code_output_names`** — planner `OutputSpec.role` and agent `media_type` ignored; all-code upstream → intermediate is a root; diamond DFS uses on_stack vs done) or **structural** share-any criterion template (same target, empty roots; empty plan criteria → `catalog.defaults["experiment"]`). No TaskSpec/goal/title/plan_id hash. Method is not in the key.
+- **Countable vs trusted:** evidence is **countable** when the core evaluates a catalog check on an artifact bound to the **current attempt** (`produced_by.call_id`). Countable gates **both** `refuted` (`k_ref`) and severe/`supported` symmetrically. Foreign artifacts are rejected. `effect.trusted` (`Artifact.producer` core|sandbox) is a separate stronger tag for reporting — **sandbox producer not wired in M1** production (only tests call `put_sandbox`); when wired, trusted becomes true on that path without changing the countable gate.
+- **No numeric effect → indeterminate** (deliberate safe weakening vs main): missing output / missing artifact / empty json_pointer / `foreign_artifact` never refute. Report carries a **specific** reason (`output_not_submitted`, `artifact_missing`, `pointer_empty`, `foreign_artifact`) — not generic `unclear`.
+- On journal read/replay: recompute `severe`/`refute_capable`/`trusted`/`countable` from artifact metadata when the store is attached, else from effect-stamped provenance facts — never journal bits. **Compat:** old `inconsistent` journals without countable provenance may recompute differently (indeterminate / not toward `k_ref`).
+- `ResultRecorded` **v3** + v2→v3 upcaster for `output_kinds`. M1: caller passes `attempt_id` for call_id binding; production catalogs have empty `code_output_names` (conservative → all data).
+- Study: **`supported_needed`** (default 2, ≥2); `confirmations_needed` = PR8 snapshot `k`. StudyCreated **v6**.
+- `aggregate='evalue'` rejected at create (deferred until core computes p-values).
+- Report: `hypothesis_report_row` in finalize; failures set dedicated `hypotheses_unavailable` (not a fake hypothesis id). Bind snapshots win on replay; finalize recomputes report rows.
+- Keeps PR8: check roles, per-experiment `validity_failed` / `unknown_role`, `VerdictSnapshotsRecorded`.
+- **Known flake:** `test_twenty_parallel_attempts_fsync` p99 write latency (seen 56ms > 50ms on `6fe49e5` push CI); timing-sensitive, not a logic regression.
+
 ### M1 PR8
 - Runtime `verdict()` wired into `dispositions()` / finalize (Study `confirmations_needed` / `refutations_needed` / `refutation_priority`); supported → answered; hypothesis verdicts in StudyFinalized.
 - `InputSpec.kind=verdict` enabled; `VerdictSnapshotsRecorded` persists full snapshots (not digest-only); invalidated on claim/`about` changes (scoped to affected target).

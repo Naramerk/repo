@@ -65,6 +65,9 @@ class LifecycleMixin:
         confirmations_needed: int = 1,
         refutations_needed: int = 1,
         refutation_priority: bool = False,
+        supported_needed: int = 2,
+        aggregate: str = "count",
+        evalue_alpha: float = 0.05,
         inputs: list[Any] | None = None,
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,
@@ -82,6 +85,19 @@ class LifecycleMixin:
             raise ValueError(
                 f"refutations_needed must be >= 1, got {refutations_needed}"
             )
+        if supported_needed < 2:
+            raise ValueError(
+                f"supported_needed must be >= 2, got {supported_needed}"
+            )
+        if aggregate == "evalue":
+            raise ValueError(
+                "aggregate='evalue' is deferred past M1 "
+                "(core does not yet compute p-values); use aggregate='count'"
+            )
+        if aggregate != "count":
+            raise ValueError(f"aggregate must be 'count', got {aggregate!r}")
+        if not (0.0 < float(evalue_alpha) <= 1.0):
+            raise ValueError(f"evalue_alpha out of range: {evalue_alpha}")
         validate_budget_for_create(budget)
         duration_s = (dl - now).total_seconds()
         decision = await intake(
@@ -108,6 +124,9 @@ class LifecycleMixin:
             confirmations_needed=confirmations_needed,
             refutations_needed=refutations_needed,
             refutation_priority=refutation_priority,
+            supported_needed=supported_needed,
+            aggregate="count",
+            evalue_alpha=float(evalue_alpha),
         )
         effective = study.effective_deadline()
         events: list[EventEnvelope] = [
@@ -118,7 +137,7 @@ class LifecycleMixin:
                 idem_key=make_idem("StudyCreated", sid),
                 payload=study.model_dump(mode="json"),
                 ts=now,
-                schema_version=4,
+                schema_version=6,
             ),
             EventEnvelope(
                 study_id=sid,
@@ -292,6 +311,26 @@ class LifecycleMixin:
                         or bool((existing.attrs or {}).get("frozen"))
                     ):
                         continue
+                # SESOI / predicts_null from catalog template only — never params.
+                cattrs: dict[str, Any] = {"frozen": True, "template_id": key}
+                cattrs["alpha"] = 0.05
+                if catalog is not None:
+                    by_id = {
+                        t.id: t for t in getattr(catalog, "templates", []) or []
+                    }
+                    tmpl = by_id.get(key)
+                    if tmpl is not None:
+                        if getattr(tmpl, "uses_sesoi", False) and tmpl.sesoi is not None:
+                            cattrs["uses_sesoi"] = True
+                            cattrs["sesoi"] = float(tmpl.sesoi)
+                            cattrs["predicted_direction"] = str(
+                                getattr(tmpl, "predicted_direction", "two_sided")
+                            )
+                        else:
+                            cattrs["uses_sesoi"] = False
+                        cattrs["predicts_null"] = bool(
+                            getattr(tmpl, "predicts_null", False)
+                        )
                 events.append(
                     EventEnvelope(
                         study_id=sid,
@@ -303,7 +342,7 @@ class LifecycleMixin:
                             kind="criterion",
                             study_id=sid,
                             ref_id=key,
-                            attrs={"frozen": True, "template_id": key},
+                            attrs=cattrs,
                             created_at=now,
                         ).model_dump(mode="json"),
                         ts=now,

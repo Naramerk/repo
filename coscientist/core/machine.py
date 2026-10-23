@@ -108,6 +108,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                     "provenance": d.get("provenance", "real"),
                     "task_id": d["task_id"],
                     "study_id": d["study_id"],
+                    "inputs": list(d.get("inputs") or []),
                 },
             )()
 
@@ -121,6 +122,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             on_events=on_events or self._project_local,
             review_statuses=review_statuses,
             get_graph=lambda: self.graph,
+            get_results=lambda: self.results,
         )
         self.artifacts = artifacts
         self.catalog = catalog
@@ -142,12 +144,15 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
 
         qdisp = None
         if self.plans:
+            arts = getattr(self, "artifacts", None)
+            lookup = getattr(arts, "get_meta", None) if arts is not None else None
             qdisp = dispositions(
                 tasks=self.tasks,
                 plans=self.plans,
                 graph=self.graph,
                 study=self.study,
                 results=self.results,
+                artifact_lookup=lookup if callable(lookup) else None,
             )
         ed = self.study.effective_deadline() if self.study else None
         return study_view(

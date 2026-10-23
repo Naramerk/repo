@@ -226,7 +226,10 @@ async def test_review_scheduled_on_every_record_path(tmp_path, catalog):
     store, writer = await _writer(tmp_path, clock, "st_r")
     arts = LocalArtifactStore(tmp_path / "a")
     art = arts.put(
-        b'{"count":225}', make_tool_ref("x:1"), name="main", media_type="application/json"
+        b'{"count":225}',
+        make_tool_ref("st_r/EXP-1#1:1"),
+        name="main",
+        media_type="application/json",
     )
     spec = TaskSpec(
         task_key="EXP-1",
@@ -316,7 +319,10 @@ async def test_downgrade_without_refs_rejected(tmp_path, catalog):
     store, writer = await _writer(tmp_path, clock, "st_d")
     arts = LocalArtifactStore(tmp_path / "a")
     art = arts.put(
-        b'{"count":225}', make_tool_ref("d:1"), name="main", media_type="application/json"
+        b'{"count":225}',
+        make_tool_ref("st_d/EXP-1#1:1"),
+        name="main",
+        media_type="application/json",
     )
     spec = TaskSpec(
         task_key="EXP-1",

@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from coscientist.core.artifacts import LocalArtifactStore
+from coscientist.core.artifacts import (
+    LocalArtifactStore,
+    artifact_producer_trusted,
+)
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import (
     AgentTaskOutput,
@@ -78,6 +81,108 @@ def _cmp(op: str, left: Any, right: Any, tolerance: float | None) -> bool:
     return ops[op](left, right)
 
 
+def artifact_belongs_to_attempt(meta: Any | None, attempt_id: str | None) -> bool:
+    """True when ``Artifact.produced_by.call_id`` is bound to ``attempt_id``."""
+    if meta is None or not attempt_id:
+        return False
+    produced = getattr(meta, "produced_by", None)
+    call_id = str(getattr(produced, "call_id", "") or "")
+    if not call_id:
+        return False
+    return call_id == attempt_id or call_id.startswith(f"{attempt_id}:")
+
+
+# Stable reasons for checks with no numeric effect (indeterminate — never refute).
+NO_EFFECT_REASONS = frozenset(
+    {
+        "foreign_artifact",
+        "output_not_submitted",
+        "artifact_missing",
+        "pointer_empty",
+    }
+)
+
+
+def _no_effect_result(
+    *,
+    check_id: str,
+    template_id: str,
+    role: CheckRole,
+    reason: str,
+) -> CheckResult:
+    """FAILED prediction without effect → classify as indeterminate (safe vs main)."""
+    return CheckResult(
+        check_id=check_id,
+        template_id=template_id,
+        status=ReqStatus.FAILED,
+        is_code=True,
+        required=True,
+        role=role,
+        detail=reason,
+        effect=None,
+        used_sesoi=False,
+    )
+
+
+def _effect_provenance_fields(
+    artifacts: LocalArtifactStore,
+    artifact_id: str | None,
+    *,
+    attempt_id: str | None,
+) -> dict[str, Any]:
+    """Core-stamped producer/trusted/countable from artifact meta (agent cannot set).
+
+    ``trusted`` = producer core|sandbox (sandbox not wired in M1 production).
+    ``countable`` = core catalog evaluation on an artifact bound to this attempt.
+    """
+    meta = artifacts.get_meta(artifact_id) if artifact_id else None
+    producer = getattr(meta, "producer", "agent") if meta is not None else "agent"
+    if producer not in ("agent", "core", "sandbox"):
+        producer = "agent"
+    produced = getattr(meta, "produced_by", None) if meta is not None else None
+    call_id = str(getattr(produced, "call_id", "") or "")
+    belongs = artifact_belongs_to_attempt(meta, attempt_id)
+    return {
+        "producer": producer,
+        "trusted": artifact_producer_trusted(meta),
+        "core_evaluated": True,
+        "produced_by_call_id": call_id,
+        "artifact_id": str(artifact_id or ""),
+        # Countable only when the artifact was produced for this attempt.
+        "countable": bool(belongs),
+    }
+
+
+def _extract_ci(doc: Any, left: Any) -> dict[str, float] | None:
+    """Read a real CI from the metric document (ci_low < ci_high).
+
+    Accepts ``{est, ci_low, ci_high}`` at the document root, under ``effect``,
+    or when ``left`` itself is that mapping. Point estimates (missing CI or
+    ``ci_low >= ci_high``) return None — never invent CI from a point.
+    """
+    candidates: list[Any] = []
+    if isinstance(left, dict):
+        candidates.append(left)
+    if isinstance(doc, dict):
+        candidates.append(doc)
+        if isinstance(doc.get("effect"), dict):
+            candidates.append(doc["effect"])
+    for raw in candidates:
+        if not isinstance(raw, dict):
+            continue
+        if "ci_low" not in raw or "ci_high" not in raw:
+            continue
+        try:
+            lo = float(raw["ci_low"])
+            hi = float(raw["ci_high"])
+            est = float(raw["est"]) if raw.get("est") is not None else (lo + hi) / 2.0
+        except (TypeError, ValueError):
+            continue
+        if lo < hi:
+            return {"est": est, "ci_low": lo, "ci_high": hi}
+    return None
+
+
 def evaluate_code_check(
     check: CodeCheck,
     *,
@@ -87,29 +192,45 @@ def evaluate_code_check(
     artifacts: LocalArtifactStore,
     values: dict[str, Any],
     role: CheckRole,
+    uses_sesoi: bool = False,
+    sesoi: float | None = None,
+    predicts_null: bool = False,
+    predicted_direction: str = "two_sided",
+    attempt_id: str | None = None,
 ) -> CheckResult:
     try:
         if check.kind == "artifact_exists":
             handle = out.outputs.get(check.output or "")
-            if handle is None or artifacts.get_meta(handle.artifact_id) is None:
-                return CheckResult(
+            if handle is None:
+                return _no_effect_result(
                     check_id=check_id,
                     template_id=template_id,
-                    status=ReqStatus.FAILED,
-                    is_code=True,
-                    required=True,
                     role=role,
-                    detail="artifact missing",
+                    reason="output_not_submitted",
+                )
+            if artifacts.get_meta(handle.artifact_id) is None:
+                return _no_effect_result(
+                    check_id=check_id,
+                    template_id=template_id,
+                    role=role,
+                    reason="artifact_missing",
                 )
             art = artifacts.get_meta(handle.artifact_id)
             assert art is not None
+            if attempt_id and not artifact_belongs_to_attempt(art, attempt_id):
+                return _no_effect_result(
+                    check_id=check_id,
+                    template_id=template_id,
+                    role=role,
+                    reason="foreign_artifact",
+                )
             return CheckResult(
                 check_id=check_id,
                 template_id=template_id,
                 status=ReqStatus.MET,
                 is_code=True,
                 required=True,
-                    role=role,
+                role=role,
                 evidence=[
                     EvidenceRef(
                         artifact_id=art.artifact_id,
@@ -121,39 +242,124 @@ def evaluate_code_check(
         if check.kind in ("value_matches", "metric_threshold", "json_pointer"):
             handle = out.outputs.get(check.output or "main")
             if handle is None:
-                return CheckResult(
+                return _no_effect_result(
                     check_id=check_id,
                     template_id=template_id,
-                    status=ReqStatus.FAILED,
-                    is_code=True,
-                    required=True,
                     role=role,
-                    detail="output missing",
+                    reason="output_not_submitted",
+                )
+            meta = artifacts.get_meta(handle.artifact_id)
+            if meta is None:
+                return _no_effect_result(
+                    check_id=check_id,
+                    template_id=template_id,
+                    role=role,
+                    reason="artifact_missing",
+                )
+            if attempt_id and not artifact_belongs_to_attempt(meta, attempt_id):
+                return _no_effect_result(
+                    check_id=check_id,
+                    template_id=template_id,
+                    role=role,
+                    reason="foreign_artifact",
                 )
             raw = artifacts.read(handle.artifact_id)
             doc = json.loads(raw)
             pointer = check.pointer
-            if check.kind == "metric_threshold" and check.metric and not pointer:
-                # prefer values dict, else top-level key
-                if check.metric in values:
-                    left = values[check.metric]
-                    pointer = None
-                    evid_digest = sha256_hex(canonical_json(left))
+            try:
+                if check.kind == "metric_threshold" and check.metric and not pointer:
+                    # prefer values dict, else top-level key
+                    if check.metric in values:
+                        left = values[check.metric]
+                        pointer = None
+                        evid_digest = sha256_hex(canonical_json(left))
+                    else:
+                        pointer = f"/{check.metric}"
+                        left = _pointer_get(doc, pointer)
+                        evid_digest = sha256_hex(canonical_json(left))
                 else:
-                    pointer = f"/{check.metric}"
+                    if check.kind == "json_pointer" and (
+                        pointer is None or pointer == "" or pointer == "/"
+                    ):
+                        return _no_effect_result(
+                            check_id=check_id,
+                            template_id=template_id,
+                            role=role,
+                            reason="pointer_empty",
+                        )
                     left = _pointer_get(doc, pointer)
                     evid_digest = sha256_hex(canonical_json(left))
-            else:
-                left = _pointer_get(doc, pointer)
-                evid_digest = sha256_hex(canonical_json(left))
+            except (KeyError, IndexError, TypeError, ValueError):
+                return _no_effect_result(
+                    check_id=check_id,
+                    template_id=template_id,
+                    role=role,
+                    reason="pointer_empty",
+                )
 
+            effect: dict[str, Any] | None = None
+            used_sesoi = False
+            prov = _effect_provenance_fields(
+                artifacts, handle.artifact_id, attempt_id=attempt_id
+            )
             if check.kind == "json_pointer":
-                ok = left is not None
+                # Missing / null / empty-string at pointer → no numeric effect.
+                if left is None or left == "":
+                    return _no_effect_result(
+                        check_id=check_id,
+                        template_id=template_id,
+                        role=role,
+                        reason="pointer_empty",
+                    )
+                ok = True
             elif check.kind == "value_matches":
+                # Exact equality is a point check — never TOST, never used_sesoi.
                 ok = left == check.target
+                if isinstance(left, (int, float)):
+                    est = float(left)
+                    effect = {"est": est, "kind": "point", **prov}
             else:
+                # metric_threshold — point-estimate exceedance or TOST with real CI.
                 op = check.op or "=="
-                ok = _cmp(op, left, check.target, check.tolerance)
+                ci = _extract_ci(doc, left)
+                if (
+                    uses_sesoi
+                    and sesoi is not None
+                    and predicts_null
+                ):
+                    # TOST: require a real interval from the metric artifact.
+                    if ci is not None:
+                        effect = {
+                            "est": ci["est"],
+                            "ci_low": ci["ci_low"],
+                            "ci_high": ci["ci_high"],
+                            "kind": "interval",
+                            **prov,
+                        }
+                        used_sesoi = True
+                        ok = (-float(sesoi)) < ci["ci_low"] and ci["ci_high"] < float(
+                            sesoi
+                        )
+                    else:
+                        # No CI → not a TOST result; equivalence not assessable.
+                        used_sesoi = False
+                        effect = None
+                        ok = False
+                elif uses_sesoi and sesoi is not None and isinstance(left, (int, float)):
+                    # Honest point-estimate check (not TOST).
+                    used_sesoi = True
+                    est = float(left)
+                    effect = {"est": est, "kind": "point", **prov}
+                    if predicted_direction == "positive":
+                        ok = est > float(sesoi)
+                    elif predicted_direction == "negative":
+                        ok = est < -float(sesoi)
+                    else:
+                        ok = abs(est) > float(sesoi)
+                else:
+                    ok = _cmp(op, left, check.target, check.tolerance)
+                    if isinstance(left, (int, float)):
+                        effect = {"est": float(left), "kind": "point", **prov}
 
             return CheckResult(
                 check_id=check_id,
@@ -161,7 +367,7 @@ def evaluate_code_check(
                 status=ReqStatus.MET if ok else ReqStatus.FAILED,
                 is_code=True,
                 required=True,
-                    role=role,
+                role=role,
                 evidence=[
                     EvidenceRef(
                         artifact_id=handle.artifact_id,
@@ -170,19 +376,18 @@ def evaluate_code_check(
                     )
                 ],
                 detail=None if ok else f"{left!r} vs {check.target!r}",
+                effect=effect,
+                used_sesoi=used_sesoi,
             )
 
         if check.kind == "schema_valid":
             handle = out.outputs.get(check.output or "main")
             if handle is None:
-                return CheckResult(
+                return _no_effect_result(
                     check_id=check_id,
                     template_id=template_id,
-                    status=ReqStatus.FAILED,
-                    is_code=True,
-                    required=True,
                     role=role,
-                    detail="output missing",
+                    reason="output_not_submitted",
                 )
             artifacts.read(handle.artifact_id)  # verify sha
             return CheckResult(
@@ -191,7 +396,7 @@ def evaluate_code_check(
                 status=ReqStatus.MET,
                 is_code=True,
                 required=True,
-                    role=role,
+                role=role,
                 evidence=[
                     EvidenceRef(artifact_id=handle.artifact_id, digest=sha256_hex(b"ok"))
                 ],
@@ -204,7 +409,7 @@ def evaluate_code_check(
                 status=ReqStatus.MET,
                 is_code=True,
                 required=True,
-                    role=role,
+                role=role,
             )
 
     except ArtifactCorrupt as e:
@@ -214,7 +419,7 @@ def evaluate_code_check(
             status=ReqStatus.FAILED,
             is_code=True,
             required=True,
-                    role=role,
+            role=role,
             detail=str(e),
         )
     except Exception as e:
@@ -224,7 +429,7 @@ def evaluate_code_check(
             status=ReqStatus.FAILED,
             is_code=True,
             required=True,
-                    role=role,
+            role=role,
             detail=str(e),
         )
 
@@ -234,7 +439,7 @@ def evaluate_code_check(
         status=ReqStatus.FAILED,
         is_code=True,
         required=True,
-                    role=role,
+        role=role,
         detail=f"unhandled kind {check.kind}",
     )
 
@@ -266,6 +471,7 @@ def evaluate_task_checks(
     artifacts: LocalArtifactStore,
     *,
     review_statuses: dict[str, ReqStatus] | None = None,
+    attempt_id: str | None = None,
 ) -> list[CheckResult]:
     """Evaluate criteria on the task; review checks become UNASSESSED unless overridden."""
     by_id = {t.id: t for t in catalog.templates}
@@ -316,6 +522,11 @@ def evaluate_task_checks(
                 artifacts=artifacts,
                 values=out.values,
                 role=role,
+                uses_sesoi=bool(tmpl.uses_sesoi),
+                sesoi=tmpl.sesoi,
+                predicts_null=bool(tmpl.predicts_null),
+                predicted_direction=str(tmpl.predicted_direction),
+                attempt_id=attempt_id,
             )
             # respect required flag from ref
             results.append(
@@ -328,6 +539,8 @@ def evaluate_task_checks(
                     role=role,
                     evidence=cr.evidence,
                     detail=cr.detail,
+                    effect=cr.effect,
+                    used_sesoi=cr.used_sesoi,
                 )
             )
     return results

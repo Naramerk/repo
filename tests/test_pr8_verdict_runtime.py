@@ -46,6 +46,24 @@ _DERIVED_OK = {
     "lit_own_criterion": False,
     "accepted": True,
     "artifact_id": "A1",
+    # Catalog-style SESOI threshold + core effect (exceeds sesoi).
+    "sesoi": 0.5,
+    "uses_sesoi": True,
+    "used_sesoi": True,
+    "predicted_direction": "positive",
+    "effect": {
+        "est": 1.5,
+        "ci_low": 1.5,
+        "ci_high": 1.5,
+        "producer": "agent",
+        "trusted": False,
+        "core_evaluated": True,
+        "countable": True,
+        "produced_by_call_id": "",
+    },
+    "check_role": "prediction",
+    "refute_capable": True,
+    "severe": True,
 }
 
 
@@ -698,8 +716,9 @@ def test_dispositions_from_verdict_counting_claims():
         study=study,
         results={aid: {"outcome": "SUCCESS"}},
     )
-    assert d["Q1"]["disposition"] == "answered"
-    assert d["Q1"]["verdict"] == "supported"
+    # PR8b: single severe confirm → survived (supported needs ≥2 + refute intent).
+    assert d["Q1"]["disposition"] == "survived"
+    assert d["Q1"]["verdict"] == "survived"
     # Same filter as snapshots (kind-prefixed keys)
     by = filtered_claims_by_target(g, study_id=sid, results={aid: {"outcome": "SUCCESS"}})
     assert "question:Q1" in by and by["question:Q1"][0].counts()
@@ -734,14 +753,14 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="value_match")],
+                criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid0 = await rt.start_attempt("E0")
-    content = b'{"count": 225}'
+    content = b'{"effect": 2.0}'
     art = arts.put(
         content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
     )
@@ -750,7 +769,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
         AgentTaskOutput(
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
-            values={"count": 225},
+            values={"effect": 2.0},
             claims=[{"id": "ans", "target": "Q1"}],
         ),
     )
@@ -761,7 +780,13 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
         study=rt.study,
         results=rt.results,
     )
-    assert d["Q1"]["disposition"] == "answered"
+    # Agent put + core SESOI eval → countable severe → survived (need 2 for supported).
+    assert d["Q1"]["verdict"] == "survived"
+    by = filtered_claims_by_target(
+        rt.graph, study_id=sid, results=rt.results
+    )
+    assert by["question:Q1"][0].severe is True
+    assert (by["question:Q1"][0].effect or {}).get("trusted") is False
     await close_runtime(rt)
 
 
@@ -824,7 +849,7 @@ def test_qh_logical_id_collision_does_not_merge():
         g, study_id=sid, any_experiment_done=True, refs=["X1"]
     )
     assert snaps["X1"]["target_kind"] == "question"
-    assert snaps["X1"]["verdict"] == "supported"
+    assert snaps["X1"]["verdict"] == "survived"
     # Explicit hypothesis bind does not get the question verdict.
     snaps_h = compute_verdict_snapshots(
         g, study_id=sid, any_experiment_done=True, refs=["hypothesis:X1"]
@@ -861,6 +886,15 @@ def test_criterion_status_not_met_from_failed_check():
             is_code=True,
             required=False,
             role="prediction",
+            # Countable core-evaluated evidence required for inconsistent / not_met.
+            effect={
+                "est": 0.0,
+                "kind": "point",
+                "producer": "agent",
+                "trusted": False,
+                "core_evaluated": True,
+                "countable": True,
+            },
         )
     ]
     attrs = _derive_claim_core_attrs(
@@ -1019,6 +1053,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
     assert any(n.kind == "criterion" for n in rt.graph.nodes_by_kind("criterion"))
     aid0 = await rt.start_attempt("E0", provenance="real")
     # value_match required, target 225 — wrong count ⇒ FAILED/PARTIAL scientific.
+    # Production path: agent put + core catalog evaluation → countable refute.
     art = arts.put(
         b'{"count": 999}',
         make_tool_ref(f"{aid0}:1"),
@@ -1047,6 +1082,8 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
     assert claim.attrs["check_role"] == "prediction"
     assert claim.attrs["frozen"] is True
     assert claim.attrs["attempt_outcome"] in ("FAILED", "PARTIAL")
+    assert (claim.attrs.get("effect") or {}).get("countable") is True
+    assert (claim.attrs.get("effect") or {}).get("trusted") is False
     res = rt.results[aid0]
     assert res.get("result_class") == "scientific"
     d = dispositions(
@@ -1326,6 +1363,21 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
             validity_ok=True,
             check_role="prediction",
             target="Q1",
+            sesoi=0.5,
+            uses_sesoi=True,
+            used_sesoi=True,
+            predicted_direction="positive",
+            effect={
+                "est": 1.5,
+                "ci_low": 1.5,
+                "ci_high": 1.5,
+                "producer": "agent",
+                "trusted": False,
+                "core_evaluated": True,
+                "countable": True,
+            },
+            claim_outcome="consistent",
+            severe=True,
         )
         for i in range(3)
     ]
@@ -1342,7 +1394,8 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
         target="Q1",
     )
     claims = [*valid, bad]
-    assert verdict(claims, True, k=3)[0] == "supported"
+    # PR8b: three confirms without refute intent → survived; invalid excluded.
+    assert verdict(claims, True, k=3)[0] == "survived"
     excl = excluded_claims_report(claims)
     assert len(excl) == 1 and excl[0]["reason"] == "validity_failed"
     # Snapshot path: same rule — no force to inconclusive.
@@ -1405,7 +1458,7 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
         any_experiment_done=True,
         refs=["Q1"],
     )
-    assert snaps["Q1"]["verdict"] == "supported"
+    assert snaps["Q1"]["verdict"] == "survived"
     assert snaps["Q1"]["excluded_claims"][0]["reason"] == "validity_failed"
     assert snaps["Q1"].get("reason") != "validity_failed"
 
@@ -1478,7 +1531,8 @@ def test_unknown_role_exclusion_never_forces_verdict():
         any_experiment_done=True,
         refs=["Q1"],
     )
-    assert snaps["Q1"]["verdict"] == "untested"
+    # Only-excluded claims → inconclusive (not untested).
+    assert snaps["Q1"]["verdict"] == "inconclusive"
     assert snaps["Q1"]["excluded_claims"][0]["reason"] == "unknown_role"
     assert snaps["Q1"].get("reason") != "validity_failed"
 
@@ -1690,7 +1744,7 @@ def test_priority_refuted_stub_support_note_in_report_payload():
     )
     assert hyp["H1"]["verdict"] == "refuted"
     assert hyp["H1"]["note"] == "refuted; 1 supporting results were stub/partial"
-    # Without priority: ceiling → inconclusive, no note.
+    # Without priority: stub excluded → only real ref → still refuted + note.
     study_off = study.model_copy(update={"refutation_priority": False})
     snaps_off = compute_verdict_snapshots(
         g,
@@ -1700,8 +1754,8 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         any_experiment_done=True,
         refs=["hypothesis:H1"],
     )
-    assert snaps_off["H1"]["verdict"] == "inconclusive"
-    assert "note" not in snaps_off["H1"]
+    assert snaps_off["H1"]["verdict"] == "refuted"
+    assert snaps_off["H1"]["note"] == "refuted; 1 supporting results were stub/partial"
 
 
 def test_intent_from_producing_experiment_two_opposite():

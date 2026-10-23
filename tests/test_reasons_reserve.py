@@ -145,10 +145,12 @@ def test_upcast_provenance_simulated_to_stub():
             "verdict": "simulated",
         },
     )
-    assert v == 2
+    # v1→v2 simulated→stub, then v2→v3 output_kinds={} (PR8b).
+    assert v == 3
     assert p["provenance"] == "stub"
     assert p["inputs"][0]["source"] == "stub"
     assert p["verdict"] == "stubbed"
+    assert p["output_kinds"] == {}
 
 
 def _task(
@@ -324,12 +326,14 @@ def test_upcast_study_created_sets_reserve_zero():
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     )
-    # v1→v2 reserve, v2→v3 k_ref, v3→v4 confirmations_needed (PR 8).
-    assert v == 4
+    # v1→v2 reserve → … → v6 supported_needed.
+    assert v == 6
     assert p["finalize_reserve_s"] == 0
     assert p["refutations_needed"] == 1
     assert p["refutation_priority"] is False
+    assert p["supported_needed"] == 2
     assert p["confirmations_needed"] == 1
+    assert p["aggregate"] == "count"
     # Explicit value must not be overwritten
     v2, p2 = upcast("StudyCreated", 1, {**p, "finalize_reserve_s": 30})
     assert p2["finalize_reserve_s"] == 30
