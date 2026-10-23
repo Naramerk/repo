@@ -74,7 +74,10 @@ def validate_final_types(
             continue
         ft = getattr(q, "final_type", None) or "verdict"
         if ft not in VALID_FINAL_TYPES:
-            raise ValueError(f"question {qid!r}: unknown final_type {ft!r}")
+            raise ValueError(
+                f"question {qid!r}: unknown final_type {ft!r} "
+                f"(expected verdict|artifact|both)"
+            )
         covering = cover.get(qid) or []
         if not covering and ft in ("artifact", "both", "verdict"):
             # Unaddressed questions stay not_attempted; PlanValidator only
@@ -92,6 +95,77 @@ def validate_final_types(
                     f"question {qid!r} final_type={ft}: need ≥1 criterion "
                     f"on an addressing task"
                 )
+
+
+PLAN_REFUSED_LINE = "не выполнено: план отклонён (рубрика/final_type)"
+
+
+def refuse_detail(err: BaseException | str) -> str:
+    msg = str(err) if not isinstance(err, BaseException) else str(err)
+    return (msg or type(err).__name__)[:200]
+
+
+async def apply_plan_refused(
+    runtime: Any,
+    *,
+    detail: str,
+    report_line: str = PLAN_REFUSED_LINE,
+) -> str:
+    """Emit PlanRefused, fail PLAN with schema_invalid; return '' (no plan_id).
+
+    StudyFinalized still happens via the normal deadline/totality path; the
+    report folds ``report_line`` from PlanRefused.
+    """
+    from coscientist.core.domain import TaskOutcome, TaskState
+    from coscientist.core.events import EventEnvelope, make_idem
+    from coscientist.core.reasons import TaskReason
+
+    study = getattr(runtime, "study", None)
+    if study is None:
+        return ""
+    sid = study.study_id
+    now = runtime.clock.now()
+    events: list[Any] = [
+        EventEnvelope(
+            study_id=sid,
+            type="PlanRefused",
+            entity_key=sid,
+            idem_key=make_idem("PlanRefused", sid, detail[:80]),
+            payload={
+                "reason": TaskReason.SCHEMA_INVALID.value,
+                "detail": detail,
+                "report_line": report_line,
+            },
+            ts=now,
+            schema_version=1,
+        )
+    ]
+    # Close PLAN stage so the study can reach REPORT / finalize.
+    plan_task = None
+    for t in (getattr(runtime, "tasks", None) or {}).values():
+        spec = getattr(t, "spec", None)
+        if spec is not None and getattr(spec, "task_key", None) == "PLAN":
+            plan_task = t
+            break
+    if plan_task is not None and getattr(plan_task, "state", None) != TaskState.DONE:
+        events.append(
+            EventEnvelope(
+                study_id=sid,
+                type="TaskDone",
+                entity_key=plan_task.task_id,
+                idem_key=make_idem("TaskDone", plan_task.task_id, "plan_refused"),
+                payload={
+                    "task_id": plan_task.task_id,
+                    "outcome": TaskOutcome.FAILED.value,
+                    "reason": TaskReason.SCHEMA_INVALID.value,
+                    "detail": detail,
+                },
+                ts=now,
+                schema_version=2,
+            )
+        )
+    await runtime._append(events)  # noqa: SLF001
+    return ""
 
 
 def validate_rubric_immutable(

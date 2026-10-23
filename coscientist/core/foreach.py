@@ -351,7 +351,7 @@ async def materialize_foreach(
                 idem_key=make_idem("TaskCreated", tid, pid),
                 payload=task.model_dump(mode="json"),
                 ts=now,
-                schema_version=9,
+                schema_version=10,
             )
         )
 
@@ -389,7 +389,7 @@ async def materialize_foreach(
             idem_key=make_idem("PlanExpanded", "foreach", sid, tkey),
             payload=payload,
             ts=now,
-            schema_version=1,
+            schema_version=2,
         )
     )
     await runtime._append(events)  # noqa: SLF001

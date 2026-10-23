@@ -13,6 +13,7 @@
 
 ### M1 PR13
 - `QuestionSpec.final_type` (`verdict` | `artifact` | `both`) and `OutputSpec.rubric` (`Rubric` / `RubricItem`).
+<<<<<<< HEAD
 - CodeCheck kind `rubric`: qualitative deliverables; aggregate `all_required` | `k_of_n` (required items only); digest = sha256(JCS(canonical fields, `v=1`)).
 - PlanValidator: `artifact` ⇒ OutputSpec.rubric; `verdict` ⇒ ≥1 **explicit** criterion (catalog defaults do **not** count); `both` ⇒ both. All plan validation + pydantic `TaskSpec`/`QuestionSpec` → `PlanRefused` + immediate `StudyFinalized`. Idem = sid + sha256(**full** detail, never truncated).
 - Finalize may only **downgrade** verdict (never raise to fulfilled); `study_view` gets `question_final_types`; blocking: not_attempted / inconclusive / rubric_not_met / rubric_pending. `rt.view().verdict` == `StudyFinalized.verdict`.
@@ -20,6 +21,14 @@
 - Rubric role=validity but excluded from `validity_ok` (failed rubric ≠ claim validity_failed). `both` + verdict + rubric pending → reason `rubric_pending`. Bugs in rubric eval / freeze propagate (no `except Exception → UNASSESSED`).
 - Upcasters: PlanAccepted **v8**; TaskCreated **v10**; PlanExpanded **v2** — legacy unknown `final_type` → verdict + report line; current unknown → PlanRefused.
 - **M1 gap:** NodeRequirement `STALE` on rubric supersede not implemented; MET of one covering task never covers another's rubric.
+=======
+- CodeCheck kind `rubric`: qualitative deliverables (literature review, design doc, …); aggregate `all_required` | `k_of_n` (required items only); digest = sha256(JCS(canonical fields, `v=1`)) — not raw `model_dump`.
+- PlanValidator: `artifact` ⇒ OutputSpec with rubric; `verdict` ⇒ ≥1 criterion (catalog experiment defaults count); `both` ⇒ both. Rubric digest immutable unless task superseded (PlanExpanded / HITL). Invalid plan / unknown `final_type` / pydantic Rubric → `PlanRefused` + report line (StudyFinalized still).
+- Frozen at PLAN (`frozen_at_seq` via criterion node `rubric:<digest>`). Judge **not-met** → `FAILED`; judge **infra failure** (timeout / invalid_json / refusal) → `UNASSESSED` + 1 retry (R23). Production path: `review_statuses` keyed by `check_id:item_id`, `judge_retry` / `failure_kinds` through evaluate, per-item `ReviewScheduled` / `ReviewRecorded` via `Executor.record_review`.
+- Dispositions: `final_type=artifact` fulfilled ⇔ rubric MET → `answered`/`rubric_met`; rubric rejected → report «не выполнено: рубрика не принята». `both` requires verdict **and** rubric. Rubric role forced to `validity` — never feeds claim stance.
+- **M1 gap:** NodeRequirement `STALE` on rubric supersede is not implemented (PlanExpanded + new digest only); see DESIGN_M1 §6.2.
+- Upcasters: PlanAccepted **v8**; TaskCreated **v10** (`rubric` default null); PlanExpanded **v2** (rubric / `final_type` defaults). Chained after PR18 AttemptStarted **v7** (`tainted_context`); TaskCreated/PlanAccepted versions are contiguous with main.
+>>>>>>> 077b532 (M1 PR13 review: wire judge path, PlanRefused, dispositions)
 
 ### M1 PR18
 - Frozen closed `core.tool_registry` (loader-gated `register_tool` only; freeze at end of `tool_loader` → `MappingProxyType`; unregistered → `external_effect`); `invoke_tool` only (import-linter + agents AST); `ToolSpec.effect` advisory.

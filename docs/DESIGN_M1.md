@@ -271,6 +271,7 @@ class RubricItem(BaseModel): id: str; text: str; required: bool; check: Literal[
 class Rubric(BaseModel): items: list[RubricItem]; aggregate: Literal["all_required","k_of_n"]; k: int | None; digest: str  # sha256(JCS(items+aggregate))
 ```
 - Замораживается в PLAN: `frozen_at_seq` = seq принятия ревизии плана; digest в событии. Менять можно только через PlanExpanded или HITL; «реши сам» = PlanExpanded с `delegated_by=human`. Новая рубрика `supersedes` старую; NodeRequirement по старой → STALE.
+- **M1 gap (STALE on supersede):** в M1 при supersede старой рубрики NodeRequirement **не** помечаются `STALE` автоматически — смена идёт через PlanExpanded + новый digest / новые задачи; статус `STALE` на NodeRequirement при supersede рубрики = M2 (как catalog_version STALE в D §3.6).
 - Пункты атомарные и бинарные. Агрегация: required — все MET; optional влияют только на score в отчёте.
 - Рубрика влияет только на outcome задачи и приёмку question с final_type=artifact; **никогда** на claim stance (stance — только от criterion с metric/op/target). Инвариант проверяется тестом.
 - Judge failure (таймаут, невалидный JSON, отказ) → пункт UNASSESSED + 1 повтор; не FAILED (R23).

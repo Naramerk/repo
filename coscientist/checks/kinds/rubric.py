@@ -1,8 +1,12 @@
 """Evaluate CodeCheck kind ``rubric`` (M1 PR13 / DESIGN_M1 §6.2).
 
 Items are atomic and binary. ``check=code`` delegates to a nested CodeCheck
-kind (never ``rubric``). ``check=judge`` uses review_statuses; judge failure
-→ UNASSESSED (R23) + caller may retry once — never FAILED for the judge item.
+kind (never ``rubric``). ``check=judge`` uses ``review_statuses``:
+
+- missing status → PENDING (waiting for judge; blocks outcome)
+- MET / FAILED (not-met verdict) → kept as-is
+- judge *failure* (timeout / invalid_json / refusal) → UNASSESSED + 1 retry
+  via ``judge_retry`` / ``failure_kinds`` (never silently remap FAILED→UNASSESSED)
 
 Aggregate status never feeds claim stance (role must be validity).
 """
@@ -15,11 +19,19 @@ from coscientist.core.domain import AgentTaskOutput, CheckResult, CodeCheck, Req
 from coscientist.core.rubric import aggregate_rubric_status, freeze_rubric
 from coscientist.core.rubric_types import Rubric
 
+# Infra failures of the judge call itself (DESIGN §6.2) — not "item not met".
+JUDGE_FAILURE_KINDS = frozenset({"timeout", "invalid_json", "refusal"})
+
 
 def _as_rubric(raw: Any) -> Rubric:
     if isinstance(raw, Rubric):
         return freeze_rubric(raw)
     return freeze_rubric(Rubric.model_validate(raw))
+
+
+def judge_item_key(check_id: str, item_id: str) -> str:
+    """Stable key for review_statuses / ReviewScheduled / record_review."""
+    return f"{check_id}:{item_id}"
 
 
 def evaluate_rubric(
@@ -32,6 +44,7 @@ def evaluate_rubric(
     role: str,
     review_statuses: dict[str, ReqStatus] | None = None,
     judge_retry: dict[str, int] | None = None,
+    failure_kinds: dict[str, str] | None = None,
     output_rubric: Any | None = None,
     attempt_id: str | None = None,
     evaluate_code_check: Any | None = None,
@@ -47,6 +60,7 @@ def evaluate_rubric(
             role=role,
             review_statuses=review_statuses or {},
             judge_retry=judge_retry or {},
+            failure_kinds=failure_kinds or {},
             output_rubric=output_rubric,
             attempt_id=attempt_id,
             evaluate_code_check=evaluate_code_check,
@@ -58,7 +72,7 @@ def evaluate_rubric(
             status=ReqStatus.UNASSESSED,
             is_code=False,
             required=True,
-            role="validity",  # never prediction — stance invariant
+            role="validity",
             detail=f"rubric_eval_error:{type(e).__name__}:{e}",
         )
 
@@ -73,11 +87,13 @@ def _evaluate(
     role: str,
     review_statuses: dict[str, ReqStatus],
     judge_retry: dict[str, int],
+    failure_kinds: dict[str, str],
     output_rubric: Any | None,
     attempt_id: str | None,
     evaluate_code_check: Any | None,
 ) -> CheckResult:
-    raw = check.rubric if check.rubric is not None else output_rubric
+    # Plan-frozen OutputSpec.rubric wins over catalog placeholder rubric.
+    raw = output_rubric if output_rubric is not None else check.rubric
     if raw is None:
         return CheckResult(
             check_id=check_id,
@@ -91,36 +107,56 @@ def _evaluate(
     rubric = _as_rubric(raw)
     item_statuses: dict[str, ReqStatus] = {}
     details: list[str] = []
+    pending_items: list[str] = []
     has_judge = False
     has_code = False
 
     for item in rubric.items:
-        item_key = f"{check_id}:{item.id}"
+        item_key = judge_item_key(check_id, item.id)
         if item.check == "judge":
             has_judge = True
             st = review_statuses.get(item_key)
             if st is None:
                 st = review_statuses.get(item.id)
-            if st is None:
-                # Judge not yet answered → UNASSESSED (R23); retry counter.
-                retries = int(judge_retry.get(item_key, 0))
-                st = ReqStatus.UNASSESSED
-                details.append(f"{item.id}:judge_unassessed:retry={retries}")
+            fk = failure_kinds.get(item_key) or failure_kinds.get(item.id)
+            retries = int(judge_retry.get(item_key, 0) or judge_retry.get(item.id, 0))
+            if st is None and fk is None:
+                # Waiting for judge — PENDING blocks compute_outcome.
+                st = ReqStatus.PENDING
+                pending_items.append(item.id)
+                details.append(f"{item.id}:judge_pending")
             elif st == ReqStatus.FAILED:
-                # Judge failure → UNASSESSED + one retry, never FAILED (design §6.2).
-                retries = int(judge_retry.get(item_key, 0))
-                if retries < 1:
-                    st = ReqStatus.UNASSESSED
-                    details.append(f"{item.id}:judge_failure_unassessed:retry=1")
+                # Not-met verdict — stay FAILED (never remap to UNASSESSED).
+                details.append(f"{item.id}:judge:FAILED")
+            elif fk in JUDGE_FAILURE_KINDS:
+                # Infra failure (timeout/invalid_json/refusal): one retry (R23).
+                # While retry budget remains, stay PENDING so the attempt stays open.
+                if retries <= 1 and st in (
+                    None,
+                    ReqStatus.PENDING,
+                    ReqStatus.UNASSESSED,
+                ):
+                    st = ReqStatus.PENDING
+                    pending_items.append(item.id)
+                    details.append(
+                        f"{item.id}:judge_failure:{fk}:retry={retries}:waiting"
+                    )
                 else:
                     st = ReqStatus.UNASSESSED
-                    details.append(f"{item.id}:judge_failure_exhausted")
+                    details.append(
+                        f"{item.id}:judge_failure:{fk}:retry={retries}"
+                    )
+            elif st is None:
+                st = ReqStatus.UNASSESSED
+                details.append(f"{item.id}:judge_unassessed")
+            elif st == ReqStatus.PENDING:
+                pending_items.append(item.id)
+                details.append(f"{item.id}:judge_pending")
             else:
                 details.append(f"{item.id}:judge:{st.value}")
             item_statuses[item.id] = st
             continue
 
-        # code item
         has_code = True
         kind = item.code_kind or "artifact_exists"
         if kind == "rubric":
@@ -146,7 +182,6 @@ def _evaluate(
         details.append(f"{item.id}:code:{cr.status.value}:{cr.detail or ''}")
 
     overall = aggregate_rubric_status(item_statuses, rubric)
-    # Mixed judge+code: overall UNASSESSED is not "code" for outcome B2b.
     is_code = has_code and not has_judge
     return CheckResult(
         check_id=check_id,
@@ -154,12 +189,13 @@ def _evaluate(
         status=overall,
         is_code=is_code,
         required=True,
-        role="validity",  # force validity — never feeds claim stance
+        role="validity",
         detail=f"rubric:{rubric.digest};" + ";".join(details),
         effect={
             "rubric_digest": rubric.digest,
+            "rubric_kind": "rubric",
             "item_statuses": {k: v.value for k, v in item_statuses.items()},
-            # Explicit: rubric must not count toward claim stance / k.
+            "pending_items": pending_items,
             "affects_stance": False,
             "countable": False,
         },
@@ -175,6 +211,8 @@ def evaluate_output_spec_rubrics(
     attempt_id: str | None,
     already: set[str],
     evaluate_code_check: Any | None = None,
+    judge_retry: dict[str, int] | None = None,
+    failure_kinds: dict[str, str] | None = None,
 ) -> list[CheckResult]:
     """Evaluate each OutputSpec.rubric not already covered by a criterion."""
     extra: list[CheckResult] = []
@@ -197,7 +235,7 @@ def evaluate_output_spec_rubrics(
             )
             continue
         tid = f"rubric:{rub.digest}"
-        if any(tid == a or rub.digest in a for a in already):
+        if tid in already:
             continue
         check = CodeCheck(kind="rubric", output=o.name, rubric=rub)
         cr = evaluate_rubric(
@@ -208,6 +246,8 @@ def evaluate_output_spec_rubrics(
             artifacts=artifacts,
             role="validity",
             review_statuses=review_statuses,
+            judge_retry=judge_retry,
+            failure_kinds=failure_kinds,
             output_rubric=rub,
             attempt_id=attempt_id,
             evaluate_code_check=evaluate_code_check,

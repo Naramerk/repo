@@ -182,7 +182,7 @@ def test_questions_from_spec_output_wired():
 def test_upcast_taskcreated_addresses_default():
     v, p = upcast("TaskCreated", 2, {"task_id": "t", "spec": {"task_key": "E1"}})
     # v2→…→v7 foreach/quorum → v8 sandbox → v9 shares.
-    assert v == 9 and p["spec"]["addresses"] == []
+    assert v == 10 and p["spec"]["addresses"] == []
     assert p["spec"]["foreach"] is None
     assert p["spec"]["sandbox_timeout_s"] is None
     assert p["spec"]["budget_share"] is None
@@ -201,7 +201,7 @@ def test_upcast_taskcreated_input_mode_old_default():
             },
         },
     )
-    assert v == 9
+    assert v == 10
     assert p["spec"]["inputs"][0]["mode"] == "use_partial"
     assert p["spec"]["inputs"][0]["kind"] == "artifact"
     assert p["spec"]["inputs"][0]["quorum"] is None
@@ -257,7 +257,7 @@ def test_upcast_taskcreated_strips_plan_criterion_role():
             },
         },
     )
-    assert v == 9
+    assert v == 10
     for c in p["spec"]["criteria"]:
         assert "role" not in c
     assert p["spec"]["foreach"] is None

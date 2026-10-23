@@ -63,7 +63,8 @@ def questions_from_spec_output(spec_out: Mapping[str, Any] | None) -> list[dict[
         text = str(item.get("text") or item.get("formulation") or "")
         row: dict[str, Any] = {"id": qid, "text": text}
         ft = item.get("final_type")
-        if ft in ("verdict", "artifact", "both"):
+        if ft is not None and ft != "":
+            # Pass through; PlanValidator / QuestionSpec refuse unknowns honestly.
             row["final_type"] = ft
         parent = item.get("parent_id")
         if parent:

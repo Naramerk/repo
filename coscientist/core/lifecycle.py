@@ -234,7 +234,7 @@ class LifecycleMixin:
                     idem_key=make_idem("TaskCreated", tid),
                     payload=task.model_dump(mode="json"),
                     ts=now,
-                    schema_version=9,
+                    schema_version=10,
                 )
             )
             # Graph nodes for stages: only schema kinds. SPEC/HYP/LIT are DAG
@@ -262,12 +262,27 @@ class LifecycleMixin:
         assert self.study is not None
         sid = self.study.study_id
         now = self.clock.now()
-        if questions is None and spec_output is not None:
-            questions = [
-                QuestionSpec.model_validate(q)
-                for q in questions_from_spec_output(spec_output)
-            ]
-        questions = list(questions or [])
+        from pydantic import ValidationError
+
+        from coscientist.core.plan_validate import (
+            PLAN_REFUSED_LINE,
+            apply_plan_refused,
+            freeze_plan_rubrics,
+            refuse_detail,
+        )
+
+        # Pydantic QuestionSpec / unknown final_type → honest PlanRefused.
+        try:
+            if questions is None and spec_output is not None:
+                questions = [
+                    QuestionSpec.model_validate(q)
+                    for q in questions_from_spec_output(spec_output)
+                ]
+            questions = list(questions or [])
+        except (ValidationError, ValueError, TypeError) as e:
+            return await apply_plan_refused(
+                self, detail=refuse_detail(e), report_line=PLAN_REFUSED_LINE
+            )
         expand_after = list(expand_after or [])
         self._validate_dag(tasks)
         known_texts = await self._known_question_texts()
@@ -289,12 +304,17 @@ class LifecycleMixin:
         share_err = critic_plan_shares(tasks, study=self.study)
         if share_err is not None:
             raise ValueError(share_err)
-        catalog = getattr(self, "catalog", None) or getattr(getattr(self, "executor", None), "catalog", None)
+        catalog = getattr(self, "catalog", None) or getattr(
+            getattr(self, "executor", None), "catalog", None
+        )
         validate_plan_criteria(tasks, catalog)
-        # M1 PR13: freeze rubric digests + final_type PlanValidator (§6.1).
-        from coscientist.core.plan_validate import freeze_plan_rubrics
-
-        tasks, questions = freeze_plan_rubrics(tasks, questions, catalog=catalog)
+        # PlanValidator / Rubric pydantic → PlanRefused (StudyFinalized still).
+        try:
+            tasks, questions = freeze_plan_rubrics(tasks, questions, catalog=catalog)
+        except (ValueError, ValidationError, TypeError) as e:
+            return await apply_plan_refused(
+                self, detail=refuse_detail(e), report_line=PLAN_REFUSED_LINE
+            )
         pid = plan_id()
         plan = Plan(
             plan_id=pid,
@@ -469,7 +489,7 @@ class LifecycleMixin:
                     idem_key=make_idem("TaskCreated", tid),
                     payload=task.model_dump(mode="json"),
                     ts=now,
-                    schema_version=9,
+                    schema_version=10,
                 )
             )
         await self._append(events)

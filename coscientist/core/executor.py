@@ -575,6 +575,11 @@ class Executor:
         self.get_task = get_task
         self.on_events = on_events  # callback after successful append (project local)
         self.review_statuses = review_statuses or {}
+        # PR13: per judge-item infra-failure retry counts + kind labels.
+        self.judge_retry: dict[str, int] = {}
+        self.failure_kinds: dict[str, str] = {}
+        # Last agent output per open attempt (for record_review re-eval).
+        self._pending_outputs: dict[str, AgentTaskOutput] = {}
         self.get_graph = get_graph
         self.get_results = get_results
         self.max_attempts = int(max_attempts)
@@ -662,6 +667,7 @@ class Executor:
                     fetch_idx = await load_source_fetch_index_from_writer(self.writer)
                 else:
                     fetch_idx = SourceFetchIndex()
+                self._pending_outputs[attempt_id] = out
                 checks = await asyncio.to_thread(
                     evaluate_task_checks,
                     self.catalog,
@@ -669,6 +675,8 @@ class Executor:
                     out,
                     self.artifacts,
                     review_statuses=self.review_statuses,
+                    judge_retry=self.judge_retry,
+                    failure_kinds=self.failure_kinds,
                     attempt_id=attempt_id,
                     task_kind=str(getattr(task.kind, "value", task.kind)),
                     task_key=task.spec.task_key,
@@ -897,41 +905,72 @@ class Executor:
             )
 
         if computed is None:
-            await self._append(
-                [
-                    EventEnvelope(
-                        study_id=study_id,
-                        type="ResultPending",
-                        entity_key=attempt_id,
-                        idem_key=make_idem(
-                            "ResultPending", attempt_id, str(self.clock.now())
-                        ),
-                        payload={
-                            "attempt_id": attempt_id,
-                            "reason": "required_checks_pending",
-                        },
-                        ts=self.clock.now(),
-                    )
-                ]
-            )
-            raise RuntimeError("compute_outcome pending")
+            from coscientist.core.reviews import review_scheduled_events
 
-        for c in checks:
-            if not c.is_code and c.status == ReqStatus.UNASSESSED:
-                await self._append(
-                    [
-                        EventEnvelope(
-                            study_id=study_id,
-                            type="ReviewScheduled",
-                            entity_key=attempt_id,
-                            idem_key=make_idem(
-                                "ReviewScheduled", attempt_id, c.check_id
-                            ),
-                            payload={"check_id": c.check_id, "attempt_id": attempt_id},
-                            ts=self.clock.now(),
-                        )
-                    ]
+            # Idem must change as judge answers arrive (clock may be frozen in tests).
+            status_fp = ",".join(
+                f"{c.check_id}={c.status.value}"
+                for c in sorted(checks, key=lambda x: x.check_id)
+            )
+            rev_fp = ",".join(
+                f"{k}={v.value}"
+                for k, v in sorted(self.review_statuses.items(), key=lambda kv: kv[0])
+            )
+            retry_fp = ",".join(
+                f"{k}={v}" for k, v in sorted(self.judge_retry.items())
+            )
+            pending_events = [
+                EventEnvelope(
+                    study_id=study_id,
+                    type="ResultPending",
+                    entity_key=attempt_id,
+                    idem_key=make_idem(
+                        "ResultPending", attempt_id, status_fp, rev_fp, retry_fp
+                    ),
+                    payload={
+                        "attempt_id": attempt_id,
+                        "reason": "required_checks_pending",
+                        "check_results": [c.model_dump(mode="json") for c in checks],
+                    },
+                    ts=self.clock.now(),
                 )
+            ]
+            pending_events.extend(
+                review_scheduled_events(
+                    study_id=study_id,
+                    attempt_id=attempt_id,
+                    checks=checks,
+                    now=self.clock.now(),
+                )
+            )
+            await self._append(pending_events)
+            # Attempt stays open; caller finishes via record_review.
+            return Result(
+                result_id=result_id(attempt_id),
+                attempt_id=attempt_id,
+                outcome=Outcome.PARTIAL,
+                provenance=_provenance(self.get_attempt(attempt_id)),
+                computed_outcome=Outcome.PARTIAL,
+                check_results=checks,
+                unassessed=[
+                    c.check_id
+                    for c in checks
+                    if c.status in (ReqStatus.PENDING, ReqStatus.UNASSESSED)
+                ],
+                payload_digest="",
+                reason="required_checks_pending",
+            )
+
+        from coscientist.core.reviews import review_scheduled_events
+
+        sched = review_scheduled_events(
+            study_id=study_id,
+            attempt_id=attempt_id,
+            checks=checks,
+            now=self.clock.now(),
+        )
+        if sched:
+            await self._append(sched)
 
         unassessed = [c.check_id for c in checks if c.status == ReqStatus.UNASSESSED]
         rid = result_id(attempt_id)
@@ -991,6 +1030,76 @@ class Executor:
             infra_failure=False,
             cost_rub=out.cost_rub,
         )
+
+    async def record_review(
+        self,
+        attempt_id: str,
+        check_id: str,
+        *,
+        status: ReqStatus | str | None = None,
+        failure_kind: str | None = None,
+    ) -> Result:
+        """Apply a judge/review verdict and re-evaluate the open attempt (PR13).
+
+        ``failure_kind`` (timeout|invalid_json|refusal) → UNASSESSED + one retry
+        (attempt stays open). Explicit FAILED = item not met (stays FAILED).
+        """
+        from coscientist.core.reviews import resolve_review_status
+
+        attempt = self.get_attempt(attempt_id)
+        if attempt is None:
+            raise KeyError(attempt_id)
+        closed = attempt.closed if hasattr(attempt, "closed") else attempt.get("closed")
+        study_id = (
+            attempt.study_id if hasattr(attempt, "study_id") else attempt["study_id"]
+        )
+        if closed:
+            raise AttemptClosedError(attempt_id)
+        prior = int(self.judge_retry.get(check_id, 0))
+        st, retries, fk = resolve_review_status(
+            status=status, failure_kind=failure_kind, prior_retries=prior
+        )
+        self.judge_retry[check_id] = retries
+        if fk and retries <= 1:
+            # First infra failure: keep waiting for a retry answer.
+            self.review_statuses[check_id] = ReqStatus.PENDING
+            self.failure_kinds[check_id] = fk
+            wait_status = ReqStatus.UNASSESSED
+        else:
+            self.review_statuses[check_id] = st
+            if fk:
+                self.failure_kinds[check_id] = fk
+            else:
+                self.failure_kinds.pop(check_id, None)
+            wait_status = st
+        await self._append(
+            [
+                EventEnvelope(
+                    study_id=study_id,
+                    type="ReviewRecorded",
+                    entity_key=attempt_id,
+                    idem_key=make_idem(
+                        "ReviewRecorded",
+                        attempt_id,
+                        check_id,
+                        str(wait_status.value),
+                        str(retries),
+                    ),
+                    payload={
+                        "attempt_id": attempt_id,
+                        "check_id": check_id,
+                        "status": wait_status.value,
+                        "failure_kind": fk,
+                        "retry": retries,
+                    },
+                    ts=self.clock.now(),
+                )
+            ]
+        )
+        out = self._pending_outputs.get(attempt_id)
+        if out is None:
+            raise KeyError(f"no pending agent output for attempt {attempt_id}")
+        return await self.record(attempt_id, out)
 
     async def _commit_timeout(
         self,
@@ -1149,6 +1258,7 @@ class Executor:
     ) -> Result:
         # Attempt-open check runs inside the write transaction (_append_many_sync).
         now = self.clock.now()
+        self._pending_outputs.pop(attempt_id, None)
         graph = self.get_graph() if self.get_graph is not None else None
         task = self.get_task(task_id)
         attempt = self.get_attempt(attempt_id)

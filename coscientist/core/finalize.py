@@ -473,6 +473,19 @@ async def _build_rich_payload(
     )
     events = await runtime.store.read_all()
     contrib = contributing_reasons_ordered(events)
+    # PR13: disposition report_line (e.g. «не выполнено: рубрика не принята»).
+    for d in qdisp.values():
+        line = d.get("report_line") if isinstance(d, dict) else None
+        if line and line not in contrib:
+            contrib.append(str(line))
+    # PlanRefused / invalid final_type lines folded from events.
+    for ev in events:
+        if ev.type == "PlanRefused":
+            line = (ev.payload or {}).get("report_line") or (
+                "не выполнено: план отклонён"
+            )
+            if line not in contrib:
+                contrib.append(str(line))
     study = runtime.study
     assert study is not None
     view = study_view(

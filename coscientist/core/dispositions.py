@@ -15,7 +15,12 @@ from coscientist.core.domain import Study, Task, TaskOutcome, TaskState
 from coscientist.core.graph import GraphStore
 from coscientist.core.question_tasks import known_questions, question_tasks
 from coscientist.core.reasons import Disposition, NotAttemptedReason, TaskReason
-from coscientist.core.rubric import question_final_types, task_rubrics_met
+from coscientist.core.rubric import (
+    RUBRIC_REJECTED_LINE,
+    RUBRIC_REJECTED_REASON,
+    question_final_types,
+    task_rubric_status,
+)
 from coscientist.core.rules import priority_refuted_support_note, verdict
 from coscientist.core.verdict import NO_EFFECT_EXCLUSION_REASONS
 
@@ -151,9 +156,17 @@ def _dispositions_inner(
         excluded = excluded_claims_report(claims)
         validity_excl = [e for e in excluded if e["reason"] == "validity_failed"]
         any_exp = any(t.state == TaskState.DONE for t in covering)
-        # PR13: artifact (or both without counting claims) fulfilled by rubric MET.
-        if ft in ("artifact", "both") and not counting:
-            if task_rubrics_met(task_keys=keys, tasks=tasks, results=results):
+        # PR13: rubric status for artifact / both (§6.1).
+        rub_st: str | None = None
+        if ft in ("artifact", "both"):
+            try:
+                rub_st = task_rubric_status(
+                    task_keys=keys, tasks=tasks, results=results
+                )
+            except Exception:  # noqa: BLE001 — totality; explicit error reason
+                rub_st = "failed"
+        if ft == "artifact":
+            if rub_st == "met":
                 result[qid] = {
                     "disposition": Disposition.ANSWERED.value,
                     "reason": "rubric_met",
@@ -161,19 +174,28 @@ def _dispositions_inner(
                     "formulation": text,
                     "final_type": ft,
                     "verdict": "answered",
+                    "report_line": None,
                 }
                 continue
-            if ft == "artifact":
-                # No claims path — map covering outcomes to not_attempted reasons.
-                reason, detail = _not_attempted_for_covering(covering)
+            if rub_st == "failed":
                 result[qid] = {
                     "disposition": Disposition.NOT_ATTEMPTED.value,
-                    "reason": reason.value,
-                    "reason_detail": [r.value for r in detail],
+                    "reason": RUBRIC_REJECTED_REASON,
+                    "reason_detail": [RUBRIC_REJECTED_REASON],
                     "formulation": text,
                     "final_type": ft,
+                    "report_line": RUBRIC_REJECTED_LINE,
                 }
                 continue
+            reason, detail = _not_attempted_for_covering(covering)
+            result[qid] = {
+                "disposition": Disposition.NOT_ATTEMPTED.value,
+                "reason": reason.value,
+                "reason_detail": [r.value for r in detail],
+                "formulation": text,
+                "final_type": ft,
+            }
+            continue
         if counting:
             # Per-experiment exclusion: verdict from valid claims only.
             v, _by_lit = verdict(
@@ -192,12 +214,38 @@ def _dispositions_inner(
                 has_hypotheses=False,
             )
             if disp != "not_attempted":
+                # §6.1 both: verdict AND rubric required.
+                if ft == "both":
+                    if rub_st != "met":
+                        result[qid] = {
+                            "disposition": Disposition.NOT_ATTEMPTED.value,
+                            "reason": (
+                                RUBRIC_REJECTED_REASON
+                                if rub_st == "failed"
+                                else NotAttemptedReason.NO_COUNTING_CLAIMS.value
+                            ),
+                            "reason_detail": [
+                                RUBRIC_REJECTED_REASON
+                                if rub_st == "failed"
+                                else "rubric_pending"
+                            ],
+                            "formulation": text,
+                            "final_type": ft,
+                            "verdict": v,
+                            "report_line": (
+                                RUBRIC_REJECTED_LINE if rub_st == "failed" else None
+                            ),
+                        }
+                        if excluded:
+                            result[qid]["excluded_claims"] = excluded
+                        continue
                 row: dict[str, Any] = {
                     "disposition": disp,
                     "reason": None,
                     "reason_detail": [],
                     "formulation": text,
                     "verdict": v,
+                    "final_type": ft,
                 }
                 note = priority_refuted_support_note(
                     claims,
@@ -213,6 +261,27 @@ def _dispositions_inner(
                     row["excluded_claims"] = excluded
                 result[qid] = row
                 continue
+        elif ft == "both" and rub_st == "met" and not counting:
+            # Rubric alone is not enough for both.
+            reason, detail = _not_attempted_for_covering(covering)
+            result[qid] = {
+                "disposition": Disposition.NOT_ATTEMPTED.value,
+                "reason": reason.value,
+                "reason_detail": [r.value for r in detail],
+                "formulation": text,
+                "final_type": ft,
+            }
+            continue
+        elif ft == "both" and rub_st == "failed":
+            result[qid] = {
+                "disposition": Disposition.NOT_ATTEMPTED.value,
+                "reason": RUBRIC_REJECTED_REASON,
+                "reason_detail": [RUBRIC_REJECTED_REASON],
+                "formulation": text,
+                "final_type": ft,
+                "report_line": RUBRIC_REJECTED_LINE,
+            }
+            continue
         # No valid claims: validity_failed → inconclusive; unknown_role alone
         # never forces a verdict (falls through to not_attempted).
         if validity_excl:

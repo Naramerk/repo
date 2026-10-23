@@ -57,6 +57,11 @@ class Rubric(_Frozen):
         if self.aggregate == "k_of_n":
             if self.k is None or self.k < 1:
                 raise ValueError("aggregate=k_of_n requires k ≥ 1")
-            if self.k > len(self.items):
-                raise ValueError(f"k={self.k} exceeds item count {len(self.items)}")
+            # k_of_n counts MET among required items only.
+            n_req = sum(1 for it in self.items if it.required)
+            limit = n_req if n_req else len(self.items)
+            if self.k > limit:
+                raise ValueError(
+                    f"k={self.k} exceeds required item count {limit}"
+                )
         return self

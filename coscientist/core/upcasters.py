@@ -177,6 +177,62 @@ def _task_created_v8_to_v9_shares(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _ensure_output_rubric_defaults(spec: dict[str, Any]) -> dict[str, Any]:
+    """PR13: OutputSpec.rubric default null on TaskCreated / PlanExpanded tasks."""
+    out = dict(spec)
+    outs = out.get("expected_outputs")
+    if isinstance(outs, list):
+        new_outs: list[Any] = []
+        for o in outs:
+            if isinstance(o, dict):
+                o = dict(o)
+                o.setdefault("rubric", None)
+                new_outs.append(o)
+            else:
+                new_outs.append(o)
+        out["expected_outputs"] = new_outs
+    return out
+
+
+def _task_created_v9_to_v10_rubric(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR13: OutputSpec.rubric on TaskCreated v10 (stacked after shares v9).
+
+    If PR18 (#20) merges second and also bumps TaskCreated, resolve order in
+    upcasters.py so this step remains contiguous.
+    """
+    out = dict(payload)
+    spec = out.get("spec")
+    if isinstance(spec, dict):
+        out["spec"] = _ensure_output_rubric_defaults(spec)
+    return out
+
+
+def _plan_expanded_v1_to_v2_rubric(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR13: rubric defaults on PlanExpanded.added_tasks (+ questions final_type)."""
+    out = dict(payload)
+    added = out.get("added_tasks")
+    if isinstance(added, list):
+        rewritten: list[Any] = []
+        for t in added:
+            if isinstance(t, dict):
+                rewritten.append(_ensure_output_rubric_defaults(dict(t)))
+            else:
+                rewritten.append(t)
+        out["added_tasks"] = rewritten
+    questions = out.get("added_questions")
+    if isinstance(questions, list):
+        rewritten_q: list[Any] = []
+        for q in questions:
+            if isinstance(q, dict):
+                q = dict(q)
+                q.setdefault("final_type", "verdict")
+                rewritten_q.append(q)
+            else:
+                rewritten_q.append(q)
+        out["added_questions"] = rewritten_q
+    return out
+
+
 def _plan_accepted_v4_to_v5_foreach_quorum(payload: dict[str, Any]) -> dict[str, Any]:
     out = dict(payload)
     tasks = out.get("tasks")
@@ -510,6 +566,7 @@ register_upcaster("TaskCreated", 5, _task_created_v5_to_v6_check_role)
 register_upcaster("TaskCreated", 6, _task_created_v6_to_v7_foreach_quorum)
 register_upcaster("TaskCreated", 7, _task_created_v7_to_v8_sandbox)
 register_upcaster("TaskCreated", 8, _task_created_v8_to_v9_shares)
+register_upcaster("TaskCreated", 9, _task_created_v9_to_v10_rubric)
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)
 register_upcaster("PlanAccepted", 2, _plan_accepted_v2_to_v3_check_role)
 register_upcaster("PlanAccepted", 3, _plan_accepted_v3_to_v4_expand_after)
@@ -517,6 +574,7 @@ register_upcaster("PlanAccepted", 4, _plan_accepted_v4_to_v5_foreach_quorum)
 register_upcaster("PlanAccepted", 5, _plan_accepted_v5_to_v6_sandbox)
 register_upcaster("PlanAccepted", 6, _plan_accepted_v6_to_v7_shares)
 register_upcaster("PlanAccepted", 7, _plan_accepted_v7_to_v8_rubric)
+register_upcaster("PlanExpanded", 1, _plan_expanded_v1_to_v2_rubric)
 register_upcaster("StudyCreated", 1, _study_created_v1_to_v2)
 register_upcaster("StudyCreated", 2, _study_created_v2_to_v3)
 register_upcaster("StudyCreated", 3, _study_created_v3_to_v4)

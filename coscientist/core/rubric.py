@@ -18,28 +18,48 @@ from coscientist.core.rubric_types import (
     RubricItem,
 )
 
+# Digest schema version — bump when canonical fields change.
+RUBRIC_DIGEST_VERSION = 1
+
+RUBRIC_REJECTED_REASON = "rubric_rejected"
+RUBRIC_REJECTED_LINE = "не выполнено: рубрика не принята"
+
 __all__ = [
     "FinalType",
     "VALID_FINAL_TYPES",
     "Rubric",
     "RubricItem",
+    "RUBRIC_DIGEST_VERSION",
+    "RUBRIC_REJECTED_REASON",
+    "RUBRIC_REJECTED_LINE",
     "rubric_digest",
     "freeze_rubric",
     "aggregate_rubric_status",
     "question_final_types",
     "task_rubrics_met",
+    "task_rubric_status",
     "freeze_task_rubrics",
 ]
 
 
 def rubric_digest(items: list[RubricItem], aggregate: str, k: int | None) -> str:
-    """sha256(JCS(items+aggregate[+k])) — design §6.2."""
+    """sha256(JCS(canonical rubric fields)) — stable across model_dump churn."""
+    canon_items = [
+        {
+            "id": it.id,
+            "text": it.text,
+            "required": bool(it.required),
+            "check": it.check,
+            "code_kind": it.code_kind,
+        }
+        for it in items
+    ]
     payload: dict[str, Any] = {
-        "items": [it.model_dump(mode="json") for it in items],
+        "v": RUBRIC_DIGEST_VERSION,
+        "items": canon_items,
         "aggregate": aggregate,
+        "k": k if aggregate == "k_of_n" else None,
     }
-    if aggregate == "k_of_n":
-        payload["k"] = k
     return sha256_hex(canonical_json(payload))
 
 
@@ -67,7 +87,9 @@ def freeze_task_rubrics(spec: Any) -> Any:
         if rub is None:
             new_outs.append(o)
             continue
-        frozen = freeze_rubric(rub if isinstance(rub, Rubric) else Rubric.model_validate(rub))
+        frozen = freeze_rubric(
+            rub if isinstance(rub, Rubric) else Rubric.model_validate(rub)
+        )
         if frozen is not rub:
             changed = True
             new_outs.append(o.model_copy(update={"rubric": frozen}))
@@ -84,14 +106,16 @@ def aggregate_rubric_status(
 ) -> ReqStatus:
     """Combine per-item statuses → overall rubric status.
 
-    Required items must all be MET (or WAIVED/NOT_APPLICABLE). Optional items
-    never block MET. Any PENDING → PENDING. Judge failure → UNASSESSED (R23),
-    not FAILED. Code FAILED on a required item → FAILED.
+    Required items drive MET/FAILED. Optional items only affect report score.
+    Any PENDING → PENDING. Judge infra failure → UNASSESSED (R23).
+    Code/judge not-met (FAILED) on a required item → FAILED.
+    ``k_of_n`` counts MET among **required** items only.
     """
     required = [it for it in rubric.items if it.required]
+    pool = required if required else list(rubric.items)
     if any(
         item_statuses.get(it.id, ReqStatus.PENDING) == ReqStatus.PENDING
-        for it in rubric.items
+        for it in pool
     ):
         return ReqStatus.PENDING
 
@@ -101,7 +125,7 @@ def aggregate_rubric_status(
     unassessed_required = [
         it
         for it in required
-        if item_statuses.get(it.id) == ReqStatus.UNASSESSED and it.check == "judge"
+        if item_statuses.get(it.id) == ReqStatus.UNASSESSED
     ]
     failed_required = [
         it
@@ -128,24 +152,25 @@ def aggregate_rubric_status(
             return ReqStatus.UNASSESSED
         return ReqStatus.FAILED
 
+    # k_of_n: count only required items (optional never toward k).
     met_n = sum(
-        1
-        for it in rubric.items
-        if _ok(item_statuses.get(it.id, ReqStatus.PENDING))
+        1 for it in required if _ok(item_statuses.get(it.id, ReqStatus.PENDING))
     )
     k = int(rubric.k or 0)
     if met_n >= k:
         return ReqStatus.MET
     if any(
-        item_statuses.get(it.id) == ReqStatus.UNASSESSED and it.check == "judge"
-        for it in rubric.items
+        item_statuses.get(it.id) == ReqStatus.UNASSESSED for it in required
     ):
         return ReqStatus.UNASSESSED
     return ReqStatus.FAILED
 
 
 def question_final_types(plans: Any) -> dict[str, FinalType]:
-    """question_id → final_type across PlanAccepted revisions (first wins)."""
+    """question_id → final_type across PlanAccepted revisions (first wins).
+
+    Unknown ``final_type`` values are skipped (caller/plan accept must refuse).
+    """
     found: dict[str, FinalType] = {}
     rows = (
         plans.values()
@@ -161,84 +186,15 @@ def question_final_types(plans: Any) -> dict[str, FinalType]:
             qid = str(q.get("id", ""))
             if not qid or qid in found:
                 continue
-            ft = str(q.get("final_type") or "verdict")
+            raw = q.get("final_type")
+            if raw is None or raw == "":
+                found[qid] = "verdict"
+                continue
+            ft = str(raw)
             if ft not in VALID_FINAL_TYPES:
-                ft = "verdict"
+                continue  # unknown — not silently coerced
             found[qid] = ft  # type: ignore[assignment]
     return found
-
-
-def task_rubrics_met(
-    *,
-    task_keys: set[str],
-    tasks: Any,
-    results: Any | None,
-) -> bool:
-    """True iff ≥1 covering DONE SUCCESS/PARTIAL task has OutputSpec rubrics MET."""
-    try:
-        by_key: dict[str, Any] = {}
-        for t in (tasks.values() if hasattr(tasks, "values") else tasks) or []:
-            spec = getattr(t, "spec", None)
-            if spec is None:
-                continue
-            by_key[str(spec.task_key)] = t
-        res_map = results or {}
-        for key in sorted(task_keys):
-            t = by_key.get(key)
-            if t is None:
-                continue
-            outcome = getattr(t, "outcome", None)
-            if outcome is None:
-                continue
-            ov = getattr(outcome, "value", outcome)
-            if ov not in ("SUCCESS", "PARTIAL"):
-                continue
-            rubrics = [
-                o.rubric
-                for o in (t.spec.expected_outputs or [])
-                if getattr(o, "rubric", None) is not None
-            ]
-            if not rubrics:
-                continue
-            if _rubric_checks_met_for_task(t, res_map, rubrics):
-                return True
-        return False
-    except Exception:  # noqa: BLE001 — dispositions/finalize totality
-        return False
-
-
-def _rubric_checks_met_for_task(task: Any, results: Any, rubrics: list[Any]) -> bool:
-    digests = {
-        str(getattr(r, "digest", None) or "")
-        for r in rubrics
-        if getattr(r, "digest", None)
-    }
-    attempt_ids = list(getattr(task, "attempts", None) or [])
-    for aid in reversed(attempt_ids):
-        row = _result_row(results, aid)
-        if not isinstance(row, dict):
-            continue
-        crs = row.get("check_results") or []
-        met_digests: set[str] = set()
-        any_rubric_met = False
-        for cr in crs:
-            if not isinstance(cr, dict):
-                continue
-            st = cr.get("status")
-            if st not in (ReqStatus.MET.value, ReqStatus.MET):
-                continue
-            tid = str(cr.get("template_id") or "")
-            detail = str(cr.get("detail") or "")
-            if tid.startswith("rubric:") or tid == "rubric_check" or "rubric" in tid:
-                any_rubric_met = True
-            for d in digests:
-                if d and (d in tid or d in detail or f"rubric:{d}" == tid):
-                    met_digests.add(d)
-        if digests and digests <= met_digests:
-            return True
-        if not digests and any_rubric_met:
-            return True
-    return False
 
 
 def _result_row(results: Any, aid: str) -> dict[str, Any] | None:
@@ -251,3 +207,103 @@ def _result_row(results: Any, aid: str) -> dict[str, Any] | None:
         if isinstance(v, dict) and v.get("attempt_id") == aid:
             return v
     return None
+
+
+def _is_rubric_check(cr: dict[str, Any], digests: set[str]) -> str | None:
+    """Return matching digest if this CheckResult is a rubric check for one of digests."""
+    raw_effect = cr.get("effect")
+    effect: dict[str, Any] = raw_effect if isinstance(raw_effect, dict) else {}
+    dig = str(effect.get("rubric_digest") or "")
+    if dig and dig in digests:
+        return dig
+    tid = str(cr.get("template_id") or "")
+    cid = str(cr.get("check_id") or "")
+    for d in digests:
+        if tid == f"rubric:{d}" or cid.startswith(f"rubric:{d}"):
+            return d
+        if effect.get("rubric_kind") == "rubric" and d and d in tid:
+            return d
+    return None
+
+
+def task_rubric_status(
+    *,
+    task_keys: set[str],
+    tasks: Any,
+    results: Any | None,
+) -> str | None:
+    """Best rubric status across covering tasks: ``met`` | ``failed`` | ``pending`` | None.
+
+    ``None`` = no rubric on covering tasks. Errors propagate (no silent swallow).
+    """
+    by_key: dict[str, Any] = {}
+    for t in (tasks.values() if hasattr(tasks, "values") else tasks) or []:
+        spec = getattr(t, "spec", None)
+        if spec is None:
+            continue
+        by_key[str(spec.task_key)] = t
+    res_map = results or {}
+    seen_failed = False
+    seen_pending = False
+    for key in sorted(task_keys):
+        t = by_key.get(key)
+        if t is None:
+            continue
+        rubrics = [
+            o.rubric
+            for o in (t.spec.expected_outputs or [])
+            if getattr(o, "rubric", None) is not None
+        ]
+        if not rubrics:
+            continue
+        digests = {
+            str(getattr(r, "digest", None) or "")
+            for r in rubrics
+            if getattr(r, "digest", None)
+        }
+        attempt_ids = list(getattr(t, "attempts", None) or [])
+        for aid in reversed(attempt_ids):
+            row = _result_row(res_map, aid)
+            if not isinstance(row, dict):
+                continue
+            for cr in row.get("check_results") or []:
+                if not isinstance(cr, dict):
+                    continue
+                matched = _is_rubric_check(cr, digests) if digests else None
+                if matched is None and digests:
+                    continue
+                if not digests and not (
+                    isinstance(cr.get("effect"), dict)
+                    and cr["effect"].get("rubric_kind") == "rubric"
+                ):
+                    continue
+                st = cr.get("status")
+                if st in (ReqStatus.MET.value, ReqStatus.MET):
+                    return "met"
+                if st in (ReqStatus.FAILED.value, ReqStatus.FAILED):
+                    seen_failed = True
+                if st in (ReqStatus.PENDING.value, ReqStatus.PENDING, ReqStatus.UNASSESSED.value, ReqStatus.UNASSESSED):
+                    seen_pending = True
+            # Also infer from task outcome when checks present but not met.
+            outcome = getattr(t, "outcome", None)
+            ov = getattr(outcome, "value", outcome) if outcome is not None else None
+            if ov == "FAILED":
+                seen_failed = True
+    if seen_failed:
+        return "failed"
+    if seen_pending:
+        return "pending"
+    return None
+
+
+def task_rubrics_met(
+    *,
+    task_keys: set[str],
+    tasks: Any,
+    results: Any | None,
+) -> bool:
+    """True iff ≥1 covering task has OutputSpec rubrics MET (structured identity).
+
+    Errors propagate — callers that need totality (dispositions) catch explicitly.
+    """
+    return task_rubric_status(task_keys=task_keys, tasks=tasks, results=results) == "met"

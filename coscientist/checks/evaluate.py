@@ -624,6 +624,8 @@ def evaluate_task_checks(
     artifacts: LocalArtifactStore,
     *,
     review_statuses: dict[str, ReqStatus] | None = None,
+    judge_retry: dict[str, int] | None = None,
+    failure_kinds: dict[str, str] | None = None,
     attempt_id: str | None = None,
     task_kind: str | None = None,
     task_key: str | None = None,
@@ -632,6 +634,8 @@ def evaluate_task_checks(
     """Evaluate criteria on the task; review checks become UNASSESSED unless overridden."""
     by_id = {t.id: t for t in catalog.templates}
     review_statuses = review_statuses or {}
+    judge_retry = judge_retry or {}
+    failure_kinds = failure_kinds or {}
     results: list[CheckResult] = []
     refs = list(spec.criteria)
     if not refs:
@@ -727,6 +731,8 @@ def evaluate_task_checks(
                 artifacts=artifacts,
                 role="validity",
                 review_statuses=review_statuses,
+                judge_retry=judge_retry,
+                failure_kinds=failure_kinds,
                 output_rubric=out_rubric,
                 attempt_id=attempt_id,
                 evaluate_code_check=evaluate_code_check,
@@ -781,6 +787,12 @@ def evaluate_task_checks(
     # (artifact deliverables: literature review, design doc, …).
     from coscientist.checks.kinds.rubric import evaluate_output_spec_rubrics
 
+    already: set[str] = {r.template_id for r in results}
+    for r in results:
+        effect = r.effect if isinstance(r.effect, dict) else {}
+        dig = effect.get("rubric_digest")
+        if dig:
+            already.add(f"rubric:{dig}")
     results.extend(
         evaluate_output_spec_rubrics(
             spec,
@@ -788,8 +800,10 @@ def evaluate_task_checks(
             artifacts=artifacts,
             review_statuses=review_statuses,
             attempt_id=attempt_id,
-            already={r.template_id for r in results},
+            already=already,
             evaluate_code_check=evaluate_code_check,
+            judge_retry=judge_retry,
+            failure_kinds=failure_kinds,
         )
     )
     return results

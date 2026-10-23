@@ -168,8 +168,9 @@ def study_fulfilled(
 ) -> bool:
     """Fulfilled when required tasks succeed and every question is settled.
 
-    For ``final_type=artifact``, ``answered`` (rubric MET) counts as settled —
-    ``untested`` only blocks verdict/both questions (DESIGN_M1 §6.1).
+    ``final_type=artifact``: settled ⇔ disposition/verdict is answered (rubric MET).
+    ``final_type=both``: settled ⇔ answered (verdict + rubric); untested blocks.
+    ``final_type=verdict``: untested blocks (DESIGN_M1 §6.1).
     """
     if not all_required_success:
         return False
@@ -177,6 +178,10 @@ def study_fulfilled(
     for qid, v in question_verdicts.items():
         ft = ftypes.get(qid, "verdict")
         if ft == "artifact":
+            if v in ("untested", "not_attempted"):
+                return False
+            continue
+        if ft == "both":
             if v in ("untested", "not_attempted"):
                 return False
             continue
