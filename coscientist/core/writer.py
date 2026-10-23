@@ -29,6 +29,10 @@ class StudyWriter:
         self._task: asyncio.Task[None] | None = None
         self._depth_high_water = 0
         self._latencies_ms: deque[float] = deque(maxlen=10_000)
+        # SourceFetched fold cache (PR14) — study-scoped; typed Any to avoid
+        # circular import with source_fetch.SourceFetchIndex.
+        self.source_fetch_idx: Any | None = None
+        self.source_fetch_seq: int = 0
 
     @property
     def depth(self) -> int:
@@ -85,8 +89,15 @@ class StudyWriter:
         self._depth_high_water = max(self._depth_high_water, self.queue.qsize())
         return await fut
 
-    async def append(self, event: EventEnvelope) -> EventEnvelope:
-        out = await self.append_many([event])
+    async def append(
+        self,
+        event: EventEnvelope,
+        *,
+        _source_fetched_cap_id: str | None = None,
+    ) -> EventEnvelope:
+        out = await self.append_many(
+            [event], _source_fetched_cap_id=_source_fetched_cap_id
+        )
         if out:
             return out[0]
         # Defensive: append_many always returns stored envelopes (incl. idempotent).
@@ -97,10 +108,23 @@ class StudyWriter:
         events: list[EventEnvelope],
         *,
         require_open_attempt: str | None = None,
+        _source_fetched_cap_id: str | None = None,
     ) -> list[EventEnvelope]:
+        for ev in events:
+            if getattr(ev, "type", None) == "SourceFetched":
+                # Capability id required; store takes the effects write permit.
+                from coscientist.core.errors import ArtifactRejected
+
+                if not _source_fetched_cap_id:
+                    raise ArtifactRejected("fetch_capability_required")
+
+        _cap_id = _source_fetched_cap_id
+
         async def _do() -> list[EventEnvelope]:
             return await self.store.append_many(
-                events, require_open_attempt=require_open_attempt
+                events,
+                require_open_attempt=require_open_attempt,
+                _source_fetched_cap_id=_cap_id,
             )
 
         return await self.submit(_do)

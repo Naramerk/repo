@@ -31,6 +31,8 @@ class ToolSpec(BaseModel):
     output_schema: dict[str, Any] | None = None
     # Advisory only — register the same name in core.tool_registry for gating.
     effect: ToolEffect = "read"
+    # Advisory: real gate is RegisteredToolSpec.is_fetch in the closed registry.
+    is_fetch: bool = False
     idempotent: bool = False
     supports_idem_key: bool = False
     timeout_s: float = 120
@@ -76,6 +78,8 @@ class CallCtx:
     input_bindings: list[Any] = field(default_factory=list)
     call_seq: int = 1
     extra: dict[str, Any] = field(default_factory=dict)
+    # Set only by invoke_tool for RegisteredToolSpec.is_fetch tools.
+    fetch_capability: Any | None = None
 
 
 class Tool(Protocol):

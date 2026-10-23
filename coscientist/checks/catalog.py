@@ -24,6 +24,7 @@ KNOWN_CODE_KINDS = frozenset(
         "source_link",
         "metric_threshold",
         "value_matches",
+        "quote_in_source",
         "exec_runs",
         "tests_pass",
         "metric_on_holdout",

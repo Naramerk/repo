@@ -35,6 +35,9 @@ class RegisteredToolSpec(BaseModel):
 
     name: str
     effect: ToolEffect
+    # Explicit fetch tools may put_fetched + SourceFetched via invoke_tool.
+    # Plain ``effect=read`` is not enough (spoof/read ≠ literature fetch).
+    is_fetch: bool = False
     idempotent: bool = False
     supports_idem_key: bool = False
     timeout_s: float = 120
@@ -119,6 +122,12 @@ def resolve_effect(name: str) -> ToolEffect:
     if spec is None:
         return DEFAULT_UNREGISTERED_EFFECT
     return spec.effect
+
+
+def resolve_is_fetch(name: str) -> bool:
+    """True only for registered tools with ``is_fetch=True``."""
+    spec = _REGISTRY.get(name)
+    return bool(spec is not None and spec.is_fetch)
 
 
 def resolve_spec(name: str) -> RegisteredToolSpec:

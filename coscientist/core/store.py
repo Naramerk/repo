@@ -317,10 +317,13 @@ class SqliteEventStore:
         events: list[EventEnvelope],
         *,
         require_open_attempt: str | None = None,
+        _source_fetched_cap_id: str | None = None,
     ) -> list[EventEnvelope]:
         return await self._to_thread(
             lambda: self._append_many_sync(
-                events, require_open_attempt=require_open_attempt
+                events,
+                require_open_attempt=require_open_attempt,
+                source_fetched_cap_id=_source_fetched_cap_id,
             )
         )
 
@@ -338,6 +341,7 @@ class SqliteEventStore:
         events: list[EventEnvelope],
         *,
         require_open_attempt: str | None = None,
+        source_fetched_cap_id: str | None = None,
     ) -> list[EventEnvelope]:
         out: list[EventEnvelope] = []
         saw_finalized = False
@@ -351,6 +355,23 @@ class SqliteEventStore:
                 # Allow the StudyFinalized write itself; reject anything after.
                 if ev.type != "StudyFinalized":
                     self._reject_if_finalized(ev.type)
+                if ev.type == "SourceFetched":
+                    # Must present a capability id whose write permit was granted
+                    # by effects.verify (consume). Bool bypass flags are gone.
+                    from coscientist.core.errors import ArtifactRejected
+                    from coscientist.core.source_fetch import (
+                        take_source_fetched_write_permit,
+                    )
+
+                    if not source_fetched_cap_id:
+                        raise ArtifactRejected("fetch_capability_required")
+                    p = ev.payload if isinstance(ev.payload, dict) else {}
+                    take_source_fetched_write_permit(
+                        source_fetched_cap_id,
+                        tool=str(p.get("tool") or ""),
+                        call_id=str(p.get("call_id") or ""),
+                        study_id=str(ev.study_id or ""),
+                    )
                 stored, idem = self._insert_one(ev)
                 if idem is not None:
                     out.append(self._fetch_by_idem(ev.idem_key))

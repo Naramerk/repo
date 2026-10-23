@@ -650,6 +650,18 @@ class Executor:
             try:
                 # MJ2: no sync Popen on the event loop — evaluate (sandbox) off-thread.
                 # to_thread on 3.12+ copies ContextVar so sandbox puts see taint.
+                from coscientist.core.source_fetch import (
+                    SourceFetchIndex,
+                    load_source_fetch_index_from_writer,
+                    task_needs_source_fetch,
+                )
+
+                # Skip journal fold unless quote_in_source is on this task
+                # (read_all during write bursts blew the p99 SLO).
+                if task_needs_source_fetch(self.catalog, task.spec):
+                    fetch_idx = await load_source_fetch_index_from_writer(self.writer)
+                else:
+                    fetch_idx = SourceFetchIndex()
                 checks = await asyncio.to_thread(
                     evaluate_task_checks,
                     self.catalog,
@@ -660,6 +672,7 @@ class Executor:
                     attempt_id=attempt_id,
                     task_kind=str(getattr(task.kind, "value", task.kind)),
                     task_key=task.spec.task_key,
+                    fetched_digests=fetch_idx.digests_for_attempt(attempt_id),
                 )
             except SandboxInfraError as e:
                 # Host/private-FD infra — does NOT charge the retry budget.

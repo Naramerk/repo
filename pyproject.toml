@@ -108,3 +108,17 @@ forbidden_modules = [
   "coscientist.tools.taint",
   "coscientist.core.tool_registry",
 ]
+
+[[tool.importlinter.contracts]]
+name = "SourceFetched only via invoke_tool (no source_fetch import)"
+type = "forbidden"
+# Direct imports only: checks may reach artifacts→verify; experimental may
+# reach executor→load index. Agents/checks/experimental must not import
+# source_fetch themselves (capability mint stays in invoke_tool).
+allow_indirect_imports = true
+source_modules = [
+  "coscientist.agents",
+  "coscientist.checks",
+  "coscientist.experimental",
+]
+forbidden_modules = ["coscientist.core.source_fetch"]

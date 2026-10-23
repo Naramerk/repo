@@ -98,7 +98,7 @@ class LocalArtifactStore:
         # writers (OutputSpec). Agent ``put`` ignores code|data role args.
         if role in ("paper", "figure", "table", "log", "report"):
             inferred = role
-        elif role in ("code", "data") and producer in ("core", "sandbox"):
+        elif role in ("code", "data") and producer in ("core", "sandbox", "tool"):
             inferred = role
         else:
             inferred = media_role
@@ -172,6 +172,54 @@ class LocalArtifactStore:
             schema_ref=schema_ref,
             role=role,
             attempt_closed=attempt_closed,
+            tainted=True,
+            context_tainted=context_tainted,
+        )
+
+    def put_fetched(
+        self,
+        content: bytes,
+        produced_by: ToolCallRef,
+        *,
+        name: str,
+        media_type: str,
+        capability: object,
+        schema_ref: str | None = None,
+        role: str | None = None,
+        attempt_closed: bool = False,
+        context_tainted: bool = False,
+        expected_tool: str,
+        expected_call_id: str,
+        expected_study_id: str,
+        expected_attempt_id: str,
+    ) -> Artifact:
+        """Fetch-tool path — ``producer=tool``, always ``tainted=True``.
+
+        Requires a ``FetchCapability`` minted by ``invoke_tool`` for an
+        ``is_fetch`` tool (not any read tool). Pair with ``SourceFetched``.
+        Journal provenance ≠ content trusted: network bytes stay tainted;
+        ``quote_in_source`` may still accept them when the digest is journaled.
+        ``expected_*`` binds are required; assert (no consume) so append can
+        consume the opaque id once.
+        """
+        from coscientist.core.source_fetch import assert_fetch_capability_bound
+
+        assert_fetch_capability_bound(
+            capability,
+            tool=expected_tool,
+            call_id=expected_call_id,
+            study_id=expected_study_id,
+            attempt_id=expected_attempt_id,
+        )
+        return self._store(
+            content,
+            produced_by,
+            name=name,
+            media_type=media_type,
+            schema_ref=schema_ref,
+            role=role,
+            attempt_closed=attempt_closed,
+            producer="tool",
             tainted=True,
             context_tainted=context_tainted,
         )

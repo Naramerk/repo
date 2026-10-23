@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import ast
+import subprocess
 from pathlib import Path
-
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 COSI = ROOT / "coscientist"
@@ -17,8 +16,32 @@ _REGISTER_ALLOWED = {
     COSI / "core" / "tool_loader.py",
 }
 
-# Test-only APIs — must not appear under coscientist/.
-_TEST_ONLY_NAMES = ("_reset_registry_for_tests", "_register_tool_for_tests")
+# Test-only APIs — must not appear under coscientist/ (except their defining module).
+_TEST_ONLY_NAMES = (
+    "_reset_registry_for_tests",
+    "_register_tool_for_tests",
+    "_mint_fetch_capability_for_tests",
+)
+_TEST_ONLY_DEF_MODULES = {
+    "_reset_registry_for_tests": COSI / "core" / "tool_registry.py",
+    "_register_tool_for_tests": COSI / "core" / "tool_registry.py",
+    "_mint_fetch_capability_for_tests": COSI / "tools" / "effects.py",
+}
+
+# Fetch mint / registry / write-permit: only tools.effects may define these.
+_FETCH_MINT_NAMES = (
+    "_mint_fetch_capability",
+    "_ISSUED_FETCH_CAPS",
+    "_IssuedFetchCap",
+    "_SOURCE_FETCHED_WRITE_PERMITS",
+    "_take_source_fetched_write_permit",
+    # Removed bool-bypass APIs — must not reappear under coscientist/.
+    "_source_fetched_permit_scope",
+    "source_fetched_permitted",
+    "_allow_source_fetched",
+    "allow_source_fetched",
+)
+_FETCH_MINT_ALLOWED = {COSI / "tools" / "effects.py"}
 
 
 def _py_files(base: Path) -> list[Path]:
@@ -52,6 +75,15 @@ def _calls_name(tree: ast.AST, func_name: str) -> bool:
     return False
 
 
+def _names_attr_or_name(tree: ast.AST, name: str) -> bool:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == name:
+            return True
+        if isinstance(node, ast.Attribute) and node.attr == name:
+            return True
+    return False
+
+
 def test_register_tool_only_in_loader_and_registry():
     """Forbid ``register_tool(...)`` outside tool_loader / tool_registry."""
     offenders: list[str] = []
@@ -65,19 +97,60 @@ def test_register_tool_only_in_loader_and_registry():
 
 
 def test_test_only_registry_helpers_banned_outside_tests():
-    """``_reset_registry_for_tests`` / ``_register_tool_for_tests`` only in tests/."""
+    """Test-only mint/register helpers must not be called outside tests/."""
     offenders: list[str] = []
     for path in _py_files(COSI):
-        # Definitions live in tool_registry; everything else under coscientist is banned.
-        if path == COSI / "core" / "tool_registry.py":
-            continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for name in _TEST_ONLY_NAMES:
-            if _calls_name(tree, name) or _imports_name(
-                tree, module_suffix="tool_registry", name=name
-            ):
+            if path == _TEST_ONLY_DEF_MODULES[name]:
+                continue
+            if _calls_name(tree, name):
+                offenders.append(f"{path.relative_to(ROOT)}: {name}")
+                continue
+            mod = (
+                "tool_registry"
+                if name in ("_reset_registry_for_tests", "_register_tool_for_tests")
+                else "effects"
+            )
+            if _imports_name(tree, module_suffix=mod, name=name):
                 offenders.append(f"{path.relative_to(ROOT)}: {name}")
     assert not offenders, f"test-only registry helpers in production: {offenders}"
+
+
+# Bool / scope bypass names must not appear anywhere under coscientist/.
+_FETCH_BYPASS_BANNED = (
+    "_source_fetched_permit_scope",
+    "source_fetched_permitted",
+    "_allow_source_fetched",
+    "allow_source_fetched",
+)
+
+
+def test_fetch_capability_mint_only_in_effects():
+    """Only ``coscientist.tools.effects`` may mint / hold the fetch registry."""
+    offenders: list[str] = []
+    registry_names = (
+        "_mint_fetch_capability",
+        "_ISSUED_FETCH_CAPS",
+        "_IssuedFetchCap",
+        "_SOURCE_FETCHED_WRITE_PERMITS",
+        "_take_source_fetched_write_permit",
+    )
+    for path in _py_files(COSI):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _FETCH_BYPASS_BANNED:
+            if _calls_name(tree, name) or _names_attr_or_name(tree, name):
+                offenders.append(f"{path.relative_to(ROOT)}: {name}")
+        if path in _FETCH_MINT_ALLOWED:
+            continue
+        for name in registry_names:
+            if _calls_name(tree, name) or _names_attr_or_name(tree, name):
+                offenders.append(f"{path.relative_to(ROOT)}: {name}")
+            if _imports_name(tree, module_suffix="effects", name=name):
+                offenders.append(f"{path.relative_to(ROOT)}: import {name}")
+            if _imports_name(tree, module_suffix="source_fetch", name=name):
+                offenders.append(f"{path.relative_to(ROOT)}: import {name}")
+    assert not offenders, f"fetch mint/bypass leaked: {offenders}"
 
 
 def test_agents_forbid_registry_and_direct_tool_call():
@@ -107,10 +180,17 @@ def test_agents_forbid_registry_and_direct_tool_call():
     assert not offenders, offenders
 
 
-def test_import_linter_agents_contract():
-    """lint-imports must include the agents invoke_tool contract."""
-    pytest.importorskip("importlinter")
-    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert "agents must use invoke_tool" in text
-    assert "coscientist.agents" in text
-    assert "coscientist.core.tool_registry" in text
+def test_import_linter_contracts_run():
+    """Actually run lint-imports (not merely grep pyproject; no importorskip)."""
+    proc = subprocess.run(
+        ["lint-imports"],
+        cwd=str(ROOT),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, (
+        f"lint-imports failed (rc={proc.returncode}):\n"
+        f"{proc.stdout}\n{proc.stderr}"
+    )
+    assert "0 broken" in proc.stdout

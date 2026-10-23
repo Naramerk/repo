@@ -13,22 +13,36 @@ from typing import Any
 GetMeta = Callable[[str], Any | None]
 
 # Per-async-task / per-thread (copied into to_thread on 3.12+).
-_attempt_context_tainted: ContextVar[bool] = ContextVar(
-    "attempt_context_tainted", default=False
+# Mutable cell so a mid-attempt fetch can flip taint without losing the
+# executor's reset token (foreach-safe: each context has its own cell).
+_attempt_context_tainted: ContextVar[list[bool] | None] = ContextVar(
+    "attempt_context_tainted", default=None
 )
 
 
-def push_attempt_taint(value: bool) -> Token[bool]:
+def push_attempt_taint(value: bool) -> Token[list[bool] | None]:
     """Bind attempt taint for the current context; return token for reset."""
-    return _attempt_context_tainted.set(bool(value))
+    return _attempt_context_tainted.set([bool(value)])
 
 
-def reset_attempt_taint(token: Token[bool]) -> None:
+def reset_attempt_taint(token: Token[list[bool] | None]) -> None:
     _attempt_context_tainted.reset(token)
 
 
+def mark_attempt_tainted() -> None:
+    """Flip the current context cell to tainted (sticky until reset)."""
+    cell = _attempt_context_tainted.get()
+    if cell is None:
+        _attempt_context_tainted.set([True])
+    else:
+        cell[0] = True
+
+
 def current_attempt_taint() -> bool:
-    return bool(_attempt_context_tainted.get())
+    cell = _attempt_context_tainted.get()
+    if cell is None:
+        return False
+    return bool(cell[0])
 
 
 def artifact_is_tainted(meta: Any | None) -> bool:
