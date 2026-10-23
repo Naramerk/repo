@@ -22,8 +22,8 @@ from coscientist.tools.taint import (
 __all__ = [
     "CallCtx",
     "Tool",
-    "ToolError",
     "ToolEffect",
+    "ToolError",
     "ToolOutput",
     "ToolSpec",
     "context_is_tainted",
