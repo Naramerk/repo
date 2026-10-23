@@ -139,9 +139,11 @@ async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
 
 def test_upcast_provenance_simulated_to_stub():
     v, p = upcast("AttemptStarted", 1, {"provenance": "simulated", "attempt_id": "a"})
-    # v1→v2 simulated→stub, v2→v3 inputs=[] (PR7), v3→v4 limitations=[] (PR10).
-    assert v == 4 and p["provenance"] == "stub" and p["inputs"] == []
+    # v1→v2 stub … v3→v4 limitations … v4→v5 shares … v5→v6 budget_limit.
+    assert v == 6 and p["provenance"] == "stub" and p["inputs"] == []
     assert p["limitations"] == []
+    assert p["allocated_budget_rub"] is None
+    assert p["budget_limit_rub"] is None
     v, p = upcast(
         "ResultRecorded",
         1,
@@ -332,8 +334,8 @@ def test_upcast_study_created_sets_reserve_zero():
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     )
-    # v1→v2 reserve → … → v8 max_foreach_children.
-    assert v == 8
+    # v1→v2 reserve → … → v8 max_foreach_children → v9 max_task_budget_share.
+    assert v == 9
     assert p["max_foreach_children"] == 32
     assert p["finalize_reserve_s"] == 0
     assert p["refutations_needed"] == 1

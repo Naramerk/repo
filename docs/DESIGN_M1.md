@@ -256,9 +256,10 @@ class Disposition(StrEnum):
 - `TaskSpec.budget_share: float | None`, `deadline_share: float | None`. Незаданные доли = равные доли от не распределённого остатка.
 - Резервы: `finalize_reserve_s` (§0.5) и `replan_reserve: float` (доля, по умолчанию 0.1) под PLAN-n.
 - Валидатор: `Σ budget_share ≤ 1` по всем задачам активной ревизии (бюджет расходуется задачами независимо от параллельности). `Σ deadline_share` проверяется **по критическому пути** DAG (максимум суммы долей по путям от источника до стока) ≤ 1 — параллельные ветви время делят, а не складывают.
-- **Перенормировка при P2** (каждый старт задачи i): `remaining = effective_deadline − now − replan_reserve × (effective_deadline − now)`; `task.deadline = now + share_i / Σ share(задачи на критическом пути от i, ещё не стартовавшие) × remaining`. Бюджет: `budget_i = share_i / Σ share(ещё не стартовавшие задачи) × (budget_remaining − budget_reserve)`. Ранний SUCCESS освобождает время и деньги для хвоста; поздние задачи не голодают.
+- **Перенормировка при P2** (каждый старт задачи i): `remaining = effective_deadline − now − replan_reserve × (effective_deadline − now)`; `task.deadline = now + share_i / Σ share(задачи на критическом пути от i, ещё не стартовавшие) × remaining`. Бюджет: `budget_i = share_i / Σ share(ещё не стартовавшие задачи) × (budget_remaining − budget_reserve)`. Ранний SUCCESS освобождает время и деньги для хвоста; поздние задачи не голодают. Остаток доли журналируется как `AttemptStarted.budget_limit_rub`.
+- **M1 gap:** в M1 нет LLM/tool-call runner, поэтому `budget_limit_rub` mid-flight **не** enforce’ится — reserve доли **не** неприкосновенен внутри одной попытки. Контракт для M2: `would_exceed_budget_limit(spent_so_far, next_cost, limit)` — остановить вызов до превышения. Пока runner не enforce’ит: post-hoc `budget_overrun` на `ResultRecorded`/`TaskDone` (outcome/detail исходные; отчёт «выполнено с перерасходом…»), retries запрещены. `cost_rub` → `BudgetDebited` в том же append batch, что `ResultRecorded`/`TaskDone`, на всех путях (включая infra).
 
-**Тесты.** `test_shares_validator_sum`, `test_tail_gets_remaining_time`, `test_reserve_untouchable`.
+**Тесты.** `test_shares_validator_sum`, `test_tail_gets_remaining_time`, `test_reserve_untouchable`, `test_debit_cost_rub_on_every_result_path`, `test_single_attempt_budget_overrun`, `test_budget_hitl_delegate_applies_shares`, `test_budget_hitl_shares_refused`.
 
 ## 6. Финальные типы результата и рубрика (B2, B5, K7, строки 4, 5, 8)
 
@@ -375,7 +376,7 @@ CodeCheck kinds: `exec_runs` (agent jail, exit 0; **prediction/refute role → v
 | 9 | `PlanExpanded` + триггер + квоты агента/человека + replan_reserve + question add/supersede + фильтр k | S6, H-d, H-g, C10 | 8b |
 | 10 | foreach + quorum fan-in (`TaskSpec.foreach`, `InputSpec.quorum`; RU report lines; no expansion quota) | S9 | 9 |
 | 11 | LoopSpec (scope, 3 предиката, обязательный max_iter, LoopCapped) | S10 | 9 |
-| 12 | budget_share/deadline_share + перенормировка + валидатор (критический путь) | S4 | 9 |
+| 12 | budget_share/deadline_share + перенормировка + валидатор (критический путь) — **landed** | S4 | 9 |
 | 13 | Рубрика + final_type + PlanValidator | B2, B5, K7 | 8 |
 | 14 | quote_in_source с нормализацией по CAS | K9 | — |
 | 15 | needs_more_data + experiment_design; contradicts; derivation | строки 4, 5, 8, 9 | 13 |

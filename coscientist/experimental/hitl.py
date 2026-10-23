@@ -98,10 +98,19 @@ class HitlForkMixin(CostlyHitlMixin):
                 h, answer=answer, critic_accepts=critic_accepts  # type: ignore[arg-type]
             )
             return
-        # DESIGN §7.3: «реши сам» → critic with delegated_by=human
+        # DESIGN §7.3 / PR12 budget gate: «реши сам» → critic; mark HITL node only.
+        # Budget shares apply via _apply_budget_hitl (not plan expand).
         if decision == "delegate":
             await self._critic_decide(h, decision="accept", delegated_by="human")
-            await self._maybe_hitl_expand(h, request_id, expansion)
+            if h.kind == "budget":
+                await self._mark_hitl_decision_node(
+                    h, approved_by="critic", delegated_by="human"
+                )
+                await self._apply_budget_hitl(
+                    h, request_id, expansion, approved_by="critic"
+                )
+            else:
+                await self._maybe_hitl_expand(h, request_id, expansion)
             return
         now = self.clock.now()
         await self._append(
@@ -125,7 +134,15 @@ class HitlForkMixin(CostlyHitlMixin):
             ]
         )
         if decision in ("accept", "approve"):
-            await self._maybe_hitl_expand(h, request_id, expansion)
+            if h.kind == "budget":
+                await self._apply_budget_hitl(
+                    h, request_id, expansion, approved_by="human"
+                )
+                await self._mark_hitl_decision_node(
+                    h, approved_by="human", delegated_by=None
+                )
+            else:
+                await self._maybe_hitl_expand(h, request_id, expansion)
 
     async def _maybe_hitl_expand(
         self,
@@ -278,6 +295,7 @@ class HitlForkMixin(CostlyHitlMixin):
         await self._mark_plan_delegated(h, delegated_by=delegated_by)
 
     async def _mark_plan_delegated(self, h: HitlRequest, *, delegated_by: str) -> None:
+        # Budget HITL marks the HITL decision node only (not the plan).
         if h.kind not in ("plan", "plan_approval", "plan_expansion", "hypotheses"):
             return
         graph = getattr(self, "graph", None)
@@ -319,6 +337,83 @@ class HitlForkMixin(CostlyHitlMixin):
                 )
             ]
         )
+
+    async def _mark_hitl_decision_node(
+        self, h: HitlRequest, *, approved_by: str, delegated_by: str | None
+    ) -> None:
+        """PR12: budget delegation attrs live on the HITL node only (not plan)."""
+        graph = getattr(self, "graph", None)
+        if graph is None:
+            return
+        from coscientist.core.graph import GraphNode
+
+        sid, nid, now = h.study_id, f"{h.study_id}:hitl:{h.request_id}", self.clock.now()
+        existing = graph.get_node(nid)
+        attrs = dict((existing.attrs if existing is not None else None) or {})
+        attrs["approved_by"], attrs["kind_gate"] = approved_by, h.kind
+        if delegated_by is not None:
+            attrs["delegated_by"] = delegated_by
+        node = GraphNode(
+            node_id=nid, kind="hitl", study_id=sid, ref_id=h.request_id, attrs=attrs,
+            created_at=getattr(existing, "created_at", None) or now,
+        )
+        await self._append([EventEnvelope(
+            study_id=sid, type="GraphNodeUpserted", entity_key=nid,
+            idem_key=make_idem(
+                "GraphNodeUpserted", nid, "hitl_decision", approved_by, delegated_by or "-"
+            ),
+            payload=node.model_dump(mode="json"), ts=now, schema_version=1,
+        )])
+
+    async def _apply_budget_hitl(
+        self,
+        h: HitlRequest,
+        request_id: str,
+        expansion: dict[str, Any] | None,
+        *,
+        approved_by: str = "human",
+    ) -> None:
+        """Apply explicit HITL budget shares via journaled BudgetSharesAdjusted.
+
+        Critic rejection emits ``BudgetSharesRefused`` + report line (not silent).
+        """
+        if not expansion:
+            return
+        bmap, dmap = expansion.get("budget_shares") or {}, expansion.get("deadline_shares") or {}
+        if not bmap and not dmap:
+            return
+        from coscientist.core.share_alloc import build_budget_shares_payload
+
+        err, payload = build_budget_shares_payload(
+            self, budget_shares=dict(bmap),
+            deadline_shares=dict(dmap) if dmap else None, request_id=request_id,
+        )
+        if err is not None or payload is None:
+            await self._append(
+                [
+                    EventEnvelope(
+                        study_id=h.study_id,
+                        type="BudgetSharesRefused",
+                        entity_key=request_id,
+                        idem_key=make_idem("BudgetSharesRefused", request_id),
+                        payload={
+                            "request_id": request_id,
+                            "reason": "critic_rejected",
+                            "detail": str(err or "invalid"),
+                            "approved_by": approved_by,
+                        },
+                        ts=self.clock.now(),
+                        schema_version=1,
+                    )
+                ]
+            )
+            return
+        payload["approved_by"] = approved_by
+        await self._append([EventEnvelope(
+            study_id=h.study_id, type="BudgetSharesAdjusted", entity_key=request_id,
+            idem_key=make_idem("BudgetSharesAdjusted", request_id),
+            payload=payload, ts=self.clock.now(), schema_version=1,
+        )])
 
     def _depends_transitively(self, task: Task, key: str) -> bool:
         seen: set[str] = set()

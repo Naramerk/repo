@@ -159,11 +159,15 @@ def _validate(
                 return f"unknown question id in addresses: {qid!r}"
     validate_input_specs(merged)
     from coscientist.core.foreach import validate_foreach_specs
+    from coscientist.core.shares import critic_plan_shares
 
     try:
         validate_foreach_specs(merged, known_keys=keys)
     except ValueError as e:
         return str(e) or "invalid_foreach"
+    share_err = critic_plan_shares(merged, study=study)
+    if share_err is not None:
+        return share_err
     catalog = getattr(runtime, "catalog", None) or getattr(
         getattr(runtime, "executor", None), "catalog", None
     )

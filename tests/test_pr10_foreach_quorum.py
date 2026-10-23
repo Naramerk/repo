@@ -1471,19 +1471,22 @@ def test_upcast_task_created_foreach_quorum():
             "attempts": [],
         },
     )
-    assert v == 8
+    assert v == 9
     assert p["spec"]["foreach"] is None
     assert p["spec"]["inputs"][0]["quorum"] is None
     assert p["spec"]["sandbox_timeout_s"] is None
+    assert p["spec"]["budget_share"] is None
 
 
 def test_upcast_attempt_limitations():
     v, p = upcast("AttemptStarted", 3, {"attempt_id": "a", "inputs": []})
-    assert v == 4
+    assert v == 6
     assert p["limitations"] == []
+    assert p["allocated_budget_rub"] is None
+    assert p["budget_limit_rub"] is None
 
 
 def test_upcast_study_foreach_cap():
     v, p = upcast("StudyCreated", 7, {"study_id": "s"})
-    assert v == 8
+    assert v == 9
     assert p["max_foreach_children"] == 32

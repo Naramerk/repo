@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import Mapping
 from datetime import timedelta
+from decimal import Decimal
 from typing import Any
 
 from coscientist.checks.evaluate import evaluate_task_checks, role_from_catalog
@@ -564,6 +565,7 @@ class Executor:
         get_graph: Any | None = None,
         get_results: Any | None = None,
         max_attempts: int = 3,
+        on_budget_debit: Any | None = None,
     ) -> None:
         self.writer = writer
         self.catalog = catalog
@@ -576,6 +578,8 @@ class Executor:
         self.get_graph = get_graph
         self.get_results = get_results
         self.max_attempts = int(max_attempts)
+        # PR12: async (task_id, spent_rub, request_id) → record_budget_debit
+        self.on_budget_debit = on_budget_debit
         self._scheduled_reviews: list[str] = []
 
     async def mark_route_returned(self, attempt_id: str, out: AgentTaskOutput) -> str:
@@ -959,6 +963,7 @@ class Executor:
             claims=list(out.claims or []),
             checks=checks,
             infra_failure=False,
+            cost_rub=out.cost_rub,
         )
 
     async def _commit_timeout(
@@ -1008,6 +1013,7 @@ class Executor:
             infra_failure=False,
             charge_attempt=True,
             allow_retry=True,
+            cost_rub=out.cost_rub,
         )
 
     async def _commit_failure(
@@ -1026,7 +1032,10 @@ class Executor:
         charge_attempt: bool = True,
         allow_retry: bool = False,
     ) -> Result:
-        """Infra/core_bug/reject path — drop claims; infra never charges the budget."""
+        """Infra/core_bug/reject path — drop claims; infra never charges the *attempt*.
+
+        Money spent is still debited when ``out.cost_rub`` is known (same batch).
+        """
         rid = result_id(attempt_id)
         drop_claims = result_class in ("infra", "core_bug") or reason in (
             TaskReason.SAME_DIGEST_RETRY.value,
@@ -1075,6 +1084,7 @@ class Executor:
             infra_failure=drop_claims,
             charge_attempt=charge_attempt,
             allow_retry=allow_retry,
+            cost_rub=out.cost_rub,
         )
 
     def _charged_count_after(
@@ -1109,6 +1119,7 @@ class Executor:
         infra_failure: bool = False,
         charge_attempt: bool = True,
         allow_retry: bool = False,
+        cost_rub: Decimal | float | int | str | None = None,
     ) -> Result:
         # Attempt-open check runs inside the write transaction (_append_many_sync).
         now = self.clock.now()
@@ -1133,6 +1144,29 @@ class Executor:
             payload["payload_digest"] = payload_digest(payload)
         payload = {**payload, "charged": bool(charge_attempt)}
         payload["payload_digest"] = payload_digest(payload)
+
+        # PR12 B3: remaining share limit from AttemptStarted; overrun forbids retries.
+        limit_raw: Any = None
+        if isinstance(attempt, dict):
+            limit_raw = attempt.get("budget_limit_rub")
+        elif attempt is not None:
+            limit_raw = getattr(attempt, "budget_limit_rub", None)
+        spent_this: Decimal | None = None
+        if cost_rub is not None:
+            spent_this = Decimal(str(cost_rub))
+            if spent_this <= 0:
+                spent_this = None
+        overrun = False
+        if (
+            spent_this is not None
+            and limit_raw is not None
+            and spent_this > Decimal(str(limit_raw))
+        ):
+            overrun = True
+            payload = {**payload, "budget_overrun": True, "budget_limit_rub": str(limit_raw)}
+            payload["payload_digest"] = payload_digest(payload)
+            allow_retry = False
+
         # PR7/PR8: claim nodes carry producing-attempt provenance (H-b);
         # re-upsert keeps worst provenance; about edges + attr whitelist.
         # Scientific FAILED/PARTIAL keep claims (not_met → refute); infra drops.
@@ -1218,8 +1252,11 @@ class Executor:
                 "outcome": task_outcome.value,
                 "reason": reason,
             }
+            # Keep original detail/result; overrun is a separate flag (not «не выполнено»).
             if payload.get("detail"):
                 done_payload["detail"] = payload["detail"]
+            if overrun:
+                done_payload["budget_overrun"] = True
             events.append(
                 EventEnvelope(
                     study_id=study_id,
@@ -1231,7 +1268,25 @@ class Executor:
                     schema_version=2,
                 )
             )
+        # PR12: debit actual cost_rub in the SAME append batch as the result
+        # (scientific / timeout / same_digest / core_bug / catalog_error / infra).
+        if spent_this is not None:
+            from coscientist.core.share_alloc import budget_debit_event
+
+            debit_ev = budget_debit_event(
+                study_id=study_id,
+                spent_rub=spent_this,
+                request_id=attempt_id,
+                task_id=task_id,
+                ts=now,
+            )
+            if debit_ev is not None:
+                events.append(debit_ev)
         await self._append(events, require_open_attempt=attempt_id)
+        if spent_this is not None and self.on_budget_debit is not None:
+            await self.on_budget_debit(
+                spent_rub=spent_this, request_id=attempt_id, task_id=task_id
+            )
         return Result(
             result_id=payload["result_id"],
             attempt_id=attempt_id,

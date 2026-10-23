@@ -83,6 +83,7 @@ HitlGateKind = Literal[
     "report",
     "result_acceptance",
     "skip_task",
+    "budget",  # M1 PR12: budget_share checkpoint («реши сам» → critic)
 ]
 
 
@@ -106,6 +107,7 @@ def _default_gates() -> dict[str, GateConfig]:
         "report": GateConfig(timeout_s=1800, on_timeout="delegate"),
         "result_acceptance": GateConfig(timeout_s=1800, on_timeout="delegate"),
         "skip_task": GateConfig(timeout_s=1800, on_timeout="delegate"),
+        "budget": GateConfig(timeout_s=1800, on_timeout="delegate"),
     }
 
 
@@ -273,6 +275,9 @@ class TaskSpec(Frozen):
     sandbox_check_limits: dict[str, dict[str, Any]] | None = None
     # Audit when agent-provided limit fields were ignored.
     sandbox_limits_note: str | None = None
+    # M1 PR12: fractions of study budget / wall time (None = equal remainder).
+    budget_share: float | None = Field(default=None, ge=0.0, le=1.0)
+    deadline_share: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class Budget(Frozen):
@@ -333,6 +338,8 @@ class Study(Frozen):
     plan_timeout_s: int = Field(default=600, ge=1)
     # PR10: cap foreach children; excess → report limitation (sorted order kept).
     max_foreach_children: int = Field(default=32, ge=1)
+    # PR12: plan critic — no single task may claim more than this budget_share.
+    max_task_budget_share: float = Field(default=1.0, ge=0.0, le=1.0)
 
     def effective_deadline(self) -> datetime:
         """Last instant usable by tasks/attempts/HITL (deadline − finalize reserve)."""
@@ -640,6 +647,8 @@ class AgentTaskOutput(Frozen):
     downgrade: DowngradeClaim | None = None
     # PR9: typed request; core enqueues PLAN-n → critic (never direct PlanExpanded).
     expansion_request: ExpansionRequest | None = None
+    # PR12: actual spend → BudgetDebited(task_id) from Executor.record.
+    cost_rub: Decimal | None = None
 
 
 class StudyView(Frozen):

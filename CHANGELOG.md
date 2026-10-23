@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### M1 PR12
+- `TaskSpec.budget_share` / `deadline_share` (None = equal remainder of undistributed pool).
+- Validators / plan critic: Σ `budget_share` ≤ (1−`replan_reserve`); per-task range + `Study.max_task_budget_share`; critical-path Σ `deadline_share` ≤ (1−reserve). Same critic on `accept_plan`, expansions, foreach, and HITL budget apply.
+- P2 renorm (journaled on `AttemptStarted` v6): when shares present, `deadline = min(task.deadline, renormed, ed)`; without shares, `min(task.deadline, ed)` only. Budget: no `max_cost_rub` → `allocated_budget_rub=None` (no task cap); pool/share 0 → refuse at start `SKIPPED(budget)` (no attempt, no exception); else exceed only when `spent > cap`. Cap fixed at first allocation across retries; spend accumulates. Remaining cap passed as `budget_limit_rub`.
+- **M1 gap (mid-attempt reserve):** there is no LLM/tool-call runner in M1, so `budget_limit_rub` is **not** enforced mid-flight. Core exposes `would_exceed_budget_limit` for M2 runners (stop before a call that would exceed). Until then the share reserve is **not** inviolable mid-attempt: post-hoc overrun is flagged on `ResultRecorded`/`TaskDone.budget_overrun` (original outcome/detail kept), retries are forbidden, and the report says the task was done with an overrun.
+- Concurrent starts: pool subtracts allocated-but-unspent of open tasks so reserve stays untouchable.
+- Executor debits `AgentTaskOutput.cost_rub` → `BudgetDebited(task_id=)` on **every** result path (scientific / timeout / same_digest / core_bug / catalog_error / infra) in the **same** append batch as `ResultRecorded`/`TaskDone`. Infra still does not charge an *attempt*; money spent is still debited.
+- Foreach children **split** the template’s resolved share (`template_share / N`); when the template share is unset, the resolved parent default (equal remainder, capped) is split the same way. Agents cannot raise own `budget_share` (`agent_share_raise`).
+- HITL `budget`: explicit shares via journaled `BudgetSharesAdjusted` (critic-validated; «реши сам»/delegate also applies shares); critic reject → `BudgetSharesRefused` + report line. `delegated_by`/`approved_by` on the HITL decision node only (not plan). Report: task «не выполнено: бюджет задачи исчерпан»; overrun «выполнено с перерасходом…»; study «не выполнено: бюджет исчерпан».
+- Upcasters: TaskCreated **v9** / PlanAccepted **v7** (share defaults; PR17 sandbox stays on v8/v6); AttemptStarted v6 (`budget_limit_rub`); StudyCreated v9 (`max_task_budget_share`).
+
 ### M1 PR17
 - Executable CodeCheck kinds + sandbox limits (B7, B8, K5): `exec_runs`, `tests_pass`, `metric_on_holdout`, `reproducible_rerun`.
 - **Separate verifier (B1):** collect agent declared outputs (sha256); catalog scorer / task tests in a second fresh bwrap jail (data/scorer/holdout/tests RO; only results RW); read structured `reward.txt` JSON / junit — never stdout. Holdout labels from catalog (`CodeCheck.holdout`); agent holdout slots ignored. `catalog:metric` scores predictions-as-data (`python -I`). `tests_pass` is **observation-only** (`countable=false`, `trusted=false`; tamper-proof = M2). Per-check `input_allowlist` (fail-closed).

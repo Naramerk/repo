@@ -55,6 +55,9 @@ _TASKDONE_DETAIL_LINES = {
     "foreach_quorum_gt_children": "не выполнено: кворум > числа детей",
     "quorum": "не выполнено: кворум входов",
     "foreach_empty": "не выполнено: foreach пуст",
+    "share_exhausted": "не выполнено: бюджет задачи исчерпан",
+    "task_share_exhausted": "не выполнено: бюджет задачи исчерпан",
+    "zero_share_or_pool": "не выполнено: бюджет задачи исчерпан",
 }
 
 def is_finalized(runtime: StudyRuntime) -> bool:
@@ -164,9 +167,35 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
                 )
                 if line and line not in seen:
                     seen.append(line)
+            # PR12: per-task budget line (study-level stays on BudgetExceeded).
+            if reason == TaskReason.BUDGET.value:
+                from coscientist.core.shares import TASK_BUDGET_EXHAUSTED_LINE
+
+                if TASK_BUDGET_EXHAUSTED_LINE not in seen:
+                    seen.append(TASK_BUDGET_EXHAUSTED_LINE)
             line = _TASKDONE_DETAIL_LINES.get(str(ev.payload.get("detail") or ""))
             if line and line not in seen:
                 seen.append(line)
+            if ev.payload.get("budget_overrun"):
+                from coscientist.core.shares import TASK_BUDGET_OVERRUN_LINE
+
+                if TASK_BUDGET_OVERRUN_LINE not in seen:
+                    seen.append(TASK_BUDGET_OVERRUN_LINE)
+        elif ev.type == "BudgetExceeded":
+            from coscientist.core.shares import BUDGET_EXHAUSTED_LINE
+
+            if BUDGET_EXHAUSTED_LINE not in seen:
+                seen.append(BUDGET_EXHAUSTED_LINE)
+        elif ev.type == "BudgetSharesRefused":
+            from coscientist.core.shares import BUDGET_SHARES_REFUSED_LINE
+
+            if BUDGET_SHARES_REFUSED_LINE not in seen:
+                seen.append(BUDGET_SHARES_REFUSED_LINE)
+        elif ev.type == "ResultRecorded" and ev.payload.get("budget_overrun"):
+            from coscientist.core.shares import TASK_BUDGET_OVERRUN_LINE
+
+            if TASK_BUDGET_OVERRUN_LINE not in seen:
+                seen.append(TASK_BUDGET_OVERRUN_LINE)
         elif ev.type == "ExpansionRefused":
             line = expansion_not_done_line(
                 str(ev.payload.get("reason") or ""),

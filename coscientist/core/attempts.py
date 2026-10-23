@@ -172,7 +172,12 @@ class AttemptsMixin:
         task_key_or_id: str,
         *,
         provenance: Provenance | None = None,
-    ) -> str:
+    ) -> str | None:
+        """Start an attempt, or return ``None`` when the task is refused without one.
+
+        Callers must treat ``None`` as a successful refusal (task already
+        ``SKIPPED(budget)`` / similar) — never pass it to ``Executor.record``.
+        """
         task = self._resolve_task(task_key_or_id)
         # Foreach templates are materialization placeholders — never dispatched.
         if task.spec.foreach is not None:
@@ -299,8 +304,13 @@ class AttemptsMixin:
         now = self.clock.now()
         assert self.study is not None
         sid = self.study.study_id
-        deadline = min(task.deadline, self.study.effective_deadline())
+        from coscientist.core.shares import attempt_share_fields_or_refuse
+
         lim_payload = [lim.model_dump(mode="json") if hasattr(lim, "model_dump") else dict(lim) for lim in limitations]
+        share_fields = await attempt_share_fields_or_refuse(self, task)
+        if share_fields is None:
+            # Zero share / empty pool: task already SKIPPED(budget); no AttemptStarted.
+            return None
         payload = {
             "attempt_id": aid,
             "n": n,
@@ -310,13 +320,11 @@ class AttemptsMixin:
             "close_reason": None,
             "provenance": prov,
             "agent_output_digest": None,
-            "deadline": deadline.isoformat(),
             "task_id": task.task_id,
             "study_id": sid,
-            # PR7: P2 bindings (+ digest) live in the journal for replay.
             "inputs": [b.model_dump(mode="json") for b in bindings],
-            # PR10: fan-in gaps (inputs below quorum / failed deps).
             "limitations": lim_payload,
+            **share_fields,
         }
         events: list[EventEnvelope] = [
             EventEnvelope(
@@ -326,7 +334,7 @@ class AttemptsMixin:
                 idem_key=make_idem("AttemptStarted", aid),
                 payload=payload,
                 ts=now,
-                schema_version=4,
+                schema_version=6,
             )
         ]
         # Persist full verdict snapshots used at bind (not digest-only).
