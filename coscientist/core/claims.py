@@ -486,10 +486,12 @@ def runtime_claim_from_node(
         effect_raw = attrs.get("effect")
         effect: dict[str, Any] | None
         if isinstance(effect_raw, dict):
-            from coscientist.core.verdict import recompute_effect_trusted
+            from coscientist.core.verdict import recompute_effect_provenance
 
-            # MN2: recompute trusted from core producer; never trust journal bit.
-            effect = recompute_effect_trusted(dict(effect_raw))
+            # Recompute trusted/countable from provenance facts (not journal bits).
+            effect = recompute_effect_provenance(
+                dict(effect_raw), attempt_id=aid or None
+            )
         else:
             effect = None
         frozen = _coerce_bool(attrs.get("frozen"))
@@ -552,8 +554,8 @@ def runtime_claim_from_node(
         # Absent or explicit False ⇒ never-severe (V5); True is ignored and recomputed.
         from coscientist.core.verdict import (
             claim_is_severe,
-            effect_is_trusted,
-            effect_producer_trusted,
+            effect_has_interval,
+            effect_is_countable,
         )
 
         sesoi_f = sesoi if isinstance(sesoi, float) else None
@@ -608,18 +610,15 @@ def runtime_claim_from_node(
         if stored_refute is False:
             refute_capable = False
         else:
-            # Recompute — ignore stored True; require trusted producer (null → CI too).
+            # Recompute — ignore stored True; require countable evidence (null → CI).
             refute_capable = bool(
                 frozen
                 and check_role == "prediction"
                 and uses_sesoi is True
                 and sesoi_f is not None
                 and used_sesoi is True
-                and (
-                    effect_is_trusted(effect)
-                    if predicts_null
-                    else effect_producer_trusted(effect)
-                )
+                and effect_is_countable(effect)
+                and (effect_has_interval(effect) if predicts_null else True)
             )
         probe.severe = severe_coerced
         probe.refute_capable = refute_capable

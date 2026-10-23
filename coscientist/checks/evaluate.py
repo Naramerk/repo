@@ -81,17 +81,43 @@ def _cmp(op: str, left: Any, right: Any, tolerance: float | None) -> bool:
     return ops[op](left, right)
 
 
-def _effect_trust_fields(
-    artifacts: LocalArtifactStore, artifact_id: str | None
+def artifact_belongs_to_attempt(meta: Any | None, attempt_id: str | None) -> bool:
+    """True when ``Artifact.produced_by.call_id`` is bound to ``attempt_id``."""
+    if meta is None or not attempt_id:
+        return False
+    produced = getattr(meta, "produced_by", None)
+    call_id = str(getattr(produced, "call_id", "") or "")
+    if not call_id:
+        return False
+    return call_id == attempt_id or call_id.startswith(f"{attempt_id}:")
+
+
+def _effect_provenance_fields(
+    artifacts: LocalArtifactStore,
+    artifact_id: str | None,
+    *,
+    attempt_id: str | None,
 ) -> dict[str, Any]:
-    """Core-stamped producer + trusted from artifact meta (agent cannot set)."""
+    """Core-stamped producer/trusted/countable from artifact meta (agent cannot set).
+
+    ``trusted`` = producer core|sandbox (sandbox not wired in M1 production).
+    ``countable`` = core catalog evaluation on an artifact bound to this attempt.
+    """
     meta = artifacts.get_meta(artifact_id) if artifact_id else None
     producer = getattr(meta, "producer", "agent") if meta is not None else "agent"
     if producer not in ("agent", "core", "sandbox"):
         producer = "agent"
+    produced = getattr(meta, "produced_by", None) if meta is not None else None
+    call_id = str(getattr(produced, "call_id", "") or "")
+    belongs = artifact_belongs_to_attempt(meta, attempt_id)
     return {
         "producer": producer,
         "trusted": artifact_producer_trusted(meta),
+        "core_evaluated": True,
+        "produced_by_call_id": call_id,
+        "artifact_id": str(artifact_id or ""),
+        # Countable only when the artifact was produced for this attempt.
+        "countable": bool(belongs),
     }
 
 
@@ -138,6 +164,7 @@ def evaluate_code_check(
     sesoi: float | None = None,
     predicts_null: bool = False,
     predicted_direction: str = "two_sided",
+    attempt_id: str | None = None,
 ) -> CheckResult:
     try:
         if check.kind == "artifact_exists":
@@ -154,6 +181,16 @@ def evaluate_code_check(
                 )
             art = artifacts.get_meta(handle.artifact_id)
             assert art is not None
+            if attempt_id and not artifact_belongs_to_attempt(art, attempt_id):
+                return CheckResult(
+                    check_id=check_id,
+                    template_id=template_id,
+                    status=ReqStatus.FAILED,
+                    is_code=True,
+                    required=True,
+                    role=role,
+                    detail="foreign_artifact",
+                )
             return CheckResult(
                 check_id=check_id,
                 template_id=template_id,
@@ -181,6 +218,17 @@ def evaluate_code_check(
                     role=role,
                     detail="output missing",
                 )
+            meta = artifacts.get_meta(handle.artifact_id)
+            if attempt_id and not artifact_belongs_to_attempt(meta, attempt_id):
+                return CheckResult(
+                    check_id=check_id,
+                    template_id=template_id,
+                    status=ReqStatus.FAILED,
+                    is_code=True,
+                    required=True,
+                    role=role,
+                    detail="foreign_artifact",
+                )
             raw = artifacts.read(handle.artifact_id)
             doc = json.loads(raw)
             pointer = check.pointer
@@ -200,7 +248,9 @@ def evaluate_code_check(
 
             effect: dict[str, Any] | None = None
             used_sesoi = False
-            trust = _effect_trust_fields(artifacts, handle.artifact_id)
+            prov = _effect_provenance_fields(
+                artifacts, handle.artifact_id, attempt_id=attempt_id
+            )
             if check.kind == "json_pointer":
                 ok = left is not None
             elif check.kind == "value_matches":
@@ -208,7 +258,7 @@ def evaluate_code_check(
                 ok = left == check.target
                 if isinstance(left, (int, float)):
                     est = float(left)
-                    effect = {"est": est, "kind": "point", **trust}
+                    effect = {"est": est, "kind": "point", **prov}
             else:
                 # metric_threshold — point-estimate exceedance or TOST with real CI.
                 op = check.op or "=="
@@ -225,7 +275,7 @@ def evaluate_code_check(
                             "ci_low": ci["ci_low"],
                             "ci_high": ci["ci_high"],
                             "kind": "interval",
-                            **trust,
+                            **prov,
                         }
                         used_sesoi = True
                         ok = (-float(sesoi)) < ci["ci_low"] and ci["ci_high"] < float(
@@ -240,7 +290,7 @@ def evaluate_code_check(
                     # Honest point-estimate check (not TOST).
                     used_sesoi = True
                     est = float(left)
-                    effect = {"est": est, "kind": "point", **trust}
+                    effect = {"est": est, "kind": "point", **prov}
                     if predicted_direction == "positive":
                         ok = est > float(sesoi)
                     elif predicted_direction == "negative":
@@ -250,7 +300,7 @@ def evaluate_code_check(
                 else:
                     ok = _cmp(op, left, check.target, check.tolerance)
                     if isinstance(left, (int, float)):
-                        effect = {"est": float(left), "kind": "point", **trust}
+                        effect = {"est": float(left), "kind": "point", **prov}
 
             return CheckResult(
                 check_id=check_id,
@@ -365,6 +415,7 @@ def evaluate_task_checks(
     artifacts: LocalArtifactStore,
     *,
     review_statuses: dict[str, ReqStatus] | None = None,
+    attempt_id: str | None = None,
 ) -> list[CheckResult]:
     """Evaluate criteria on the task; review checks become UNASSESSED unless overridden."""
     by_id = {t.id: t for t in catalog.templates}
@@ -419,6 +470,7 @@ def evaluate_task_checks(
                 sesoi=tmpl.sesoi,
                 predicts_null=bool(tmpl.predicts_null),
                 predicted_direction=str(tmpl.predicted_direction),
+                attempt_id=attempt_id,
             )
             # respect required flag from ref
             results.append(

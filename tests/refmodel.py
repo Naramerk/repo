@@ -116,30 +116,31 @@ class Claim:
         if self.used_sesoi is None:
             self.used_sesoi = bool(self.uses_sesoi)
         if self.effect is None and self.sesoi is not None:
-            # Default effect exceeds sesoi; sandbox producer so oracle unit tests
-            # can exercise severe / refute gates (agent put stays untrusted).
+            # Default effect exceeds sesoi; countable core-eval for oracle gates.
             est = float(self.sesoi) + 1.0
             self.effect = {
                 "est": est,
                 "ci_low": est,
                 "ci_high": est,
-                "trusted": True,
-                "producer": "sandbox",
+                "producer": "agent",
+                "trusted": False,
+                "core_evaluated": True,
+                "countable": True,
             }
         elif isinstance(self.effect, dict):
             patched = dict(self.effect)
-            if "trusted" not in patched:
-                patched["trusted"] = True
-            if "producer" not in patched and patched.get("trusted") is True:
-                patched["producer"] = "sandbox"
+            if "core_evaluated" not in patched and patched.get("countable") is not False:
+                patched["core_evaluated"] = True
+            if "countable" not in patched and patched.get("core_evaluated"):
+                patched["countable"] = True
             self.effect = patched
-        trusted = bool(
-            isinstance(self.effect, dict) and self.effect.get("trusted") is True
+        countable = bool(
+            isinstance(self.effect, dict) and self.effect.get("countable") is True
         )
         if self.severe is None:
             has_thr = bool(self.uses_sesoi) and self.sesoi is not None and self.used_sesoi
             exceeds = False
-            if has_thr and self.effect is not None and trusted:
+            if has_thr and self.effect is not None and countable:
                 try:
                     exceeds = float(self.effect["est"]) > float(self.sesoi)
                 except (KeyError, TypeError, ValueError):
@@ -150,7 +151,7 @@ class Claim:
                 and self.validity_ok
                 and self.provenance == "real"
                 and has_thr
-                and trusted
+                and countable
                 and (self.predicts_null or exceeds)
             )
         if self.refute_capable is None:
@@ -160,7 +161,7 @@ class Claim:
                 and self.uses_sesoi
                 and self.sesoi is not None
                 and self.used_sesoi
-                and trusted
+                and countable
             )
 
     @property

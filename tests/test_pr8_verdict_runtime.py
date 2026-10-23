@@ -55,8 +55,11 @@ _DERIVED_OK = {
         "est": 1.5,
         "ci_low": 1.5,
         "ci_high": 1.5,
-        "trusted": True,
-        "producer": "sandbox",
+        "producer": "agent",
+        "trusted": False,
+        "core_evaluated": True,
+        "countable": True,
+        "produced_by_call_id": "",
     },
     "check_role": "prediction",
     "refute_capable": True,
@@ -777,12 +780,13 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
         study=rt.study,
         results=rt.results,
     )
-    # M1 limitation: agent metrics are untrusted → not severe → inconclusive.
-    assert d["Q1"]["verdict"] == "inconclusive"
+    # Agent put + core SESOI eval → countable severe → survived (need 2 for supported).
+    assert d["Q1"]["verdict"] == "survived"
     by = filtered_claims_by_target(
         rt.graph, study_id=sid, results=rt.results
     )
-    assert by["question:Q1"][0].severe is False
+    assert by["question:Q1"][0].severe is True
+    assert (by["question:Q1"][0].effect or {}).get("trusted") is False
     await close_runtime(rt)
 
 
@@ -882,12 +886,14 @@ def test_criterion_status_not_met_from_failed_check():
             is_code=True,
             required=False,
             role="prediction",
-            # Trusted metric evidence required for inconsistent / not_met.
+            # Countable core-evaluated evidence required for inconsistent / not_met.
             effect={
                 "est": 0.0,
                 "kind": "point",
-                "producer": "sandbox",
-                "trusted": True,
+                "producer": "agent",
+                "trusted": False,
+                "core_evaluated": True,
+                "countable": True,
             },
         )
     ]
@@ -1047,8 +1053,8 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
     assert any(n.kind == "criterion" for n in rt.graph.nodes_by_kind("criterion"))
     aid0 = await rt.start_attempt("E0", provenance="real")
     # value_match required, target 225 — wrong count ⇒ FAILED/PARTIAL scientific.
-    # Sandbox producer required for trusted refute (agent put cannot refute).
-    art = arts.put_sandbox(
+    # Production path: agent put + core catalog evaluation → countable refute.
+    art = arts.put(
         b'{"count": 999}',
         make_tool_ref(f"{aid0}:1"),
         name="main",
@@ -1076,7 +1082,8 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
     assert claim.attrs["check_role"] == "prediction"
     assert claim.attrs["frozen"] is True
     assert claim.attrs["attempt_outcome"] in ("FAILED", "PARTIAL")
-    assert (claim.attrs.get("effect") or {}).get("trusted") is True
+    assert (claim.attrs.get("effect") or {}).get("countable") is True
+    assert (claim.attrs.get("effect") or {}).get("trusted") is False
     res = rt.results[aid0]
     assert res.get("result_class") == "scientific"
     d = dispositions(
@@ -1286,7 +1293,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
     )
     aid = await rt.start_attempt("E_ref", provenance="real")
     await rt.record_budget_debit(spent_rub=Decimal("1.00"), request_id="debit-1")
-    art = arts.put_sandbox(
+    art = arts.put(
         b'{"count": 999}',
         make_tool_ref(f"{aid}:1"),
         name="main",
@@ -1364,8 +1371,10 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
                 "est": 1.5,
                 "ci_low": 1.5,
                 "ci_high": 1.5,
-                "trusted": True,
-                "producer": "sandbox",
+                "producer": "agent",
+                "trusted": False,
+                "core_evaluated": True,
+                "countable": True,
             },
             claim_outcome="consistent",
             severe=True,

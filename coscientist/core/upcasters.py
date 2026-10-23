@@ -300,6 +300,14 @@ register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)
 register_upcaster("AttemptStarted", 2, _attempt_started_v2_to_v3_inputs)
+def _result_recorded_v2_to_v3_output_kinds(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR8b: ``output_kinds`` (catalog code|data); absent → {}."""
+    out = dict(payload)
+    out.setdefault("output_kinds", {})
+    return out
+
+
 register_upcaster("ResultRecorded", 1, _rename_simulated_provenance)
+register_upcaster("ResultRecorded", 2, _result_recorded_v2_to_v3_output_kinds)
 register_upcaster("StudyFinalized", 1, _study_finalized_v1_to_v2)
 register_upcaster("StudyFinalized", 2, _study_finalized_v2_to_v3)

@@ -63,13 +63,16 @@ def _c(**kw) -> RuntimeClaim:
         used_sesoi=True,
         predicts_null=False,
         predicted_direction="positive",
-        # Unit tests stamp trusted sandbox producer to exercise gates.
+        # Unit tests stamp countable core-evaluated evidence (production path).
         effect={
             "est": 1.5,
             "ci_low": 1.5,
             "ci_high": 1.5,
-            "trusted": True,
-            "producer": "sandbox",
+            "producer": "agent",
+            "trusted": False,
+            "core_evaluated": True,
+            "countable": True,
+            "produced_by_call_id": "A1#1:1",
         },
         refute_capable=True,
     )
@@ -295,12 +298,14 @@ def test_null_claim_requires_tost():
         tost_holds_numerically,
     )
 
-    effect = {"ci_low": -0.1, "ci_high": 0.1, "est": 0.0, "trusted": False}
+    effect = {"ci_low": -0.1, "ci_high": 0.1, "est": 0.0, "countable": False}
     assert not tost_holds_numerically(sesoi=None, effect=effect)
     assert tost_holds_numerically(sesoi=1.0, effect=effect)
-    # Severe-grade TOST also requires trusted producer.
+    # Severe-grade TOST requires countable core-evaluated evidence.
     assert not tost_holds(sesoi=1.0, effect=effect)
-    assert tost_holds(sesoi=1.0, effect={**effect, "trusted": True})
+    assert tost_holds(
+        sesoi=1.0, effect={**effect, "countable": True, "core_evaluated": True}
+    )
     v, oc, _ = classify_outcome(
         validity_ok=True,
         prediction_statuses=["PASSED"],
@@ -324,7 +329,7 @@ def test_underpowered_is_indeterminate_exclusion():
 
 
 def test_severe_requires_catalog_sesoi_and_effect():
-    """Severe needs uses_sesoi + used_sesoi + trusted effect exceeding sesoi."""
+    """Severe needs uses_sesoi + used_sesoi + countable effect exceeding sesoi."""
     bare = _c(
         severe=None,
         sesoi=None,
@@ -343,22 +348,33 @@ def test_severe_requires_catalog_sesoi_and_effect():
         frozen=True,
     )
     assert claim_is_severe(no_effect) is False
-    untrusted = _c(
+    not_countable = _c(
         severe=None,
         sesoi=0.5,
         uses_sesoi=True,
         used_sesoi=True,
-        effect={"est": 999.0, "kind": "point", "trusted": False},
+        effect={
+            "est": 999.0,
+            "kind": "point",
+            "core_evaluated": False,
+            "countable": False,
+        },
         predicted_direction="positive",
         frozen=True,
     )
-    assert claim_is_severe(untrusted) is False
+    assert claim_is_severe(not_countable) is False
     below = _c(
         severe=None,
         sesoi=0.5,
         uses_sesoi=True,
         used_sesoi=True,
-        effect={"est": 0.1, "ci_low": 0.1, "ci_high": 0.1, "trusted": True},
+        effect={
+            "est": 0.1,
+            "ci_low": 0.1,
+            "ci_high": 0.1,
+            "core_evaluated": True,
+            "countable": True,
+        },
         predicted_direction="positive",
         frozen=True,
     )
@@ -368,7 +384,13 @@ def test_severe_requires_catalog_sesoi_and_effect():
         sesoi=0.5,
         uses_sesoi=True,
         used_sesoi=True,
-        effect={"est": 1.0, "ci_low": 1.0, "ci_high": 1.0, "trusted": True},
+        effect={
+            "est": 1.0,
+            "ci_low": 1.0,
+            "ci_high": 1.0,
+            "core_evaluated": True,
+            "countable": True,
+        },
         predicted_direction="positive",
         frozen=True,
     )
@@ -534,6 +556,23 @@ def test_slot_rename_cannot_hide_data_roots():
         code_output_names=["code", "script", "program"],
     )
     assert digs == [sha]
+
+
+def test_output_kinds_from_catalog_ignores_planner_role():
+    """MJ2: kinds from catalog code_output_names; planner role ignored; else data."""
+    from coscientist.core.verdict import output_kinds_from_catalog
+
+    catalog = type("C", (), {"code_output_names": ["script", "program"]})()
+    kinds = output_kinds_from_catalog(
+        output_names=["dataset", "script", "other"],
+        catalog=catalog,
+    )
+    assert kinds == {"dataset": "data", "script": "code", "other": "data"}
+    # Empty catalog list → everything data (planner cannot override).
+    empty = type("C", (), {"code_output_names": []})()
+    assert output_kinds_from_catalog(
+        output_names=["dataset"], catalog=empty
+    ) == {"dataset": "data"}
 
 
 def test_artifact_role_code_skipped():
@@ -707,8 +746,9 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
                 route="experiment",
                 depends_on=["PLAN"],
                 expected_outputs=[
+                    # Planner declares role=code; catalog does not list "dataset".
                     OutputSpec(
-                        name="dataset", media_type="application/json", role="data"
+                        name="dataset", media_type="application/json", role="code"
                     )
                 ],
                 criteria=[RequirementRef(template_id="artifact_present")],
@@ -728,7 +768,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid_p = await rt.start_attempt("P0")
-    # Spoof: agent labels bytes as python though OutputSpec says data.
+    # Spoof: agent labels bytes as python; planner role=code — catalog still data.
     raw = arts.put(
         b'{"count": 225}',
         make_tool_ref(f"{aid_p}:1"),
@@ -770,52 +810,77 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
     await close_runtime(rt)
 
 
-def test_untrusted_fail_is_indeterminate_not_refutation():
+def test_non_countable_fail_is_indeterminate_not_refutation():
     from coscientist.core.verdict import classify_outcome
 
     v, oc, _ = classify_outcome(
         validity_ok=True,
         prediction_statuses=["FAILED"],
-        effect={"est": 0.0, "kind": "point", "trusted": False, "producer": "agent"},
+        effect={
+            "est": 0.0,
+            "kind": "point",
+            "producer": "agent",
+            "core_evaluated": False,
+            "countable": False,
+        },
     )
     assert v == "valid" and oc == "indeterminate"
     v2, oc2, _ = classify_outcome(
         validity_ok=True,
         prediction_statuses=["FAILED"],
-        effect={"est": 0.0, "kind": "point", "trusted": True, "producer": "sandbox"},
+        effect={
+            "est": 0.0,
+            "kind": "point",
+            "producer": "agent",
+            "core_evaluated": True,
+            "countable": True,
+        },
     )
     assert v2 == "valid" and oc2 == "inconsistent"
-    agent_fail = _c(
+    non_count = _c(
         criterion_status="unassessed",
         claim_outcome="indeterminate",
         severe=False,
-        effect={"est": 0.0, "kind": "point", "trusted": False, "producer": "agent"},
+        effect={
+            "est": 0.0,
+            "kind": "point",
+            "producer": "agent",
+            "core_evaluated": False,
+            "countable": False,
+        },
         exclusion_reason="indeterminate",
     )
-    assert hypothesis_verdict([agent_fail], True)[0] == "inconclusive"
+    assert hypothesis_verdict([non_count], True)[0] == "inconclusive"
 
 
-def test_tost_requires_real_ci_and_trusted():
-    """Point estimate / untrusted CI is not TOST-severe."""
+def test_tost_requires_real_ci_and_countable():
+    """Point estimate / non-countable CI is not TOST-severe."""
     sesoi = 0.5
-    point = {"est": 0.0, "ci_low": 0.0, "ci_high": 0.0, "kind": "point", "trusted": False}
+    point = {
+        "est": 0.0,
+        "ci_low": 0.0,
+        "ci_high": 0.0,
+        "kind": "point",
+        "countable": False,
+    }
     assert tost_holds(sesoi=sesoi, effect=point) is False
-    agent_ci = {
+    no_count = {
         "est": 0.0,
         "ci_low": -0.1,
         "ci_high": 0.1,
         "kind": "interval",
-        "trusted": False,
+        "countable": False,
+        "core_evaluated": False,
     }
-    assert tost_holds(sesoi=sesoi, effect=agent_ci) is False
-    trusted = {**agent_ci, "trusted": True}
-    assert tost_holds(sesoi=sesoi, effect=trusted) is True
+    assert tost_holds(sesoi=sesoi, effect=no_count) is False
+    countable = {**no_count, "countable": True, "core_evaluated": True}
+    assert tost_holds(sesoi=sesoi, effect=countable) is True
     c = _c(
         predicts_null=True,
         used_sesoi=True,
         uses_sesoi=True,
         sesoi=sesoi,
-        effect=agent_ci,
+        effect=no_count,
         severe=None,
     )
     assert claim_is_severe(c) is False
@@ -826,7 +891,7 @@ def test_tost_requires_real_ci_and_trusted():
             used_sesoi=True,
             uses_sesoi=True,
             sesoi=sesoi,
-            effect=agent_ci,
+            effect=no_count,
             refute_capable=True,  # forged True must not win
         )
     ) is False
@@ -1107,8 +1172,11 @@ class VerdictPropertyMachine(RuleBasedStateMachine):
                 "est": 1.5,
                 "ci_low": 1.5,
                 "ci_high": 1.5,
-                "trusted": True,
-                "producer": "sandbox",
+                "producer": "agent",
+                "trusted": False,
+                "core_evaluated": True,
+                "countable": True,
+                "produced_by_call_id": f"{exp}#1:1",
             }
             if (with_threshold and not legacy) or outcome == "inconsistent"
             else None
@@ -1325,9 +1393,9 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 expected_outputs=[
-                    # Slot-rename: data OutputSpec named "script" (core-owned kind).
+                    # Planner may lie with role=code; catalog decides kinds.
                     OutputSpec(
-                        name="script", media_type="application/json", role="data"
+                        name="dataset", media_type="application/json", role="code"
                     ),
                     OutputSpec(
                         name="data_b", media_type="application/json", role="data"
@@ -1345,7 +1413,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 goal="pass-through",
                 route="experiment",
                 depends_on=["P_RAW"],
-                inputs=[InputSpec(from_task="P_RAW", output="script")],
+                inputs=[InputSpec(from_task="P_RAW", output="dataset")],
                 expected_outputs=[
                     OutputSpec(name="mid", media_type="application/json", role="data"),
                 ],
@@ -1374,7 +1442,8 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 depends_on=["P_RAW"],
                 method=ExperimentMethod.STATISTICAL,
                 inputs=[
-                    InputSpec(from_task="P_RAW", output="script"),
+                    # Slot rename: bind data output under input name "script".
+                    InputSpec(from_task="P_RAW", output="dataset"),
                     InputSpec(from_task="P_RAW", output="code"),
                 ],
                 criteria=[RequirementRef(template_id="value_match")],
@@ -1433,7 +1502,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
     da = arts.put(
         b'{"count": 1}',
         make_tool_ref(f"{aid_p}:da"),
-        name="script",
+        name="dataset",
         media_type="application/json",
         role="code",  # agent code|data role ignored at put
     )
@@ -1451,20 +1520,22 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
         media_type="text/x-python",
         role="code",
     )
-    assert da.role == "data"  # agent code|data role ignored; OutputSpec owns kind
+    assert da.role == "data"  # agent role ignored; catalog owns kind
     await rt.executor.record(
         aid_p,
         AgentTaskOutput(
             summary="data",
             outputs={
                 "main": ArtifactHandle(artifact_id=da.artifact_id, name="main"),
-                "script": ArtifactHandle(artifact_id=da.artifact_id, name="script"),
+                "dataset": ArtifactHandle(artifact_id=da.artifact_id, name="dataset"),
                 "data_b": ArtifactHandle(artifact_id=db.artifact_id, name="data_b"),
                 "code": ArtifactHandle(artifact_id=code.artifact_id, name="code"),
             },
             claims=[],
         ),
     )
+    assert rt.results[aid_p].get("output_kinds", {}).get("dataset") == "data"
+    assert rt.results[aid_p].get("output_kinds", {}).get("code") == "code"
     aid_mid = await rt.start_attempt("P_MID")
     mid = arts.put(
         b'{"count": 1, "passed": true}',
@@ -1528,79 +1599,12 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
-async def test_e2e_agent_metric_cannot_support(tmp_path, clock, runtime_cls):
-    """Agent-written passing metric is untrusted → never severe / supported."""
+async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
+    """Production path: agent put + core catalog eval → countable not_met refutes."""
     from coscientist.core.artifacts import make_tool_ref
     from coscientist.core.dispositions import dispositions
 
-    sid = "st_one"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
-    await rt.create_study(
-        profile="research",
-        request="q",
-        catalog_version="0.1.0",
-        deadline=clock.now() + timedelta(seconds=180),
-        sid=sid,
-        finalize_reserve_s=5,
-    )
-    assert rt.study.supported_needed == 2
-    assert rt.study.confirmations_needed == 1
-    _, arts = attach_executor(rt, tmp_path)
-    for key in ("SPEC", "HYP", "LIT"):
-        await rt.start_attempt(key)
-        await rt.cancel_task(key, reason="cancelled")
-    await rt.accept_plan(
-        [
-            TaskSpec(
-                task_key="E0",
-                title="producer",
-                goal="g",
-                route="experiment",
-                depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="value_match_sesoi")],
-                addresses=["Q1"],
-            )
-        ],
-        questions=[QuestionSpec(id="Q1", text="why")],
-    )
-    aid0 = await rt.start_attempt("E0")
-    art = arts.put(
-        b'{"effect": 999.0}',
-        make_tool_ref(f"{aid0}:1"),
-        name="main",
-        media_type="application/json",
-    )
-    await rt.executor.record(
-        aid0,
-        AgentTaskOutput(
-            summary="ok",
-            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
-            values={"effect": 999.0},
-            claims=[{"id": "c1", "target": "Q1"}],
-        ),
-    )
-    by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
-    c = by["question:Q1"][0]
-    assert (c.effect or {}).get("trusted") is False
-    assert (c.effect or {}).get("producer") == "agent"
-    assert c.severe is False
-    assert c.refute_capable is False
-    d = dispositions(
-        tasks=rt.tasks, plans=rt.plans, graph=rt.graph, study=rt.study, results=rt.results
-    )
-    assert d["Q1"]["verdict"] == "inconclusive"
-    await close_runtime(rt)
-
-
-@pytest.mark.asyncio
-async def test_e2e_agent_failing_metric_cannot_refute(tmp_path, clock, runtime_cls):
-    """Agent-written failing metric → indeterminate, never refuted."""
-    from coscientist.core.artifacts import make_tool_ref
-    from coscientist.core.dispositions import dispositions
-
-    sid = "st_agent_fail"
+    sid = "st_agent_ref"
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
@@ -1648,19 +1652,85 @@ async def test_e2e_agent_failing_metric_cannot_refute(tmp_path, clock, runtime_c
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
     c = by["question:Q1"][0]
+    assert (c.effect or {}).get("countable") is True
     assert (c.effect or {}).get("trusted") is False
-    assert c.claim_outcome == "indeterminate"
+    assert c.claim_outcome == "inconsistent"
     d = dispositions(
         tasks=rt.tasks, plans=rt.plans, graph=rt.graph, study=rt.study, results=rt.results
     )
-    assert d["Q1"].get("verdict") != "refuted"
-    assert d["Q1"]["disposition"] != "refuted"
+    assert d["Q1"]["verdict"] == "refuted"
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
-async def test_e2e_sandbox_metric_supported_and_refuted(tmp_path, clock, runtime_cls):
-    """Sandbox-produced metrics can reach supported (k_sup≥2) and refuted."""
+async def test_e2e_foreign_artifact_not_countable(tmp_path, clock, runtime_cls):
+    """Artifact produced_by from another attempt is rejected (foreign_artifact)."""
+    from coscientist.checks.evaluate import evaluate_code_check
+    from coscientist.core.artifacts import make_tool_ref
+    from coscientist.core.domain import CodeCheck
+
+    sid = "st_foreign"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=180),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E0",
+                title="t",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    aid = await rt.start_attempt("E0")
+    foreign = arts.put(
+        b'{"count": 225}',
+        make_tool_ref("other_attempt#1:1"),
+        name="main",
+        media_type="application/json",
+    )
+    cr = evaluate_code_check(
+        CodeCheck(kind="value_matches", output="main", pointer="/count", target=225),
+        template_id="value_match",
+        check_id="value_match#0",
+        out=AgentTaskOutput(
+            summary="x",
+            outputs={"main": ArtifactHandle(artifact_id=foreign.artifact_id, name="main")},
+            values={"count": 225},
+        ),
+        artifacts=arts,
+        values={"count": 225},
+        role="prediction",
+        attempt_id=aid,
+    )
+    assert cr.status.value == "FAILED"
+    assert cr.detail == "foreign_artifact"
+    assert cr.effect is None
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_e2e_sandbox_metric_trusted_tag_and_countable(
+    tmp_path, clock, runtime_cls
+):
+    """Sandbox put stamps trusted=True (API only); still countable for verdicts."""
     from datetime import UTC, datetime
 
     from coscientist.core.artifacts import make_tool_ref
@@ -1815,13 +1885,14 @@ async def test_e2e_sandbox_metric_supported_and_refuted(tmp_path, clock, runtime
     hyps = by["hypothesis:H1"]
     assert len(hyps) == 2
     assert all((c.effect or {}).get("trusted") is True for c in hyps)
+    assert all((c.effect or {}).get("countable") is True for c in hyps)
     assert all(c.severe for c in hyps)
     v, _, rule = hypothesis_verdict(
         hyps, True, supported_needed=2, refutations_needed=1, refutation_priority=True
     )
     assert v == "supported" and rule == "support_min"
 
-    # Separate study path: sandbox failing metric → refuted.
+    # Separate study: sandbox failing metric → refuted + trusted tag.
     sid2 = "st_sandbox_ref"
     rt2 = await open_runtime(
         tmp_path / "ref", sid2, clock=clock, owner="t1", runtime_cls=runtime_cls
@@ -1871,6 +1942,7 @@ async def test_e2e_sandbox_metric_supported_and_refuted(tmp_path, clock, runtime
     by2 = filtered_claims_by_target(rt2.graph, study_id=sid2, results=rt2.results)
     c_fail = by2["question:Q1"][0]
     assert (c_fail.effect or {}).get("trusted") is True
+    assert (c_fail.effect or {}).get("countable") is True
     assert c_fail.claim_outcome == "inconsistent"
     d2 = dispositions(
         tasks=rt2.tasks,
@@ -1950,8 +2022,8 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
     # Bind E1 → records VerdictSnapshotsRecorded for Q1.
     await rt.start_attempt("E1")
     snap1 = dict(rt.verdict_snapshots.get("Q1") or {})
-    # Agent metrics untrusted → not severe → inconclusive (still journaled).
-    assert snap1.get("verdict") == "inconclusive"
+    # Agent put + core SESOI eval → countable severe → survived (k_sup=2).
+    assert snap1.get("verdict") == "survived"
     await close_runtime(rt)
 
     # Reopen: journaled snapshot preferred.
@@ -2104,8 +2176,8 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
 
 
 @pytest.mark.asyncio
-async def test_e2e_tost_agent_metric_not_severe(tmp_path, clock, runtime_cls):
-    """Agent-written CI may be numerically TOST but never severe / refute-capable."""
+async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_cls):
+    """Agent put + core TOST eval → countable severe; trusted stays false."""
     from coscientist.core.artifacts import make_tool_ref
 
     sid = "st_tost"
@@ -2159,6 +2231,9 @@ async def test_e2e_tost_agent_metric_not_severe(tmp_path, clock, runtime_cls):
     assert c.claim_outcome == "consistent"
     assert c.used_sesoi is True
     assert (c.effect or {}).get("trusted") is False
-    assert c.severe is False
-    assert c.refute_capable is False
+    assert (c.effect or {}).get("countable") is True
+    assert c.severe is True
+    # refute_capable = SESOI setup could fail; intent is separate (default confirm).
+    assert c.refute_capable is True
+    assert c.intent == "confirm"
     await close_runtime(rt)

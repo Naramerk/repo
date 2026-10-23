@@ -215,9 +215,13 @@ def _criterion_freeze_attrs(
     return out
 
 
-def _effect_from_checks(checks: list[Any]) -> tuple[dict[str, Any] | None, bool]:
+def _effect_from_checks(
+    checks: list[Any],
+    *,
+    attempt_id: str | None = None,
+) -> tuple[dict[str, Any] | None, bool]:
     """Core-computed effect from CheckResult.effect (never agent detail / claims)."""
-    from coscientist.core.verdict import recompute_effect_trusted
+    from coscientist.core.verdict import recompute_effect_provenance
 
     for c in checks or ():
         if _check_role(c) != "prediction":
@@ -230,11 +234,14 @@ def _effect_from_checks(checks: list[Any]) -> tuple[dict[str, Any] | None, bool]
                 "est": float(data["est"]) if data.get("est") is not None else None,
                 "kind": str(data.get("kind") or "point"),
                 "producer": str(data.get("producer") or "agent"),
+                "core_evaluated": bool(data.get("core_evaluated", True)),
+                "produced_by_call_id": str(data.get("produced_by_call_id") or ""),
+                "artifact_id": str(data.get("artifact_id") or ""),
             }
             if data.get("ci_low") is not None and data.get("ci_high") is not None:
                 effect["ci_low"] = float(data["ci_low"])
                 effect["ci_high"] = float(data["ci_high"])
-            recomputed = recompute_effect_trusted(effect)
+            recomputed = recompute_effect_provenance(effect, attempt_id=attempt_id)
             if recomputed is not None:
                 effect = recomputed
         except (TypeError, ValueError, KeyError):
@@ -257,6 +264,7 @@ def _derive_claim_core_attrs(
     bindings: list[Any] | None = None,
     artifact_store: Any | None = None,
     results_map: Mapping[str, Mapping[str, Any]] | None = None,
+    attempt_id: str | None = None,
 ) -> dict[str, Any]:
     """Core-owned counting fields from plan/checks/freeze — never agent attrs.
 
@@ -298,8 +306,8 @@ def _derive_claim_core_attrs(
     from coscientist.core.verdict import (
         claim_is_severe,
         classify_outcome,
-        effect_is_trusted,
-        effect_producer_trusted,
+        effect_has_interval,
+        effect_is_countable,
         independence_key_for,
         outcome_to_status,
         root_data_digests_from_bindings,
@@ -323,7 +331,9 @@ def _derive_claim_core_attrs(
             "PASSED" if status == "met" else ("FAILED" if status == "not_met" else "")
         ]
     # Effect from CheckResult.effect only — never agent detail / claim attrs.
-    effect, used_sesoi = _effect_from_checks(list(checks or []))
+    effect, used_sesoi = _effect_from_checks(
+        list(checks or []), attempt_id=attempt_id
+    )
     validity_s, claim_outcome, _ = classify_outcome(
         validity_ok=validity_ok,
         prediction_statuses=pred_statuses,
@@ -396,18 +406,15 @@ def _derive_claim_core_attrs(
     )()
     severe = claim_is_severe(probe)
     # Capable refute: recompute — never trust a stored True later on replay.
-    # Trusted metric producer required for both null and non-null (M1: agent → false).
+    # Countable core-evaluated evidence required (trusted is a separate tag).
     refute_capable = bool(
         frozen
         and has_prediction_check
         and uses_sesoi
         and isinstance(sesoi, float)
         and used_sesoi
-        and (
-            effect_is_trusted(effect)
-            if predicts_null
-            else effect_producer_trusted(effect)
-        )
+        and effect_is_countable(effect)
+        and (effect_has_interval(effect) if predicts_null else True)
     )
     out: dict[str, Any] = {
         "criterion_status": status,
@@ -535,6 +542,7 @@ class Executor:
             out,
             self.artifacts,
             review_statuses=self.review_statuses,
+            attempt_id=attempt_id,
         )
         for c in checks:
             if not c.is_code and c.status == ReqStatus.UNASSESSED:
@@ -618,10 +626,17 @@ class Executor:
         unassessed = [c.check_id for c in checks if c.status == ReqStatus.UNASSESSED]
         rid = result_id(attempt_id)
         final = downgrade.to if downgrade else computed
-        from coscientist.core.verdict import output_kinds_from_task_spec
+        from coscientist.core.verdict import output_kinds_from_catalog
 
-        # Core-owned code|data from plan OutputSpec (ignore agent media_type).
-        output_kinds = output_kinds_from_task_spec(getattr(task, "spec", None))
+        # Code|data from catalog code_output_names (ignore planner OutputSpec.role).
+        out_names = list((out.outputs or {}).keys())
+        for ospec in getattr(getattr(task, "spec", None), "expected_outputs", None) or ():
+            n = str(getattr(ospec, "name", "") or "")
+            if n and n not in out_names:
+                out_names.append(n)
+        output_kinds = output_kinds_from_catalog(
+            output_names=out_names, catalog=self.catalog
+        )
         payload = {
             "result_id": rid,
             "attempt_id": attempt_id,
@@ -773,6 +788,7 @@ class Executor:
                 results_map=(
                     self.get_results() if self.get_results is not None else None
                 ),
+                attempt_id=attempt_id,
             ),
         )
         if drops:
@@ -787,7 +803,7 @@ class Executor:
                 idem_key=make_idem("ResultRecorded", payload["result_id"]),
                 payload=payload,
                 ts=now,
-                schema_version=2,
+                schema_version=3,
             ),
             EventEnvelope(
                 study_id=study_id,

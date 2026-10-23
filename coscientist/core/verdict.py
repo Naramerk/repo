@@ -126,22 +126,42 @@ def binding_is_code(
     return artifact_is_code(meta)
 
 
-def output_kinds_from_task_spec(spec: Any | None) -> dict[str, str]:
-    """name → code|data from plan ``OutputSpec`` (core-owned at record time)."""
-    from coscientist.core.artifacts import output_kind_from_spec
+def output_kinds_from_catalog(
+    *,
+    output_names: Sequence[str] | None,
+    catalog: Any | None,
+) -> dict[str, str]:
+    """name → code|data from catalog ``code_output_names`` (ignore planner role).
 
+    Names listed in the catalog are code; everything else defaults to **data**.
+    Planner ``OutputSpec.role`` / media_type are ignored for this decision.
+    """
+    code_names = {
+        str(x)
+        for x in (getattr(catalog, "code_output_names", None) or ())
+        if x
+    }
     out: dict[str, str] = {}
-    if spec is None:
-        return out
-    for ospec in getattr(spec, "expected_outputs", None) or ():
-        name = str(getattr(ospec, "name", "") or "")
-        if not name:
+    for name in output_names or ():
+        n = str(name or "")
+        if not n:
             continue
-        out[name] = output_kind_from_spec(
-            role=getattr(ospec, "role", None),
-            media_type=getattr(ospec, "media_type", None),
-        )
+        out[n] = "code" if n in code_names else "data"
     return out
+
+
+def output_kinds_from_task_spec(
+    spec: Any | None,
+    catalog: Any | None = None,
+) -> dict[str, str]:
+    """Backward-compat wrapper: kinds from catalog names on plan outputs."""
+    names: list[str] = []
+    if spec is not None:
+        for ospec in getattr(spec, "expected_outputs", None) or ():
+            n = str(getattr(ospec, "name", "") or "")
+            if n:
+                names.append(n)
+    return output_kinds_from_catalog(output_names=names, catalog=catalog)
 
 
 def _kind_from_producer(
@@ -580,10 +600,24 @@ def effect_has_interval(effect: Mapping[str, Any] | None) -> bool:
     return lo < hi
 
 
-def recompute_effect_trusted(
+def call_id_belongs_to_attempt(call_id: str | None, attempt_id: str | None) -> bool:
+    if not call_id or not attempt_id:
+        return False
+    cid = str(call_id)
+    return cid == attempt_id or cid.startswith(f"{attempt_id}:")
+
+
+def recompute_effect_provenance(
     effect: Mapping[str, Any] | None,
+    *,
+    attempt_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """Recompute ``trusted`` from core ``producer``; ignore journal ``trusted``."""
+    """Recompute ``trusted`` / ``countable`` from provenance facts (not journal bits).
+
+    Facts: ``producer``, ``produced_by_call_id``, ``core_evaluated``.
+    ``trusted`` = producer ∈ {core, sandbox} (sandbox producer not wired in M1).
+    ``countable`` = core-evaluated catalog check on an artifact bound to the attempt.
+    """
     if not isinstance(effect, Mapping):
         return None
     out = dict(effect)
@@ -592,33 +626,48 @@ def recompute_effect_trusted(
         producer = "agent"
     out["producer"] = producer
     out["trusted"] = producer in ("core", "sandbox")
+    core_eval = bool(out.get("core_evaluated"))
+    call_id = str(out.get("produced_by_call_id") or "")
+    if attempt_id and call_id:
+        out["countable"] = core_eval and call_id_belongs_to_attempt(
+            call_id, attempt_id
+        )
+    else:
+        # No binding facts (unit probe / legacy): core_evaluated is the fact.
+        out["countable"] = core_eval
     return out
 
 
+# Back-compat alias.
+def recompute_effect_trusted(
+    effect: Mapping[str, Any] | None,
+    *,
+    attempt_id: str | None = None,
+) -> dict[str, Any] | None:
+    return recompute_effect_provenance(effect, attempt_id=attempt_id)
+
+
 def effect_producer_trusted(effect: Mapping[str, Any] | None) -> bool:
-    """True when metric producer is core/sandbox (symmetric trust gate)."""
+    """True when metric producer is core/sandbox (stronger tag; not M1 counting)."""
     if not isinstance(effect, Mapping):
         return False
-    producer = effect.get("producer")
-    if producer in ("core", "sandbox"):
-        return True
-    if producer == "agent":
+    return effect.get("producer") in ("core", "sandbox")
+
+
+def effect_is_countable(effect: Mapping[str, Any] | None) -> bool:
+    """True when core catalog-evaluated evidence is countable for verdicts."""
+    if not isinstance(effect, Mapping):
         return False
-    # Hand-built unit effects may stamp trusted=True without producer.
-    return effect.get("trusted") is True
+    return effect.get("countable") is True
 
 
-def evidence_trusted_for_verdict(claim: Any) -> bool:
-    """Trusted evidence required for both refuted and supported counting."""
-    effect = getattr(claim, "effect", None)
-    if effect_producer_trusted(effect):
-        return True
-    # Explicit evidence_trusted for unit tests without a full effect blob.
-    return getattr(claim, "evidence_trusted", None) is True
+def evidence_countable_for_verdict(claim: Any) -> bool:
+    """Countable evidence required for both refuted and supported counting."""
+    return effect_is_countable(getattr(claim, "effect", None))
 
 
 def effect_is_trusted(effect: Mapping[str, Any] | None) -> bool:
-    """TOST severity: trusted producer **and** a real CI interval."""
+    """Trusted producer **and** a real CI interval (reported; not M1 counting)."""
     return effect_producer_trusted(effect) and effect_has_interval(effect)
 
 
@@ -639,8 +688,8 @@ def tost_holds_numerically(
 
 
 def tost_holds(*, sesoi: float | None, effect: Mapping[str, Any] | None) -> bool:
-    """Severe-grade TOST: numerical hold + trusted (core/sandbox) metric producer."""
-    return effect_is_trusted(effect) and tost_holds_numerically(
+    """Severe-grade TOST: numerical hold + countable core-evaluated evidence."""
+    return effect_is_countable(effect) and tost_holds_numerically(
         sesoi=sesoi, effect=effect
     )
 
@@ -651,8 +700,8 @@ def effect_exceeds_sesoi(
     effect: Mapping[str, Any] | None,
     direction: PredictedDirection | str | None = "two_sided",
 ) -> bool:
-    """Non-null: trusted point-estimate exceeds sesoi (not TOST)."""
-    if sesoi is None or not effect_producer_trusted(effect):
+    """Non-null: countable point-estimate exceeds sesoi (not TOST)."""
+    if sesoi is None or not effect_is_countable(effect):
         return False
     assert effect is not None
     try:
@@ -672,7 +721,8 @@ def claim_is_severe(claim: Any) -> bool:
     """Severe from catalog + check results — never trust stored ``severe=True``.
 
     Explicit ``severe=False`` remains definitive (V5 legacy never supported).
-    Both null (TOST) and non-null paths require a trusted metric producer.
+    Requires **countable** core-evaluated evidence (not sandbox ``trusted``).
+    ``effect.trusted`` is a separate stronger tag recorded for reporting.
     """
     if effective_outcome(claim) != "consistent":
         return False
@@ -700,8 +750,7 @@ def claim_is_severe(claim: Any) -> bool:
     if used is not True:
         return False
     effect = getattr(claim, "effect", None)
-    # Agent-written metrics are never severe (trusted=false in M1).
-    if not effect_producer_trusted(effect):
+    if not effect_is_countable(effect):
         return False
     predicts_null = bool(getattr(claim, "predicts_null", False))
     if predicts_null:
@@ -716,7 +765,7 @@ def refute_intent_counts(claim: Any) -> bool:
     """Refute intent counts toward supported only if the prediction could fail.
 
     Never trusts stored ``refute_capable=True``. Recomputes from catalog + check.
-    Requires a trusted metric producer (same rule as severe).
+    Requires countable core-evaluated evidence (same rule as severe).
     """
     if _intent(claim) != "refute":
         return False
@@ -736,8 +785,8 @@ def refute_intent_counts(claim: Any) -> bool:
         return False
     effect = getattr(claim, "effect", None)
     if bool(getattr(claim, "predicts_null", False)):
-        return effect_is_trusted(effect)
-    return effect_producer_trusted(effect)
+        return effect_is_countable(effect) and effect_has_interval(effect)
+    return effect_is_countable(effect)
 
 
 def classify_outcome(
@@ -751,15 +800,15 @@ def classify_outcome(
 ) -> tuple[str, str | None, bool]:
     """Return (validity, outcome|None, severe_hint_inputs_ok).
 
-    Untrusted failing metrics are indeterminate (never refutation). Trusted
-    evidence is required symmetrically for inconsistent and severe/consistent.
+    Non-countable failing metrics are indeterminate (never refutation).
+    Countable evidence is required symmetrically for inconsistent and severe.
     """
     if not validity_ok or not r17_ok:
         return "invalid", None, False
     preds = [s for s in prediction_statuses if s]
     if any(s == "FAILED" or s == "not_met" for s in preds):
-        # Agent-written / untrusted failing metric → never a counting refute.
-        if not effect_producer_trusted(effect):
+        # Foreign / non-core-evaluated fail → never a counting refute.
+        if not effect_is_countable(effect):
             outcome: str | None = "indeterminate"
         else:
             outcome = "inconsistent"
@@ -768,7 +817,7 @@ def classify_outcome(
     else:
         outcome = "indeterminate"
     if predicts_null and outcome == "consistent":
-        # Consistency uses numerical TOST; severity separately requires trusted CI.
+        # Consistency uses numerical TOST; severity separately requires countable.
         if not tost_holds_numerically(sesoi=sesoi, effect=effect):
             outcome = "indeterminate"
     return "valid", outcome, outcome == "consistent"
@@ -875,13 +924,13 @@ def hypothesis_verdict(
 
     counted = [c for c in about if claim_counts_for_verdict(c)]
 
-    # Symmetric trust: untrusted inconsistent never counts toward k_ref.
+    # Symmetric countability: non-countable inconsistent never counts toward k_ref.
     inconsistent = distinct_by_key(
         [
             c
             for c in counted
             if effective_outcome(c) == "inconsistent"
-            and evidence_trusted_for_verdict(c)
+            and evidence_countable_for_verdict(c)
         ]
     )
     consistent_severe = distinct_by_key(

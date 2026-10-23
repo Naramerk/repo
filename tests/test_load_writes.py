@@ -63,6 +63,8 @@ async def test_twenty_parallel_attempts_fsync(tmp_path: Path, runtime_cls: type)
     assert lat, "no write latencies recorded"
     lat_sorted = sorted(lat)
     p99 = lat_sorted[max(0, int(len(lat_sorted) * 0.99) - 1)]
+    # Known timing flake: push CI on 6fe49e5 saw p99≈56ms > 50ms under load.
+    # Keep the budget; do not paper over with empty retrigger commits.
     assert p99 <= 50.0, f"p99 write {p99:.2f}ms > 50ms (n={len(lat)})"
     assert rt.writer.depth_high_water <= 100
     assert fold_events(events).get("tasks")

@@ -145,10 +145,12 @@ def test_upcast_provenance_simulated_to_stub():
             "verdict": "simulated",
         },
     )
-    assert v == 2
+    # v1→v2 simulated→stub, then v2→v3 output_kinds={} (PR8b).
+    assert v == 3
     assert p["provenance"] == "stub"
     assert p["inputs"][0]["source"] == "stub"
     assert p["verdict"] == "stubbed"
+    assert p["output_kinds"] == {}
 
 
 def _task(

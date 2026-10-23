@@ -144,7 +144,8 @@ class HitlPolicy(Frozen):
 
 
 ArtifactRole = Literal["paper", "data", "code", "figure", "table", "log", "report"]
-# Who stored the artifact bytes. Agent paths are never trusted for verdicts.
+# Who stored the artifact bytes. Sets effect.trusted (reporting tag); M1
+# verdicts gate on countable core catalog eval, not trusted. Sandbox not wired.
 ArtifactProducer = Literal["agent", "core", "sandbox"]
 
 
@@ -496,8 +497,8 @@ class Catalog(Frozen):
     rules: list[RuleRef] = Field(default_factory=list)
     templates: list[RequirementTemplate] = Field(default_factory=list)
     defaults: dict[str, list[str]] = Field(default_factory=dict)  # node_kind -> template ids
-    # Legacy catalog hint; independence code-vs-data uses plan OutputSpec /
-    # ResultRecorded.output_kinds (core-owned), not this list or agent media_type.
+    # Independence code-vs-data: names listed here are code; else data.
+    # ResultRecorded.output_kinds is filled from this list (planner role ignored).
     code_output_names: list[str] = Field(default_factory=list)
 
 
