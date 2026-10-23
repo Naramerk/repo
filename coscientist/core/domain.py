@@ -157,7 +157,9 @@ ArtifactRole = Literal["paper", "data", "code", "figure", "table", "log", "repor
 # gate on countable). Sandbox puts are trusted only when both net and fs
 # isolation are hard (soft/none ⇒ trusted=False). ``tests_pass`` is
 # observation-only (countable=False); other executable kinds stay countable.
-ArtifactProducer = Literal["agent", "core", "sandbox"]
+# ``tool`` = is_fetch tool via FetchCapability (SourceFetched); not agent put / sandbox.
+# ``user`` = HITL/uploaded inputs (PR23 joint) — never a quote_in_source source.
+ArtifactProducer = Literal["agent", "core", "sandbox", "tool", "user"]
 NetIsolation = Literal["hard", "soft", "none"]
 FsIsolation = Literal["hard", "soft", "none"]
 
@@ -417,6 +419,28 @@ class EvidenceRef(Frozen):
     digest: str
 
 
+class SourceQuote(Frozen):
+    """Literature evidence locator (DESIGN §2 / DESIGN_M1 §6.3).
+
+    ``quote_in_source`` matches ``quote`` in the CAS text of ``artifact_id``
+    after normalization. ``translation`` is never checked. OCR text is a
+    separate text artifact (own sha256); callers set attempt provenance=partial.
+
+    ``source_sha256`` is required and must equal a journaled ``SourceFetched``
+    digest (and the artifact's CAS sha256). Agent ``put`` / ``put_sandbox``
+    sources are rejected.
+    """
+
+    artifact_id: str  # artifact(role=paper) or OCR text artifact
+    locator: str  # page / section, e.g. "p.6" / "§3.2"
+    quote: str
+    digest: str  # sha256(JCS(quote))
+    source_sha256: str  # required; must match SourceFetched + artifact.sha256
+    lang: str | None = None
+    normalization_version: str | None = None
+    translation: str | None = None  # not checked by quote_in_source
+
+
 class Downgrade(Frozen):
     from_: Outcome = Field(alias="from_")
     to: Outcome
@@ -524,6 +548,8 @@ class CodeCheck(Frozen):
         "source_link",
         "metric_threshold",
         "value_matches",
+        # M1 PR14 (DESIGN_M1 §6.3 / K9)
+        "quote_in_source",
         # M1 PR17 executable kinds (DESIGN_M1 §7)
         "exec_runs",
         "tests_pass",

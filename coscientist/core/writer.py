@@ -29,6 +29,10 @@ class StudyWriter:
         self._task: asyncio.Task[None] | None = None
         self._depth_high_water = 0
         self._latencies_ms: deque[float] = deque(maxlen=10_000)
+        # SourceFetched fold cache (PR14) — study-scoped; typed Any to avoid
+        # circular import with source_fetch.SourceFetchIndex.
+        self.source_fetch_idx: Any | None = None
+        self.source_fetch_seq: int = 0
 
     @property
     def depth(self) -> int:
@@ -85,8 +89,13 @@ class StudyWriter:
         self._depth_high_water = max(self._depth_high_water, self.queue.qsize())
         return await fut
 
-    async def append(self, event: EventEnvelope) -> EventEnvelope:
-        out = await self.append_many([event])
+    async def append(
+        self,
+        event: EventEnvelope,
+        *,
+        _fetch_capability: Any | None = None,
+    ) -> EventEnvelope:
+        out = await self.append_many([event], _fetch_capability=_fetch_capability)
         if out:
             return out[0]
         # Defensive: append_many always returns stored envelopes (incl. idempotent).
@@ -97,7 +106,26 @@ class StudyWriter:
         events: list[EventEnvelope],
         *,
         require_open_attempt: str | None = None,
+        _fetch_capability: Any | None = None,
     ) -> list[EventEnvelope]:
+        for ev in events:
+            if getattr(ev, "type", None) == "SourceFetched":
+                # Direct StudyWriter.append(SourceFetched) is closed — only the
+                # capability-gated append_source_fetched path may journal these.
+                from coscientist.core.errors import ArtifactRejected
+                from coscientist.core.source_fetch import verify_fetch_capability
+
+                if _fetch_capability is None:
+                    raise ArtifactRejected("fetch_capability_required")
+                p = getattr(ev, "payload", None) or {}
+                verify_fetch_capability(
+                    _fetch_capability,
+                    tool=str(p.get("tool") or "") or None,
+                    call_id=str(p.get("call_id") or "") or None,
+                    study_id=str(getattr(ev, "study_id", "") or "") or None,
+                    consume=False,
+                )
+
         async def _do() -> list[EventEnvelope]:
             return await self.store.append_many(
                 events, require_open_attempt=require_open_attempt

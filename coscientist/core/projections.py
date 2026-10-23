@@ -136,6 +136,21 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
             event.entity_key,
             {**p, "key": p.get("key") or event.entity_key, "denied": True},
         )
+    elif t == "SourceFetched":
+        # Separate from effects — only fold payloads paired with a fetch ToolCall.
+        from coscientist.core.source_fetch import source_fetched_payload_ok
+
+        if not source_fetched_payload_ok(p if isinstance(p, dict) else {}):
+            return
+        digest = str(p.get("digest") or "")
+        row_key = digest or event.entity_key
+        _put(proj, "source_fetches", row_key, {**p, "digest": digest})
+    elif t == "AttemptTainted":
+        # Sticky attempt taint after source fetch (write/external deny).
+        aid = str(p.get("attempt_id") or event.entity_key or "")
+        if aid:
+            prev = _get(proj, "attempts", aid) or {}
+            _put(proj, "attempts", aid, {**prev, "tainted_context": True, **p})
     elif t == "HitlOpened":
         _put(proj, "hitl_requests", event.entity_key, {**p, "open": True})
     elif t in ("HitlDecided", "HitlTimedOut"):
@@ -184,6 +199,7 @@ def apply_event(store: Any, event: EventEnvelope) -> None:
         "results",
         "artifacts",
         "effects",
+        "source_fetches",
         "requirements",
         "hitl_requests",
         "graph_nodes",
@@ -210,6 +226,7 @@ def _row_key(table: str, row: dict[str, Any]) -> str | None:
         "results": "result_id",
         "artifacts": "artifact_id",
         "effects": "key",
+        "source_fetches": "digest",
         "requirements": "id",
         "hitl_requests": "request_id",
         "graph_nodes": "node_id",
@@ -242,6 +259,8 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         "EffectIntended": ("effects",),
         "EffectDone": ("effects",),
         "SideEffectDenied": ("effects",),
+        "SourceFetched": ("source_fetches",),
+        "AttemptTainted": ("attempts",),
         "HitlOpened": ("hitl_requests",),
         "HitlDecided": ("hitl_requests",),
         "HitlTimedOut": ("hitl_requests",),

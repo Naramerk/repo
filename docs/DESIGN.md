@@ -142,10 +142,18 @@ class EvidenceRef(BaseModel):          # модель доказательств
     json_pointer: str                  # RFC 6901, обязателен; "" = весь документ
     digest: str                        # sha256(JCS(значение по указателю))
 
-class SourceQuote(BaseModel):          # доказательство из литературы
-    artifact_id: str                   # artifact(role=paper)
+class SourceQuote(BaseModel):          # доказательство из литературы (M1 PR14 / K9)
+    artifact_id: str                   # artifact(role=paper) или OCR-текст (свой sha256)
     locator: str                       # страница или раздел
     quote: str; digest: str            # digest = sha256(JCS(quote)); проверка quote_in_source
+    source_sha256: str                 # обяз.; = SourceFetched.digest = artifact.sha256
+    lang: str | None = None
+    normalization_version: str | None = None  # "rules+unidata_version"; None → UNASSESSED
+    translation: str | None = None     # не проверяется кодом
+# quote_in_source: только is_fetch tool via invoke_tool (FetchCapability) + SourceFetched v1
+# {call_id,tool,digest,url} (не effect index); reject put/put_sandbox; network stays tainted=True
+# (journal ≠ trusted). Token-boundary + digit-edge; CJK/Thai ≥8 chars no boundary; ≥4 letter-tokens;
+# super/sub → ^n/_n до NFKC; -\\n join только между буквами; presence≠polarity; study-scoped digests.
 
 class Node(BaseModel):                 # проекция для графа/метамодели/веба
     node_id: str; kind: NodeKind; parent_id: str | None; ref_id: str

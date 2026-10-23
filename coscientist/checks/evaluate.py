@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from typing import Any
 
 from coscientist.core.artifacts import (
@@ -104,6 +105,9 @@ NO_EFFECT_REASONS = frozenset(
         "output_not_submitted",
         "artifact_missing",
         "pointer_empty",
+        # quote_in_source indeterminate (missing / unreadable payload)
+        "quote_missing",
+        "quote_payload_invalid",
     }
 )
 
@@ -142,7 +146,11 @@ def _effect_provenance_fields(
     """
     meta = artifacts.get_meta(artifact_id) if artifact_id else None
     producer = getattr(meta, "producer", "agent") if meta is not None else "agent"
-    if producer not in ("agent", "core", "sandbox"):
+    # Fail-closed: unknown / future producers collapse to agent (untrusted).
+    # ``user`` is explicit — never trusted, never countable via this helper alone.
+    if producer == "user":
+        pass
+    elif producer not in ("agent", "core", "sandbox", "tool"):
         producer = "agent"
     produced = getattr(meta, "produced_by", None) if meta is not None else None
     call_id = str(getattr(produced, "call_id", "") or "")
@@ -210,6 +218,7 @@ def evaluate_code_check(
     predicts_null: bool = False,
     predicted_direction: str = "two_sided",
     attempt_id: str | None = None,
+    fetched_digests: frozenset[str] | Collection[str] | None = None,
 ) -> CheckResult:
     try:
         if check.kind == "artifact_exists":
@@ -440,6 +449,20 @@ def evaluate_code_check(
                 role=role,
             )
 
+        if check.kind == "quote_in_source":
+            from coscientist.checks.kinds.quote import evaluate_quote_in_source
+
+            return evaluate_quote_in_source(
+                check,
+                template_id=template_id,
+                check_id=check_id,
+                out=out,
+                artifacts=artifacts,
+                role=role,
+                attempt_id=attempt_id,
+                fetched_digests=fetched_digests,
+            )
+
         if check.kind in (
             "exec_runs",
             "tests_pass",
@@ -589,6 +612,7 @@ def evaluate_task_checks(
     attempt_id: str | None = None,
     task_kind: str | None = None,
     task_key: str | None = None,
+    fetched_digests: frozenset[str] | Collection[str] | None = None,
 ) -> list[CheckResult]:
     """Evaluate criteria on the task; review checks become UNASSESSED unless overridden."""
     by_id = {t.id: t for t in catalog.templates}
@@ -684,6 +708,7 @@ def evaluate_task_checks(
                 predicts_null=bool(tmpl.predicts_null),
                 predicted_direction=str(tmpl.predicted_direction),
                 attempt_id=attempt_id,
+                fetched_digests=fetched_digests,
             )
             # respect required flag from ref
             results.append(

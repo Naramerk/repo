@@ -20,11 +20,91 @@ from typing import Any
 
 from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.digest import canonical_json, sha256_hex
+from coscientist.core.errors import ArtifactRejected
 from coscientist.core.events import EventEnvelope, make_idem
+from coscientist.core.source_fetch import (
+    FetchCapability,
+    register_fetch_capability_verifier,
+)
+from coscientist.core.taint import mark_attempt_tainted
 from coscientist.core.tool_registry import resolve_effect, resolve_spec
 from coscientist.core.writer import StudyWriter
 from coscientist.tools.contract import CallCtx, Tool, ToolError, ToolOutput
 from coscientist.tools.gate import side_effect_allowed
+
+# FetchCapability mint secret — private to this module (AST + import-linter).
+_FETCH_CAP_SECRET = object()
+
+
+def _mint_fetch_capability(
+    *,
+    tool: str,
+    call_id: str,
+    study_id: str,
+    attempt_id: str,
+) -> FetchCapability:
+    """Only ``invoke_tool`` (this module) may mint fetch capabilities."""
+    return FetchCapability(
+        _token=_FETCH_CAP_SECRET,
+        tool=tool,
+        call_id=call_id,
+        study_id=study_id,
+        attempt_id=attempt_id,
+    )
+
+
+def _mint_fetch_capability_for_tests(
+    *,
+    tool: str,
+    call_id: str,
+    study_id: str = "st_test",
+    attempt_id: str | None = None,
+) -> FetchCapability:
+    """Test-only mint (AST-banned outside ``tests/``)."""
+    aid = attempt_id if attempt_id is not None else (
+        call_id.rsplit(":", 1)[0] if ":" in call_id else call_id
+    )
+    return _mint_fetch_capability(
+        tool=tool, call_id=call_id, study_id=study_id, attempt_id=aid
+    )
+
+
+def _invalidate_fetch_capability(capability: FetchCapability | None) -> None:
+    if capability is None:
+        return
+    if not capability._spent:
+        capability._spent.append(True)
+
+
+def _verify_fetch_capability(
+    capability: Any,
+    *,
+    tool: str | None = None,
+    call_id: str | None = None,
+    study_id: str | None = None,
+    attempt_id: str | None = None,
+    consume: bool = False,
+) -> FetchCapability:
+    if not isinstance(capability, FetchCapability):
+        raise ArtifactRejected("fetch_capability_required")
+    if capability._token is not _FETCH_CAP_SECRET:
+        raise ArtifactRejected("fetch_capability_required")
+    if capability._spent:
+        raise ArtifactRejected("fetch_capability_spent")
+    if tool is not None and capability.tool != tool:
+        raise ArtifactRejected("fetch_capability_mismatch")
+    if call_id is not None and capability.call_id != call_id:
+        raise ArtifactRejected("fetch_capability_mismatch")
+    if study_id is not None and capability.study_id != study_id:
+        raise ArtifactRejected("fetch_capability_mismatch")
+    if attempt_id is not None and capability.attempt_id != attempt_id:
+        raise ArtifactRejected("fetch_capability_mismatch")
+    if consume:
+        capability._spent.append(True)
+    return capability
+
+
+register_fetch_capability_verifier(_verify_fetch_capability)
 
 
 def effect_fingerprint(
@@ -190,18 +270,22 @@ def _cache_note(writer: StudyWriter, ev: EventEnvelope) -> None:
 
 
 def _note_attempt_taint(cache: dict[str, bool], ev: Any) -> None:
-    if getattr(ev, "type", None) != "AttemptStarted":
-        return
+    t = getattr(ev, "type", None)
     p = getattr(ev, "payload", None) or {}
     if not isinstance(p, dict):
         return
     aid = str(p.get("attempt_id") or getattr(ev, "entity_key", "") or "")
-    if aid:
-        cache[aid] = bool(p.get("tainted_context"))
+    if not aid:
+        return
+    if t == "AttemptStarted":
+        # Sticky OR: later AttemptTainted must not be cleared by replay order.
+        cache[aid] = bool(cache.get(aid)) or bool(p.get("tainted_context"))
+    elif t == "AttemptTainted":
+        cache[aid] = True
 
 
 async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
-    """Read ``AttemptStarted.tainted_context`` for this attempt from the journal.
+    """Read attempt taint from journal (AttemptStarted + AttemptTainted).
 
     Incremental fold cached on the writer (same pattern as the effect index) so
     each ``invoke_tool`` is O(Δ) rather than a full ``read_all``.
@@ -225,7 +309,8 @@ async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
                 max_seq = seq
             _note_attempt_taint(cache, ev)
         after = max_seq
-    elif attempt_id not in cache:
+    else:
+        # Always fold Δ — AttemptTainted may arrive after AttemptStarted cached.
         if hasattr(store, "read_after"):
             events = await store.read_after(after)
         else:
@@ -244,6 +329,39 @@ async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
     if attempt_id not in cache:
         return True  # unknown attempt — fail closed
     return bool(cache[attempt_id])
+
+
+async def _journal_attempt_tainted(
+    writer: StudyWriter,
+    *,
+    study_id: str,
+    attempt_id: str,
+    call_id: str,
+    tool: str,
+    on_event: Any | None = None,
+) -> EventEnvelope:
+    """Journal sticky attempt taint after a successful source fetch."""
+    ev = EventEnvelope(
+        study_id=study_id,
+        type="AttemptTainted",
+        entity_key=attempt_id,
+        idem_key=make_idem("AttemptTainted", attempt_id, call_id),
+        payload={
+            "attempt_id": attempt_id,
+            "reason": "source_fetch",
+            "call_id": call_id,
+            "tool": tool,
+        },
+        ts=datetime.now(UTC),
+        schema_version=1,
+    )
+    stored = await writer.append(ev)
+    cache: dict[str, bool] | None = getattr(writer, "_pr18_taint_by_attempt", None)
+    if cache is not None:
+        cache[attempt_id] = True
+    if on_event is not None:
+        on_event(stored)
+    return stored
 
 
 def _restore_output(
@@ -341,9 +459,74 @@ async def invoke_tool(
     effect = resolve_effect(name)  # authoritative; ignore tool.spec.effect
     digest = args_digest(args)
 
-    # --- read: no gate, no EffectIntended/Done ---
+    # --- read: no EffectIntended/Done; SourceFetched only for is_fetch tools ---
     if effect == "read":
-        return await tool.call(args, ctx)
+        is_fetch = bool(getattr(reg, "is_fetch", False))
+        call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
+        cap: FetchCapability | None = None
+        try:
+            if is_fetch:
+                cap = _mint_fetch_capability(
+                    tool=name,
+                    call_id=call_id,
+                    study_id=ctx.study_id,
+                    attempt_id=ctx.attempt_id,
+                )
+                ctx.fetch_capability = cap
+            else:
+                ctx.fetch_capability = None
+
+            output = await tool.call(args, ctx)
+
+            # Provenance for quote_in_source: only explicit fetch tools, via
+            # capability-gated put_fetched + SourceFetched (not any read tool).
+            if (
+                is_fetch
+                and cap is not None
+                and artifacts is not None
+                and output.artifacts
+            ):
+                from coscientist.core.source_fetch import append_source_fetched
+
+                # URL from normalized tool result — not raw agent args.
+                url = ""
+                if isinstance(output.data, dict):
+                    url = str(
+                        output.data.get("url") or output.data.get("uri") or ""
+                    )
+                fetched_any = False
+                for art in output.artifacts:
+                    if getattr(art, "producer", None) != "tool":
+                        continue
+                    digest = str(getattr(art, "sha256", "") or "")
+                    if not digest:
+                        continue
+                    await append_source_fetched(
+                        writer,
+                        study_id=ctx.study_id,
+                        call_id=call_id,
+                        tool=name,
+                        digest=digest,
+                        url=url,
+                        capability=cap,
+                        on_event=on_event,
+                    )
+                    fetched_any = True
+                if fetched_any:
+                    await _journal_attempt_tainted(
+                        writer,
+                        study_id=ctx.study_id,
+                        attempt_id=ctx.attempt_id,
+                        call_id=call_id,
+                        tool=name,
+                        on_event=on_event,
+                    )
+                    mark_attempt_tainted()
+            return output
+        finally:
+            # Single-use: capability must not leak to later write/external calls.
+            _invalidate_fetch_capability(cap)
+            ctx.fetch_capability = None
 
     # Write/external_effect require an artifact store up front (before the call).
     if artifacts is None:

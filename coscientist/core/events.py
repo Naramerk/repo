@@ -58,6 +58,8 @@ EventType = Literal[
     "EffectIntended",
     "EffectDone",
     "SideEffectDenied",
+    "SourceFetched",
+    "AttemptTainted",
 ]
 
 

@@ -71,11 +71,17 @@
 ```python
 class EvidenceRef(BaseModel):    # computational / experimental
     artifact_id: str; json_pointer: str; digest: str          # json_pointer обязателен ("" = весь документ); digest = sha256(JCS(значение))
-class SourceQuote(BaseModel):    # literature
-    artifact_id: str             # artifact(role=paper)
+class SourceQuote(BaseModel):    # literature (M1 PR14 / K9)
+    artifact_id: str             # artifact(role=paper) или OCR-текст (свой sha256)
     locator: str                 # страница или раздел, напр. "p.6" / "§3.2"
     quote: str; digest: str      # digest = sha256(JCS(quote))
+    source_sha256: str           # обяз.; = SourceFetched.digest = artifact.sha256
+    lang: str | None = None
+    normalization_version: str | None = None  # rules+unidata; None → UNASSESSED
+    translation: str | None = None            # не проверяется кодом
 ```
+
+
 
 ## 3. Рёбра
 
@@ -201,7 +207,7 @@ Study `fulfilled` только если все required задачи SUCCESS и 
 - Evidence с provenance≠real: criterion не сильнее PARTIAL у задачи, вердикт не выше inconclusive (§4.1), в отчёте — раздел «Выполнено на заглушках».
 
 ### 6.1 Валидность evidence
-- literature: `ref` — SourceQuote; artifact(role=paper) существует; `quote_in_source` проходит по тексту; digest = sha256(JCS(quote)).
+- literature: `ref` — SourceQuote; источник только `is_fetch` tool via `invoke_tool` (`FetchCapability` → `put_fetched` + журнал `SourceFetched`, не effect index; reject agent put / sandbox; сеть остаётся `tainted=True`, journal ≠ trusted); `quote_in_source` — token-boundary + digit-edge (`5 mg` ⊄ `-5 mg`/`0.5 mg`), CJK/Thai ≥8 символов без word-boundary, ≥4 letter-tokens иначе; super/sub→`^n`/`_n` до NFKC; `-\n` только между буквами (оба варианта); full casefold; presence≠polarity контекста; `fetched_digests` study-scoped; `source_sha256` обязателен; `translation` не проверяется.
 - computational / experimental: `ref` — EvidenceRef с artifact_id, json_pointer (резолвится) и digest значения (совпадает при re-read).
 - expert: ссылка на HitlDecided или ReviewCheck. Иначе — invalid.
 
