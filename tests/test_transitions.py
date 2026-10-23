@@ -52,6 +52,8 @@ async def test_p1_p2_p4_happy_path(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_p3_retry_then_done(tmp_path, clock, runtime_cls):
+    from coscientist.core.attempts import RETRY_BACKOFF_S
+
     rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
     _, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
@@ -66,9 +68,12 @@ async def test_p3_retry_then_done(tmp_path, clock, runtime_cls):
         if not rt.attempts.get(a, {}).get("closed")
     ]
     assert open_during_backoff == []
-    import asyncio
-
-    await asyncio.sleep(0.1)
+    # Before retry_at: tick must not start a new attempt (Clock, not wall sleep).
+    await rt.tick()
+    assert rt.tasks["st_tr/SPEC"].state == TaskState.PENDING
+    assert open_during_backoff == []
+    clock.advance(timedelta(seconds=RETRY_BACKOFF_S))
+    await rt.tick()
     open_aids = [
         a
         for a in rt.tasks["st_tr/SPEC"].attempts
@@ -78,6 +83,72 @@ async def test_p3_retry_then_done(tmp_path, clock, runtime_cls):
     assert rt.tasks["st_tr/SPEC"].state == TaskState.RUNNING
     await record_success(rt, open_aids[0], arts)
     assert rt.tasks["st_tr/SPEC"].outcome == TaskOutcome.SUCCESS
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_p3_retry_survives_crash_then_recover(tmp_path, clock, runtime_cls):
+    """Pending retry_at is folded from the journal; tick fires it after Clock advance."""
+    from coscientist.core.attempts import RETRY_BACKOFF_S
+
+    rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
+    attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("SPEC")
+    await rt.fail_attempt(aid, retryable=True)
+    retry_at = rt._retry_at["st_tr/SPEC"]
+    assert rt.tasks["st_tr/SPEC"].state == TaskState.PENDING
+    await close_runtime(rt)
+
+    # Reopen before retry_at: fold restores pending retry; tick must not fire yet.
+    rt2 = await open_runtime(
+        tmp_path, "st_tr", clock=clock, runtime_cls=runtime_cls
+    )
+    attach_executor(rt2, tmp_path)
+    assert "st_tr/SPEC" in rt2._retry_at
+    assert rt2._retry_at["st_tr/SPEC"] == retry_at
+    assert rt2.tasks["st_tr/SPEC"].state == TaskState.PENDING
+    await rt2.tick()
+    assert rt2.tasks["st_tr/SPEC"].state == TaskState.PENDING
+
+    clock.advance(timedelta(seconds=RETRY_BACKOFF_S))
+    await rt2.tick()
+    open_aids = [
+        a
+        for a in rt2.tasks["st_tr/SPEC"].attempts
+        if not rt2.attempts.get(a, {}).get("closed")
+    ]
+    assert len(open_aids) == 1
+    assert rt2.tasks["st_tr/SPEC"].state == TaskState.RUNNING
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_p3_retry_fires_exactly_once(tmp_path, clock, runtime_cls):
+    """Due retry_at is removed from _retry_at when fired; a second tick does not re-start."""
+    from coscientist.core.attempts import RETRY_BACKOFF_S
+
+    rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
+    attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("SPEC")
+    await rt.fail_attempt(aid, retryable=True)
+    clock.advance(timedelta(seconds=RETRY_BACKOFF_S))
+    await rt.tick()
+    assert "st_tr/SPEC" not in rt._retry_at
+    open1 = [
+        a
+        for a in rt.tasks["st_tr/SPEC"].attempts
+        if not rt.attempts.get(a, {}).get("closed")
+    ]
+    assert len(open1) == 1
+    n_attempts = len(rt.tasks["st_tr/SPEC"].attempts)
+    await rt.tick()
+    open2 = [
+        a
+        for a in rt.tasks["st_tr/SPEC"].attempts
+        if not rt.attempts.get(a, {}).get("closed")
+    ]
+    assert open2 == open1
+    assert len(rt.tasks["st_tr/SPEC"].attempts) == n_attempts
     await close_runtime(rt)
 
 
@@ -220,7 +291,7 @@ async def test_recover_corrupt_cas_crashes_retryable(tmp_path, clock, runtime_cl
     assert result["retried"] >= 1
     assert rt.attempts[aid]["closed"] is True
     assert rt.attempts[aid]["close_reason"] == "crashed"
-    assert not any(e.type == "ResultRecorded" for e in rt.store.read_all())
+    assert not any(e.type == "ResultRecorded" for e in await rt.store.read_all())
     await close_runtime(rt)
 
 
@@ -272,12 +343,12 @@ async def test_record_vs_deadline_race(tmp_path, clock, runtime_cls):
             ),
         ]
     )
-    assert rt.store.get_row("attempts", aid)["closed"] is True
+    assert (await rt.store.get_row("attempts", aid))["closed"] is True
     assert rt.attempts[aid].get("closed") is not True  # stale memory
 
     with pytest.raises(AttemptClosedError):
         await ex.record(aid, out)
-    assert not any(e.type == "ResultRecorded" for e in rt.store.read_all())
+    assert not any(e.type == "ResultRecorded" for e in await rt.store.read_all())
     await close_runtime(rt)
 
 
@@ -315,7 +386,7 @@ async def test_mark_route_returned_vs_deadline_race(tmp_path, clock, runtime_cls
     assert rt.attempts[aid].get("closed") is not True  # stale memory
     with pytest.raises(AttemptClosedError):
         await ex.mark_route_returned(aid, _success_output(art.artifact_id))
-    assert not any(e.type == "RouteReturned" for e in rt.store.read_all())
+    assert not any(e.type == "RouteReturned" for e in await rt.store.read_all())
     await close_runtime(rt)
 
 
@@ -329,9 +400,9 @@ async def test_repeated_record_after_success_raises_attempt_closed(tmp_path, clo
     assert rt.attempts[aid]["closed"] is True
     with pytest.raises(AttemptClosedError):
         await ex.record(aid, _success_output("art_unused", summary="again"))
-    results = [e for e in rt.store.read_all() if e.type == "ResultRecorded"]
+    results = [e for e in await rt.store.read_all() if e.type == "ResultRecorded"]
     assert len(results) == 1
-    assert any(e.type == "LateWriteRejected" for e in rt.store.read_all())
+    assert any(e.type == "LateWriteRejected" for e in await rt.store.read_all())
     await close_runtime(rt)
 
 

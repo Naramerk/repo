@@ -156,7 +156,7 @@ async def test_recovery_stage_task_not_rerun(tmp_path, clock, runtime_cls):
     assert len(rt.tasks["st_rec_mr/SPEC"].attempts) == n_attempts_before
     assert rt.tasks["st_rec_mr/SPEC"].state == TaskState.DONE
     assert len(rt.graph.all_nodes()) == nodes_before
-    starts = [e for e in rt.store.read_all() if e.type == "AttemptStarted"]
+    starts = [e for e in await rt.store.read_all() if e.type == "AttemptStarted"]
     assert len(starts) == 1
     await close_runtime(rt)
 

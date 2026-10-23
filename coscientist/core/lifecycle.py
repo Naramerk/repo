@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any
 
+from coscientist.core.clock import Clock
 from coscientist.core.domain import (
     Budget,
     HitlPolicy,
@@ -19,6 +19,7 @@ from coscientist.core.domain import (
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.graph import GraphNode
 from coscientist.core.ids import plan_id, study_id, task_id
+from coscientist.core.ports import EventStore
 
 STAGE_KEYS = [
     ("SPEC", TaskKind.SPEC),
@@ -32,8 +33,8 @@ STAGE_KEYS = [
 class LifecycleMixin:
     """Attribute stubs so mypy accepts mixin use on StudyRuntime."""
 
-    store: Any
-    clock: Any
+    store: EventStore
+    clock: Clock
     study: Study | None
     tasks: dict[str, Task]
 

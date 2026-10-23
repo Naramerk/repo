@@ -45,7 +45,7 @@ async def test_hitl_delegate_records_critic(tmp_path, clock):
     clock.advance(timedelta(seconds=2))
     await rt.tick()
     assert rt.hitl[rid].open is False
-    decided = [e for e in rt.store.read_all() if e.type == "HitlDecided"]
+    decided = [e for e in await rt.store.read_all() if e.type == "HitlDecided"]
     assert any(e.payload.get("approved_by") == "critic" for e in decided)
     assert any(e.payload.get("delegated_by") == "timeout" for e in decided)
     await close_runtime(rt)
@@ -62,7 +62,7 @@ async def test_hitl_human_delegate_records_critic(tmp_path, clock):
     await rt.answer_hitl(rid, "delegate")
     assert rt.hitl[rid].open is False
     decided = [
-        e for e in rt.store.read_all() if e.type == "HitlDecided" and e.entity_key == rid
+        e for e in await rt.store.read_all() if e.type == "HitlDecided" and e.entity_key == rid
     ]
     assert len(decided) == 1
     assert decided[0].payload.get("approved_by") == "critic"

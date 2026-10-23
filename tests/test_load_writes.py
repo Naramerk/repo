@@ -58,7 +58,7 @@ async def test_twenty_parallel_attempts_fsync(tmp_path: Path, runtime_cls: type)
     await asyncio.gather(*(one(i) for i in range(1, 21)))
     await rt.cancel_task("REPORT", reason="budget")
 
-    events = rt.store.read_all()
+    events = await rt.store.read_all()
     assert len(events) >= 100
     lat = rt.writer.latency_samples_ms()
     assert lat, "no write latencies recorded"
