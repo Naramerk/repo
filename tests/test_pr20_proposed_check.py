@@ -2521,7 +2521,7 @@ async def test_finalize_survives_broken_proposals_map(tmp_path: Path) -> None:
     try:
         await _create(rt, "cc isolate")
         await _boot_plan(rt, [_exp_spec()])
-        exp_tid = _task_id(rt, "EXP")
+        assert _task_id(rt, "EXP")
         aid = await rt.start_attempt("EXP")
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
