@@ -115,6 +115,47 @@ def _task_created_v5_to_v6_check_role(payload: dict[str, Any]) -> dict[str, Any]
     return out
 
 
+def _ensure_foreach_quorum_fields(spec: dict[str, Any]) -> dict[str, Any]:
+    """PR10: foreach / foreach_item / InputSpec.quorum defaults for old journals."""
+    spec = dict(spec)
+    spec.setdefault("foreach", None)
+    spec.setdefault("foreach_item", None)
+    inputs = spec.get("inputs")
+    if isinstance(inputs, list):
+        rewritten: list[Any] = []
+        for item in inputs:
+            if isinstance(item, dict):
+                item = dict(item)
+                item.setdefault("quorum", None)
+                rewritten.append(item)
+            else:
+                rewritten.append(item)
+        spec["inputs"] = rewritten
+    return spec
+
+
+def _task_created_v6_to_v7_foreach_quorum(payload: dict[str, Any]) -> dict[str, Any]:
+    out = dict(payload)
+    spec = out.get("spec")
+    if isinstance(spec, dict):
+        out["spec"] = _ensure_foreach_quorum_fields(spec)
+    return out
+
+
+def _plan_accepted_v4_to_v5_foreach_quorum(payload: dict[str, Any]) -> dict[str, Any]:
+    out = dict(payload)
+    tasks = out.get("tasks")
+    if isinstance(tasks, list):
+        rewritten: list[Any] = []
+        for t in tasks:
+            if isinstance(t, dict):
+                rewritten.append(_ensure_foreach_quorum_fields(dict(t)))
+            else:
+                rewritten.append(t)
+        out["tasks"] = rewritten
+    return out
+
+
 def _plan_accepted_v2_to_v3_check_role(payload: dict[str, Any]) -> dict[str, Any]:
     """PR8: strip PlanAccepted.tasks[].criteria role (catalog is source of truth)."""
     out = dict(payload)
@@ -216,6 +257,13 @@ def _study_created_v6_to_v7(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _study_created_v7_to_v8(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR10: max_foreach_children default."""
+    out = dict(payload)
+    out.setdefault("max_foreach_children", 32)
+    return out
+
+
 def _plan_accepted_v3_to_v4_expand_after(payload: dict[str, Any]) -> dict[str, Any]:
     """PR9: PlanAccepted.expand_after defaults to []."""
     out = dict(payload)
@@ -307,24 +355,35 @@ def _attempt_started_v2_to_v3_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _attempt_started_v3_to_v4_limitations(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR10: fan-in limitations on AttemptStarted; old journals → []."""
+    out = dict(payload)
+    out.setdefault("limitations", [])
+    return out
+
+
 register_upcaster("TaskCreated", 1, _task_created_v1_to_v2)
 register_upcaster("TaskCreated", 2, _ensure_spec_addresses)
 register_upcaster("TaskCreated", 3, _task_created_v3_to_v4_input_mode)
 register_upcaster("TaskCreated", 4, _task_created_v4_to_v5_input_kind)
 register_upcaster("TaskCreated", 5, _task_created_v5_to_v6_check_role)
+register_upcaster("TaskCreated", 6, _task_created_v6_to_v7_foreach_quorum)
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)
 register_upcaster("PlanAccepted", 2, _plan_accepted_v2_to_v3_check_role)
 register_upcaster("PlanAccepted", 3, _plan_accepted_v3_to_v4_expand_after)
+register_upcaster("PlanAccepted", 4, _plan_accepted_v4_to_v5_foreach_quorum)
 register_upcaster("StudyCreated", 1, _study_created_v1_to_v2)
 register_upcaster("StudyCreated", 2, _study_created_v2_to_v3)
 register_upcaster("StudyCreated", 3, _study_created_v3_to_v4)
 register_upcaster("StudyCreated", 4, _study_created_v4_to_v5)
 register_upcaster("StudyCreated", 5, _study_created_v5_to_v6)
 register_upcaster("StudyCreated", 6, _study_created_v6_to_v7)
+register_upcaster("StudyCreated", 7, _study_created_v7_to_v8)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)
 register_upcaster("AttemptStarted", 2, _attempt_started_v2_to_v3_inputs)
+register_upcaster("AttemptStarted", 3, _attempt_started_v3_to_v4_limitations)
 
 
 def _result_recorded_v2_to_v3_output_kinds(payload: dict[str, Any]) -> dict[str, Any]:

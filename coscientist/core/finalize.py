@@ -33,11 +33,14 @@ _TRIGGER_TERMINAL: dict[str, str] = {
     "intake": TerminalReason.REFUSED.value,
     "all_done": TerminalReason.COMPLETED.value,
 }
-
+_TASKDONE_DETAIL_LINES = {
+    "foreach_quorum_gt_children": "не выполнено: кворум > числа детей",
+    "quorum": "не выполнено: кворум входов",
+    "foreach_empty": "не выполнено: foreach пуст",
+}
 
 def is_finalized(runtime: StudyRuntime) -> bool:
     return bool(getattr(runtime, "_finalized", False))
-
 
 def pick_finalize_trigger(
     *,
@@ -64,7 +67,6 @@ def pick_finalize_trigger(
         return "all_done"
     return None
 
-
 def terminal_reason_for(
     trigger: FinalizeTrigger,
     *,
@@ -89,24 +91,23 @@ def terminal_reason_for(
     _ = question_dispositions
     return TerminalReason.COMPLETED
 
-
 def expansion_not_done_line(reason: str, detail: str) -> str:
     """Report line for ExpansionRefused (DESIGN_M1 §4 — Russian wording)."""
-    r = str(reason or "")
-    d = str(detail or "")
+    r, d = str(reason or ""), str(detail or "")
+    if d.startswith("foreach_"):
+        if "assign_keys" in d or "exception" in d:
+            return "не выполнено: ошибка foreach"
+        return "не выполнено: невалидный запрос"
     if r in ("invalid", "invalid_hitl") or d.startswith("invalid"):
         return "не выполнено: невалидный запрос"
     if r == "has_refutation":
         return "не выполнено: есть опровержение"
     if r == "critic_rejected":
         return "не выполнено: отказ критика"
-    # expansion_limit / replan_reserve / agent_quota / human_quota → same wording
-    # (DESIGN_M1.md:236 «не выполнено: лимит расширений»).
-    return "не выполнено: лимит расширений"
-
+    return "не выполнено: лимит расширений"  # quota / reserve / expansion_limit
 
 def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
-    """TaskReason values + ExpansionRefused report lines, first-seen order by seq."""
+    """TaskReason values + ExpansionRefused / foreach / quorum report lines."""
     seen: list[str] = []
     for ev in sorted(events, key=lambda e: e.seq or 0):
         if ev.type == "TaskDone":
@@ -117,6 +118,9 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
                 except ValueError:
                     continue
                 seen.append(str(reason))
+            line = _TASKDONE_DETAIL_LINES.get(str(ev.payload.get("detail") or ""))
+            if line and line not in seen:
+                seen.append(line)
         elif ev.type == "ExpansionRefused":
             line = expansion_not_done_line(
                 str(ev.payload.get("reason") or ""),
@@ -124,8 +128,40 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
             )
             if line not in seen:
                 seen.append(line)
+        elif ev.type == "PlanExpanded" and ev.payload.get("foreach"):
+            _append_foreach_report_lines(seen, ev.payload)
     return seen
 
+def _append_foreach_report_lines(seen: list[str], p: dict[str, Any]) -> None:
+    items, added = p.get("foreach_items") or [], p.get("added_tasks") or []
+    dropped = [str(x) for x in (p.get("foreach_dropped") or [])]
+    total = p.get("foreach_total")
+    if total is None:
+        total = len(items) + len(dropped)
+    refute = "не выполнено: проверка опровержения не выполнена"
+    if not items and not added:
+        if "не выполнено: foreach пуст" not in seen:
+            seen.append("не выполнено: foreach пуст")
+        if p.get("foreach_refute") and refute not in seen:
+            seen.append(refute)
+        return
+    line = f"foreach: развёрнуто {len(added)}"
+    if line not in seen:
+        seen.append(line)
+    if p.get("foreach_capped") or dropped:
+        cap = f"ограничение foreach: взято {len(added)} из {total}"
+        if dropped:
+            cap += f", отброшены {', '.join(dropped)}"
+        if cap not in seen:
+            seen.append(cap)
+    if p.get("foreach_refute"):
+        for did in dropped:
+            r = f"{refute} ({did})"
+            if r not in seen:
+                seen.append(r)
+    for n in p.get("foreach_rank_notes") or []:
+        if n and str(n) not in seen:
+            seen.append(str(n))
 
 def last_resort_payload(
     *,
@@ -137,9 +173,8 @@ def last_resort_payload(
     """Constant-only StudyFinalized payload (no tasks/plans/store access).
 
     I2 deviation: ``question_dispositions`` is empty, so fold emits only the
-    study-level conclusion via ``conclusion_ids_for(study_id, {})``. Questions
-    have no per-question conclusion on this path (nor entries in
-    ``minimal_report.questions``). Prefer the rich/minimal paths when possible.
+    study-level conclusion via ``conclusion_ids_for(study_id, {})``. Questions have
+    no per-question conclusion (nor ``minimal_report.questions``). Prefer rich/minimal.
     """
     term = _TRIGGER_TERMINAL.get(trigger, TerminalReason.COMPLETED.value)
     minimal: dict[str, Any] = {
@@ -171,7 +206,6 @@ def last_resort_payload(
         "fallback_reason": fallback_reason,
         "refusal": refusal,
     }
-
 
 async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     """Write StudyFinalized (idempotent). Always attempts a write; LeaseLost propagates.
@@ -219,7 +253,6 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
             raise
     runtime._finalized = True  # noqa: SLF001
 
-
 async def _sync_finalized_from_store(
     runtime: StudyRuntime, *, sid: str, conflict: Conflict
 ) -> None:
@@ -231,7 +264,6 @@ async def _sync_finalized_from_store(
                 runtime._project_local(ev)  # noqa: SLF001
             return
     raise conflict
-
 
 async def _append_finalized(
     runtime: StudyRuntime, *, sid: str, payload: dict[str, Any]
@@ -250,7 +282,6 @@ async def _append_finalized(
             )
         ]
     )
-
 
 def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Shrink question_dispositions / reasons until JCS ≤ MAX; else raise."""
@@ -272,7 +303,6 @@ def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
         return out
     raise RuntimeError("finalized_payload_too_large")
 
-
 def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
     """``get_meta`` when an artifact store is attached (live replay); else None."""
     arts = getattr(runtime, "artifacts", None)
@@ -281,7 +311,6 @@ def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
         arts = getattr(ex, "artifacts", None) if ex is not None else None
     lookup = getattr(arts, "get_meta", None)
     return lookup if callable(lookup) else None
-
 
 async def _build_rich_payload(
     runtime: StudyRuntime, *, sid: str, trigger: FinalizeTrigger
@@ -333,14 +362,12 @@ async def _build_rich_payload(
     )
     return _bound_rich_payload(payload)
 
-
 async def _load_plans(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
     local = getattr(runtime, "plans", None)
     if isinstance(local, dict) and local:
         return local
     rows = await runtime.store.get_projection("plans")
     return {str(r.get("plan_id") or i): r for i, r in enumerate(rows)}
-
 
 def _refusal_payload(runtime: StudyRuntime, trigger: FinalizeTrigger) -> str | None:
     if trigger != "intake":
@@ -352,7 +379,6 @@ def _refusal_payload(runtime: StudyRuntime, trigger: FinalizeTrigger) -> str | N
     reason = getattr(ref, "reason", "")
     kv = getattr(kind, "value", kind)
     return f"{kv}:{reason}" if kv else str(reason)
-
 
 async def _build_finalized_payload(
     runtime: StudyRuntime,
@@ -417,7 +443,6 @@ async def _build_finalized_payload(
         "refusal": refusal,
     }
 
-
 async def _primary_report_path(
     runtime: StudyRuntime,
     *,
@@ -451,7 +476,6 @@ async def _primary_report_path(
         media_type="text/markdown",
     )
     return art.artifact_id
-
 
 def _artifact_store(runtime: StudyRuntime) -> Any:
     ex = getattr(runtime, "executor", None)

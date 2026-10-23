@@ -66,12 +66,19 @@ async def recover(runtime: StudyRuntime) -> dict[str, Any]:
         if _retry_scheduled(runtime, att["task_id"]):
             retried += 1
 
-    # Crash between TaskDone and expand: re-queue PLAN-n / apply pending.
+    # Crash between TaskDone and expand/foreach: re-queue PLAN-n / materialize.
     from coscientist.core.expand_trigger import resume_pending_expansions
+    from coscientist.core.foreach import resume_pending_foreach
 
+    foreach_n = await resume_pending_foreach(runtime)
     resumed = await resume_pending_expansions(runtime)
     await runtime.tick()
-    return {"closed": closed, "retried": retried, "expansions_resumed": resumed}
+    return {
+        "closed": closed,
+        "retried": retried,
+        "expansions_resumed": resumed,
+        "foreach_resumed": foreach_n,
+    }
 
 
 def _retry_scheduled(runtime: StudyRuntime, task_id: str) -> bool:

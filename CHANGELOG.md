@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### M1 PR10
+- `TaskSpec.foreach` (selected/all hypothesis|question of a source task): core materializes N `EXP-<n>` via `PlanExpanded(foreach=true)` — no planner, no expansion quota; restart/recover resumes; report lines in Russian.
+- Expand at source `TaskDone` **and** at `accept_plan` / after `PlanExpanded` when `of_task` is already DONE (B1; live == replay). `validate_foreach_specs` in `validate_expansion`.
+- Selector requires `source_task == of_task`; cap keeps best **rank** (missing/non-numeric rank **last**, report note; never SKIP template); journals `foreach_total`/`foreach_dropped`/`foreach_rank_notes`; kept children nat-sorted; deterministic `pl_foreach_*`; `max_foreach_children` (StudyCreated **v8**).
+- Foreach errors → `ExpansionRefused` + `TaskDone SKIPPED(refused)`; `iter_dispatchable_tasks` excludes templates; `start_attempt` rejects them.
+- Quorum pools: **one static pool** per fan-in task + **one pool per foreach template** (never by equal quorum value). Reject mix of ``all``+int; order-independent selection; quorum > static pool size rejected; foreach quorum > children → report «кворум > числа детей».
+- Foreach template ``SUPERSEDED`` (empty) and ``REFUSED`` both count as done for ``expand_after`` → PLAN-n.
+- Upcasters: TaskCreated v7, PlanAccepted v5, AttemptStarted v4, StudyCreated v8.
+
 ### M1 PR9
 - `PlanExpanded` + H-g trigger (`expand_after` / `AgentTaskOutput.expansion_request` / HITL).
 - Agent `expansion_request` / `expand_after` enqueue **PLAN-n → critic** (never direct `PlanExpanded`); HITL plan edit / «decide yourself» is the third trigger; `delegated_by` from `HitlDecided`.

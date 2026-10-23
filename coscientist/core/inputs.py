@@ -605,6 +605,8 @@ def uses_claim_graph_events(
 
 def validate_input_specs(tasks: list[TaskSpec]) -> None:
     """Reject invalid InputSpec at accept_plan (kind-specific fields)."""
+    from coscientist.core.quorum import validate_quorum_specs
+
     for t in tasks:
         for inp in t.inputs:
             kind = inp.kind
@@ -628,6 +630,7 @@ def validate_input_specs(tasks: list[TaskSpec]) -> None:
                     )
             else:
                 raise ValueError(f"unknown InputSpec.kind: {kind!r}")
+    validate_quorum_specs(tasks)
 
 
 _FORBIDDEN_THRESHOLD_PARAMS = frozenset(

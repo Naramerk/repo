@@ -87,6 +87,8 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         self._hitl_decisions: dict[str, dict[str, Any]] = {}
         self._hitl_requests: dict[str, dict[str, Any]] = {}
         self._hitl_expand_used: set[str] = set()
+        # PR10: foreach_template → concrete EXP keys (folded from PlanExpanded).
+        self._foreach_children: dict[str, list[str]] = {}
 
     def bind_executor(self, executor: Any) -> Any:
         """Wire production ``graph`` into Executor (laundering + about edges)."""
@@ -149,6 +151,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             if self._finalized or self._lease_lost:
                 return
             from coscientist.core.expand import maybe_expand_after_task_done
+            from coscientist.core.foreach import maybe_foreach_after_task_done
 
             for ev in events:
                 if ev.type != "TaskDone":
@@ -157,7 +160,13 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                 reason = getattr(t, "reason", None) if t is not None else None
                 rv = getattr(reason, "value", reason)
                 if rv == TaskReason.SUPERSEDED.value:
+                    # Foreach template closed by PlanExpanded still counts for
+                    # expand_after (same as REFUSED); skip re-foreach only.
+                    kids = getattr(self, "_foreach_children", None) or {}
+                    if t is not None and t.spec.task_key in kids:
+                        await maybe_expand_after_task_done(self, ev.entity_key)
                     continue
+                await maybe_foreach_after_task_done(self, ev.entity_key)
                 await maybe_expand_after_task_done(self, ev.entity_key)
 
         ex._append = _append_with_expand  # type: ignore[method-assign]
@@ -176,18 +185,24 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             self._project_local(ev)
             if ev.type == "TaskDone":
                 done_ids.append(ev.entity_key)
-        # H-g: after each TaskDone, maybe expand (expansion_request / expand_after).
+        # PR10 foreach then H-g expand (expansion_request / expand_after).
         if done_ids and not self._finalized and not self._lease_lost:
             from coscientist.core.expand import maybe_expand_after_task_done
+            from coscientist.core.foreach import maybe_foreach_after_task_done
 
             for tid in done_ids:
-                # Skip expand side-effects for tasks we just skipped as superseded
-                # inside the same expand batch (reason already projected).
+                # Superseded non-foreach: skip expand (same-batch PlanExpanded).
+                # Foreach template SUPERSEDED counts as done for expand_after
+                # (consistent with REFUSED).
                 t = self.tasks.get(tid)
                 reason = getattr(t, "reason", None) if t is not None else None
                 rv = getattr(reason, "value", reason)
                 if rv == TaskReason.SUPERSEDED.value:
+                    kids = getattr(self, "_foreach_children", None) or {}
+                    if t is not None and t.spec.task_key in kids:
+                        await maybe_expand_after_task_done(self, tid)
                     continue
+                await maybe_foreach_after_task_done(self, tid)
                 await maybe_expand_after_task_done(self, tid)
 
     def view(self):

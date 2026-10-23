@@ -110,10 +110,11 @@ def test_upcast_task_created_input_kind_defaults():
             "deadline": "2026-01-01T00:00:00+00:00",
         },
     )
-    assert v == 6
+    assert v == 7
     inp = p["spec"]["inputs"][0]
     assert inp["kind"] == "artifact"
     assert inp["ref"] is None
+    assert inp["quorum"] is None
 
 
 def test_upcast_attempt_started_inputs_default():
@@ -129,8 +130,9 @@ def test_upcast_attempt_started_inputs_default():
             "deadline": "2026-01-01T00:00:00+00:00",
         },
     )
-    assert v == 3
+    assert v == 4
     assert p["inputs"] == []
+    assert p["limitations"] == []
 
 
 @pytest.mark.asyncio
@@ -272,7 +274,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
     edges = [e for e in rt.graph.edges_from(exp_id) if e.kind == "uses_claim"]
     assert len(edges) == 1 and edges[0].dst_id == claim_id
     started = next(e for e in await rt.store.read_all() if e.type == "AttemptStarted" and e.entity_key == aid)
-    assert started.schema_version == 3
+    assert started.schema_version == 4
     assert len(started.payload["inputs"]) == 1
     assert started.payload["inputs"][0]["kind"] == "claim"
     assert started.payload["inputs"][0]["digest"]

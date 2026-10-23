@@ -39,6 +39,7 @@ class LocalProjectMixin:
     _hitl_decisions: dict[str, dict[str, Any]]
     _hitl_requests: dict[str, dict[str, Any]]
     _hitl_expand_used: set[str]
+    _foreach_children: dict[str, list[str]]
 
     def _clear_expand_request(
         self, *, after_task: str | None = None, plan_key: str | None = None
@@ -73,11 +74,13 @@ class LocalProjectMixin:
         elif ev.type == "PlanExpanded":
             self.plans[ev.entity_key] = dict(p)
             # B3: expansion counts + replan_used from events (not live counters).
-            # timeout → agent quota (DESIGN_M1 §4); only human skips agent quota.
-            if p.get("delegated_by") == "human":
-                self._human_expansions = int(getattr(self, "_human_expansions", 0)) + 1
-            else:
-                self._agent_expansions = int(getattr(self, "_agent_expansions", 0)) + 1
+            # Foreach (PR10) does not spend agent/human expansion quota.
+            if not p.get("foreach"):
+                # timeout → agent quota (DESIGN_M1 §4); only human skips agent quota.
+                if p.get("delegated_by") == "human":
+                    self._human_expansions = int(getattr(self, "_human_expansions", 0)) + 1
+                else:
+                    self._agent_expansions = int(getattr(self, "_agent_expansions", 0)) + 1
             alloc = float(p.get("replan_allocated_s") or 0.0)
             if alloc:
                 self._replan_used_s = float(getattr(self, "_replan_used_s", 0.0)) + alloc
@@ -97,6 +100,20 @@ class LocalProjectMixin:
                     self._hitl_expand_used = set()
                     used = self._hitl_expand_used
                 used.add(str(rid))
+            # PR10: rebuild foreach child index from journal (restart == live).
+            if p.get("foreach"):
+                tmpl = str(p.get("foreach_template") or "")
+                kids = [
+                    str(t.get("task_key") if isinstance(t, dict) else getattr(t, "task_key", ""))
+                    for t in (p.get("added_tasks") or [])
+                ]
+                kids = [k for k in kids if k]
+                children = getattr(self, "_foreach_children", None)
+                if not isinstance(children, dict):
+                    self._foreach_children: dict[str, list[str]] = {}
+                    children = self._foreach_children
+                if tmpl:
+                    children[tmpl] = kids
         elif ev.type == "ExpansionRefused":
             refusals = getattr(self, "_expansion_refusals", None)
             if isinstance(refusals, list):

@@ -238,8 +238,8 @@ def test_upcast_study_created_k_ref_defaults():
             "finalize_reserve_s": 30,
         },
     )
-    # v2→…→v7 (expansion quotas)
-    assert v == 7
+    # v2→…→v8 (foreach cap)
+    assert v == 8
     assert p["refutations_needed"] == 1
     assert p["refutation_priority"] is False
     assert p["confirmations_needed"] == 1
@@ -260,7 +260,7 @@ def test_upcast_study_created_confirmations_needed_v3_to_v4():
             "refutation_priority": True,
         },
     )
-    assert v == 7
+    assert v == 8
     assert p["confirmations_needed"] == 1
     assert p["refutations_needed"] == 2
     assert p["refutation_priority"] is True
@@ -288,7 +288,7 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
     assert rt.study.refutations_needed == 3
     assert rt.study.refutation_priority is True
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 7
+    assert created.schema_version == 8
     assert created.payload["refutations_needed"] == 3
     assert created.payload["confirmations_needed"] == 1
     assert created.payload["aggregate"] == "count"

@@ -98,7 +98,12 @@ async def test_core_opens_when_all_hitl_gates_closed(tmp_path, clock):
     # SPEC already DONE via record_success; no open attempts to close.
     assert core.tasks["st_hitl/SPEC"].state == TaskState.DONE
     out = await recover(core)
-    assert out == {"closed": 0, "retried": 0, "expansions_resumed": 0}
+    assert out == {
+        "closed": 0,
+        "retried": 0,
+        "expansions_resumed": 0,
+        "foreach_resumed": 0,
+    }
     assert core.tasks["st_hitl/SPEC"].state == TaskState.DONE
     await close_runtime(core)
 
