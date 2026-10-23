@@ -13,7 +13,7 @@
 - Core materializes each iter as `PlanExpanded(loop=true)` at `PLAN_EXPANDED_SCHEMA_VERSION` / `TASK_CREATED_SCHEMA_VERSION`; `depends_on=["loop:<id>"]` NFKC-normalized; orphan barriers → SKIPPED refuse.
 - Until-met → **`LoopCompleted`**. True cap → **`LoopCapped{reason=iteration_cap}`**. Expected eval failures → **`LoopRefused` + `LoopCapped{reason=error}`** (no survivor recompute; never disguised as iteration_cap). Real bugs propagate. Disposition `iteration_cap` only for unresolved questions after a true ≥1-iter cap (answered/outside-loop/infeasible preserved).
 - Upcasters (pre-rebase): StudyCreated **v10**, PlanAccepted **v8**, TaskCreated **v10**; duplicate/continuous guards. Both upcaster registrations stay in the chain.
-- **Rebase after #21 (reviewer-confirmed):** delete any local `plan_refuse.py` and this PR's own finalize `PlanRefused` branch; call **#21's** `plan_validate.apply_plan_refused`; take **TaskCreated v11** / **PlanAccepted v9** (and **StudyCreated v11** after #23). Never merge from this agent.
+- **Rebase after #21 (reviewer-confirmed):** delete any local `plan_refuse.py` and this PR's own finalize `PlanRefused` branch; call **#21's** `plan_validate.apply_plan_refused`; take **TaskCreated v11** / **PlanAccepted v9** (and **StudyCreated v11** after #23). **#21 adds public `TerminalReason.INTERNAL_ERROR`** — wire it in loop/disposition logic (error/refuse LoopCapped must not stamp `iteration_cap`; unexpected eval/journal bugs that propagate may finalize via `internal_error`, never disguised as cap). Never merge from this agent.
 
 ### M1 PR14
 - `quote_in_source` (K9): token-boundary + digit-edge; CJK/Thai; super/sub before NFKC; norm cache; presence≠polarity.

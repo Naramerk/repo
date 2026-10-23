@@ -744,13 +744,14 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
     """Advance all loops that can take a step (start / next iter / cap / complete).
 
     Expected eval failures (unknown predicate) → LoopRefused + LoopCapped(reason=error).
-    Real bugs propagate (never disguised as iteration_cap).
+    Real bugs propagate (never disguised as iteration_cap). Post-#21 rebase:
+    callers/finalize may map those to ``TerminalReason.INTERNAL_ERROR``.
     """
     done: list[str] = []
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return done
-    # Orphan scan / plan parse bugs propagate (honest failure). Expected
-    # predicate eval failures are caught per-loop below — never iteration_cap.
+    # Orphan scan / plan parse bugs propagate (honest failure → INTERNAL_ERROR
+    # after #21). Expected predicate eval failures are caught per-loop below.
     await refuse_orphaned_loop_barriers(runtime)
     loops = _loops_from_plans(runtime)
     for loop in loops:
@@ -909,7 +910,8 @@ def capped_scope_questions(runtime: Any) -> dict[str, dict[str, Any]]:
     """qid → LoopCapped payload only for true iteration_cap with ≥1 iter.
 
     Refuse/error terminals and zero-iter caps are excluded — they must not stamp
-    disposition reason=iteration_cap.
+    disposition reason=iteration_cap. Post-#21 rebase: also respect public
+    ``TerminalReason.INTERNAL_ERROR`` (never map error-path loops to cap).
     """
     capped = getattr(runtime, "_loop_capped", None) or {}
     out: dict[str, dict[str, Any]] = {}

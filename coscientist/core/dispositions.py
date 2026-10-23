@@ -338,6 +338,8 @@ def apply_loop_cap_dispositions(
       their disposition and reason — never overwritten with iteration_cap.
     - infeasible / needs_more_data / ill_posed preserved.
     - not_attempted → inconclusive + iteration_cap.
+    - Post-#21: ``TerminalReason.INTERNAL_ERROR`` must not be conflated with
+      iteration_cap here (error/refuse stays honest).
     """
     capped_q = {str(k): v for k, v in (loop_capped_questions or {}).items()}
     if not capped_q:
