@@ -74,6 +74,8 @@ class StudyRuntime(CoreStudyRuntime, HitlForkMixin):
         from coscientist.core.dispositions import dispositions
 
         open_hitl = sum(1 for h in self.hitl.values() if h.open)
+        arts = getattr(self, "artifacts", None)
+        lookup = getattr(arts, "get_meta", None) if arts is not None else None
         qdisp = (
             dispositions(
                 tasks=self.tasks,
@@ -81,6 +83,7 @@ class StudyRuntime(CoreStudyRuntime, HitlForkMixin):
                 graph=getattr(self, "graph", None),
                 study=self.study,
                 results=getattr(self, "results", None),
+                artifact_lookup=lookup if callable(lookup) else None,
             )
             if self.plans
             else None

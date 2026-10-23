@@ -92,6 +92,38 @@ def artifact_belongs_to_attempt(meta: Any | None, attempt_id: str | None) -> boo
     return call_id == attempt_id or call_id.startswith(f"{attempt_id}:")
 
 
+# Stable reasons for checks with no numeric effect (indeterminate — never refute).
+NO_EFFECT_REASONS = frozenset(
+    {
+        "foreign_artifact",
+        "output_not_submitted",
+        "artifact_missing",
+        "pointer_empty",
+    }
+)
+
+
+def _no_effect_result(
+    *,
+    check_id: str,
+    template_id: str,
+    role: CheckRole,
+    reason: str,
+) -> CheckResult:
+    """FAILED prediction without effect → classify as indeterminate (safe vs main)."""
+    return CheckResult(
+        check_id=check_id,
+        template_id=template_id,
+        status=ReqStatus.FAILED,
+        is_code=True,
+        required=True,
+        role=role,
+        detail=reason,
+        effect=None,
+        used_sesoi=False,
+    )
+
+
 def _effect_provenance_fields(
     artifacts: LocalArtifactStore,
     artifact_id: str | None,
@@ -169,27 +201,28 @@ def evaluate_code_check(
     try:
         if check.kind == "artifact_exists":
             handle = out.outputs.get(check.output or "")
-            if handle is None or artifacts.get_meta(handle.artifact_id) is None:
-                return CheckResult(
+            if handle is None:
+                return _no_effect_result(
                     check_id=check_id,
                     template_id=template_id,
-                    status=ReqStatus.FAILED,
-                    is_code=True,
-                    required=True,
                     role=role,
-                    detail="artifact missing",
+                    reason="output_not_submitted",
+                )
+            if artifacts.get_meta(handle.artifact_id) is None:
+                return _no_effect_result(
+                    check_id=check_id,
+                    template_id=template_id,
+                    role=role,
+                    reason="artifact_missing",
                 )
             art = artifacts.get_meta(handle.artifact_id)
             assert art is not None
             if attempt_id and not artifact_belongs_to_attempt(art, attempt_id):
-                return CheckResult(
+                return _no_effect_result(
                     check_id=check_id,
                     template_id=template_id,
-                    status=ReqStatus.FAILED,
-                    is_code=True,
-                    required=True,
                     role=role,
-                    detail="foreign_artifact",
+                    reason="foreign_artifact",
                 )
             return CheckResult(
                 check_id=check_id,
@@ -209,42 +242,60 @@ def evaluate_code_check(
         if check.kind in ("value_matches", "metric_threshold", "json_pointer"):
             handle = out.outputs.get(check.output or "main")
             if handle is None:
-                return CheckResult(
+                return _no_effect_result(
                     check_id=check_id,
                     template_id=template_id,
-                    status=ReqStatus.FAILED,
-                    is_code=True,
-                    required=True,
                     role=role,
-                    detail="output missing",
+                    reason="output_not_submitted",
                 )
             meta = artifacts.get_meta(handle.artifact_id)
-            if attempt_id and not artifact_belongs_to_attempt(meta, attempt_id):
-                return CheckResult(
+            if meta is None:
+                return _no_effect_result(
                     check_id=check_id,
                     template_id=template_id,
-                    status=ReqStatus.FAILED,
-                    is_code=True,
-                    required=True,
                     role=role,
-                    detail="foreign_artifact",
+                    reason="artifact_missing",
+                )
+            if attempt_id and not artifact_belongs_to_attempt(meta, attempt_id):
+                return _no_effect_result(
+                    check_id=check_id,
+                    template_id=template_id,
+                    role=role,
+                    reason="foreign_artifact",
                 )
             raw = artifacts.read(handle.artifact_id)
             doc = json.loads(raw)
             pointer = check.pointer
-            if check.kind == "metric_threshold" and check.metric and not pointer:
-                # prefer values dict, else top-level key
-                if check.metric in values:
-                    left = values[check.metric]
-                    pointer = None
-                    evid_digest = sha256_hex(canonical_json(left))
+            try:
+                if check.kind == "metric_threshold" and check.metric and not pointer:
+                    # prefer values dict, else top-level key
+                    if check.metric in values:
+                        left = values[check.metric]
+                        pointer = None
+                        evid_digest = sha256_hex(canonical_json(left))
+                    else:
+                        pointer = f"/{check.metric}"
+                        left = _pointer_get(doc, pointer)
+                        evid_digest = sha256_hex(canonical_json(left))
                 else:
-                    pointer = f"/{check.metric}"
+                    if check.kind == "json_pointer" and (
+                        pointer is None or pointer == "" or pointer == "/"
+                    ):
+                        return _no_effect_result(
+                            check_id=check_id,
+                            template_id=template_id,
+                            role=role,
+                            reason="pointer_empty",
+                        )
                     left = _pointer_get(doc, pointer)
                     evid_digest = sha256_hex(canonical_json(left))
-            else:
-                left = _pointer_get(doc, pointer)
-                evid_digest = sha256_hex(canonical_json(left))
+            except (KeyError, IndexError, TypeError, ValueError):
+                return _no_effect_result(
+                    check_id=check_id,
+                    template_id=template_id,
+                    role=role,
+                    reason="pointer_empty",
+                )
 
             effect: dict[str, Any] | None = None
             used_sesoi = False
@@ -252,7 +303,15 @@ def evaluate_code_check(
                 artifacts, handle.artifact_id, attempt_id=attempt_id
             )
             if check.kind == "json_pointer":
-                ok = left is not None
+                # Missing / null / empty-string at pointer → no numeric effect.
+                if left is None or left == "":
+                    return _no_effect_result(
+                        check_id=check_id,
+                        template_id=template_id,
+                        role=role,
+                        reason="pointer_empty",
+                    )
+                ok = True
             elif check.kind == "value_matches":
                 # Exact equality is a point check — never TOST, never used_sesoi.
                 ok = left == check.target
@@ -324,14 +383,11 @@ def evaluate_code_check(
         if check.kind == "schema_valid":
             handle = out.outputs.get(check.output or "main")
             if handle is None:
-                return CheckResult(
+                return _no_effect_result(
                     check_id=check_id,
                     template_id=template_id,
-                    status=ReqStatus.FAILED,
-                    is_code=True,
-                    required=True,
                     role=role,
-                    detail="output missing",
+                    reason="output_not_submitted",
                 )
             artifacts.read(handle.artifact_id)  # verify sha
             return CheckResult(

@@ -389,6 +389,10 @@ def claim_nodes_from_attempt(
             "lit",
             "r17",
             "superseded",
+            "foreign_artifact",
+            "output_not_submitted",
+            "artifact_missing",
+            "pointer_empty",
         ):
             attrs["exclusion_reason"] = excl
         oc = core.get("claim_outcome") or core.get("outcome")

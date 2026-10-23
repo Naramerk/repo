@@ -68,12 +68,31 @@ Legacy claims are never severe → never `supported` (V5). On replay/read, **`se
 
 Agent `LocalArtifactStore.put` + core `evaluate_code_check` → countable (production path). Foreign artifacts (other attempt's `call_id`) are rejected at eval (`foreign_artifact`) and never countable.
 
+### No numeric effect → indeterminate (safe weakening vs main)
+
+A prediction check that yields **no numeric effect** is **indeterminate** (never a counting refute). This is a deliberate safe weakening versus main, where a FAILED prediction always became `not_met` / refute. Covered cases and **specific** report reasons (never a generic `unclear`):
+
+| Case | CheckResult.detail / exclusion_reason |
+|---|---|
+| Output slot not submitted | `output_not_submitted` |
+| Artifact id missing from store | `artifact_missing` |
+| Empty / missing json_pointer value | `pointer_empty` |
+| Artifact `produced_by.call_id` ≠ current attempt | `foreign_artifact` |
+
+Study disposition / `StudyFinalized.question_dispositions[].reason` and `excluded_claims[].reason` carry that code. Claim `outcome=indeterminate`; severity and `k_ref` counting skip it.
+
 ### Sandbox producer not wired in M1
 
 `put_core` / `put_sandbox` exist and stamp `Artifact.producer`, but **no production executor path calls them**. Live metrics use agent `put` + core catalog evaluation. Until sandbox/catalog-check execution is wired to `put_sandbox`:
 
 - `effect.trusted` stays **false** on the production path
 - trusted remains a stronger severity **tag** for reporting; when wired, core/sandbox-produced data will set `trusted=true` without changing the countable gate
+
+### M1 limits (call_id + catalog kinds)
+
+- **Attempt binding:** the executor/eval caller passes `attempt_id`; countable / foreign checks compare `Artifact.produced_by.call_id` to that id. There is no separate ambient “current attempt” resolver.
+- **`code_output_names`:** independence `output_kinds` come from the catalog list. **No production catalog ships a non-empty list yet** (test catalog does). Empty list ⇒ every output name is **data** (conservative: more root digests, harder accidental independence splits).
+- **Replay countable:** when an artifact store is attached, replay recomputes `trusted`/`countable` from live `get_meta`. Journal-only replay (no store) uses effect-stamped provenance facts written at eval from that same meta — never journal `trusted`/`countable` bits.
 
 ## 4. Counting filter
 
@@ -146,7 +165,7 @@ Unit + property (`record_claim` V1–V5) + executor e2e:
 
 - Independence: slot-rename, catalog kinds (planner `role=code` ignored), goal reword, intermediate step, all-code upstream, media_type spoof, diamond DFS.
 - Structural: share-any templates; empty criteria → catalog defaults.
-- Countable: agent `put` + core eval → not_met refutes; two independent SESOI mets support; foreign artifact excluded; sandbox `trusted` tagged separately (producer API not wired in production).
+- Countable: agent `put` + core eval → not_met refutes; two independent SESOI mets → live `supported`; foreign / missing-output finalize with specific reason; sandbox `trusted` tagged separately (producer API not wired in production).
 - TOST / non-null SESOI; `value_matches` never `used_sesoi`.
 - Forged journal `severe`/`refute_capable`/`trusted`/`countable` recomputed on replay.
 - Provenance walk safe; ResultRecorded v2→v3 upcaster for `output_kinds`.

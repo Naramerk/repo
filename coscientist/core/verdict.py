@@ -35,7 +35,21 @@ ExclusionReason = Literal[
     "superseded",
     "unknown_role",
     "validity_failed",
+    # No numeric effect (safe weakening vs main — never a counting refute).
+    "foreign_artifact",
+    "output_not_submitted",
+    "artifact_missing",
+    "pointer_empty",
 ]
+
+NO_EFFECT_EXCLUSION_REASONS = frozenset(
+    {
+        "foreign_artifact",
+        "output_not_submitted",
+        "artifact_missing",
+        "pointer_empty",
+    }
+)
 PredictedDirection = Literal["positive", "negative", "two_sided"]
 
 
@@ -611,10 +625,15 @@ def recompute_effect_provenance(
     effect: Mapping[str, Any] | None,
     *,
     attempt_id: str | None = None,
+    artifact_meta: Any | None = None,
 ) -> dict[str, Any] | None:
     """Recompute ``trusted`` / ``countable`` from provenance facts (not journal bits).
 
-    Facts: ``producer``, ``produced_by_call_id``, ``core_evaluated``.
+    Prefer live ``artifact_meta`` (``producer``, ``produced_by.call_id``) when the
+    artifact store is available on replay. Otherwise use effect-stamped facts
+    written at eval from that same meta (``producer``, ``produced_by_call_id``,
+    ``core_evaluated``). Journal ``trusted``/``countable`` bits are never trusted.
+
     ``trusted`` = producer ∈ {core, sandbox} (sandbox producer not wired in M1).
     ``countable`` = core-evaluated catalog check on an artifact bound to the attempt.
     """
@@ -622,12 +641,24 @@ def recompute_effect_provenance(
         return None
     out = dict(effect)
     producer = out.get("producer", "agent")
+    call_id = str(out.get("produced_by_call_id") or "")
+    if artifact_meta is not None:
+        meta_prod = getattr(artifact_meta, "producer", None)
+        if meta_prod in ("agent", "core", "sandbox"):
+            producer = meta_prod
+        produced = getattr(artifact_meta, "produced_by", None)
+        meta_call = str(getattr(produced, "call_id", "") or "")
+        if meta_call:
+            call_id = meta_call
+            out["produced_by_call_id"] = meta_call
+        aid = getattr(artifact_meta, "artifact_id", None)
+        if aid:
+            out["artifact_id"] = str(aid)
     if producer not in ("agent", "core", "sandbox"):
         producer = "agent"
     out["producer"] = producer
     out["trusted"] = producer in ("core", "sandbox")
     core_eval = bool(out.get("core_evaluated"))
-    call_id = str(out.get("produced_by_call_id") or "")
     if attempt_id and call_id:
         out["countable"] = core_eval and call_id_belongs_to_attempt(
             call_id, attempt_id
@@ -838,6 +869,10 @@ def exclusion_reason(claim: Any) -> ExclusionReason | None:
         "superseded",
         "unknown_role",
         "validity_failed",
+        "foreign_artifact",
+        "output_not_submitted",
+        "artifact_missing",
+        "pointer_empty",
     ):
         return stored  # type: ignore[return-value]
     if getattr(claim, "check_role", "unknown") == "unknown" and not getattr(

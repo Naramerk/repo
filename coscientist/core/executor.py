@@ -144,6 +144,42 @@ def _required_validity_failed(checks: list[Any]) -> bool:
     return False
 
 
+_NO_EFFECT_DETAIL_ALIASES = {
+    "foreign_artifact": "foreign_artifact",
+    "output_not_submitted": "output_not_submitted",
+    "artifact_missing": "artifact_missing",
+    "pointer_empty": "pointer_empty",
+    # Pre-normalization detail strings (compat).
+    "output missing": "output_not_submitted",
+    "artifact missing": "artifact_missing",
+}
+
+
+def _no_effect_reason_from_checks(checks: list[Any]) -> str | None:
+    """Specific reason when a prediction FAILED with no numeric effect."""
+    for c in checks or ():
+        if _check_role(c) != "prediction":
+            continue
+        st = _check_field(c, "status")
+        if isinstance(st, ReqStatus):
+            failed = st in (ReqStatus.FAILED, ReqStatus.MIGRATION_ERROR)
+        else:
+            failed = str(st) in (
+                ReqStatus.FAILED.value,
+                ReqStatus.MIGRATION_ERROR.value,
+            )
+        if not failed:
+            continue
+        # No-effect failures never carry a countable effect blob.
+        if isinstance(_check_field(c, "effect"), dict):
+            continue
+        detail = str(_check_field(c, "detail") or "")
+        mapped = _NO_EFFECT_DETAIL_ALIASES.get(detail)
+        if mapped is not None:
+            return mapped
+    return None
+
+
 def _role_for_claim_key(
     raw: dict[str, Any],
     checks: list[Any],
@@ -234,7 +270,7 @@ def _effect_from_checks(
                 "est": float(data["est"]) if data.get("est") is not None else None,
                 "kind": str(data.get("kind") or "point"),
                 "producer": str(data.get("producer") or "agent"),
-                "core_evaluated": bool(data.get("core_evaluated", True)),
+                "core_evaluated": bool(data.get("core_evaluated", False)),
                 "produced_by_call_id": str(data.get("produced_by_call_id") or ""),
                 "artifact_id": str(data.get("artifact_id") or ""),
             }
@@ -347,7 +383,10 @@ def _derive_claim_core_attrs(
         if exclusion_reason is None:
             exclusion_reason = "validity_failed"
     elif claim_outcome == "indeterminate" and exclusion_reason is None:
-        exclusion_reason = "indeterminate"
+        # Prefer specific no-effect reason over generic indeterminate.
+        exclusion_reason = _no_effect_reason_from_checks(list(checks or [])) or (
+            "indeterminate"
+        )
     status = outcome_to_status(
         claim_outcome,  # type: ignore[arg-type]
         validity="valid" if validity_ok else "invalid",

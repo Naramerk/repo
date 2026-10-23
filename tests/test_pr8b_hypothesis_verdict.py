@@ -1663,11 +1663,9 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
-async def test_e2e_foreign_artifact_not_countable(tmp_path, clock, runtime_cls):
-    """Artifact produced_by from another attempt is rejected (foreign_artifact)."""
-    from coscientist.checks.evaluate import evaluate_code_check
+async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls):
+    """record→finalize: foreign_artifact → StudyFinalized reason, not unclear."""
     from coscientist.core.artifacts import make_tool_ref
-    from coscientist.core.domain import CodeCheck
 
     sid = "st_foreign"
     rt = await open_runtime(
@@ -1706,23 +1704,276 @@ async def test_e2e_foreign_artifact_not_countable(tmp_path, clock, runtime_cls):
         name="main",
         media_type="application/json",
     )
-    cr = evaluate_code_check(
-        CodeCheck(kind="value_matches", output="main", pointer="/count", target=225),
-        template_id="value_match",
-        check_id="value_match#0",
-        out=AgentTaskOutput(
+    await rt.executor.record(
+        aid,
+        AgentTaskOutput(
             summary="x",
-            outputs={"main": ArtifactHandle(artifact_id=foreign.artifact_id, name="main")},
+            outputs={
+                "main": ArtifactHandle(artifact_id=foreign.artifact_id, name="main")
+            },
             values={"count": 225},
+            claims=[{"id": "c1", "target": "Q1"}],
         ),
-        artifacts=arts,
-        values={"count": 225},
-        role="prediction",
-        attempt_id=aid,
     )
-    assert cr.status.value == "FAILED"
-    assert cr.detail == "foreign_artifact"
-    assert cr.effect is None
+    by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
+    c = by["question:Q1"][0]
+    assert c.claim_outcome == "indeterminate"
+    assert c.exclusion_reason == "foreign_artifact"
+    assert c.effect is None
+    await rt.start_attempt("REPORT")
+    await rt.cancel_task("REPORT", reason="cancelled")
+    await rt.tick()
+    assert rt._finalized
+    events = await rt.store.read_all()
+    fin = next(e for e in events if e.type == "StudyFinalized")
+    q = fin.payload["question_dispositions"]["Q1"]
+    assert q["disposition"] == "inconclusive"
+    assert q["reason"] == "foreign_artifact"
+    assert q["reason"] != "unclear"
+    assert any(
+        e.get("reason") == "foreign_artifact" for e in (q.get("excluded_claims") or [])
+    )
+    assert fin.payload.get("report_artifact_id") or fin.payload.get("minimal_report")
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
+    """record→finalize: no output submitted → output_not_submitted on StudyFinalized."""
+    sid = "st_no_out"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=180),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    attach_executor(rt, tmp_path)
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E0",
+                title="t",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    aid = await rt.start_attempt("E0")
+    await rt.executor.record(
+        aid,
+        AgentTaskOutput(
+            summary="no artifact",
+            outputs={},
+            values={},
+            claims=[{"id": "c1", "target": "Q1"}],
+        ),
+    )
+    by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
+    c = by["question:Q1"][0]
+    assert c.claim_outcome == "indeterminate"
+    assert c.exclusion_reason == "output_not_submitted"
+    await rt.start_attempt("REPORT")
+    await rt.cancel_task("REPORT", reason="cancelled")
+    await rt.tick()
+    assert rt._finalized
+    events = await rt.store.read_all()
+    fin = next(e for e in events if e.type == "StudyFinalized")
+    q = fin.payload["question_dispositions"]["Q1"]
+    assert q["disposition"] == "inconclusive"
+    assert q["reason"] == "output_not_submitted"
+    assert q["reason"] != "unclear"
+    assert any(
+        e.get("reason") == "output_not_submitted"
+        for e in (q.get("excluded_claims") or [])
+    )
+    assert fin.payload.get("report_artifact_id") or fin.payload.get("minimal_report")
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_e2e_agent_put_two_independent_mets_supported(
+    tmp_path, clock, runtime_cls
+):
+    """Live supported: agent put + core SESOI eval, two independent mets."""
+    from datetime import UTC, datetime
+
+    from coscientist.core.artifacts import make_tool_ref
+    from coscientist.core.graph import GraphEdge, GraphNode
+    from coscientist.core.ids import experiment_node_id, hypothesis_node_id
+    from coscientist.core.verdict import hypothesis_verdict
+
+    sid = "st_agent_sup"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        supported_needed=2,
+        refutations_needed=1,
+        refutation_priority=True,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="P1",
+                title="raw1",
+                goal="d1",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="artifact_present")],
+                addresses=["Q1"],
+                expected_outputs=[
+                    OutputSpec(name="main", media_type="application/json", role="data")
+                ],
+            ),
+            TaskSpec(
+                task_key="P2",
+                title="raw2",
+                goal="d2",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="artifact_present")],
+                addresses=["Q1"],
+                expected_outputs=[
+                    OutputSpec(name="main", media_type="application/json", role="data")
+                ],
+            ),
+            TaskSpec(
+                task_key="E1",
+                title="exp1",
+                goal="g1",
+                route="experiment",
+                depends_on=["P1"],
+                inputs=[InputSpec(from_task="P1", output="main")],
+                criteria=[RequirementRef(template_id="value_match_sesoi")],
+                addresses=["Q1"],
+            ),
+            TaskSpec(
+                task_key="E2",
+                title="exp2",
+                goal="g2",
+                route="experiment",
+                depends_on=["P2"],
+                inputs=[InputSpec(from_task="P2", output="main")],
+                criteria=[RequirementRef(template_id="value_match_sesoi")],
+                addresses=["Q1"],
+            ),
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    now = datetime.now(UTC)
+    hid = hypothesis_node_id(sid, "H1")
+    rt.graph.upsert_node(
+        GraphNode(
+            node_id=hid,
+            kind="hypothesis",
+            study_id=sid,
+            ref_id="H1",
+            attrs={"text": "h"},
+        )
+    )
+    for tk in ("E1", "E2"):
+        eid = experiment_node_id(sid, tk)
+        if rt.graph.get_node(eid) is None:
+            rt.graph.upsert_node(
+                GraphNode(
+                    node_id=eid,
+                    kind="experiment",
+                    study_id=sid,
+                    ref_id=tk,
+                    attrs={"task_key": tk},
+                )
+            )
+        rt.graph.add_edge(
+            GraphEdge(
+                edge_id=f"tests:{eid}:{hid}",
+                kind="tests",
+                study_id=sid,
+                src_id=eid,
+                dst_id=hid,
+                attrs={"intent": "refute"},
+                created_at=now,
+            )
+        )
+
+    for tk, blob in (("P1", b'{"raw": 1}'), ("P2", b'{"raw": 2}')):
+        aid = await rt.start_attempt(tk)
+        art = arts.put(
+            blob,
+            make_tool_ref(f"{aid}:1"),
+            name="main",
+            media_type="application/json",
+            role="data",
+        )
+        await rt.executor.record(
+            aid,
+            AgentTaskOutput(
+                summary="raw",
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+                claims=[],
+            ),
+        )
+
+    for tk, est in (("E1", 2.0), ("E2", 3.0)):
+        aid = await rt.start_attempt(tk)
+        payload = f'{{"effect": {est}}}'.encode()
+        art = arts.put(
+            payload,
+            make_tool_ref(f"{aid}:1"),
+            name="main",
+            media_type="application/json",
+            role="data",
+        )
+        assert art.producer == "agent"
+        await rt.executor.record(
+            aid,
+            AgentTaskOutput(
+                summary="ok",
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+                values={"effect": est},
+                claims=[{"id": f"c_{tk}", "target": "H1"}],
+            ),
+        )
+    by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
+    hyps = by["hypothesis:H1"]
+    assert len(hyps) == 2
+    assert all((c.effect or {}).get("trusted") is False for c in hyps)
+    assert all((c.effect or {}).get("countable") is True for c in hyps)
+    assert all(c.severe for c in hyps)
+    v, _, rule = hypothesis_verdict(
+        hyps, True, supported_needed=2, refutations_needed=1, refutation_priority=True
+    )
+    assert v == "supported" and rule == "support_min"
+
+    await rt.start_attempt("REPORT")
+    await rt.cancel_task("REPORT", reason="cancelled")
+    await rt.tick()
+    assert rt._finalized
+    events = await rt.store.read_all()
+    fin = next(e for e in events if e.type == "StudyFinalized")
+    hyp_rows = fin.payload.get("hypothesis_verdicts") or {}
+    assert hyp_rows.get("H1", {}).get("verdict") == "supported"
     await close_runtime(rt)
 
 

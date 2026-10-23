@@ -368,8 +368,14 @@ def runtime_claim_from_node(
     study_id: str,
     results: Mapping[str, Mapping[str, Any]] | None = None,
     graph: GraphStore | None = None,
+    artifact_lookup: Any | None = None,
 ) -> tuple[RuntimeClaim | None, str | None]:
-    """Build a RuntimeClaim; on garbage attrs return ``(None, reason)`` — never raise."""
+    """Build a RuntimeClaim; on garbage attrs return ``(None, reason)`` — never raise.
+
+    When ``artifact_lookup`` is provided, effect ``trusted``/``countable`` are
+    recomputed from live artifact metadata. Journal-only replay falls back to
+    effect-stamped provenance facts written at eval from that same meta.
+    """
     try:
         attrs = dict(node.attrs or {})
         aid = _coerce_str(attrs.get("attempt_id"), allow_empty=True) or ""
@@ -416,6 +422,10 @@ def runtime_claim_from_node(
             "lit",
             "r17",
             "superseded",
+            "foreign_artifact",
+            "output_not_submitted",
+            "artifact_missing",
+            "pointer_empty",
         )
         exclusion_reason = excl_raw if excl_raw in _EXCL else None
         claim_outcome_raw = _coerce_str(attrs.get("claim_outcome"), allow_empty=True) or (
@@ -488,9 +498,18 @@ def runtime_claim_from_node(
         if isinstance(effect_raw, dict):
             from coscientist.core.verdict import recompute_effect_provenance
 
-            # Recompute trusted/countable from provenance facts (not journal bits).
+            # Prefer live artifact meta; else effect-stamped provenance facts.
+            meta = None
+            art_id = effect_raw.get("artifact_id") or attrs.get("artifact_id")
+            if artifact_lookup is not None and art_id:
+                try:
+                    meta = artifact_lookup(str(art_id))
+                except Exception:  # noqa: BLE001 — totality
+                    meta = None
             effect = recompute_effect_provenance(
-                dict(effect_raw), attempt_id=aid or None
+                dict(effect_raw),
+                attempt_id=aid or None,
+                artifact_meta=meta,
             )
         else:
             effect = None
@@ -639,6 +658,7 @@ def filtered_claims_by_target(
     *,
     study_id: str,
     results: Mapping[str, Mapping[str, Any]] | None = None,
+    artifact_lookup: Any | None = None,
 ) -> dict[str, list[RuntimeClaim]]:
     """Group claims by ``{kind}:{logical}``; about + coerce applied uniformly.
 
@@ -649,7 +669,11 @@ def filtered_claims_by_target(
     grouped: dict[str, list[RuntimeClaim]] = defaultdict(list)
     for node in graph.nodes_by_kind("claim"):
         rc, _reason = runtime_claim_from_node(
-            node, study_id=study_id, results=results, graph=graph
+            node,
+            study_id=study_id,
+            results=results,
+            graph=graph,
+            artifact_lookup=artifact_lookup,
         )
         if rc is None or not rc.target:
             continue

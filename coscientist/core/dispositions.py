@@ -16,6 +16,7 @@ from coscientist.core.graph import GraphStore
 from coscientist.core.question_tasks import known_questions, question_tasks
 from coscientist.core.reasons import Disposition, NotAttemptedReason, TaskReason
 from coscientist.core.rules import priority_refuted_support_note, verdict
+from coscientist.core.verdict import NO_EFFECT_EXCLUSION_REASONS
 
 
 def _task_by_key(tasks: Mapping[str, Task]) -> dict[str, Task]:
@@ -73,6 +74,7 @@ def dispositions(
     study: Study | None = None,
     results: Mapping[str, Mapping[str, Any]] | None = None,
     k: int | None = None,
+    artifact_lookup: Any | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-question disposition.
 
@@ -91,6 +93,7 @@ def dispositions(
             study=study,
             results=results,
             k=k,
+            artifact_lookup=artifact_lookup,
         )
     except Exception:  # noqa: BLE001 — finalize/view must never crash
         qmap = known_questions(plans)
@@ -113,6 +116,7 @@ def _dispositions_inner(
     study: Study | None,
     results: Mapping[str, Mapping[str, Any]] | None,
     k: int | None,
+    artifact_lookup: Any | None = None,
 ) -> dict[str, dict[str, Any]]:
     qmap = known_questions(plans)
     cover = question_tasks(plans)
@@ -120,7 +124,10 @@ def _dispositions_inner(
     by_target: dict[str, list] = {}
     if graph is not None and study is not None:
         by_target = filtered_claims_by_target(
-            graph, study_id=study.study_id, results=results
+            graph,
+            study_id=study.study_id,
+            results=results,
+            artifact_lookup=artifact_lookup,
         )
 
     k_ref = study.refutations_needed if study is not None else 1
@@ -192,6 +199,23 @@ def _dispositions_inner(
                 "excluded_claims": excluded,
             }
             continue
+        # No-effect indeterminate (foreign / missing output / empty pointer):
+        # inconclusive with the specific reason — never generic "unclear".
+        no_effect_excl = [
+            e for e in excluded if e.get("reason") in NO_EFFECT_EXCLUSION_REASONS
+        ]
+        if no_effect_excl:
+            reasons = sorted({str(e["reason"]) for e in no_effect_excl})
+            primary = reasons[0]
+            result[qid] = {
+                "disposition": Disposition.INCONCLUSIVE.value,
+                "reason": primary,
+                "reason_detail": reasons,
+                "formulation": text,
+                "verdict": "inconclusive",
+                "excluded_claims": excluded,
+            }
+            continue
         reason, detail = _not_attempted_for_covering(covering)
         row_na: dict[str, Any] = {
             "disposition": Disposition.NOT_ATTEMPTED.value,
@@ -211,6 +235,7 @@ def report_hypothesis_verdicts(
     study: Study | None,
     results: Mapping[str, Mapping[str, Any]] | None,
     tasks: Mapping[str, Task],
+    artifact_lookup: Any | None = None,
 ) -> tuple[dict[str, dict[str, Any]], str | None]:
     """Hypothesis verdicts for StudyFinalized / minimal_report (PR8/PR8b).
 
@@ -240,7 +265,10 @@ def report_hypothesis_verdicts(
             any_experiment_done=any_exp,
         )
         by_target = filtered_claims_by_target(
-            graph, study_id=study.study_id, results=results
+            graph,
+            study_id=study.study_id,
+            results=results,
+            artifact_lookup=artifact_lookup,
         )
         out: dict[str, dict[str, Any]] = {}
         for hid, snap in snaps.items():

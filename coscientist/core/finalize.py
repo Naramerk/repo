@@ -252,22 +252,35 @@ def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
     raise RuntimeError("finalized_payload_too_large")
 
 
+def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
+    """``get_meta`` when an artifact store is attached (live replay); else None."""
+    arts = getattr(runtime, "artifacts", None)
+    if arts is None:
+        ex = getattr(runtime, "executor", None)
+        arts = getattr(ex, "artifacts", None) if ex is not None else None
+    lookup = getattr(arts, "get_meta", None)
+    return lookup if callable(lookup) else None
+
+
 async def _build_rich_payload(
     runtime: StudyRuntime, *, sid: str, trigger: FinalizeTrigger
 ) -> dict[str, Any]:
     plans = await _load_plans(runtime)
+    lookup = _artifact_lookup(runtime)
     qdisp = dispositions(
         tasks=runtime.tasks,
         plans=plans,
         graph=getattr(runtime, "graph", None),
         study=runtime.study,
         results=getattr(runtime, "results", None),
+        artifact_lookup=lookup,
     )
     hyp_verdicts, hyp_unavail = report_hypothesis_verdicts(
         graph=getattr(runtime, "graph", None),
         study=runtime.study,
         results=getattr(runtime, "results", None),
         tasks=runtime.tasks,
+        artifact_lookup=lookup,
     )
     term = terminal_reason_for(
         trigger, tasks=runtime.tasks, question_dispositions=qdisp

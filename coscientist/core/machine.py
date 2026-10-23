@@ -144,12 +144,15 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
 
         qdisp = None
         if self.plans:
+            arts = getattr(self, "artifacts", None)
+            lookup = getattr(arts, "get_meta", None) if arts is not None else None
             qdisp = dispositions(
                 tasks=self.tasks,
                 plans=self.plans,
                 graph=self.graph,
                 study=self.study,
                 results=self.results,
+                artifact_lookup=lookup if callable(lookup) else None,
             )
         ed = self.study.effective_deadline() if self.study else None
         return study_view(
