@@ -142,11 +142,14 @@ class RuntimeClaim:
         return self.evidence_kind == "literature"
 
     def counts(self) -> bool:
-        """PR8b counting filter: real ∧ valid ∧ consistent|inconsistent ∧ not lit.
+        """PR8b/PR9 counting filter: real ∧ valid ∧ consistent|inconsistent ∧ not lit.
 
         Stubs/partials are excluded **before** counting (no provenance ceiling).
         Literature never counts. Validity failures never count.
+        PR9/C10: claims whose target (or checked_against) is superseded are out.
         """
+        if self.exclusion_reason == "superseded":
+            return False
         if not (self.accepted and self.validity_ok and self.frozen):
             return False
         if self.provenance != "real":
@@ -560,6 +563,20 @@ def runtime_claim_from_node(
                 target = _logical_id_from_node(dst, study_id, "hypothesis")
             else:
                 return None, "about_dst_kind"
+
+        # PR9/C10: superseded targets (and criteria) are excluded from k.
+        if graph is not None and exclusion_reason is None:
+            from coscientist.core.supersede import (
+                criterion_is_superseded,
+                question_is_superseded,
+            )
+
+            if target_kind == "question" and question_is_superseded(graph, study_id, target):
+                exclusion_reason = "superseded"
+            else:
+                checked = _coerce_str(attrs.get("checked_against"), allow_empty=True)
+                if checked and criterion_is_superseded(graph, study_id, checked):
+                    exclusion_reason = "superseded"
 
         intent = intent_from_producing_experiment(
             graph,

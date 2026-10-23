@@ -171,7 +171,9 @@ class Claim:
     def is_lit(self):
         return self.evidence_kind == "literature"
     def counts(self):
-        # PR8b: real ∧ valid ∧ consistent|inconsistent ∧ not lit; stubs excluded.
+        # PR8b/PR9: real ∧ valid ∧ consistent|inconsistent ∧ not lit; stubs excluded.
+        if getattr(self, "exclusion_reason", None) == "superseded":
+            return False
         if not (self.accepted and self.validity_ok and self.frozen):
             return False
         if self.provenance != "real":

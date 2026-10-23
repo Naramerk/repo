@@ -77,6 +77,16 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         self._budget_exceeded = False
         self._intake_refusal: IntakeRefuse | None = None
         self._study_spent_rub = Decimal("0")
+        # PR9 expansion accounting (folded from PlanExpanded / ExpansionRefused).
+        self._agent_expansions = 0
+        self._human_expansions = 0
+        self._replan_used_s = 0.0
+        self._expand_pending: set[str] = set()
+        self._expand_requests: dict[str, dict[str, Any]] = {}
+        self._expansion_refusals: list[dict[str, Any]] = []
+        self._hitl_decisions: dict[str, dict[str, Any]] = {}
+        self._hitl_requests: dict[str, dict[str, Any]] = {}
+        self._hitl_expand_used: set[str] = set()
 
     def bind_executor(self, executor: Any) -> Any:
         """Wire production ``graph`` into Executor (laundering + about edges)."""
@@ -126,7 +136,32 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         )
         self.artifacts = artifacts
         self.catalog = catalog
-        return self.bind_executor(ex)
+        self.bind_executor(ex)
+        # Executor writes via writer (not StudyRuntime._append); wrap to run H-g.
+        orig_append = ex._append
+
+        async def _append_with_expand(
+            events: list[EventEnvelope],
+            *,
+            require_open_attempt: str | None = None,
+        ) -> None:
+            await orig_append(events, require_open_attempt=require_open_attempt)
+            if self._finalized or self._lease_lost:
+                return
+            from coscientist.core.expand import maybe_expand_after_task_done
+
+            for ev in events:
+                if ev.type != "TaskDone":
+                    continue
+                t = self.tasks.get(ev.entity_key)
+                reason = getattr(t, "reason", None) if t is not None else None
+                rv = getattr(reason, "value", reason)
+                if rv == TaskReason.SUPERSEDED.value:
+                    continue
+                await maybe_expand_after_task_done(self, ev.entity_key)
+
+        ex._append = _append_with_expand  # type: ignore[method-assign]
+        return ex
 
     async def _append(self, events: list[EventEnvelope]) -> None:
         if self._lease_lost:
@@ -136,8 +171,24 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         except LeaseLost:
             self._lease_lost = True
             raise
+        done_ids: list[str] = []
         for ev in events:
             self._project_local(ev)
+            if ev.type == "TaskDone":
+                done_ids.append(ev.entity_key)
+        # H-g: after each TaskDone, maybe expand (expansion_request / expand_after).
+        if done_ids and not self._finalized and not self._lease_lost:
+            from coscientist.core.expand import maybe_expand_after_task_done
+
+            for tid in done_ids:
+                # Skip expand side-effects for tasks we just skipped as superseded
+                # inside the same expand batch (reason already projected).
+                t = self.tasks.get(tid)
+                reason = getattr(t, "reason", None) if t is not None else None
+                rv = getattr(reason, "value", reason)
+                if rv == TaskReason.SUPERSEDED.value:
+                    continue
+                await maybe_expand_after_task_done(self, tid)
 
     def view(self):
         from coscientist.core.dispositions import dispositions
@@ -167,9 +218,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
 
     def invariant_open_attempts(self) -> bool:
         for t in self.tasks.values():
-            open_n = sum(
-                1 for a in t.attempts if not self.attempts.get(a, {}).get("closed")
-            )
+            open_n = sum(1 for a in t.attempts if not self.attempts.get(a, {}).get("closed"))
             if open_n > 1:
                 return False
         return True
@@ -315,16 +364,10 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         # without InputSpec (stage chain excluded — see AttemptsMixin).
         # Skip when budget/cancel already owns close reasons (else children get
         # input_unavailable instead of budget/cancelled).
-        if (
-            now < ed
-            and not self._budget_exceeded
-            and not self._study_cancelled
-        ):
+        if now < ed and not self._budget_exceeded and not self._study_cancelled:
             await self._skip_unavailable_dep_children()
 
-        all_done = bool(self.tasks) and all(
-            t.state == TaskState.DONE for t in self.tasks.values()
-        )
+        all_done = bool(self.tasks) and all(t.state == TaskState.DONE for t in self.tasks.values())
         trigger = pick_finalize_trigger(
             cancelled=self._study_cancelled,
             budget=self._budget_trigger_active(),
@@ -334,15 +377,11 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         )
         if trigger in ("cancel", "budget", "deadline", "intake"):
             if trigger == "deadline":
-                await self._close_remaining(
-                    TaskReason.STUDY_DEADLINE, CloseReason.STUDY_DEADLINE
-                )
+                await self._close_remaining(TaskReason.STUDY_DEADLINE, CloseReason.STUDY_DEADLINE)
             elif trigger == "budget" and not all_done:
                 await self._close_remaining(TaskReason.BUDGET, CloseReason.BUDGET)
             elif trigger == "cancel" and not all_done:
-                await self._close_remaining(
-                    TaskReason.CANCELLED, CloseReason.CANCELLED
-                )
+                await self._close_remaining(TaskReason.CANCELLED, CloseReason.CANCELLED)
             await _finalize(self, trigger=trigger)
             return
 
@@ -375,9 +414,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                             study_id=sid,
                             type="AttemptClosed",
                             entity_key=aid,
-                            idem_key=make_idem(
-                                "AttemptClosed", aid, CloseReason.DEADLINE.value
-                            ),
+                            idem_key=make_idem("AttemptClosed", aid, CloseReason.DEADLINE.value),
                             payload={
                                 "attempt_id": aid,
                                 "closed": True,
@@ -424,9 +461,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             if now > task.deadline or (ed is not None and now >= ed):
                 self._retry_at.pop(tid, None)
                 continue
-            open_atts = [
-                a for a in task.attempts if not self.attempts.get(a, {}).get("closed")
-            ]
+            open_atts = [a for a in task.attempts if not self.attempts.get(a, {}).get("closed")]
             if open_atts:
                 self._retry_at.pop(tid, None)
                 continue

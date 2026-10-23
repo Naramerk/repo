@@ -27,10 +27,22 @@ class HitlForkMixin(CostlyHitlMixin):
         timeout_s: int | None = None,
         *,
         cost_rub: float = 0.0,
+        expand_after_task: str | None = None,
     ) -> str:
+        """Open a HITL gate.
+
+        ``HitlOpened.kind`` stays as requested (``plan`` / ``plan_approval`` / …)
+        so GateConfig / UI / report readers keep working. Plan-change offers bind
+        ``expand_after_task``; a human edit then produces ``PlanExpanded`` or
+        ``ExpansionRefused`` without renaming the gate kind.
+        """
         task = self._resolve_task(task_key_or_id)
         assert self.study is not None
         now = self.clock.now()
+        # Policy always by the original kind (do NOT rename to plan_expansion).
+        after: str | None = expand_after_task
+        if kind in ("plan", "plan_approval", "plan_expansion"):
+            after = after or task.spec.task_key
         gate = self.study.hitl_policy.gate(kind)
         to = timeout_s if timeout_s is not None else gate.timeout_s
         deadline = min(
@@ -48,6 +60,7 @@ class HitlForkMixin(CostlyHitlMixin):
             task_id=task.task_id,
             open=True,
             cost_rub=float(cost_rub),
+            expand_after_task=after,
         )
         await self._append(
             [
@@ -69,6 +82,7 @@ class HitlForkMixin(CostlyHitlMixin):
         decision: str = "accept",
         *,
         critic_accepts: bool = True,
+        expansion: dict[str, Any] | None = None,
     ) -> None:
         h = self.hitl[request_id]
         if not h.open:
@@ -87,6 +101,7 @@ class HitlForkMixin(CostlyHitlMixin):
         # DESIGN §7.3: «реши сам» → critic with delegated_by=human
         if decision == "delegate":
             await self._critic_decide(h, decision="accept", delegated_by="human")
+            await self._maybe_hitl_expand(h, request_id, expansion)
             return
         now = self.clock.now()
         await self._append(
@@ -108,6 +123,78 @@ class HitlForkMixin(CostlyHitlMixin):
                     ts=now,
                 )
             ]
+        )
+        if decision in ("accept", "approve"):
+            await self._maybe_hitl_expand(h, request_id, expansion)
+
+    async def _maybe_hitl_expand(
+        self,
+        h: HitlRequest,
+        request_id: str,
+        expansion: dict[str, Any] | None,
+    ) -> None:
+        """Third H-g trigger: HITL plan edit → PlanExpanded / ExpansionRefused.
+
+        ``delegated_by`` is derived from the HitlDecided event, not an argument.
+        Wrong/unknown kind with a plan change → ``ExpansionRefused(invalid_hitl)``
+        (never silent drop).
+        """
+        if not expansion:
+            return
+        from coscientist.core.domain import QuestionSpec, QuestionSupersede, TaskSpec
+        from coscientist.core.expand import expand_plan
+        from coscientist.core.expand_trigger import refuse_expansion
+
+        after = str(
+            expansion.get("after_task")
+            or getattr(h, "expand_after_task", None)
+            or ""
+        )
+        if not after and h.task_id:
+            task = self.tasks.get(h.task_id)
+            after = task.spec.task_key if task is not None else h.task_id
+        after = after or "HITL"
+        # Plan edits only via plan / plan_approval / plan_expansion (+ expand_after_task).
+        # hypotheses / report / … → ExpansionRefused(invalid_hitl), never silent drop.
+        if h.kind not in ("plan", "plan_approval", "plan_expansion"):
+            await refuse_expansion(
+                self,  # type: ignore[arg-type]
+                after,
+                reason="invalid_hitl",
+                detail=f"hitl_wrong_kind:{h.kind or 'unknown'}",
+            )
+            return
+        if not getattr(h, "expand_after_task", None) and not expansion.get("after_task"):
+            await refuse_expansion(
+                self,  # type: ignore[arg-type]
+                after,
+                reason="invalid_hitl",
+                detail="hitl_unbound",
+            )
+            return
+        added_tasks = [
+            TaskSpec.model_validate(t) if isinstance(t, dict) else t
+            for t in (expansion.get("added_tasks") or [])
+        ]
+        added_questions = [
+            QuestionSpec.model_validate(q) if isinstance(q, dict) else q
+            for q in (expansion.get("added_questions") or [])
+        ]
+        superseded_questions = [
+            QuestionSupersede.model_validate(s) if isinstance(s, dict) else s
+            for s in (expansion.get("superseded_questions") or [])
+        ]
+        await expand_plan(
+            self,  # type: ignore[arg-type]
+            after_task=after,
+            added_tasks=added_tasks,
+            added_questions=added_questions,
+            superseded_tasks=list(expansion.get("superseded_tasks") or []),
+            superseded_questions=superseded_questions,
+            origin="plan",
+            reason=str(expansion.get("reason") or "hitl_plan_edit"),
+            hitl_request_id=request_id,
+            assign_keys=bool(expansion.get("assign_keys", False)),
         )
 
     async def _hitl_timeout(self, h: HitlRequest) -> None:
@@ -133,6 +220,7 @@ class HitlForkMixin(CostlyHitlMixin):
         )
         if h.kind not in (
             "plan_approval",
+            "plan_expansion",
             "spec_approval",
             "plan",
             "hypotheses",
@@ -183,6 +271,51 @@ class HitlForkMixin(CostlyHitlMixin):
                         "spent_rub": 0.0,
                     },
                     ts=now,
+                )
+            ]
+        )
+        # Mark plan node when «decide yourself» / timeout delegate (graph attrs).
+        await self._mark_plan_delegated(h, delegated_by=delegated_by)
+
+    async def _mark_plan_delegated(self, h: HitlRequest, *, delegated_by: str) -> None:
+        if h.kind not in ("plan", "plan_approval", "plan_expansion", "hypotheses"):
+            return
+        graph = getattr(self, "graph", None)
+        plans = getattr(self, "plans", None)
+        if graph is None or not isinstance(plans, dict) or not plans:
+            return
+        from coscientist.core.graph import GraphNode
+        from coscientist.core.supersede import plan_node_id
+
+        prev = max(plans.values(), key=lambda p: int(p.get("revision") or 0))
+        pid = str(prev.get("plan_id") or "")
+        if not pid:
+            return
+        sid = h.study_id
+        pnid = plan_node_id(sid, pid)
+        existing = graph.get_node(pnid)
+        attrs = dict((existing.attrs if existing is not None else None) or {})
+        attrs["delegated_by"] = delegated_by
+        attrs["approved_by"] = "critic"
+        now = self.clock.now()
+        node = GraphNode(
+            node_id=pnid,
+            kind="plan",
+            study_id=sid,
+            ref_id=pid,
+            attrs=attrs,
+            created_at=getattr(existing, "created_at", None) or now,
+        )
+        await self._append(
+            [
+                EventEnvelope(
+                    study_id=sid,
+                    type="GraphNodeUpserted",
+                    entity_key=pnid,
+                    idem_key=make_idem("GraphNodeUpserted", pnid, "hitl_delegate", delegated_by),
+                    payload=node.model_dump(mode="json"),
+                    ts=now,
+                    schema_version=1,
                 )
             ]
         )

@@ -30,6 +30,28 @@ class LocalProjectMixin:
     _study_spent_rub: Decimal
     verdict_snapshots: dict[str, dict[str, Any]]
     hypothesis_verdicts: dict[str, dict[str, Any]]
+    _agent_expansions: int
+    _human_expansions: int
+    _replan_used_s: float
+    _expand_pending: set[str]
+    _expand_requests: dict[str, dict[str, Any]]
+    _expansion_refusals: list[dict[str, Any]]
+    _hitl_decisions: dict[str, dict[str, Any]]
+    _hitl_requests: dict[str, dict[str, Any]]
+    _hitl_expand_used: set[str]
+
+    def _clear_expand_request(
+        self, *, after_task: str | None = None, plan_key: str | None = None
+    ) -> None:
+        """Drop PLAN-n pending entries once PlanExpanded / ExpansionRefused folds."""
+        reqs = getattr(self, "_expand_requests", None)
+        if not isinstance(reqs, dict) or not reqs:
+            return
+        if plan_key and plan_key in reqs:
+            reqs.pop(plan_key, None)
+        if after_task:
+            for k in [k for k, m in reqs.items() if str(m.get("after_task") or "") == after_task]:
+                reqs.pop(k, None)
 
     def _project_local(self, ev: EventEnvelope) -> None:
         p = ev.payload
@@ -48,13 +70,89 @@ class LocalProjectMixin:
                 self._budget_exceeded = True
         elif ev.type == "PlanAccepted":
             self.plans[ev.entity_key] = dict(p)
+        elif ev.type == "PlanExpanded":
+            self.plans[ev.entity_key] = dict(p)
+            # B3: expansion counts + replan_used from events (not live counters).
+            # timeout → agent quota (DESIGN_M1 §4); only human skips agent quota.
+            if p.get("delegated_by") == "human":
+                self._human_expansions = int(getattr(self, "_human_expansions", 0)) + 1
+            else:
+                self._agent_expansions = int(getattr(self, "_agent_expansions", 0)) + 1
+            alloc = float(p.get("replan_allocated_s") or 0.0)
+            if alloc:
+                self._replan_used_s = float(getattr(self, "_replan_used_s", 0.0)) + alloc
+            after = p.get("after_task")
+            pending = getattr(self, "_expand_pending", None)
+            if after and isinstance(pending, set):
+                pending.discard(str(after))
+            # Clear PLAN-n pending rebuilt from TaskCreated (MAJOR replay leak).
+            self._clear_expand_request(
+                after_task=str(after) if after else None,
+                plan_key=p.get("plan_key"),
+            )
+            rid = p.get("hitl_request_id")
+            if rid:
+                used = getattr(self, "_hitl_expand_used", None)
+                if not isinstance(used, set):
+                    self._hitl_expand_used = set()
+                    used = self._hitl_expand_used
+                used.add(str(rid))
+        elif ev.type == "ExpansionRefused":
+            refusals = getattr(self, "_expansion_refusals", None)
+            if isinstance(refusals, list):
+                refusals.append(dict(p))
+            else:
+                self._expansion_refusals = [dict(p)]
+            self._clear_expand_request(
+                after_task=str(p.get("after_task") or "") or None,
+                plan_key=p.get("plan_key"),
+            )
+        elif ev.type == "HitlOpened":
+            rid = str(p.get("request_id") or ev.entity_key)
+            opens = getattr(self, "_hitl_requests", None)
+            if not isinstance(opens, dict):
+                self._hitl_requests = {}
+                opens = self._hitl_requests
+            opens[rid] = dict(p)
+        elif ev.type == "HitlDecided":
+            rid = str(p.get("request_id") or ev.entity_key)
+            decisions = getattr(self, "_hitl_decisions", None)
+            if not isinstance(decisions, dict):
+                self._hitl_decisions = {}
+                decisions = self._hitl_decisions
+            decisions[rid] = dict(p)
         elif ev.type == "StudyCancelled":
             self._study_cancelled = True
         elif ev.type == "StudyFinalized":
             self._finalized = True
             self._fold_finalized_graph(ev.study_id, p, created_at=ev.ts)
         elif ev.type in ("TaskCreated", "TaskInherited"):
-            self.tasks[p["task_id"]] = Task.model_validate(p)
+            # Task model forbids extras; strip expansion bookkeeping before validate.
+            drop = ("pending_expansion", "expand_after_task", "replan_allocated_s")
+            clean = {k: v for k, v in p.items() if k not in drop}
+            self.tasks[p["task_id"]] = Task.model_validate(clean)
+            # Fold PLAN-n replan_allocated_s (reserve spent creating the container).
+            alloc = float(p.get("replan_allocated_s") or 0.0)
+            if alloc:
+                self._replan_used_s = float(getattr(self, "_replan_used_s", 0.0)) + alloc
+            pending_exp = p.get("pending_expansion")
+            after = p.get("expand_after_task")
+            tkey = str((clean.get("spec") or {}).get("task_key") or "")
+            if after and tkey.startswith("PLAN-"):
+                reqs = getattr(self, "_expand_requests", None)
+                if not isinstance(reqs, dict):
+                    self._expand_requests = {}
+                    reqs = self._expand_requests
+                reqs[tkey] = {
+                    "after_task": str(after),
+                    "pending": pending_exp if isinstance(pending_exp, dict) else None,
+                    "replan_allocated_s": alloc,
+                }
+                pend = getattr(self, "_expand_pending", None)
+                if isinstance(pend, set):
+                    pend.add(str(after))
+                else:
+                    self._expand_pending = {str(after)}
         elif ev.type == "AttemptStarted":
             self.attempts[p["attempt_id"]] = dict(p)
             t = self.tasks[p["task_id"]]
@@ -102,27 +200,18 @@ class LocalProjectMixin:
             aid = p.get("attempt_id")
             att = self.attempts.get(aid or "", {})
             tid = att.get("task_id") or p.get("task_id")
-            if (
-                isinstance(dep_outputs, dict)
-                and tid
-                and tid in self.tasks
-            ):
+            if isinstance(dep_outputs, dict) and tid and tid in self.tasks:
                 tkey = self.tasks[tid].spec.task_key
                 omap = p.get("output_map")
                 if isinstance(omap, dict) and omap:
-                    dep_outputs[tkey] = {
-                        str(k): str(v) for k, v in omap.items() if v
-                    }
+                    dep_outputs[tkey] = {str(k): str(v) for k, v in omap.items() if v}
                 elif p.get("artifacts"):
                     arts = list(p.get("artifacts") or [])
                     if arts:
                         dep_outputs.setdefault(tkey, {})
                         dep_outputs[tkey].setdefault("main", str(arts[0]))
                 prov = p.get("provenance", "real")
-                if (
-                    isinstance(dep_provenance, dict)
-                    and prov in ("real", "partial", "stub")
-                ):
+                if isinstance(dep_provenance, dict) and prov in ("real", "partial", "stub"):
                     dep_provenance[tkey] = prov
         elif ev.type == "TaskDone":
             t = self.tasks[p["task_id"]]
@@ -167,9 +256,7 @@ class LocalProjectMixin:
                     )
                 self.graph.upsert_node(node)
             if node.kind == "claim":
-                self._invalidate_verdict_snapshots_for_target(
-                    (node.attrs or {}).get("target")
-                )
+                self._invalidate_verdict_snapshots_for_target((node.attrs or {}).get("target"))
         elif ev.type == "GraphEdgeAdded":
             # Fail loudly: missing endpoints / illegal pairs are journal bugs.
             edge = GraphEdge.model_validate(p)
@@ -181,17 +268,13 @@ class LocalProjectMixin:
                 if dst is not None:
                     prefix = f"{ev.study_id}:{dst.kind}:"
                     logical = (
-                        edge.dst_id[len(prefix) :]
-                        if edge.dst_id.startswith(prefix)
-                        else (dst.ref_id or edge.dst_id)
+                        edge.dst_id[len(prefix) :] if edge.dst_id.startswith(prefix) else (dst.ref_id or edge.dst_id)
                     )
                 self._invalidate_verdict_snapshots_for_target(logical)
         elif ev.type == "VerdictSnapshotsRecorded":
             snaps = p.get("snapshots") or {}
             if isinstance(snaps, dict):
-                self.verdict_snapshots.update(
-                    {str(k): dict(v) for k, v in snaps.items() if isinstance(v, dict)}
-                )
+                self.verdict_snapshots.update({str(k): dict(v) for k, v in snaps.items() if isinstance(v, dict)})
 
     def _invalidate_verdict_snapshots_for_target(self, target: Any) -> None:
         """Drop journaled snapshots for one target ref (DESIGN_M1 PR8)."""
@@ -204,14 +287,10 @@ class LocalProjectMixin:
             self.verdict_snapshots.pop(f"question:{key}", None)
             self.verdict_snapshots.pop(f"hypothesis:{key}", None)
 
-    def _fold_finalized_graph(
-        self, study_id: str, payload: dict[str, Any], *, created_at: datetime
-    ) -> None:
+    def _fold_finalized_graph(self, study_id: str, payload: dict[str, Any], *, created_at: datetime) -> None:
         from coscientist.core.finalize_nodes import graph_rows_from_finalized
 
-        nodes, edges = graph_rows_from_finalized(
-            study_id, payload, created_at=created_at
-        )
+        nodes, edges = graph_rows_from_finalized(study_id, payload, created_at=created_at)
         for row in nodes.values():
             incoming = GraphNode.model_validate(row)
             existing = self.graph.get_node(incoming.node_id)
@@ -222,9 +301,7 @@ class LocalProjectMixin:
                 and not (incoming.attrs or {}).get("formulation")
             ):
                 # Preserve formulation from accept_plan when finalize row is sparse.
-                merged = incoming.model_copy(
-                    update={"attrs": {**(existing.attrs or {}), **(incoming.attrs or {})}}
-                )
+                merged = incoming.model_copy(update={"attrs": {**(existing.attrs or {}), **(incoming.attrs or {})}})
                 self.graph.upsert_node(merged)
             else:
                 self.graph.upsert_node(incoming)
@@ -237,6 +314,4 @@ class LocalProjectMixin:
         # Keep hypothesis_verdicts separate from bind's verdict_snapshots cache.
         hv = payload.get("hypothesis_verdicts")
         if isinstance(hv, dict):
-            self.hypothesis_verdicts.update(
-                {str(k): dict(v) for k, v in hv.items() if isinstance(v, dict)}
-            )
+            self.hypothesis_verdicts.update({str(k): dict(v) for k, v in hv.items() if isinstance(v, dict)})

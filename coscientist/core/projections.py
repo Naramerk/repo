@@ -28,6 +28,9 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         _put(proj, "tasks", event.entity_key, dict(p))
     elif t == "PlanAccepted":
         _put(proj, "plans", event.entity_key, dict(p))
+    elif t == "PlanExpanded":
+        _put(proj, "plans", event.entity_key, dict(p))
+    # ExpansionRefused: journal-only audit (runtime folds to _expansion_refusals).
     elif t == "StudyCancelled":
         study = _get(proj, "studies", event.study_id) or {}
         _put(proj, "studies", event.study_id, {**study, "cancelled": True, **p})
@@ -58,9 +61,7 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         )
         from coscientist.core.finalize_nodes import graph_rows_from_finalized
 
-        nodes, edges = graph_rows_from_finalized(
-            event.study_id, p, created_at=event.ts
-        )
+        nodes, edges = graph_rows_from_finalized(event.study_id, p, created_at=event.ts)
         for key, row in nodes.items():
             _put(proj, "graph_nodes", key, row)
         for key, row in edges.items():
@@ -153,10 +154,7 @@ def apply_event(store: Any, event: EventEnvelope) -> None:
     get_rows = getattr(store, "_get_projection_write", None)
     put_row = getattr(store, "_upsert_projection_write", None)
     if get_rows is None or put_row is None:
-        raise TypeError(
-            "apply_event requires a write-capable store "
-            "(_get_projection_write / _upsert_projection_write)"
-        )
+        raise TypeError("apply_event requires a write-capable store (_get_projection_write / _upsert_projection_write)")
     scratch: ProjectionMap = {}
     for table in (
         "studies",
@@ -208,6 +206,7 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         "TaskCreated": ("tasks",),
         "TaskInherited": ("tasks",),
         "PlanAccepted": ("plans",),
+        "PlanExpanded": ("plans",),
         "StudyCancelled": ("studies",),
         "StudyRefused": ("studies",),
         "BudgetExceeded": ("studies",),

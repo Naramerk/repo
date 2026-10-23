@@ -15,13 +15,14 @@ from coscientist.core.graph import (
 )
 
 
-def test_schema_loads_twelve_nodes_seventeen_edges():
+def test_schema_loads_twelve_nodes_eighteen_edges():
     reg = registry_from_schema()  # packaged coscientist.schema
     assert len(reg.node_kinds()) == 12
-    assert len(reg.edge_kinds()) == 17
+    assert len(reg.edge_kinds()) == 18  # +decomposes (DESIGN_M1 §10)
     assert "hypothesis" in reg.node_kinds()
     assert "asks" in reg.edge_kinds()
     assert "uses_claim" in reg.edge_kinds()
+    assert "decomposes" in reg.edge_kinds()
     assert "goal" not in reg.node_kinds()
     assert "source" not in reg.node_kinds()
     assert "run" not in reg.node_kinds()

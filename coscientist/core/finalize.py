@@ -90,19 +90,40 @@ def terminal_reason_for(
     return TerminalReason.COMPLETED
 
 
+def expansion_not_done_line(reason: str, detail: str) -> str:
+    """Report line for ExpansionRefused (DESIGN_M1 §4 — Russian wording)."""
+    r = str(reason or "")
+    d = str(detail or "")
+    if r in ("invalid", "invalid_hitl") or d.startswith("invalid"):
+        return "не выполнено: невалидный запрос"
+    if r == "has_refutation":
+        return "не выполнено: есть опровержение"
+    if r == "critic_rejected":
+        return "не выполнено: отказ критика"
+    # expansion_limit / replan_reserve / agent_quota / human_quota → same wording
+    # (DESIGN_M1.md:236 «не выполнено: лимит расширений»).
+    return "не выполнено: лимит расширений"
+
+
 def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
-    """TaskReason values from TaskDone payloads, first-seen order by seq."""
+    """TaskReason values + ExpansionRefused report lines, first-seen order by seq."""
     seen: list[str] = []
     for ev in sorted(events, key=lambda e: e.seq or 0):
-        if ev.type != "TaskDone":
-            continue
-        reason = ev.payload.get("reason")
-        if reason and reason not in seen:
-            try:
-                TaskReason(reason)
-            except ValueError:
-                continue
-            seen.append(str(reason))
+        if ev.type == "TaskDone":
+            reason = ev.payload.get("reason")
+            if reason and reason not in seen:
+                try:
+                    TaskReason(reason)
+                except ValueError:
+                    continue
+                seen.append(str(reason))
+        elif ev.type == "ExpansionRefused":
+            line = expansion_not_done_line(
+                str(ev.payload.get("reason") or ""),
+                str(ev.payload.get("detail") or ""),
+            )
+            if line not in seen:
+                seen.append(line)
     return seen
 
 

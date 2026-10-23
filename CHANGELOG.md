@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### M1 PR9
+- `PlanExpanded` + H-g trigger (`expand_after` / `AgentTaskOutput.expansion_request` / HITL).
+- Agent `expansion_request` / `expand_after` enqueue **PLAN-n → critic** (never direct `PlanExpanded`); HITL plan edit / «decide yourself» is the third trigger; `delegated_by` from `HitlDecided`.
+- Agent `max_expansions` vs human `max_human_expansions`; `replan_reserve` / quotas / `max_depth`; invalid requests → `ExpansionRefused(invalid)` (never raise from record/tick); report lines `not done: expansion limit|invalid|reserve`.
+- Expansion counts + `replan_used` folded from events (restart == live); recover re-queues pending expand after crash mid TaskDone→expand.
+- Core assigns `EXP-<n>` on agent path; deterministic `ExpansionRefused` idem keys; shared-descendant skip rule; agent cannot supersede away countable refutation (`has_refutation`).
+- Question add/supersede (`supersedes` question→question); C10 k-filter excludes claims on superseded targets.
+- StudyCreated **v7** + PlanAccepted **v4** (`expand_after`); `max_depth` + `decomposes` edge.
+- StudyLifecycle property rules: `expand`, `question_supersede`.
+- #15 follow-ups kept: `schema_valid` missing/foreign artifact; **`core_evaluated` from effect only** (meta → producer/call_id).
+
 ### M1 PR8b
 - Hypothesis verdict model (`docs/DESIGN_HYP_DELTA.md`): claim `validity`/`outcome`/`severe`/`independence_key`; stub|partial|lit|invalid excluded **before** counting.
 - `independence_key` base = `experiment_id`; count-time merge by **transitive root-data** digest overlap (code vs data from **`ResultRecorded.output_kinds`** via catalog **`code_output_names`** — planner `OutputSpec.role` and agent `media_type` ignored; all-code upstream → intermediate is a root; diamond DFS uses on_stack vs done) or **structural** share-any criterion template (same target, empty roots; empty plan criteria → `catalog.defaults["experiment"]`). No TaskSpec/goal/title/plan_id hash. Method is not in the key.

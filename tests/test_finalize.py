@@ -205,7 +205,8 @@ def test_upcast_taskcreated_input_mode_old_default():
 
 def test_upcast_planaccepted_questions_default():
     v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
-    assert v == 3 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
+    assert v == 4 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
+    assert p["expand_after"] == []
 
 
 def test_upcast_taskcreated_strips_plan_criterion_role():

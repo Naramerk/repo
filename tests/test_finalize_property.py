@@ -21,7 +21,12 @@ from hypothesis.stateful import (
 )
 
 from coscientist.core.clock import FakeClock
-from coscientist.core.domain import QuestionSpec, TaskSpec, TaskState
+from coscientist.core.domain import (
+    QuestionSpec,
+    QuestionSupersede,
+    TaskSpec,
+    TaskState,
+)
 from coscientist.core.errors import (
     AttemptClosedError,
     HitlUnsupported,
@@ -109,14 +114,21 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         self.study_deadline = self.clock.now() + timedelta(seconds=seconds)
         self.rt = self._run(
             open_runtime(
-                self.tmp, self.sid, owner="owner-a", clock=self.clock,
+                self.tmp,
+                self.sid,
+                owner="owner-a",
+                clock=self.clock,
                 runtime_cls=self.runtime_cls,
             )
         )
         self._run(
             self.rt.create_study(
-                profile="research", request="prop", catalog_version="0.1.0",
-                deadline=self.study_deadline, sid=self.sid, finalize_reserve_s=5,
+                profile="research",
+                request="prop",
+                catalog_version="0.1.0",
+                deadline=self.study_deadline,
+                sid=self.sid,
+                finalize_reserve_s=5,
             )
         )
 
@@ -152,8 +164,12 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
             addr = [qs[i % len(qs)].id]
             specs.append(
                 TaskSpec(
-                    task_key=key, title=key, goal="g", route="experiment",
-                    depends_on=deps, addresses=addr,
+                    task_key=key,
+                    title=key,
+                    goal="g",
+                    route="experiment",
+                    depends_on=deps,
+                    addresses=addr,
                 )
             )
         self._call(self.rt.accept_plan(specs, questions=qs, revision=rev))
@@ -219,6 +235,121 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         except _RULE_ERR:
             pass
 
+    @rule(data=st.data())
+    def expand(self, data):
+        """PR9: PlanExpanded from a DONE experiment (agent quota)."""
+        if not self._writable() or self.rt is None or self.rt.study is None:
+            return
+        done = [t for t in self.rt.tasks.values() if t.state == TaskState.DONE and t.spec.task_key.startswith("EXP-")]
+        if not done:
+            return
+        parent = data.draw(st.sampled_from(done))
+        n = data.draw(st.integers(min_value=1, max_value=3))
+        self._plan_rev += 1
+        rev = self._plan_rev
+        known = known_questions(self.rt.plans)
+        base_addrs = [a for a in (parent.spec.addresses or []) if a in known]
+        if not base_addrs and known:
+            base_addrs = [sorted(known)[0]]
+        rebuilt = [
+            TaskSpec(
+                task_key=f"EXP-x{rev}-{i}",
+                title=f"x{rev}-{i}",
+                goal="g",
+                route="experiment",
+                depends_on=[parent.spec.task_key],
+                addresses=list(base_addrs),
+            )
+            for i in range(n)
+        ]
+        self._call(
+            self.rt.expand_plan(
+                after_task=parent.spec.task_key,
+                added_tasks=rebuilt,
+                origin="emergent",
+                reason="prop_expand",
+            )
+        )
+
+    @rule(data=st.data())
+    def question_supersede(self, data):
+        """PR9/H-d: HITL-style question supersede via PlanExpanded."""
+        if not self._writable() or self.rt is None:
+            return
+        known = sorted(known_questions(self.rt.plans))
+        if not known:
+            return
+        old_id = data.draw(st.sampled_from(known))
+        self._plan_rev += 1
+        rev = self._plan_rev
+        new_id = f"Qsup_{rev}"
+        new_q = QuestionSpec(id=new_id, text=f"supersede {old_id}")
+        new_task = TaskSpec(
+            task_key=f"EXP-sup{rev}",
+            title="sup",
+            goal="g",
+            route="experiment",
+            depends_on=["PLAN"],
+            addresses=[new_id],
+        )
+        # MJ-d: human quota only via HitlDecided matching hitl_request_id.
+        from coscientist.core.events import EventEnvelope, make_idem
+
+        rid = f"hitl_prop_{rev}"
+        now = self.rt.clock.now()
+        tid0 = next(iter(self.rt.tasks))
+        self._call(
+            self.rt._append(
+                [
+                    EventEnvelope(
+                        study_id=self.rt.study.study_id,
+                        type="HitlOpened",
+                        entity_key=rid,
+                        idem_key=make_idem("HitlOpened", rid),
+                        payload={
+                            "request_id": rid,
+                            "kind": "plan_expansion",
+                            "payload_ref": tid0,
+                            "deadline": now.isoformat(),
+                            "study_id": self.rt.study.study_id,
+                            "task_id": tid0,
+                            "expand_after_task": "PLAN",
+                            "open": True,
+                            "cost_rub": 0.0,
+                        },
+                        ts=now,
+                    ),
+                    EventEnvelope(
+                        study_id=self.rt.study.study_id,
+                        type="HitlDecided",
+                        entity_key=rid,
+                        idem_key=make_idem("HitlDecided", rid),
+                        payload={
+                            "request_id": rid,
+                            "decision": "accept",
+                            "by": "human",
+                            "decided_by": "human",
+                            "approved_by": "human",
+                            "reason": "answered",
+                            "spent_rub": 0.0,
+                        },
+                        ts=now,
+                    ),
+                ]
+            )
+        )
+        self._call(
+            self.rt.expand_plan(
+                after_task="PLAN",
+                added_tasks=[new_task],
+                added_questions=[new_q],
+                superseded_questions=[QuestionSupersede(new_id=new_id, old_id=old_id)],
+                origin="plan",
+                hitl_request_id=rid,
+                reason="prop_question_supersede",
+            )
+        )
+
     @rule()
     def lose_lease(self):
         if self.lost_lease or self.rt is None:
@@ -226,8 +357,12 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         self.clock.advance(timedelta(seconds=400))
         other = self._run(
             open_runtime(
-                self.tmp, self.sid, owner="owner-b", clock=self.clock,
-                acquire=True, runtime_cls=self.runtime_cls,
+                self.tmp,
+                self.sid,
+                owner="owner-b",
+                clock=self.clock,
+                acquire=True,
+                runtime_cls=self.runtime_cls,
             )
         )
         self.rt.store.epoch = 0
@@ -266,12 +401,17 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
             self._run(
                 self.rt.store.append(
                     EventEnvelope(
-                        study_id=self.sid, type="TaskDone", entity_key="late",
+                        study_id=self.sid,
+                        type="TaskDone",
+                        entity_key="late",
                         idem_key=make_idem("TaskDone", "late", str(n)),
                         payload={
-                            "task_id": "late", "outcome": "FAILED", "reason": "failed",
+                            "task_id": "late",
+                            "outcome": "FAILED",
+                            "reason": "failed",
                         },
-                        ts=self.clock.now(), schema_version=2,
+                        ts=self.clock.now(),
+                        schema_version=2,
                     )
                 )
             )
@@ -300,8 +440,15 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
             proj = {}
             for r in proj_rows:
                 for f in (
-                    "result_id", "attempt_id", "request_id", "node_id", "edge_id",
-                    "plan_id", "task_id", "id", "study_id",
+                    "result_id",
+                    "attempt_id",
+                    "request_id",
+                    "node_id",
+                    "edge_id",
+                    "plan_id",
+                    "task_id",
+                    "id",
+                    "study_id",
                 ):
                     if f in r:
                         proj[str(r[f])] = r
@@ -325,7 +472,10 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         self.clock.set(target)
         self.rt = self._run(
             open_runtime(
-                self.tmp, self.sid, owner="owner-final", clock=self.clock,
+                self.tmp,
+                self.sid,
+                owner="owner-final",
+                clock=self.clock,
                 runtime_cls=self.runtime_cls,
             )
         )
@@ -397,6 +547,9 @@ _HYP = settings(
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.filter_too_much],
     phases=[Phase.generate, Phase.target],
 )
+
+# DESIGN_M1 §13 name.
+StudyLifecycle = FinalizePropertyMachine
 
 
 @pytest.mark.asyncio

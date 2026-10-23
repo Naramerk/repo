@@ -582,6 +582,8 @@ class Executor:
             self.artifacts,
             review_statuses=self.review_statuses,
             attempt_id=attempt_id,
+            task_kind=str(getattr(task.kind, "value", task.kind)),
+            task_key=task.spec.task_key,
         )
         for c in checks:
             if not c.is_code and c.status == ReqStatus.UNASSESSED:
@@ -679,6 +681,7 @@ class Executor:
         payload = {
             "result_id": rid,
             "attempt_id": attempt_id,
+            "task_id": task_id,
             "outcome": final.value,
             "computed_outcome": computed.value,
             "reason": None,
@@ -696,6 +699,12 @@ class Executor:
                 downgrade.model_dump(mode="json", by_alias=True) if downgrade else None
             ),
             "inputs": [],
+            # PR9 H-g: typed expansion request (applied via PLAN-n → critic).
+            "expansion_request": (
+                out.expansion_request.model_dump(mode="json")
+                if out.expansion_request is not None
+                else None
+            ),
         }
         # Scientific result: criteria evaluated (SUCCESS / PARTIAL / FAILED).
         # Keep claims so not_met can refute (invariant 10); only infra drops them.
