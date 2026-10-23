@@ -26,6 +26,7 @@ from coscientist.core.finalize import (
     finalize as _finalize,
 )
 from coscientist.core.graph import GraphStore, KindRegistry, default_execution_registry
+from coscientist.core.intake import IntakeRefuse
 from coscientist.core.lifecycle import LifecycleMixin
 from coscientist.core.local_project import LocalProjectMixin
 from coscientist.core.reasons import CloseReason, TaskReason
@@ -71,6 +72,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         self._finalized = False
         self._study_cancelled = False
         self._budget_exceeded = False
+        self._intake_refusal: IntakeRefuse | None = None
 
     async def _append(self, events: list[EventEnvelope]) -> None:
         if self._lease_lost:
@@ -138,31 +140,35 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
     async def cancel_study(self, by: str = "user") -> None:
         await _cancel_study(self, by=by)
 
-    def note_budget_exceeded(self) -> None:
-        """Mark study-level budget trigger for the next tick (no BudgetExceeded yet)."""
-        self._budget_exceeded = True
+    async def note_budget_exceeded(self) -> None:
+        """Persist study-level ``BudgetExceeded`` (folded → budget finalize trigger)."""
+        if self.study is None or self._budget_exceeded or self._finalized:
+            return
+        sid = self.study.study_id
+        await self._append(
+            [
+                EventEnvelope(
+                    study_id=sid,
+                    type="BudgetExceeded",
+                    entity_key=sid,
+                    idem_key=make_idem("BudgetExceeded", sid, "study"),
+                    payload={"scope": "study"},
+                    ts=self.clock.now(),
+                    schema_version=1,
+                )
+            ]
+        )
 
     async def finalize(self, *, trigger: FinalizeTrigger) -> None:
         await _finalize(self, trigger=trigger)
 
     def _budget_trigger_active(self) -> bool:
-        """Study-level budget: flag or any DONE task with reason=budget.
+        """Study-level budget only (``BudgetExceeded`` / folded flag).
 
-        A single TaskDone(..., reason=budget) from a costly/HITL path is enough
-        to close the whole study on the next tick (trigger=budget), not only
-        that task. Remaining open work is closed as SKIPPED(budget) first.
+        A single ``TaskDone(..., reason=budget)`` from a costly/HITL route does
+        **not** close the study — that is a task-level skip only.
         """
-        if self._budget_exceeded:
-            return True
-        for t in self.tasks.values():
-            if t.state != TaskState.DONE or t.reason is None:
-                continue
-            reason = (
-                t.reason.value if isinstance(t.reason, TaskReason) else str(t.reason)
-            )
-            if reason == TaskReason.BUDGET.value:
-                return True
-        return False
+        return bool(self._budget_exceeded)
 
     async def tick(self) -> None:
         """Fence lease, P5 for deadline<ed, then finalize triggers, retries.
@@ -190,10 +196,11 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         trigger = pick_finalize_trigger(
             cancelled=self._study_cancelled,
             budget=self._budget_trigger_active(),
+            refused=self._intake_refusal is not None,
             deadline=now >= ed,
             all_done=all_done,
         )
-        if trigger in ("cancel", "budget", "deadline"):
+        if trigger in ("cancel", "budget", "deadline", "intake"):
             if trigger == "deadline":
                 await self._close_remaining(
                     TaskReason.STUDY_DEADLINE, CloseReason.STUDY_DEADLINE

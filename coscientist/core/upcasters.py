@@ -115,6 +115,28 @@ def _rename_simulated_provenance(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _study_finalized_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
+    """Add refusal + structured question counts on minimal_report (PR 4)."""
+    out = dict(payload)
+    out.setdefault("refusal", None)
+    mr = out.get("minimal_report")
+    if isinstance(mr, dict):
+        mr = dict(mr)
+        mr.setdefault("refusal", out.get("refusal"))
+        qs = mr.get("questions") or []
+        if not isinstance(qs, list):
+            qs = []
+        mr.setdefault("question_count", len(qs))
+        if "not_attempted_count" not in mr:
+            mr["not_attempted_count"] = sum(
+                1
+                for q in qs
+                if isinstance(q, dict) and q.get("disposition") == "not_attempted"
+            )
+        out["minimal_report"] = mr
+    return out
+
+
 register_upcaster("TaskCreated", 1, _task_created_v1_to_v2)
 register_upcaster("TaskCreated", 2, _ensure_spec_addresses)
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)
@@ -123,3 +145,4 @@ register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)
 register_upcaster("ResultRecorded", 1, _rename_simulated_provenance)
+register_upcaster("StudyFinalized", 1, _study_finalized_v1_to_v2)

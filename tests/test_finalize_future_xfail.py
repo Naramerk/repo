@@ -1,14 +1,16 @@
-"""PR 3 strict xfail stubs that call real APIs (must be able to XPASS later)."""
+"""Strict xfail stubs that call real APIs (must be able to XPASS later).
+
+``raises=AssertionError`` so incidental KeyError/RuntimeError do not count as xfail.
+PR 4 budget-zero intake is covered by ``tests/test_intake.py``.
+"""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 
 import pytest
 
 from coscientist.core.domain import (
-    Budget,
     Task,
     TaskKind,
     TaskOutcome,
@@ -18,27 +20,11 @@ from coscientist.core.domain import (
 from coscientist.core.runtime_factory import close_runtime, open_runtime
 
 
-@pytest.mark.xfail(strict=True, reason="PR 4: budget=0 study refused at intake")
-@pytest.mark.asyncio
-async def test_budget_zero_study_refused(tmp_path, clock):
-    rt = await open_runtime(tmp_path, "st_b0", clock=clock, owner="t1")
-    await rt.create_study(
-        profile="research",
-        request="q",
-        catalog_version="0.1.0",
-        deadline=clock.now() + timedelta(seconds=60),
-        sid="st_b0",
-        finalize_reserve_s=5,
-        budget=Budget(max_cost_rub=Decimal("0")),
-    )
-    await rt.tick()
-    fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
-    assert fins and fins[0].payload["trigger"] == "intake"
-    assert fins[0].payload["terminal_reason"] == "refused"
-    await close_runtime(rt)
-
-
-@pytest.mark.xfail(strict=True, reason="PR 5: failed parent without InputSpec skips child")
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="PR 5: failed parent without InputSpec skips child",
+)
 @pytest.mark.asyncio
 async def test_failed_parent_without_inputspec_skips_child(tmp_path, clock):
     from coscientist.core.reasons import TaskReason as TR
@@ -76,7 +62,11 @@ async def test_failed_parent_without_inputspec_skips_child(tmp_path, clock):
     await close_runtime(rt)
 
 
-@pytest.mark.xfail(strict=True, reason="PR 6/8: based_on required for counted dispositions")
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="PR 6/8: based_on required for counted dispositions",
+)
 def test_based_on_required_for_counted_dispositions():
     from coscientist.core.finalize_nodes import graph_rows_from_finalized
 
@@ -94,7 +84,11 @@ def test_based_on_required_for_counted_dispositions():
     assert based, "answered conclusion must carry ≥1 based_on"
 
 
-@pytest.mark.xfail(strict=True, reason="PR 6/8: question disposition from verdict()")
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="PR 6/8: question disposition from verdict()",
+)
 def test_question_disposition_computed_from_verdict():
     from coscientist.core.dispositions import dispositions
 
@@ -121,7 +115,11 @@ def test_question_disposition_computed_from_verdict():
     assert d["Q1"]["disposition"] == "answered"
 
 
-@pytest.mark.xfail(strict=True, reason="PR 8: explicit QuestionDisposed infeasible")
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="PR 8: explicit QuestionDisposed infeasible",
+)
 def test_question_disposition_explicit_infeasible():
     from coscientist.core.dispositions import dispositions
 
@@ -136,6 +134,7 @@ def test_question_disposition_explicit_infeasible():
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason="PR 8: all_done→infeasible; PR2 only human_timeout|completed",
 )
 def test_terminal_reason_trigger_all_done_infeasible():

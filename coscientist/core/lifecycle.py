@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from coscientist.core.clock import Clock
@@ -21,6 +22,7 @@ from coscientist.core.domain import (
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.graph import GraphNode
 from coscientist.core.ids import plan_id, study_id, task_id
+from coscientist.core.intake import IntakeRefuse, SafetyPort, intake
 from coscientist.core.ports import EventStore
 
 STAGE_KEYS = [
@@ -39,6 +41,7 @@ class LifecycleMixin:
     clock: Clock
     study: Study | None
     tasks: dict[str, Task]
+    _intake_refusal: IntakeRefuse | None
 
     async def _append(self, events: list[EventEnvelope]) -> None:
         raise NotImplementedError
@@ -55,6 +58,9 @@ class LifecycleMixin:
         sid: str | None = None,
         budget: Budget | None = None,
         finalize_reserve_s: int = 30,
+        inputs: list[Any] | None = None,
+        min_plan_cost: Decimal | float | int = 0,
+        safety: SafetyPort | None = None,
     ) -> str:
         sid = sid or self.store.study_id or study_id()
         now = self.clock.now()
@@ -62,11 +68,16 @@ class LifecycleMixin:
         if finalize_reserve_s < 0:
             raise ValueError(f"finalize_reserve_s must be >= 0, got {finalize_reserve_s}")
         duration_s = (dl - now).total_seconds()
-        if duration_s <= finalize_reserve_s:
-            raise ValueError(
-                f"study duration ({duration_s}s) must exceed finalize_reserve_s "
-                f"({finalize_reserve_s}s)"
-            )
+        decision = await intake(
+            request,
+            list(inputs or []),
+            profile,
+            budget,
+            min_plan_cost=min_plan_cost,
+            safety=safety,
+            duration_s=duration_s,
+            finalize_reserve_s=float(finalize_reserve_s),
+        )
         study = Study(
             study_id=sid,
             profile=profile,
@@ -105,6 +116,29 @@ class LifecycleMixin:
                 ts=now,
             ),
         ]
+        if isinstance(decision, IntakeRefuse):
+            # Same transaction as StudyCreated so crash/reopen keeps refusal.
+            events.append(
+                EventEnvelope(
+                    study_id=sid,
+                    type="StudyRefused",
+                    entity_key=sid,
+                    idem_key=make_idem("StudyRefused", sid),
+                    payload={
+                        "kind": decision.kind.value,
+                        "reason": decision.reason,
+                        "classifier_error": decision.classifier_error,
+                    },
+                    ts=now,
+                    schema_version=1,
+                )
+            )
+            await self._append(events)
+            self.store.study_id = sid
+            from coscientist.core.finalize import finalize
+
+            await finalize(self, trigger="intake")  # type: ignore[arg-type]
+            return sid
         plan_deadline = min(now + timedelta(seconds=600), effective)
         for key, kind in STAGE_KEYS:
             if kind == TaskKind.REPORT:

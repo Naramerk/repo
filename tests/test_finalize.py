@@ -85,6 +85,7 @@ def _spec(key, addresses=None, deps=None):
 def test_same_tick_tiebreak():
     assert pick_finalize_trigger(cancelled=True, budget=True, deadline=True) == "cancel"
     assert pick_finalize_trigger(budget=True, deadline=True) == "budget"
+    assert pick_finalize_trigger(refused=True, deadline=True) == "intake"
     assert pick_finalize_trigger(deadline=True, all_done=True) == "deadline"
 
 
@@ -183,6 +184,48 @@ def test_upcast_planaccepted_questions_default():
     assert v == 2 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
 
 
+def test_upcast_study_finalized_v1_adds_counts_and_refusal():
+    v, p = upcast(
+        "StudyFinalized",
+        1,
+        {
+            "trigger": "all_done",
+            "terminal_reason": "completed",
+            "contributing_reasons": [],
+            "verdict": "partial",
+            "question_dispositions": {},
+            "report_artifact_id": None,
+            "conclusion_ids": [],
+            "minimal_report": {
+                "study_id": "st",
+                "terminal_reason": "completed",
+                "trigger": "all_done",
+                "contributing_reasons": [],
+                "summary": "x",
+                "fallback_reason": None,
+                "verdict": "partial",
+                "tasks": [],
+                "questions": [
+                    {
+                        "question_id": "Q1",
+                        "formulation": "q",
+                        "disposition": "not_attempted",
+                        "reason": "no_task",
+                    }
+                ],
+                "sections": {"real": [], "stub": [], "human": []},
+                "truncated": False,
+            },
+            "fallback_reason": None,
+        },
+    )
+    assert v == 2
+    assert p["refusal"] is None
+    assert p["minimal_report"]["question_count"] == 1
+    assert p["minimal_report"]["not_attempted_count"] == 1
+    assert p["minimal_report"]["refusal"] is None
+
+
 def test_minimal_report_le_10kb():
     tasks = {f"st/T{i}": _task(f"T{i}", outcome=TaskOutcome.SKIPPED, reason=TaskReason.CANCELLED) for i in range(500)}
     qdisp = {
@@ -273,9 +316,9 @@ async def test_finalize_on_cancel(tmp_path, clock):
 
 @pytest.mark.asyncio
 async def test_finalize_budget_trigger(tmp_path, clock):
-    """Budget via note_budget_exceeded(); BudgetExceeded event not in core yet."""
+    """Budget via BudgetExceeded event from note_budget_exceeded()."""
     rt = await _boot(tmp_path, clock, "st_bg")
-    rt.note_budget_exceeded()
+    await rt.note_budget_exceeded()
     await rt.tick()
     assert _fin(await rt.store.read_all()).payload["trigger"] == "budget"
     assert any(
@@ -286,12 +329,93 @@ async def test_finalize_budget_trigger(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_finalize_budget_from_taskdone_after_reopen(tmp_path, clock):
-    """Budget trigger derived from TaskDone(SKIPPED, budget) after crash/reopen."""
-    from coscientist.core.cancel import _close_open_work
+async def test_task_budget_does_not_close_study(tmp_path, clock):
+    """TaskDone(budget) from a costly route must not close the whole study."""
     from coscientist.core.reasons import CloseReason
 
     sid = "st_bg2"
+    rt = await _boot(tmp_path, clock, sid)
+    # Skip only SPEC with budget; leave other stages open.
+    spec = rt.tasks[f"{sid}/SPEC"]
+    events: list[EventEnvelope] = []
+    for aid in spec.attempts:
+        if not rt.attempts.get(aid, {}).get("closed"):
+            events.append(
+                EventEnvelope(
+                    study_id=sid,
+                    type="AttemptClosed",
+                    entity_key=aid,
+                    idem_key=make_idem(
+                        "AttemptClosed", aid, CloseReason.BUDGET.value
+                    ),
+                    payload={
+                        "attempt_id": aid,
+                        "closed": True,
+                        "close_reason": CloseReason.BUDGET.value,
+                        "task_id": spec.task_id,
+                    },
+                    ts=clock.now(),
+                    schema_version=2,
+                )
+            )
+    events.append(
+        EventEnvelope(
+            study_id=sid,
+            type="TaskDone",
+            entity_key=spec.task_id,
+            idem_key=make_idem("TaskDone", spec.task_id),
+            payload={
+                "task_id": spec.task_id,
+                "outcome": TaskOutcome.SKIPPED.value,
+                "reason": TaskReason.BUDGET.value,
+            },
+            ts=clock.now(),
+            schema_version=2,
+        )
+    )
+    await rt._append(events)
+    await rt.tick()
+    assert not rt._finalized
+    assert rt.view().phase != "closed"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
+    """BudgetExceeded persisted → reopen finalizes trigger=budget (core + exp)."""
+    sid = "st_bg_crash"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=60),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    await rt.note_budget_exceeded()
+    assert rt._budget_exceeded
+    assert any(e.type == "BudgetExceeded" for e in await rt.store.read_all())
+    assert not rt._finalized
+    await close_runtime(rt)
+    rt2 = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
+    )
+    assert rt2._budget_exceeded
+    await rt2.tick()
+    assert _fin(await rt2.store.read_all()).payload["trigger"] == "budget"
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_all_done_budget_reasons_finalize_all_done(tmp_path, clock):
+    """All tasks DONE(budget) without study flag → all_done, not budget trigger."""
+    from coscientist.core.cancel import _close_open_work
+    from coscientist.core.reasons import CloseReason
+
+    sid = "st_bg3"
     rt = await _boot(tmp_path, clock, sid)
     events = _close_open_work(
         rt, reason=TaskReason.BUDGET, close=CloseReason.BUDGET
@@ -302,7 +426,7 @@ async def test_finalize_budget_from_taskdone_after_reopen(tmp_path, clock):
     await close_runtime(rt)
     rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
     await rt2.tick()
-    assert _fin(await rt2.store.read_all()).payload["trigger"] == "budget"
+    assert _fin(await rt2.store.read_all()).payload["trigger"] == "all_done"
     await close_runtime(rt2)
 
 

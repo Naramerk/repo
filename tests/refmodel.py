@@ -104,12 +104,16 @@ TERMINAL_BY_TRIGGER = {
 }
 
 
-def pick_finalize_trigger(*, cancelled=False, budget=False, deadline=False, all_done=False):
-    """Same-tick priority: cancelled > budget > deadline > all_done."""
+def pick_finalize_trigger(
+    *, cancelled=False, budget=False, refused=False, deadline=False, all_done=False
+):
+    """Same-tick priority: cancelled > budget > intake > deadline > all_done."""
     if cancelled:
         return "cancel"
     if budget:
         return "budget"
+    if refused:
+        return "intake"
     if deadline:
         return "deadline"
     if all_done:

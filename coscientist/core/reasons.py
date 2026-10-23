@@ -81,7 +81,7 @@ class NotAttemptedReason(StrEnum):
 
 
 class RefusalKind(StrEnum):
-    """PR 4, не реализовывать."""
+    """Why intake refused a study (see ``coscientist.core.intake``)."""
 
     SAFETY = "safety"
     OUT_OF_SCOPE = "out_of_scope"
@@ -91,16 +91,21 @@ class RefusalKind(StrEnum):
     CONTRADICTORY = "contradictory"
     EGRESS_POLICY = "egress_policy"
     INPUT_TOO_LARGE = "input_too_large"
+    # DESIGN §0.5 / PR4: duration ≤ finalize_reserve_s (not in rev5 enum list)
+    DURATION_TOO_SHORT = "duration_too_short"
 
 
-def intake(
+async def intake(
     request: str,
     inputs: list[Any],
     profile: str,
     budget: Any,
+    **kwargs: Any,
 ) -> Any:
-    """PR 4, не реализовывать."""
-    raise NotImplementedError("PR 4, не реализовывать")
+    """Delegate to ``coscientist.core.intake.intake`` (PR 4)."""
+    from coscientist.core.intake import intake as _intake
+
+    return await _intake(request, inputs, profile, budget, **kwargs)
 
 
 def coerce_task_reason(value: str | TaskReason | None) -> TaskReason | None:

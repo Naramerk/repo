@@ -8,11 +8,12 @@ from typing import Any
 from coscientist.core.domain import Study, Task, TaskOutcome, TaskState
 from coscientist.core.events import EventEnvelope
 from coscientist.core.graph import GraphEdge, GraphNode, GraphStore
-from coscientist.core.reasons import TaskReason
+from coscientist.core.intake import IntakeRefuse
+from coscientist.core.reasons import RefusalKind, TaskReason
 
 
 class LocalProjectMixin:
-    """Fold journal events into StudyRuntime local maps (no HITL/budget)."""
+    """Fold journal events into StudyRuntime local maps (no HITL)."""
 
     study: Study | None
     tasks: dict[str, Task]
@@ -24,11 +25,21 @@ class LocalProjectMixin:
     _finalized: bool
     _study_cancelled: bool
     _budget_exceeded: bool
+    _intake_refusal: IntakeRefuse | None
 
     def _project_local(self, ev: EventEnvelope) -> None:
         p = ev.payload
         if ev.type == "StudyCreated":
             self.study = Study.model_validate(p)
+        elif ev.type == "StudyRefused":
+            self._intake_refusal = IntakeRefuse(
+                kind=RefusalKind(p["kind"]),
+                reason=str(p.get("reason") or ""),
+                classifier_error=bool(p.get("classifier_error", False)),
+            )
+        elif ev.type == "BudgetExceeded":
+            if str(p.get("scope") or "study") == "study":
+                self._budget_exceeded = True
         elif ev.type == "PlanAccepted":
             self.plans[ev.entity_key] = dict(p)
         elif ev.type == "StudyCancelled":
@@ -90,8 +101,8 @@ class LocalProjectMixin:
                 }
             )
             self._retry_at.pop(p["task_id"], None)
-            if reason == TaskReason.BUDGET.value or reason == TaskReason.BUDGET:
-                self._budget_exceeded = True
+            # TaskDone(reason=budget) is task-level only; study budget is
+            # BudgetExceeded (folded above).
         elif ev.type == "GraphNodeUpserted":
             self.graph.upsert_node(GraphNode.model_validate(p))
 

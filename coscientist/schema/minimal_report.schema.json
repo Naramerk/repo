@@ -37,6 +37,8 @@
       "maxItems": 20
     },
     "summary": {"type": "string", "maxLength": 1000},
+    "question_count": {"type": "integer", "minimum": 0},
+    "not_attempted_count": {"type": "integer", "minimum": 0},
     "fallback_reason": {"type": ["string", "null"], "maxLength": 200},
     "refusal": {"type": ["string", "null"]},
     "verdict": {"enum": ["fulfilled", "partial", "stubbed", "failed"]},

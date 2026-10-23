@@ -91,12 +91,16 @@ def graph_rows_from_finalized(
         }
 
     scid = conclusion_id_for_study(study_id)
+    refusal = payload.get("refusal")
+    synthesis = f"terminal:{term}"
+    if refusal:
+        synthesis = f"terminal:{term}; refused:{refusal}"
     nodes[scid] = {
         "node_id": scid,
         "kind": "conclusion",
         "study_id": study_id,
         "ref_id": scid,
-        "attrs": {"synthesis": f"terminal:{term}", "validity_bounds": "study"},
+        "attrs": {"synthesis": synthesis, "validity_bounds": "study"},
         "created_at": ts,
     }
     study_n = study_node_id(study_id)

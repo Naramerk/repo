@@ -43,14 +43,21 @@ def pick_finalize_trigger(
     *,
     cancelled: bool = False,
     budget: bool = False,
+    refused: bool = False,
     deadline: bool = False,
     all_done: bool = False,
 ) -> FinalizeTrigger | None:
-    """Same-tick tie-break: cancelled > budget > deadline > all_done (§0.2)."""
+    """Same-tick tie-break: cancelled > budget > intake > deadline > all_done.
+
+    Intake (``StudyRefused``) beats deadline so a crash past ``ed`` still
+    finalizes as refused, not deadline.
+    """
     if cancelled:
         return "cancel"
     if budget:
         return "budget"
+    if refused:
+        return "intake"
     if deadline:
         return "deadline"
     if all_done:
@@ -104,6 +111,7 @@ def last_resort_payload(
     study_id: str,
     trigger: FinalizeTrigger,
     fallback_reason: str,
+    refusal: str | None = None,
 ) -> dict[str, Any]:
     """Constant-only StudyFinalized payload (no tasks/plans/store access).
 
@@ -120,8 +128,10 @@ def last_resort_payload(
         "contributing_reasons": [],
         "summary": f"Study закрыто: {term}; задач 0 (SUCCESS 0, PARTIAL 0, "
         f"FAILED 0, SKIPPED 0); вопросов 0, not_attempted 0",
+        "question_count": 0,
+        "not_attempted_count": 0,
         "fallback_reason": fallback_reason[:200],
-        "refusal": None,
+        "refusal": refusal,
         "verdict": "failed",
         "tasks": [],
         "questions": [],
@@ -138,6 +148,7 @@ def last_resort_payload(
         "conclusion_ids": conclusion_ids_for(study_id, {}),
         "minimal_report": minimal,
         "fallback_reason": fallback_reason,
+        "refusal": refusal,
     }
 
 
@@ -151,12 +162,16 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     if runtime.study is None or is_finalized(runtime):
         return
     sid = runtime.study.study_id
+    refusal = _refusal_payload(runtime, trigger)
     try:
         payload = await _build_rich_payload(runtime, sid=sid, trigger=trigger)
     except Exception as e:  # noqa: BLE001 — last-resort totality
         log.warning("finalize rich path failed: %s", e, exc_info=True)
         payload = last_resort_payload(
-            study_id=sid, trigger=trigger, fallback_reason=type(e).__name__
+            study_id=sid,
+            trigger=trigger,
+            fallback_reason=type(e).__name__,
+            refusal=refusal,
         )
     try:
         await _append_finalized(runtime, sid=sid, payload=payload)
@@ -171,7 +186,10 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
                 runtime,
                 sid=sid,
                 payload=last_resort_payload(
-                    study_id=sid, trigger=trigger, fallback_reason=type(e).__name__
+                    study_id=sid,
+                    trigger=trigger,
+                    fallback_reason=type(e).__name__,
+                    refusal=refusal,
                 ),
             )
         except Conflict as err:
@@ -207,7 +225,7 @@ async def _append_finalized(
                 idem_key=make_idem("StudyFinalized", sid),
                 payload=payload,
                 ts=now,
-                schema_version=1,
+                schema_version=2,
             )
         ]
     )
@@ -276,6 +294,18 @@ async def _load_plans(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
     return {str(r.get("plan_id") or i): r for i, r in enumerate(rows)}
 
 
+def _refusal_payload(runtime: StudyRuntime, trigger: FinalizeTrigger) -> str | None:
+    if trigger != "intake":
+        return None
+    ref = getattr(runtime, "_intake_refusal", None)
+    if ref is None:
+        return None
+    kind = getattr(ref, "kind", None)
+    reason = getattr(ref, "reason", "")
+    kv = getattr(kind, "value", kind)
+    return f"{kv}:{reason}" if kv else str(reason)
+
+
 async def _build_finalized_payload(
     runtime: StudyRuntime,
     *,
@@ -290,6 +320,7 @@ async def _build_finalized_payload(
     report_artifact_id: str | None = None
     conclusion_ids = conclusion_ids_for(sid, qdisp)
     minimal: dict[str, Any] | None = None
+    refusal = _refusal_payload(runtime, trigger)
     try:
         report_artifact_id = await _primary_report_path(
             runtime,
@@ -299,6 +330,7 @@ async def _build_finalized_payload(
             verdict=verdict,
             contrib=contrib,
             qdisp=qdisp,
+            refusal=refusal,
         )
     except Exception as e:  # noqa: BLE001 — primary failure → minimal_report
         fallback = type(e).__name__
@@ -314,6 +346,7 @@ async def _build_finalized_payload(
                 attempts=runtime.attempts,
                 question_dispositions=qdisp,
                 fallback_reason=fallback,
+                refusal=refusal,
             )
         except Exception as e2:  # noqa: BLE001
             raise RuntimeError(f"minimal_report:{type(e2).__name__}") from e2
@@ -327,6 +360,7 @@ async def _build_finalized_payload(
         "conclusion_ids": conclusion_ids,
         "minimal_report": minimal,
         "fallback_reason": fallback,
+        "refusal": refusal,
     }
 
 
@@ -339,6 +373,7 @@ async def _primary_report_path(
     verdict: str,
     contrib: list[str],
     qdisp: dict[str, dict[str, Any]],
+    refusal: str | None = None,
 ) -> str:
     md = render_markdown_report(
         study_id=sid,
@@ -348,6 +383,7 @@ async def _primary_report_path(
         contributing_reasons=contrib,
         question_dispositions=qdisp,
         tasks=runtime.tasks,
+        refusal=refusal,
     )
     arts = _artifact_store(runtime)
     if arts is None:
