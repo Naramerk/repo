@@ -381,6 +381,83 @@ def test_question_disposed_fold_first_wins():
     assert store["Q1"]["reason"] == "first"
 
 
+def test_honest_terminals_stamp_verdict_for_rollup():
+    """PR16 rollup clamps on ``verdict is not None`` — honest terminals must stamp it.
+
+    needs_more_data / infeasible (PR15) and ill_posed (PR8 debt, still stamped
+    when present) so incomplete children cannot wipe the parent.
+    """
+    from coscientist.core.dispositions import stamp_honest_terminal_verdict
+
+    # ill_posed is computed elsewhere (PR8); contract helper still stamps it.
+    for disp in (
+        Disposition.NEEDS_MORE_DATA.value,
+        Disposition.INFEASIBLE.value,
+        Disposition.ILL_POSED.value,
+    ):
+        row = stamp_honest_terminal_verdict(
+            {"disposition": disp, "reason": disp, "formulation": "q"}
+        )
+        assert row.get("verdict") == disp
+    # not_attempted must not gain a fake terminal verdict.
+    na = stamp_honest_terminal_verdict(
+        {"disposition": Disposition.NOT_ATTEMPTED.value, "reason": "no_task", "formulation": "q"}
+    )
+    assert na.get("verdict") is None
+
+    plans = {
+        "p": {
+            "questions": [
+                {"id": "Q_nmd", "text": "nmd?"},
+                {"id": "Q_inf", "text": "inf?"},
+            ],
+            "tasks": [
+                {"task_key": "E_nmd", "addresses": ["Q_nmd"]},
+                {"task_key": "E_inf", "addresses": ["Q_inf"]},
+            ],
+        }
+    }
+    disposals = {
+        "Q_nmd": {
+            "disposition": "needs_more_data",
+            "reason": "need RCT",
+            "refs": ["evidence:e1"],
+            "design_artifact_id": "art_design",
+        },
+        "Q_inf": {
+            "disposition": "infeasible",
+            "reason": "no assay",
+            "refs": ["hitl:h1"],
+        },
+    }
+    got = dispositions(
+        tasks={},
+        plans=plans,
+        question_disposals=disposals,
+        journal_kinds={"art_design": ARTIFACT_KIND_EXPERIMENT_DESIGN},
+    )
+    assert got["Q_nmd"]["disposition"] == Disposition.NEEDS_MORE_DATA.value
+    assert got["Q_nmd"].get("verdict") == Disposition.NEEDS_MORE_DATA.value
+    assert got["Q_inf"]["disposition"] == Disposition.INFEASIBLE.value
+    assert got["Q_inf"].get("verdict") == Disposition.INFEASIBLE.value
+    # Missing design → not_attempted without terminal verdict (rollup may wipe).
+    bad = dispositions(
+        tasks={},
+        plans={"p": {"questions": [{"id": "Q", "text": "q"}], "tasks": []}},
+        question_disposals={
+            "Q": {
+                "disposition": "needs_more_data",
+                "reason": "x",
+                "refs": ["evidence:e1"],
+                "design_artifact_id": "missing",
+            }
+        },
+        journal_kinds={},
+    )
+    assert bad["Q"]["disposition"] == Disposition.NOT_ATTEMPTED.value
+    assert bad["Q"].get("verdict") is None
+
+
 @pytest.mark.asyncio
 async def test_needs_more_data_requires_design(tmp_path, clock):
     """Without experiment_design artifact, needs_more_data does not stick."""
@@ -462,6 +539,7 @@ async def test_needs_more_data_requires_design(tmp_path, clock):
         journal_kinds=rt.artifact_kinds,
     )
     assert d["Q1"]["disposition"] == Disposition.NEEDS_MORE_DATA.value
+    assert d["Q1"].get("verdict") == Disposition.NEEDS_MORE_DATA.value
     assert d["Q1"].get("design_artifact_id") == art.artifact_id
     # Kill / reopen replay
     await close_runtime(rt)

@@ -225,7 +225,6 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
         )
     )
 
-<<<<<<< HEAD
     # PR16: GraphNodeUpserted + GraphEdgeAdded(kind=decomposes) must project via
     # #27 dirty-key apply_event (GraphEdgeAdded ∈ _affected_tables → graph_edges).
     q_root = f"{sid}:question:Q"
@@ -262,7 +261,12 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
                 "src_id": q_child,
                 "dst_id": q_root,
                 "attrs": {"origin": "explicit"},
-=======
+            },
+            ts=now,
+            schema_version=1,
+        )
+    )
+
     # PR15: QuestionDisposed + QuestionDisposeRejected (dirty-key tables).
     await rt.writer.append(
         EventEnvelope(
@@ -294,7 +298,6 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
                 "reason": "missing_experiment_design",
                 "report_line": "не выполнено: needs_more_data без дизайна эксперимента",
                 "row_key": "Qrej:deadbeefdeadbeef",
->>>>>>> 71b2219 (fix(pr15): rebase on #27 dirty-key; soft missing-meta; private stamp)
             },
             ts=now,
             schema_version=1,
@@ -330,16 +333,10 @@ async def test_twenty_parallel_sqlite_projection_matches_fold(
     """After the full 20-parallel load, SQLite projections == fold_events (every table).
 
     Also seeds AttemptTainted / SourceFetched / FetchIntegrityRaised / HitlOpened /
-<<<<<<< HEAD
-    GraphNodeUpserted / GraphEdgeAdded(kind=decomposes) so ``source_fetches``,
-    ``fetch_calls``, ``fetch_integrity``, ``hitl_requests``, ``graph_nodes``, and
-    ``graph_edges`` are non-empty (dirty-key load deps + #26 integrity + PR16
-    decomposes).
-=======
-    QuestionDisposed / QuestionDisposeRejected so ``source_fetches``, ``fetch_calls``,
-    ``fetch_integrity``, ``hitl_requests``, ``question_disposals``, and
-    ``disposal_rejects`` are non-empty (dirty-key load deps + #26/#28 rows).
->>>>>>> 71b2219 (fix(pr15): rebase on #27 dirty-key; soft missing-meta; private stamp)
+    GraphNodeUpserted / GraphEdgeAdded(kind=decomposes) / QuestionDisposed /
+    QuestionDisposeRejected so ``source_fetches``, ``fetch_calls``,
+    ``fetch_integrity``, ``hitl_requests``, ``graph_nodes``, ``graph_edges``,
+    ``question_disposals``, and ``disposal_rejects`` are non-empty.
     """
     rt = await _run_load(tmp_path, runtime_cls)
     await _seed_fetch_hitl_projection_events(rt)
@@ -352,13 +349,10 @@ async def test_twenty_parallel_sqlite_projection_matches_fold(
         "fetch_calls",
         "fetch_integrity",
         "hitl_requests",
-<<<<<<< HEAD
         "graph_nodes",
         "graph_edges",
-=======
         "question_disposals",
         "disposal_rejects",
->>>>>>> 71b2219 (fix(pr15): rebase on #27 dirty-key; soft missing-meta; private stamp)
     ):
         assert folded.get(table), f"{table} must be non-empty after seed"
         assert sqlite_map.get(table), f"{table} missing from SQLite projection"

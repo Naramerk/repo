@@ -72,6 +72,36 @@ def _not_attempted_for_covering(
     return NotAttemptedReason(not_attempted_reason(outcomes)), _reasons_for(done)
 
 
+# Honest terminals for PR16 rollup clamp (``verdict is not None``). Explicit
+# needs_more_data / infeasible (PR15) and computed ill_posed (PR8) must stamp
+# ``verdict`` so incomplete children cannot wipe the parent.
+_HONEST_TERMINAL_DISPOSITIONS: frozenset[str] = frozenset(
+    {
+        Disposition.NEEDS_MORE_DATA.value,
+        Disposition.INFEASIBLE.value,
+        Disposition.ILL_POSED.value,
+    }
+)
+
+
+def stamp_honest_terminal_verdict(row: dict[str, Any]) -> dict[str, Any]:
+    """Ensure needs_more_data / infeasible / ill_posed carry a terminal verdict.
+
+    PR16 ``_has_own_terminal_verdict`` is true when ``disposition != not_attempted``
+    **or** ``verdict is not None``. Stamping ``verdict`` keeps the contract
+    explicit for claims-style clamp paths. not_attempted fallbacks omit it.
+    """
+    disp = str(row.get("disposition") or "")
+    if disp in _HONEST_TERMINAL_DISPOSITIONS and row.get("verdict") is None:
+        row["verdict"] = disp
+    return row
+
+
+def _stamp_honest_terminals(result: dict[str, dict[str, Any]]) -> None:
+    for row in result.values():
+        stamp_honest_terminal_verdict(row)
+
+
 def dispositions(
     *,
     tasks: Mapping[str, Task],
@@ -417,6 +447,8 @@ def _dispositions_inner(
 
     # PR11: iteration_cap on unresolved loop-scoped questions (before rollup).
     apply_loop_cap_dispositions(result, loop_capped_questions)
+    # Stamp honest terminals before rollup so clamp sees verdict.
+    _stamp_honest_terminals(result)
     # PR16: parent disposition from frozen Plan.rollup (DESIGN_M1 §10).
     from coscientist.core.rollup import apply_rollup
 
