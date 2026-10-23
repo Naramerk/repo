@@ -1232,11 +1232,10 @@ async def test_legacy_two_study_finalized_fold_first_wins(tmp_path, clock):
 
 @pytest.mark.asyncio
 async def test_legacy_duplicate_study_finalized_taints_and_report(tmp_path, clock):
-    """Second SF in a legacy journal taints meta/local fold and report reasons."""
+    """Second SF in a legacy journal taints meta + local fold (not the frozen report)."""
     import json
 
     from coscientist.core.digest import payload_digest
-    from coscientist.core.finalize import contributing_reasons_ordered
     from coscientist.core.projections import apply_event
     from coscientist.core.store import SqliteEventStore
 
@@ -1285,16 +1284,29 @@ async def test_legacy_duplicate_study_finalized_taints_and_report(tmp_path, cloc
     folded = fold_events(events)
     assert folded["meta"][sid]["duplicate_study_finalized"] is True
     assert folded["meta"][sid]["tainted"] is True
-    # Report path: dual SF → internal_error in contributing_reasons.
-    assert "internal_error" in contributing_reasons_ordered(events)
+    # Frozen first SF report is unchanged (finalize already returned / never re-runs).
+    assert "internal_error" not in (fins[0].payload.get("contributing_reasons") or [])
     await store.release_lease(store.owner, store.epoch)
     await store.close()
 
     rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
-    dups = getattr(rt2, "_duplicate_study_finalized", None) or []
-    assert dups and dups[0].get("tainted") is True
+    assert len([e for e in await rt2.store.read_all() if e.type == "StudyFinalized"]) == 2
+    assert rt2._duplicate_study_finalized
+    assert rt2._duplicate_study_finalized[0]["tainted"] is True
     assert rt2.view().phase == "closed"
     await close_runtime(rt2)
+
+    # Replay-twice: second reopen still sees exactly two SF and the same taint mark.
+    rt3 = await open_runtime(tmp_path, sid, clock=clock, owner="t3")
+    assert len([e for e in await rt3.store.read_all() if e.type == "StudyFinalized"]) == 2
+    assert rt3._duplicate_study_finalized
+    assert rt3._duplicate_study_finalized[0]["tainted"] is True
+    assert rt3.view().phase == "closed"
+    meta3 = await rt3.store.get_row("meta", sid)
+    assert meta3 is not None
+    assert meta3.get("duplicate_study_finalized") is True
+    assert meta3.get("tainted") is True
+    await close_runtime(rt3)
 
 
 @pytest.mark.asyncio
