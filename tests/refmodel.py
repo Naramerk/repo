@@ -64,6 +64,13 @@ class Claim:
     attempt_id: str = "X1#1"
     artifact_id: str = "A1"
     lit_own_criterion: bool = False
+    # tests.intent on the experiment→hypothesis edge (default confirm).
+    intent: str = "confirm"
+    # R17 (DESIGN_M1 §12); None = not supplied → base counts() only.
+    criterion_frozen_at_seq: int | None = None
+    first_cited_evidence_seq: int | None = None
+    confirming_evidence_ids: frozenset | None = None
+    threshold_source_evidence_ids: frozenset | None = None
     @property
     def stance(self):
         return claim_stance(self.criterion_status)
@@ -74,20 +81,63 @@ class Claim:
         ok = self.evidence_kind in ("computational", "experimental") or (self.is_lit and self.lit_own_criterion)
         return self.accepted and ok and self.frozen and self.attempt_outcome == "SUCCESS"
 
-def verdict(claims, any_experiment_done, k=1):
+    def counts_under_r17(self):
+        """Base counts() plus R17 when freeze/evidence metadata is present."""
+        if not self.counts():
+            return False
+        if (
+            self.criterion_frozen_at_seq is None
+            and self.first_cited_evidence_seq is None
+            and self.confirming_evidence_ids is None
+        ):
+            return True
+        if self.criterion_frozen_at_seq is None or self.first_cited_evidence_seq is None:
+            return False
+        if not (self.criterion_frozen_at_seq < self.first_cited_evidence_seq):
+            return False
+        usable = set(self.confirming_evidence_ids or ()) - set(
+            self.threshold_source_evidence_ids or ()
+        )
+        return bool(usable)
+
+def verdict(
+    claims,
+    any_experiment_done,
+    k=1,
+    *,
+    refutations_needed=1,
+    refutation_priority=False,
+):
     acc = [c for c in claims if c.accepted]
     if not acc and not any_experiment_done:
         return "untested", False
-    q = [c for c in acc if c.counts()]
-    sup, ref = [c for c in q if c.stance == "supports"], [c for c in q if c.stance == "refutes"]
+    q = [c for c in acc if c.counts_under_r17()]
+    confirm_sup = [c for c in q if c.stance == "supports" and c.intent != "refute"]
+    survived_sup = [c for c in q if c.stance == "supports" and c.intent == "refute"]
+    ref = [c for c in q if c.stance == "refutes"]
+    all_sup = confirm_sup + survived_sup
     dist = lambda cs: min(len({c.attempt_id for c in cs}), len({c.artifact_id for c in cs})) if cs else 0
-    if sup and ref: v = "inconclusive"
-    elif dist(sup) >= k: v = "supported"
-    elif dist(ref) >= k: v = "refuted"
-    else: v = "inconclusive"
-    if v in ("supported", "refuted") and any(c.provenance != "real" for c in q):
+    pref = [c for c in ref if c.provenance == "real" and not c.is_lit]
+    priority_win = refutation_priority and dist(pref) >= refutations_needed
+    if priority_win:
+        v = "refuted"
+    elif all_sup and ref:
         v = "inconclusive"
-    d = sup + ref
+    elif dist(confirm_sup) >= k:
+        v = "supported"
+    elif dist(survived_sup) >= k:
+        v = "survived"
+    elif dist(ref) >= k:
+        v = "refuted"
+    else:
+        v = "inconclusive"
+    # Provenance ceiling. Exception: ≥ k_ref real priority refs stay refuted —
+    # stub/partial supports must not cap a refutation.
+    if v in ("supported", "survived") and any(c.provenance != "real" for c in q):
+        v = "inconclusive"
+    elif v == "refuted" and not priority_win and any(c.provenance != "real" for c in q):
+        v = "inconclusive"
+    d = all_sup + ref
     return v, bool(d) and all(c.is_lit for c in d)
 
 def study_fulfilled(question_verdicts, all_required_success):

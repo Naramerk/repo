@@ -59,6 +59,8 @@ class LifecycleMixin:
         sid: str | None = None,
         budget: Budget | None = None,
         finalize_reserve_s: int = 30,
+        refutations_needed: int = 1,
+        refutation_priority: bool = False,
         inputs: list[Any] | None = None,
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,
@@ -68,6 +70,10 @@ class LifecycleMixin:
         dl = deadline or (now + timedelta(hours=2))
         if finalize_reserve_s < 0:
             raise ValueError(f"finalize_reserve_s must be >= 0, got {finalize_reserve_s}")
+        if refutations_needed < 1:
+            raise ValueError(
+                f"refutations_needed must be >= 1, got {refutations_needed}"
+            )
         validate_budget_for_create(budget)
         duration_s = (dl - now).total_seconds()
         decision = await intake(
@@ -91,6 +97,8 @@ class LifecycleMixin:
             parent_study_id=parent_study_id,
             budget=budget,
             finalize_reserve_s=finalize_reserve_s,
+            refutations_needed=refutations_needed,
+            refutation_priority=refutation_priority,
         )
         effective = study.effective_deadline()
         events: list[EventEnvelope] = [
@@ -101,7 +109,7 @@ class LifecycleMixin:
                 idem_key=make_idem("StudyCreated", sid),
                 payload=study.model_dump(mode="json"),
                 ts=now,
-                schema_version=2,
+                schema_version=3,
             ),
             EventEnvelope(
                 study_id=sid,

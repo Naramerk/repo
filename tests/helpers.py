@@ -58,6 +58,7 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
 
     ex.get_attempt = get_attempt
     rt.executor = ex
+    # finalize/_artifact_store prefers executor.artifacts; no runtime.artifacts assign.
     return ex, arts
 
 

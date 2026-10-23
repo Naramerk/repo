@@ -323,8 +323,11 @@ def test_upcast_study_created_sets_reserve_zero():
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     )
-    assert v == 2
+    # v1→v2 reserve, then v2→v3 k_ref defaults (PR 6).
+    assert v == 3
     assert p["finalize_reserve_s"] == 0
+    assert p["refutations_needed"] == 1
+    assert p["refutation_priority"] is False
     # Explicit value must not be overwritten
     v2, p2 = upcast("StudyCreated", 1, {**p, "finalize_reserve_s": 30})
     assert p2["finalize_reserve_s"] == 30

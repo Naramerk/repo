@@ -53,9 +53,20 @@ def claim_stance(criterion_status: str) -> Literal["supports", "refutes", "incon
     return STANCE[criterion_status]  # type: ignore[return-value]
 
 
+TestsIntent = Literal["confirm", "refute"]
+DEFAULT_TESTS_INTENT: TestsIntent = "confirm"
+
+
 class _ClaimLike(Protocol):
     accepted: bool
     provenance: str
+    # tests.intent on the experiment→hypothesis edge (default confirm).
+    intent: TestsIntent
+    # R17 metadata (DESIGN_M1 §12); None = not supplied → base counts() only.
+    criterion_frozen_at_seq: int | None
+    first_cited_evidence_seq: int | None
+    confirming_evidence_ids: set[str] | frozenset[str] | list[str] | None
+    threshold_source_evidence_ids: set[str] | frozenset[str] | list[str] | None
 
     @property
     def stance(self) -> str: ...
@@ -72,13 +83,63 @@ class _ClaimLike(Protocol):
     def artifact_id(self) -> str: ...
 
 
-def verdict(claims: list[_ClaimLike], any_experiment_done: bool, k: int = 1):
+def _tests_intent(claim: _ClaimLike) -> TestsIntent:
+    """Read ``tests.intent`` explicitly; typed default is ``confirm``."""
+    intent: TestsIntent = claim.intent or DEFAULT_TESTS_INTENT
+    if intent not in ("confirm", "refute"):
+        raise ValueError(f"invalid tests.intent: {intent!r}")
+    return intent
+
+
+def _claim_counts(claim: _ClaimLike) -> bool:
+    """Base ``counts()`` plus R17 when freeze/evidence metadata is present."""
+    from coscientist.core.r17 import claim_counts_under_r17
+
+    if not claim.counts():
+        return False
+    frozen_at = claim.criterion_frozen_at_seq
+    first_ev = claim.first_cited_evidence_seq
+    confirming = claim.confirming_evidence_ids
+    threshold_src = claim.threshold_source_evidence_ids
+    # No R17 metadata → base counts() already decided.
+    if frozen_at is None and first_ev is None and confirming is None:
+        return True
+    return claim_counts_under_r17(
+        criterion_frozen_at_seq=frozen_at,
+        first_cited_evidence_seq=first_ev,
+        confirming_evidence_ids=set(confirming or ()),
+        threshold_source_evidence_ids=set(threshold_src or ()),
+    )
+
+
+def verdict(
+    claims: list[_ClaimLike],
+    any_experiment_done: bool,
+    k: int = 1,
+    *,
+    refutations_needed: int = 1,
+    refutation_priority: bool = False,
+):
+    """Hypothesis/question verdict (RM §4.1 + DESIGN_M1 PR 6).
+
+    Pure rule function — runtime wiring of Study.k_ref / intent into finalize
+    lands in PR 8 (DESIGN_M1). ``tests.intent=refute`` + met → stance supports,
+    verdict ``survived``. With ``refutation_priority``, distinct real non-lit
+    refs ≥ k_ref → ``refuted`` even with supports; that outcome is **not** capped
+    by stub/partial supports. Lit/non-real refs never override real supports.
+    """
     acc = [c for c in claims if c.accepted]
     if not acc and not any_experiment_done:
         return "untested", False
-    q = [c for c in acc if c.counts()]
-    sup = [c for c in q if c.stance == "supports"]
+    q = [c for c in acc if _claim_counts(c)]
+    confirm_sup = [
+        c for c in q if c.stance == "supports" and _tests_intent(c) != "refute"
+    ]
+    survived_sup = [
+        c for c in q if c.stance == "supports" and _tests_intent(c) == "refute"
+    ]
     ref = [c for c in q if c.stance == "refutes"]
+    all_sup = confirm_sup + survived_sup
 
     def distinct(cs: list[_ClaimLike]) -> int:
         return (
@@ -87,17 +148,39 @@ def verdict(claims: list[_ClaimLike], any_experiment_done: bool, k: int = 1):
             else 0
         )
 
-    if sup and ref:
+    def priority_refs(cs: list[_ClaimLike]) -> list[_ClaimLike]:
+        # Real computational/experimental only; literature must not flip priority.
+        return [c for c in cs if c.provenance == "real" and not c.is_lit]
+
+    priority_win = (
+        refutation_priority and distinct(priority_refs(ref)) >= refutations_needed
+    )
+    v: str
+    if priority_win:
+        v = "refuted"
+    elif all_sup and ref:
+        # Lit / non-real refs with supports → inconclusive (no priority win).
         v = "inconclusive"
-    elif distinct(sup) >= k:
+    elif distinct(confirm_sup) >= k:
         v = "supported"
+    elif distinct(survived_sup) >= k:
+        v = "survived"
     elif distinct(ref) >= k:
         v = "refuted"
     else:
         v = "inconclusive"
-    if v in ("supported", "refuted") and any(c.provenance != "real" for c in q):
+
+    # Provenance ceiling over counted claims. Exception: ≥ k_ref real priority
+    # refs stay ``refuted`` — stub/partial supports must not cap a refutation.
+    if v in ("supported", "survived") and any(c.provenance != "real" for c in q):
         v = "inconclusive"
-    decisive = sup + ref
+    elif (
+        v == "refuted"
+        and not priority_win
+        and any(c.provenance != "real" for c in q)
+    ):
+        v = "inconclusive"
+    decisive = all_sup + ref
     return v, bool(decisive) and all(c.is_lit for c in decisive)
 
 
