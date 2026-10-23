@@ -199,6 +199,8 @@ class QuestionSpec(Frozen):
 
     id: str
     text: str
+    # Optional parent for decomposes / max_depth (DESIGN_M1 §10).
+    parent_id: str | None = None
 
 
 class ExperimentMethod(StrEnum):
@@ -284,6 +286,7 @@ class Study(Frozen):
     max_human_expansions: int = Field(default=10, ge=0)
     replan_reserve: float = Field(default=0.1, ge=0.0, le=1.0)
     max_tasks: int = Field(default=64, ge=1)
+    max_depth: int = Field(default=8, ge=1)  # decomposes depth (DESIGN_M1 §4 / §10)
     plan_timeout_s: int = Field(default=600, ge=1)
 
     def effective_deadline(self) -> datetime:
@@ -561,7 +564,7 @@ class AgentTaskOutput(Frozen):
     values: dict[str, Any] = Field(default_factory=dict)
     claims: list[dict[str, Any]] = Field(default_factory=list)
     downgrade: DowngradeClaim | None = None
-    # PR9: when set, core applies PlanExpanded after TaskDone (origin=emergent).
+    # PR9: typed request; core enqueues PLAN-n → critic (never direct PlanExpanded).
     expansion_request: ExpansionRequest | None = None
 
 

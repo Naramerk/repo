@@ -211,6 +211,7 @@ def _study_created_v6_to_v7(payload: dict[str, Any]) -> dict[str, Any]:
     out.setdefault("max_human_expansions", 10)
     out.setdefault("replan_reserve", 0.1)
     out.setdefault("max_tasks", 64)
+    out.setdefault("max_depth", 8)
     out.setdefault("plan_timeout_s", 600)
     return out
 

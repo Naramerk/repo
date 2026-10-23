@@ -90,19 +90,38 @@ def terminal_reason_for(
     return TerminalReason.COMPLETED
 
 
+def expansion_not_done_line(reason: str, detail: str) -> str:
+    """Report line for ExpansionRefused (DESIGN_M1 §4 / review B2)."""
+    r = str(reason or "")
+    d = str(detail or "")
+    if r == "invalid" or d.startswith("invalid"):
+        return "not done: invalid"
+    if d == "replan_reserve" or r == "reserve":
+        return "not done: reserve"
+    if r == "has_refutation":
+        return "not done: has_refutation"
+    return "not done: expansion limit"
+
+
 def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
-    """TaskReason values from TaskDone payloads, first-seen order by seq."""
+    """TaskReason values + ExpansionRefused report lines, first-seen order by seq."""
     seen: list[str] = []
     for ev in sorted(events, key=lambda e: e.seq or 0):
-        if ev.type != "TaskDone":
-            continue
-        reason = ev.payload.get("reason")
-        if reason and reason not in seen:
-            try:
-                TaskReason(reason)
-            except ValueError:
-                continue
-            seen.append(str(reason))
+        if ev.type == "TaskDone":
+            reason = ev.payload.get("reason")
+            if reason and reason not in seen:
+                try:
+                    TaskReason(reason)
+                except ValueError:
+                    continue
+                seen.append(str(reason))
+        elif ev.type == "ExpansionRefused":
+            line = expansion_not_done_line(
+                str(ev.payload.get("reason") or ""),
+                str(ev.payload.get("detail") or ""),
+            )
+            if line not in seen:
+                seen.append(line)
     return seen
 
 

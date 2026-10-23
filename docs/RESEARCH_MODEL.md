@@ -100,6 +100,7 @@ class SourceQuote(BaseModel):    # literature
 | `based_on` | conclusion → claim, conclusion → experiment | 0..n / 0..n | report | ≥1 based_on если disposition ∈ {answered,refuted,survived} — код; not_attempted → пусто |
 | `renders` | report → conclusion | 1..n / 0..1 | report |  |
 | `supersedes` | plan → plan, hypothesis → hypothesis, criterion → criterion, question → question | 0..1 / 0..1 | ревизия (PLAN-n, PlanExpanded, HITL-правка); question→question = C10/H-d |  |
+| `decomposes` | question → question | 0..1 / 0..n | PLAN/PlanExpanded subquestions; origin=explicit|implicit|emergent; ацикл. (DESIGN_M1 §10) |  |
 <!-- gen:edges:end -->
 
 ## 4. Жизненный цикл узла (вычисляемый)

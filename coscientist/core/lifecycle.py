@@ -72,6 +72,7 @@ class LifecycleMixin:
         max_human_expansions: int = 10,
         replan_reserve: float = 0.1,
         max_tasks: int = 64,
+        max_depth: int = 8,
         plan_timeout_s: int = 600,
         inputs: list[Any] | None = None,
         min_plan_cost: Decimal | float | int = 0,
@@ -104,6 +105,8 @@ class LifecycleMixin:
             raise ValueError(f"replan_reserve out of range: {replan_reserve}")
         if max_tasks < 1:
             raise ValueError(f"max_tasks must be >= 1, got {max_tasks}")
+        if max_depth < 1:
+            raise ValueError(f"max_depth must be >= 1, got {max_depth}")
         if plan_timeout_s < 1:
             raise ValueError(f"plan_timeout_s must be >= 1, got {plan_timeout_s}")
         validate_budget_for_create(budget)
@@ -139,6 +142,7 @@ class LifecycleMixin:
             max_human_expansions=max_human_expansions,
             replan_reserve=float(replan_reserve),
             max_tasks=max_tasks,
+            max_depth=max_depth,
             plan_timeout_s=plan_timeout_s,
         )
         effective = study.effective_deadline()

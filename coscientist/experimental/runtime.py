@@ -59,6 +59,13 @@ class StudyRuntime(CoreStudyRuntime, HitlForkMixin):
             spent = Decimal(str(p.get("spent_rub") or 0))
             if spent > 0:
                 self._delegated_costly_spent += spent
+            if ev.type == "HitlDecided":
+                rid = str(p.get("request_id") or ev.entity_key)
+                decisions = getattr(self, "_hitl_decisions", None)
+                if not isinstance(decisions, dict):
+                    self._hitl_decisions = {}
+                    decisions = self._hitl_decisions
+                decisions[rid] = dict(p)
             return
         if ev.type == "HitlDeadlineExtended":
             h = self.hitl.get(p["request_id"])

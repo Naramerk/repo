@@ -82,7 +82,9 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         self._human_expansions = 0
         self._replan_used_s = 0.0
         self._expand_pending: set[str] = set()
+        self._expand_requests: dict[str, dict[str, Any]] = {}
         self._expansion_refusals: list[dict[str, Any]] = []
+        self._hitl_decisions: dict[str, dict[str, Any]] = {}
 
     def bind_executor(self, executor: Any) -> Any:
         """Wire production ``graph`` into Executor (laundering + about edges)."""

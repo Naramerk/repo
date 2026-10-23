@@ -1,29 +1,43 @@
 """PlanExpanded apply path: quotas, replan_reserve, question supersede (M1 PR9).
 
-Trigger lives in ``expand_trigger``; supersede helpers in ``supersede``.
+Trigger lives in ``expand_trigger``; validation in ``expand_validate``;
+graph helpers in ``expand_graph``. Never raise out of tick/record — invalid
+requests become ``ExpansionRefused(reason=invalid)``.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 from coscientist.core.domain import (
+    ExpansionRequest,
     Plan,
     QuestionSpec,
     QuestionSupersede,
     Task,
     TaskKind,
-    TaskOutcome,
     TaskSpec,
     TaskState,
 )
 from coscientist.core.events import EventEnvelope, make_idem
+from coscientist.core.expand_graph import (
+    plan_graph_events,
+    question_graph_events,
+    skip_superseded_task_events,
+)
 from coscientist.core.expand_trigger import refuse_expansion
-from coscientist.core.graph import GraphEdge, GraphNode
-from coscientist.core.ids import plan_id, question_node_id, task_id
-from coscientist.core.inputs import validate_input_specs, validate_plan_criteria
-from coscientist.core.reasons import CloseReason, TaskReason
-from coscientist.core.supersede import plan_node_id
+from coscientist.core.expand_validate import (
+    active_plan_blob,
+    assign_exp_keys,
+    task_produced_countable_claims,
+    validate_expansion,
+)
+from coscientist.core.ids import plan_id, task_id
+from coscientist.core.supersede import (
+    question_has_countable_refutation,
+    should_skip_for_question_supersede,
+    tasks_needed_by_active_questions,
+)
 
 if TYPE_CHECKING:
     from coscientist.core.machine import StudyRuntime
@@ -32,14 +46,29 @@ Origin = Literal["plan", "emergent"]
 DelegatedBy = Literal["human", "timeout"] | None
 
 
-def _active_plan(runtime: StudyRuntime) -> dict[str, Any] | None:
-    if not runtime.plans:
-        return None
-    return max(runtime.plans.values(), key=lambda p: int(p.get("revision") or 0))
-
-
 def _quota_kind(delegated_by: DelegatedBy) -> Literal["agent", "human"]:
     return "human" if delegated_by == "human" else "agent"
+
+
+def _delegated_by_from_hitl(runtime: StudyRuntime, hitl_request_id: str | None) -> DelegatedBy:
+    """MJ6: derive delegated_by from HitlDecided, not from a free argument alone."""
+    if not hitl_request_id:
+        return None
+    hitl = getattr(runtime, "hitl", None) or {}
+    h = hitl.get(hitl_request_id) if isinstance(hitl, dict) else None
+    if h is not None:
+        db = getattr(h, "delegated_by", None)
+        if db in ("human", "timeout"):
+            return db  # type: ignore[return-value]
+        raw = getattr(h, "decision_payload", None) or {}
+        if isinstance(raw, dict) and raw.get("delegated_by") in ("human", "timeout"):
+            return raw["delegated_by"]  # type: ignore[return-value]
+    decisions = getattr(runtime, "_hitl_decisions", None)
+    if isinstance(decisions, dict) and hitl_request_id in decisions:
+        db = decisions[hitl_request_id].get("delegated_by")
+        if db in ("human", "timeout"):
+            return db  # type: ignore[return-value]
+    return "human"
 
 
 async def expand_plan(
@@ -53,22 +82,70 @@ async def expand_plan(
     origin: Origin = "emergent",
     reason: str = "",
     delegated_by: DelegatedBy = None,
+    hitl_request_id: str | None = None,
     expand_after: list[str] | None = None,
+    assign_keys: bool = False,
 ) -> str | None:
     """Apply a plan expansion. Returns new plan_id, or None if ExpansionRefused.
 
-    Human / ``delegated_by=human`` uses ``max_human_expansions`` and does not
-    consume the agent ``max_expansions`` quota (DESIGN_M1 §4).
+    Agent-path pending apply sets ``assign_keys=True`` (core EXP-<n>); HITL/API
+    may pass explicit keys with ``assign_keys=False``.
     """
+    try:
+        return await _expand_plan(
+            runtime,
+            after_task=after_task,
+            added_tasks=added_tasks,
+            added_questions=added_questions,
+            superseded_tasks=superseded_tasks,
+            superseded_questions=superseded_questions,
+            origin=origin,
+            reason=reason,
+            delegated_by=delegated_by,
+            hitl_request_id=hitl_request_id,
+            expand_after=expand_after,
+            assign_keys=assign_keys,
+        )
+    except Exception:  # noqa: BLE001 — never raise to tick/record
+        await refuse_expansion(runtime, after_task, reason="invalid", detail="expand_crash")
+        return None
+
+
+async def _expand_plan(
+    runtime: StudyRuntime,
+    *,
+    after_task: str,
+    added_tasks: list[TaskSpec],
+    added_questions: list[QuestionSpec] | None,
+    superseded_tasks: list[str] | None,
+    superseded_questions: list[QuestionSupersede] | None,
+    origin: Origin,
+    reason: str,
+    delegated_by: DelegatedBy,
+    hitl_request_id: str | None,
+    expand_after: list[str] | None,
+    assign_keys: bool,
+) -> str | None:
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return None
     study = runtime.study
     sid = study.study_id
     now = runtime.clock.now()
+    if hitl_request_id:
+        delegated_by = _delegated_by_from_hitl(runtime, hitl_request_id)
     added_questions = list(added_questions or [])
     superseded_tasks = list(superseded_tasks or [])
     superseded_questions = list(superseded_questions or [])
     expand_after = list(expand_after or [])
+
+    if assign_keys:
+        keyed = assign_exp_keys(runtime, list(added_tasks))
+        if isinstance(keyed, str):
+            await refuse_expansion(runtime, after_task, reason="invalid", detail=keyed[:200])
+            return None
+        added_tasks = keyed
+    else:
+        added_tasks = list(added_tasks)
 
     qkind = _quota_kind(delegated_by)
     agent_n = int(getattr(runtime, "_agent_expansions", 0))
@@ -91,67 +168,88 @@ async def expand_plan(
         await refuse_expansion(runtime, after_task, reason="expansion_limit", detail="replan_reserve")
         return None
 
-    prev = _active_plan(runtime)
+    if qkind == "agent":
+        for s in superseded_questions:
+            if question_has_countable_refutation(runtime, s.old_id):
+                await refuse_expansion(
+                    runtime, after_task, reason="has_refutation", detail=s.old_id
+                )
+                return None
+
+    prev = active_plan_blob(runtime)
     prev_rev = int(prev.get("revision") or 0) if prev else 0
     prev_pid = str(prev.get("plan_id") or "") if prev else ""
     new_rev = prev_rev + 1
-
     prev_tasks = [
-        TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in (prev.get("tasks") if prev else []) or []
+        TaskSpec.model_validate(t) if isinstance(t, dict) else t
+        for t in (prev.get("tasks") if prev else []) or []
     ]
-    skip_keys = set(superseded_tasks)
-    kept = [t for t in prev_tasks if t.task_key not in skip_keys]
-    superseded_old = {s.old_id for s in superseded_questions}
-    active_q_after: set[str] = set()
+    known_texts: dict[str, str] = {}
     for q in (prev.get("questions") if prev else []) or []:
-        qid = q.get("id") if isinstance(q, dict) else getattr(q, "id", None)
-        if qid and qid not in superseded_old:
-            active_q_after.add(str(qid))
+        if isinstance(q, dict) and q.get("id"):
+            known_texts[str(q["id"])] = str(q.get("text") or "")
+        elif hasattr(q, "id"):
+            known_texts[str(q.id)] = str(q.text)
+    known_texts.update({q.id: q.text for q in added_questions})
+
+    superseded_old = {s.old_id for s in superseded_questions}
+    active_q_after: set[str] = {qid for qid in known_texts if qid not in superseded_old}
     for q in added_questions:
         active_q_after.add(q.id)
+
+    err = validate_expansion(
+        runtime,
+        added_tasks=added_tasks,
+        added_questions=added_questions,
+        superseded_tasks=superseded_tasks,
+        superseded_questions=superseded_questions,
+        known_texts=known_texts,
+        prev_tasks=prev_tasks,
+        active_q_ids=active_q_after,
+    )
+    if err is not None:
+        reason_code = (
+            "expansion_limit" if err in ("max_tasks",) or str(err).startswith("max_depth") else "invalid"
+        )
+        await refuse_expansion(runtime, after_task, reason=reason_code, detail=str(err)[:200])
+        return None
+
+    skip_keys = {k for k in superseded_tasks if not task_produced_countable_claims(runtime, k)}
+    kept = [t for t in prev_tasks if t.task_key not in skip_keys]
+    protected = tasks_needed_by_active_questions(
+        tasks=kept + list(added_tasks),
+        superseded_old=superseded_old,
+        active_q_after=active_q_after,
+    )
+    for t in kept:
+        if task_produced_countable_claims(runtime, t.task_key):
+            protected.add(t.task_key)
+
     still_kept: list[TaskSpec] = []
     for t in kept:
-        addrs = set(t.addresses or [])
         tid_exist = task_id(sid, t.task_key)
         rt_task = runtime.tasks.get(tid_exist)
         already_done = rt_task is not None and rt_task.state == TaskState.DONE
-        # Only open tasks that solely address superseded questions are dropped;
-        # DONE tasks stay in the revision so dependents can keep depends_on.
-        if not already_done and addrs and addrs <= superseded_old and not (addrs & active_q_after):
+        if already_done:
+            still_kept.append(t)
+            continue
+        if should_skip_for_question_supersede(
+            task=t,
+            superseded_old=superseded_old,
+            active_q_after=active_q_after,
+            protected_keys=protected,
+        ):
             skip_keys.add(t.task_key)
         else:
             still_kept.append(t)
     superseded_tasks = sorted(skip_keys)
-
     merged_tasks = still_kept + list(added_tasks)
-    if len(merged_tasks) > study.max_tasks:
-        await refuse_expansion(runtime, after_task, reason="expansion_limit", detail="max_tasks")
-        return None
-
-    runtime._validate_dag(merged_tasks)  # noqa: SLF001
-    known_texts = await runtime._known_question_texts()  # noqa: SLF001
-    runtime._validate_questions(added_questions, known_texts)  # noqa: SLF001
-    known_texts = {**known_texts, **{q.id: q.text for q in added_questions}}
-    prev_q_ids = {
-        (q.get("id") if isinstance(q, dict) else getattr(q, "id", None))
-        for q in (prev.get("questions") if prev else []) or []
-    }
-    for s in superseded_questions:
-        if s.old_id not in known_texts and s.old_id not in prev_q_ids:
-            raise ValueError(f"unknown superseded question id: {s.old_id!r}")
-        if s.new_id not in {q.id for q in added_questions} and s.new_id not in known_texts:
-            raise ValueError(f"supersede new_id not in added_questions: {s.new_id!r}")
-    runtime._validate_addresses(merged_tasks, set(known_texts))  # noqa: SLF001
-    validate_input_specs(merged_tasks)
-    catalog = getattr(runtime, "catalog", None) or getattr(getattr(runtime, "executor", None), "catalog", None)
-    validate_plan_criteria(merged_tasks, catalog)
 
     prev_questions = [
         QuestionSpec.model_validate(q) if isinstance(q, dict) else q
         for q in (prev.get("questions") if prev else []) or []
     ]
-    kept_q = [q for q in prev_questions if q.id not in superseded_old]
-    all_questions = kept_q + added_questions
+    all_questions = [q for q in prev_questions if q.id not in superseded_old] + added_questions
 
     pid = plan_id()
     plan = Plan(
@@ -165,7 +263,7 @@ async def expand_plan(
     )
     events: list[EventEnvelope] = []
     events.extend(
-        _plan_graph_events(
+        plan_graph_events(
             runtime,
             sid=sid,
             pid=pid,
@@ -173,11 +271,12 @@ async def expand_plan(
             new_rev=new_rev,
             prev_rev=prev_rev,
             origin=origin,
+            delegated_by=delegated_by,
             now=now,
         )
     )
     events.extend(
-        _question_graph_events(
+        question_graph_events(
             runtime,
             sid=sid,
             pid=pid,
@@ -187,7 +286,7 @@ async def expand_plan(
             now=now,
         )
     )
-    events.extend(_skip_superseded_task_events(runtime, sid=sid, superseded_tasks=superseded_tasks, now=now))
+    events.extend(skip_superseded_task_events(runtime, sid=sid, superseded_tasks=superseded_tasks, now=now))
     existing_keys = {t.spec.task_key for t in runtime.tasks.values()}
     for spec in added_tasks:
         if spec.task_key in existing_keys and spec.task_key not in skip_keys:
@@ -225,6 +324,7 @@ async def expand_plan(
         "delegated_by": delegated_by,
         "replan_allocated_s": allocate,
         "prev_plan_id": prev_pid or None,
+        "hitl_request_id": hitl_request_id,
     }
     events.append(
         EventEnvelope(
@@ -238,234 +338,41 @@ async def expand_plan(
         )
     )
     await runtime._append(events)  # noqa: SLF001
-    runtime._replan_used_s = used + allocate  # noqa: SLF001
     return pid
 
 
-def _plan_graph_events(
-    runtime: StudyRuntime,
-    *,
-    sid: str,
-    pid: str,
-    prev_pid: str,
-    new_rev: int,
-    prev_rev: int,
-    origin: str,
-    now: Any,
-) -> list[EventEnvelope]:
-    events: list[EventEnvelope] = []
-    pnid = plan_node_id(sid, pid)
-    events.append(
-        EventEnvelope(
-            study_id=sid,
-            type="GraphNodeUpserted",
-            entity_key=pnid,
-            idem_key=make_idem("GraphNodeUpserted", pnid),
-            payload=GraphNode(
-                node_id=pnid,
-                kind="plan",
-                study_id=sid,
-                ref_id=pid,
-                attrs={"revision": new_rev, "origin": origin},
-                created_at=now,
-            ).model_dump(mode="json"),
-            ts=now,
-            schema_version=1,
-        )
+async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str | None:
+    """Apply queued ExpansionRequest after PLAN-n SUCCESS (critic accept)."""
+    reqs = getattr(runtime, "_expand_requests", None) or {}
+    meta = reqs.get(plan_key) if isinstance(reqs, dict) else None
+    if not isinstance(meta, dict):
+        return None
+    after = str(meta.get("after_task") or plan_key)
+    raw = meta.get("pending")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        req = ExpansionRequest.model_validate(raw)
+    except Exception:  # noqa: BLE001
+        await refuse_expansion(runtime, after, reason="invalid", detail="pending_bad")
+        return None
+    pid = await expand_plan(
+        runtime,
+        after_task=after,
+        added_tasks=list(req.tasks),
+        added_questions=list(req.questions),
+        superseded_tasks=list(req.superseded_tasks),
+        superseded_questions=list(req.superseded_questions),
+        origin="emergent",
+        reason=req.reason or "expansion_request",
+        delegated_by=None,
+        assign_keys=True,
     )
-    if not prev_pid:
-        return events
-    prev_nid = plan_node_id(sid, prev_pid)
-    if runtime.graph.get_node(prev_nid) is None:
-        events.append(
-            EventEnvelope(
-                study_id=sid,
-                type="GraphNodeUpserted",
-                entity_key=prev_nid,
-                idem_key=make_idem("GraphNodeUpserted", prev_nid, "backfill"),
-                payload=GraphNode(
-                    node_id=prev_nid,
-                    kind="plan",
-                    study_id=sid,
-                    ref_id=prev_pid,
-                    attrs={"revision": prev_rev},
-                    created_at=now,
-                ).model_dump(mode="json"),
-                ts=now,
-                schema_version=1,
-            )
-        )
-    eid = f"supersedes:{pnid}:{prev_nid}"
-    events.append(
-        EventEnvelope(
-            study_id=sid,
-            type="GraphEdgeAdded",
-            entity_key=eid,
-            idem_key=make_idem("GraphEdgeAdded", eid),
-            payload=GraphEdge(
-                edge_id=eid,
-                kind="supersedes",
-                study_id=sid,
-                src_id=pnid,
-                dst_id=prev_nid,
-                attrs={},
-                created_at=now,
-            ).model_dump(mode="json"),
-            ts=now,
-            schema_version=1,
-        )
-    )
-    return events
+    if isinstance(reqs, dict):
+        reqs.pop(plan_key, None)
+    return pid
 
 
-def _question_graph_events(
-    runtime: StudyRuntime,
-    *,
-    sid: str,
-    pid: str,
-    added_questions: list[QuestionSpec],
-    superseded_questions: list[QuestionSupersede],
-    known_texts: dict[str, str],
-    now: Any,
-) -> list[EventEnvelope]:
-    events: list[EventEnvelope] = []
-    for q in added_questions:
-        qnid = question_node_id(sid, q.id)
-        if runtime.graph.get_node(qnid) is not None:
-            continue
-        events.append(
-            EventEnvelope(
-                study_id=sid,
-                type="GraphNodeUpserted",
-                entity_key=qnid,
-                idem_key=make_idem("GraphNodeUpserted", qnid, pid),
-                payload=GraphNode(
-                    node_id=qnid,
-                    kind="question",
-                    study_id=sid,
-                    ref_id=q.id,
-                    attrs={"formulation": q.text},
-                    created_at=now,
-                ).model_dump(mode="json"),
-                ts=now,
-                schema_version=1,
-            )
-        )
-    added_ids = {q.id for q in added_questions}
-    for s in superseded_questions:
-        new_nid = question_node_id(sid, s.new_id)
-        old_nid = question_node_id(sid, s.old_id)
-        if runtime.graph.get_node(old_nid) is None:
-            events.append(
-                EventEnvelope(
-                    study_id=sid,
-                    type="GraphNodeUpserted",
-                    entity_key=old_nid,
-                    idem_key=make_idem("GraphNodeUpserted", old_nid, "supersede_old"),
-                    payload=GraphNode(
-                        node_id=old_nid,
-                        kind="question",
-                        study_id=sid,
-                        ref_id=s.old_id,
-                        attrs={"formulation": known_texts.get(s.old_id, "")},
-                        created_at=now,
-                    ).model_dump(mode="json"),
-                    ts=now,
-                    schema_version=1,
-                )
-            )
-        if runtime.graph.get_node(new_nid) is None and s.new_id not in added_ids:
-            events.append(
-                EventEnvelope(
-                    study_id=sid,
-                    type="GraphNodeUpserted",
-                    entity_key=new_nid,
-                    idem_key=make_idem("GraphNodeUpserted", new_nid, "supersede_new"),
-                    payload=GraphNode(
-                        node_id=new_nid,
-                        kind="question",
-                        study_id=sid,
-                        ref_id=s.new_id,
-                        attrs={"formulation": known_texts.get(s.new_id, "")},
-                        created_at=now,
-                    ).model_dump(mode="json"),
-                    ts=now,
-                    schema_version=1,
-                )
-            )
-        eid = f"supersedes:{new_nid}:{old_nid}"
-        events.append(
-            EventEnvelope(
-                study_id=sid,
-                type="GraphEdgeAdded",
-                entity_key=eid,
-                idem_key=make_idem("GraphEdgeAdded", eid),
-                payload=GraphEdge(
-                    edge_id=eid,
-                    kind="supersedes",
-                    study_id=sid,
-                    src_id=new_nid,
-                    dst_id=old_nid,
-                    attrs={},
-                    created_at=now,
-                ).model_dump(mode="json"),
-                ts=now,
-                schema_version=1,
-            )
-        )
-    return events
-
-
-def _skip_superseded_task_events(
-    runtime: StudyRuntime,
-    *,
-    sid: str,
-    superseded_tasks: list[str],
-    now: Any,
-) -> list[EventEnvelope]:
-    events: list[EventEnvelope] = []
-    for tkey in superseded_tasks:
-        tid = task_id(sid, tkey)
-        task = runtime.tasks.get(tid)
-        if task is None or task.state == TaskState.DONE:
-            continue
-        for aid in task.attempts:
-            if not runtime.attempts.get(aid, {}).get("closed"):
-                events.append(
-                    EventEnvelope(
-                        study_id=sid,
-                        type="AttemptClosed",
-                        entity_key=aid,
-                        idem_key=make_idem("AttemptClosed", aid, CloseReason.CANCELLED.value),
-                        payload={
-                            "attempt_id": aid,
-                            "closed": True,
-                            "close_reason": CloseReason.CANCELLED.value,
-                            "task_id": tid,
-                        },
-                        ts=now,
-                        schema_version=2,
-                    )
-                )
-        events.append(
-            EventEnvelope(
-                study_id=sid,
-                type="TaskDone",
-                entity_key=tid,
-                idem_key=make_idem("TaskDone", tid, "superseded"),
-                payload={
-                    "task_id": tid,
-                    "outcome": TaskOutcome.SKIPPED.value,
-                    "reason": TaskReason.SUPERSEDED.value,
-                },
-                ts=now,
-                schema_version=2,
-            )
-        )
-    return events
-
-
-# Re-export trigger for callers that import from expand.
 from coscientist.core.expand_trigger import maybe_expand_after_task_done  # noqa: E402
 from coscientist.core.supersede import (  # noqa: E402
     criterion_is_superseded,
@@ -473,6 +380,7 @@ from coscientist.core.supersede import (  # noqa: E402
 )
 
 __all__ = [
+    "apply_pending_expansion",
     "expand_plan",
     "maybe_expand_after_task_done",
     "question_is_superseded",

@@ -69,6 +69,7 @@ class HitlForkMixin(CostlyHitlMixin):
         decision: str = "accept",
         *,
         critic_accepts: bool = True,
+        expansion: dict[str, Any] | None = None,
     ) -> None:
         h = self.hitl[request_id]
         if not h.open:
@@ -87,6 +88,7 @@ class HitlForkMixin(CostlyHitlMixin):
         # DESIGN §7.3: «реши сам» → critic with delegated_by=human
         if decision == "delegate":
             await self._critic_decide(h, decision="accept", delegated_by="human")
+            await self._maybe_hitl_expand(h, request_id, expansion)
             return
         now = self.clock.now()
         await self._append(
@@ -108,6 +110,54 @@ class HitlForkMixin(CostlyHitlMixin):
                     ts=now,
                 )
             ]
+        )
+        if decision in ("accept", "approve"):
+            await self._maybe_hitl_expand(h, request_id, expansion)
+
+    async def _maybe_hitl_expand(
+        self,
+        h: HitlRequest,
+        request_id: str,
+        expansion: dict[str, Any] | None,
+    ) -> None:
+        """Third H-g trigger: HITL plan/hypotheses edit → PlanExpanded (MJ6).
+
+        ``delegated_by`` is derived from the HitlDecided event, not an argument.
+        """
+        if not expansion:
+            return
+        if h.kind not in ("plan", "plan_approval", "hypotheses"):
+            return
+        from coscientist.core.domain import QuestionSpec, QuestionSupersede, TaskSpec
+        from coscientist.core.expand import expand_plan
+
+        after = str(expansion.get("after_task") or "")
+        if not after and h.task_id:
+            task = self.tasks.get(h.task_id)
+            after = task.spec.task_key if task is not None else h.task_id
+        added_tasks = [
+            TaskSpec.model_validate(t) if isinstance(t, dict) else t
+            for t in (expansion.get("added_tasks") or [])
+        ]
+        added_questions = [
+            QuestionSpec.model_validate(q) if isinstance(q, dict) else q
+            for q in (expansion.get("added_questions") or [])
+        ]
+        superseded_questions = [
+            QuestionSupersede.model_validate(s) if isinstance(s, dict) else s
+            for s in (expansion.get("superseded_questions") or [])
+        ]
+        await expand_plan(
+            self,  # type: ignore[arg-type]
+            after_task=after or "HITL",
+            added_tasks=added_tasks,
+            added_questions=added_questions,
+            superseded_tasks=list(expansion.get("superseded_tasks") or []),
+            superseded_questions=superseded_questions,
+            origin="plan",
+            reason=str(expansion.get("reason") or "hitl_plan_edit"),
+            hitl_request_id=request_id,
+            assign_keys=bool(expansion.get("assign_keys", False)),
         )
 
     async def _hitl_timeout(self, h: HitlRequest) -> None:
@@ -183,6 +233,51 @@ class HitlForkMixin(CostlyHitlMixin):
                         "spent_rub": 0.0,
                     },
                     ts=now,
+                )
+            ]
+        )
+        # Mark plan node when «decide yourself» / timeout delegate (graph attrs).
+        await self._mark_plan_delegated(h, delegated_by=delegated_by)
+
+    async def _mark_plan_delegated(self, h: HitlRequest, *, delegated_by: str) -> None:
+        if h.kind not in ("plan", "plan_approval", "hypotheses"):
+            return
+        graph = getattr(self, "graph", None)
+        plans = getattr(self, "plans", None)
+        if graph is None or not isinstance(plans, dict) or not plans:
+            return
+        from coscientist.core.graph import GraphNode
+        from coscientist.core.supersede import plan_node_id
+
+        prev = max(plans.values(), key=lambda p: int(p.get("revision") or 0))
+        pid = str(prev.get("plan_id") or "")
+        if not pid:
+            return
+        sid = h.study_id
+        pnid = plan_node_id(sid, pid)
+        existing = graph.get_node(pnid)
+        attrs = dict((existing.attrs if existing is not None else None) or {})
+        attrs["delegated_by"] = delegated_by
+        attrs["approved_by"] = "critic"
+        now = self.clock.now()
+        node = GraphNode(
+            node_id=pnid,
+            kind="plan",
+            study_id=sid,
+            ref_id=pid,
+            attrs=attrs,
+            created_at=getattr(existing, "created_at", None) or now,
+        )
+        await self._append(
+            [
+                EventEnvelope(
+                    study_id=sid,
+                    type="GraphNodeUpserted",
+                    entity_key=pnid,
+                    idem_key=make_idem("GraphNodeUpserted", pnid, "hitl_delegate", delegated_by),
+                    payload=node.model_dump(mode="json"),
+                    ts=now,
+                    schema_version=1,
                 )
             ]
         )

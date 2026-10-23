@@ -278,7 +278,9 @@ def evaluate_code_check(
                         left = _pointer_get(doc, pointer)
                         evid_digest = sha256_hex(canonical_json(left))
                 else:
-                    if check.kind == "json_pointer" and (pointer is None or pointer == "" or pointer == "/"):
+                    if check.kind == "json_pointer" and (
+                        pointer is None or pointer == "" or pointer == "/"
+                    ):
                         return _no_effect_result(
                             check_id=check_id,
                             template_id=template_id,
@@ -297,7 +299,9 @@ def evaluate_code_check(
 
             effect: dict[str, Any] | None = None
             used_sesoi = False
-            prov = _effect_provenance_fields(artifacts, handle.artifact_id, attempt_id=attempt_id)
+            prov = _effect_provenance_fields(
+                artifacts, handle.artifact_id, attempt_id=attempt_id
+            )
             if check.kind == "json_pointer":
                 # Missing / null / empty-string at pointer → no numeric effect.
                 if left is None or left == "":
@@ -318,7 +322,11 @@ def evaluate_code_check(
                 # metric_threshold — point-estimate exceedance or TOST with real CI.
                 op = check.op or "=="
                 ci = _extract_ci(doc, left)
-                if uses_sesoi and sesoi is not None and predicts_null:
+                if (
+                    uses_sesoi
+                    and sesoi is not None
+                    and predicts_null
+                ):
                     # TOST: require a real interval from the metric artifact.
                     if ci is not None:
                         effect = {
@@ -329,7 +337,9 @@ def evaluate_code_check(
                             **prov,
                         }
                         used_sesoi = True
-                        ok = (-float(sesoi)) < ci["ci_low"] and ci["ci_high"] < float(sesoi)
+                        ok = (-float(sesoi)) < ci["ci_low"] and ci["ci_high"] < float(
+                            sesoi
+                        )
                     else:
                         # No CI → not a TOST result; equivalence not assessable.
                         used_sesoi = False
@@ -402,7 +412,9 @@ def evaluate_code_check(
                 is_code=True,
                 required=True,
                 role=role,
-                evidence=[EvidenceRef(artifact_id=handle.artifact_id, digest=sha256_hex(b"ok"))],
+                evidence=[
+                    EvidenceRef(artifact_id=handle.artifact_id, digest=sha256_hex(b"ok"))
+                ],
             )
 
         if check.kind == "source_link":

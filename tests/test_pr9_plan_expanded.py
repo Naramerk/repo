@@ -1,4 +1,7 @@
-"""M1 PR9: PlanExpanded, quotas, replan_reserve, question supersede, k filter."""
+"""M1 PR9: PlanExpanded, quotas, replan_reserve, question supersede, k filter.
+
+Review fixes: B1–B3, MJ1–MJ6, minors (PLAN-n path, report lines, fold, HITL).
+"""
 
 from __future__ import annotations
 
@@ -18,16 +21,25 @@ from coscientist.core.domain import (
     RequirementRef,
     TaskSpec,
 )
+from coscientist.core.expand import apply_pending_expansion
 from coscientist.core.ids import question_node_id
 from coscientist.core.reasons import TaskReason
 from coscientist.core.supersede import question_is_superseded
 from coscientist.core.upcasters import upcast
+from coscientist.core.verdict import recompute_effect_provenance
 from tests.helpers import attach_executor, close_runtime, open_runtime
+
+
+async def _boot_plan(rt, *, tasks, questions, expand_after=None, **study_kw):
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(tasks, questions=questions, expand_after=expand_after or [])
 
 
 @pytest.mark.asyncio
 async def test_expand_after_exp(tmp_path, clock, runtime_cls):
-    """expand_after + expansion_request after EXP creates new tasks (H-g)."""
+    """expansion_request → PLAN-n → critic apply → PlanExpanded (MJ2)."""
     sid = "st_exp_after"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
@@ -40,11 +52,9 @@ async def test_expand_after_exp(tmp_path, clock, runtime_cls):
         max_expansions=3,
     )
     attach_executor(rt, tmp_path)
-    for key in ("SPEC", "HYP", "LIT"):
-        await rt.start_attempt(key)
-        await rt.cancel_task(key, reason="cancelled")
-    await rt.accept_plan(
-        [
+    await _boot_plan(
+        rt,
+        tasks=[
             TaskSpec(
                 task_key="E0",
                 title="t",
@@ -65,7 +75,7 @@ async def test_expand_after_exp(tmp_path, clock, runtime_cls):
             expansion_request=ExpansionRequest(
                 tasks=[
                     TaskSpec(
-                        task_key="E1",
+                        task_key="agent_wants_E1",
                         title="follow",
                         goal="g",
                         route="experiment",
@@ -77,16 +87,96 @@ async def test_expand_after_exp(tmp_path, clock, runtime_cls):
             ),
         ),
     )
-    assert f"{sid}/E1" in rt.tasks
+    # MJ2: PLAN-n container, not direct PlanExpanded.
+    plan_n = [t for t in rt.tasks.values() if t.spec.task_key.startswith("PLAN-")]
+    assert plan_n, "expected PLAN-n container for expansion_request"
+    events = await rt.store.read_all()
+    assert not any(e.type == "PlanExpanded" for e in events)
+    # Critic accept → apply pending (core assigns EXP-<n>).
+    pid = await apply_pending_expansion(rt, plan_n[0].spec.task_key)
+    assert pid is not None
     assert rt._agent_expansions == 1
     events = await rt.store.read_all()
     assert any(e.type == "PlanExpanded" for e in events)
+    exp_keys = [k for k in rt.tasks if "/EXP-" in k]
+    assert exp_keys, "core must assign EXP-<n> keys"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_garbage_expansion_request_refused_study_finalizes(tmp_path, clock, runtime_cls):
+    """B1: unknown dep → ExpansionRefused(invalid); never raise; study finalizes."""
+    sid = "st_garbage"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=3,
+    )
+    attach_executor(rt, tmp_path)
+    await _boot_plan(
+        rt,
+        tasks=[
+            TaskSpec(
+                task_key="E0",
+                title="t",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                addresses=["Q1"],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    aid = await rt.start_attempt("E0")
+    await rt.executor.record(
+        aid,
+        AgentTaskOutput(
+            summary="bad",
+            expansion_request=ExpansionRequest(
+                tasks=[
+                    TaskSpec(
+                        task_key="E1",
+                        title="x",
+                        goal="g",
+                        route="experiment",
+                        depends_on=["NO_SUCH_TASK"],
+                        addresses=["Q1"],
+                    )
+                ],
+                reason="garbage",
+            ),
+        ),
+    )
+    events = await rt.store.read_all()
+    refused = [e for e in events if e.type == "ExpansionRefused"]
+    assert refused
+    assert refused[0].payload.get("reason") == "invalid"
+    assert not any(e.type == "PlanExpanded" for e in events)
+    # Study still finalizes (B1).
+    for key in list(rt.tasks):
+        t = rt.tasks[key]
+        if t.state.value != "DONE":
+            await rt.cancel_task(t.spec.task_key, reason="cancelled")
+    await rt.tick()
+    # Force finalize via cancel if not yet.
+    if not rt._finalized:
+        await rt.cancel_study()
+    events = await rt.store.read_all()
+    fin = [e for e in events if e.type == "StudyFinalized"]
+    assert fin
+    contrib = fin[0].payload.get("contributing_reasons") or []
+    assert any(str(c).startswith("not done:") for c in contrib)
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
 async def test_expansion_limit_reported(tmp_path, clock, runtime_cls):
-    """Agent quota exhaustion → ExpansionRefused(expansion_limit), no silent drop."""
+    """Agent quota exhaustion → ExpansionRefused in StudyFinalized/report (B2)."""
     sid = "st_exp_lim"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
@@ -99,11 +189,9 @@ async def test_expansion_limit_reported(tmp_path, clock, runtime_cls):
         max_expansions=1,
     )
     attach_executor(rt, tmp_path)
-    for key in ("SPEC", "HYP", "LIT"):
-        await rt.start_attempt(key)
-        await rt.cancel_task(key, reason="cancelled")
-    await rt.accept_plan(
-        [
+    await _boot_plan(
+        rt,
+        tasks=[
             TaskSpec(
                 task_key="E0",
                 title="t",
@@ -149,8 +237,21 @@ async def test_expansion_limit_reported(tmp_path, clock, runtime_cls):
         reason="second",
     )
     assert refused is None
-    assert any(r.get("reason") == "expansion_limit" for r in rt._expansion_refusals)
     assert f"{sid}/E2" not in rt.tasks
+    for key in list(rt.tasks):
+        t = rt.tasks[key]
+        if t.state.value != "DONE":
+            await rt.cancel_task(t.spec.task_key, reason="cancelled")
+    if not rt._finalized:
+        await rt.cancel_study()
+    events = await rt.store.read_all()
+    fin = next(e for e in events if e.type == "StudyFinalized")
+    contrib = fin.payload.get("contributing_reasons") or []
+    assert "not done: expansion limit" in contrib
+    report_id = fin.payload.get("report_artifact_id")
+    if report_id and rt.artifacts is not None:
+        md = rt.artifacts.read(report_id).decode("utf-8")
+        assert "not done: expansion limit" in md
     await close_runtime(rt)
 
 
@@ -169,11 +270,9 @@ async def test_human_expand_does_not_consume_agent_quota(tmp_path, clock, runtim
         max_human_expansions=2,
     )
     attach_executor(rt, tmp_path)
-    for key in ("SPEC", "HYP", "LIT"):
-        await rt.start_attempt(key)
-        await rt.cancel_task(key, reason="cancelled")
-    await rt.accept_plan(
-        [
+    await _boot_plan(
+        rt,
+        tasks=[
             TaskSpec(
                 task_key="E0",
                 title="t",
@@ -185,7 +284,6 @@ async def test_human_expand_does_not_consume_agent_quota(tmp_path, clock, runtim
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
-    # Agent expand refused (quota 0).
     assert (
         await rt.expand_plan(
             after_task="E0",
@@ -203,7 +301,6 @@ async def test_human_expand_does_not_consume_agent_quota(tmp_path, clock, runtim
         )
         is None
     )
-    # Human «decide yourself» / plan edit uses human quota.
     pid = await rt.expand_plan(
         after_task="E0",
         added_tasks=[
@@ -239,11 +336,9 @@ async def test_emergent_question_added(tmp_path, clock, runtime_cls):
         finalize_reserve_s=5,
     )
     attach_executor(rt, tmp_path)
-    for key in ("SPEC", "HYP", "LIT"):
-        await rt.start_attempt(key)
-        await rt.cancel_task(key, reason="cancelled")
-    await rt.accept_plan(
-        [
+    await _boot_plan(
+        rt,
+        tasks=[
             TaskSpec(
                 task_key="E0",
                 title="t",
@@ -290,11 +385,9 @@ async def test_hitl_question_edit_skips_old_tasks(tmp_path, clock, runtime_cls):
         finalize_reserve_s=5,
     )
     attach_executor(rt, tmp_path)
-    for key in ("SPEC", "HYP", "LIT"):
-        await rt.start_attempt(key)
-        await rt.cancel_task(key, reason="cancelled")
-    await rt.accept_plan(
-        [
+    await _boot_plan(
+        rt,
+        tasks=[
             TaskSpec(
                 task_key="E0",
                 title="old",
@@ -316,7 +409,6 @@ async def test_hitl_question_edit_skips_old_tasks(tmp_path, clock, runtime_cls):
     )
     await rt.start_attempt("E0")
     await rt.cancel_task("E0", reason="cancelled")
-    # E1 still PENDING — will be superseded with the question.
     await rt.expand_plan(
         after_task="E0",
         added_tasks=[
@@ -343,6 +435,69 @@ async def test_hitl_question_edit_skips_old_tasks(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
+async def test_shared_descendant_not_skipped(tmp_path, clock, runtime_cls):
+    """MJ5: task depended on by a new-question task is not SKIPPED."""
+    sid = "st_share"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    attach_executor(rt, tmp_path)
+    await _boot_plan(
+        rt,
+        tasks=[
+            TaskSpec(
+                task_key="E0",
+                title="shared",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                addresses=["Q1"],
+            ),
+            TaskSpec(
+                task_key="E1",
+                title="old-only",
+                goal="g",
+                route="experiment",
+                depends_on=["E0"],
+                addresses=["Q1"],
+            ),
+        ],
+        questions=[QuestionSpec(id="Q1", text="old")],
+    )
+    # Don't start E0/E1 — both PENDING. New task depends on E0.
+    await rt.expand_plan(
+        after_task="PLAN",
+        added_tasks=[
+            TaskSpec(
+                task_key="E2",
+                title="new",
+                goal="g",
+                route="experiment",
+                depends_on=["E0"],
+                addresses=["Q2"],
+            )
+        ],
+        added_questions=[QuestionSpec(id="Q2", text="new")],
+        superseded_questions=[QuestionSupersede(new_id="Q2", old_id="Q1")],
+        origin="plan",
+        delegated_by="human",
+    )
+    # E0 is needed by E2 → must remain PENDING (not superseded).
+    assert rt.tasks[f"{sid}/E0"].state.value == "PENDING"
+    # E1 only addresses Q1 and is not shared → SKIPPED.
+    e1 = rt.tasks[f"{sid}/E1"]
+    assert e1.state.value == "DONE"
+    assert str(getattr(e1.reason, "value", e1.reason)) == TaskReason.SUPERSEDED.value
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
 async def test_superseded_question_claims_not_counted(tmp_path, clock, runtime_cls):
     """C10: claims about a superseded question are excluded from k."""
     from coscientist.core.claims import filtered_claims_by_target
@@ -360,11 +515,9 @@ async def test_superseded_question_claims_not_counted(tmp_path, clock, runtime_c
         refutation_priority=True,
     )
     _, arts = attach_executor(rt, tmp_path)
-    for key in ("SPEC", "HYP", "LIT"):
-        await rt.start_attempt(key)
-        await rt.cancel_task(key, reason="cancelled")
-    await rt.accept_plan(
-        [
+    await _boot_plan(
+        rt,
+        tasks=[
             TaskSpec(
                 task_key="E0",
                 title="t",
@@ -422,7 +575,6 @@ async def test_superseded_question_claims_not_counted(tmp_path, clock, runtime_c
 async def test_replan_reserve_refuses_when_exhausted(tmp_path, clock, runtime_cls):
     sid = "st_rr"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    # Tiny reserve: almost no expansion window.
     await rt.create_study(
         profile="research",
         request="q",
@@ -434,11 +586,9 @@ async def test_replan_reserve_refuses_when_exhausted(tmp_path, clock, runtime_cl
         max_expansions=5,
     )
     attach_executor(rt, tmp_path)
-    for key in ("SPEC", "HYP", "LIT"):
-        await rt.start_attempt(key)
-        await rt.cancel_task(key, reason="cancelled")
-    await rt.accept_plan(
-        [
+    await _boot_plan(
+        rt,
+        tasks=[
             TaskSpec(
                 task_key="E0",
                 title="t",
@@ -467,8 +617,186 @@ async def test_replan_reserve_refuses_when_exhausted(tmp_path, clock, runtime_cl
         )
         is None
     )
-    assert any(r.get("detail") == "replan_reserve" for r in rt._expansion_refusals)
+    for key in list(rt.tasks):
+        t = rt.tasks[key]
+        if t.state.value != "DONE":
+            await rt.cancel_task(t.spec.task_key, reason="cancelled")
+    if not rt._finalized:
+        await rt.cancel_study()
+    events = await rt.store.read_all()
+    fin = next(e for e in events if e.type == "StudyFinalized")
+    contrib = fin.payload.get("contributing_reasons") or []
+    assert "not done: reserve" in contrib
     await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_replan_used_survives_restart(tmp_path, clock, runtime_cls):
+    """B3: live == replay for replan_used + expansion counts; restart can't bypass."""
+    sid = "st_restart"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=1,
+        replan_reserve=0.5,
+    )
+    attach_executor(rt, tmp_path)
+    await _boot_plan(
+        rt,
+        tasks=[
+            TaskSpec(
+                task_key="E0",
+                title="t",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                addresses=["Q1"],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    await rt.expand_plan(
+        after_task="E0",
+        added_tasks=[
+            TaskSpec(
+                task_key="E1",
+                title="a",
+                goal="g",
+                route="experiment",
+                depends_on=["E0"],
+                addresses=["Q1"],
+            )
+        ],
+        origin="emergent",
+    )
+    live_agent = rt._agent_expansions
+    live_replan = rt._replan_used_s
+    assert live_agent == 1
+    assert live_replan > 0
+    await close_runtime(rt)
+
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
+    attach_executor(rt2, tmp_path)
+    assert rt2._agent_expansions == live_agent
+    assert abs(rt2._replan_used_s - live_replan) < 1e-6
+    # Restart cannot bypass agent quota.
+    refused = await rt2.expand_plan(
+        after_task="E1",
+        added_tasks=[
+            TaskSpec(
+                task_key="E2",
+                title="b",
+                goal="g",
+                route="experiment",
+                depends_on=["E1"],
+                addresses=["Q1"],
+            )
+        ],
+        origin="emergent",
+    )
+    assert refused is None
+    events = await rt2.store.read_all()
+    assert any(
+        e.type == "ExpansionRefused" and e.payload.get("detail") == "agent_quota" for e in events
+    )
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_infra_failed_does_not_expand(tmp_path, clock, runtime_cls):
+    """MJ3: infra FAILED does not trigger expansion even with expansion_request."""
+    from coscientist.core.domain import TaskOutcome, TaskState
+    from coscientist.core.expand_trigger import maybe_expand_after_task_done
+
+    sid = "st_infra"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=3,
+    )
+    attach_executor(rt, tmp_path)
+    await _boot_plan(
+        rt,
+        tasks=[
+            TaskSpec(
+                task_key="E0",
+                title="t",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                addresses=["Q1"],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    aid = await rt.start_attempt("E0")
+    await rt.fail_attempt(aid, retryable=False, close_reason="crashed")
+    tid = f"{sid}/E0"
+    # Inject typed request on the (only) attempt as if agent asked to expand.
+    rt.results[aid] = {
+        "attempt_id": aid,
+        "task_id": tid,
+        "result_class": "infra",
+        "expansion_request": ExpansionRequest(
+            tasks=[
+                TaskSpec(
+                    task_key="E1",
+                    title="x",
+                    goal="g",
+                    route="experiment",
+                    depends_on=["E0"],
+                    addresses=["Q1"],
+                )
+            ],
+            reason="should_not_apply",
+        ).model_dump(mode="json"),
+    }
+    task = rt.tasks[tid]
+    assert task.state == TaskState.DONE
+    assert task.outcome == TaskOutcome.FAILED
+    await maybe_expand_after_task_done(rt, tid)
+    assert not any(
+        t.spec.task_key.startswith("PLAN-") and t.spec.task_key != "PLAN" for t in rt.tasks.values()
+    )
+    events = await rt.store.read_all()
+    assert not any(e.type == "PlanExpanded" for e in events)
+    await close_runtime(rt)
+
+
+def test_core_evaluated_only_from_effect_not_meta():
+    """MJ1: core_evaluated comes ONLY from effect; meta supplies producer/call_id."""
+
+    class Meta:
+        producer = "core"
+        produced_by = type("P", (), {"call_id": "st/E0#1:1"})()
+        artifact_id = "art1"
+        # Deliberately stamp a conflicting flag — must be ignored.
+        core_evaluated = False
+
+    effect = {"core_evaluated": True, "producer": "agent", "ci_low": 0.0, "ci_high": 1.0}
+    out = recompute_effect_provenance(effect, attempt_id="st/E0#1", artifact_meta=Meta())
+    assert out is not None
+    assert out["core_evaluated"] is True  # from effect, not meta's False
+    assert out["producer"] == "core"  # from meta
+    assert out["produced_by_call_id"] == "st/E0#1:1"
+    assert out["countable"] is True
+
+    # Without effect stamp, meta must not invent core_evaluated=True.
+    effect2 = {"producer": "agent"}
+    out2 = recompute_effect_provenance(effect2, attempt_id="st/E0#1", artifact_meta=Meta())
+    assert out2 is not None
+    assert out2.get("core_evaluated") in (False, None) or out2["core_evaluated"] is False
+    assert out2["countable"] is False
 
 
 def test_upcaster_studycreated_v6_to_v7_expansion_fields():
@@ -477,6 +805,7 @@ def test_upcaster_studycreated_v6_to_v7_expansion_fields():
     assert p["max_expansions"] == 4
     assert p["max_human_expansions"] == 10
     assert p["replan_reserve"] == 0.1
+    assert p["max_depth"] == 8
 
 
 def test_upcaster_planaccepted_v3_to_v4_expand_after():
@@ -505,3 +834,11 @@ def test_schema_valid_missing_artifact(tmp_path):
     assert cr.status == ReqStatus.FAILED
     assert cr.detail == "artifact_missing"
     assert cr.effect is None
+
+
+def test_expansion_refused_idem_deterministic():
+    from coscientist.core.events import make_idem
+
+    a = make_idem("ExpansionRefused", "s", "E0", "invalid", "unknown dependency X")
+    b = make_idem("ExpansionRefused", "s", "E0", "invalid", "unknown dependency X")
+    assert a == b

@@ -34,7 +34,9 @@ class LocalProjectMixin:
     _human_expansions: int
     _replan_used_s: float
     _expand_pending: set[str]
+    _expand_requests: dict[str, dict[str, Any]]
     _expansion_refusals: list[dict[str, Any]]
+    _hitl_decisions: dict[str, dict[str, Any]]
 
     def _project_local(self, ev: EventEnvelope) -> None:
         p = ev.payload
@@ -55,10 +57,14 @@ class LocalProjectMixin:
             self.plans[ev.entity_key] = dict(p)
         elif ev.type == "PlanExpanded":
             self.plans[ev.entity_key] = dict(p)
+            # B3: expansion counts + replan_used from events (not live counters).
             if p.get("delegated_by") == "human":
                 self._human_expansions = int(getattr(self, "_human_expansions", 0)) + 1
             else:
                 self._agent_expansions = int(getattr(self, "_agent_expansions", 0)) + 1
+            alloc = float(p.get("replan_allocated_s") or 0.0)
+            if alloc:
+                self._replan_used_s = float(getattr(self, "_replan_used_s", 0.0)) + alloc
             after = p.get("after_task")
             pending = getattr(self, "_expand_pending", None)
             if after and isinstance(pending, set):
@@ -69,13 +75,41 @@ class LocalProjectMixin:
                 refusals.append(dict(p))
             else:
                 self._expansion_refusals = [dict(p)]
+        elif ev.type == "HitlDecided":
+            rid = str(p.get("request_id") or ev.entity_key)
+            decisions = getattr(self, "_hitl_decisions", None)
+            if not isinstance(decisions, dict):
+                self._hitl_decisions = {}
+                decisions = self._hitl_decisions
+            decisions[rid] = dict(p)
         elif ev.type == "StudyCancelled":
             self._study_cancelled = True
         elif ev.type == "StudyFinalized":
             self._finalized = True
             self._fold_finalized_graph(ev.study_id, p, created_at=ev.ts)
         elif ev.type in ("TaskCreated", "TaskInherited"):
-            self.tasks[p["task_id"]] = Task.model_validate(p)
+            # Task model forbids extras; strip expansion bookkeeping before validate.
+            drop = ("pending_expansion", "expand_after_task", "replan_allocated_s")
+            clean = {k: v for k, v in p.items() if k not in drop}
+            self.tasks[p["task_id"]] = Task.model_validate(clean)
+            pending_exp = p.get("pending_expansion")
+            after = p.get("expand_after_task")
+            tkey = str((clean.get("spec") or {}).get("task_key") or "")
+            if after and tkey.startswith("PLAN-"):
+                reqs = getattr(self, "_expand_requests", None)
+                if not isinstance(reqs, dict):
+                    self._expand_requests = {}
+                    reqs = self._expand_requests
+                reqs[tkey] = {
+                    "after_task": str(after),
+                    "pending": pending_exp if isinstance(pending_exp, dict) else None,
+                    "replan_allocated_s": float(p.get("replan_allocated_s") or 0.0),
+                }
+                pend = getattr(self, "_expand_pending", None)
+                if isinstance(pend, set):
+                    pend.add(str(after))
+                else:
+                    self._expand_pending = {str(after)}
         elif ev.type == "AttemptStarted":
             self.attempts[p["attempt_id"]] = dict(p)
             t = self.tasks[p["task_id"]]
