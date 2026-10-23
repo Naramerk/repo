@@ -155,9 +155,14 @@ async def test_p3_retry_fires_exactly_once(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_p5_deadline_fails_task(tmp_path, clock, runtime_cls):
-    rt = await _boot(tmp_path, clock, runtime_cls, seconds=10)
+    # Long study so SPEC.deadline (≤600s) is strictly before effective_deadline.
+    rt = await _boot(tmp_path, clock, runtime_cls, seconds=3600, finalize_reserve_s=30)
+    await rt.ensure_lease(ttl_s=10_000)
     await rt.start_attempt("SPEC")
-    clock.advance(timedelta(seconds=11))
+    spec_dl = rt.tasks["st_tr/SPEC"].deadline
+    assert spec_dl < rt.study.effective_deadline()
+    # Past task deadline, still before study effective → P5 FAILED(deadline).
+    clock.set(spec_dl + timedelta(seconds=1))
     await rt.tick()
     t = rt.tasks["st_tr/SPEC"]
     assert t.state == TaskState.DONE
@@ -409,8 +414,9 @@ async def test_repeated_record_after_success_raises_attempt_closed(tmp_path, clo
 
 @pytest.mark.asyncio
 async def test_llm_hang_past_deadline(tmp_path, clock, runtime_cls):
-    """Test double: cancel attempt work via deadline (no hang flag in prod API)."""
-    rt = await _boot(tmp_path, clock, runtime_cls, seconds=5)
+    """Test double: cancel attempt work via P5 deadline (before study effective)."""
+    rt = await _boot(tmp_path, clock, runtime_cls, seconds=3600, finalize_reserve_s=30)
+    await rt.ensure_lease(ttl_s=10_000)
     aid = await rt.start_attempt("SPEC")
 
     async def _work():
@@ -422,11 +428,13 @@ async def test_llm_hang_past_deadline(tmp_path, clock, runtime_cls):
             return
 
     rt._attempt_tasks[aid] = asyncio.create_task(_work())
-    clock.advance(timedelta(seconds=6))
+    spec_dl = rt.tasks["st_tr/SPEC"].deadline
+    clock.set(spec_dl + timedelta(seconds=1))
     await rt.tick()
     t = rt.tasks["st_tr/SPEC"]
     assert t.state == TaskState.DONE
     assert t.outcome == TaskOutcome.FAILED
+    assert t.reason == "deadline"
     assert rt.attempts[aid]["closed"] is True
     await close_runtime(rt)
 

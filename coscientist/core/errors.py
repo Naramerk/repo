@@ -29,6 +29,21 @@ class AttemptClosedError(CoreError):
     """Attempt is closed; late writes are rejected."""
 
 
+class StudyClosedError(CoreError):
+    """Study is finalized; further journal writes are rejected (I3)."""
+
+    def __init__(self, study_id: str, event_type: str = ""):
+        self.study_id = study_id
+        self.event_type = event_type
+        super().__init__(
+            f"study {study_id} is finalized; rejecting {event_type or 'write'}"
+        )
+
+
+class CASUnavailable(CoreError):
+    """Content-addressed artifact store is not attached / unreachable."""
+
+
 class ArtifactCorrupt(CoreError):
     """Stored blob sha256 does not match the Artifact record."""
 

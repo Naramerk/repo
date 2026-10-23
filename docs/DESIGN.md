@@ -165,23 +165,30 @@ class Outcome(StrEnum): SUCCESS; PARTIAL; FAILED                    # резул
 ### 3.2 Статус study — вычисляется, не хранится
 
 ```python
-def study_view(tasks, *, attempts=None) -> StudyView:
+def study_view(tasks, *, attempts=None, finalized=False, now=None, effective_deadline=None,
+               question_dispositions=None) -> StudyView:
     # stub_share = |DONE with provenance=stub| / |DONE|  (из projection/attempts; без simulated_done)
-    if any(t.state != DONE for t in tasks):
+    # closed ⇔ ∃ StudyFinalized (finalized=True). Не «все задачи DONE».
+    if finalized:
+        return StudyView(phase="closed", verdict=..., stub_share=..., progress=1.0)
+    if any(t.state != DONE for t in tasks) and not (now and effective_deadline and now >= effective_deadline):
         return StudyView(phase="running", progress=done/total, awaiting_human=open_hitl > 0, stub_share=...)
-    req = [t for t in tasks if t.spec.required]
-    # PR 1: вопросы не учитываются (до PR 2). fulfilled — только по required-задачам.
+    # finalizing: все DONE или now ≥ effective_deadline, финала ещё нет
+    req = [t for t in tasks if t.spec.required]   # report: required=False (PR 2)
     if not req: verdict = "partial"
     elif all(t.outcome in {FAILED, SKIPPED} for t in req) or plan_task.outcome in {FAILED, SKIPPED}:
         verdict = "failed"
     elif all(t.outcome in {SUCCESS, PARTIAL} for t in req) and any(prov(t)=="stub" for t in req):
-        verdict = "stubbed"            # только required-stub; нерequired снижают stub_share, не verdict
+        verdict = "stubbed"
     elif all(t.outcome == SUCCESS for t in req):
         verdict = "fulfilled"
     else: verdict = "partial"
-    return StudyView(phase="closed", verdict=verdict, stub_share=..., ...)   # fulfilled | partial | stubbed | failed
+    # PR 2: ≥1 question not_attempted → verdict не выше partial (fulfilled/stubbed → partial)
+    return StudyView(phase="finalizing", verdict=verdict, stub_share=..., ...)
 ```
-B1 невозможен по построению: «closed» требует state=DONE у всех задач, а DONE всегда несёт outcome из enum. Тест: `test_b1_closed_only_when_all_tasks_done`.
+I1: `closed ⇔ ∃ StudyFinalized`. Тест: `test_b1_closed_only_when_all_tasks_done` (фаза closed только при finalized).
+I2: `closed ⇒ ∀ question: (∃! conclusion −answers→ question) ∨ (question_id ∈ minimal_report.questions ∨ minimal_report.truncated ∧ учтён в summary)`; на основном пути — conclusion у каждого question, на fallback — покрытие `minimal_report`. **Отклонение:** last-resort payload (`last_resort_payload`) пишет только study-level conclusion (`conclusion_ids_for(sid, {})`) и пустые `questions` — per-question conclusions отсутствуют.
+I3: после `StudyFinalized` store отклоняет любые записи (`StudyClosedError`); метрика `late_write_rejected_total`.
 
 ### 3.3 Переходы
 
@@ -228,7 +235,9 @@ DONE финален; повторный запуск — только через
 - Дорогие маршруты (coder, alembic, FEDOT, GPU) по умолчанию `simulate=forbid`; разрешение — только с отдельным `Budget` для работы на заглушках (§7.4).
 - `provenance` (real < partial < stub) хранится на попытке, не на артефакте: артефакт stub ⇔ его `produced_by` ведёт к попытке с provenance=stub. Перепаковка через MCP-инструмент (новый артефакт той же попытки) флаг не снимает. Входы `partial` ставят provenance=partial на попытке (потолок PARTIAL).
 - `compute_outcome`: при Attempt.provenance ≠ real outcome = min(outcome, PARTIAL). SUCCESS на заглушках или частичных данных невозможен.
-- `StudyView` содержит `stub_share` (доля DONE-задач с provenance=stub) и verdict `stubbed` ⇔ все required ∈ {SUCCESS, PARTIAL} ∧ ∃ required с provenance=stub. Нерequired-заглушки влияют только на stub_share. Вопросы в verdict не входят до PR 2.
+- `StudyView` содержит `stub_share` (доля DONE-задач с provenance=stub) и verdict `stubbed` ⇔ все required ∈ {SUCCESS, PARTIAL} ∧ ∃ required с provenance=stub. Нерequired-заглушки влияют только на stub_share.
+- Задача `report` — `required=False` (PR 2): пишет только прозу; HITL-шлюз report относится только к прозе и не блокирует finalize. FAILED/отсутствие report не понижает verdict; study без required-задач (только report) → verdict `partial` (`test_report_not_required_verdict`).
+- Вопросы: при ≥1 disposition `not_attempted` verdict не выше `partial` (до PR 6/8 в core все вопросы not_attempted — study с вопросами не бывает `fulfilled`).
 - Отчёт (§10) обязательно содержит три раздела: «Сделано» (real), «Выполнено на заглушках» (задачи и входы stub/partial), «Требует доработки человеком» (FAILED, SKIPPED, stub-цепочки с причинами).
 Тесты: `test_failed_dep_runs_dependent_on_partial_data`, `test_simulated_input_caps_at_partial` (provenance=stub), `test_simulated_flag_propagates`, `test_report_lists_stub_and_human_sections`.
 

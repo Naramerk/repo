@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import Any
 
 from coscientist.core.clock import Clock
 from coscientist.core.domain import (
     Budget,
     HitlPolicy,
     Plan,
+    QuestionSpec,
     Study,
     Task,
     TaskKind,
@@ -118,6 +120,7 @@ class LifecycleMixin:
                 route=kind.value,
                 depends_on=deps,
                 criteria=[],
+                required=(kind != TaskKind.REPORT),
             )
             tid = task_id(sid, key)
             task = Task(
@@ -135,6 +138,7 @@ class LifecycleMixin:
                     idem_key=make_idem("TaskCreated", tid),
                     payload=task.model_dump(mode="json"),
                     ts=now,
+                    schema_version=3,
                 )
             )
             # Graph nodes for stages: only schema kinds. SPEC/HYP/LIT are DAG
@@ -145,12 +149,33 @@ class LifecycleMixin:
         return sid
 
     async def accept_plan(
-        self, tasks: list[TaskSpec], *, revision: int = 1
+        self,
+        tasks: list[TaskSpec],
+        *,
+        questions: list[QuestionSpec] | None = None,
+        revision: int = 1,
+        spec_output: dict[str, Any] | None = None,
     ) -> str:
+        """Accept a plan revision.
+
+        Pass ``questions`` from SPEC (``ResearchSpecOut.questions[]``), or pass
+        ``spec_output`` and questions are extracted via ``questions_from_spec_output``.
+        """
         assert self.study is not None
         sid = self.study.study_id
         now = self.clock.now()
+        if questions is None and spec_output is not None:
+            from coscientist.core.question_tasks import questions_from_spec_output
+
+            questions = [
+                QuestionSpec(**q) for q in questions_from_spec_output(spec_output)
+            ]
+        questions = list(questions or [])
         self._validate_dag(tasks)
+        known_texts = await self._known_question_texts()
+        self._validate_questions(questions, known_texts)
+        known_texts = {**known_texts, **{q.id: q.text for q in questions}}
+        self._validate_addresses(tasks, set(known_texts))
         pid = plan_id()
         plan = Plan(
             plan_id=pid,
@@ -158,6 +183,7 @@ class LifecycleMixin:
             revision=revision,
             hypothesis_id=None,
             tasks=tasks,
+            questions=questions,
         )
         events: list[EventEnvelope] = [
             EventEnvelope(
@@ -167,6 +193,7 @@ class LifecycleMixin:
                 idem_key=make_idem("PlanAccepted", pid),
                 payload=plan.model_dump(mode="json"),
                 ts=now,
+                schema_version=2,
             )
         ]
         plan_tid = task_id(sid, "PLAN")
@@ -204,10 +231,51 @@ class LifecycleMixin:
                     idem_key=make_idem("TaskCreated", tid),
                     payload=task.model_dump(mode="json"),
                     ts=now,
+                    schema_version=3,
                 )
             )
         await self._append(events)
         return pid
+
+    async def _known_question_texts(self) -> dict[str, str]:
+        texts: dict[str, str] = {}
+        local = getattr(self, "plans", None)
+        plans = list(local.values()) if isinstance(local, dict) else []
+        if not plans:
+            store = getattr(self, "store", None)
+            if store is not None:
+                plans = await store.get_projection("plans")
+        for plan in plans:
+            for q in plan.get("questions") or []:
+                if not isinstance(q, dict):
+                    continue
+                qid = str(q.get("id", ""))
+                text = str(q.get("text", ""))
+                if not qid:
+                    continue
+                if qid in texts and texts[qid] != text:
+                    raise ValueError(f"question id {qid!r} text conflict")
+                texts[qid] = text
+        return texts
+
+    @staticmethod
+    def _validate_questions(
+        questions: list[QuestionSpec], known_texts: dict[str, str]
+    ) -> None:
+        seen: dict[str, str] = {}
+        for q in questions:
+            if q.id in seen and seen[q.id] != q.text:
+                raise ValueError(f"question id {q.id!r} text conflict")
+            if q.id in known_texts and known_texts[q.id] != q.text:
+                raise ValueError(f"question id {q.id!r} text conflict")
+            seen[q.id] = q.text
+
+    @staticmethod
+    def _validate_addresses(tasks: list[TaskSpec], known: set[str]) -> None:
+        for t in tasks:
+            for qid in t.addresses:
+                if qid not in known:
+                    raise ValueError(f"unknown question id in addresses: {qid!r}")
 
     @staticmethod
     def _validate_dag(tasks: list[TaskSpec]) -> None:

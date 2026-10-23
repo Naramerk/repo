@@ -26,7 +26,7 @@ from hypothesis.stateful import (
 
 from coscientist.core.clock import FakeClock
 from coscientist.core.domain import Clarification, TaskSpec, TaskState
-from coscientist.core.errors import HitlUnsupported, LeaseLost
+from coscientist.core.errors import HitlUnsupported, LeaseLost, StudyClosedError
 from coscientist.core.hitl_guard import supports_hitl
 from coscientist.core.inputs import InputUnavailable
 from coscientist.core.projections import fold_events
@@ -35,7 +35,7 @@ from coscientist.core.runtime_factory import close_runtime, open_runtime
 
 # Expected failures when a random rule hits an invalid transition / missing key.
 # Do not include AssertionError — that would swallow production asserts.
-_RULE_ERR = (RuntimeError, KeyError, ValueError, InputUnavailable)
+_RULE_ERR = (RuntimeError, KeyError, ValueError, InputUnavailable, StudyClosedError)
 
 
 class StudyClosesMachine(RuleBasedStateMachine):
@@ -60,8 +60,24 @@ class StudyClosesMachine(RuleBasedStateMachine):
     def _run(self, coro):
         return self._loop.run_until_complete(coro)
 
+    def _finalized(self) -> bool:
+        return bool(self.rt is not None and getattr(self.rt, "_finalized", False))
+
+    def _writable(self) -> bool:
+        return self.rt is not None and not self.lost_lease and not self._finalized()
+
     def _hitl_ok(self) -> bool:
-        return self.rt is not None and supports_hitl(self.rt)
+        return self.rt is not None and supports_hitl(self.rt) and self._writable()
+
+    def _call(self, coro, default=None):
+        """Run a mutating coro; map LeaseLost / expected errors to default."""
+        try:
+            return self._run(coro)
+        except LeaseLost:
+            self.lost_lease = True
+            return default
+        except _RULE_ERR:
+            return default
 
     @initialize(data=st.data())
     def boot(self, data):
@@ -100,16 +116,13 @@ class StudyClosesMachine(RuleBasedStateMachine):
 
     @rule(target=task_keys)
     def create_and_accept_plan(self):
-        if self.lost_lease or self.rt is None:
+        if not self._writable():
             return "PLAN"
         for key in ("SPEC", "HYP", "LIT"):
             t = self.rt.tasks.get(f"{self.sid}/{key}")
             if t and t.state == TaskState.PENDING:
-                try:
-                    self._run(self.rt.start_attempt(key))
-                    self._run(self.rt.cancel_task(key, reason="cancelled"))
-                except _RULE_ERR:
-                    pass
+                self._call(self.rt.start_attempt(key))
+                self._call(self.rt.cancel_task(key, reason="cancelled"))
         if not any(
             k.startswith("EXP-") for k in (t.spec.task_key for t in self.rt.tasks.values())
         ):
@@ -129,101 +142,78 @@ class StudyClosesMachine(RuleBasedStateMachine):
                     depends_on=["EXP-1"],
                 ),
             ]
-            try:
-                self._run(self.rt.accept_plan(specs))
-            except _RULE_ERR:
-                pass
+            self._call(self.rt.accept_plan(specs))
         return "EXP-1"
 
     @rule(key=task_keys, target=attempt_ids)
     def start_attempt(self, key):
-        if self.lost_lease or self.rt is None:
+        if not self._writable():
             return "none"
-        try:
-            return self._run(self.rt.start_attempt(key))
-        except _RULE_ERR:
-            return "none"
+        return self._call(self.rt.start_attempt(key), default="none") or "none"
 
     @rule(aid=attempt_ids)
     def finish_attempt(self, aid):
-        if self.lost_lease or aid == "none" or self.rt is None:
+        if not self._writable() or aid == "none":
             return
-        try:
-            att = self.rt.attempts.get(aid, {})
-            tid = att.get("task_id")
-            if tid:
-                self._run(self.rt.cancel_task(tid, reason="cancelled"))
-        except _RULE_ERR:
-            pass
+        att = self.rt.attempts.get(aid, {})
+        tid = att.get("task_id")
+        if tid:
+            self._call(self.rt.cancel_task(tid, reason="cancelled"))
 
     @rule(aid=attempt_ids)
     def fail_attempt(self, aid):
-        if self.lost_lease or aid == "none" or self.rt is None:
+        if not self._writable() or aid == "none":
             return
-        try:
-            self._run(self.rt.fail_attempt(aid, retryable=True))
-        except _RULE_ERR:
-            pass
+        self._call(self.rt.fail_attempt(aid, retryable=True))
 
     @rule(delta=st.integers(min_value=1, max_value=30))
     def advance_clock(self, delta):
         self.clock.advance(timedelta(seconds=delta))
-        if self.rt and not self.lost_lease:
-            try:
-                self._run(self.rt.tick())
-            except LeaseLost:
-                self.lost_lease = True
+        if self._writable():
+            self._call(self.rt.tick())
 
     @precondition(lambda self: self._hitl_ok())
     @rule(key=task_keys, target=hitl_ids)
     def open_hitl(self, key):
-        if self.lost_lease or self.rt is None:
-            return "none"
-        try:
-            return self._run(self.rt.open_hitl(key, kind="plan_approval", timeout_s=15))
-        except _RULE_ERR:
-            return "none"
+        return self._call(
+            self.rt.open_hitl(key, kind="plan_approval", timeout_s=15), default="none"
+        ) or "none"
 
     @precondition(lambda self: self._hitl_ok())
     @rule(hid=hitl_ids)
     def answer_hitl(self, hid):
-        if self.lost_lease or hid == "none" or self.rt is None:
+        if hid == "none":
             return
-        try:
-            self._run(self.rt.answer_hitl(hid))
-        except _RULE_ERR:
-            pass
+        self._call(self.rt.answer_hitl(hid))
 
-    @precondition(lambda self: self._hitl_ok())
     @rule()
     def recover_after_idle(self):
-        if self.lost_lease or self.rt is None:
+        """Recover is allowed after finalize (not gated by _writable)."""
+        if self.rt is None or self.lost_lease:
             return
         try:
-            self._run(self.rt.recover_after_idle(grace_s=5))
+            if supports_hitl(self.rt):
+                self._run(self.rt.recover_after_idle(grace_s=5))
             self._run(recover(self.rt))
         except LeaseLost:
             self.lost_lease = True
-        except (HitlUnsupported, RuntimeError):
+        except (HitlUnsupported, RuntimeError, StudyClosedError):
             pass
 
     @rule(key=task_keys)
     def cancel_task(self, key):
-        if self.lost_lease or self.rt is None:
+        if not self._writable():
             return
-        try:
-            self._run(self.rt.cancel_task(key))
-        except _RULE_ERR:
-            pass
+        self._call(self.rt.cancel_task(key))
 
     @precondition(lambda self: self._hitl_ok())
     @rule()
     def fork_session(self):
-        if self.lost_lease or self.rt is None:
-            return
         try:
             self._run(self.rt.fork([Clarification(target="EXP-1", text="retry")]))
             self.fork_count += 1
+        except LeaseLost:
+            self.lost_lease = True
         except _RULE_ERR:
             pass
 
@@ -246,6 +236,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
         self.rt.store.epoch = 0
         self.lost_lease = True
         try:
+            # tick() still fences via ensure_lease even after StudyFinalized.
             self._run(self.rt.tick())
             raise AssertionError("stale epoch must not write")
         except LeaseLost:
@@ -258,13 +249,14 @@ class StudyClosesMachine(RuleBasedStateMachine):
 
     @rule()
     def crash_and_recover(self):
-        if self.lost_lease or self.rt is None:
+        """Recover after crash; also covers post-finalize recover."""
+        if self.rt is None or self.lost_lease:
             return
         try:
             self._run(recover(self.rt))
         except LeaseLost:
             self.lost_lease = True
-        except (HitlUnsupported, RuntimeError):
+        except (HitlUnsupported, RuntimeError, StudyClosedError):
             pass
 
     @invariant()

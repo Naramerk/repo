@@ -92,6 +92,7 @@ def test_simulated_input_caps_at_partial():
 
 
 def test_b1_closed_only_when_all_tasks_done():
+    """closed ⇔ finalized (StudyFinalized); all DONE alone → finalizing, not closed."""
     now = datetime(2026, 1, 1, tzinfo=UTC)
     spec = TaskSpec(task_key="A", title="a", goal="g", route="experiment")
     tasks = [
@@ -116,7 +117,12 @@ def test_b1_closed_only_when_all_tasks_done():
     tasks[1] = tasks[1].model_copy(
         update={"state": TaskState.DONE, "outcome": TaskOutcome.SUCCESS}
     )
-    assert study_view(tasks).verdict == "fulfilled"
+    view = study_view(tasks)
+    assert view.phase == "finalizing"
+    assert view.verdict == "fulfilled"
+    closed = study_view(tasks, finalized=True)
+    assert closed.phase == "closed"
+    assert closed.verdict == "fulfilled"
 
 
 async def _writer(tmp_path, clock, sid="st_b2"):
