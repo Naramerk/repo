@@ -362,9 +362,10 @@ def runtime_claim_from_node(
         if validity_ok_raw is None:
             validity_ok = True
         else:
-            validity_ok = _coerce_bool(validity_ok_raw)
-            if validity_ok is None:
+            coerced_vok = _coerce_bool(validity_ok_raw)
+            if coerced_vok is None:
                 return None, "bad_validity_ok"
+            validity_ok = coerced_vok
         check_role = _coerce_str(attrs.get("check_role"), allow_empty=True) or "prediction"
         if check_role not in ("prediction", "validity"):
             check_role = "prediction"
