@@ -434,13 +434,13 @@ def test_delegated_does_not_tip_catalog_tie() -> None:
             "ci_high": 3.0,
         },
     )
-    v_cat, _, _ = hypothesis_verdict(
+    v_cat, _, _, _ = hypothesis_verdict(
         [catalog_refute, catalog_support],
         refutations_needed=1,
         supported_needed=2,
         refutation_priority=True,
     )
-    v_all, _, _ = hypothesis_verdict(
+    v_all, _, _, _ = hypothesis_verdict(
         [catalog_refute, catalog_support, delegated_extra],
         refutations_needed=1,
         supported_needed=2,
@@ -478,7 +478,7 @@ def test_delegated_zero_zero_catalog_not_supported() -> None:
             },
         )
 
-    v, _, _ = hypothesis_verdict(
+    v, _, _, _ = hypothesis_verdict(
         [_delegated("d1"), _delegated("d2")],
         refutations_needed=1,
         supported_needed=2,
