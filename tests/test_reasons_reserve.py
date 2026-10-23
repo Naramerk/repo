@@ -7,14 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from coscientist.core.domain import (
-    Task,
-    TaskKind,
-    TaskOutcome,
-    TaskSpec,
-    TaskState,
-)
-from coscientist.core.reasons import (
+from coscientist.core.claims.reasons import (
     CloseReason,
     Disposition,
     NotAttemptedReason,
@@ -23,8 +16,15 @@ from coscientist.core.reasons import (
     TerminalReason,
     intake,
 )
-from coscientist.core.study_view import study_view
-from coscientist.core.upcasters import upcast
+from coscientist.core.events.upcasters import upcast
+from coscientist.core.execution.domain import (
+    Task,
+    TaskKind,
+    TaskOutcome,
+    TaskSpec,
+    TaskState,
+)
+from coscientist.core.finalize.study_view import study_view
 from tests.helpers import close_runtime, open_runtime
 
 # Legacy reason strings from §0.1 that map to TaskReason / CloseReason.
@@ -81,7 +81,7 @@ def test_task_reason_enum_roundtrip():
     assert RefusalKind.DURATION_TOO_SHORT.value == "duration_too_short"
     import asyncio
 
-    from coscientist.core.intake import IntakeRefuse
+    from coscientist.core.plan.intake import IntakeRefuse
 
     refused = asyncio.run(intake("", [], "p", None))
     assert isinstance(refused, IntakeRefuse)
@@ -364,9 +364,9 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
     tmp_path: Path, clock, runtime_cls
 ):
     """StudyCreated v1 without finalize_reserve_s → reserve=0; deadlines unchanged; tick works."""
-    from coscientist.core.domain import HitlPolicy, TaskKind, TaskSpec, TaskState
-    from coscientist.core.events import EventEnvelope, make_idem
-    from coscientist.core.store import SqliteEventStore
+    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.store import SqliteEventStore
+    from coscientist.core.execution.domain import HitlPolicy, TaskKind, TaskSpec, TaskState
 
     sid = "st_legacy"
     root = tmp_path / sid

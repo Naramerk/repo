@@ -6,14 +6,18 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from coscientist.core.claims import (
+from coscientist.core.claims.claims import (
     CLAIM_ATTR_WHITELIST,
     claims_missing_about,
     filtered_claims_by_target,
     runtime_claim_from_node,
 )
-from coscientist.core.dispositions import dispositions
-from coscientist.core.domain import (
+from coscientist.core.claims.dispositions import dispositions
+from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore, default_execution_registry
+from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.ids import claim_node_id, question_node_id
+from coscientist.core.execution.domain import (
     HitlPolicy,
     InputSpec,
     QuestionSpec,
@@ -25,17 +29,13 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.graph import GraphEdge, GraphNode, GraphStore, default_execution_registry
-from coscientist.core.ids import claim_node_id, question_node_id
-from coscientist.core.inputs import (
+from coscientist.core.execution.inputs import (
     InputUnavailable,
     bind_inputs,
     claim_nodes_from_attempt,
     collect_bindable_claims,
     verdict_binding_digest,
 )
-from coscientist.core.reasons import TaskReason
 from tests.helpers import attach_executor, close_runtime, open_runtime
 from tests.test_inputs import _task
 
@@ -334,10 +334,10 @@ def test_no_h_star_heuristic_auto_create():
 async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
     from unittest.mock import patch
 
-    from coscientist.core.artifacts import make_tool_ref
-    from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
-    from coscientist.core.errors import CatalogError
-    from coscientist.core.ids import claim_node_id as cid_fn
+    from coscientist.core.events.errors import CatalogError
+    from coscientist.core.events.ids import claim_node_id as cid_fn
+    from coscientist.core.execution.artifacts import make_tool_ref
+    from coscientist.core.execution.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
 
     sid = "st_cfail"
     rt = await open_runtime(
@@ -380,7 +380,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
     def boom(*_a, **_k):
         raise CatalogError("forced")
 
-    with patch("coscientist.core.executor.compute_outcome", side_effect=boom):
+    with patch("coscientist.core.execution.executor.compute_outcome", side_effect=boom):
         result = await ex.record(
             aid0,
             AgentTaskOutput(
@@ -400,7 +400,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
     """Validity FAILED is still scientific — claim kept but not counted."""
-    from coscientist.core.domain import AgentTaskOutput
+    from coscientist.core.execution.domain import AgentTaskOutput
 
     sid = "st_fail_cl"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
@@ -525,7 +525,7 @@ def test_open_runtime_requires_catalog():
     import asyncio
     from pathlib import Path
 
-    from coscientist.core.runtime_factory import open_runtime as prod_open
+    from coscientist.core.execution.runtime_factory import open_runtime as prod_open
 
     async def _run():
         with pytest.raises(TypeError, match="catalog"):
@@ -604,8 +604,8 @@ async def test_accept_plan_allows_verdict_kind(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
-    from coscientist.core.artifacts import make_tool_ref
-    from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
+    from coscientist.core.execution.artifacts import make_tool_ref
+    from coscientist.core.execution.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
 
     sid = "st_v_bind"
     rt = await open_runtime(
@@ -742,8 +742,8 @@ def test_dispositions_from_verdict_counting_claims():
 
 @pytest.mark.asyncio
 async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_cls):
-    from coscientist.core.artifacts import make_tool_ref
-    from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
+    from coscientist.core.execution.artifacts import make_tool_ref
+    from coscientist.core.execution.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
 
     sid = "st_ans"
     rt = await open_runtime(
@@ -807,15 +807,15 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
 
 
 def test_empty_provenance_list_is_stub():
-    from coscientist.core.domain import worst_provenance
+    from coscientist.core.execution.domain import worst_provenance
 
     assert worst_provenance() == "stub"
 
 
 def test_qh_logical_id_collision_does_not_merge():
     """Question and hypothesis with the same logical id stay separate."""
-    from coscientist.core.claims import compute_verdict_snapshots
-    from coscientist.core.ids import hypothesis_node_id
+    from coscientist.core.claims.claims import compute_verdict_snapshots
+    from coscientist.core.events.ids import hypothesis_node_id
 
     g = GraphStore(default_execution_registry())
     sid = "st_qh"
@@ -876,8 +876,8 @@ def test_qh_logical_id_collision_does_not_merge():
 
 def test_criterion_status_not_met_from_failed_check():
     """checked_against → FAILED ReqStatus ⇒ criterion_status=not_met."""
-    from coscientist.core.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
-    from coscientist.core.executor import _derive_claim_core_attrs
+    from coscientist.core.execution.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
+    from coscientist.core.execution.executor import _derive_claim_core_attrs
 
     now = datetime(2026, 1, 1, tzinfo=UTC)
     task = Task(
@@ -931,9 +931,9 @@ def test_criterion_status_not_met_from_failed_check():
 
 def test_frozen_normalizes_check_id_to_template_id():
     """checked_against=check_id maps to criterion node keyed by template_id."""
-    from coscientist.core.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
-    from coscientist.core.executor import _derive_claim_core_attrs
-    from coscientist.core.ids import criterion_node_id
+    from coscientist.core.events.ids import criterion_node_id
+    from coscientist.core.execution.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
+    from coscientist.core.execution.executor import _derive_claim_core_attrs
 
     sid = "st_frz"
     g = GraphStore(default_execution_registry())
@@ -987,8 +987,8 @@ def test_frozen_normalizes_check_id_to_template_id():
 
 def test_criterion_match_is_exact_not_endswith():
     """C11 must not match template_id ``1`` via endswith."""
-    from coscientist.core.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
-    from coscientist.core.executor import _derive_claim_core_attrs
+    from coscientist.core.execution.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
+    from coscientist.core.execution.executor import _derive_claim_core_attrs
 
     now = datetime(2026, 1, 1, tzinfo=UTC)
     task = Task(
@@ -1030,8 +1030,8 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
     accepted stays True (result recorded + structurally valid). Outcome may be
     FAILED/PARTIAL; claims are kept (not infra). graph_schema invariant 10.
     """
-    from coscientist.core.artifacts import make_tool_ref
-    from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
+    from coscientist.core.execution.artifacts import make_tool_ref
+    from coscientist.core.execution.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
 
     sid = "st_ref"
     rt = await open_runtime(
@@ -1119,7 +1119,7 @@ async def test_validity_failed_claim_invalid_inconclusive(
     tmp_path, clock, runtime_cls
 ):
     """(b) Failed required validity check → invalid claim, inconclusive + excluded."""
-    from coscientist.core.domain import AgentTaskOutput, RequirementRef
+    from coscientist.core.execution.domain import AgentTaskOutput, RequirementRef
 
     sid = "st_val"
     rt = await open_runtime(
@@ -1277,8 +1277,8 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
     """Scientific FAILED refute: no retry, no H-c cascade, budget ok, finalize refuted."""
     from decimal import Decimal
 
-    from coscientist.core.artifacts import make_tool_ref
-    from coscientist.core.domain import (
+    from coscientist.core.execution.artifacts import make_tool_ref
+    from coscientist.core.execution.domain import (
         AgentTaskOutput,
         ArtifactHandle,
         Budget,
@@ -1378,13 +1378,13 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
 
 def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
     """3 valid real confirmations + 1 validity-failed → normal supported, not capped."""
-    from coscientist.core.claims import (
+    from coscientist.core.claims.claims import (
         RuntimeClaim,
         compute_verdict_snapshots,
         excluded_claims_report,
     )
-    from coscientist.core.domain import Study
-    from coscientist.core.rules import verdict
+    from coscientist.core.claims.rules import verdict
+    from coscientist.core.execution.domain import Study
 
     valid = [
         RuntimeClaim(
@@ -1499,12 +1499,12 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
 
 def test_unknown_role_exclusion_never_forces_verdict():
     """unknown_role is listed but does not force inconclusive by itself."""
-    from coscientist.core.claims import (
+    from coscientist.core.claims.claims import (
         RuntimeClaim,
         compute_verdict_snapshots,
         excluded_claims_report,
     )
-    from coscientist.core.domain import Study
+    from coscientist.core.execution.domain import Study
 
     bad = RuntimeClaim(
         criterion_status="unassessed",
@@ -1573,8 +1573,8 @@ def test_unknown_role_exclusion_never_forces_verdict():
 
 def test_validity_only_evidence_inconclusive():
     """A validity failure as the only evidence → inconclusive (validity_failed)."""
-    from coscientist.core.claims import RuntimeClaim, compute_verdict_snapshots
-    from coscientist.core.domain import Study
+    from coscientist.core.claims.claims import RuntimeClaim, compute_verdict_snapshots
+    from coscientist.core.execution.domain import Study
 
     g = GraphStore(default_execution_registry())
     sid = "st_val_only"
@@ -1638,8 +1638,8 @@ def test_validity_only_evidence_inconclusive():
 @pytest.mark.asyncio
 async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cls):
     """open_runtime (core + experimental) builds Executor via make_executor — no manual call."""
-    from coscientist.core.artifacts import make_tool_ref
-    from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
+    from coscientist.core.execution.artifacts import make_tool_ref
+    from coscientist.core.execution.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
     from tests.helpers import open_runtime_experimental
 
     for factory, sid in (
@@ -1703,8 +1703,8 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
 
 def test_priority_refuted_stub_support_note_in_report_payload():
     """Priority-win refuted + stub supports → note on hypothesis_verdicts snapshot."""
-    from coscientist.core.claims import compute_verdict_snapshots, hypothesis_verdicts
-    from coscientist.core.ids import hypothesis_node_id
+    from coscientist.core.claims.claims import compute_verdict_snapshots, hypothesis_verdicts
+    from coscientist.core.events.ids import hypothesis_node_id
 
     g = GraphStore(default_execution_registry())
     sid = "st_prio_note"
@@ -1794,8 +1794,8 @@ def test_priority_refuted_stub_support_note_in_report_payload():
 
 def test_intent_from_producing_experiment_two_opposite():
     """Two experiments, opposite tests.intent → claims pick their producer."""
-    from coscientist.core.claims import intent_from_producing_experiment, runtime_claim_from_node
-    from coscientist.core.ids import experiment_node_id, hypothesis_node_id
+    from coscientist.core.claims.claims import intent_from_producing_experiment, runtime_claim_from_node
+    from coscientist.core.events.ids import experiment_node_id, hypothesis_node_id
 
     g = GraphStore(default_execution_registry())
     sid = "st_dual"
@@ -1871,8 +1871,8 @@ def test_intent_from_producing_experiment_two_opposite():
 @pytest.mark.asyncio
 async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtime_cls):
     """VerdictSnapshotsRecorded: record → reopen → read; claim invalidates."""
-    from coscientist.core.artifacts import make_tool_ref
-    from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
+    from coscientist.core.execution.artifacts import make_tool_ref
+    from coscientist.core.execution.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
 
     sid = "st_snap_replay"
     rt = await open_runtime(
@@ -1952,7 +1952,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
 
 def test_hypothesis_verdicts_not_in_bind_snapshot_cache():
     """_fold_finalized_graph keeps hypothesis_verdicts off the bind cache."""
-    from coscientist.core.local_project import LocalProjectMixin
+    from coscientist.core.execution.local_project import LocalProjectMixin
 
     class _T(LocalProjectMixin):
         def __init__(self) -> None:
@@ -1983,8 +1983,8 @@ def test_hypothesis_verdicts_not_in_bind_snapshot_cache():
 @pytest.mark.asyncio
 async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
     """xfail: Executor does not yet stamp criterion_frozen_at_seq on claims."""
-    from coscientist.core.artifacts import make_tool_ref
-    from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
+    from coscientist.core.execution.artifacts import make_tool_ref
+    from coscientist.core.execution.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
 
     sid = "st_r17"
     rt = await open_runtime(

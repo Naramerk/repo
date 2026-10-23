@@ -1,7 +1,7 @@
 # CoScientist-next — научная модель исследования (граф)
 
 Статус: черновик v0.4 (2026-10-23). Дополняет DESIGN.md §2, §5, §7.3. Один граф = научная модель = то, что рисует веб = то, на чём проверяется каталог требований.
-Источник истины для типов, рёбер, кардинальностей и правил — `coscientist/schema/graph_schema.yaml` (единственная копия, упакована в wheel); таблицы §2, §3, §7 (Том Б и правила R) между маркерами `gen:*` генерирует `scripts/gen_model_tables.py`; поля и кардинальности структурированы (name, type, required), из них строятся pydantic-модели (`gen_model_tables.models()`). CI (`.github/workflows/ci.yml`): ruff, `gen --check`, pytest. Тесты сверяют таблицы, rule_id и 14 id Тома Б с вендоренными `vendor/ai4research/*.json` (sha256 в SHA256SUMS), допустимые пары (from,to) рёбер, CodeCheck.kind и NodeKind с DESIGN. Независимый оракул правил — `tests/refmodel.py` (сверяется с `coscientist.core.rules` через `impl=`).
+Источник истины для типов, рёбер, кардинальностей и правил — `coscientist/schema/graph_schema.yaml` (единственная копия, упакована в wheel); таблицы §2, §3, §7 (Том Б и правила R) между маркерами `gen:*` генерирует `scripts/gen_model_tables.py`; поля и кардинальности структурированы (name, type, required), из них строятся pydantic-модели (`gen_model_tables.models()`). CI (`.github/workflows/ci.yml`): ruff, `gen --check`, pytest. Тесты сверяют таблицы, rule_id и 14 id Тома Б с вендоренными `vendor/ai4research/*.json` (sha256 в SHA256SUMS), допустимые пары (from,to) рёбер, CodeCheck.kind и NodeKind с DESIGN. Независимый оракул правил — `tests/refmodel.py` (сверяется с `coscientist.core.claims.rules` через `impl=`).
 
 ## 0. Глоссарий (простыми словами)
 

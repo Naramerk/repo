@@ -6,7 +6,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from coscientist.core.domain import (
+from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.events.upcasters import upcast
+from coscientist.core.execution.domain import (
     ExperimentMethod,
     InputSpec,
     OutputSpec,
@@ -16,9 +18,7 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.inputs import InputUnavailable, bind_inputs
-from coscientist.core.reasons import TaskReason
-from coscientist.core.upcasters import upcast
+from coscientist.core.execution.inputs import InputUnavailable, bind_inputs
 from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
 
@@ -77,7 +77,7 @@ def test_upcast_input_mode_keeps_old_default():
 
 
 def test_experiment_method_enum_matches_graph():
-    from coscientist.core.graph import load_schema
+    from coscientist.core.claims.graph import load_schema
 
     schema = load_schema()
     exp = next(n for n in schema["nodes"] if n["kind"] == "experiment")
@@ -171,7 +171,7 @@ async def test_hc_skipped_when_budget_exceeded(tmp_path, clock, runtime_cls):
     """record_budget_debit → tick: H-c must not rewrite children to input_unavailable."""
     from decimal import Decimal
 
-    from coscientist.core.domain import Budget
+    from coscientist.core.execution.domain import Budget
 
     sid = "st_hc_bud"
     rt = await open_runtime(
@@ -214,7 +214,7 @@ async def test_hc_skipped_when_budget_exceeded(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_hc_skipped_when_study_cancelled(tmp_path, clock, runtime_cls):
     """StudyCancelled without closing deps → tick skips H-c; children get cancelled."""
-    from coscientist.core.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import EventEnvelope, make_idem
 
     sid = "st_hc_cx"
     rt = await open_runtime(
@@ -439,7 +439,7 @@ async def test_method_simulation_keeps_stub_input_provenance(
 
 
 def test_graph_schema_allows_simulation_method():
-    from coscientist.core.graph import load_schema
+    from coscientist.core.claims.graph import load_schema
 
     schema = load_schema()
     exp = next(n for n in schema["nodes"] if n["kind"] == "experiment")

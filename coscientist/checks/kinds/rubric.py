@@ -15,10 +15,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from coscientist.core.domain import AgentTaskOutput, CheckResult, CodeCheck, ReqStatus
-from coscientist.core.reviews import review_key
-from coscientist.core.rubric import aggregate_rubric_status, freeze_rubric
-from coscientist.core.rubric_types import Rubric
+from coscientist.core.claims.reviews import review_key
+from coscientist.core.claims.rubric import aggregate_rubric_status, freeze_rubric
+from coscientist.core.claims.rubric_types import Rubric
+from coscientist.core.execution.domain import AgentTaskOutput, CheckResult, CodeCheck, ReqStatus
 
 # Infra failures of the judge call itself (DESIGN §6.2) — not "item not met".
 JUDGE_FAILURE_KINDS = frozenset({"timeout", "invalid_json", "refusal"})

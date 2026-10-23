@@ -7,9 +7,15 @@ from datetime import timedelta
 import pytest
 
 from coscientist.checks.kinds.rubric import evaluate_rubric
-from coscientist.core.artifacts import make_tool_ref
-from coscientist.core.claims import RuntimeClaim
-from coscientist.core.domain import (
+from coscientist.core.claims.claims import RuntimeClaim
+from coscientist.core.claims.reasons import NotAttemptedReason
+from coscientist.core.claims.reviews import review_key
+from coscientist.core.claims.rubric import freeze_rubric, rubric_digest
+from coscientist.core.claims.rubric_types import Rubric, RubricItem
+from coscientist.core.claims.stance import claim_stance
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.execution.artifacts import make_tool_ref
+from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     CodeCheck,
@@ -20,17 +26,11 @@ from coscientist.core.domain import (
     TaskOutcome,
     TaskSpec,
 )
-from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.plan_validate import (
+from coscientist.core.plan.plan_validate import (
     freeze_plan_rubrics,
     validate_final_types,
     validate_rubric_immutable,
 )
-from coscientist.core.reasons import NotAttemptedReason
-from coscientist.core.reviews import review_key
-from coscientist.core.rubric import freeze_rubric, rubric_digest
-from coscientist.core.rubric_types import Rubric, RubricItem
-from coscientist.core.stance import claim_stance
 from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
 _SCOPE = dict(task_id="t1", attempt_id="a1", output_digest="deadbeef")
@@ -535,7 +535,7 @@ async def test_impossible_task_still_closes_with_report(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_judge_rubric_e2e_met_failed_retry(tmp_path, clock):
     """Production judge path via #out: MET, FAILED, infra-retry — no hand statuses."""
-    from coscientist.core.reviews import review_key
+    from coscientist.core.claims.reviews import review_key
 
     rt = await _boot(tmp_path, clock, "st_pr13_judge_e2e")
     rub = freeze_rubric(
@@ -811,9 +811,9 @@ async def test_unknown_final_type_refused(tmp_path, clock):
 
 def test_final_type_both_requires_verdict_and_rubric(clock):
     """§6.1 both: failed rubric → RUBRIC_NOT_MET + RU line."""
-    from coscientist.core.dispositions import dispositions
-    from coscientist.core.domain import Task, TaskKind, TaskState
-    from coscientist.core.rubric import RUBRIC_REJECTED_LINE, task_rubric_status
+    from coscientist.core.claims.dispositions import dispositions
+    from coscientist.core.claims.rubric import RUBRIC_REJECTED_LINE, task_rubric_status
+    from coscientist.core.execution.domain import Task, TaskKind, TaskState
 
     rub = _judge_only_rubric()
     spec = _exp(
@@ -869,7 +869,7 @@ def test_final_type_both_requires_verdict_and_rubric(clock):
 
 
 def test_k_of_n_counts_required_only():
-    from coscientist.core.rubric import aggregate_rubric_status
+    from coscientist.core.claims.rubric import aggregate_rubric_status
 
     rub = freeze_rubric(
         Rubric(
@@ -914,7 +914,7 @@ def test_rubric_digest_stable_canonical():
 
 
 def test_upcast_taskcreated_v10_and_plan_expanded_v2():
-    from coscientist.core.upcasters import upcast
+    from coscientist.core.events.upcasters import upcast
 
     v, p = upcast(
         "TaskCreated",
@@ -969,8 +969,8 @@ def test_upcast_taskcreated_v10_and_plan_expanded_v2():
 
 def test_study_view_uses_study_fulfilled_final_types():
     """view must not stay fulfilled when study_fulfilled would downgrade (artifact+refuted)."""
-    from coscientist.core.domain import Task, TaskKind, TaskState
-    from coscientist.core.study_view import study_view
+    from coscientist.core.execution.domain import Task, TaskKind, TaskState
+    from coscientist.core.finalize.study_view import study_view
 
     rub = _judge_only_rubric()
     t = Task(
@@ -1000,7 +1000,7 @@ def test_study_view_uses_study_fulfilled_final_types():
 
 
 def test_study_fulfilled_wires_final_types():
-    from coscientist.core.rules import study_fulfilled
+    from coscientist.core.claims.rules import study_fulfilled
 
     assert study_fulfilled(
         {"Q1": "answered"},
@@ -1095,10 +1095,10 @@ def test_review_key_empty_fields_fail_closed():
 
 
 def test_plan_refused_idem_hashes_full_detail():
-    from coscientist.core.digest import sha256_hex
-    from coscientist.core.events import make_idem
-    from coscientist.core.plan_validate import refuse_detail
-    from coscientist.core.reviews import plan_refused_idem
+    from coscientist.core.claims.reviews import plan_refused_idem
+    from coscientist.core.events.digest import sha256_hex
+    from coscientist.core.events.events import make_idem
+    from coscientist.core.plan.plan_validate import refuse_detail
 
     long = "x" * 500
     full = refuse_detail(long)
@@ -1114,9 +1114,9 @@ def test_both_rubric_pending_own_reason(clock):
     """both + verdict present + rubric pending → reason rubric_pending (not no_counting_claims)."""
     from unittest.mock import patch
 
-    from coscientist.core.claims import RuntimeClaim
-    from coscientist.core.dispositions import dispositions
-    from coscientist.core.domain import Task, TaskKind, TaskState
+    from coscientist.core.claims.claims import RuntimeClaim
+    from coscientist.core.claims.dispositions import dispositions
+    from coscientist.core.execution.domain import Task, TaskKind, TaskState
 
     rub = _judge_only_rubric()
     spec = _exp(
@@ -1169,11 +1169,11 @@ def test_both_rubric_pending_own_reason(clock):
     assert claim.counts()
     with (
         patch(
-            "coscientist.core.dispositions.filtered_claims_by_target",
+            "coscientist.core.claims.dispositions.filtered_claims_by_target",
             return_value={"Q1": [claim]},
         ),
         patch(
-            "coscientist.core.dispositions.claims_for_ref",
+            "coscientist.core.claims.dispositions.claims_for_ref",
             return_value=[claim],
         ),
     ):
@@ -1396,7 +1396,7 @@ async def test_e2e_downgrade_unaddressed_question_view_matches(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
     """Corrupt ReviewRecorded.retry → JudgePendingCorrupt → finalize(internal_error)."""
-    from coscientist.core.reviews import JudgePendingCorrupt, rebuild_judge_state
+    from coscientist.core.claims.reviews import JudgePendingCorrupt, rebuild_judge_state
 
     # Unit: rebuild must raise on non-int retry (fail-closed).
     bad = EventEnvelope(
@@ -1621,8 +1621,8 @@ async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
 
 def test_met_one_task_never_covers_another(clock):
     """Documented invariant: MET on E0 does not satisfy E1's rubric."""
-    from coscientist.core.domain import Task, TaskKind, TaskState
-    from coscientist.core.rubric import task_rubric_status
+    from coscientist.core.claims.rubric import task_rubric_status
+    from coscientist.core.execution.domain import Task, TaskKind, TaskState
 
     rub = _judge_only_rubric()
     t0 = Task(

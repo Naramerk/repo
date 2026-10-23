@@ -14,10 +14,22 @@ import pytest
 
 from coscientist.checks.catalog import minimal_test_catalog
 from coscientist.checks.evaluate import evaluate_task_checks
-from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
-from coscientist.core.claims import RuntimeClaim
-from coscientist.core.clock import FakeClock
-from coscientist.core.domain import (
+from coscientist.core.claims.claims import RuntimeClaim
+from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.claims.rubric_types import Rubric, RubricItem
+from coscientist.core.claims.verdict import claim_is_severe, exclusion_reason, hypothesis_verdict
+from coscientist.core.events.clock import FakeClock
+from coscientist.core.events.errors import AttemptClosedError, Conflict, StudyClosedError
+from coscientist.core.events.events import (
+    STUDY_CREATED_SCHEMA_VERSION,
+    STUDY_FINALIZED_SCHEMA_VERSION,
+    EventEnvelope,
+    make_idem,
+)
+from coscientist.core.events.ids import hitl_request_id
+from coscientist.core.events.upcasters import UPCASTERS, register_upcaster, upcast
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.execution.domain import (
     PROPOSED_CHECK_TEMPLATE_ID,
     AgentTaskOutput,
     ArtifactHandle,
@@ -30,16 +42,10 @@ from coscientist.core.domain import (
     RequirementRef,
     TaskSpec,
 )
-from coscientist.core.errors import AttemptClosedError, Conflict, StudyClosedError
-from coscientist.core.events import (
-    STUDY_CREATED_SCHEMA_VERSION,
-    STUDY_FINALIZED_SCHEMA_VERSION,
-    EventEnvelope,
-    make_idem,
-)
-from coscientist.core.finalize import finalize
-from coscientist.core.ids import hitl_request_id
-from coscientist.core.proposed_check import (
+from coscientist.core.execution.tool_loader import ensure_core_tools_ready
+from coscientist.core.execution.tool_registry import get_registered
+from coscientist.core.finalize.finalize import finalize
+from coscientist.core.plan.proposed_check import (
     approve_check,
     assert_proposal_preregistered_for_eval,
     bind_proposed_check_reviewer,
@@ -53,12 +59,6 @@ from coscientist.core.proposed_check import (
     schedule_proposed_check_review,
     validate_proposal_content,
 )
-from coscientist.core.reasons import TaskReason
-from coscientist.core.rubric_types import Rubric, RubricItem
-from coscientist.core.tool_loader import ensure_core_tools_ready
-from coscientist.core.tool_registry import get_registered
-from coscientist.core.upcasters import UPCASTERS, register_upcaster, upcast
-from coscientist.core.verdict import claim_is_severe, exclusion_reason, hypothesis_verdict
 from coscientist.tools.contract import CallCtx
 from coscientist.tools.propose_check_tool import ProposeCheckTool
 from tests.helpers import (
@@ -185,7 +185,7 @@ async def _plant_proposed_hitl(rt, pid: str, task_id: str) -> str:
     """Journal HitlOpened(kind=proposed_check) only (not a human decision)."""
     from datetime import timedelta
 
-    from coscientist.core.domain import HitlRequest
+    from coscientist.core.execution.domain import HitlRequest
 
     rid = hitl_request_id()
     now = rt.clock.now()
@@ -1538,7 +1538,7 @@ def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
 @pytest.mark.asyncio
 async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -> None:
     """Seeded StudyCreated v10 with max_loop_iter=2 reopens as study.max_loop_iter==2."""
-    from coscientist.core.store import SqliteEventStore
+    from coscientist.core.events.store import SqliteEventStore
 
     sid = "st_pr20_v10_loop"
     root = tmp_path / sid
@@ -2207,7 +2207,7 @@ async def test_approval_cannot_satisfy_other_target_same_task(tmp_path: Path) ->
 
 def test_nfkc_fullwidth_collapses_confusables_do_not() -> None:
     """Major: NFKC collapses fullwidth; Cyrillic/Latin lookalikes stay distinct."""
-    from coscientist.core.proposed_check import compute_proposal_digest
+    from coscientist.core.plan.proposed_check import compute_proposal_digest
 
     base = {
         "target": "metric",
@@ -2234,7 +2234,7 @@ def test_nfkc_fullwidth_collapses_confusables_do_not() -> None:
 
 def test_result_seq_mixed_missing_fail_closed() -> None:
     """Minor: mixed rows with/without _seq → fail-closed (not silent min)."""
-    from coscientist.core.proposed_check import _result_seq_for_task
+    from coscientist.core.plan.proposed_check import _result_seq_for_task
 
     assert (
         _result_seq_for_task(
@@ -2721,7 +2721,7 @@ async def test_consume_reject_between_bind_and_lock_raises(
     tmp_path: Path,
 ) -> None:
     """Timeout/reject between consume bind and lock → ValueError (not silent)."""
-    from coscientist.core.proposed_check import hold_proposed_check_decision_lock
+    from coscientist.core.plan.proposed_check import hold_proposed_check_decision_lock
 
     rt = await open_runtime(tmp_path, "st_pr20_consume_race")
     try:
@@ -2786,7 +2786,7 @@ async def test_proposed_check_decision_lock_reentry_and_child(
     tmp_path: Path,
 ) -> None:
     """Lock owner is current_task: re-entry ok; child does not inherit; release on error/cancel."""
-    from coscientist.core.proposed_check import (
+    from coscientist.core.plan.proposed_check import (
         hold_proposed_check_decision_lock,
         proposed_check_decision_lock,
     )
@@ -2922,7 +2922,7 @@ async def test_timeout_between_hitl_decided_and_approve_fail_closed(
     tmp_path: Path,
 ) -> None:
     """Timeout after HitlDecided(accept) must not reject; approve can complete."""
-    from coscientist.core.proposed_check import reject_check as _reject
+    from coscientist.core.plan.proposed_check import reject_check as _reject
 
     rt = await open_runtime(tmp_path, "st_pr20_timeout_race")
     try:

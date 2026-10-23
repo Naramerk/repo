@@ -8,16 +8,16 @@ from typing import Any, Protocol
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
 from coscientist.checks.catalog import minimal_test_catalog
-from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
-from coscientist.core.domain import (
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     RequirementRef,
     TaskSpec,
 )
-from coscientist.core.executor import Executor
-from coscientist.core.runtime_factory import close_runtime as close_runtime
-from coscientist.core.runtime_factory import open_runtime as _open_runtime_core
+from coscientist.core.execution.executor import Executor
+from coscientist.core.execution.runtime_factory import close_runtime as close_runtime
+from coscientist.core.execution.runtime_factory import open_runtime as _open_runtime_core
 
 
 async def open_runtime(
@@ -29,7 +29,7 @@ async def open_runtime(
 ) -> Any:
     """Test wrapper: injects ``minimal_test_catalog`` when catalog omitted.
 
-    Production ``coscientist.core.runtime_factory.open_runtime`` requires
+    Production ``coscientist.core.execution.runtime_factory.open_runtime`` requires
     ``catalog=`` explicitly and never imports this helper. Defaults to the
     API StudyRuntime (lifecycle mixin) so ``create_study`` is available.
     """

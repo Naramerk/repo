@@ -7,9 +7,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
-from coscientist.core.clock import FakeClock
-from coscientist.core.domain import (
+from coscientist.core.events.clock import FakeClock
+from coscientist.core.events.errors import AttemptClosedError, CatalogError
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.events.writer import StudyWriter
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     CheckResult,
@@ -23,14 +27,10 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.errors import AttemptClosedError, CatalogError
-from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.executor import Executor
-from coscientist.core.machine import new_owner
-from coscientist.core.outcome import compute_outcome
-from coscientist.core.store import SqliteEventStore
-from coscientist.core.study_view import study_view
-from coscientist.core.writer import StudyWriter
+from coscientist.core.execution.executor import Executor
+from coscientist.core.execution.machine import new_owner
+from coscientist.core.execution.outcome import compute_outcome
+from coscientist.core.finalize.study_view import study_view
 
 
 def _req(status: ReqStatus, *, code: bool = True, required: bool = True, i: int = 0):

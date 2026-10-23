@@ -6,8 +6,8 @@ import time
 from threading import Event
 from typing import Any
 
-from coscientist.core.events import EventEnvelope
-from coscientist.core.store import SqliteEventStore
+from coscientist.core.events.events import EventEnvelope
+from coscientist.core.events.store import SqliteEventStore
 
 
 class SlowWriteStore(SqliteEventStore):

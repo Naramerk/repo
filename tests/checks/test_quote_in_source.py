@@ -25,8 +25,9 @@ from coscientist.checks.kinds.quote_norm import (
     quote_in_normalized_source,
     token_boundary_match,
 )
-from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
-from coscientist.core.domain import (
+from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     CodeCheck,
@@ -37,9 +38,8 @@ from coscientist.core.domain import (
     SourceQuote,
     TaskSpec,
 )
-from coscientist.core.errors import ArtifactRejected
-from coscientist.core.source_fetch import store_fetched_source
-from coscientist.core.tool_registry import (
+from coscientist.core.execution.source_fetch import store_fetched_source
+from coscientist.core.execution.tool_registry import (
     RegisteredToolSpec,
     _register_tool_for_tests,
     _reset_registry_for_tests,
@@ -486,7 +486,7 @@ def test_put_sandbox_source_rejected(tmp_path: Path):
 
 def test_put_user_source_rejected(tmp_path: Path):
     """PR19: producer=user is never a quote_in_source source (is_quote_source_producer)."""
-    from coscientist.core._ingest_gate import (
+    from coscientist.core.execution._ingest_gate import (
         mint_user_put_capability,
         put_user,
         release_user_put_capability,
@@ -989,7 +989,7 @@ async def test_source_fetched_survives_crash_reopen(
     arts2 = LocalArtifactStore(arts_root)
     rt2.artifacts = arts2
     ex2.artifacts = arts2
-    from coscientist.core.source_fetch import load_source_fetch_index_from_writer
+    from coscientist.core.execution.source_fetch import load_source_fetch_index_from_writer
 
     idx = await load_source_fetch_index_from_writer(rt2.writer)
     assert paper_sha in idx.digests_for_attempt(aid)
@@ -1250,7 +1250,7 @@ def test_contextvar_taint_isolated_across_tasks_and_threads():
     import asyncio
     import concurrent.futures
 
-    from coscientist.core.taint import (
+    from coscientist.core.execution.taint import (
         current_attempt_taint,
         mark_attempt_tainted,
         push_attempt_taint,
@@ -1397,9 +1397,9 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
 @pytest.mark.asyncio
 async def test_direct_writer_append_source_fetched_rejected(tmp_path: Path, clock):
     """MAJOR: StudyWriter.append / store.append_many SourceFetched without permit."""
-    from coscientist.core.errors import ArtifactRejected
-    from coscientist.core.events import EventEnvelope, make_idem
-    from coscientist.core.source_fetch import FetchCapability
+    from coscientist.core.events.errors import ArtifactRejected
+    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.execution.source_fetch import FetchCapability
 
     rt = await open_runtime(tmp_path, "st_sf_deny", clock=clock)
     await rt.create_study(
@@ -1434,7 +1434,7 @@ async def test_direct_writer_append_source_fetched_rejected(tmp_path: Path, cloc
             [ev], _source_fetched_cap_id="forged-not-issued"
         )
     forged = FetchCapability(id="forged-not-issued")
-    from coscientist.core.source_fetch import verify_fetch_capability
+    from coscientist.core.execution.source_fetch import verify_fetch_capability
 
     with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
         verify_fetch_capability(
@@ -1447,8 +1447,8 @@ def test_fetch_capability_not_forgeable_via_replace():
     """MAJOR: opaque id + registry — replace/copy of fields cannot mint."""
     from dataclasses import replace
 
-    from coscientist.core.errors import ArtifactRejected
-    from coscientist.core.source_fetch import (
+    from coscientist.core.events.errors import ArtifactRejected
+    from coscientist.core.execution.source_fetch import (
         FetchCapability,
         assert_fetch_capability_bound,
         verify_fetch_capability,
@@ -1580,8 +1580,8 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
 
 def test_projection_source_fetched_requires_fetch_call_pairing():
     """SourceFetched without prior AttemptTainted fetch_call is not folded."""
-    from coscientist.core.events import EventEnvelope
-    from coscientist.core.projections import _get, _put, apply_to_map
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.projections import _get, _put, apply_to_map
 
     proj: dict = {}
     sf = EventEnvelope(
@@ -1800,8 +1800,8 @@ def test_core_cannot_bypass_source_fetched_with_bool_flag(tmp_path: Path, clock)
     """Direct core store path cannot grant SourceFetched without effects permit."""
     import asyncio
 
-    from coscientist.core.errors import ArtifactRejected
-    from coscientist.core.events import EventEnvelope, make_idem
+    from coscientist.core.events.errors import ArtifactRejected
+    from coscientist.core.events.events import EventEnvelope, make_idem
 
     async def _run() -> None:
         rt = await open_runtime(tmp_path, "st_core_bypass", clock=clock)
@@ -1846,7 +1846,7 @@ async def test_append_failure_on_second_digest_clears_permits(
     tmp_path: Path, clock, fetch_registry, monkeypatch
 ):
     """Remint inside invoke_tool (effects.py) fails on 2nd SourceFetched → permits cleared."""
-    import coscientist.core.source_fetch as sf_mod
+    import coscientist.core.execution.source_fetch as sf_mod
     from coscientist.tools import effects as effects_mod
 
     catalog = _catalog_quote()
@@ -1945,9 +1945,9 @@ async def test_append_failure_on_second_digest_clears_permits(
 
 def test_attempt_tainted_without_is_fetch_does_not_pair():
     """Negative: AttemptTainted missing is_fetch must not create fetch_calls."""
-    from coscientist.core.events import EventEnvelope
-    from coscientist.core.projections import apply_to_map
-    from coscientist.core.source_fetch import (
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.projections import apply_to_map
+    from coscientist.core.execution.source_fetch import (
         SourceFetchIndex,
         apply_source_fetch_events,
         note_fetch_call_from_attempt_tainted,
@@ -2012,7 +2012,7 @@ def test_attempt_tainted_without_is_fetch_does_not_pair():
 
 def test_attempt_tainted_renamed_tool_still_pairs_from_journal(fetch_registry):
     """Unregistered (renamed) tool with journaled is_fetch still pairs — no silent drop."""
-    from coscientist.core.source_fetch import note_fetch_call_from_attempt_tainted
+    from coscientist.core.execution.source_fetch import note_fetch_call_from_attempt_tainted
 
     marked = note_fetch_call_from_attempt_tainted(
         {
@@ -2027,8 +2027,8 @@ def test_attempt_tainted_renamed_tool_still_pairs_from_journal(fetch_registry):
 
 def test_attempt_tainted_reclassified_raises_domain(fetch_registry):
     """Registered tool with is_fetch=False vs journaled True → FetchToolReclassified."""
-    from coscientist.core.errors import FetchToolReclassified
-    from coscientist.core.source_fetch import note_fetch_call_from_attempt_tainted
+    from coscientist.core.events.errors import FetchToolReclassified
+    from coscientist.core.execution.source_fetch import note_fetch_call_from_attempt_tainted
 
     with pytest.raises(FetchToolReclassified) as ei:
         note_fetch_call_from_attempt_tainted(
@@ -2125,8 +2125,8 @@ async def test_reclassified_tool_study_opens_finalizes_uncounted(
     AttemptTainted is_fetch=True + SourceFetched). Upcasters run on open.
     Finalization via tick/deadline — not finalize(trigger=...).
     """
-    from coscientist.core.projections import fold_events
-    from coscientist.core.source_fetch import load_source_fetch_index_from_writer
+    from coscientist.core.events.projections import fold_events
+    from coscientist.core.execution.source_fetch import load_source_fetch_index_from_writer
 
     sid, digest, call_id, db = _copy_reclass_fixture(tmp_path)
     _assert_raw_fixture_schema_versions(db)
@@ -2181,7 +2181,7 @@ async def test_reclassify_internal_error_survives_reconcile_failure(
         raise RuntimeError("reconcile_boom")
 
     monkeypatch.setattr(
-        "coscientist.core.source_fetch.reconcile_fetch_integrity", boom
+        "coscientist.core.execution.source_fetch.reconcile_fetch_integrity", boom
     )
 
     rt = await open_runtime(
@@ -2198,7 +2198,7 @@ async def test_reclassify_internal_error_survives_reconcile_failure(
 @pytest.mark.asyncio
 async def test_open_reconcile_lease_lost_propagates(tmp_path: Path, clock, monkeypatch):
     """LeaseLost from reconcile_fetch_integrity on open must not be swallowed."""
-    from coscientist.core.errors import LeaseLost
+    from coscientist.core.events.errors import LeaseLost
 
     sid, _digest, _call_id, db = _copy_reclass_fixture(tmp_path)
     _assert_raw_fixture_schema_versions(db)
@@ -2208,7 +2208,7 @@ async def test_open_reconcile_lease_lost_propagates(tmp_path: Path, clock, monke
         raise LeaseLost("reconcile lease lost")
 
     monkeypatch.setattr(
-        "coscientist.core.source_fetch.reconcile_fetch_integrity", boom_lease
+        "coscientist.core.execution.source_fetch.reconcile_fetch_integrity", boom_lease
     )
     with pytest.raises(LeaseLost, match="reconcile lease lost"):
         await open_runtime(
@@ -2262,8 +2262,8 @@ def test_fetch_integrity_row_key_without_call_id():
     ``_row_key`` order for fetch_integrity (first non-empty wins):
     ``call_id`` → ``tool`` → ``tool_name`` → ``row_key``.
     """
-    from coscientist.core.events import EventEnvelope, make_idem
-    from coscientist.core.projections import _row_key, apply_to_map, fold_events
+    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.projections import _row_key, apply_to_map, fold_events
 
     # Empty call_id → tool.
     assert (
@@ -2331,8 +2331,8 @@ def test_fetch_integrity_row_key_without_call_id():
 
 def test_fetch_capability_mismatch_on_wrong_bind(fetch_registry):
     """verify/assert raise fetch_capability_mismatch on wrong tool/call/study."""
-    from coscientist.core.errors import ArtifactRejected
-    from coscientist.core.source_fetch import (
+    from coscientist.core.events.errors import ArtifactRejected
+    from coscientist.core.execution.source_fetch import (
         assert_fetch_capability_bound,
         verify_fetch_capability,
     )
@@ -2364,8 +2364,8 @@ def test_fetch_capability_mismatch_on_wrong_bind(fetch_registry):
 
 def test_take_source_fetched_write_permit_mismatches(fetch_registry):
     """_take_source_fetched_write_permit rejects foreign tool / call / study."""
-    from coscientist.core.errors import ArtifactRejected
-    from coscientist.core.source_fetch import (
+    from coscientist.core.events.errors import ArtifactRejected
+    from coscientist.core.execution.source_fetch import (
         take_source_fetched_write_permit,
         verify_fetch_capability,
     )
@@ -2402,7 +2402,7 @@ def test_take_source_fetched_write_permit_mismatches(fetch_registry):
 
 def test_release_without_handler_raises(monkeypatch):
     """release must not silently no-op when no handler is registered."""
-    import coscientist.core.source_fetch as sf_mod
+    import coscientist.core.execution.source_fetch as sf_mod
 
     monkeypatch.setattr(sf_mod, "_release_write_permit_impl", None)
     with pytest.raises(ArtifactRejected, match="fetch_capability_required"):

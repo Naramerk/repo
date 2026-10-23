@@ -8,24 +8,49 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from coscientist.core.artifact_stamp import apply_kind_stamp
-from coscientist.core.artifacts import make_tool_ref
-from coscientist.core.claims import RuntimeClaim
-from coscientist.core.contradicts import (
+from coscientist.core.claims.claims import RuntimeClaim
+from coscientist.core.claims.contradicts import (
     contradiction_pairs,
     contradicts_edge_id,
     contradicts_events_for_new_claims,
     render_contradiction_map,
 )
-from coscientist.core.derivation import (
+from coscientist.core.claims.derivation import (
     apply_derivation_ceiling,
     by_theory_mark,
     derivation_caps_inconclusive,
     executable_check_met,
 )
-from coscientist.core.dispose import DisposeRejected, QuestionDisposal, validate_disposal
-from coscientist.core.dispositions import dispositions
-from coscientist.core.domain import (
+from coscientist.core.claims.dispose import DisposeRejected, QuestionDisposal, validate_disposal
+from coscientist.core.claims.dispositions import dispositions
+from coscientist.core.claims.experiment_design import (
+    ARTIFACT_KIND_EXPERIMENT_DESIGN,
+    EXPERIMENT_DESIGN_ITEM_IDS,
+    MISSING_DESIGN_REASON,
+    design_artifact_ok,
+    experiment_design_rubric,
+    is_experiment_design_rubric,
+)
+from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore, registry_from_schema
+from coscientist.core.claims.reasons import Disposition
+from coscientist.core.claims.rubric_types import Rubric, RubricItem
+from coscientist.core.claims.verdict import hypothesis_verdict
+from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.events.events import (
+    PLAN_ACCEPTED_SCHEMA_VERSION,
+    PLAN_EXPANDED_SCHEMA_VERSION,
+    TASK_CREATED_SCHEMA_VERSION,
+)
+from coscientist.core.events.upcasters import (
+    UPCASTERS,
+    assert_upcaster_chain_continuous,
+    register_upcaster,
+    upcast,
+    writer_schema_version,
+)
+from coscientist.core.execution.artifact_stamp import apply_kind_stamp
+from coscientist.core.execution.artifacts import make_tool_ref
+from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     OutputSpec,
@@ -34,32 +59,7 @@ from coscientist.core.domain import (
     RequirementRef,
     TaskSpec,
 )
-from coscientist.core.errors import ArtifactRejected
-from coscientist.core.events import (
-    PLAN_ACCEPTED_SCHEMA_VERSION,
-    PLAN_EXPANDED_SCHEMA_VERSION,
-    TASK_CREATED_SCHEMA_VERSION,
-)
-from coscientist.core.experiment_design import (
-    ARTIFACT_KIND_EXPERIMENT_DESIGN,
-    EXPERIMENT_DESIGN_ITEM_IDS,
-    MISSING_DESIGN_REASON,
-    design_artifact_ok,
-    experiment_design_rubric,
-    is_experiment_design_rubric,
-)
-from coscientist.core.graph import GraphEdge, GraphNode, GraphStore, registry_from_schema
-from coscientist.core.plan_validate import validate_evidence_kinds, validate_output_kinds
-from coscientist.core.reasons import Disposition
-from coscientist.core.rubric_types import Rubric, RubricItem
-from coscientist.core.upcasters import (
-    UPCASTERS,
-    assert_upcaster_chain_continuous,
-    register_upcaster,
-    upcast,
-    writer_schema_version,
-)
-from coscientist.core.verdict import hypothesis_verdict
+from coscientist.core.plan.plan_validate import validate_evidence_kinds, validate_output_kinds
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
 
@@ -232,7 +232,7 @@ def test_refs_require_known_prefix():
 
 def test_design_artifact_ok_ignores_meta_kind_without_journal(tmp_path):
     """meta.kind alone must not unlock needs_more_data (pre-commit stamp spoof)."""
-    arts = __import__("coscientist.core.artifacts", fromlist=["LocalArtifactStore"]).LocalArtifactStore(
+    arts = __import__("coscientist.core.execution.artifacts", fromlist=["LocalArtifactStore"]).LocalArtifactStore(
         tmp_path / "arts"
     )
     art = arts.put(
@@ -263,7 +263,7 @@ def test_design_artifact_ok_ignores_meta_kind_without_journal(tmp_path):
 
 
 def test_apply_kind_stamp_rejects_invalid_and_missing(tmp_path):
-    from coscientist.core.artifacts import LocalArtifactStore
+    from coscientist.core.execution.artifacts import LocalArtifactStore
 
     with pytest.raises(ArtifactRejected):
         apply_kind_stamp(object(), "art_x", "nope")
@@ -274,7 +274,7 @@ def test_apply_kind_stamp_rejects_invalid_and_missing(tmp_path):
 
 def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
     """steps+assumptions rubric alone must NOT imply derivation (§6.6)."""
-    from coscientist.core.derivation import is_derivation_task_spec
+    from coscientist.core.claims.derivation import is_derivation_task_spec
 
     rub = Rubric(
         items=[
@@ -355,7 +355,7 @@ def test_executable_check_met_only_bound_check():
 
 
 def test_question_disposed_fold_first_wins():
-    from coscientist.core.dispose import fold_question_disposed
+    from coscientist.core.claims.dispose import fold_question_disposed
 
     store: dict = {}
     fold_question_disposed(
@@ -387,7 +387,7 @@ def test_honest_terminals_stamp_verdict_for_rollup():
     needs_more_data / infeasible / ill_posed must not put claim-vocabulary
     pollution into ``verdict``; rollup clamps on ``terminal`` / disposition.
     """
-    from coscientist.core.dispositions import stamp_honest_terminal_verdict
+    from coscientist.core.claims.dispositions import stamp_honest_terminal_verdict
 
     for disp in (
         Disposition.NEEDS_MORE_DATA.value,
@@ -459,7 +459,7 @@ def test_honest_terminals_stamp_verdict_for_rollup():
     assert bad["Q"].get("terminal") is not True
     assert bad["Q"].get("verdict") is None
 
-    from coscientist.core.rollup import apply_rollup
+    from coscientist.core.claims.rollup import apply_rollup
     from tests.test_pr16_decomposes_rollup import _tree_plans
 
     leaves = {
@@ -523,7 +523,7 @@ async def test_needs_more_data_requires_design(tmp_path, clock):
         media_type="text/markdown",
         role="report",
     )
-    from coscientist.core.artifact_stamp import kind_stamped_event
+    from coscientist.core.execution.artifact_stamp import kind_stamped_event
 
     await rt._append(  # noqa: SLF001
         [
@@ -1034,7 +1034,7 @@ async def test_stamp_kind_e2e_replay_and_missing_meta_marks_internal_error(tmp_p
 @pytest.mark.asyncio
 async def test_stamp_meta_missing_downgrades_needs_more_data(tmp_path, clock):
     """Fold sets artifact_kinds only after successful stamp — missing meta → not_attempted."""
-    from coscientist.core.local_project import LocalProjectMixin
+    from coscientist.core.execution.local_project import LocalProjectMixin
 
     class _RT(LocalProjectMixin):
         pass
@@ -1042,7 +1042,7 @@ async def test_stamp_meta_missing_downgrades_needs_more_data(tmp_path, clock):
     rt = _RT()
     rt.artifact_kinds = {"art_x": ARTIFACT_KIND_EXPERIMENT_DESIGN}  # pre-poison
     rt._stamp_meta_missing = []
-    arts = __import__("coscientist.core.artifacts", fromlist=["LocalArtifactStore"]).LocalArtifactStore(
+    arts = __import__("coscientist.core.execution.artifacts", fromlist=["LocalArtifactStore"]).LocalArtifactStore(
         tmp_path / "arts"
     )
     rt.artifacts = arts
@@ -1064,7 +1064,7 @@ def test_dispose_reject_detail_length_aligned():
     """``_note_reject`` and journaled QuestionDisposeRejected share one truncate length."""
     from datetime import datetime, timezone
 
-    from coscientist.core.dispose import (
+    from coscientist.core.claims.dispose import (
         DISPOSE_REJECT_DETAIL_MAX,
         _note_reject,
         fold_question_dispose_rejected,

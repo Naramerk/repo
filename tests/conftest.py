@@ -14,12 +14,12 @@ sys.path.insert(0, str(ROOT / "tests"))
 import pytest  # noqa: E402
 
 from coscientist.checks.catalog import minimal_test_catalog  # noqa: E402
-from coscientist.core.artifacts import LocalArtifactStore  # noqa: E402
-from coscientist.core.clock import FakeClock  # noqa: E402
-from coscientist.core.graph import default_execution_registry  # noqa: E402
+from coscientist.core.claims.graph import default_execution_registry  # noqa: E402
+from coscientist.core.events.clock import FakeClock  # noqa: E402
+from coscientist.core.execution.artifacts import LocalArtifactStore  # noqa: E402
 from tests.helpers import close_runtime, open_runtime  # noqa: E402
 
-CORE_RULES = "coscientist.core.rules"  # required API: tests/README.md
+CORE_RULES = "coscientist.core.claims.rules"  # required API: tests/README.md
 
 
 @pytest.fixture(params=["refmodel", "core"])

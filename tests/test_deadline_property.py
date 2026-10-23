@@ -24,13 +24,13 @@ from hypothesis.stateful import (
     run_state_machine_as_test,
 )
 
-from coscientist.core.clock import FakeClock
-from coscientist.core.domain import Clarification, TaskSpec, TaskState
-from coscientist.core.errors import HitlUnsupported, LeaseLost, StudyClosedError
-from coscientist.core.hitl_guard import supports_hitl
-from coscientist.core.inputs import InputUnavailable
-from coscientist.core.projections import fold_events
-from coscientist.core.recover import recover
+from coscientist.core.events.clock import FakeClock
+from coscientist.core.events.errors import HitlUnsupported, LeaseLost, StudyClosedError
+from coscientist.core.events.projections import fold_events
+from coscientist.core.execution.domain import Clarification, TaskSpec, TaskState
+from coscientist.core.execution.hitl_guard import supports_hitl
+from coscientist.core.execution.inputs import InputUnavailable
+from coscientist.core.execution.recover import recover
 from tests.helpers import close_runtime, open_runtime
 
 # Expected failures when a random rule hits an invalid transition / missing key.

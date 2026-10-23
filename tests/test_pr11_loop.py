@@ -7,8 +7,18 @@ from typing import Any
 
 import pytest
 
-from coscientist.core.artifacts import make_tool_ref
-from coscientist.core.domain import (
+from coscientist.core.claims.graph import GraphNode
+from coscientist.core.claims.reasons import Disposition, TaskReason, TerminalReason
+from coscientist.core.events.ids import hypothesis_node_id
+from coscientist.core.events.upcasters import (
+    UPCASTERS,
+    assert_upcaster_chain_continuous,
+    register_upcaster,
+    upcast,
+    writer_schema_version,
+)
+from coscientist.core.execution.artifacts import make_tool_ref
+from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     LoopPredicate,
@@ -20,25 +30,15 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.graph import GraphNode
-from coscientist.core.ids import hypothesis_node_id
-from coscientist.core.loop import loop_is_complete, loop_status
-from coscientist.core.loop_predicates import (
+from coscientist.core.execution.recover import recover
+from coscientist.core.plan.loop import loop_is_complete, loop_status
+from coscientist.core.plan.loop_predicates import (
     _claims_for_loop_scope,
     count_survivors,
     eval_loop_predicate,
     register_loop_predicate,
     scope_fingerprint,
     validate_loop_predicate,
-)
-from coscientist.core.reasons import Disposition, TaskReason, TerminalReason
-from coscientist.core.recover import recover
-from coscientist.core.upcasters import (
-    UPCASTERS,
-    assert_upcaster_chain_continuous,
-    register_upcaster,
-    upcast,
-    writer_schema_version,
 )
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
@@ -200,7 +200,7 @@ async def _drive_to_finalized(rt, arts) -> Any:
 
 def _assert_internal_error_finalized(fins: list[Any]) -> Any:
     """Exactly one StudyFinalized(internal_error) with report XOR + conclusion_ids."""
-    from coscientist.core.reasons import TerminalReason
+    from coscientist.core.claims.reasons import TerminalReason
 
     assert len(fins) == 1
     fin = fins[0]
@@ -214,7 +214,7 @@ def _assert_internal_error_finalized(fins: list[Any]) -> Any:
 
 
 async def _assert_plan_refused(rt, *, match: str) -> None:
-    from coscientist.core.reasons import TerminalReason
+    from coscientist.core.claims.reasons import TerminalReason
 
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
@@ -610,7 +610,7 @@ async def test_loop_capped_survives_restart(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_loop_refuse_error_survives_restart(tmp_path, clock, runtime_cls):
     """LoopRefused+LoopCapped(reason=error) folds on reopen; not iteration_cap."""
-    import coscientist.core.loop_predicates as lp
+    import coscientist.core.plan.loop_predicates as lp
 
     name = "test_plugin_refuse_restart"
     register_loop_predicate(name, lambda *a, **k: False)
@@ -656,7 +656,7 @@ async def test_loop_refuse_error_survives_restart(tmp_path, clock, runtime_cls):
     assert len(capped) == 1
     assert capped[0].payload["reason"] == "error"
     # Must not stamp iteration_cap on dispositions for error path.
-    from coscientist.core.loop import capped_scope_questions
+    from coscientist.core.plan.loop import capped_scope_questions
 
     assert capped_scope_questions(rt) == {}
 
@@ -745,8 +745,8 @@ def test_pred_criterion_met_reads_check_results():
     """Unit: criterion_met true only when loop task check_results status=MET."""
     from datetime import datetime, timezone
 
-    from coscientist.core.domain import ReqStatus
-    from coscientist.core.loop_predicates import _pred_criterion_met
+    from coscientist.core.execution.domain import ReqStatus
+    from coscientist.core.plan.loop_predicates import _pred_criterion_met
 
     class RT:
         def __init__(self):
@@ -836,8 +836,8 @@ def _seed_refute_claim_on_graph(rt, *, hid: str, exp_key: str, claim_suffix: str
     """Upsert a countable refute claim on the real graph (no monkeypatch)."""
     from datetime import datetime, timezone
 
-    from coscientist.core.graph import GraphEdge, GraphNode
-    from coscientist.core.ids import claim_node_id, experiment_node_id, hypothesis_node_id
+    from coscientist.core.claims.graph import GraphEdge, GraphNode
+    from coscientist.core.events.ids import claim_node_id, experiment_node_id, hypothesis_node_id
 
     sid = rt.study.study_id
     now = datetime.now(timezone.utc)
@@ -939,8 +939,8 @@ def test_survivors_le_real_graph_scope_filter():
     """survivors_le via real GraphStore claims; outside-loop claims ignored."""
     from datetime import datetime, timezone
 
-    from coscientist.core.domain import HitlPolicy, Study
-    from coscientist.core.graph import GraphStore, default_execution_registry
+    from coscientist.core.claims.graph import GraphStore, default_execution_registry
+    from coscientist.core.execution.domain import HitlPolicy, Study
 
     now = datetime.now(timezone.utc)
     loop_key = "EXP-LOOP"
@@ -999,8 +999,8 @@ def test_survivors_le_real_graph_scope_filter():
     _seed_refute_claim_on_graph(rt, hid="H1", exp_key=loop_key, claim_suffix="c1")
     _seed_refute_claim_on_graph(rt, hid="H3", exp_key=outside_key, claim_suffix="c3")
     # H2: hypothesis node only — unrefuted survivor.
-    from coscientist.core.graph import GraphNode
-    from coscientist.core.ids import hypothesis_node_id
+    from coscientist.core.claims.graph import GraphNode
+    from coscientist.core.events.ids import hypothesis_node_id
 
     rt.graph.upsert_node(
         GraphNode(
@@ -1089,7 +1089,7 @@ async def test_survivors_le_e2e_real_graph_runtime(tmp_path, clock, runtime_cls)
 
 
 def test_dispositions_preserve_infeasible_and_outside_answers_under_cap():
-    from coscientist.core.dispositions import apply_loop_cap_dispositions, dispositions
+    from coscientist.core.claims.dispositions import apply_loop_cap_dispositions, dispositions
 
     plans = {
         "p1": {
@@ -1185,7 +1185,7 @@ def test_upcast_study_created_max_loop_iter():
     assert p["as_of"] is None
     assert p["user_input_ids"] == []
     assert p["max_proposals"] == 3
-    from coscientist.core.upcasters import _study_created_v9_to_v10
+    from coscientist.core.events.upcasters import _study_created_v9_to_v10
 
     assert _study_created_v9_to_v10({})["max_loop_iter"] == 8
 
@@ -1230,7 +1230,7 @@ def test_upcast_task_created_loop_fields():
 
 
 def test_upcaster_duplicate_and_continuous_chains():
-    from coscientist.core.events import (
+    from coscientist.core.events.events import (
         PLAN_ACCEPTED_SCHEMA_VERSION,
         STUDY_CREATED_SCHEMA_VERSION,
         TASK_CREATED_SCHEMA_VERSION,
@@ -1260,8 +1260,8 @@ def test_upcaster_duplicate_and_continuous_chains():
 
 
 def test_validate_loop_predicate_builtins():
-    from coscientist.core.loop_predicates import SURVIVORS_LE_N_MAX
-    from coscientist.core.rules import PlanInvalid
+    from coscientist.core.claims.rules import PlanInvalid
+    from coscientist.core.plan.loop_predicates import SURVIVORS_LE_N_MAX
 
     validate_loop_predicate(LoopPredicate(name="survivors_le", params={"n": 1}))
     validate_loop_predicate(
@@ -1345,8 +1345,8 @@ def test_plugin_loop_predicate_registration():
 
 
 def test_normalize_loop_id_nfkc_and_invisible():
-    from coscientist.core.loop import normalize_loop_id, parse_loop_dep
-    from coscientist.core.rules import PlanInvalid
+    from coscientist.core.claims.rules import PlanInvalid
+    from coscientist.core.plan.loop import normalize_loop_id, parse_loop_dep
 
     assert normalize_loop_id("Ｌ１") == "L1"  # fullwidth → NFKC ASCII
     assert normalize_loop_id("Loop_1") == "Loop_1"
@@ -1406,7 +1406,7 @@ async def test_unregistered_plugin_predicate_fail_closed_on_restart(
     tmp_path, clock, runtime_cls
 ):
     """Plugin until accepted live; after restart without plugin → refuse, not extra iters."""
-    import coscientist.core.loop_predicates as lp
+    import coscientist.core.plan.loop_predicates as lp
 
     def always_false(runtime, loop, *, iter_n, ctx):
         return False
@@ -1471,7 +1471,7 @@ async def test_unregistered_plugin_predicate_fail_closed_on_restart(
 
 @pytest.mark.asyncio
 async def test_plan_expanded_uses_writer_constant(tmp_path, clock, runtime_cls):
-    from coscientist.core.events import PLAN_EXPANDED_SCHEMA_VERSION
+    from coscientist.core.events.events import PLAN_EXPANDED_SCHEMA_VERSION
 
     rt, arts = await _open_study(
         tmp_path, clock, "st_loop_sv", runtime_cls=runtime_cls
@@ -1504,8 +1504,8 @@ async def test_plan_expanded_uses_writer_constant(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_loop_unexpected_error_finalizes_live(tmp_path, clock, runtime_cls):
     """Predicate body RuntimeError → journal + StudyFinalized(internal_error)."""
-    import coscientist.core.loop_predicates as lp
-    from coscientist.core.reasons import TerminalReason
+    import coscientist.core.plan.loop_predicates as lp
+    from coscientist.core.claims.reasons import TerminalReason
 
     name = f"test_plugin_boom_live_{runtime_cls.__name__}"
 
@@ -1554,8 +1554,8 @@ async def test_loop_unexpected_error_finalizes_on_recover(
     tmp_path, clock, runtime_cls, monkeypatch
 ):
     """recover() must finalize internal_error, not hang before tick()."""
-    import coscientist.core.loop as loop_mod
-    import coscientist.core.loop_predicates as lp
+    import coscientist.core.plan.loop as loop_mod
+    import coscientist.core.plan.loop_predicates as lp
 
     name = f"test_plugin_ok_then_boom_{runtime_cls.__name__}"
     lp._REGISTRY.pop(name, None)
@@ -1614,8 +1614,8 @@ async def test_loop_unexpected_error_finalizes_on_recover(
 
 def test_count_survivors_and_validate_loop_specs_plan_invalid():
     """Unit: count_survivors + validate_loop_specs → PlanInvalid (no runtime)."""
-    from coscientist.core.loop import validate_loop_specs
-    from coscientist.core.rules import PlanInvalid
+    from coscientist.core.claims.rules import PlanInvalid
+    from coscientist.core.plan.loop import validate_loop_specs
 
     class RT:
         tasks = {}
@@ -1659,8 +1659,8 @@ def test_count_survivors_and_validate_loop_specs_plan_invalid():
 @pytest.mark.asyncio
 async def test_materialize_loop_iter_writes_plan_expanded(tmp_path, clock, runtime_cls):
     """materialize_loop_iter emits PlanExpanded(loop=true) at writer schema."""
-    from coscientist.core.events import PLAN_EXPANDED_SCHEMA_VERSION
-    from coscientist.core.loop import materialize_loop_iter
+    from coscientist.core.events.events import PLAN_EXPANDED_SCHEMA_VERSION
+    from coscientist.core.plan.loop import materialize_loop_iter
 
     rt, arts = await _open_study(
         tmp_path, clock, "st_loop_mat", runtime_cls=runtime_cls
@@ -1695,13 +1695,13 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
     tmp_path, clock, runtime_cls
 ):
     """Corrupt plan loops → real pydantic ValidationError → internal_error finalize."""
-    import coscientist.core.loop_predicates as lp
-    from coscientist.core.events import (
+    import coscientist.core.plan.loop_predicates as lp
+    from coscientist.core.claims.reasons import TerminalReason
+    from coscientist.core.events.events import (
         PLAN_ACCEPTED_SCHEMA_VERSION,
         EventEnvelope,
         make_idem,
     )
-    from coscientist.core.reasons import TerminalReason
 
     name = f"test_plugin_keep_running_{runtime_cls.__name__}"
     lp._REGISTRY.pop(name, None)
@@ -1790,9 +1790,9 @@ async def test_refuse_loop_failure_in_expected_branch_finalizes(
     tmp_path, clock, runtime_cls, monkeypatch
 ):
     """Exception inside _refuse_loop (expected-eval branch) still finalizes."""
-    import coscientist.core.loop as loop_mod
-    import coscientist.core.loop_predicates as lp
-    from coscientist.core.reasons import TerminalReason
+    import coscientist.core.plan.loop as loop_mod
+    import coscientist.core.plan.loop_predicates as lp
+    from coscientist.core.claims.reasons import TerminalReason
 
     name = f"test_plugin_gone_live_{runtime_cls.__name__}"
     lp._REGISTRY.pop(name, None)
@@ -1840,10 +1840,10 @@ async def test_internal_error_closes_running_tasks_and_attempts(
     tmp_path, clock, runtime_cls
 ):
     """RUNNING task + open attempt are closed (CORE_BUG / CRASHED) on internal_error."""
-    import coscientist.core.loop_predicates as lp
-    from coscientist.core.domain import TaskState
-    from coscientist.core.errors import AttemptClosedError, Conflict, StudyClosedError
-    from coscientist.core.reasons import CloseReason, TaskReason
+    import coscientist.core.plan.loop_predicates as lp
+    from coscientist.core.claims.reasons import CloseReason, TaskReason
+    from coscientist.core.events.errors import AttemptClosedError, Conflict, StudyClosedError
+    from coscientist.core.execution.domain import TaskState
 
     name = f"test_plugin_boom_running_{runtime_cls.__name__}"
     lp._REGISTRY.pop(name, None)
@@ -1929,7 +1929,7 @@ async def test_internal_error_close_does_not_reenter_hooks(
     tmp_path, clock, runtime_cls
 ):
     """Nested _append(TaskDone CORE_BUG) under _finalizing must not create PLAN-n."""
-    import coscientist.core.loop_predicates as lp
+    import coscientist.core.plan.loop_predicates as lp
 
     name = f"test_plugin_boom_reentry_{runtime_cls.__name__}"
     lp._REGISTRY.pop(name, None)
@@ -1999,7 +1999,7 @@ async def test_count_survivors_failure_finalizes_internal_error(
     tmp_path, clock, runtime_cls, monkeypatch
 ):
     """Exception inside count_survivors during advance → internal_error."""
-    import coscientist.core.loop_predicates as lp
+    import coscientist.core.plan.loop_predicates as lp
 
     def boom_survivors(*_a, **_k):
         raise RuntimeError("count_survivors boom")
@@ -2033,8 +2033,8 @@ async def test_materialize_loop_iter_failure_finalizes_internal_error(
     tmp_path, clock, runtime_cls, monkeypatch
 ):
     """Exception inside materialize_loop_iter during advance → internal_error."""
-    import coscientist.core.loop as loop_mod
-    import coscientist.core.loop_predicates as lp
+    import coscientist.core.plan.loop as loop_mod
+    import coscientist.core.plan.loop_predicates as lp
 
     name = f"test_plugin_keep_mat_{runtime_cls.__name__}"
     lp._REGISTRY.pop(name, None)
@@ -2075,8 +2075,8 @@ async def test_plan_invalid_from_predicate_body_finalizes(
     tmp_path, clock, runtime_cls
 ):
     """PlanInvalid raised from a predicate body during advance → internal_error."""
-    import coscientist.core.loop_predicates as lp
-    from coscientist.core.rules import PlanInvalid
+    import coscientist.core.plan.loop_predicates as lp
+    from coscientist.core.claims.rules import PlanInvalid
 
     name = f"test_plugin_plan_invalid_{runtime_cls.__name__}"
     lp._REGISTRY.pop(name, None)

@@ -6,14 +6,22 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from coscientist.core.artifacts import make_tool_ref
-from coscientist.core.decomposes import (
-    DECOMPOSITION_COVERS_ITEM_ID,
-    assert_decomposes_acyclic,
-    leaf_ids,
+from coscientist.core.claims.dispositions import dispositions
+from coscientist.core.claims.graph import GraphNode
+from coscientist.core.claims.reasons import Disposition, NotAttemptedReason, TaskReason, TerminalReason
+from coscientist.core.claims.rubric import freeze_rubric
+from coscientist.core.claims.rubric_types import Rubric, RubricItem
+from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.events import (
+    PLAN_ACCEPTED_SCHEMA_VERSION,
+    PLAN_EXPANDED_SCHEMA_VERSION,
+    EventEnvelope,
+    make_idem,
 )
-from coscientist.core.dispositions import dispositions
-from coscientist.core.domain import (
+from coscientist.core.events.ids import hypothesis_node_id, task_id
+from coscientist.core.events.upcasters import upcast
+from coscientist.core.execution.artifacts import make_tool_ref
+from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     ForEachSpec,
@@ -28,23 +36,15 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.errors import LeaseLost
-from coscientist.core.events import (
-    PLAN_ACCEPTED_SCHEMA_VERSION,
-    PLAN_EXPANDED_SCHEMA_VERSION,
-    EventEnvelope,
-    make_idem,
+from coscientist.core.execution.recover import recover
+from coscientist.core.finalize.minimal_report import render_markdown_report
+from coscientist.core.plan.decomposes import (
+    DECOMPOSITION_COVERS_ITEM_ID,
+    assert_decomposes_acyclic,
+    leaf_ids,
 )
-from coscientist.core.graph import GraphNode
-from coscientist.core.ids import hypothesis_node_id, task_id
-from coscientist.core.loop import capped_scope_questions, loop_status
-from coscientist.core.minimal_report import render_markdown_report
-from coscientist.core.plan_validate import validate_decomposes
-from coscientist.core.reasons import Disposition, NotAttemptedReason, TaskReason, TerminalReason
-from coscientist.core.recover import recover
-from coscientist.core.rubric import freeze_rubric
-from coscientist.core.rubric_types import Rubric, RubricItem
-from coscientist.core.upcasters import upcast
+from coscientist.core.plan.loop import capped_scope_questions, loop_status
+from coscientist.core.plan.plan_validate import validate_decomposes
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
 # --- helpers -----------------------------------------------------------------
@@ -271,8 +271,8 @@ async def test_accept_plan_writes_decomposes_edge(tmp_path, clock):
 
 def test_rollup_rule():
     """all / any / majority / rubric parent disposition from children."""
-    from coscientist.core.decomposes import majority_threshold
-    from coscientist.core.rollup import apply_rollup
+    from coscientist.core.claims.rollup import apply_rollup
+    from coscientist.core.plan.decomposes import majority_threshold
 
     assert majority_threshold(2) == 2
     assert majority_threshold(4) == 3
@@ -345,7 +345,7 @@ def test_rollup_rule():
 
 def test_majority_ties_do_not_win():
     """Strict majority: 1:1 and 2:2 → no majority (never preference-tiebreak to answered)."""
-    from coscientist.core.rollup import apply_rollup
+    from coscientist.core.claims.rollup import apply_rollup
 
     base_q = [
         {"id": "Q", "text": "root", "parent_id": None},
@@ -416,7 +416,7 @@ def _tree_plans(rollup: str, *, extra_q: list[dict] | None = None) -> dict:
 
 def test_rollup_any_never_raises_above_parent_claims():
     """Adversarial PR 8b: parent claims=refuted + child answered → stay refuted."""
-    from coscientist.core.rollup import apply_rollup
+    from coscientist.core.claims.rollup import apply_rollup
 
     leaves = {
         "Q": {
@@ -441,7 +441,7 @@ def test_rollup_any_never_raises_above_parent_claims():
 @pytest.mark.parametrize("rule", ["all", "any", "majority"])
 def test_rollup_never_raises_rubric_not_met_parent(rule: str):
     """Blocker: rubric_not_met parent + answered child must stay rubric_not_met."""
-    from coscientist.core.rollup import apply_rollup
+    from coscientist.core.claims.rollup import apply_rollup
 
     # majority needs ≥2 answering children to meet n//2+1 on 2 kids → both answered.
     leaves = {
@@ -462,7 +462,7 @@ def test_rollup_never_raises_rubric_not_met_parent(rule: str):
 
 def test_rollup_incomplete_keeps_own_terminal_all_and_majority():
     """rollup_incomplete / no_majority must not wipe a terminal parent verdict."""
-    from coscientist.core.rollup import apply_rollup
+    from coscientist.core.claims.rollup import apply_rollup
 
     own = {
         "disposition": Disposition.REFUTED.value,
@@ -499,7 +499,7 @@ def test_rollup_incomplete_keeps_own_terminal_all_and_majority():
 
 def test_rollup_can_lower_parent_claims():
     """Children rollup may lower a claims-based parent (answered → refuted via all)."""
-    from coscientist.core.rollup import apply_rollup
+    from coscientist.core.claims.rollup import apply_rollup
 
     leaves = {
         "Q": {
@@ -518,7 +518,7 @@ def test_rollup_can_lower_parent_claims():
 
 def test_rollup_cycle_localized_not_study_wide():
     """Cycle must tag only the cyclic subtree — unrelated questions still roll up."""
-    from coscientist.core.rollup import apply_rollup
+    from coscientist.core.claims.rollup import apply_rollup
 
     plans = {
         "p1": {
@@ -567,7 +567,7 @@ def test_rollup_cycle_localized_not_study_wide():
 
 def test_rollup_cycle_keeps_own_terminal_like_incomplete():
     """Cycle node with own terminal disposition must clamp, not wipe (like incomplete)."""
-    from coscientist.core.rollup import apply_rollup
+    from coscientist.core.claims.rollup import apply_rollup
 
     plans = {
         "p1": {
@@ -607,7 +607,7 @@ def test_rollup_cycle_keeps_own_terminal_like_incomplete():
 
 def test_rollup_iteration_cap_parent_clamped():
     """PR11 iteration_cap (inconclusive, no verdict) is terminal for clamp."""
-    from coscientist.core.rollup import apply_rollup
+    from coscientist.core.claims.rollup import apply_rollup
 
     own = {
         "disposition": Disposition.INCONCLUSIVE.value,
@@ -631,8 +631,8 @@ def test_rollup_iteration_cap_parent_clamped():
 
 def test_loop_cap_skips_decomposes_parent_so_rollup_wins():
     """Parent with *no own tasks* under loop_capped stays rollup-eligible → answered."""
-    from coscientist.core.dispositions import apply_loop_cap_dispositions, dispositions
-    from coscientist.core.rollup import apply_rollup
+    from coscientist.core.claims.dispositions import apply_loop_cap_dispositions, dispositions
+    from coscientist.core.claims.rollup import apply_rollup
 
     plans = _tree_plans("all")
     capped = {
@@ -659,7 +659,7 @@ def test_loop_cap_skips_decomposes_parent_so_rollup_wins():
     def _rub(*, task_keys, **_kw):
         return "met" if task_keys else None
 
-    import coscientist.core.dispositions as disp_mod
+    import coscientist.core.claims.dispositions as disp_mod
 
     # No task addresses Q — parent has no own covering tasks.
     plans_ft = {
@@ -700,8 +700,8 @@ def test_loop_cap_skips_decomposes_parent_so_rollup_wins():
 
 def test_loop_cap_keeps_parent_with_own_task_despite_answered_children():
     """Parent with own covering task under cap must not be raised by answered kids."""
-    import coscientist.core.dispositions as disp_mod
-    from coscientist.core.dispositions import dispositions
+    import coscientist.core.claims.dispositions as disp_mod
+    from coscientist.core.claims.dispositions import dispositions
 
     capped = {
         "Q": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
@@ -758,9 +758,9 @@ def test_loop_cap_keeps_parent_with_own_task_despite_answered_children():
 
 def test_loop_cap_preserves_iteration_cap_when_children_incomplete_or_rubric():
     """Parent with own task under cap keeps iteration_cap if kids incomplete / rubric."""
-    import coscientist.core.dispositions as disp_mod
-    from coscientist.core.dispositions import dispositions
-    from coscientist.core.domain import TaskKind, TaskSpec
+    import coscientist.core.claims.dispositions as disp_mod
+    from coscientist.core.claims.dispositions import dispositions
+    from coscientist.core.execution.domain import TaskKind, TaskSpec
 
     capped = {
         "Q": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
@@ -852,7 +852,7 @@ def test_loop_cap_preserves_iteration_cap_when_children_incomplete_or_rubric():
 
 def test_rollup_equal_rank_keeps_own_without_false_clamp():
     """rolled_rank == own_rank: keep own reason; no fake rollup_clamped."""
-    from coscientist.core.rollup import apply_rollup
+    from coscientist.core.claims.rollup import apply_rollup
 
     leaves = {
         "Q": {
@@ -881,7 +881,7 @@ def test_rollup_equal_rank_keeps_own_without_false_clamp():
 
 def test_rollup_lower_preserves_iteration_cap_in_detail():
     """Children may lower disposition; iteration_cap must remain in reason_detail."""
-    from coscientist.core.rollup import apply_rollup
+    from coscientist.core.claims.rollup import apply_rollup
 
     leaves = {
         "Q": {
@@ -908,9 +908,9 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
     ``runtime.tasks``. dispositions must union those addresses into cover /
     skip_cap so answered children cannot bypass the limit.
     """
-    import coscientist.core.dispositions as disp_mod
-    from coscientist.core.dispositions import dispositions
-    from coscientist.core.question_tasks import question_tasks
+    import coscientist.core.claims.dispositions as disp_mod
+    from coscientist.core.claims.dispositions import dispositions
+    from coscientist.core.plan.question_tasks import question_tasks
 
     sid = "pr16-expand-cap"
     rt = await _boot(tmp_path, clock, sid)
@@ -1061,7 +1061,7 @@ def test_cover_excludes_cancelled_superseded_yields_no_task():
     ``tasks_skipped``; pruning restores empty cover / ``no_task``. Runtime-only
     live covering can still change ``no_task`` → ``tasks_failed``.
     """
-    from coscientist.core.dispositions import dispositions
+    from coscientist.core.claims.dispositions import dispositions
 
     plans = {
         "p1": {
@@ -1117,7 +1117,7 @@ def test_cover_excludes_cancelled_superseded_yields_no_task():
 
 def test_superseded_only_parent_cover_skips_loop_cap():
     """Parent addressed only by superseded/cancelled tasks must not get false cap."""
-    from coscientist.core.dispositions import dispositions
+    from coscientist.core.claims.dispositions import dispositions
 
     capped = {
         "Q": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
@@ -1171,7 +1171,7 @@ def test_superseded_only_parent_cover_skips_loop_cap():
 @pytest.mark.asyncio
 async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
     """Real foreach: SUPERSEDED template drops from cover; children keep it."""
-    from coscientist.core.dispositions import dispositions
+    from coscientist.core.claims.dispositions import dispositions
 
     sid = "pr16-fe-cover"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
@@ -1278,7 +1278,7 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, clock):
     """Real loop iters → capped_scope_questions; reopen/replay dispositions match."""
-    from coscientist.core.dispositions import dispositions
+    from coscientist.core.claims.dispositions import dispositions
 
     sid = "pr16-loop-cover"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
@@ -1411,7 +1411,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
 
 
 def test_question_origin_implicit_vs_explicit():
-    from coscientist.core.decomposes import question_origin_from_plans
+    from coscientist.core.plan.decomposes import question_origin_from_plans
 
     origins = question_origin_from_plans(
         {
@@ -1451,7 +1451,7 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
         rollup="all",
     )
     assert pid
-    from coscientist.core.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import EventEnvelope, make_idem
 
     q_b = _q("Q.b", "emergent child", parent="Q", origin="emergent")
     rid = "hitl_pr16_tree"
@@ -1574,14 +1574,14 @@ def test_validate_decomposes_pure_cycle():
 
 def test_expand_graph_rejects_cycle_via_existing_edges():
     """expand_graph must see the full decomposes tree, not only the new self-pair."""
-    from coscientist.core.expand_graph import _decomposes_parent_map, question_graph_events
-    from coscientist.core.graph import (
+    from coscientist.core.claims.graph import (
         GraphEdge,
         GraphNode,
         GraphStore,
         default_execution_registry,
     )
-    from coscientist.core.ids import question_node_id
+    from coscientist.core.events.ids import question_node_id
+    from coscientist.core.plan.expand_graph import _decomposes_parent_map, question_graph_events
 
     class _RT:
         def __init__(self) -> None:
@@ -1721,7 +1721,7 @@ async def test_rollup_run_finalizes_with_single_study_finalized(tmp_path, clock)
 @pytest.mark.asyncio
 async def test_internal_error_finalizes_once(tmp_path, clock, monkeypatch):
     """Real raised exception on recover → StudyFinalized(internal_error)."""
-    import coscientist.core.loop as loop_mod
+    import coscientist.core.plan.loop as loop_mod
 
     rt = await _boot(tmp_path, clock, "pr16-internal")
     rub = _decomp_rubric()
@@ -1809,7 +1809,7 @@ async def test_recover_then_finalize_single(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_expand_plan_propagates_lease_lost(tmp_path, clock, monkeypatch):
     """LeaseLost from _expand_plan must propagate — no ExpansionRefused mask."""
-    import coscientist.core.expand as expand_mod
+    import coscientist.core.plan.expand as expand_mod
 
     rt = await _boot(tmp_path, clock, "pr16-lease")
     rub = _decomp_rubric()
@@ -1845,8 +1845,8 @@ async def test_expand_plan_propagates_lease_lost(tmp_path, clock, monkeypatch):
 
 
 def test_graph_edge_decomposes_in_affected_tables():
-    from coscientist.core.events import EventEnvelope
-    from coscientist.core.projections import _affected_tables, fold_events
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.projections import _affected_tables, fold_events
 
     assert "graph_edges" in _affected_tables("GraphEdgeAdded")
     sid = "st"
@@ -1874,10 +1874,10 @@ def test_graph_edge_decomposes_in_affected_tables():
 @pytest.mark.asyncio
 async def test_foreach_after_task_done_reraise_lease_lost(tmp_path, clock, monkeypatch):
     """foreach.py:453 — LeaseLost from _materialize_one must not become refuse."""
-    from coscientist.core import foreach as foreach_mod
-    from coscientist.core.domain import ForEachSpec
-    from coscientist.core.foreach import maybe_foreach_after_task_done
-    from coscientist.core.ids import task_id
+    from coscientist.core.events.ids import task_id
+    from coscientist.core.execution.domain import ForEachSpec
+    from coscientist.core.plan import foreach as foreach_mod
+    from coscientist.core.plan.foreach import maybe_foreach_after_task_done
 
     sid = "pr16-fe-lease-after"
     rt = await _boot(tmp_path, clock, sid)
@@ -1923,9 +1923,9 @@ async def test_foreach_after_task_done_reraise_lease_lost(tmp_path, clock, monke
 @pytest.mark.asyncio
 async def test_materialize_ready_foreach_reraise_lease_lost(tmp_path, clock, monkeypatch):
     """foreach.py:479 — LeaseLost from _materialize_one must not become refuse."""
-    from coscientist.core import foreach as foreach_mod
-    from coscientist.core.domain import ForEachSpec
-    from coscientist.core.foreach import materialize_ready_foreach
+    from coscientist.core.execution.domain import ForEachSpec
+    from coscientist.core.plan import foreach as foreach_mod
+    from coscientist.core.plan.foreach import materialize_ready_foreach
 
     sid = "pr16-fe-lease-ready"
     rt = await _boot(tmp_path, clock, sid)
@@ -1971,8 +1971,8 @@ async def test_materialize_ready_foreach_reraise_lease_lost(tmp_path, clock, mon
 @pytest.mark.asyncio
 async def test_expand_trigger_reraise_lease_lost(tmp_path, clock, monkeypatch):
     """expand_trigger.py:266 — LeaseLost must not become ExpansionRefused."""
-    from coscientist.core.expand_trigger import maybe_expand_after_task_done
-    from coscientist.core.ids import task_id
+    from coscientist.core.events.ids import task_id
+    from coscientist.core.plan.expand_trigger import maybe_expand_after_task_done
 
     sid = "pr16-exp-trig-lease"
     rt = await _boot(tmp_path, clock, sid)
@@ -1990,7 +1990,7 @@ async def test_expand_trigger_reraise_lease_lost(tmp_path, clock, monkeypatch):
     async def _boom(_runtime, _tid):
         raise LeaseLost("mocked lease loss in maybe_expand_after_task_done")
 
-    monkeypatch.setattr("coscientist.core.expand_trigger._maybe_expand", _boom)
+    monkeypatch.setattr("coscientist.core.plan.expand_trigger._maybe_expand", _boom)
     before = sum(1 for e in await rt.store.read_all() if e.type == "ExpansionRefused")
     with pytest.raises(LeaseLost, match="maybe_expand_after_task_done"):
         await maybe_expand_after_task_done(rt, task_id(sid, "E0"))
@@ -2018,7 +2018,7 @@ async def _finalize_lease_fixture(tmp_path, clock, sid: str):
 @pytest.mark.asyncio
 async def test_finalize_reraise_lease_lost(tmp_path, clock, monkeypatch):
     """finalize.py — LeaseLost from rich payload must not fall to last-resort."""
-    import coscientist.core.finalize as fin_mod
+    import coscientist.core.finalize.finalize as fin_mod
 
     rt = await _finalize_lease_fixture(tmp_path, clock, "pr16-fin-lease")
 
@@ -2038,7 +2038,7 @@ async def test_finalize_reraise_lease_lost(tmp_path, clock, monkeypatch):
 @pytest.mark.asyncio
 async def test_finalize_primary_report_path_lease_lost(tmp_path, clock, monkeypatch):
     """finalize.py:675/:695 — LeaseLost from _primary_report_path must reraise (no StudyFinalized)."""
-    import coscientist.core.finalize as fin_mod
+    import coscientist.core.finalize.finalize as fin_mod
 
     rt = await _finalize_lease_fixture(tmp_path, clock, "pr16-fin-primary-ll")
 
@@ -2058,7 +2058,7 @@ async def test_finalize_primary_report_path_lease_lost(tmp_path, clock, monkeypa
 @pytest.mark.asyncio
 async def test_finalize_render_markdown_report_lease_lost(tmp_path, clock, monkeypatch):
     """finalize.py:675/:695 — LeaseLost from render_markdown_report must reraise; no StudyFinalized."""
-    import coscientist.core.finalize as fin_mod
+    import coscientist.core.finalize.finalize as fin_mod
 
     rt = await _finalize_lease_fixture(tmp_path, clock, "pr16-fin-render-ll")
 
@@ -2078,7 +2078,7 @@ async def test_finalize_render_markdown_report_lease_lost(tmp_path, clock, monke
 @pytest.mark.asyncio
 async def test_finalize_minimal_report_lease_lost(tmp_path, clock, monkeypatch):
     """finalize.py:675/:695 — LeaseLost from build_minimal_report after primary failure."""
-    import coscientist.core.finalize as fin_mod
+    import coscientist.core.finalize.finalize as fin_mod
 
     rt = await _finalize_lease_fixture(tmp_path, clock, "pr16-fin-minimal-ll")
 

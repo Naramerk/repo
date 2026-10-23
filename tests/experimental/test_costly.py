@@ -45,7 +45,7 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
     from datetime import timedelta
     from decimal import Decimal
 
-    from coscientist.core.domain import Budget, GateConfig, HitlPolicy, TaskOutcome
+    from coscientist.core.execution.domain import Budget, GateConfig, HitlPolicy, TaskOutcome
     from coscientist.experimental.report import render
     from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
     from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
@@ -148,7 +148,7 @@ async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
     from datetime import timedelta
     from decimal import Decimal
 
-    from coscientist.core.domain import Budget, GateConfig, HitlPolicy
+    from coscientist.core.execution.domain import Budget, GateConfig, HitlPolicy
     from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
     from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
@@ -214,7 +214,7 @@ async def test_study_budget_exceeded_from_costly_spend(tmp_path, clock, runtime_
     from datetime import timedelta
     from decimal import Decimal
 
-    from coscientist.core.domain import Budget
+    from coscientist.core.execution.domain import Budget
     from tests.helpers import close_runtime, open_runtime
 
     budget = Budget(
@@ -254,7 +254,7 @@ async def test_settle_delegated_spend_emits_study_budget(tmp_path, clock):
     from datetime import timedelta
     from decimal import Decimal
 
-    from coscientist.core.domain import Budget, GateConfig, HitlPolicy
+    from coscientist.core.execution.domain import Budget, GateConfig, HitlPolicy
     from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
     from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 

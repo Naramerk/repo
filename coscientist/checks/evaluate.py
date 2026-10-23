@@ -6,12 +6,18 @@ import json
 from collections.abc import Collection, Mapping
 from typing import Any
 
-from coscientist.core.artifacts import (
+from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.errors import (
+    ArtifactCorrupt,
+    CatalogError,
+    CoreBugError,
+    SandboxInfraError,
+)
+from coscientist.core.execution.artifacts import (
     LocalArtifactStore,
     artifact_producer_trusted,
 )
-from coscientist.core.digest import canonical_json, sha256_hex
-from coscientist.core.domain import (
+from coscientist.core.execution.domain import (
     PROPOSED_CHECK_TEMPLATE_ID,
     AgentTaskOutput,
     Catalog,
@@ -25,12 +31,6 @@ from coscientist.core.domain import (
     RequirementTemplate,
     ReviewCheck,
     TaskSpec,
-)
-from coscientist.core.errors import (
-    ArtifactCorrupt,
-    CatalogError,
-    CoreBugError,
-    SandboxInfraError,
 )
 
 
@@ -626,7 +626,7 @@ def _evaluate_proposed_check(
     Unapproved / missing → PENDING (await HITL) or FAILED after reject.
     Claims never count until ``CheckApproved`` (exclusion ``unapproved_check``).
     """
-    from coscientist.core.proposed_check import (
+    from coscientist.core.plan.proposed_check import (
         assert_proposal_preregistered_for_eval,
         code_check_from_proposal,
         rubric_from_proposal,
@@ -758,7 +758,7 @@ def _evaluate_proposed_check(
     delegated = bool(row.get("delegated"))
     if row.get("rubric") is not None:
         from coscientist.checks.kinds.rubric import evaluate_rubric
-        from coscientist.core.domain import CodeCheck as CC
+        from coscientist.core.execution.domain import CodeCheck as CC
 
         rub = rubric_from_proposal(row)
         # Qualitative proposed rubric — never severe (DESIGN_M1 §16).
@@ -978,7 +978,7 @@ def evaluate_task_checks(
         else:
             check = tmpl.check
         if isinstance(check, ReviewCheck):
-            from coscientist.core.reviews import review_key
+            from coscientist.core.claims.reviews import review_key
 
             # Scoped key only — never bare check_id / empty-field substitution.
             if not task_id or not attempt_id or not output_digest:
@@ -1005,7 +1005,7 @@ def evaluate_task_checks(
             )
         elif isinstance(check, CodeCheck) and check.kind == "rubric":
             from coscientist.checks.kinds.rubric import evaluate_rubric
-            from coscientist.core.rubric import freeze_rubric
+            from coscientist.core.claims.rubric import freeze_rubric
 
             # Prefer OutputSpec.rubric for the named output (plan-frozen).
             out_rubric = None

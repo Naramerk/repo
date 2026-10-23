@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from coscientist.core.domain import HitlPolicy
+from coscientist.core.execution.domain import HitlPolicy
 
 SideEffectDecision = Literal["deny", "allow", "ask"]
 

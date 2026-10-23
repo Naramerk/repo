@@ -34,9 +34,10 @@ from coscientist.checks.kinds.quote_norm import (
     quote_in_normalized_source,
     quote_token_ok,
 )
-from coscientist.core.artifacts import LocalArtifactStore
-from coscientist.core.digest import canonical_json, sha256_hex
-from coscientist.core.domain import (
+from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.errors import ArtifactCorrupt
+from coscientist.core.execution.artifacts import LocalArtifactStore
+from coscientist.core.execution.domain import (
     AgentTaskOutput,
     CheckResult,
     CheckRole,
@@ -45,8 +46,7 @@ from coscientist.core.domain import (
     ReqStatus,
     SourceQuote,
 )
-from coscientist.core.errors import ArtifactCorrupt
-from coscientist.core.input_limits import is_quote_source_producer
+from coscientist.core.execution.input_limits import is_quote_source_producer
 
 # Re-export for tests / callers.
 __all__ = [

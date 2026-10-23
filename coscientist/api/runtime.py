@@ -6,8 +6,8 @@ does not — so executor/agents → machine cannot reach ``_ingest_gate`` via li
 
 from __future__ import annotations
 
-from coscientist.core.lifecycle import LifecycleMixin
-from coscientist.core.machine import StudyRuntime as MachineRuntime
+from coscientist.core.execution.machine import StudyRuntime as MachineRuntime
+from coscientist.core.plan.lifecycle import LifecycleMixin
 
 
 class StudyRuntime(MachineRuntime, LifecycleMixin):  # type: ignore[misc]

@@ -22,9 +22,11 @@ from coscientist.checks.sandbox import (
     run_verifier,
 )
 from coscientist.checks.sandbox_probe import bwrap_available, probe_bwrap_hard
-from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
-from coscientist.core.digest import canonical_json, sha256_hex
-from coscientist.core.domain import (
+from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.errors import SandboxInfraError
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     CodeCheck,
@@ -33,8 +35,6 @@ from coscientist.core.domain import (
     RequirementRef,
     TaskSpec,
 )
-from coscientist.core.errors import SandboxInfraError
-from coscientist.core.reasons import TaskReason
 from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
 
@@ -1066,7 +1066,7 @@ def test_holdout_digest_mismatch_is_catalog_error(tmp_path):
             )
         }
     )
-    from coscientist.core.errors import CatalogError
+    from coscientist.core.events.errors import CatalogError
 
     with pytest.raises(CatalogError, match="holdout_digest mismatch"):
         evaluate_code_check(
@@ -1278,8 +1278,8 @@ def test_agent_facing_view_never_includes_holdout_or_scorer():
         agent_facing_template_view,
         template_to_requirement,
     )
-    from coscientist.core.digest import canonical_json, sha256_hex
-    from coscientist.core.domain import RequirementTemplate
+    from coscientist.core.events.digest import canonical_json, sha256_hex
+    from coscientist.core.execution.domain import RequirementTemplate
 
     holdout = {"y": [0, 1], "secret": "LABELS"}
     tmpl = RequirementTemplate(
@@ -1469,8 +1469,8 @@ def test_sigxcpu_with_rusage_at_budget_is_cpu_timeout(monkeypatch):
 
 def test_refute_timeout_hard_blocks_supported():
     """Sleep/idle refute-role timeout → supported unreachable (refute_unresolved)."""
-    from coscientist.core.claims import RuntimeClaim
-    from coscientist.core.verdict import hypothesis_verdict
+    from coscientist.core.claims.claims import RuntimeClaim
+    from coscientist.core.claims.verdict import hypothesis_verdict
 
     def severe(**kw):
         base = dict(
@@ -1643,7 +1643,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
             )
         ]
     )
-    from coscientist.core.finalize import IDLE_TIMEOUT_RU, TIMEOUT_BUDGET_RU
+    from coscientist.core.finalize.finalize import IDLE_TIMEOUT_RU, TIMEOUT_BUDGET_RU
 
     for i in range(2):
         aid = await rt.start_attempt("E1")
@@ -1706,7 +1706,7 @@ async def test_infra_failure_does_not_charge_attempt(
     tmp_path, clock, runtime_cls, monkeypatch
 ):
     """Transient attach infra → charged=False; next attempt still within budget."""
-    from coscientist.core.errors import SandboxInfraError
+    from coscientist.core.events.errors import SandboxInfraError
 
     cat = _catalog_with(
         {
@@ -1768,7 +1768,7 @@ async def test_infra_failure_does_not_charge_attempt(
         return real_eval(*args, **kwargs)
 
     monkeypatch.setattr(
-        "coscientist.core.executor.evaluate_task_checks", boom
+        "coscientist.core.execution.executor.evaluate_task_checks", boom
     )
     result = await ex.record(
         aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
@@ -1973,7 +1973,7 @@ def test_freeze_strips_agent_timeout_zero_point_oh_five():
 def test_agent_facing_catalog_view_is_sole_template_export():
     """Catalog agent projection never includes holdout/scorer/tests bodies."""
     from coscientist.checks.evaluate import agent_facing_catalog_view
-    from coscientist.core.digest import canonical_json, sha256_hex
+    from coscientist.core.events.digest import canonical_json, sha256_hex
 
     holdout = {"y": [0, 1], "secret": "NEVER"}
     cat = _catalog_with(
@@ -2008,12 +2008,12 @@ def test_agent_facing_catalog_view_is_sole_template_export():
 
 
 def test_sandbox_timeout_report_line_by_reason_only():
-    from coscientist.core.finalize import (
+    from coscientist.core.claims.reasons import TaskReason
+    from coscientist.core.finalize.finalize import (
         IDLE_TIMEOUT_RU,
         TIMEOUT_BUDGET_RU,
         sandbox_timeout_report_line,
     )
-    from coscientist.core.reasons import TaskReason
 
     assert (
         sandbox_timeout_report_line(TaskReason.IDLE_TIMEOUT.value, "anything")
@@ -2042,13 +2042,13 @@ def test_no_derived_call_id_fallback():
     """Missing produced_by_call_id must not be invented as {attempt}:derived."""
     from datetime import UTC, datetime
 
-    from coscientist.core.graph import (
+    from coscientist.core.claims.graph import (
         GraphNode,
         GraphStore,
         default_execution_registry,
     )
-    from coscientist.core.ids import question_node_id
-    from coscientist.core.inputs import claim_nodes_from_attempt
+    from coscientist.core.events.ids import question_node_id
+    from coscientist.core.execution.inputs import claim_nodes_from_attempt
 
     sid = "st_noderived"
     g = GraphStore(default_execution_registry())
@@ -2102,7 +2102,7 @@ def test_freeze_shared_helper_used_by_all_task_create_paths():
     import inspect
 
     from coscientist.checks import sandbox_limits as sl
-    from coscientist.core import expand, expand_trigger, foreach, lifecycle
+    from coscientist.core.plan import expand, expand_trigger, foreach, lifecycle
 
     assert "freeze_task_sandbox_limits" in inspect.getsource(
         lifecycle.LifecycleMixin.accept_plan
@@ -2148,7 +2148,7 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
 
     Alternating template_ids must not evade the structural rule.
     """
-    from coscientist.core.domain import CheckResult
+    from coscientist.core.execution.domain import CheckResult
 
     cat = _catalog_with(
         {
@@ -2245,7 +2245,7 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
         ]
 
     monkeypatch.setattr(
-        "coscientist.core.executor.evaluate_task_checks", _fake_eval
+        "coscientist.core.execution.executor.evaluate_task_checks", _fake_eval
     )
 
     aid1 = await rt.start_attempt("E1")
@@ -2276,7 +2276,7 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
     tmp_path, clock, runtime_cls, monkeypatch
 ):
     """One prediction timeout on the last charged attempt stays sandbox_timeout."""
-    from coscientist.core.domain import CheckResult
+    from coscientist.core.execution.domain import CheckResult
 
     cat = _catalog_with(
         {
@@ -2342,7 +2342,7 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
         ]
 
     monkeypatch.setattr(
-        "coscientist.core.executor.evaluate_task_checks", _fake_eval
+        "coscientist.core.execution.executor.evaluate_task_checks", _fake_eval
     )
     aid = await rt.start_attempt("E1")
     r = await ex.record(aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS))

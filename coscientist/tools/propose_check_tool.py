@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from coscientist.core.domain import CodeCheck, RejectedTemplateNote
-from coscientist.core.proposed_check import propose_check, requirement_ref_for_proposal
-from coscientist.core.rubric_types import Rubric
+from coscientist.core.claims.rubric_types import Rubric
+from coscientist.core.execution.domain import CodeCheck, RejectedTemplateNote
+from coscientist.core.plan.proposed_check import propose_check, requirement_ref_for_proposal
 from coscientist.tools.contract import CallCtx, ToolOutput, ToolSpec
 
 

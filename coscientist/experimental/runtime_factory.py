@@ -5,10 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from coscientist.core.clock import Clock
-from coscientist.core.graph import KindRegistry
-from coscientist.core.runtime_factory import close_runtime
-from coscientist.core.runtime_factory import open_runtime as open_runtime_core
+from coscientist.core.claims.graph import KindRegistry
+from coscientist.core.events.clock import Clock
+from coscientist.core.execution.runtime_factory import close_runtime
+from coscientist.core.execution.runtime_factory import open_runtime as open_runtime_core
 from coscientist.experimental.runtime import StudyRuntime
 
 __all__ = ["StudyRuntime", "close_runtime", "open_runtime"]

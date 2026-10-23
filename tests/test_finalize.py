@@ -9,10 +9,16 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from coscientist.core.artifacts import LocalArtifactStore
-from coscientist.core.digest import canonical_json
-from coscientist.core.dispositions import dispositions
-from coscientist.core.domain import (
+from coscientist.core.claims.dispositions import dispositions
+from coscientist.core.claims.reasons import NotAttemptedReason, TaskReason, TerminalReason
+from coscientist.core.events.digest import canonical_json
+from coscientist.core.events.errors import Conflict, Idempotent, StudyClosedError
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.metrics import late_write_rejected_total
+from coscientist.core.events.projections import fold_events
+from coscientist.core.events.upcasters import upcast
+from coscientist.core.execution.artifacts import LocalArtifactStore
+from coscientist.core.execution.domain import (
     QuestionSpec,
     RequirementRef,
     Task,
@@ -21,21 +27,15 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.errors import Conflict, Idempotent, StudyClosedError
-from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.finalize import (
+from coscientist.core.finalize.finalize import (
     contributing_reasons_ordered,
     pick_finalize_trigger,
     terminal_reason_for,
 )
-from coscientist.core.finalize_nodes import conclusion_ids_for
-from coscientist.core.metrics import late_write_rejected_total
-from coscientist.core.minimal_report import MAX_BYTES, build_minimal_report
-from coscientist.core.projections import fold_events
-from coscientist.core.question_tasks import question_tasks, questions_from_spec_output
-from coscientist.core.reasons import NotAttemptedReason, TaskReason, TerminalReason
-from coscientist.core.study_view import study_view
-from coscientist.core.upcasters import upcast
+from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
+from coscientist.core.finalize.minimal_report import MAX_BYTES, build_minimal_report
+from coscientist.core.finalize.study_view import study_view
+from coscientist.core.plan.question_tasks import question_tasks, questions_from_spec_output
 from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
 _TS = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
@@ -453,7 +453,7 @@ async def test_finalize_budget_trigger(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
     """TaskDone(budget) from a costly route must not close the whole study."""
-    from coscientist.core.reasons import CloseReason
+    from coscientist.core.claims.reasons import CloseReason
 
     sid = "st_bg2"
     rt = await _boot(tmp_path, clock, sid, runtime_cls=runtime_cls)
@@ -550,7 +550,7 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
     """BudgetDebited only → crash → reopen → tick re-checks spend → trigger=budget."""
     from decimal import Decimal
 
-    from coscientist.core.domain import Budget
+    from coscientist.core.execution.domain import Budget
 
     sid = "st_bg_debit_crash"
     budget = Budget(
@@ -591,7 +591,7 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
 async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime_cls):
     from decimal import Decimal
 
-    from coscientist.core.domain import Budget
+    from coscientist.core.execution.domain import Budget
 
     sid = "st_bg_bad"
     rt = await open_runtime(
@@ -623,8 +623,8 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
     """
     from decimal import Decimal
 
-    from coscientist.core.domain import Budget, HitlPolicy, Study
-    from coscientist.core.store import SqliteEventStore
+    from coscientist.core.events.store import SqliteEventStore
+    from coscientist.core.execution.domain import Budget, HitlPolicy, Study
 
     sid = "st_bg_old_ratio"
     root = tmp_path / sid
@@ -691,8 +691,8 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
 @pytest.mark.asyncio
 async def test_all_done_budget_reasons_finalize_all_done(tmp_path, clock):
     """All tasks DONE(budget) without study flag → all_done, not budget trigger."""
-    from coscientist.core.cancel import _close_open_work
-    from coscientist.core.reasons import CloseReason
+    from coscientist.core.claims.reasons import CloseReason
+    from coscientist.core.plan.cancel import _close_open_work
 
     sid = "st_bg3"
     rt = await _boot(tmp_path, clock, sid)
@@ -766,7 +766,7 @@ async def test_finalize_total_on_render_failure(tmp_path, clock, monkeypatch):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(
-        "coscientist.core.finalize.render_markdown_report", _boom
+        "coscientist.core.finalize.finalize.render_markdown_report", _boom
     )
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
@@ -777,7 +777,7 @@ async def test_finalize_total_on_render_failure(tmp_path, clock, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_finalize_total_on_cas_failure(tmp_path, clock):
-    from coscientist.core.errors import CASUnavailable
+    from coscientist.core.events.errors import CASUnavailable
 
     class _BoomArts:
         """Realistic CAS failure: store attached but put raises CASUnavailable."""
@@ -1042,7 +1042,7 @@ async def test_concurrent_finalize_exactly_one(tmp_path, clock):
     """Real race: Barrier + two threads/stores; exactly one SF; {ok, StudyClosedError}."""
     import threading
 
-    from coscientist.core.store import SqliteEventStore
+    from coscientist.core.events.store import SqliteEventStore
 
     sid = "st_sf_concurrent"
     rt = await _boot(tmp_path, clock, sid)
@@ -1124,13 +1124,13 @@ async def test_legacy_two_study_finalized_fold_first_wins(tmp_path, clock):
     """Legacy journal with two SF: fold first-wins == store projections == rt2 graph."""
     import json
 
-    from coscientist.core.digest import payload_digest
-    from coscientist.core.finalize_nodes import (
+    from coscientist.core.events.digest import payload_digest
+    from coscientist.core.events.projections import apply_event
+    from coscientist.core.events.store import SqliteEventStore
+    from coscientist.core.finalize.finalize_nodes import (
         conclusion_id_for_study,
         graph_rows_from_finalized,
     )
-    from coscientist.core.projections import apply_event
-    from coscientist.core.store import SqliteEventStore
 
     sid = "st_sf_legacy_dup"
     rt = await _boot(tmp_path, clock, sid)
@@ -1242,9 +1242,9 @@ async def test_legacy_duplicate_study_finalized_taints_and_report(tmp_path, cloc
     """Second SF in a legacy journal taints meta + local fold (not the frozen report)."""
     import json
 
-    from coscientist.core.digest import payload_digest
-    from coscientist.core.projections import apply_event
-    from coscientist.core.store import SqliteEventStore
+    from coscientist.core.events.digest import payload_digest
+    from coscientist.core.events.projections import apply_event
+    from coscientist.core.events.store import SqliteEventStore
 
     sid = "st_sf_legacy_taint"
     rt = await _boot(tmp_path, clock, sid)
@@ -1401,7 +1401,7 @@ async def test_internal_error_finalize_exactly_one(tmp_path, clock, monkeypatch)
     def _boom(*_a, **_k):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("coscientist.core.finalize.render_markdown_report", _boom)
+    monkeypatch.setattr("coscientist.core.finalize.finalize.render_markdown_report", _boom)
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     fin = _fin(await rt.store.read_all())
@@ -1649,7 +1649,7 @@ async def test_finalized_rollback_allows_retry_then_closes(tmp_path, clock, monk
 @pytest.mark.asyncio
 async def test_lease_reacquire_sees_peer_finalize(tmp_path, clock):
     """After peer finalizes, reacquire rejects late writes (I3)."""
-    from coscientist.core.store import SqliteEventStore
+    from coscientist.core.events.store import SqliteEventStore
 
     sid = "st_lease_cache"
     root = tmp_path / sid

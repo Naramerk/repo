@@ -138,9 +138,9 @@ async def test_recovery_stage_task_not_rerun(tmp_path, clock, runtime_cls):
     """Task with ResultRecorded inside a stage: recover adds 0 attempts and 0 nodes."""
     from datetime import timedelta
 
-    from coscientist.core.domain import TaskState
-    from coscientist.core.ids import result_id
-    from coscientist.core.recover import recover
+    from coscientist.core.events.ids import result_id
+    from coscientist.core.execution.domain import TaskState
+    from coscientist.core.execution.recover import recover
     from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
     rt = await open_runtime(
@@ -177,7 +177,7 @@ def test_core_study_view_matches_refmodel(required_ok, verdicts):
     import refmodel
 
     core = pytest.importorskip(
-        "coscientist.core.rules", reason="coscientist.core.rules not present yet (M0)"
+        "coscientist.core.claims.rules", reason="coscientist.core.claims.rules not present yet (M0)"
     )
     got = core.study_view_verdict(required_ok, verdicts) == "fulfilled"
     assert got == refmodel.study_fulfilled(verdicts, required_ok)

@@ -6,15 +6,15 @@ from datetime import timedelta
 
 import pytest
 
-from coscientist.core.domain import TaskSpec
-from coscientist.core.graph import load_schema
-from coscientist.core.r17 import (
+from coscientist.core.claims.graph import load_schema
+from coscientist.core.claims.r17 import (
     claim_counts_under_r17,
     r17_criterion_before_evidence,
     r17_threshold_source_not_counted,
 )
-from coscientist.core.reasons import TaskReason
-from coscientist.core.upcasters import upcast
+from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.events.upcasters import upcast
+from coscientist.core.execution.domain import TaskSpec
 from tests.helpers import close_runtime, open_runtime
 
 
@@ -97,7 +97,7 @@ def test_refutation_priority_k_ref(impl):
 
 def test_priority_refuted_not_capped_by_stub_supports(impl):
     """PR8b: stubs excluded before counting; ≥ k_ref real refs → refuted + note."""
-    from coscientist.core.rules import priority_refuted_support_note
+    from coscientist.core.claims.rules import priority_refuted_support_note
 
     stub_sup = impl.Claim(
         "met", provenance="stub", attempt_id="S1", artifact_id="AS"
@@ -352,9 +352,9 @@ async def test_cancel_study_tick_closes_remaining(
     tmp_path, clock, runtime_cls, monkeypatch
 ):
     """cancel_study then tick: _close_remaining(CANCELLED) when close was skipped."""
-    import coscientist.core.cancel as cancel_mod
-    from coscientist.core import finalize as finalize_mod
-    from coscientist.core.domain import TaskState
+    import coscientist.core.plan.cancel as cancel_mod
+    from coscientist.core.execution.domain import TaskState
+    from coscientist.core.finalize import finalize as finalize_mod
 
     sid = "st_cx_tick"
     rt = await open_runtime(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from coscientist.core.graph import (
+from coscientist.core.claims.graph import (
     GraphEdge,
     GraphNode,
     GraphStore,

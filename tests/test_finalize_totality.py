@@ -6,16 +6,16 @@ from datetime import timedelta
 
 import pytest
 
-from coscientist.core.artifacts import LocalArtifactStore
-from coscientist.core.domain import HitlPolicy, QuestionSpec, TaskKind, TaskState
-from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.finalize import last_resort_payload
-from coscientist.core.finalize_nodes import (
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.execution.artifacts import LocalArtifactStore
+from coscientist.core.execution.domain import HitlPolicy, QuestionSpec, TaskKind, TaskState
+from coscientist.core.finalize.finalize import last_resort_payload
+from coscientist.core.finalize.finalize_nodes import (
     conclusion_id_for_question,
     conclusion_id_for_study,
     conclusion_ids_for,
 )
-from coscientist.core.store import SqliteEventStore
 from tests.helpers import close_runtime, open_runtime
 from tests.test_finalize import _boot, _fin, _skip_all, _spec
 
@@ -37,7 +37,7 @@ async def test_finalize_total_on_load_plans_failure(tmp_path, clock, monkeypatch
     async def boom(_rt):
         raise RuntimeError("plans_boom")
 
-    monkeypatch.setattr("coscientist.core.finalize._load_plans", boom)
+    monkeypatch.setattr("coscientist.core.finalize.finalize._load_plans", boom)
     await rt.finalize(trigger="all_done")
     await _assert_finalized(rt, fallback="RuntimeError")
     await close_runtime(rt)
@@ -51,7 +51,7 @@ async def test_finalize_total_on_dispositions_failure(tmp_path, clock, monkeypat
     def boom(**_k):
         raise ValueError("disp_boom")
 
-    monkeypatch.setattr("coscientist.core.finalize.dispositions", boom)
+    monkeypatch.setattr("coscientist.core.finalize.finalize.dispositions", boom)
     await rt.finalize(trigger="all_done")
     await _assert_finalized(rt, fallback="ValueError")
     await close_runtime(rt)
@@ -82,7 +82,7 @@ async def test_finalize_total_on_study_view_failure(tmp_path, clock, monkeypatch
     def boom(*_a, **_k):
         raise RuntimeError("view_boom")
 
-    monkeypatch.setattr("coscientist.core.finalize.study_view", boom)
+    monkeypatch.setattr("coscientist.core.finalize.finalize.study_view", boom)
     await rt.finalize(trigger="all_done")
     await _assert_finalized(rt, fallback="RuntimeError")
     await close_runtime(rt)
@@ -96,7 +96,7 @@ async def test_finalize_total_on_terminal_reason_failure(tmp_path, clock, monkey
     def boom(*_a, **_k):
         raise RuntimeError("term_boom")
 
-    monkeypatch.setattr("coscientist.core.finalize.terminal_reason_for", boom)
+    monkeypatch.setattr("coscientist.core.finalize.finalize.terminal_reason_for", boom)
     await rt.finalize(trigger="cancel")
     await _assert_finalized(rt, fallback="RuntimeError")
     await close_runtime(rt)
@@ -113,8 +113,8 @@ async def test_finalize_total_on_minimal_report_failure(tmp_path, clock, monkeyp
     def boom_min(*_a, **_k):
         raise RuntimeError("minimal_boom")
 
-    monkeypatch.setattr("coscientist.core.finalize.render_markdown_report", boom_render)
-    monkeypatch.setattr("coscientist.core.finalize.build_minimal_report", boom_min)
+    monkeypatch.setattr("coscientist.core.finalize.finalize.render_markdown_report", boom_render)
+    monkeypatch.setattr("coscientist.core.finalize.finalize.build_minimal_report", boom_min)
     rt.artifacts = LocalArtifactStore(tmp_path / "arts")
     # primary fails on render; minimal fails → outer last-resort
     await rt.finalize(trigger="all_done")
@@ -124,7 +124,7 @@ async def test_finalize_total_on_minimal_report_failure(tmp_path, clock, monkeyp
 
 
 def test_last_resort_payload_constants_only():
-    from coscientist.core.finalize_nodes import conclusion_ids_for
+    from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
 
     sid = "st_x"
     p = last_resort_payload(
@@ -195,7 +195,7 @@ async def test_crash_between_cancelled_and_finalized(tmp_path, clock, monkeypatc
         return  # simulate process death before StudyFinalized
 
     # cancel_study imports finalize by name each call — patch the module attr.
-    monkeypatch.setattr("coscientist.core.finalize.finalize", crash_finalize)
+    monkeypatch.setattr("coscientist.core.finalize.finalize.finalize", crash_finalize)
     await rt.cancel_study(by="user")
     types = [e.type for e in await rt.store.read_all()]
     assert "StudyCancelled" in types
@@ -260,7 +260,7 @@ async def test_finalize_conflict_after_commit_is_success(tmp_path, clock, monkey
 @pytest.mark.asyncio
 async def test_finalize_conflict_without_event_reraises(tmp_path, clock, monkeypatch):
     """Conflict with no StudyFinalized in store must not mark finalized."""
-    from coscientist.core.errors import Conflict
+    from coscientist.core.events.errors import Conflict
 
     sid = "st_conf_neg"
     rt = await _boot(tmp_path, clock, sid)
@@ -279,8 +279,8 @@ async def test_finalize_conflict_without_event_reraises(tmp_path, clock, monkeyp
 
 
 def test_rich_payload_bound_truncates_or_raises():
-    from coscientist.core.digest import canonical_json
-    from coscientist.core.finalize import (
+    from coscientist.core.events.digest import canonical_json
+    from coscientist.core.finalize.finalize import (
         MAX_FINALIZED_PAYLOAD_BYTES,
         _bound_rich_payload,
     )
@@ -326,8 +326,8 @@ def test_rich_payload_bound_truncates_or_raises():
 
 def test_timeout_budget_ru_survives_contributing_reasons_truncation():
     """«не проверено в пределах бюджета» must not be dropped by [:10] truncation."""
-    from coscientist.core.digest import canonical_json
-    from coscientist.core.finalize import (
+    from coscientist.core.events.digest import canonical_json
+    from coscientist.core.finalize.finalize import (
         IDLE_TIMEOUT_RU,
         MAX_FINALIZED_PAYLOAD_BYTES,
         TIMEOUT_BUDGET_RU,
@@ -372,13 +372,13 @@ def test_timeout_budget_ru_survives_contributing_reasons_truncation():
 
 def test_conclusion_not_tested_marker_for_refute_unresolved():
     """rule=refute_unresolved → conclusion attrs.not_tested (not just inconclusive)."""
-    from coscientist.core.finalize_nodes import (
+    from coscientist.core.claims.verdict import hypothesis_report_row
+    from coscientist.core.finalize.finalize_nodes import (
         conclusion_id_for_question,
         conclusion_id_for_study,
         conclusion_ids_for,
         graph_rows_from_finalized,
     )
-    from coscientist.core.verdict import hypothesis_report_row
 
     row = hypothesis_report_row(
         hypothesis_id="H1",
@@ -435,7 +435,7 @@ def test_conclusion_not_tested_marker_for_refute_unresolved():
 @pytest.mark.asyncio
 async def test_recover_after_finalize(tmp_path, clock):
     """recover() after StudyFinalized is a no-op success (not cut by writable)."""
-    from coscientist.core.recover import recover
+    from coscientist.core.execution.recover import recover
 
     sid = "st_rec_fin"
     rt = await _boot(tmp_path, clock, sid)
@@ -458,7 +458,7 @@ async def test_tick_ensure_lease_after_finalized(tmp_path, clock):
     await rt.tick()
     # stale epoch still raises
     rt.store.epoch = 0
-    from coscientist.core.errors import LeaseLost
+    from coscientist.core.events.errors import LeaseLost
 
     with pytest.raises(LeaseLost):
         await rt.tick()
@@ -573,14 +573,14 @@ def test_pick_finalize_trigger(impl):
 def test_terminal_reason_for(impl):
     from datetime import UTC, datetime
 
-    from coscientist.core.domain import (
+    from coscientist.core.claims.reasons import TaskReason
+    from coscientist.core.execution.domain import (
         Task,
         TaskKind,
         TaskOutcome,
         TaskSpec,
         TaskState,
     )
-    from coscientist.core.reasons import TaskReason
 
     now = datetime(2026, 1, 1, tzinfo=UTC)
     t = Task(

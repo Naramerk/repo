@@ -6,11 +6,11 @@ from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from typing import Any, Self
 
-from coscientist.core.digest import canonical_json, sha256_hex
-from coscientist.core.domain import Clarification, HitlRequest, Task
-from coscientist.core.errors import Conflict
-from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.ids import hitl_request_id, study_id
+from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.errors import Conflict
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.ids import hitl_request_id, study_id
+from coscientist.core.execution.domain import Clarification, HitlRequest, Task
 from coscientist.experimental.hitl_costly import CostlyHitlMixin
 
 
@@ -26,7 +26,7 @@ class HitlForkMixin(CostlyHitlMixin):
         self, proposal_id: str
     ) -> AbstractAsyncContextManager[None]:
         """Per-proposal lock: accept/delegate/reject/timeout/stale serialize side effects."""
-        from coscientist.core.proposed_check import hold_proposed_check_decision_lock
+        from coscientist.core.plan.proposed_check import hold_proposed_check_decision_lock
 
         return hold_proposed_check_decision_lock(self, proposal_id)
 
@@ -174,9 +174,9 @@ class HitlForkMixin(CostlyHitlMixin):
         """
         if not expansion:
             return
-        from coscientist.core.domain import QuestionSpec, QuestionSupersede, TaskSpec
-        from coscientist.core.expand import expand_plan
-        from coscientist.core.expand_trigger import refuse_expansion
+        from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskSpec
+        from coscientist.core.plan.expand import expand_plan
+        from coscientist.core.plan.expand_trigger import refuse_expansion
 
         after = str(
             expansion.get("after_task")
@@ -244,7 +244,7 @@ class HitlForkMixin(CostlyHitlMixin):
         reviewer must call ``approve_check`` / ``reject_check`` with a different
         ``reviewer_attempt_id`` than the proposer (DESIGN_M1 §16).
         """
-        from coscientist.core.proposed_check import approve_check, reject_check
+        from coscientist.core.plan.proposed_check import approve_check, reject_check
 
         ref_pid = str(getattr(h, "payload_ref", None) or "").strip()
         exp_pid = str((expansion or {}).get("proposal_id") or "").strip()
@@ -348,7 +348,7 @@ class HitlForkMixin(CostlyHitlMixin):
                 )
                 return
             if want == "delegate":
-                from coscientist.core.proposed_check import schedule_proposed_check_review
+                from coscientist.core.plan.proposed_check import schedule_proposed_check_review
 
                 rev_tid = None
                 if isinstance(expansion, dict):
@@ -376,7 +376,7 @@ class HitlForkMixin(CostlyHitlMixin):
         # Must take the same per-proposal lock as answer_hitl — otherwise timeout can
         # write CheckRejected while a human accept is still inside _append.
         if h.kind == "proposed_check":
-            from coscientist.core.proposed_check import reject_check
+            from coscientist.core.plan.proposed_check import reject_check
 
             pid = str(getattr(h, "payload_ref", None) or "").strip()
             if not pid:
@@ -449,7 +449,7 @@ class HitlForkMixin(CostlyHitlMixin):
             await self._critic_decide(h, decision="accept", delegated_by="timeout")
             return
         task = self.tasks[h.task_id]
-        from coscientist.core.domain import TaskState
+        from coscientist.core.execution.domain import TaskState
 
         if task.state != TaskState.DONE:
             await self._fail_task_human_timeout(h, task)
@@ -500,8 +500,8 @@ class HitlForkMixin(CostlyHitlMixin):
         plans = getattr(self, "plans", None)
         if graph is None or not isinstance(plans, dict) or not plans:
             return
-        from coscientist.core.graph import GraphNode
-        from coscientist.core.supersede import plan_node_id
+        from coscientist.core.claims.graph import GraphNode
+        from coscientist.core.plan.supersede import plan_node_id
 
         prev = max(plans.values(), key=lambda p: int(p.get("revision") or 0))
         pid = str(prev.get("plan_id") or "")
@@ -543,7 +543,7 @@ class HitlForkMixin(CostlyHitlMixin):
         graph = getattr(self, "graph", None)
         if graph is None:
             return
-        from coscientist.core.graph import GraphNode
+        from coscientist.core.claims.graph import GraphNode
 
         sid, nid, now = h.study_id, f"{h.study_id}:hitl:{h.request_id}", self.clock.now()
         existing = graph.get_node(nid)
@@ -580,7 +580,7 @@ class HitlForkMixin(CostlyHitlMixin):
         bmap, dmap = expansion.get("budget_shares") or {}, expansion.get("deadline_shares") or {}
         if not bmap and not dmap:
             return
-        from coscientist.core.share_alloc import build_budget_shares_payload
+        from coscientist.core.plan.share_alloc import build_budget_shares_payload
 
         err, payload = build_budget_shares_payload(
             self, budget_shares=dict(bmap),

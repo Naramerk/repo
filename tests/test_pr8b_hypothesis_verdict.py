@@ -14,19 +14,9 @@ from hypothesis.stateful import (
     run_state_machine_as_test,
 )
 
-from coscientist.core.claims import RuntimeClaim, filtered_claims_by_target
-from coscientist.core.domain import (
-    AgentTaskOutput,
-    ArtifactHandle,
-    InputSpec,
-    OutputSpec,
-    QuestionSpec,
-    RequirementRef,
-    TaskSpec,
-)
-from coscientist.core.rules import verdict
-from coscientist.core.upcasters import upcast
-from coscientist.core.verdict import (
+from coscientist.core.claims.claims import RuntimeClaim, filtered_claims_by_target
+from coscientist.core.claims.rules import verdict
+from coscientist.core.claims.verdict import (
     claim_is_severe,
     data_digests_from_bindings,
     distinct_by_key,
@@ -37,6 +27,16 @@ from coscientist.core.verdict import (
     refute_intent_counts,
     root_data_digests_from_bindings,
     tost_holds,
+)
+from coscientist.core.events.upcasters import upcast
+from coscientist.core.execution.domain import (
+    AgentTaskOutput,
+    ArtifactHandle,
+    InputSpec,
+    OutputSpec,
+    QuestionSpec,
+    RequirementRef,
+    TaskSpec,
 )
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
@@ -230,7 +230,7 @@ def test_refute_intent_needs_failable_prediction():
 
 
 def test_refuted_with_confirmations_reports_conflict_note():
-    from coscientist.core.verdict import excluded_confirmations_note
+    from coscientist.core.claims.verdict import excluded_confirmations_note
 
     stub = _c(
         provenance="stub",
@@ -298,7 +298,7 @@ def test_report_hypotheses_payload_schema():
 
 
 def test_null_claim_requires_tost():
-    from coscientist.core.verdict import (
+    from coscientist.core.claims.verdict import (
         classify_outcome,
         tost_holds,
         tost_holds_numerically,
@@ -566,7 +566,7 @@ def test_slot_rename_cannot_hide_data_roots():
 
 def test_output_kinds_from_catalog_ignores_planner_role():
     """MJ2: kinds from catalog code_output_names; planner role ignored; else data."""
-    from coscientist.core.verdict import output_kinds_from_catalog
+    from coscientist.core.claims.verdict import output_kinds_from_catalog
 
     catalog = type("C", (), {"code_output_names": ["script", "program"]})()
     kinds = output_kinds_from_catalog(
@@ -725,7 +725,7 @@ def test_agent_media_type_spoof_does_not_drop_data_root():
 @pytest.mark.asyncio
 async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls):
     """Agent put with text/x-python on a data OutputSpec stays in root digests."""
-    from coscientist.core.artifacts import make_tool_ref
+    from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_spoof"
     rt = await open_runtime(
@@ -817,7 +817,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
 
 
 def test_non_countable_fail_is_indeterminate_not_refutation():
-    from coscientist.core.verdict import classify_outcome
+    from coscientist.core.claims.verdict import classify_outcome
 
     v, oc, _ = classify_outcome(
         validity_ok=True,
@@ -908,8 +908,8 @@ def test_value_matches_never_used_sesoi():
     from pathlib import Path
 
     from coscientist.checks.evaluate import evaluate_code_check
-    from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
-    from coscientist.core.domain import CodeCheck
+    from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+    from coscientist.core.execution.domain import CodeCheck
 
     with tempfile.TemporaryDirectory() as tmp:
         arts = LocalArtifactStore(Path(tmp))
@@ -992,7 +992,7 @@ def test_inc_below_k_ref_inconclusive():
 
 
 def test_disposition_mapping_with_hypotheses():
-    from coscientist.core.verdict import disposition_for_question
+    from coscientist.core.claims.verdict import disposition_for_question
 
     assert (
         disposition_for_question(
@@ -1031,7 +1031,7 @@ def test_legacy_claims_never_supported():
 
 
 def test_r17_violation_invalid():
-    from coscientist.core.verdict import classify_outcome
+    from coscientist.core.claims.verdict import classify_outcome
 
     v, oc, _ = classify_outcome(
         validity_ok=True,
@@ -1042,9 +1042,9 @@ def test_r17_violation_invalid():
 
 
 def test_minimal_report_hypotheses_truncation_le_10kb():
-    from coscientist.core.digest import canonical_json
-    from coscientist.core.domain import Task, TaskKind, TaskOutcome, TaskSpec, TaskState
-    from coscientist.core.minimal_report import MAX_BYTES, build_minimal_report
+    from coscientist.core.events.digest import canonical_json
+    from coscientist.core.execution.domain import Task, TaskKind, TaskOutcome, TaskSpec, TaskState
+    from coscientist.core.finalize.minimal_report import MAX_BYTES, build_minimal_report
 
     tasks = {
         "st/T0": Task(
@@ -1305,8 +1305,8 @@ def test_verdict_property_record_claim_v1_v5():
 @pytest.mark.asyncio
 async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
     """Catalog without uses_sesoi → not severe → survived at most, never supported."""
-    from coscientist.core.artifacts import make_tool_ref
-    from coscientist.core.dispositions import dispositions
+    from coscientist.core.claims.dispositions import dispositions
+    from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_nose"
     rt = await open_runtime(
@@ -1370,8 +1370,8 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
     """Role swap, goal reword, and intermediate-step provenance cannot split sources."""
-    from coscientist.core.artifacts import make_tool_ref
-    from coscientist.core.domain import ExperimentMethod
+    from coscientist.core.execution.artifacts import make_tool_ref
+    from coscientist.core.execution.domain import ExperimentMethod
 
     sid = "st_indep"
     rt = await open_runtime(
@@ -1607,8 +1607,8 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
     """Production path: agent put + core catalog eval → countable not_met refutes."""
-    from coscientist.core.artifacts import make_tool_ref
-    from coscientist.core.dispositions import dispositions
+    from coscientist.core.claims.dispositions import dispositions
+    from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_agent_ref"
     rt = await open_runtime(
@@ -1671,7 +1671,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls):
     """record→finalize: foreign_artifact → StudyFinalized reason, not unclear."""
-    from coscientist.core.artifacts import make_tool_ref
+    from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_foreign"
     rt = await open_runtime(
@@ -1815,10 +1815,10 @@ async def test_e2e_agent_put_two_independent_mets_supported(
     """Live supported: agent put + core SESOI eval, two independent mets."""
     from datetime import UTC, datetime
 
-    from coscientist.core.artifacts import make_tool_ref
-    from coscientist.core.graph import GraphEdge, GraphNode
-    from coscientist.core.ids import experiment_node_id, hypothesis_node_id
-    from coscientist.core.verdict import hypothesis_verdict
+    from coscientist.core.claims.graph import GraphEdge, GraphNode
+    from coscientist.core.claims.verdict import hypothesis_verdict
+    from coscientist.core.events.ids import experiment_node_id, hypothesis_node_id
+    from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_agent_sup"
     rt = await open_runtime(
@@ -1990,11 +1990,11 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
     """Sandbox put stamps trusted=True; still countable for verdicts (PR17 path)."""
     from datetime import UTC, datetime
 
-    from coscientist.core.artifacts import make_tool_ref
-    from coscientist.core.dispositions import dispositions
-    from coscientist.core.graph import GraphEdge, GraphNode
-    from coscientist.core.ids import experiment_node_id, hypothesis_node_id
-    from coscientist.core.verdict import hypothesis_verdict
+    from coscientist.core.claims.dispositions import dispositions
+    from coscientist.core.claims.graph import GraphEdge, GraphNode
+    from coscientist.core.claims.verdict import hypothesis_verdict
+    from coscientist.core.events.ids import experiment_node_id, hypothesis_node_id
+    from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_sandbox"
     rt = await open_runtime(
@@ -2222,7 +2222,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
 @pytest.mark.asyncio
 async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtime_cls):
     """V1: journaled VerdictSnapshotsRecorded wins on reopen (not recomputed softer)."""
-    from coscientist.core.artifacts import make_tool_ref
+    from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_v1"
     rt = await open_runtime(
@@ -2322,9 +2322,9 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
     tmp_path, clock, runtime_cls
 ):
     """Legacy/forged severe=True / refute_capable=True must not survive read/replay."""
-    from coscientist.core.events import EventEnvelope, make_idem
-    from coscientist.core.graph import GraphEdge, GraphNode
-    from coscientist.core.ids import claim_node_id, question_node_id
+    from coscientist.core.claims.graph import GraphEdge, GraphNode
+    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.ids import claim_node_id, question_node_id
 
     sid = "st_forge"
     rt = await open_runtime(
@@ -2441,7 +2441,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
 @pytest.mark.asyncio
 async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_cls):
     """Agent put + core TOST eval → countable severe; trusted stays false."""
-    from coscientist.core.artifacts import make_tool_ref
+    from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_tost"
     rt = await open_runtime(

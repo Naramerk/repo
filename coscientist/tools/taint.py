@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 
-from coscientist.core.taint import artifact_is_tainted
-from coscientist.core.tool_registry import resolve_effect
+from coscientist.core.execution.taint import artifact_is_tainted
+from coscientist.core.execution.tool_registry import resolve_effect
 from coscientist.tools.contract import Tool, ToolSpec
 
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from coscientist.core.domain import Catalog, CodeCheck, TaskSpec
+from coscientist.core.execution.domain import Catalog, CodeCheck, TaskSpec
 
 
 def _catalog_limits_for_criteria(
