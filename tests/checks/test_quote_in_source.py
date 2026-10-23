@@ -2163,6 +2163,27 @@ async def test_reclassify_internal_error_survives_reconcile_failure(
 
 
 @pytest.mark.asyncio
+async def test_open_reconcile_lease_lost_propagates(tmp_path: Path, clock, monkeypatch):
+    """LeaseLost from reconcile_fetch_integrity on open must not be swallowed."""
+    from coscientist.core.errors import LeaseLost
+
+    sid, _digest, _call_id, db = _copy_reclass_fixture(tmp_path)
+    _assert_raw_fixture_schema_versions(db)
+    _install_reclassified_papers_get()
+
+    async def boom_lease(_writer):
+        raise LeaseLost("reconcile lease lost")
+
+    monkeypatch.setattr(
+        "coscientist.core.source_fetch.reconcile_fetch_integrity", boom_lease
+    )
+    with pytest.raises(LeaseLost, match="reconcile lease lost"):
+        await open_runtime(
+            tmp_path, sid, clock=clock, catalog=_catalog_quote(), owner="t2"
+        )
+
+
+@pytest.mark.asyncio
 async def test_open_finalized_study_does_not_append_fetch_integrity(
     tmp_path: Path, clock
 ):

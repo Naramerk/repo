@@ -534,6 +534,8 @@ async def _build_rich_payload(
 
     try:
         await reconcile_fetch_integrity(runtime.writer)
+    except LeaseLost:
+        raise
     except Exception:  # noqa: BLE001 — finalize must remain total
         log.warning("reconcile_fetch_integrity failed", exc_info=True)
 
