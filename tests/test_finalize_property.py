@@ -292,6 +292,33 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
             depends_on=["PLAN"],
             addresses=[new_id],
         )
+        # MJ-d: human quota only via HitlDecided matching hitl_request_id.
+        from coscientist.core.events import EventEnvelope, make_idem
+
+        rid = f"hitl_prop_{rev}"
+        now = self.rt.clock.now()
+        self._call(
+            self.rt._append(
+                [
+                    EventEnvelope(
+                        study_id=self.rt.study.study_id,
+                        type="HitlDecided",
+                        entity_key=rid,
+                        idem_key=make_idem("HitlDecided", rid),
+                        payload={
+                            "request_id": rid,
+                            "decision": "accept",
+                            "by": "human",
+                            "decided_by": "human",
+                            "approved_by": "human",
+                            "reason": "answered",
+                            "spent_rub": 0.0,
+                        },
+                        ts=now,
+                    )
+                ]
+            )
+        )
         self._call(
             self.rt.expand_plan(
                 after_task="PLAN",
@@ -299,7 +326,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                 added_questions=[new_q],
                 superseded_questions=[QuestionSupersede(new_id=new_id, old_id=old_id)],
                 origin="plan",
-                delegated_by="human",
+                hitl_request_id=rid,
                 reason="prop_question_supersede",
             )
         )

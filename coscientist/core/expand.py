@@ -1,8 +1,8 @@
 """PlanExpanded apply path: quotas, replan_reserve, question supersede (M1 PR9).
 
 Trigger lives in ``expand_trigger``; validation in ``expand_validate``;
-graph helpers in ``expand_graph``. Never raise out of tick/record — invalid
-requests become ``ExpansionRefused(reason=invalid)``.
+critic gate in ``expand_critic``. Never raise out of tick/record.
+``delegated_by`` is derived only from a matching ``HitlDecided`` (MJ-d).
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from coscientist.core.domain import (
     TaskState,
 )
 from coscientist.core.events import EventEnvelope, make_idem
+from coscientist.core.expand_critic import critic_gate, prepare_request_for_apply
 from coscientist.core.expand_graph import (
     plan_graph_events,
     question_graph_events,
@@ -28,14 +29,14 @@ from coscientist.core.expand_graph import (
 from coscientist.core.expand_trigger import refuse_expansion
 from coscientist.core.expand_validate import (
     active_plan_blob,
-    assign_exp_keys,
+    assign_core_keys,
     task_produced_countable_claims,
     validate_expansion,
 )
 from coscientist.core.ids import plan_id, task_id
 from coscientist.core.supersede import (
-    question_has_countable_refutation,
     should_skip_for_question_supersede,
+    target_blocks_agent_supersede,
     tasks_needed_by_active_questions,
 )
 
@@ -47,28 +48,34 @@ DelegatedBy = Literal["human", "timeout"] | None
 
 
 def _quota_kind(delegated_by: DelegatedBy) -> Literal["agent", "human"]:
-    return "human" if delegated_by == "human" else "agent"
+    # HITL path (human accept or decide-yourself / timeout) uses human quota.
+    return "human" if delegated_by in ("human", "timeout") else "agent"
 
 
-def _delegated_by_from_hitl(runtime: StudyRuntime, hitl_request_id: str | None) -> DelegatedBy:
-    """MJ6: derive delegated_by from HitlDecided, not from a free argument alone."""
-    if not hitl_request_id:
-        return None
-    hitl = getattr(runtime, "hitl", None) or {}
-    h = hitl.get(hitl_request_id) if isinstance(hitl, dict) else None
-    if h is not None:
-        db = getattr(h, "delegated_by", None)
-        if db in ("human", "timeout"):
-            return db  # type: ignore[return-value]
-        raw = getattr(h, "decision_payload", None) or {}
-        if isinstance(raw, dict) and raw.get("delegated_by") in ("human", "timeout"):
-            return raw["delegated_by"]  # type: ignore[return-value]
+def _delegated_by_from_hitl(
+    runtime: StudyRuntime, hitl_request_id: str
+) -> DelegatedBy | str:
+    """Derive delegated_by from HitlDecided only. Return error detail if missing."""
     decisions = getattr(runtime, "_hitl_decisions", None)
-    if isinstance(decisions, dict) and hitl_request_id in decisions:
-        db = decisions[hitl_request_id].get("delegated_by")
-        if db in ("human", "timeout"):
-            return db  # type: ignore[return-value]
-    return "human"
+    row: dict | None = None
+    if isinstance(decisions, dict):
+        row = decisions.get(hitl_request_id)
+    if row is None:
+        hitl = getattr(runtime, "hitl", None) or {}
+        h = hitl.get(hitl_request_id) if isinstance(hitl, dict) else None
+        if h is not None and not getattr(h, "open", True):
+            # Closed HITL without a folded decision is still invalid for forge.
+            pass
+        return "missing_hitl_decided"
+    db = row.get("delegated_by")
+    if db in ("human", "timeout"):
+        return db  # type: ignore[return-value]
+    # Human accept (approved_by=human, no delegated_by) → treat as human quota.
+    if row.get("approved_by") == "human" or row.get("decided_by") == "human":
+        return "human"
+    if row.get("approved_by") == "critic" or row.get("decided_by") == "critic":
+        return "timeout" if db == "timeout" else "human"
+    return "missing_hitl_decided"
 
 
 async def expand_plan(
@@ -81,15 +88,16 @@ async def expand_plan(
     superseded_questions: list[QuestionSupersede] | None = None,
     origin: Origin = "emergent",
     reason: str = "",
-    delegated_by: DelegatedBy = None,
     hitl_request_id: str | None = None,
     expand_after: list[str] | None = None,
     assign_keys: bool = False,
+    replan_allocated_s: float | None = None,
 ) -> str | None:
     """Apply a plan expansion. Returns new plan_id, or None if ExpansionRefused.
 
-    Agent-path pending apply sets ``assign_keys=True`` (core EXP-<n>); HITL/API
-    may pass explicit keys with ``assign_keys=False``.
+    ``delegated_by`` is not a public argument (MJ-d): pass ``hitl_request_id``
+    and it is taken from the matching ``HitlDecided``; unknown id →
+    ``ExpansionRefused(invalid_hitl)``.
     """
     try:
         return await _expand_plan(
@@ -101,10 +109,10 @@ async def expand_plan(
             superseded_questions=superseded_questions,
             origin=origin,
             reason=reason,
-            delegated_by=delegated_by,
             hitl_request_id=hitl_request_id,
             expand_after=expand_after,
             assign_keys=assign_keys,
+            replan_allocated_s=replan_allocated_s,
         )
     except Exception:  # noqa: BLE001 — never raise to tick/record
         await refuse_expansion(runtime, after_task, reason="invalid", detail="expand_crash")
@@ -121,25 +129,34 @@ async def _expand_plan(
     superseded_questions: list[QuestionSupersede] | None,
     origin: Origin,
     reason: str,
-    delegated_by: DelegatedBy,
     hitl_request_id: str | None,
     expand_after: list[str] | None,
     assign_keys: bool,
+    replan_allocated_s: float | None,
 ) -> str | None:
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return None
     study = runtime.study
     sid = study.study_id
     now = runtime.clock.now()
+
+    delegated_by: DelegatedBy = None
     if hitl_request_id:
-        delegated_by = _delegated_by_from_hitl(runtime, hitl_request_id)
+        derived = _delegated_by_from_hitl(runtime, hitl_request_id)
+        if isinstance(derived, str) and derived not in ("human", "timeout"):
+            await refuse_expansion(
+                runtime, after_task, reason="invalid_hitl", detail=str(derived)[:200]
+            )
+            return None
+        delegated_by = derived  # type: ignore[assignment]
+
     added_questions = list(added_questions or [])
     superseded_tasks = list(superseded_tasks or [])
     superseded_questions = list(superseded_questions or [])
     expand_after = list(expand_after or [])
 
     if assign_keys:
-        keyed = assign_exp_keys(runtime, list(added_tasks))
+        keyed = assign_core_keys(runtime, list(added_tasks))
         if isinstance(keyed, str):
             await refuse_expansion(runtime, after_task, reason="invalid", detail=keyed[:200])
             return None
@@ -163,18 +180,27 @@ async def _expand_plan(
     remaining_budget = budget - used
     ed = study.effective_deadline()
     time_left = max(0.0, (ed - now).total_seconds())
-    allocate = min(float(study.plan_timeout_s), remaining_budget, time_left)
-    if remaining_budget <= 0 or allocate <= 0:
-        await refuse_expansion(runtime, after_task, reason="expansion_limit", detail="replan_reserve")
-        return None
+    if replan_allocated_s is not None:
+        allocate = float(replan_allocated_s)
+    else:
+        allocate = min(float(study.plan_timeout_s), remaining_budget, time_left)
+        if remaining_budget <= 0 or allocate <= 0:
+            await refuse_expansion(
+                runtime, after_task, reason="expansion_limit", detail="replan_reserve"
+            )
+            return None
 
+    # MJ-b: agent path cannot supersede/SKIP past countable refutation or open refute.
+    blocked_qs: set[str] = set()
     if qkind == "agent":
         for s in superseded_questions:
-            if question_has_countable_refutation(runtime, s.old_id):
+            block = target_blocks_agent_supersede(runtime, s.old_id)
+            if block:
                 await refuse_expansion(
-                    runtime, after_task, reason="has_refutation", detail=s.old_id
+                    runtime, after_task, reason="has_refutation", detail=f"{s.old_id}:{block}"
                 )
                 return None
+            blocked_qs.add(s.old_id)
 
     prev = active_plan_blob(runtime)
     prev_rev = int(prev.get("revision") or 0) if prev else 0
@@ -238,6 +264,7 @@ async def _expand_plan(
             superseded_old=superseded_old,
             active_q_after=active_q_after,
             protected_keys=protected,
+            blocked_questions=blocked_qs if qkind == "agent" else None,
         ):
             skip_keys.add(t.task_key)
         else:
@@ -292,9 +319,17 @@ async def _expand_plan(
         if spec.task_key in existing_keys and spec.task_key not in skip_keys:
             continue
         tid = task_id(sid, spec.task_key)
+        kind = TaskKind.EXPERIMENT
+        route = (spec.route or "").lower()
+        if route in ("literature", "lit"):
+            kind = TaskKind.LITERATURE
+        elif route in ("hypotheses", "hypothesis", "hyp"):
+            kind = TaskKind.HYPOTHESES
+        elif route in ("planner", "plan"):
+            kind = TaskKind.PLAN
         task = Task(
             task_id=tid,
-            kind=TaskKind.EXPERIMENT,
+            kind=kind,
             spec=spec,
             state=TaskState.PENDING,
             deadline=ed,
@@ -342,7 +377,7 @@ async def _expand_plan(
 
 
 async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str | None:
-    """Apply queued ExpansionRequest after PLAN-n SUCCESS (critic accept)."""
+    """Run M1 critic gate, then apply queued ExpansionRequest after PLAN-n SUCCESS."""
     reqs = getattr(runtime, "_expand_requests", None) or {}
     meta = reqs.get(plan_key) if isinstance(reqs, dict) else None
     if not isinstance(meta, dict):
@@ -350,23 +385,42 @@ async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str |
     after = str(meta.get("after_task") or plan_key)
     raw = meta.get("pending")
     if not isinstance(raw, dict):
+        await refuse_expansion(runtime, after, reason="critic_rejected", detail="no_pending")
+        if isinstance(reqs, dict):
+            reqs.pop(plan_key, None)
         return None
     try:
         req = ExpansionRequest.model_validate(raw)
     except Exception:  # noqa: BLE001
-        await refuse_expansion(runtime, after, reason="invalid", detail="pending_bad")
+        await refuse_expansion(runtime, after, reason="critic_rejected", detail="pending_bad")
+        if isinstance(reqs, dict):
+            reqs.pop(plan_key, None)
         return None
+    reject = critic_gate(runtime, req, after_task=after)
+    if reject is not None:
+        await refuse_expansion(runtime, after, reason="critic_rejected", detail=str(reject)[:200])
+        if isinstance(reqs, dict):
+            reqs.pop(plan_key, None)
+        return None
+    prepared = prepare_request_for_apply(runtime, req)
+    if isinstance(prepared, str):
+        await refuse_expansion(runtime, after, reason="critic_rejected", detail=prepared[:200])
+        if isinstance(reqs, dict):
+            reqs.pop(plan_key, None)
+        return None
+    # PLAN-n already reserved replan time — do not double-count on PlanExpanded.
+    already = float(meta.get("replan_allocated_s") or 0.0)
     pid = await expand_plan(
         runtime,
         after_task=after,
-        added_tasks=list(req.tasks),
-        added_questions=list(req.questions),
-        superseded_tasks=list(req.superseded_tasks),
-        superseded_questions=list(req.superseded_questions),
+        added_tasks=list(prepared.tasks),
+        added_questions=list(prepared.questions),
+        superseded_tasks=list(prepared.superseded_tasks),
+        superseded_questions=list(prepared.superseded_questions),
         origin="emergent",
-        reason=req.reason or "expansion_request",
-        delegated_by=None,
-        assign_keys=True,
+        reason=prepared.reason or "expansion_request",
+        assign_keys=False,  # already assigned in prepare_request_for_apply
+        replan_allocated_s=0.0 if already > 0 else None,
     )
     if isinstance(reqs, dict):
         reqs.pop(plan_key, None)

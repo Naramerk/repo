@@ -1,10 +1,16 @@
-"""Question/criterion supersede helpers (M1 PR9 / C10 / §11)."""
+"""Question/criterion supersede helpers (M1 PR9 / C10 / §11 / MJ-b)."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from coscientist.core.ids import criterion_node_id, question_node_id
+from coscientist.core.domain import TaskState
+from coscientist.core.ids import (
+    criterion_node_id,
+    experiment_node_id,
+    hypothesis_node_id,
+    question_node_id,
+)
 
 
 def plan_node_id(study_id: str, pid: str) -> str:
@@ -36,39 +42,99 @@ def criterion_is_superseded(graph: Any, study_id: str, criterion_key: str) -> bo
     return False
 
 
-def question_has_countable_refutation(
-    runtime: Any,
-    question_id: str,
-) -> bool:
-    """True when the question has ≥ k_ref countable inconsistent claims (refuted)."""
+def countable_refutation_n(runtime: Any, target_id: str) -> int:
+    """Count claims that ``counts()`` and are inconsistent for this target.
+
+    Uses the same ``RuntimeClaim.counts()`` filter as the verdict path (MJ-b).
+    Threshold is ≥1 countable refutation — not ``k_ref``.
+    """
     study = getattr(runtime, "study", None)
     graph = getattr(runtime, "graph", None)
-    if study is None or graph is None or not question_id:
-        return False
+    if study is None or graph is None or not target_id:
+        return 0
     from coscientist.core.claims import filtered_claims_by_target
     from coscientist.core.verdict import effective_outcome
 
     by = filtered_claims_by_target(
         graph, study_id=study.study_id, results=getattr(runtime, "results", None)
     )
-    claims = list(by.get(f"question:{question_id}") or []) + list(by.get(question_id) or [])
-    k_ref = int(getattr(study, "refutations_needed", 1) or 1)
+    claims = list(by.get(f"question:{target_id}") or []) + list(
+        by.get(f"hypothesis:{target_id}") or []
+    ) + list(by.get(target_id) or [])
     n = 0
     for c in claims:
-        if getattr(c, "exclusion_reason", None) not in (None, "superseded"):
+        # counts() already applies C10 superseded exclusion; for escape check we
+        # need pre-supersede facts — temporarily ignore superseded exclusion.
+        excl = getattr(c, "exclusion_reason", None)
+        if excl == "superseded":
+            # Probe without the supersede flag via the same predicates as counts().
+            if not (
+                getattr(c, "accepted", False)
+                and getattr(c, "validity_ok", False)
+                and getattr(c, "frozen", False)
+                and getattr(c, "provenance", "") == "real"
+            ):
+                continue
+            if getattr(c, "is_lit", False):
+                continue
+            if getattr(c, "evidence_kind", "") not in ("computational", "experimental"):
+                continue
+            if effective_outcome(c) == "inconsistent":
+                n += 1
             continue
-        if not (
-            getattr(c, "accepted", False)
-            and getattr(c, "validity_ok", False)
-            and getattr(c, "frozen", False)
-            and getattr(c, "provenance", "") == "real"
-        ):
-            continue
-        if getattr(c, "is_lit", False):
-            continue
-        if effective_outcome(c) == "inconsistent":
+        if c.counts() and effective_outcome(c) == "inconsistent":
             n += 1
-    return n >= k_ref
+    return n
+
+
+def has_open_refute_task(runtime: Any, target_id: str) -> bool:
+    """True when a non-DONE task has tests.intent=refute toward this target.
+
+    ``tests`` edges are experiment→hypothesis. For a question target, any open
+    task that addresses it and carries a refute tests edge (to any hypothesis)
+    also blocks. For a hypothesis target, the edge must point at that hypothesis.
+    """
+    study = getattr(runtime, "study", None)
+    graph = getattr(runtime, "graph", None)
+    if study is None or graph is None or not target_id:
+        return False
+    sid = study.study_id
+    hid = hypothesis_node_id(sid, target_id)
+    for task in runtime.tasks.values():
+        if task.state == TaskState.DONE:
+            continue
+        exp_id = experiment_node_id(sid, task.spec.task_key)
+        if graph.get_node(exp_id) is None:
+            continue
+        for e in graph.edges_from(exp_id):
+            if e.kind != "tests":
+                continue
+            if (e.attrs or {}).get("intent") != "refute":
+                continue
+            if e.dst_id == hid:
+                return True
+            # Question target: open refute task addressing this question.
+            if target_id in (task.spec.addresses or []):
+                return True
+    return False
+
+
+def target_blocks_agent_supersede(runtime: Any, target_id: str) -> str | None:
+    """Agent-path block reason, or None if supersede/SKIP is allowed.
+
+    Blocks when ≥1 countable refutation (via ``counts()``) OR an open task with
+    ``tests.intent=refute`` for that question/hypothesis.
+    """
+    if countable_refutation_n(runtime, target_id) >= 1:
+        return "has_refutation"
+    if has_open_refute_task(runtime, target_id):
+        return "open_refute_task"
+    return None
+
+
+# Back-compat name used by expand.py / expand_critic.
+def question_has_countable_refutation(runtime: Any, question_id: str) -> bool:
+    return target_blocks_agent_supersede(runtime, question_id) is not None
 
 
 def tasks_needed_by_active_questions(
@@ -77,12 +143,7 @@ def tasks_needed_by_active_questions(
     superseded_old: set[str],
     active_q_after: set[str],
 ) -> set[str]:
-    """Task keys that active (non-superseded / new) questions' tasks depend on.
-
-    DESIGN_M1 §11: do not SKIP a task that a task of a non-superseded or new
-    question depends on (shared-descendant / shared ancestor in the DAG).
-    """
-    # Map task_key → addresses / depends_on
+    """Task keys that active (non-superseded / new) questions' tasks depend on."""
     by_key: dict[str, Any] = {}
     for t in tasks:
         key = getattr(t, "task_key", None) or (t.get("task_key") if isinstance(t, dict) else None)
@@ -101,9 +162,7 @@ def tasks_needed_by_active_questions(
             raw = t.get("depends_on")
         return [str(d) for d in (raw or [])]
 
-    # Tasks that address an active question.
     keepers = {k for k, t in by_key.items() if _addrs(t) & active_q_after}
-    # Also tasks that address only non-superseded questions (no supersede at all).
     for k, t in by_key.items():
         addrs = _addrs(t)
         if addrs and not (addrs <= superseded_old):
@@ -130,8 +189,13 @@ def should_skip_for_question_supersede(
     superseded_old: set[str],
     active_q_after: set[str],
     protected_keys: set[str],
+    blocked_questions: set[str] | None = None,
 ) -> bool:
-    """True when an open task solely addresses superseded questions and is not shared."""
+    """True when an open task solely addresses superseded questions and is not shared.
+
+    Agent path: never SKIP tasks that address a question blocked by MJ-b
+    (``blocked_questions``).
+    """
     key = getattr(task, "task_key", None) or (
         task.get("task_key") if isinstance(task, dict) else None
     )
@@ -142,6 +206,8 @@ def should_skip_for_question_supersede(
         raw = task.get("addresses")
     addrs = {str(a) for a in (raw or [])}
     if not addrs:
+        return False
+    if blocked_questions and (addrs & blocked_questions):
         return False
     if addrs <= superseded_old and not (addrs & active_q_after):
         return True

@@ -15,43 +15,56 @@ from coscientist.core.inputs import validate_input_specs, validate_plan_criteria
 if TYPE_CHECKING:
     from coscientist.core.machine import StudyRuntime
 
-_EXP_KEY = re.compile(r"^EXP-(\d+)$")
+_KIND_KEY = re.compile(r"^(EXP|LIT|HYP|PLAN)-(\d+)$")
 
 
-def next_exp_index(runtime: StudyRuntime, tasks: list[TaskSpec]) -> int:
-    """Next EXP-<n> index from runtime tasks + candidate keys."""
+def _prefix_for_route(route: str) -> str:
+    r = (route or "").lower()
+    if r in ("literature", "lit"):
+        return "LIT"
+    if r in ("hypotheses", "hypothesis", "hyp"):
+        return "HYP"
+    if r in ("planner", "plan"):
+        return "PLAN"
+    return "EXP"
+
+
+def next_kind_index(runtime: StudyRuntime, prefix: str, tasks: list[TaskSpec]) -> int:
+    """Next ``{prefix}-<n>`` index from runtime tasks + candidates."""
     n = 0
+    pat = re.compile(rf"^{re.escape(prefix)}-(\d+)$")
     for rt_task in runtime.tasks.values():
-        m = _EXP_KEY.match(rt_task.spec.task_key)
+        m = pat.match(rt_task.spec.task_key)
         if m:
             n = max(n, int(m.group(1)) + 1)
     for spec in tasks:
-        m = _EXP_KEY.match(spec.task_key)
+        m = pat.match(spec.task_key)
         if m:
             n = max(n, int(m.group(1)) + 1)
     return n
 
 
-def assign_exp_keys(runtime: StudyRuntime, added: list[TaskSpec]) -> list[TaskSpec] | str:
-    """Core assigns EXP-<n> for experiment routes; ignore agent keys; reject dupes."""
+def assign_core_keys(runtime: StudyRuntime, added: list[TaskSpec]) -> list[TaskSpec] | str:
+    """Core assigns EXP/LIT/HYP/PLAN-<n> for all expansion kinds; ignore agent keys."""
     out: list[TaskSpec] = []
-    idx = next_exp_index(runtime, [])
+    counters: dict[str, int] = {}
     seen: set[str] = {t.spec.task_key for t in runtime.tasks.values()}
     for spec in added:
-        route = (spec.route or "").lower()
-        if route in ("experiment", "exp") or _EXP_KEY.match(spec.task_key):
-            key = f"EXP-{idx}"
-            idx += 1
-            if key in seen:
-                return f"duplicate task_key after assign: {key}"
-            seen.add(key)
-            out.append(spec.model_copy(update={"task_key": key}))
-        else:
-            if spec.task_key in seen:
-                return f"duplicate task_key: {spec.task_key}"
-            seen.add(spec.task_key)
-            out.append(spec)
+        prefix = _prefix_for_route(spec.route)
+        if prefix not in counters:
+            counters[prefix] = next_kind_index(runtime, prefix, [])
+        key = f"{prefix}-{counters[prefix]}"
+        counters[prefix] += 1
+        if key in seen:
+            return f"duplicate task_key after assign: {key}"
+        seen.add(key)
+        out.append(spec.model_copy(update={"task_key": key}))
     return out
+
+
+# Back-compat alias used by older call sites / tests.
+def assign_exp_keys(runtime: StudyRuntime, added: list[TaskSpec]) -> list[TaskSpec] | str:
+    return assign_core_keys(runtime, added)
 
 
 def validate_expansion(

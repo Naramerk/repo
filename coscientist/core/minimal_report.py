@@ -178,7 +178,7 @@ def render_markdown_report(
     ]
     if refusal:
         lines.append(f"- refusal: `{refusal}`")
-    not_done = [c for c in contributing_reasons if str(c).startswith("not done:")]
+    not_done = [c for c in contributing_reasons if str(c).startswith("не выполнено:")]
     for line in not_done:
         lines.append(f"- {line}")
     lines.extend(

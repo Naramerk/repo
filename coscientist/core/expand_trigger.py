@@ -1,8 +1,8 @@
 """H-g expand trigger after TaskDone + ExpansionRefused (M1 PR9).
 
-Agent ``expansion_request`` / ``expand_after`` only enqueue a PLAN-n container
-(planner→critic). Direct ``PlanExpanded`` is applied after critic/HITL via
-``expand_plan`` / ``apply_pending_expansion``.
+Agent ``expansion_request`` / ``expand_after`` enqueue a PLAN-n container with
+explicit critic criteria. Direct ``PlanExpanded`` is applied after the M1
+deterministic critic gate (or HITL) via ``expand_plan`` / ``apply_pending_expansion``.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from coscientist.core.domain import (
     TaskState,
 )
 from coscientist.core.events import EventEnvelope, make_idem
+from coscientist.core.expand_critic import PLAN_N_CRITIC_CRITERIA
 from coscientist.core.ids import task_id
 
 if TYPE_CHECKING:
@@ -82,15 +83,6 @@ def expansion_already_handled(runtime: StudyRuntime, after_task: str) -> bool:
         for meta in pending.values():
             if isinstance(meta, dict) and str(meta.get("after_task") or "") == after_task:
                 return True
-    for t in runtime.tasks.values():
-        if t.kind == TaskKind.PLAN and t.spec.task_key.startswith("PLAN-"):
-            attrs = getattr(t.spec, "model_extra", None) or {}
-            # Pending expansion stored on TaskCreated payload via runtime map.
-            if t.spec.task_key in (getattr(runtime, "_expand_requests", {}) or {}):
-                meta = runtime._expand_requests[t.spec.task_key]  # noqa: SLF001
-                if str(meta.get("after_task") or "") == after_task:
-                    return True
-            _ = attrs
     return False
 
 
@@ -105,7 +97,6 @@ async def refuse_expansion(
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
-    # Deterministic idem key (no timestamp) — one refusal per cause.
     await runtime._append(  # noqa: SLF001
         [
             EventEnvelope(
@@ -153,10 +144,7 @@ async def ensure_plan_n_task(
     after_task: str,
     pending: ExpansionRequest | None = None,
 ) -> str | None:
-    """Create PLAN-<n> container for planner→critic (DESIGN §3.3 / MJ2).
-
-    Returns PLAN task_key or None if refused. Does not apply PlanExpanded.
-    """
+    """Create PLAN-<n> with explicit critic criteria (DESIGN_M1 §4 / MJ-a)."""
     if runtime.study is None:
         return None
     if not _agent_quota_ok(runtime):
@@ -167,7 +155,6 @@ async def ensure_plan_n_task(
         await refuse_expansion(runtime, after_task, reason="expansion_limit", detail="replan_reserve")
         return None
     sid = runtime.study.study_id
-    # PLAN-n index = agent expansions already applied + pending PLAN containers + 1
     existing_plan_n = sum(
         1
         for t in runtime.tasks.values()
@@ -185,10 +172,11 @@ async def ensure_plan_n_task(
     spec = TaskSpec(
         task_key=key,
         title=f"Replan after {after_task}",
-        goal="expand plan",
+        goal="expand plan (M1 deterministic critic gate)",
         route="planner",
         required=False,
         depends_on=[after_task],
+        criteria=list(PLAN_N_CRITIC_CRITERIA),
     )
     task = Task(
         task_id=tid,
@@ -215,8 +203,7 @@ async def ensure_plan_n_task(
             )
         ]
     )
-    # Live accounting until fold-from-events is the sole source on restart;
-    # TaskCreated fold also adds replan_allocated_s (see local_project).
+    # replan_allocated_s is folded from TaskCreated in local_project (B3 / minor).
     reqs = getattr(runtime, "_expand_requests", None)
     if not isinstance(reqs, dict):
         runtime._expand_requests = {}  # noqa: SLF001
@@ -235,10 +222,20 @@ async def ensure_plan_n_task(
 
 
 async def maybe_expand_after_task_done(runtime: StudyRuntime, task_id_full: str) -> str | None:
-    """H-g trigger: queue PLAN-n for expansion_request / expand_after (never raise)."""
+    """H-g trigger: queue PLAN-n or run critic; never raise out of record/tick."""
+    after = "?"
     try:
+        task = runtime.tasks.get(task_id_full)
+        if task is not None:
+            after = task.spec.task_key
         return await _maybe_expand(runtime, task_id_full)
-    except Exception:  # noqa: BLE001 — never break record/tick
+    except Exception as e:  # noqa: BLE001 — MJ-c: no silent loss
+        await refuse_expansion(
+            runtime,
+            after,
+            reason="invalid",
+            detail=f"expand_exception:{type(e).__name__}"[:200],
+        )
         return None
 
 
@@ -248,19 +245,27 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
     task = runtime.tasks.get(task_id_full)
     if task is None or task.state != TaskState.DONE:
         return None
-    # PLAN-n completion → apply pending expansion (critic/HITL accept path stub).
+    # PLAN-n completion → M1 deterministic critic, then apply (or refuse).
     if task.kind == TaskKind.PLAN and task.spec.task_key.startswith("PLAN-"):
         if task.outcome == TaskOutcome.SUCCESS:
             from coscientist.core.expand import apply_pending_expansion
 
             return await apply_pending_expansion(runtime, task.spec.task_key)
+        # MJ-c: non-SUCCESS PLAN-n must not vanish.
+        meta = (getattr(runtime, "_expand_requests", None) or {}).get(task.spec.task_key)
+        after = str((meta or {}).get("after_task") or task.spec.task_key)
+        oc = getattr(task.outcome, "value", task.outcome) or "unknown"
+        await refuse_expansion(
+            runtime, after, reason="critic_rejected", detail=f"plan_n_{oc}"
+        )
+        if isinstance(getattr(runtime, "_expand_requests", None), dict):
+            runtime._expand_requests.pop(task.spec.task_key, None)  # noqa: SLF001
         return None
     tkey = task.spec.task_key
     if expansion_already_handled(runtime, tkey):
         return None
     req = result_expansion_request(runtime, task_id_full)
     rc = _final_result_class(runtime, task_id_full)
-    # MJ3: infra-FAILED never triggers; scientific FAILED may; only final attempt.
     if req is not None and req.tasks:
         if task.outcome == TaskOutcome.SKIPPED:
             return None
@@ -272,7 +277,6 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
             TaskOutcome.FAILED,
         ):
             return None
-        # Pre-validate before creating PLAN-n (B1).
         err = await _prevalidate_request(runtime, req)
         if err is not None:
             await refuse_expansion(runtime, tkey, reason="invalid", detail=err[:200])
@@ -287,11 +291,11 @@ async def _prevalidate_request(runtime: StudyRuntime, req: ExpansionRequest) -> 
     from coscientist.core.domain import TaskSpec
     from coscientist.core.expand_validate import (
         active_plan_blob,
-        assign_exp_keys,
+        assign_core_keys,
         validate_expansion,
     )
 
-    keyed = assign_exp_keys(runtime, list(req.tasks))
+    keyed = assign_core_keys(runtime, list(req.tasks))
     if isinstance(keyed, str):
         return keyed
     prev = active_plan_blob(runtime) or {}
@@ -303,7 +307,6 @@ async def _prevalidate_request(runtime: StudyRuntime, req: ExpansionRequest) -> 
         if isinstance(q, dict) and q.get("id"):
             known[str(q["id"])] = str(q.get("text") or "")
     known.update({q.id: q.text for q in req.questions})
-    active = set(known)
     return validate_expansion(
         runtime,
         added_tasks=keyed,
@@ -312,19 +315,38 @@ async def _prevalidate_request(runtime: StudyRuntime, req: ExpansionRequest) -> 
         superseded_questions=list(req.superseded_questions),
         known_texts=known,
         prev_tasks=prev_tasks,
-        active_q_ids=active,
+        active_q_ids=set(known),
     )
 
 
 async def resume_pending_expansions(runtime: StudyRuntime) -> int:
-    """Re-run H-g for DONE tasks missing PLAN-n / refusal / expand (crash recover)."""
+    """Re-run H-g after crash; PLAN-n states must not be lost silently (MJ-c)."""
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return 0
     n = 0
     for tid, task in list(runtime.tasks.items()):
         if task.state != TaskState.DONE:
             continue
-        if task.kind == TaskKind.PLAN:
+        # PLAN-n: resume critic/apply or refuse non-SUCCESS.
+        if task.kind == TaskKind.PLAN and task.spec.task_key.startswith("PLAN-"):
+            meta = (getattr(runtime, "_expand_requests", None) or {}).get(task.spec.task_key)
+            after = str((meta or {}).get("after_task") or task.spec.task_key)
+            if expansion_already_handled(runtime, after) and task.outcome == TaskOutcome.SUCCESS:
+                # Already expanded or refused for after_task.
+                if not meta:
+                    continue
+            if task.outcome == TaskOutcome.SUCCESS and meta:
+                from coscientist.core.expand import apply_pending_expansion
+
+                await apply_pending_expansion(runtime, task.spec.task_key)
+                n += 1
+            elif task.outcome != TaskOutcome.SUCCESS and meta:
+                oc = getattr(task.outcome, "value", task.outcome) or "unknown"
+                await refuse_expansion(
+                    runtime, after, reason="critic_rejected", detail=f"plan_n_{oc}_recover"
+                )
+                runtime._expand_requests.pop(task.spec.task_key, None)  # noqa: SLF001
+                n += 1
             continue
         reason = getattr(task, "reason", None)
         rv = getattr(reason, "value", reason)

@@ -91,16 +91,18 @@ def terminal_reason_for(
 
 
 def expansion_not_done_line(reason: str, detail: str) -> str:
-    """Report line for ExpansionRefused (DESIGN_M1 §4 / review B2)."""
+    """Report line for ExpansionRefused (DESIGN_M1 §4 — Russian wording)."""
     r = str(reason or "")
     d = str(detail or "")
-    if r == "invalid" or d.startswith("invalid"):
-        return "not done: invalid"
+    if r in ("invalid", "invalid_hitl") or d.startswith("invalid"):
+        return "не выполнено: невалидный запрос"
     if d == "replan_reserve" or r == "reserve":
-        return "not done: reserve"
+        return "не выполнено: резерв"
     if r == "has_refutation":
-        return "not done: has_refutation"
-    return "not done: expansion limit"
+        return "не выполнено: есть опровержение"
+    if r == "critic_rejected":
+        return "не выполнено: отказ критика"
+    return "не выполнено: лимит расширений"
 
 
 def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:

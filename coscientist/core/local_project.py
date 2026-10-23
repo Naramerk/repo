@@ -92,6 +92,10 @@ class LocalProjectMixin:
             drop = ("pending_expansion", "expand_after_task", "replan_allocated_s")
             clean = {k: v for k, v in p.items() if k not in drop}
             self.tasks[p["task_id"]] = Task.model_validate(clean)
+            # Fold PLAN-n replan_allocated_s (reserve spent creating the container).
+            alloc = float(p.get("replan_allocated_s") or 0.0)
+            if alloc:
+                self._replan_used_s = float(getattr(self, "_replan_used_s", 0.0)) + alloc
             pending_exp = p.get("pending_expansion")
             after = p.get("expand_after_task")
             tkey = str((clean.get("spec") or {}).get("task_key") or "")
@@ -103,7 +107,7 @@ class LocalProjectMixin:
                 reqs[tkey] = {
                     "after_task": str(after),
                     "pending": pending_exp if isinstance(pending_exp, dict) else None,
-                    "replan_allocated_s": float(p.get("replan_allocated_s") or 0.0),
+                    "replan_allocated_s": alloc,
                 }
                 pend = getattr(self, "_expand_pending", None)
                 if isinstance(pend, set):
