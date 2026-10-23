@@ -89,9 +89,19 @@ class LocalArtifactStore:
         fs_isolation: FsIsolation | None = None,
         tainted: bool = False,
         context_tainted: bool = False,
+        user_put: object | None = None,
     ) -> Artifact:
         if attempt_closed:
             raise ArtifactRejected("attempt_closed")
+        if producer == "user":
+            # Module-level verify (exact type + hmac) — not duck-typed is_live().
+            from coscientist.core._attempt_frame import attempt_active
+            from coscientist.core._ingest_gate import verify_user_put_capability
+
+            if not verify_user_put_capability(user_put):
+                raise ArtifactRejected("user_put_capability_required")
+            if attempt_active():
+                raise ArtifactRejected("put_user_requires_ingest_scope")
         digest = self.put_cas(content, tmp_name=produced_by.call_id)
         call_part = sha256_hex(produced_by.call_id)[:8]
         artifact_id = f"art_{digest[:16]}_{call_part}"
@@ -100,7 +110,12 @@ class LocalArtifactStore:
         # writers (OutputSpec). Agent ``put`` ignores code|data role args.
         if role in ("paper", "figure", "table", "log", "report"):
             inferred = role
-        elif role in ("code", "data") and producer in ("core", "sandbox", "tool"):
+        elif role in ("code", "data") and producer in (
+            "core",
+            "sandbox",
+            "tool",
+            "user",
+        ):
             inferred = role
         else:
             inferred = media_role

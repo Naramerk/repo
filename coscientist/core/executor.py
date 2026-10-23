@@ -676,7 +676,15 @@ class Executor:
 
         task = self.get_task(task_id)
         # PR18: per-attempt ContextVar taint (not shared store state — foreach-safe).
-        from coscientist.core.taint import push_attempt_taint, reset_attempt_taint
+        # PR19: attempt frame (private) blocks put_user mid-attempt.
+        from coscientist.core._attempt_frame import (
+            push_attempt_active,
+            reset_attempt_active,
+        )
+        from coscientist.core.taint import (
+            push_attempt_taint,
+            reset_attempt_taint,
+        )
 
         _tainted = False
         if hasattr(attempt, "tainted_context"):
@@ -684,6 +692,7 @@ class Executor:
         elif isinstance(attempt, dict):
             _tainted = bool(attempt.get("tainted_context"))
         _taint_token = push_attempt_taint(_tainted)
+        _active_token = push_attempt_active(True)
         try:
             try:
                 # MJ2: no sync Popen on the event loop — evaluate (sandbox) off-thread.
@@ -756,6 +765,7 @@ class Executor:
                     result_class="core_bug",
                 )
         finally:
+            reset_attempt_active(_active_token)
             reset_attempt_taint(_taint_token)
         for c in checks:
             if not c.is_code and c.status == ReqStatus.UNASSESSED:

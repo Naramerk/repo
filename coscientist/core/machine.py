@@ -1,8 +1,9 @@
 """Task state machine + study runtime shell (DESIGN §3.3).
 
-Attempt lifecycle lives in ``attempts``; local fold in ``local_project``;
-create/accept_plan in ``lifecycle``. Finalizer/cancel in finalize/cancel.
-HITL / costly / fork / report are ``coscientist.experimental``.
+Attempt lifecycle lives in ``attempts``; local fold in ``local_project``.
+create/accept_plan live in ``lifecycle``, composed only via ``api.runtime``.
+Finalizer/cancel in finalize/cancel. HITL / costly / fork / report are
+``coscientist.experimental``.
 """
 
 from __future__ import annotations
@@ -28,7 +29,6 @@ from coscientist.core.finalize import (
 )
 from coscientist.core.graph import GraphStore, KindRegistry, default_execution_registry
 from coscientist.core.intake import IntakeRefuse
-from coscientist.core.lifecycle import LifecycleMixin
 from coscientist.core.local_project import LocalProjectMixin
 from coscientist.core.reasons import CloseReason, TaskReason
 from coscientist.core.store import SqliteEventStore
@@ -36,8 +36,12 @@ from coscientist.core.study_view import study_view
 from coscientist.core.writer import StudyWriter
 
 
-class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
-    """In-process owner of one study: store, writer, tasks, timers."""
+class StudyRuntime(LocalProjectMixin, AttemptsMixin):
+    """In-process owner of one study: store, writer, tasks, timers.
+
+    Lifecycle (create_study / accept_plan) is composed in ``coscientist.api.runtime``
+    — this shell must not import ``core.lifecycle`` (ingest-gate isolation).
+    """
 
     def __init__(
         self,

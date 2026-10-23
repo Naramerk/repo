@@ -16,11 +16,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import Budget, HitlPolicy
 from coscientist.core.errors import Conflict, LeaseLost
+from coscientist.core.input_limits import (
+    InputLimits,
+    default_input_limits,
+    enforce_request_body_limit,
+    merge_input_limits,
+)
+from coscientist.core.reasons import RefusalKind
 from coscientist.core.runtime_factory import close_runtime, open_runtime
 
 # Default wait for another worker to finish create_study before takeover.
@@ -41,6 +48,53 @@ class CreateStudyBody(BaseModel):
     deadline: datetime | None = None
     budget: Budget | None = None
     finalize_reserve_s: int = 30
+    # PR19 / DESIGN_M1 §9: user blobs → CAS before SPEC; as_of for time-sensitive Qs.
+    # Profile owns InputLimits; client may only LOWER via this optional dict.
+    inputs: list[dict[str, Any]] = []
+    as_of: datetime | None = None
+    input_limits: dict[str, Any] | None = None
+
+
+def parse_create_study_body(
+    raw: bytes | str | dict[str, Any] | CreateStudyBody,
+    *,
+    profile_limits: InputLimits | None = None,
+) -> tuple[CreateStudyBody, InputLimits] | tuple[None, tuple[RefusalKind, str]]:
+    """Decode body with wire-size gate **before** expanding into memory.
+
+    ValidationError / client raising limits → ``INPUT_INVALID`` (never 500).
+    Oversized wire body → ``INPUT_TOO_LARGE``.
+    """
+    profile = profile_limits or default_input_limits()
+    if isinstance(raw, CreateStudyBody):
+        body = raw
+    elif isinstance(raw, dict):
+        # Size gate before pydantic expand (DoS).
+        bad = enforce_request_body_limit(
+            raw, max_wire_bytes=profile.max_wire_bytes
+        )
+        if bad is not None:
+            return None, bad
+        try:
+            body = CreateStudyBody.model_validate(raw)
+        except ValidationError as e:
+            return None, (RefusalKind.INPUT_INVALID, f"body:{type(e).__name__}")
+    else:
+        bad = enforce_request_body_limit(raw, max_wire_bytes=profile.max_wire_bytes)
+        if bad is not None:
+            return None, bad
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
+            return None, (RefusalKind.INPUT_INVALID, f"json:{type(e).__name__}")
+        try:
+            body = CreateStudyBody.model_validate(data)
+        except ValidationError as e:
+            return None, (RefusalKind.INPUT_INVALID, f"body:{type(e).__name__}")
+    merged = merge_input_limits(profile, body.input_limits)
+    if isinstance(merged, tuple):
+        return None, merged
+    return body, merged
 
 
 def study_id_from_idempotency_key(key: str) -> str:
@@ -271,22 +325,35 @@ async def _wait_complete(path: Path, *, timeout_s: float = _WAIT_COMPLETE_S) -> 
 
 async def post_studies(
     data_root: Path | str,
-    body: CreateStudyBody | dict[str, Any],
+    body: CreateStudyBody | dict[str, Any] | bytes | str,
     *,
     idempotency_key: str | None = None,
     catalog: Any,
     wait_complete_s: float = _WAIT_COMPLETE_S,
+    profile_input_limits: InputLimits | None = None,
     **create_kwargs: Any,
 ) -> dict[str, str]:
     """Create a study (``POST /studies`` semantics).
 
     ``wait_complete_s`` is how long a losing concurrent caller waits for the
     winner before taking over a stale pending reservation (testable).
+
+    Raw ``bytes``/``str`` bodies are size-gated **before** JSON decode.
+    Invalid body / client raising limits → StudyFinalized(refused), never 500.
     """
     root = Path(data_root)
     root.mkdir(parents=True, exist_ok=True)
-    if isinstance(body, dict):
-        body = CreateStudyBody.model_validate(body)
+    profile_limits = profile_input_limits or default_input_limits()
+    parsed = parse_create_study_body(body, profile_limits=profile_limits)
+    refuse_kind: RefusalKind | None = None
+    refuse_reason: str | None = None
+    if parsed[0] is None:
+        refuse_kind, refuse_reason = parsed[1]
+        # Minimal body so idempotency digest + create_study still run.
+        body = CreateStudyBody(request="invalid", inputs=[])
+    else:
+        body, _effective = parsed
+        _ = _effective  # validated; create_study re-merges client vs profile
     req_digest = _request_digest(body)
 
     if idempotency_key:
@@ -318,7 +385,10 @@ async def post_studies(
         return {"study_id": str(done["study_id"])}
 
     try:
-        rt = await open_runtime(root, sid, catalog=catalog)
+        from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
+
+        rt = await open_runtime(root, sid, catalog=catalog, runtime_cls=ApiStudyRuntime)
+        assert isinstance(rt, ApiStudyRuntime)
     except LeaseLost:
         if idempotency_key:
             return await _wait_for_peer()
@@ -327,17 +397,42 @@ async def post_studies(
     created_id: str | None = None
     try:
         try:
-            created_id = await rt.create_study(
-                profile=body.profile,
-                request=body.request,
-                catalog_version=body.catalog_version,
-                hitl_policy=body.hitl_policy,
-                deadline=body.deadline,
-                budget=body.budget,
-                finalize_reserve_s=body.finalize_reserve_s,
-                sid=sid,
-                **create_kwargs,
+            from coscientist.core.intake import IntakeRefuse
+
+            force_refuse = (
+                IntakeRefuse(refuse_kind, str(refuse_reason or "invalid")[:200])
+                if refuse_kind is not None
+                else None
             )
+            from coscientist.core._ingest_gate import (
+                mint_user_put_capability,
+                release_user_put_capability,
+            )
+
+            use_inputs = [] if force_refuse is not None else list(body.inputs or [])
+            user_cap = mint_user_put_capability() if use_inputs else None
+            try:
+                created_id = await rt.create_study(
+                    profile=body.profile,
+                    request=(body.request or "invalid").strip() or "invalid",
+                    catalog_version=body.catalog_version,
+                    hitl_policy=body.hitl_policy,
+                    deadline=body.deadline,
+                    budget=body.budget,
+                    finalize_reserve_s=body.finalize_reserve_s,
+                    sid=sid,
+                    inputs=use_inputs,
+                    as_of=body.as_of,
+                    input_limits=profile_limits,
+                    client_input_limits=(
+                        None if force_refuse is not None else body.input_limits
+                    ),
+                    intake_refuse=force_refuse,
+                    user_put_capability=user_cap,
+                    **create_kwargs,
+                )
+            finally:
+                release_user_put_capability(user_cap)
         except Conflict:
             # Peer wrote StudyCreated (payload clock differs) — treat as success.
             events = await rt.store.read_all()

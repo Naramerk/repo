@@ -21,6 +21,7 @@ from coscientist.core.domain import (
     TaskState,
     validate_budget_for_create,
 )
+from coscientist.core.errors import CASUnavailable, Conflict, LeaseLost, SandboxInfraError
 from coscientist.core.events import (
     PLAN_ACCEPTED_SCHEMA_VERSION,
     STUDY_CREATED_SCHEMA_VERSION,
@@ -31,9 +32,12 @@ from coscientist.core.events import (
 from coscientist.core.graph import GraphNode
 from coscientist.core.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
 from coscientist.core.inputs import validate_input_specs, validate_plan_criteria
-from coscientist.core.intake import IntakeRefuse, SafetyPort, intake
+from coscientist.core.intake import IntakeAccept, IntakeRefuse, SafetyPort, intake
 from coscientist.core.ports import EventStore
 from coscientist.core.question_tasks import questions_from_spec_output
+
+# Infra / fencing — must not be swallowed by intake fail-closed refuse.
+_INTAKE_RERAISE = (LeaseLost, CASUnavailable, Conflict, SandboxInfraError)
 
 STAGE_KEYS = [
     ("SPEC", TaskKind.SPEC),
@@ -86,6 +90,11 @@ class LifecycleMixin:
         inputs: list[Any] | None = None,
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,
+        as_of: datetime | None = None,
+        input_limits: Any | None = None,
+        client_input_limits: Any | None = None,
+        intake_refuse: IntakeRefuse | None = None,
+        user_put_capability: Any | None = None,
     ) -> str:
         sid = sid or self.store.study_id or study_id()
         now = self.clock.now()
@@ -126,16 +135,81 @@ class LifecycleMixin:
             raise ValueError(f"max_task_budget_share out of range: {max_task_budget_share}")
         validate_budget_for_create(budget)  # delegated_costly ≤ max_cost_rub
         duration_s = (dl - now).total_seconds()
-        decision = await intake(
-            request,
-            list(inputs or []),
-            profile,
-            budget,
-            min_plan_cost=min_plan_cost,
-            safety=safety,
-            duration_s=duration_s,
-            finalize_reserve_s=float(finalize_reserve_s),
+        from coscientist.core._ingest_gate import (
+            UserInputRegistrationError,
+            register_user_input_artifacts,
         )
+        from coscientist.core.input_limits import (
+            default_input_limits,
+            merge_input_limits,
+        )
+        from coscientist.core.reasons import RefusalKind
+
+        # Profile owns caps; optional client_input_limits may only LOWER.
+        profile_limits = (
+            input_limits if input_limits is not None else default_input_limits()
+        )
+        decision: IntakeAccept | IntakeRefuse
+        limits = profile_limits
+        # Structural: any escape from intake validation → Refuse + StudyFinalized
+        # (never a bare 500 without journal).
+        if intake_refuse is not None:
+            decision = intake_refuse
+        else:
+            try:
+                merged = merge_input_limits(profile_limits, client_input_limits)
+                if isinstance(merged, tuple):
+                    refuse_kind, refuse_reason = merged
+                    decision = IntakeRefuse(refuse_kind, str(refuse_reason)[:200])
+                else:
+                    limits = merged
+                    decision = await intake(
+                        request,
+                        list(inputs or []),
+                        profile,
+                        budget,
+                        min_plan_cost=min_plan_cost,
+                        safety=safety,
+                        duration_s=duration_s,
+                        finalize_reserve_s=float(finalize_reserve_s),
+                        input_limits=limits,
+                    )
+            except _INTAKE_RERAISE:
+                raise
+            except Exception as e:  # noqa: BLE001 — fail-closed to StudyFinalized
+                decision = IntakeRefuse(
+                    RefusalKind.INPUT_INVALID,
+                    f"intake_error:{type(e).__name__}"[:200],
+                )
+                limits = profile_limits
+        user_ids: list[str] = []
+        user_events: list[EventEnvelope] = []
+        if not isinstance(decision, IntakeRefuse) and inputs:
+            try:
+                user_ids, user_events = register_user_input_artifacts(
+                    list(inputs),
+                    study_id=sid,
+                    now=now,
+                    artifacts=getattr(self, "artifacts", None),
+                    capability=user_put_capability,
+                )
+            except _INTAKE_RERAISE:
+                raise
+            except UserInputRegistrationError as e:
+                # Fail-closed: never Accept with silently dropped inputs.
+                decision = IntakeRefuse(
+                    e.kind
+                    if isinstance(e.kind, RefusalKind)
+                    else RefusalKind.INPUT_INVALID,
+                    str(e.reason)[:200],
+                )
+                user_ids, user_events = [], []
+            except Exception as e:  # noqa: BLE001 — registration bugs → refuse
+                decision = IntakeRefuse(
+                    RefusalKind.INPUT_INVALID,
+                    f"register_error:{type(e).__name__}"[:200],
+                )
+                user_ids, user_events = [], []
         study = Study(
             study_id=sid,
             profile=profile,
@@ -162,6 +236,8 @@ class LifecycleMixin:
             max_foreach_children=max_foreach_children,
             max_loop_iter=max_loop_iter,
             max_task_budget_share=float(max_task_budget_share),
+            as_of=as_of,
+            user_input_ids=list(user_ids),
         )
         effective = study.effective_deadline()
         events: list[EventEnvelope] = [
@@ -190,6 +266,7 @@ class LifecycleMixin:
                 ts=now,
             ),
         ]
+        events.extend(user_events)
         if isinstance(decision, IntakeRefuse):
             # Same transaction as StudyCreated so crash/reopen keeps refusal.
             events.append(

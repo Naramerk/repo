@@ -484,6 +484,39 @@ def test_put_sandbox_source_rejected(tmp_path: Path):
     assert cr.detail == "source_not_fetched"
 
 
+def test_put_user_source_rejected(tmp_path: Path):
+    """PR19: producer=user is never a quote_in_source source (is_quote_source_producer)."""
+    from coscientist.core._ingest_gate import (
+        mint_user_put_capability,
+        put_user,
+        release_user_put_capability,
+    )
+
+    arts = LocalArtifactStore(tmp_path / "arts")
+    cap = mint_user_put_capability()
+    try:
+        paper = put_user(
+            arts,
+            b"User upload with four word tokens present.",
+            make_tool_ref("u", tool="user"),
+            capability=cap,
+            name="u.txt",
+            media_type="text/plain",
+            role="paper",  # forced to data; still not a quote source
+        )
+    finally:
+        release_user_put_capability(cap)
+    assert paper.producer == "user"
+    cr = _eval(
+        arts,
+        paper,
+        "user upload with four",
+        fetched={paper.sha256},
+    )
+    assert cr.status is ReqStatus.FAILED
+    assert cr.detail == "source_not_fetched"
+
+
 def test_tainted_fetched_accepted_when_journaled(tmp_path: Path):
     """BLOCKER: network content stays tainted; journal match still allows MET."""
     arts = LocalArtifactStore(tmp_path / "arts")

@@ -746,6 +746,11 @@ async def _primary_report_path(
     qdisp: dict[str, dict[str, Any]],
     refusal: str | None = None,
 ) -> str:
+    study = getattr(runtime, "study", None)
+    as_of_raw = getattr(study, "as_of", None) if study is not None else None
+    as_of_s = None
+    if as_of_raw is not None:
+        as_of_s = as_of_raw.isoformat() if hasattr(as_of_raw, "isoformat") else str(as_of_raw)
     plans_local = getattr(runtime, "plans", None)
     md = render_markdown_report(
         study_id=sid,
@@ -756,6 +761,7 @@ async def _primary_report_path(
         question_dispositions=qdisp,
         tasks=runtime.tasks,
         refusal=refusal,
+        as_of=as_of_s,
         plans=plans_local if isinstance(plans_local, dict) else None,
     )
     # Surface infra details (sandbox reason + soft-isolation note) in report text.

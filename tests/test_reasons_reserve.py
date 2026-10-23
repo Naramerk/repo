@@ -139,12 +139,13 @@ async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
 
 def test_upcast_provenance_simulated_to_stub():
     v, p = upcast("AttemptStarted", 1, {"provenance": "simulated", "attempt_id": "a"})
-    # …v4→v5 shares, v5→v6 budget_limit (PR12), v6→v7 tainted_context (PR18).
-    assert v == 7 and p["provenance"] == "stub" and p["inputs"] == []
+    # …v6→v7 tainted (PR18), v7→v8 inputs_digest (PR19).
+    assert v == 8 and p["provenance"] == "stub" and p["inputs"] == []
     assert p["limitations"] == []
     assert p["allocated_budget_rub"] is None
     assert p["budget_limit_rub"] is None
     assert p["tainted_context"] is False
+    assert p.get("inputs_digest") is None
     v, p = upcast(
         "ResultRecorded",
         1,
@@ -335,10 +336,12 @@ def test_upcast_study_created_sets_reserve_zero():
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     )
-    # v1→v2 reserve → … → v9 max_task_budget_share → v10 max_loop_iter.
-    assert v == 10
+    # v1→…→v9 shares → v10 max_loop_iter (#24) → v11 as_of/ids (#23, keeps cap).
+    assert v == 11
     assert p["max_foreach_children"] == 32
     assert p["max_loop_iter"] == 8
+    assert p.get("as_of") is None
+    assert p.get("user_input_ids") == []
     assert p["finalize_reserve_s"] == 0
     assert p["refutations_needed"] == 1
     assert p["refutation_priority"] is False
@@ -347,6 +350,8 @@ def test_upcast_study_created_sets_reserve_zero():
     assert p["aggregate"] == "count"
     assert p["max_expansions"] == 2
     assert p["replan_reserve"] == 0.1
+    assert p.get("as_of") is None
+    assert p.get("user_input_ids") == []
     # Explicit value must not be overwritten
     v2, p2 = upcast("StudyCreated", 1, {**p, "finalize_reserve_s": 30})
     assert p2["finalize_reserve_s"] == 30

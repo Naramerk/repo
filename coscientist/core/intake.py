@@ -100,12 +100,14 @@ async def intake(
     safety_timeout_s: float = 5.0,
     duration_s: float | None = None,
     finalize_reserve_s: float | None = None,
+    input_limits: Any | None = None,
 ) -> IntakeResult:
     """Code checks + optional safety/scope port. No store I/O.
 
     ``duration_s <= finalize_reserve_s`` → ``DURATION_TOO_SHORT``. Classifier
     runs via ``asyncio.to_thread`` + ``wait_for`` so a hung port cannot block
-    the event loop past ``safety_timeout_s``.
+    the event loop past ``safety_timeout_s``. Oversized / zip-bomb inputs →
+    ``INPUT_TOO_LARGE`` (DESIGN_M1 §9 / PR19).
     """
     _ = profile
     if not str(request or "").strip():
@@ -123,6 +125,17 @@ async def intake(
     min_cost = Decimal(str(min_plan_cost))
     if _budget_too_low(budget, min_cost):
         return _refuse(RefusalKind.BUDGET_ZERO, "budget below minimum")
+    # PR19: InputLimits before safety port. Archive inspect is CPU-heavy —
+    # run off the event loop so pax/tar scans cannot stall intake.
+    if inputs:
+        from coscientist.core.input_limits import check_user_inputs_limits
+
+        violation = await asyncio.to_thread(
+            check_user_inputs_limits, list(inputs), input_limits
+        )
+        if violation is not None:
+            kind, reason = violation
+            return _refuse(kind, reason)
     if safety is not None:
         result = await _run_classifier(
             safety, request, list(inputs or []), timeout_s=safety_timeout_s

@@ -50,14 +50,21 @@
 - `_watch_process`: sample host-tree CPU via `/proc` **before** `poll()` (poll reaps the child and `/proc` vanishes). Keeps no-cgroup SIGXCPU classification accurate; retains the max sample while the guest is alive. Split out of PR14 so quote work stays focused.
 - **M2 notes:** `_host_tree_cpu_s` returns `0.0` (not `None`) when `/proc` is readable but idle; missing `CONFIG_PROC_CHILDREN` silently drops descendants; cgroup idle path untested on CI without delegation.
 
+### M1 PR19
+- Input snapshot (K10, A3, K1 / DESIGN §9): `InputBinding.digest` / `digest_version` / `retrieved_at` / `source_uri` at P2; `Attempt.inputs_digest = sha256(JCS(sorted bindings))` (no `retrieved_at`); drift → `input_drift` + `partial`. Legacy `digest=None` or absent/old/garbage `digest_version` → `input_drift_unknown` **without** partial. `get_meta` errors propagate; missing get_meta with `user_input_ids` → limitation (fail-closed). Binding `source_uri` is client URI only (never CAS `file://`).
+- User `inputs[]` → CAS via `UserPutCapability` minted only in `api.studies` (`put_user` / `_store(producer=user)` require live `verify_user_put_capability`); private `_ingest_gate` + `_attempt_frame`; lifecycle composed only via `api.runtime` (machine does not import it). Intake exceptions → `IntakeRefuse` + StudyFinalized (never 500 without journal); `LeaseLost`/infra re-raised.
+- `InputLimits` **profile-owned**; streaming zip/tar with two-layer tar (resource gate + tarfile semantics for pax). Nested/symlink/`../`/NFKC → `INPUT_INVALID`.
+- Upcasters: StudyCreated **v11** (`as_of`, `user_input_ids`) after #24 StudyCreated **v10** (`max_loop_iter` setdefault). AttemptStarted **v8**. Inherits #28 TaskCreated **v13** / PlanAccepted **v11** / PlanExpanded **v5**; #29 decomposes/rollup chain beneath.
+- **M1 gaps (DESIGN §9):** `config_digest` (R14); mid-attempt MCP/DB re-fetch; JCS digest for MCP/DB; soft partial-accept; orphan CAS GC after failed StudyCreated; HITL upload-as-source.
+
 ### M1 PR11
 - `LoopSpec` on `Plan.loops` (body templates, `scope_*`, mandatory `max_iter` ≤ `Study.max_loop_iter`, `until` predicate).
 - Built-in predicates: `survivors_le`, `criterion_met`, `no_change` (scope-restricted); plugins via `register_loop_predicate` (built-ins + existing plugins non-overridable; NFKC names; `survivors_le.n` exact int `0..10000`, never `float()`).
 - Invalid LoopSpec → typed **`PlanInvalid`** → **`PlanRefused` + immediate `StudyFinalized`** via **`plan_validate.apply_plan_refused`**. Fail-closed: unknown predicate / unparsable spec / unknown `scope_*`.
 - Core materializes each iter as `PlanExpanded(loop=true)` at `PLAN_EXPANDED_SCHEMA_VERSION` / `TASK_CREATED_SCHEMA_VERSION`; `depends_on=["loop:<id>"]` NFKC-normalized; orphan barriers → SKIPPED refuse.
 - Until-met → **`LoopCompleted`**. True cap → **`LoopCapped{reason=iteration_cap}`**. Expected eval failures → **`LoopRefused` + `LoopCapped{reason=error}`** (single append batch; no survivor recompute; never disguised as iteration_cap). Unexpected advance/recover errors → journal + **`finalize(trigger=internal_error)`** / `TerminalReason.INTERNAL_ERROR` (never leave TaskDone without StudyFinalized). Disposition `iteration_cap` only for unresolved questions after a true ≥1-iter cap (answered/outside-loop/infeasible preserved).
-- Upcasters (rebased on #21 / main `517b772`): PlanAccepted **v9**, TaskCreated **v11**, PlanExpanded **v3** (v2→v3 loop fields on `added_tasks`; #21 owns v1→v2 rubric). **StudyCreated v10** (`max_loop_iter`) stays on #24 — merge order is #24 before #23 (#23 takes v11). `register_upcaster` duplicate guard + continuous chain.
-- Fail-closed internals: `_refuse_loop` failures → `finalize_loop_internal_error`; `log.warning` on journal/close failures; `except LeaseLost: raise` before broad excepts; RUNNING closed (`CORE_BUG`/`CRASHED`) under `_finalizing` so nested `_append(TaskDone)` does not re-enter expand/foreach/loop hooks. Never merge from this agent.
+- Upcasters: PlanAccepted **v9**, TaskCreated **v11**, PlanExpanded **v3**, StudyCreated **v10** (`max_loop_iter`). `#23` takes StudyCreated **v11**. `register_upcaster` duplicate guard + continuous chain.
+- Fail-closed internals: `_refuse_loop` failures → `finalize_loop_internal_error`; `log.warning` on journal/close failures; `except LeaseLost: raise` before broad excepts; RUNNING closed (`CORE_BUG`/`CRASHED`) under `_finalizing` so nested `_append(TaskDone)` does not re-enter expand/foreach/loop hooks.
 
 ### M1 PR14
 - `quote_in_source` (K9): token-boundary + digit-edge; CJK/Thai; super/sub before NFKC; norm cache; presence≠polarity.

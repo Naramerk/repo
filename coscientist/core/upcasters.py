@@ -631,9 +631,23 @@ def _study_created_v8_to_v9(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _study_created_v9_to_v10(payload: dict[str, Any]) -> dict[str, Any]:
-    """PR11: max_loop_iter default 8."""
+    """PR11 (#24): max_loop_iter default 8."""
     out = dict(payload)
     out.setdefault("max_loop_iter", 8)
+    return out
+
+
+def _study_created_v10_to_v11(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR19 (#23) bridge: as_of / user_input_ids on StudyCreated **v11**.
+
+    Identical to #23: ``setdefault`` only — never pop ``max_loop_iter`` (real
+    LoopSpec cap on main). Journals with ``max_loop_iter=2`` must replay as 2.
+    #23 owns writer v11; this PR keeps the bridge so main v10 upcasts through
+    v11 before PR20's v12 ``max_proposals``.
+    """
+    out = dict(payload)
+    out.setdefault("as_of", None)
+    out.setdefault("user_input_ids", [])
     return out
 
 
@@ -779,6 +793,31 @@ def _attempt_started_v6_to_v7_tainted(payload: dict[str, Any]) -> dict[str, Any]
     return out
 
 
+def _attempt_started_v7_to_v8_inputs_digest(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR19: inputs_digest + InputBinding snapshot defaults.
+
+    Legacy rows get ``digest_version=None`` so drift treats them as unknown
+    (formula changed) without forcing provenance=partial.
+    """
+    out = dict(payload)
+    out.setdefault("inputs_digest", None)
+    inputs = out.get("inputs")
+    if isinstance(inputs, list):
+        rewritten: list[Any] = []
+        for row in inputs:
+            if isinstance(row, dict):
+                r = dict(row)
+                r.setdefault("digest", None)
+                r.setdefault("digest_version", None)
+                r.setdefault("retrieved_at", None)
+                r.setdefault("source_uri", None)
+                rewritten.append(r)
+            else:
+                rewritten.append(row)
+        out["inputs"] = rewritten
+    return out
+
+
 register_upcaster("TaskCreated", 1, _task_created_v1_to_v2)
 register_upcaster("TaskCreated", 2, _ensure_spec_addresses)
 register_upcaster("TaskCreated", 3, _task_created_v3_to_v4_input_mode)
@@ -814,6 +853,7 @@ register_upcaster("StudyCreated", 6, _study_created_v6_to_v7)
 register_upcaster("StudyCreated", 7, _study_created_v7_to_v8)
 register_upcaster("StudyCreated", 8, _study_created_v8_to_v9)
 register_upcaster("StudyCreated", 9, _study_created_v9_to_v10)
+register_upcaster("StudyCreated", 10, _study_created_v10_to_v11)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)
@@ -822,6 +862,7 @@ register_upcaster("AttemptStarted", 3, _attempt_started_v3_to_v4_limitations)
 register_upcaster("AttemptStarted", 4, _attempt_started_v4_to_v5_shares)
 register_upcaster("AttemptStarted", 5, _attempt_started_v5_to_v6_budget_limit)
 register_upcaster("AttemptStarted", 6, _attempt_started_v6_to_v7_tainted)
+register_upcaster("AttemptStarted", 7, _attempt_started_v7_to_v8_inputs_digest)
 
 
 def _result_recorded_v2_to_v3_output_kinds(payload: dict[str, Any]) -> dict[str, Any]:

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Protocol
 
+from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
 from coscientist.checks.catalog import minimal_test_catalog
 from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.domain import (
@@ -29,8 +30,12 @@ async def open_runtime(
     """Test wrapper: injects ``minimal_test_catalog`` when catalog omitted.
 
     Production ``coscientist.core.runtime_factory.open_runtime`` requires
-    ``catalog=`` explicitly and never imports this helper.
+    ``catalog=`` explicitly and never imports this helper. Defaults to the
+    API StudyRuntime (lifecycle mixin) so ``create_study`` is available.
     """
+    # ``runtime_cls=None`` must not bypass the API runtime (setdefault skips None).
+    if kwargs.get("runtime_cls") is None:
+        kwargs["runtime_cls"] = ApiStudyRuntime
     return await _open_runtime_core(
         data_root,
         study_id,

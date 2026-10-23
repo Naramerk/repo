@@ -6,19 +6,19 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
+from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
 from coscientist.core.domain import HitlRequest
 from coscientist.core.events import EventEnvelope
-from coscientist.core.machine import StudyRuntime as CoreStudyRuntime
 from coscientist.core.study_view import study_view
 from coscientist.experimental.costly import DelegatedBudget
 from coscientist.experimental.hitl import HitlForkMixin
 
 
-class StudyRuntime(CoreStudyRuntime, HitlForkMixin):
-    """Core state machine plus HITL gates, DelegatedBudget, and fork stub.
+class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
+    """API lifecycle + core machine plus HITL gates, DelegatedBudget, fork stub.
 
-    Core is listed first so ``_append`` / ``cancel_task`` resolve to the real
-    implementations rather than mixin Protocol/`...` stubs.
+    ApiStudyRuntime (machine before LifecycleMixin) keeps ``_append`` real;
+    HitlForkMixin adds HITL/costly/fork without shadowing core append.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:

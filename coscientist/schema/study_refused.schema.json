@@ -18,6 +18,7 @@
         "contradictory",
         "egress_policy",
         "input_too_large",
+        "input_invalid",
         "duration_too_short"
       ]
     },
