@@ -36,7 +36,7 @@
 - `fetch_integrity` projection rows survive without `call_id` (key via tool/row_key).
 
 ### Perf / journal write SLO (configurable gate)
-- Defaults unchanged and on: **p99 ≤ 50ms**, **max-of-3** rounds, **≥1000 samples/round**. Override via `COSCI_PERF_P99_MS` / `COSCI_PERF_ROUNDS` / `COSCI_PERF_SAMPLES`; `COSCI_PERF_GATE=off` skips the SLO test with a clear reason (never a silent pass). Invalid env values raise. CI sets the defaults explicitly. Goal: catch a steady slowdown. Demos: synthetic one-bad-round + three real `append_many` rounds with +60ms sleep.
+- Defaults on and unchanged: **p99 ≤ 50ms**, **max-of-3** rounds, **≥1000 samples/round**. Env overrides (`COSCI_PERF_P99_MS` / `COSCI_PERF_ROUNDS` / `COSCI_PERF_SAMPLES`) allowed in both directions; values weaker than defaults emit `warnings.warn` + a `PERF GATE WEAKENED:` print (never silent). `COSCI_PERF_GATE=off` skips the SLO test with a clear reason. Non-finite / out-of-range values raise (`math.isfinite`; p99 in `(0, 10000]`, rounds ≥ 1, samples ≥ 100). CI pins the defaults and fails if any `COSCI_PERF_*` is weaker. Goal: catch a steady slowdown. Demos use the resolved config (synthetic one-bad-round + real `append_many` rounds with +60ms sleep).
 
 ### Perf / journal write SLO (CI noise)
 - p99 ≤ 50ms unchanged. Gate is **max-of-3** independent full loads with **≥1000 samples/round**. `min`/best-of removed — hid intermittent regressions. No separate median SLO.

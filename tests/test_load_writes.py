@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import random
 import statistics
+import warnings
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -21,22 +23,20 @@ from coscientist.core.source_fetch import verify_fetch_capability
 from coscientist.tools.effects import _mint_fetch_capability_for_tests
 from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success
 
-# DESIGN §3.5a absolute SLO defaults — do not loosen. Override via env
-# (COSCI_PERF_P99_MS / COSCI_PERF_ROUNDS / COSCI_PERF_SAMPLES) or disable with
-# COSCI_PERF_GATE=off (skips the SLO test; never a silent pass).
+# DESIGN §3.5a absolute SLO defaults. Override via env in either direction;
+# loosening (weaker than defaults) always warns + prints PERF GATE WEAKENED.
+# COSCI_PERF_GATE=off skips the SLO test (never a silent pass).
 _DEFAULT_P99_MS = 50.0
 _DEFAULT_ROUNDS = 3
 _DEFAULT_SAMPLES = 1000
 _MIN_P99_MS = 1e-6
+_MAX_P99_MS = 10_000.0
 _MIN_ROUNDS = 1
-_MIN_SAMPLES = 1
+_MAX_ROUNDS = 1000
+_MIN_SAMPLES = 100
+_MAX_SAMPLES = 1_000_000
 _GATE_OFF = frozenset({"off", "0", "false", "no"})
 _GATE_ON = frozenset({"on", "1", "true", "yes"})
-
-# Aliases for demos / call sites that pin the DESIGN defaults.
-_P99_SLO_MS = _DEFAULT_P99_MS
-_PERF_ROUNDS = _DEFAULT_ROUNDS
-_PERF_MIN_SAMPLES = _DEFAULT_SAMPLES
 
 
 @dataclass(frozen=True)
@@ -54,28 +54,73 @@ class PerfGateConfig:
         return max(1, (self.samples + 19) // 20)
 
 
-def _parse_positive_float(raw: str | None, *, default: float, name: str) -> float:
+def _parse_p99_ms(raw: str | None, *, default: float, name: str) -> float:
     if raw is None or raw.strip() == "":
         return default
     try:
         value = float(raw)
     except ValueError as exc:
-        raise ValueError(f"{name} must be a positive number, got {raw!r}") from exc
-    if value < _MIN_P99_MS:
-        raise ValueError(f"{name} must be >= {_MIN_P99_MS}, got {value!r}")
+        raise ValueError(f"{name} must be a finite number, got {raw!r}") from exc
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be finite, got {raw!r}")
+    if value < _MIN_P99_MS or value > _MAX_P99_MS:
+        raise ValueError(
+            f"{name} must be in [{_MIN_P99_MS}, {_MAX_P99_MS}], got {value!r}"
+        )
     return value
 
 
-def _parse_positive_int(raw: str | None, *, default: int, name: str, minimum: int) -> int:
+def _parse_bounded_int(
+    raw: str | None,
+    *,
+    default: int,
+    name: str,
+    minimum: int,
+    maximum: int,
+) -> int:
     if raw is None or raw.strip() == "":
         return default
     try:
         value = int(raw, 10)
     except ValueError as exc:
-        raise ValueError(f"{name} must be a positive integer, got {raw!r}") from exc
-    if value < minimum:
-        raise ValueError(f"{name} must be >= {minimum}, got {value!r}")
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
+    if value < minimum or value > maximum:
+        raise ValueError(
+            f"{name} must be in [{minimum}, {maximum}], got {value!r}"
+        )
     return value
+
+
+def _weakening_parts(cfg: PerfGateConfig) -> list[str]:
+    """Describe overrides weaker than DESIGN defaults (empty if not weakened)."""
+    parts: list[str] = []
+    if cfg.p99_ms > _DEFAULT_P99_MS:
+        parts.append(f"p99_ms={cfg.p99_ms} > default {_DEFAULT_P99_MS}")
+    if cfg.rounds < _DEFAULT_ROUNDS:
+        parts.append(f"rounds={cfg.rounds} < default {_DEFAULT_ROUNDS}")
+    if cfg.samples < _DEFAULT_SAMPLES:
+        parts.append(f"samples={cfg.samples} < default {_DEFAULT_SAMPLES}")
+    return parts
+
+
+def _emit_perf_gate_weakened(cfg: PerfGateConfig) -> str | None:
+    """Warn + print a visible marker when the gate is looser than defaults."""
+    parts = _weakening_parts(cfg)
+    if not parts:
+        return None
+    marker = "PERF GATE WEAKENED: " + "; ".join(parts)
+    warnings.warn(marker, UserWarning, stacklevel=2)
+    print(marker)
+    return marker
+
+
+def assert_ci_perf_gate_not_weakened(cfg: PerfGateConfig) -> None:
+    """CI must fail if any COSCI_PERF_* is weaker than the DESIGN defaults."""
+    parts = _weakening_parts(cfg)
+    if parts:
+        raise ValueError(
+            "CI forbids weakened COSCI_PERF_* overrides: " + "; ".join(parts)
+        )
 
 
 def resolve_perf_gate_config(
@@ -96,26 +141,30 @@ def resolve_perf_gate_config(
             raise ValueError(
                 f"COSCI_PERF_GATE must be on/off (or true/false/1/0), got {raw_gate!r}"
             )
-    return PerfGateConfig(
+    cfg = PerfGateConfig(
         enabled=enabled,
-        p99_ms=_parse_positive_float(
+        p99_ms=_parse_p99_ms(
             env.get("COSCI_PERF_P99_MS"),
             default=_DEFAULT_P99_MS,
             name="COSCI_PERF_P99_MS",
         ),
-        rounds=_parse_positive_int(
+        rounds=_parse_bounded_int(
             env.get("COSCI_PERF_ROUNDS"),
             default=_DEFAULT_ROUNDS,
             name="COSCI_PERF_ROUNDS",
             minimum=_MIN_ROUNDS,
+            maximum=_MAX_ROUNDS,
         ),
-        samples=_parse_positive_int(
+        samples=_parse_bounded_int(
             env.get("COSCI_PERF_SAMPLES"),
             default=_DEFAULT_SAMPLES,
             name="COSCI_PERF_SAMPLES",
             minimum=_MIN_SAMPLES,
+            maximum=_MAX_SAMPLES,
         ),
     )
+    _emit_perf_gate_weakened(cfg)
+    return cfg
 
 
 def _skip_if_perf_gate_disabled(cfg: PerfGateConfig) -> None:
@@ -512,7 +561,9 @@ async def test_twenty_parallel_sqlite_projection_matches_fold(
 @pytest.mark.serial
 @pytest.mark.asyncio
 async def test_twenty_parallel_attempts_fsync_p99_slo(
-    tmp_path: Path, runtime_cls: type
+    tmp_path: Path,
+    runtime_cls: type,
+    record_property: Any,
 ):
     """Absolute DESIGN §3.5a SLO: max-of-N p99 full-path write ≤ threshold.
 
@@ -523,6 +574,9 @@ async def test_twenty_parallel_attempts_fsync_p99_slo(
     Passes iff ``max(round_p99)`` ≤ threshold. Goal: catch a steady slowdown.
     """
     cfg = resolve_perf_gate_config()
+    weakened = _weakening_parts(cfg)
+    if weakened:
+        record_property("perf_gate_weakened", "; ".join(weakened))
     _skip_if_perf_gate_disabled(cfg)
     round_p99: list[float] = []
     for r in range(cfg.rounds):
@@ -551,28 +605,41 @@ async def test_twenty_parallel_attempts_fsync_p99_slo(
 
 
 def test_p99_gate_max_of_rounds_trips_on_one_bad_round():
-    """max-of-3 must fail when one round has ~60ms p99 (best-of would hide it).
+    """max-of-N must fail when one round has ~60ms p99 (best-of would hide it).
 
-    Builds three round p99s via ``_p99_ms`` (same path as the perf job) and
-    asserts through ``_assert_max_round_p99``. Two clean rounds + one bad
-    (≈60ms-on-write tail) must trip the gate; three clean rounds must pass.
+    Builds round p99s via ``_p99_ms`` (same path as the perf job) using the
+    resolved gate config and asserts through ``_assert_max_round_p99``.
     """
-    n = _DEFAULT_SAMPLES
+    cfg = resolve_perf_gate_config()
+    n = cfg.samples
     clean = [1.0] * n
     # ~60ms on enough samples that p99 is the slow tail (not a single spike).
-    bad = [1.0] * (n - 15) + [60.0] * 15
-    round_p99 = [_p99_ms(clean), _p99_ms(bad), _p99_ms(clean)]
-    assert round_p99[0] <= _DEFAULT_P99_MS
-    assert round_p99[1] > _DEFAULT_P99_MS
-    assert round_p99[2] <= _DEFAULT_P99_MS
-    # One bad round of three → max fails (min/best-of would pass on the cleans).
-    with pytest.raises(AssertionError, match=r"max-of-3 p99 .*> 50\.0ms"):
-        _assert_max_round_p99(round_p99)
+    bad_tail = min(15, max(1, n // 50))
+    bad = [1.0] * (n - bad_tail) + [60.0] * bad_tail
+    clean_p99 = _p99_ms(clean)
+    bad_p99 = _p99_ms(bad)
+    assert clean_p99 <= cfg.p99_ms
+    assert bad_p99 > cfg.p99_ms
+    # One bad round among cfg.rounds → max fails (min/best-of would hide it).
+    round_p99 = [clean_p99] * cfg.rounds
+    round_p99[0] = bad_p99
+    with pytest.raises(
+        AssertionError, match=rf"max-of-{cfg.rounds} p99 .*> {cfg.p99_ms}ms"
+    ):
+        _assert_max_round_p99(round_p99, p99_slo=cfg.p99_ms, rounds=cfg.rounds)
     # Uniform ~60ms every round also fails.
-    with pytest.raises(AssertionError, match=r"max-of-3 p99 .*> 50\.0ms"):
-        _assert_max_round_p99([_p99_ms(bad)] * _DEFAULT_ROUNDS)
-    # Three clean rounds pass (noise like 13ms still under 50).
-    assert _assert_max_round_p99([13.53, 1.27, 1.19]) == 13.53
+    with pytest.raises(
+        AssertionError, match=rf"max-of-{cfg.rounds} p99 .*> {cfg.p99_ms}ms"
+    ):
+        _assert_max_round_p99(
+            [bad_p99] * cfg.rounds, p99_slo=cfg.p99_ms, rounds=cfg.rounds
+        )
+    # All-clean rounds pass (noise like 13ms still under a 50ms default).
+    clean_rounds = [min(13.53, cfg.p99_ms - 0.01)] * cfg.rounds
+    assert (
+        _assert_max_round_p99(clean_rounds, p99_slo=cfg.p99_ms, rounds=cfg.rounds)
+        == clean_rounds[0]
+    )
 
 
 @pytest.mark.serial
@@ -580,13 +647,14 @@ def test_p99_gate_max_of_rounds_trips_on_one_bad_round():
 async def test_p99_gate_trips_on_slow_append_many_real_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """~60ms sleep in real ``SqliteEventStore.append_many`` trips max-of-3.
+    """~60ms sleep in real ``SqliteEventStore.append_many`` trips max-of-N.
 
-    Three real rounds through the append_many path (default API runtime),
-    each with a slow append; gate sees three measured round p99s.
+    ``cfg.rounds`` real rounds through the append_many path (resolved config),
+    each with a slow append; gate sees measured round p99s only.
     """
     from coscientist.core.store import SqliteEventStore
 
+    cfg = resolve_perf_gate_config()
     real_append_many = SqliteEventStore.append_many
 
     async def _slow_append_many(self: Any, *args: Any, **kwargs: Any) -> Any:
@@ -596,7 +664,7 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
     monkeypatch.setattr(SqliteEventStore, "append_many", _slow_append_many)
 
     round_p99: list[float] = []
-    for r in range(_DEFAULT_ROUNDS):
+    for r in range(cfg.rounds):
         round_dir = tmp_path / f"round_{r}"
         round_dir.mkdir()
         clock = SystemClock()
@@ -628,41 +696,85 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
         await close_runtime(rt)
         assert lat, "no write latencies recorded"
         bad_p99 = _p99_ms(lat)
-        print(f"delay-real-path round {r + 1}/{_DEFAULT_ROUNDS} p99={bad_p99:.2f}ms n={len(lat)}")
-        assert bad_p99 > _DEFAULT_P99_MS, (
+        print(
+            f"delay-real-path round {r + 1}/{cfg.rounds} "
+            f"p99={bad_p99:.2f}ms n={len(lat)}"
+        )
+        assert bad_p99 > cfg.p99_ms, (
             f"injected 60ms delay should exceed SLO (p99={bad_p99:.2f})"
         )
         round_p99.append(bad_p99)
-    assert len(round_p99) == _DEFAULT_ROUNDS
-    with pytest.raises(AssertionError, match=r"max-of-3 p99 .*> 50\.0ms"):
-        _assert_max_round_p99(round_p99)
+    assert len(round_p99) == cfg.rounds
+    with pytest.raises(
+        AssertionError, match=rf"max-of-{cfg.rounds} p99 .*> {cfg.p99_ms}ms"
+    ):
+        _assert_max_round_p99(round_p99, p99_slo=cfg.p99_ms, rounds=cfg.rounds)
 
 
 def test_perf_gate_config_defaults():
     """Unset env → gate on with DESIGN defaults (do not loosen)."""
-    cfg = resolve_perf_gate_config(environ={})
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        cfg = resolve_perf_gate_config(environ={})
     assert cfg.enabled is True
     assert cfg.p99_ms == _DEFAULT_P99_MS
     assert cfg.rounds == _DEFAULT_ROUNDS
     assert cfg.samples == _DEFAULT_SAMPLES
     assert cfg.routes_per_attempt == 50
+    assert not [w for w in caught if "PERF GATE WEAKENED" in str(w.message)]
 
 
 def test_perf_gate_config_env_override():
-    """COSCI_PERF_* env overrides threshold, rounds, and samples."""
-    cfg = resolve_perf_gate_config(
-        environ={
-            "COSCI_PERF_GATE": "on",
-            "COSCI_PERF_P99_MS": "25.5",
-            "COSCI_PERF_ROUNDS": "2",
-            "COSCI_PERF_SAMPLES": "200",
-        }
-    )
+    """COSCI_PERF_* overrides apply; weaker-than-default values warn loudly."""
+    with pytest.warns(UserWarning, match=r"PERF GATE WEAKENED"):
+        cfg = resolve_perf_gate_config(
+            environ={
+                "COSCI_PERF_GATE": "on",
+                "COSCI_PERF_P99_MS": "25.5",
+                "COSCI_PERF_ROUNDS": "2",
+                "COSCI_PERF_SAMPLES": "200",
+            }
+        )
     assert cfg.enabled is True
     assert cfg.p99_ms == 25.5
     assert cfg.rounds == 2
     assert cfg.samples == 200
     assert cfg.routes_per_attempt == 10
+    parts = _weakening_parts(cfg)
+    assert "rounds=2 < default 3" in parts
+    assert "samples=200 < default 1000" in parts
+    assert len(parts) == 2
+
+
+def test_perf_gate_weakened_emits_marker(capsys: pytest.CaptureFixture[str]):
+    """Loosening prints a visible PERF GATE WEAKENED marker (never silent)."""
+    with pytest.warns(UserWarning, match=r"PERF GATE WEAKENED"):
+        cfg = resolve_perf_gate_config(
+            environ={
+                "COSCI_PERF_P99_MS": "100",
+                "COSCI_PERF_ROUNDS": "1",
+                "COSCI_PERF_SAMPLES": "100",
+            }
+        )
+    assert cfg.p99_ms == 100.0
+    assert cfg.rounds == 1
+    assert cfg.samples == 100
+    out = capsys.readouterr().out
+    assert "PERF GATE WEAKENED:" in out
+    assert "p99_ms=100.0 > default 50.0" in out
+
+
+def test_perf_gate_ci_rejects_weakened():
+    """CI helper fails when any COSCI_PERF_* is weaker than defaults."""
+    cfg = PerfGateConfig(
+        enabled=True, p99_ms=50.0, rounds=3, samples=1000
+    )
+    assert_ci_perf_gate_not_weakened(cfg)
+    weak = PerfGateConfig(
+        enabled=True, p99_ms=60.0, rounds=3, samples=1000
+    )
+    with pytest.raises(ValueError, match=r"CI forbids weakened"):
+        assert_ci_perf_gate_not_weakened(weak)
 
 
 def test_perf_gate_off_skips_with_reason():
@@ -683,11 +795,17 @@ def test_perf_gate_off_skips_with_reason():
         ({"COSCI_PERF_P99_MS": "0"}, r"COSCI_PERF_P99_MS"),
         ({"COSCI_PERF_P99_MS": "-1"}, r"COSCI_PERF_P99_MS"),
         ({"COSCI_PERF_P99_MS": "nope"}, r"COSCI_PERF_P99_MS"),
+        ({"COSCI_PERF_P99_MS": "inf"}, r"COSCI_PERF_P99_MS"),
+        ({"COSCI_PERF_P99_MS": "nan"}, r"COSCI_PERF_P99_MS"),
+        ({"COSCI_PERF_P99_MS": "10001"}, r"COSCI_PERF_P99_MS"),
         ({"COSCI_PERF_ROUNDS": "0"}, r"COSCI_PERF_ROUNDS"),
         ({"COSCI_PERF_ROUNDS": "-2"}, r"COSCI_PERF_ROUNDS"),
         ({"COSCI_PERF_ROUNDS": "1.5"}, r"COSCI_PERF_ROUNDS"),
+        ({"COSCI_PERF_ROUNDS": "1001"}, r"COSCI_PERF_ROUNDS"),
         ({"COSCI_PERF_SAMPLES": "0"}, r"COSCI_PERF_SAMPLES"),
+        ({"COSCI_PERF_SAMPLES": "99"}, r"COSCI_PERF_SAMPLES"),
         ({"COSCI_PERF_SAMPLES": "abc"}, r"COSCI_PERF_SAMPLES"),
+        ({"COSCI_PERF_SAMPLES": "1000001"}, r"COSCI_PERF_SAMPLES"),
     ],
 )
 def test_perf_gate_invalid_values_fail_loudly(
