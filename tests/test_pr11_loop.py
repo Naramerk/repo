@@ -1172,8 +1172,11 @@ def test_upcast_study_created_max_loop_iter():
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     )
-    assert v == 11
+    assert v == 12
     assert p["max_loop_iter"] == 8
+    assert p["as_of"] is None
+    assert p["user_input_ids"] == []
+    assert p["max_proposals"] == 3
 
 
 def test_upcast_plan_accepted_loops_default():

@@ -23,6 +23,8 @@ from coscientist.core.domain import (
     RequirementRef,
     TaskSpec,
 )
+from coscientist.core.errors import StudyClosedError
+from coscientist.core.events import STUDY_CREATED_SCHEMA_VERSION, STUDY_FINALIZED_SCHEMA_VERSION
 from coscientist.core.finalize import finalize
 from coscientist.core.proposed_check import (
     approve_check,
@@ -37,6 +39,19 @@ from coscientist.core.rubric_types import Rubric, RubricItem
 from coscientist.core.upcasters import UPCASTERS, register_upcaster, upcast
 from coscientist.core.verdict import claim_is_severe, exclusion_reason, hypothesis_verdict
 from tests.helpers import attach_executor, close_runtime, open_runtime
+
+
+def _assert_one_finalized(events: list) -> object:
+    """Exactly one StudyFinalized; report_artifact_id XOR minimal_report; conclusion_ids."""
+    fins = [e for e in events if e.type == "StudyFinalized"]
+    assert len(fins) == 1
+    fin = fins[0]
+    has_art = fin.payload.get("report_artifact_id") is not None
+    has_min = fin.payload.get("minimal_report") is not None
+    assert has_art ^ has_min, "report_artifact_id XOR minimal_report"
+    cids = fin.payload.get("conclusion_ids")
+    assert isinstance(cids, list) and len(cids) > 0, "conclusion_ids must be non-empty"
+    return fin
 
 
 def _rejected() -> list[RejectedTemplateNote]:
@@ -154,7 +169,8 @@ async def test_propose_preregisters_digest_before_result(tmp_path: Path) -> None
         assert proposed[0].payload["proposal_digest"] == digest
         assert proposed[0].schema_version == 1
         created = [e for e in events if e.type == "StudyCreated"][0]
-        assert created.schema_version == 11
+        assert created.schema_version == STUDY_CREATED_SCHEMA_VERSION
+        assert created.schema_version == 12
         assert created.payload.get("max_proposals") == 3
     finally:
         await close_runtime(rt)
@@ -470,6 +486,8 @@ async def test_proposal_quota_closes_task(tmp_path: Path) -> None:
         if not getattr(rt, "_finalized", False):
             await finalize(rt, trigger="all_done")
         assert rt._finalized
+        events = await rt.store.read_all()
+        _assert_one_finalized(events)
     finally:
         await close_runtime(rt)
 
@@ -529,11 +547,93 @@ async def test_reject_and_timeout_still_finalize(tmp_path: Path) -> None:
         await rt.tick()
         assert rt._finalized
         events = await rt.store.read_all()
-        fin = [e for e in events if e.type == "StudyFinalized"][0]
-        assert fin.schema_version == 4
+        fin = _assert_one_finalized(events)
+        assert fin.schema_version == STUDY_FINALIZED_SCHEMA_VERSION
         assert "custom_checks" in fin.payload
         assert fin.payload["custom_checks"][0]["status"] == "rejected"
         assert fin.payload["custom_checks"][0]["catalog"] is False
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
+    """CheckProposed / CheckApproved / CheckRejected rejected after StudyFinalized."""
+    rt = await open_runtime(tmp_path, "st_pr20_closed")
+    try:
+        await _create(rt, "closed")
+        await _boot_plan(
+            rt,
+            [
+                TaskSpec(
+                    task_key="EXP",
+                    title="e",
+                    goal="g",
+                    route="experiment",
+                    depends_on=["PLAN"],
+                    criteria=[RequirementRef(template_id="artifact_present")],
+                    expected_outputs=[],
+                )
+            ],
+        )
+        aid = await rt.start_attempt("EXP")
+        assert aid
+        task_id = rt.attempts[aid]["task_id"]
+        pid = await propose_check(
+            rt,
+            target="study",
+            role="validity",
+            measures="m",
+            justification="j",
+            rejected_templates=_rejected(),
+            check=_value_check(target=1),
+            task_id=task_id,
+            attempt_id=aid,
+            open_hitl=False,
+        )
+        assert pid
+        ex, arts = attach_executor(rt, tmp_path)
+        art = arts.put(
+            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
+        )
+        await ex.record(
+            aid,
+            AgentTaskOutput(
+                summary="ok",
+                outputs={
+                    "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
+                },
+            ),
+        )
+        await _finish_report(rt, tmp_path)
+        await rt.ensure_lease(ttl_s=10_000)
+        await rt.tick()
+        if not getattr(rt, "_finalized", False):
+            await finalize(rt, trigger="all_done")
+        assert rt._finalized
+        events_before = await rt.store.read_all()
+        n_before = len(events_before)
+        _assert_one_finalized(events_before)
+        with pytest.raises(StudyClosedError):
+            await propose_check(
+                rt,
+                target="study",
+                role="validity",
+                measures="late",
+                justification="j",
+                rejected_templates=_rejected(),
+                check=_value_check(target=9),
+                task_id=task_id,
+                attempt_id=aid,
+                open_hitl=False,
+            )
+        with pytest.raises(StudyClosedError):
+            await approve_check(rt, pid, by="human")
+        with pytest.raises(StudyClosedError):
+            await reject_check(rt, pid, by="policy", reason="too_late")
+        events_after = await rt.store.read_all()
+        assert len(events_after) == n_before
+        assert len([e for e in events_after if e.type == "StudyFinalized"]) == 1
     finally:
         await close_runtime(rt)
 
@@ -643,16 +743,26 @@ async def test_delegated_reviewer_must_differ_from_proposer(tmp_path: Path) -> N
         await close_runtime(rt)
 
 
-def test_upcaster_studycreated_v10_to_v11_max_proposals() -> None:
+def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
+    """Main v10 → #23 v11 (as_of/user_input_ids) → PR20 v12 (max_proposals)."""
     v, payload = upcast("StudyCreated", 10, {"study_id": "s", "max_loop_iter": 8})
-    assert v >= 11
+    assert v == STUDY_CREATED_SCHEMA_VERSION == 12
     assert payload.get("max_proposals") == 3
+    assert payload.get("as_of") is None
+    assert payload.get("user_input_ids") == []
     assert payload.get("max_loop_iter") == 8
+    # Tip-1 → tip: only max_proposals (as_of already present).
+    v12, p12 = upcast(
+        "StudyCreated", 11, {"study_id": "s", "as_of": None, "user_input_ids": []}
+    )
+    assert v12 == 12
+    assert p12.get("max_proposals") == 3
+    assert 10 in UPCASTERS["StudyCreated"] and 11 in UPCASTERS["StudyCreated"]
 
 
 def test_upcaster_studyfinalized_v3_to_v4_custom_checks() -> None:
     v, payload = upcast("StudyFinalized", 3, {"trigger": "all_done"})
-    assert v >= 4
+    assert v == STUDY_FINALIZED_SCHEMA_VERSION == 4
     assert payload.get("custom_checks") == []
     assert payload.get("observations") == []
 

@@ -449,6 +449,8 @@ async def _sync_finalized_from_store(runtime: StudyRuntime, *, sid: str, conflic
 
 
 async def _append_finalized(runtime: StudyRuntime, *, sid: str, payload: dict[str, Any]) -> None:
+    from coscientist.core.events import STUDY_FINALIZED_SCHEMA_VERSION
+
     now = runtime.clock.now()
     await runtime._append(  # noqa: SLF001
         [
@@ -459,7 +461,7 @@ async def _append_finalized(runtime: StudyRuntime, *, sid: str, payload: dict[st
                 idem_key=make_idem("StudyFinalized", sid),
                 payload=payload,
                 ts=now,
-                schema_version=4,
+                schema_version=STUDY_FINALIZED_SCHEMA_VERSION,
             )
         ]
     )
@@ -649,6 +651,8 @@ async def _build_finalized_payload(
             qdisp=qdisp,
             refusal=refusal,
         )
+    except LeaseLost:
+        raise
     except Exception as e:  # noqa: BLE001 — primary failure → minimal_report
         fallback = type(e).__name__
         log.warning("finalize primary path failed: %s", e, exc_info=True)
@@ -667,6 +671,8 @@ async def _build_finalized_payload(
                 hypotheses=hypothesis_verdicts or {},
                 hypotheses_unavailable=hypotheses_unavailable,
             )
+        except LeaseLost:
+            raise
         except Exception as e2:  # noqa: BLE001
             raise RuntimeError(f"minimal_report:{type(e2).__name__}") from e2
     from coscientist.core.proposed_check import custom_checks_report

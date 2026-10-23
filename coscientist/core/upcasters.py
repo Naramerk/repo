@@ -517,11 +517,19 @@ def _study_created_v9_to_v10(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _study_created_v10_to_v11(payload: dict[str, Any]) -> dict[str, Any]:
-    """PR20: max_proposals (agent CheckProposed quota; default 3).
+    """PR19 (#23) bridge: as_of / user_input_ids on StudyCreated **v11**.
 
-    Stacked after PR11 StudyCreated v10 (`max_loop_iter`). Open PR #23 may also
-    bump StudyCreated — coordinator renumbers if that lands before this PR.
+    #23 owns writer v11; this PR keeps the bridge so journals from main v10
+    upcast continuously through v11 before PR20's v12 ``max_proposals``.
     """
+    out = dict(payload)
+    out.setdefault("as_of", None)
+    out.setdefault("user_input_ids", [])
+    return out
+
+
+def _study_created_v11_to_v12(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR20: max_proposals (agent CheckProposed quota; default 3)."""
     out = dict(payload)
     out.setdefault("max_proposals", 3)
     return out
@@ -713,6 +721,7 @@ register_upcaster("StudyCreated", 7, _study_created_v7_to_v8)
 register_upcaster("StudyCreated", 8, _study_created_v8_to_v9)
 register_upcaster("StudyCreated", 9, _study_created_v9_to_v10)
 register_upcaster("StudyCreated", 10, _study_created_v10_to_v11)
+register_upcaster("StudyCreated", 11, _study_created_v11_to_v12)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)

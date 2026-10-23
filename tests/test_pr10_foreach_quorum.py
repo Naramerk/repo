@@ -1493,6 +1493,8 @@ def test_upcast_attempt_limitations():
 
 def test_upcast_study_foreach_cap():
     v, p = upcast("StudyCreated", 7, {"study_id": "s"})
-    assert v == 11
+    assert v == 12
     assert p["max_foreach_children"] == 32
+    assert p["as_of"] is None
+    assert p["user_input_ids"] == []
     assert p["max_proposals"] == 3

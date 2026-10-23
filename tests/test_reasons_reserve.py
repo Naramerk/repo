@@ -335,8 +335,8 @@ def test_upcast_study_created_sets_reserve_zero():
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     )
-    # v1→…→v10 max_loop_iter (PR11) → v11 max_proposals (PR20).
-    assert v == 11
+    # v1→…→v10 max_loop_iter (PR11) → v11 as_of (#23) → v12 max_proposals (PR20).
+    assert v == 12
     assert p["max_foreach_children"] == 32
     assert p["max_loop_iter"] == 8
     assert p["finalize_reserve_s"] == 0
@@ -347,6 +347,8 @@ def test_upcast_study_created_sets_reserve_zero():
     assert p["aggregate"] == "count"
     assert p["max_expansions"] == 2
     assert p["replan_reserve"] == 0.1
+    assert p["as_of"] is None
+    assert p["user_input_ids"] == []
     assert p["max_proposals"] == 3
     # Explicit value must not be overwritten
     v2, p2 = upcast("StudyCreated", 1, {**p, "finalize_reserve_s": 30})

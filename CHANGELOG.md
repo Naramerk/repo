@@ -9,8 +9,8 @@
 - Core-only counting: unapproved → exclusion `unapproved_check`; approved executable counts like catalog (severe only if trusted); approved rubric qualitative never-severe; delegated must not tip a catalog tie.
 - Quota: `Study.max_proposals` (default 3); excess closes the task with `TaskReason.PROPOSAL_QUOTA` (study still finalizes).
 - Report: `custom_checks[]` + `observations[]` on StudyFinalized / markdown / minimal_report.
-- Upcasters: StudyCreated **v11** (`max_proposals`, after PR11 `#24` v10 `max_loop_iter`); StudyFinalized **v4** (`custom_checks`/`observations`).
-- **Coordinator:** open PR #23 (PR19) may still bump StudyCreated — renumber if it lands first.
+- Upcasters: StudyCreated **v12** (`max_proposals`); bridge **v10→v11** (`as_of`/`user_input_ids`, owned by open PR #23) so the chain stays continuous from main `83949bb` v10. StudyFinalized **v4** (`custom_checks`/`observations`).
+- **Coordinator:** #23 takes StudyCreated **v11**; this PR never claims v11. Never merge from this agent.
 
 ### Sandbox (host CPU sample order)
 - `_watch_process`: sample host-tree CPU via `/proc` **before** `poll()` (poll reaps the child and `/proc` vanishes). Keeps no-cgroup SIGXCPU classification accurate; retains the max sample while the guest is alive. Split out of PR14 so quote work stays focused.
