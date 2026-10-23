@@ -17,8 +17,27 @@ from coscientist.core.tool_registry import (
     register_tool,
 )
 
-# Production built-ins. Empty until product tools ship; freeze still runs.
-CORE_BUILTIN_TOOLS: tuple[RegisteredToolSpec, ...] = ()
+# Production built-ins. PR20: propose_check agent entry (write / journal CheckProposed).
+CORE_BUILTIN_TOOLS: tuple[RegisteredToolSpec, ...] = (
+    RegisteredToolSpec(
+        name="propose_check",
+        effect="write",
+        timeout_s=30,
+        max_retries=0,
+        provider="local",
+        input_schema={
+            "type": "object",
+            "required": [
+                "target",
+                "role",
+                "measures",
+                "justification",
+                "rejected_templates",
+                "task_id",
+            ],
+        },
+    ),
+)
 
 
 def ensure_core_tools_ready() -> None:

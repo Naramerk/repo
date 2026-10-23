@@ -159,6 +159,8 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             max_attempts=self.max_attempts,
             on_budget_debit=make_budget_debit_cb(self),
         )
+        # PR20: proposed_check prereg-before-attempt needs attempt seq map.
+        ex._runtime_attempts = self.attempts  # type: ignore[attr-defined]
         self.artifacts = artifacts
         self.catalog = catalog
         self.bind_executor(ex)
@@ -201,12 +203,14 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         if self._lease_lost:
             raise LeaseLost("writer stopped after lease loss")
         try:
-            await self.writer.append_many(events)
+            # Project returned envelopes (with seq) so AttemptStarted._seq /
+            # CheckProposed.proposed_seq are available for PR20 prereg checks.
+            stored = await self.writer.append_many(events)
         except LeaseLost:
             self._lease_lost = True
             raise
         done_ids: list[str] = []
-        for ev in events:
+        for ev in stored:
             self._project_local(ev)
             if ev.type == "TaskDone":
                 done_ids.append(ev.entity_key)
@@ -407,6 +411,12 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         if self.study is None or self._lease_lost:
             return
         await self.ensure_lease()
+        if self._finalized:
+            return
+        # PR20: delegated review timeout ≡ reject (core path; experimental also runs).
+        from coscientist.core.proposed_check import reject_stale_proposed_check_reviews
+
+        await reject_stale_proposed_check_reviews(self)
         if self._finalized:
             return
         now = self.clock.now()

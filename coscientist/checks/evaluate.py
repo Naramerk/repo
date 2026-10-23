@@ -625,6 +625,7 @@ def _evaluate_proposed_check(
     Claims never count until ``CheckApproved`` (exclusion ``unapproved_check``).
     """
     from coscientist.core.proposed_check import (
+        assert_proposal_preregistered_for_eval,
         code_check_from_proposal,
         rubric_from_proposal,
     )
@@ -665,6 +666,35 @@ def _evaluate_proposed_check(
     role: CheckRole = row.get("role") if row.get("role") in ("prediction", "validity") else "unknown"  # type: ignore[assignment]
     base_effect["proposal_digest"] = row.get("proposal_digest")
     base_effect["delegated"] = bool(row.get("delegated"))
+    base_effect["bound_task_id"] = row.get("bound_task_id") or row.get("task_id")
+    base_effect["bound_target"] = row.get("bound_target") or row.get("target")
+    # Preregistration must precede evaluating AttemptStarted; bind task_id.
+    attempts_map = getattr(spec, "_attempts_for_eval", None)
+    # evaluate_task_checks may pass attempts via proposals meta; prefer closure.
+    prereg_err = assert_proposal_preregistered_for_eval(
+        row,
+        attempt_id=attempt_id,
+        task_id=task_id,
+        attempts=None,  # filled below when available on proposals bag
+    )
+    # Prefer attempts attached on the proposals dict (executor stamps _attempts).
+    stamped = proposals.get("__attempts__") if isinstance(proposals, dict) else None
+    if isinstance(stamped, dict):
+        prereg_err = assert_proposal_preregistered_for_eval(
+            row, attempt_id=attempt_id, task_id=task_id, attempts=stamped
+        )
+    del attempts_map
+    if prereg_err:
+        return CheckResult(
+            check_id=check_id,
+            template_id=PROPOSED_CHECK_TEMPLATE_ID,
+            status=ReqStatus.FAILED,
+            is_code=row.get("check") is not None,
+            required=ref.required,
+            role=role,
+            detail=prereg_err,
+            effect={**base_effect, "exclusion_reason": "unapproved_check"},
+        )
     if status == "rejected":
         return CheckResult(
             check_id=check_id,
@@ -690,6 +720,19 @@ def _evaluate_proposed_check(
         )
 
     # Approved: evaluate using the preregistered body (never mutate after propose).
+    # Bound approval: one task_id + target only (no multi-claim k_sup reuse).
+    bound_task = str(row.get("bound_task_id") or row.get("task_id") or "")
+    if task_id and bound_task and str(task_id) != bound_task:
+        return CheckResult(
+            check_id=check_id,
+            template_id=PROPOSED_CHECK_TEMPLATE_ID,
+            status=ReqStatus.FAILED,
+            is_code=row.get("check") is not None,
+            required=ref.required,
+            role=role,
+            detail=f"unapproved_check:task_mismatch:{bound_task}!={task_id}",
+            effect={**base_effect, "exclusion_reason": "unapproved_check"},
+        )
     delegated = bool(row.get("delegated"))
     if row.get("rubric") is not None:
         from coscientist.checks.kinds.rubric import evaluate_rubric

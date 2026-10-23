@@ -72,6 +72,8 @@ def build_minimal_report(
     refusal: str | None = None,
     hypotheses: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None = None,
     hypotheses_unavailable: str | None = None,
+    custom_checks: Sequence[Mapping[str, Any]] | None = None,
+    observations: Sequence[Mapping[str, Any] | str] | None = None,
 ) -> dict[str, Any]:
     task_list = sorted(tasks.values(), key=lambda t: t.spec.task_key)
     q_rows = [
@@ -123,8 +125,9 @@ def build_minimal_report(
         "hypotheses": h_rows,
         "hypotheses_unavailable": hypotheses_unavailable,
         "sections": _sections(task_list, attempts),
-        "custom_checks": [],
-        "observations": [],
+        # Apply custom_checks/observations BEFORE truncate so they respect 10KB.
+        "custom_checks": [dict(c) for c in (custom_checks or [])],
+        "observations": list(observations or []),
         "truncated": False,
     }
     return truncate_minimal_report(report)
@@ -150,6 +153,11 @@ def truncate_minimal_report(report: dict[str, Any]) -> dict[str, Any]:
     # SPEC: truncate hypotheses after questions.
     while len(canonical_json(out)) > MAX_BYTES and out.get("hypotheses"):
         out["hypotheses"] = out["hypotheses"][:-1]
+    # PR20: custom_checks / observations participate in the 10KB budget.
+    while len(canonical_json(out)) > MAX_BYTES and out.get("observations"):
+        out["observations"] = out["observations"][:-1]
+    while len(canonical_json(out)) > MAX_BYTES and out.get("custom_checks"):
+        out["custom_checks"] = out["custom_checks"][:-1]
     secs = dict(out.get("sections") or {})
     for key in ("human", "stub", "real"):
         while len(canonical_json(out)) > MAX_BYTES and secs.get(key):
@@ -213,9 +221,12 @@ def render_markdown_report(
         for c in custom_checks:
             who = c.get("approved_by") or c.get("rejected_by") or "?"
             delg = "delegated" if c.get("delegated") else "human"
+            from coscientist.core.finalize import _escape_report_text
+
+            measures = _escape_report_text(c.get("measures") or "")
             lines.append(
                 f"- `{c.get('proposal_id')}` status={c.get('status')} "
-                f"by={who}/{delg} — {c.get('measures')} (не каталожная)"
+                f"by={who}/{delg} — {measures} (не каталожная)"
             )
     lines.extend(["", "## Observations"])
     if not observations:

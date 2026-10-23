@@ -250,14 +250,15 @@ class HitlForkMixin(CostlyHitlMixin):
             await approve_check(
                 self,
                 pid,
-                by="human",
-                delegated=False,
+                source="hitl",
                 hitl_request_id_s=request_id,
             )
             return
         if decision == "delegate":
             # Mark HITL answered as delegated; reviewer agent decides later.
-            # Do not CheckApproved yet — reviewer must approve with delegated=true.
+            # Timeout≡reject still applies via ReviewScheduled.deadline.
+            from coscientist.core.proposed_check import schedule_proposed_check_review
+
             now = self.clock.now()
             await self._append(
                 [
@@ -280,31 +281,16 @@ class HitlForkMixin(CostlyHitlMixin):
                         },
                         ts=now,
                     ),
-                    EventEnvelope(
-                        study_id=h.study_id,
-                        type="ReviewScheduled",
-                        entity_key=pid,
-                        idem_key=make_idem("ReviewScheduled", pid, "proposed_check"),
-                        payload={
-                            "kind": "proposed_check_review",
-                            "proposal_id": pid,
-                            "hitl_request_id": request_id,
-                            "task_id": h.task_id,
-                            "proposer_attempt_id": (
-                                (getattr(self, "_check_proposals", {}) or {})
-                                .get(pid, {})
-                                .get("proposer_attempt_id")
-                            ),
-                        },
-                        ts=now,
-                    ),
                 ]
+            )
+            await schedule_proposed_check_review(
+                self, pid, hitl_request_id_s=request_id
             )
             return
         await reject_check(
             self,
             pid,
-            by="human",
+            source="hitl",
             reason="rejected",
             hitl_request_id_s=request_id,
         )
@@ -321,7 +307,7 @@ class HitlForkMixin(CostlyHitlMixin):
             await reject_check(
                 self,
                 pid,
-                by="policy",
+                source="timeout",
                 reason="human_timeout",
                 hitl_request_id_s=h.request_id,
             )

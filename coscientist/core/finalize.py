@@ -657,6 +657,8 @@ async def _build_finalized_payload(
         fallback = type(e).__name__
         log.warning("finalize primary path failed: %s", e, exc_info=True)
         try:
+            from coscientist.core.proposed_check import custom_checks_report as _ccr
+
             minimal = build_minimal_report(
                 study_id=sid,
                 terminal_reason=term.value,
@@ -670,6 +672,8 @@ async def _build_finalized_payload(
                 refusal=refusal,
                 hypotheses=hypothesis_verdicts or {},
                 hypotheses_unavailable=hypotheses_unavailable,
+                custom_checks=_ccr(runtime),
+                observations=list(getattr(runtime, "_observations", None) or []),
             )
         except LeaseLost:
             raise
@@ -682,8 +686,11 @@ async def _build_finalized_payload(
     observations = list(getattr(runtime, "_observations", None) or [])
     if minimal is not None and isinstance(minimal, dict):
         minimal = dict(minimal)
-        minimal.setdefault("custom_checks", custom_checks)
-        minimal.setdefault("observations", observations)
+        # Prefer already-truncated lists from build_minimal_report when present.
+        if not minimal.get("custom_checks"):
+            minimal["custom_checks"] = custom_checks
+        if not minimal.get("observations"):
+            minimal["observations"] = observations
     return {
         "trigger": trigger,
         "terminal_reason": term.value,

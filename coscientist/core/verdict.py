@@ -1058,19 +1058,22 @@ def hypothesis_verdict(
     unresolved = [c for c in about if _refute_unresolved(c)]
     idle_unresolved = any(_timeout_kind(c) == "idle_timeout" for c in unresolved)
 
-    # Prefer catalog-only counts when delegated proposals would tip a balanced catalog.
+    # Prefer catalog-only counts when delegated proposals would tip a catalog tie
+    # (including the empty 0:0 catalog tie — DESIGN_M1 §16).
     use_inc = n_inc
     use_con = n_con
     use_severe = consistent_severe
-    if n_inc_cat == n_con_cat and (n_inc != n_inc_cat or n_con != n_con_cat):
+    catalog_tied = n_inc_cat == n_con_cat
+    delegated_changes = n_inc != n_inc_cat or n_con != n_con_cat
+    if catalog_tied and delegated_changes:
         use_inc = n_inc_cat
         use_con = n_con_cat
         use_severe = catalog_con
-    elif n_inc >= k_ref and n_inc_cat < k_ref and n_inc_cat == n_con_cat:
+    elif n_inc >= k_ref and n_inc_cat < k_ref and catalog_tied:
         use_inc = n_inc_cat
         use_con = n_con_cat
         use_severe = catalog_con
-    elif n_con >= k_sup and n_con_cat < k_sup and n_inc_cat == n_con_cat:
+    elif n_con >= k_sup and n_con_cat < k_sup and catalog_tied:
         use_inc = n_inc_cat
         use_con = n_con_cat
         use_severe = catalog_con

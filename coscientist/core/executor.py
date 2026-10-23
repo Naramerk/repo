@@ -712,6 +712,20 @@ class Executor:
                 proposals = (
                     self.get_proposals() if self.get_proposals is not None else {}
                 )
+                if isinstance(proposals, dict):
+                    # Stamp attempts for proposed_check prereg-before-attempt checks.
+                    proposals = dict(proposals)
+                    get_att = getattr(self, "get_attempt", None)
+                    attempts_bag: dict[str, Any] = {}
+                    if callable(get_att):
+                        att = get_att(attempt_id)
+                        if isinstance(att, dict):
+                            attempts_bag[str(attempt_id)] = att
+                    # Prefer runtime.attempts when wired on the executor host.
+                    host = getattr(self, "_runtime_attempts", None)
+                    if isinstance(host, dict):
+                        attempts_bag = host
+                    proposals["__attempts__"] = attempts_bag
                 checks = await asyncio.to_thread(
                     evaluate_task_checks,
                     self.catalog,
@@ -1456,6 +1470,5 @@ class Executor:
     ) -> None:
         stored = await self.writer.append_many(events, require_open_attempt=require_open_attempt)
         if self.on_events is not None:
-            for ev in events:
+            for ev in stored:
                 self.on_events(ev)
-        _ = stored

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from coscientist.core.claims import compute_verdict_snapshots
 from coscientist.core.domain import (
@@ -182,6 +182,7 @@ class AttemptsMixin:
         task_key_or_id: str,
         *,
         provenance: Provenance | None = None,
+        attempt_role: Literal["agent", "reviewer"] = "agent",
     ) -> str | None:
         """Start an attempt, or return ``None`` when the task is refused without one.
 
@@ -346,6 +347,8 @@ class AttemptsMixin:
             "tainted_context": tainted_context,
             # PR10: fan-in gaps (inputs below quorum / failed deps).
             "limitations": lim_payload,
+            # PR20: reviewer attempts for proposed_check_review (default agent).
+            "attempt_role": attempt_role,
             **share_fields,
         }
         events: list[EventEnvelope] = [
@@ -356,8 +359,8 @@ class AttemptsMixin:
                 idem_key=make_idem("AttemptStarted", aid),
                 payload=payload,
                 ts=now,
-                # v6 = PR12 shares+budget_limit; v7 = PR18 tainted_context.
-                schema_version=7,
+                # v7 = PR18 tainted; v8 = #23 inputs_digest bridge; v9 = attempt_role.
+                schema_version=9,
             )
         ]
         # Persist full verdict snapshots used at bind (not digest-only).

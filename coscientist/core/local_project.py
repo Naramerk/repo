@@ -179,7 +179,12 @@ class LocalProjectMixin:
                 self._hitl_decisions = {}
                 decisions = self._hitl_decisions
             decisions[rid] = dict(p)
-        elif ev.type in ("CheckProposed", "CheckApproved", "CheckRejected"):
+        elif ev.type in (
+            "CheckProposed",
+            "CheckApproved",
+            "CheckRejected",
+            "ReviewScheduled",
+        ):
             from coscientist.core.proposed_check import fold_proposed_check_event
 
             fold_proposed_check_event(self, ev)
@@ -216,7 +221,11 @@ class LocalProjectMixin:
                 else:
                     self._expand_pending = {str(after)}
         elif ev.type == "AttemptStarted":
-            self.attempts[p["attempt_id"]] = dict(p)
+            row = dict(p)
+            row.setdefault("attempt_role", "agent")
+            if getattr(ev, "seq", None) is not None:
+                row["_seq"] = ev.seq
+            self.attempts[p["attempt_id"]] = row
             t = self.tasks[p["task_id"]]
             attempts = list(t.attempts)
             if p["attempt_id"] not in attempts:
