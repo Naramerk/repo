@@ -457,6 +457,34 @@ def test_honest_terminals_stamp_verdict_for_rollup():
     assert bad["Q"]["disposition"] == Disposition.NOT_ATTEMPTED.value
     assert bad["Q"].get("verdict") is None
 
+    # With main rollup: incomplete children must not wipe stamped needs_more_data.
+    from coscientist.core.rollup import apply_rollup
+    from tests.test_pr16_decomposes_rollup import _tree_plans
+
+    leaves = {
+        "Q": {
+            "disposition": Disposition.NEEDS_MORE_DATA.value,
+            "verdict": Disposition.NEEDS_MORE_DATA.value,
+            "reason": "need RCT",
+            "formulation": "root",
+        },
+        "Q.a": {
+            "disposition": Disposition.ANSWERED.value,
+            "verdict": "answered",
+            "reason": None,
+            "formulation": "a",
+        },
+        "Q.b": {
+            "disposition": Disposition.NOT_ATTEMPTED.value,
+            "reason": "no_task",
+            "formulation": "b",
+        },
+    }
+    rolled = apply_rollup(leaves, plans=_tree_plans("all"))
+    assert rolled["Q"]["disposition"] == Disposition.NEEDS_MORE_DATA.value
+    assert rolled["Q"].get("verdict") == Disposition.NEEDS_MORE_DATA.value
+    assert rolled["Q"].get("rollup_clamped") is True
+
 
 @pytest.mark.asyncio
 async def test_needs_more_data_requires_design(tmp_path, clock):
