@@ -365,7 +365,7 @@ def bind_input_groups(
 
     if static_quorum:
         flat: list[InputSpec] = []
-        for orig, members in static_quorum:
+        for _orig, members in static_quorum:
             flat.extend(members)
         q0 = static_quorum[0][0].quorum
         needed = len(flat) if q0 == "all" else max(1, int(q0 or 1))
