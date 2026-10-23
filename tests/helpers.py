@@ -30,6 +30,18 @@ class RuntimeLike(Protocol):
 
 
 def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifactStore]:
+    # Prefer Executor already wired by open_runtime.make_executor (live get_graph).
+    existing = getattr(rt, "executor", None)
+    existing_arts = getattr(rt, "artifacts", None)
+    if existing_arts is None and existing is not None:
+        existing_arts = getattr(existing, "artifacts", None)
+    if (
+        existing is not None
+        and getattr(existing, "get_graph", None) is not None
+        and existing_arts is not None
+    ):
+        return existing, existing_arts
+
     catalog = minimal_test_catalog()
     arts = LocalArtifactStore(tmp / "arts")
 
@@ -47,7 +59,6 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
             },
         )()
 
-    # Prefer production factory when available (wires get_graph).
     make = getattr(rt, "make_executor", None)
     if callable(make):
         ex = make(

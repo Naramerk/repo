@@ -53,13 +53,31 @@ def _check_field(c: Any, name: str) -> Any:
     return getattr(c, name, None)
 
 
+def _normalize_to_template_id(
+    key: str, checks: list[Any], criteria: list[Any]
+) -> str:
+    """Map check_id (``value_match#0``) → template_id; leave template_id as-is."""
+    for c in checks:
+        tid = _check_field(c, "template_id")
+        cid = _check_field(c, "check_id")
+        if cid is not None and str(cid) == key and tid:
+            return str(tid)
+        if tid is not None and str(tid) == key:
+            return str(tid)
+    for ref in criteria:
+        tid = _check_field(ref, "template_id")
+        if tid is not None and str(tid) == key:
+            return str(tid)
+    return key
+
+
 def _criterion_key_for_claim(
     raw: dict[str, Any], checks: list[Any], criteria: list[Any]
 ) -> str | None:
-    """Resolve checked_against, else sole check / sole plan criterion."""
+    """Resolve checked_against → template_id, else sole check / sole plan criterion."""
     checked = raw.get("checked_against")
     if checked:
-        return str(checked)
+        return _normalize_to_template_id(str(checked), checks, criteria)
     if len(checks) == 1:
         tid = _check_field(checks[0], "template_id")
         return str(tid) if tid else None
@@ -73,13 +91,17 @@ def _criterion_status_for_claim(
     raw: dict[str, Any], checks: list[Any], criteria: list[Any] | None = None
 ) -> str:
     """Map claim.checked_against → ReqStatus of that criterion's check."""
-    key = _criterion_key_for_claim(raw, checks, list(criteria or []))
+    crit = list(criteria or [])
+    key = _criterion_key_for_claim(raw, checks, crit)
     if key:
         for c in checks:
             tid = _check_field(c, "template_id")
             cid = _check_field(c, "check_id")
             st = _check_field(c, "status")
-            if tid == key or cid == key or (tid and key.endswith(str(tid))):
+            # Exact match only (no endswith — avoids C11 matching ``1``).
+            if (tid is not None and str(tid) == key) or (
+                cid is not None and str(cid) == key
+            ):
                 if isinstance(st, ReqStatus):
                     return _req_to_criterion_status(st)
                 try:
@@ -94,11 +116,11 @@ def _criterion_status_for_claim(
     return "unassessed"
 
 
-def _criterion_is_frozen(graph: Any, study_id: str, checked_against: Any) -> bool:
-    """True when plan-accept freeze marked the criterion node."""
-    if not checked_against or graph is None:
+def _criterion_is_frozen(graph: Any, study_id: str, template_id: Any) -> bool:
+    """True when plan-accept freeze marked the criterion node (keyed by template_id)."""
+    if not template_id or graph is None:
         return False
-    key = str(checked_against)
+    key = str(template_id)
     node = graph.get_node(criterion_node_id(study_id, key))
     if node is None:
         node = graph.get_node(key)
@@ -106,6 +128,28 @@ def _criterion_is_frozen(graph: Any, study_id: str, checked_against: Any) -> boo
         return False
     attrs = node.attrs or {}
     return attrs.get("frozen_at_seq") is not None or bool(attrs.get("frozen"))
+
+
+def _checks_validate_acceptance(checks: list[Any]) -> bool:
+    """Result validation: required checks must not be FAILED / MIGRATION_ERROR.
+
+    Optional (``required=False``) failures do not reject acceptance — they drive
+    ``criterion_status`` / stance instead (refuted path).
+    """
+    for c in checks:
+        if _check_field(c, "required") is False:
+            continue
+        st = _check_field(c, "status")
+        if isinstance(st, ReqStatus):
+            status = st
+        else:
+            try:
+                status = ReqStatus(str(st))
+            except ValueError:
+                continue
+        if status in (ReqStatus.FAILED, ReqStatus.MIGRATION_ERROR):
+            return False
+    return True
 
 
 def _derive_claim_core_attrs(
@@ -126,13 +170,16 @@ def _derive_claim_core_attrs(
     )
     criteria = list(getattr(spec, "criteria", None) or []) if spec is not None else []
     key = _criterion_key_for_claim(raw, checks, criteria)
+    checks_ok = _checks_validate_acceptance(checks)
     return {
         "criterion_status": _criterion_status_for_claim(raw, checks, criteria),
         "evidence_kind": "literature" if lit else "computational",
         "frozen": _criterion_is_frozen(graph, study_id, key),
         "lit_own_criterion": bool(lit and criteria),
-        # Attempt succeeded AND claim passed validation (target/id/about).
-        "accepted": bool(task_outcome == TaskOutcome.SUCCESS and validated),
+        # SUCCESS ∧ claim validation ∧ result required-check validation.
+        "accepted": bool(
+            task_outcome == TaskOutcome.SUCCESS and validated and checks_ok
+        ),
     }
 
 

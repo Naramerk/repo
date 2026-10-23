@@ -678,6 +678,9 @@ async def test_finalize_total_on_render_failure(tmp_path, clock, monkeypatch):
 @pytest.mark.asyncio
 async def test_finalize_total_on_cas_failure(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_cas")
+    # open_runtime wires make_executor + arts; strip them to force CASUnavailable.
+    rt.executor = None
+    rt.artifacts = None
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     ev = _fin(await rt.store.read_all())

@@ -135,7 +135,7 @@ def _dispositions_inner(
     for qid, text in qmap.items():
         keys = cover.get(qid, set())
         covering = [by_key[kk] for kk in sorted(keys) if kk in by_key]
-        claims = claims_for_ref(by_target, qid, prefer="question")
+        claims = claims_for_ref(by_target, qid, prefer="question")  # explicit kind
         counting = [c for c in claims if c.counts()]
         if counting:
             any_exp = any(t.state == TaskState.DONE for t in covering)

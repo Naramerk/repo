@@ -122,6 +122,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             review_statuses=review_statuses,
             get_graph=lambda: self.graph,
         )
+        self.artifacts = artifacts
         return self.bind_executor(ex)
 
     async def _append(self, events: list[EventEnvelope]) -> None:

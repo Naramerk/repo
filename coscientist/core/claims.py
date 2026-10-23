@@ -438,24 +438,49 @@ def filtered_claims_by_target(
     return dict(grouped)
 
 
+def parse_target_ref(
+    ref: str,
+) -> tuple[Literal["question", "hypothesis"] | None, str]:
+    """Split ``question:Q1`` / ``hypothesis:H1``; bare logical → ``(None, ref)``."""
+    if ":" in ref:
+        kind, logical = ref.split(":", 1)
+        if kind in ("question", "hypothesis") and logical:
+            return kind, logical  # type: ignore[return-value]
+    return None, ref
+
+
+def resolve_verdict_ref_kind(
+    graph: GraphStore | None,
+    study_id: str,
+    ref: str,
+) -> Literal["question", "hypothesis"]:
+    """Explicit target kind for a bind/snapshot ref (never ``either``).
+
+    Kind-prefixed refs win. Otherwise unique graph presence; if both Q and H
+    exist for the same logical id, default to ``question`` (bind addresses).
+    """
+    kind, logical = parse_target_ref(ref)
+    if kind is not None:
+        return kind
+    if graph is None:
+        return "question"
+    q_exists = graph.get_node(question_node_id(study_id, logical)) is not None
+    h_exists = graph.get_node(hypothesis_node_id(study_id, logical)) is not None
+    if h_exists and not q_exists:
+        return "hypothesis"
+    return "question"
+
+
 def claims_for_ref(
     by_target: Mapping[str, list[RuntimeClaim]],
     ref: str,
     *,
-    prefer: Literal["question", "hypothesis", "either"] = "either",
+    prefer: Literal["question", "hypothesis"],
 ) -> list[RuntimeClaim]:
-    """Lookup claims for a bind/report ref (logical id or kind-prefixed)."""
-    if ":" in ref and ref.split(":", 1)[0] in ("question", "hypothesis"):
-        return list(by_target.get(ref) or [])
-    qk, hk = f"question:{ref}", f"hypothesis:{ref}"
-    if prefer == "question":
-        return list(by_target.get(qk) or [])
-    if prefer == "hypothesis":
-        return list(by_target.get(hk) or [])
-    # either: prefer question when both exist (bind refs are usually questions).
-    if qk in by_target:
-        return list(by_target[qk])
-    return list(by_target.get(hk) or [])
+    """Lookup claims for a bind/report ref with an **explicit** target kind."""
+    kind, logical = parse_target_ref(ref)
+    use = kind if kind is not None else prefer
+    return list(by_target.get(f"{use}:{logical}") or [])
 
 
 def claims_missing_about(graph: GraphStore) -> list[str]:
@@ -497,17 +522,13 @@ def compute_verdict_snapshots(
     if refs is not None:
         ref_list = list(refs)
     else:
-        # All logical ids present (question preferred when both share a name).
-        seen: set[str] = set()
-        ref_list = []
-        for key in by_target:
-            logical = key.split(":", 1)[-1] if ":" in key else key
-            if logical not in seen:
-                seen.add(logical)
-                ref_list.append(logical)
+        # One entry per kind-prefixed group (no Q/H merge).
+        ref_list = list(by_target.keys())
     out: dict[str, dict[str, Any]] = {}
     for ref in ref_list:
-        claims = claims_for_ref(by_target, ref, prefer="either")
+        kind = resolve_verdict_ref_kind(graph, study_id, ref)
+        _, logical = parse_target_ref(ref)
+        claims = claims_for_ref(by_target, ref, prefer=kind)
         if not claims and refs is None:
             continue
         v, by_lit = verdict(
@@ -523,8 +544,9 @@ def compute_verdict_snapshots(
             if c.counts() and c.provenance in VALID_PROVENANCE
         ]
         source = worst_provenance(*provs) if provs else "stub"
-        out[ref] = {
-            "ref": ref,
+        snap = {
+            "ref": logical,
+            "target_kind": kind,
             "verdict": v,
             "by_literature": by_lit,
             "provenance": source,
@@ -532,6 +554,12 @@ def compute_verdict_snapshots(
             "refutation_priority": priority,
             "k": conf_k,
         }
+        # Bind (refs set): key by InputSpec.ref logical id.
+        # Full dump (refs None): kind-prefixed keys so Q/H cannot collide.
+        if refs is None:
+            out[f"{kind}:{logical}"] = snap
+        else:
+            out[logical] = snap
     return out
 
 
@@ -565,6 +593,8 @@ def hypothesis_verdicts(
         logical = _logical_id_from_node(node.node_id, study_id, "hypothesis")
         if logical not in hyp_refs:
             hyp_refs.append(logical)
+    # Pass kind-prefixed refs so bind-style lookup cannot pick up a question.
+    qualified = [f"hypothesis:{r}" for r in hyp_refs]
     snaps = compute_verdict_snapshots(
         graph,
         study_id=study_id,
@@ -572,10 +602,13 @@ def hypothesis_verdicts(
         results=results,
         k=k,
         any_experiment_done=any_experiment_done,
-        refs=hyp_refs,
+        refs=qualified,
     )
     out: dict[str, dict[str, Any]] = {}
-    for ref, snap in snaps.items():
+    for ref in hyp_refs:
+        snap = snaps.get(ref) or snaps.get(f"hypothesis:{ref}")
+        if snap is None:
+            continue
         hid = hypothesis_node_id(study_id, ref)
         if graph.get_node(hid) is not None or ref.startswith(f"{study_id}:hypothesis:"):
             out[ref] = snap

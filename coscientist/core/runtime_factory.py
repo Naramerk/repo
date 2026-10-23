@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import Any
 
+from coscientist.checks.catalog import minimal_test_catalog
+from coscientist.core.artifacts import LocalArtifactStore
 from coscientist.core.clock import Clock, SystemClock
 from coscientist.core.errors import LeaseLost
 from coscientist.core.graph import KindRegistry, default_execution_registry
@@ -26,6 +29,8 @@ async def open_runtime(
     registry: KindRegistry | None = None,
     acquire: bool = True,
     runtime_cls: type[StudyRuntime] | None = None,
+    catalog: Any | None = None,
+    artifacts: Any | None = None,
 ) -> StudyRuntime:
     """Open a study runtime. ``runtime_cls`` defaults to core ``StudyRuntime``.
 
@@ -95,6 +100,10 @@ async def open_runtime(
         )
         for ev in events:
             rt._project_local(ev)  # noqa: SLF001
+        # Production path: Executor always via make_executor (live get_graph).
+        arts = artifacts if artifacts is not None else LocalArtifactStore(root / "arts")
+        cat = catalog if catalog is not None else minimal_test_catalog()
+        rt.make_executor(cat, arts)
         return rt
     except BaseException:
         # Stop the writer first so in-flight appends cannot race release.

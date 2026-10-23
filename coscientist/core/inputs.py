@@ -287,6 +287,7 @@ def claim_nodes_from_attempt(
             continue
         target_id, _target_kind = resolved
 
+        structurally_ok = True
         if graph is not None:
             existing = graph.get_node(cid)
             if existing is not None:
@@ -311,12 +312,15 @@ def claim_nodes_from_attempt(
                 if old in VALID_PROVENANCE:
                     new_prov = worst_provenance(old, provenance)  # type: ignore[arg-type]
 
-        # Core-derived counting fields (Executor); never from agent whitelist.
-        # validated=True: target/id/about checks above passed.
-        if derive_attrs is not None:
-            core = dict(derive_attrs(raw, True) or {})
-        else:
-            core = dict(derived or {})
+        # Core-derived counting fields; derive_attrs must never raise into caller.
+        try:
+            if derive_attrs is not None:
+                core = dict(derive_attrs(raw, structurally_ok) or {})
+            else:
+                core = dict(derived or {})
+        except Exception:  # noqa: BLE001 — totality
+            drops.append({"key": agent_key, "reason": "derive_attrs_error"})
+            continue
         attrs["provenance"] = new_prov
         attrs["attempt_id"] = attempt_id
         attrs["attempt_outcome"] = attempt_outcome

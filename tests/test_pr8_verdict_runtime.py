@@ -740,6 +740,7 @@ def test_empty_provenance_list_is_stub():
 
 def test_qh_logical_id_collision_does_not_merge():
     """Question and hypothesis with the same logical id stay separate."""
+    from coscientist.core.claims import compute_verdict_snapshots
     from coscientist.core.ids import hypothesis_node_id
 
     g = GraphStore(default_execution_registry())
@@ -776,7 +777,7 @@ def test_qh_logical_id_collision_does_not_merge():
         claims=[{"id": "ch", "target": hid}],
         now=now,
         graph=g,
-        derived=_DERIVED_OK,
+        derived={**_DERIVED_OK, "criterion_status": "not_met"},
     )
     assert drops_h == []
     _apply_events(g, evs_h)
@@ -785,6 +786,18 @@ def test_qh_logical_id_collision_does_not_merge():
     assert "hypothesis:X1" in by
     assert by["question:X1"][0].target_kind == "question"
     assert by["hypothesis:X1"][0].target_kind == "hypothesis"
+    # Bind snapshot for bare "X1" uses question kind explicitly (not H's not_met).
+    snaps = compute_verdict_snapshots(
+        g, study_id=sid, any_experiment_done=True, refs=["X1"]
+    )
+    assert snaps["X1"]["target_kind"] == "question"
+    assert snaps["X1"]["verdict"] == "supported"
+    # Explicit hypothesis bind does not get the question verdict.
+    snaps_h = compute_verdict_snapshots(
+        g, study_id=sid, any_experiment_done=True, refs=["hypothesis:X1"]
+    )
+    assert snaps_h["X1"]["target_kind"] == "hypothesis"
+    assert snaps_h["X1"]["verdict"] == "refuted"
 
 
 def test_criterion_status_not_met_from_failed_check():
@@ -826,21 +839,155 @@ def test_criterion_status_not_met_from_failed_check():
         validated=True,
     )
     assert attrs["criterion_status"] == "not_met"
-    assert attrs["accepted"] is True
+    assert attrs["accepted"] is True  # optional failure → stance, not rejection
     assert attrs["frozen"] is False  # no freeze node
+
+
+def test_accepted_false_when_required_check_failed():
+    """SUCCESS outcome + required FAILED check ⇒ accepted=False."""
+    from coscientist.core.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
+    from coscientist.core.executor import _derive_claim_core_attrs
+
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    task = Task(
+        task_id="st/E0",
+        kind=TaskKind.EXPERIMENT,
+        spec=TaskSpec(
+            task_key="E0",
+            title="e",
+            goal="g",
+            route="experiment",
+            criteria=[],
+        ),
+        state=TaskState.DONE,
+        outcome=TaskOutcome.SUCCESS,
+        deadline=now,
+    )
+    checks = [
+        CheckResult(
+            check_id="artifact_present#0",
+            template_id="artifact_present",
+            status=ReqStatus.FAILED,
+            is_code=True,
+            required=True,
+        )
+    ]
+    attrs = _derive_claim_core_attrs(
+        task,
+        TaskOutcome.SUCCESS,
+        raw={"target": "Q1"},
+        checks=checks,
+        graph=None,
+        study_id="st",
+        validated=True,
+    )
+    assert attrs["accepted"] is False
+
+
+def test_frozen_normalizes_check_id_to_template_id():
+    """checked_against=check_id maps to criterion node keyed by template_id."""
+    from coscientist.core.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
+    from coscientist.core.executor import _derive_claim_core_attrs
+    from coscientist.core.ids import criterion_node_id
+
+    sid = "st_frz"
+    g = GraphStore(default_execution_registry())
+    cnid = criterion_node_id(sid, "value_match")
+    g.upsert_node(
+        GraphNode(
+            node_id=cnid,
+            kind="criterion",
+            study_id=sid,
+            ref_id="value_match",
+            attrs={"frozen": True, "frozen_at_seq": 3, "template_id": "value_match"},
+        )
+    )
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    task = Task(
+        task_id=f"{sid}/E0",
+        kind=TaskKind.EXPERIMENT,
+        spec=TaskSpec(
+            task_key="E0",
+            title="e",
+            goal="g",
+            route="experiment",
+            criteria=[],
+        ),
+        state=TaskState.DONE,
+        outcome=TaskOutcome.SUCCESS,
+        deadline=now,
+    )
+    checks = [
+        CheckResult(
+            check_id="value_match#0",
+            template_id="value_match",
+            status=ReqStatus.MET,
+            is_code=True,
+            required=True,
+        )
+    ]
+    attrs = _derive_claim_core_attrs(
+        task,
+        TaskOutcome.SUCCESS,
+        raw={"checked_against": "value_match#0", "target": "Q1"},
+        checks=checks,
+        graph=g,
+        study_id=sid,
+        validated=True,
+    )
+    assert attrs["frozen"] is True
+    assert attrs["criterion_status"] == "met"
+
+
+def test_criterion_match_is_exact_not_endswith():
+    """C11 must not match template_id ``1`` via endswith."""
+    from coscientist.core.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
+    from coscientist.core.executor import _derive_claim_core_attrs
+
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    task = Task(
+        task_id="st/E0",
+        kind=TaskKind.EXPERIMENT,
+        spec=TaskSpec(
+            task_key="E0", title="e", goal="g", route="experiment", criteria=[]
+        ),
+        state=TaskState.DONE,
+        outcome=TaskOutcome.SUCCESS,
+        deadline=now,
+    )
+    checks = [
+        CheckResult(
+            check_id="1#0",
+            template_id="1",
+            status=ReqStatus.MET,
+            is_code=True,
+            required=True,
+        )
+    ]
+    attrs = _derive_claim_core_attrs(
+        task,
+        TaskOutcome.SUCCESS,
+        raw={"checked_against": "C11", "target": "Q1"},
+        checks=checks,
+        graph=None,
+        study_id="st",
+        validated=True,
+    )
+    assert attrs["criterion_status"] == "unassessed"
 
 
 @pytest.mark.asyncio
 async def test_runtime_refuted_end_to_end(tmp_path, clock, runtime_cls):
     """SUCCESS attempt + optional failed checked_against ⇒ refuted at runtime."""
-    from coscientist.checks.catalog import minimal_test_catalog
-    from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
+    from coscientist.core.artifacts import make_tool_ref
     from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
 
     sid = "st_ref"
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
+    assert rt.executor is not None and rt.executor.get_graph is not None
+    arts = rt.artifacts
     await rt.create_study(
         profile="research",
         request="q",
@@ -848,25 +995,6 @@ async def test_runtime_refuted_end_to_end(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
-    )
-    arts = LocalArtifactStore(tmp_path / "arts")
-    catalog = minimal_test_catalog()
-    rt.make_executor(
-        catalog,
-        arts,
-        get_attempt=lambda aid: type(
-            "Att",
-            (),
-            {
-                "attempt_id": rt.attempts[aid]["attempt_id"],
-                "closed": rt.attempts[aid].get("closed", False),
-                "provenance": rt.attempts[aid].get("provenance", "real"),
-                "task_id": rt.attempts[aid]["task_id"],
-                "study_id": rt.attempts[aid]["study_id"],
-            },
-        )(),
-        get_task=lambda tid: rt.tasks[tid],
-        on_events=rt._project_local,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -927,82 +1055,71 @@ async def test_runtime_refuted_end_to_end(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
-async def test_production_make_executor_wires_get_graph(tmp_path, clock, runtime_cls):
-    """get_graph is live via make_executor — not only tests/helpers."""
-    from coscientist.checks.catalog import minimal_test_catalog
-    from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
+async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cls):
+    """open_runtime (core + experimental) builds Executor via make_executor — no manual call."""
+    from coscientist.core.artifacts import make_tool_ref
     from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
+    from coscientist.experimental.runtime_factory import (
+        open_runtime as open_runtime_exp,
+    )
 
-    sid = "st_mkex"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
-    await rt.create_study(
-        profile="research",
-        request="q",
-        catalog_version="0.1.0",
-        deadline=clock.now() + timedelta(seconds=180),
-        sid=sid,
-        finalize_reserve_s=5,
-    )
-    arts = LocalArtifactStore(tmp_path / "arts")
-    ex = rt.make_executor(
-        minimal_test_catalog(),
-        arts,
-        get_attempt=lambda aid: type(
-            "Att",
-            (),
-            {
-                "attempt_id": rt.attempts[aid]["attempt_id"],
-                "closed": rt.attempts[aid].get("closed", False),
-                "provenance": rt.attempts[aid].get("provenance", "real"),
-                "task_id": rt.attempts[aid]["task_id"],
-                "study_id": rt.attempts[aid]["study_id"],
-            },
-        )(),
-        get_task=lambda tid: rt.tasks[tid],
-        on_events=rt._project_local,
-    )
-    assert ex.get_graph is not None
-    assert ex.get_graph() is rt.graph
-    for key in ("SPEC", "HYP", "LIT"):
-        await rt.start_attempt(key)
-        await rt.cancel_task(key, reason="cancelled")
-    await rt.accept_plan(
-        [
-            TaskSpec(
-                task_key="E0",
-                title="producer",
-                goal="g",
-                route="experiment",
-                depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="value_match")],
-                addresses=["Q1"],
-            )
-        ],
-        questions=[QuestionSpec(id="Q1", text="why")],
-    )
-    aid0 = await rt.start_attempt("E0")
-    art = arts.put(
-        b'{"count": 225}',
-        make_tool_ref(f"{aid0}:1"),
-        name="main",
-        media_type="application/json",
-    )
-    await ex.record(
-        aid0,
-        AgentTaskOutput(
-            summary="ok",
-            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
-            values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1"}],
-        ),
-    )
-    claims = list(rt.graph.nodes_by_kind("claim"))
-    assert len(claims) == 1
-    about = [e for e in rt.graph.edges_from(claims[0].node_id) if e.kind == "about"]
-    assert len(about) == 1
-    await close_runtime(rt)
+    for factory, sid in (
+        (open_runtime, "st_core_fac"),
+        (open_runtime_exp, "st_exp_fac"),
+    ):
+        rt = await factory(tmp_path, sid, clock=clock, owner="t1")
+        assert rt.executor is not None
+        assert rt.executor.get_graph is not None
+        assert rt.executor.get_graph() is rt.graph
+        assert rt.artifacts is not None
+        await rt.create_study(
+            profile="research",
+            request="q",
+            catalog_version="0.1.0",
+            deadline=clock.now() + timedelta(seconds=180),
+            sid=sid,
+            finalize_reserve_s=5,
+        )
+        for key in ("SPEC", "HYP", "LIT"):
+            await rt.start_attempt(key)
+            await rt.cancel_task(key, reason="cancelled")
+        await rt.accept_plan(
+            [
+                TaskSpec(
+                    task_key="E0",
+                    title="producer",
+                    goal="g",
+                    route="experiment",
+                    depends_on=["PLAN"],
+                    criteria=[RequirementRef(template_id="value_match")],
+                    addresses=["Q1"],
+                )
+            ],
+            questions=[QuestionSpec(id="Q1", text="why")],
+        )
+        aid0 = await rt.start_attempt("E0")
+        art = rt.artifacts.put(
+            b'{"count": 225}',
+            make_tool_ref(f"{aid0}:1"),
+            name="main",
+            media_type="application/json",
+        )
+        await rt.executor.record(
+            aid0,
+            AgentTaskOutput(
+                summary="ok",
+                outputs={
+                    "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
+                },
+                values={"count": 225},
+                claims=[{"id": "c1", "target": "Q1"}],
+            ),
+        )
+        claims = list(rt.graph.nodes_by_kind("claim"))
+        assert len(claims) == 1
+        about = [e for e in rt.graph.edges_from(claims[0].node_id) if e.kind == "about"]
+        assert len(about) == 1
+        await close_runtime(rt)
 
 
 def test_intent_from_producing_experiment_two_opposite():
