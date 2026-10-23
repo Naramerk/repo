@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### M1 PR6
+- `tests.intent` (confirm|refute): refute+met → verdict `survived`; `Study.refutations_needed` / `refutation_priority` at create; provenance ceiling on priority refs.
+- R17 helpers: criterion frozen before cited evidence; threshold-source evidence excluded from counts.
+- Leftovers: `attach_executor` sets `runtime.artifacts`; H-c+cancel test; H-c+budget via `record_budget_debit`.
+
 ### M1 follow-up (post PR5)
 - Confirm `delegated_costly ≤ max_cost_rub` is create_study-only; replay test pins `Study.model_validate` / local_project reopen.
 - Skip H-c when `_budget_exceeded` / `_study_cancelled` so children close with budget/cancelled, not `input_unavailable`.

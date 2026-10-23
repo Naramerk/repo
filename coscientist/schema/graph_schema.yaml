@@ -159,7 +159,7 @@ edges:
   - {name: measured_by, pairs: [[study, criterion], [constraint, criterion], [experiment, criterion]], card: {out: "1..n", in: "1..1", out_by_src: {experiment: "0..n"}}, by: spec/plan, note: "experiment: ≥1 если required"}
   - {name: addresses, pairs: [[hypothesis, question], [experiment, question]], card: {out: "0..n", in: "0..n", out_by_src: {hypothesis: "1..n"}}, by: "HYP-n/plan (TaskSpec.addresses)", note: "hypothesis ≥1; ref обязателен, умолчания нет"}
   - {name: plans, pairs: [[plan, experiment]], card: {out: "1..n", in: "1..1"}, by: PLAN-n}
-  - {name: tests, pairs: [[experiment, hypothesis]], card: {out: "0..n", in: "0..n"}, by: plan, note: "у experiment ≥1 из tests/addresses"}
+  - {name: tests, pairs: [[experiment, hypothesis]], card: {out: "0..n", in: "0..n"}, by: plan, note: "у experiment ≥1 из tests/addresses; attrs.intent: confirm|refute (default confirm); refute+met → survived"}
   - {name: depends_on, pairs: [[experiment, experiment]], card: {out: "0..n", in: "0..n"}, by: plan, note: ацикл.}
   - {name: uses_input, pairs: [[experiment, artifact]], card: {out: "0..n", in: "0..n"}, by: ядро (P2), note: "provenance на ребре"}
   - {name: produced, pairs: [[experiment, artifact]], card: {out: "0..n", in: "1..1"}, by: слой инструментов, note: "attempt_n на ребре; повторно найденная paper — то же ребро"}

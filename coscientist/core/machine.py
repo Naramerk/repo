@@ -278,6 +278,10 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                 )
             elif trigger == "budget" and not all_done:
                 await self._close_remaining(TaskReason.BUDGET, CloseReason.BUDGET)
+            elif trigger == "cancel" and not all_done:
+                await self._close_remaining(
+                    TaskReason.CANCELLED, CloseReason.CANCELLED
+                )
             await _finalize(self, trigger=trigger)
             return
 

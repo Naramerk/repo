@@ -165,8 +165,55 @@ async def test_cancel_task_cascades_via_hc(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_hc_skipped_when_budget_exceeded(tmp_path, clock, runtime_cls):
-    """When study budget is already exceeded, H-c must not rewrite reasons."""
+    """record_budget_debit → tick: H-c must not rewrite children to input_unavailable."""
+    from decimal import Decimal
+
+    from coscientist.core.domain import Budget
+
     sid = "st_hc_bud"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=120),
+        sid=sid,
+        finalize_reserve_s=5,
+        budget=Budget(max_cost_rub=Decimal("25")),
+    )
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"]
+            ),
+            TaskSpec(
+                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"]
+            ),
+        ],
+        questions=[],
+    )
+    await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
+    await rt.record_budget_debit(spent_rub=Decimal("25"), request_id="debit-hc")
+    await rt.tick()
+    child = rt.tasks[f"{sid}/C"]
+    assert child.state == TaskState.DONE
+    assert child.reason == TaskReason.BUDGET
+    fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    assert len(fins) == 1 and fins[0].payload["trigger"] == "budget"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_hc_skipped_when_study_cancelled(tmp_path, clock, runtime_cls):
+    """StudyCancelled without closing deps → tick skips H-c; children get cancelled."""
+    from coscientist.core.events import EventEnvelope, make_idem
+
+    sid = "st_hc_cx"
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
@@ -193,13 +240,24 @@ async def test_hc_skipped_when_budget_exceeded(tmp_path, clock, runtime_cls):
         questions=[],
     )
     await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
-    await rt.note_budget_exceeded()
+    await rt._append(
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="StudyCancelled",
+                entity_key=sid,
+                idem_key=make_idem("StudyCancelled", sid),
+                payload={"study_id": sid, "by": "user"},
+                ts=clock.now(),
+            )
+        ]
+    )
     await rt.tick()
     child = rt.tasks[f"{sid}/C"]
     assert child.state == TaskState.DONE
-    assert child.reason == TaskReason.BUDGET
+    assert child.reason == TaskReason.CANCELLED
     fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
-    assert len(fins) == 1 and fins[0].payload["trigger"] == "budget"
+    assert len(fins) == 1 and fins[0].payload["trigger"] == "cancel"
     await close_runtime(rt)
 
 
@@ -281,7 +339,7 @@ async def test_failed_spec_plan_still_runs_and_report(tmp_path, clock, runtime_c
     await record_success(rt, await rt.start_attempt("REPORT"), arts)
     assert rt.tasks[f"{sid}/REPORT"].state == TaskState.DONE
     assert rt.tasks[f"{sid}/REPORT"].outcome == TaskOutcome.SUCCESS
-    rt.artifacts = arts
+    # artifacts attached by attach_executor (executor + runtime.artifacts).
     await rt.tick()
     fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
     assert len(fins) == 1

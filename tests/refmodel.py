@@ -64,6 +64,8 @@ class Claim:
     attempt_id: str = "X1#1"
     artifact_id: str = "A1"
     lit_own_criterion: bool = False
+    # tests.intent on the experiment→hypothesis edge (default confirm).
+    intent: str = "confirm"
     @property
     def stance(self):
         return claim_stance(self.criterion_status)
@@ -74,20 +76,39 @@ class Claim:
         ok = self.evidence_kind in ("computational", "experimental") or (self.is_lit and self.lit_own_criterion)
         return self.accepted and ok and self.frozen and self.attempt_outcome == "SUCCESS"
 
-def verdict(claims, any_experiment_done, k=1):
+def verdict(
+    claims,
+    any_experiment_done,
+    k=1,
+    *,
+    refutations_needed=1,
+    refutation_priority=False,
+):
     acc = [c for c in claims if c.accepted]
     if not acc and not any_experiment_done:
         return "untested", False
     q = [c for c in acc if c.counts()]
-    sup, ref = [c for c in q if c.stance == "supports"], [c for c in q if c.stance == "refutes"]
+    confirm_sup = [c for c in q if c.stance == "supports" and c.intent != "refute"]
+    survived_sup = [c for c in q if c.stance == "supports" and c.intent == "refute"]
+    ref = [c for c in q if c.stance == "refutes"]
+    all_sup = confirm_sup + survived_sup
     dist = lambda cs: min(len({c.attempt_id for c in cs}), len({c.artifact_id for c in cs})) if cs else 0
-    if sup and ref: v = "inconclusive"
-    elif dist(sup) >= k: v = "supported"
-    elif dist(ref) >= k: v = "refuted"
-    else: v = "inconclusive"
-    if v in ("supported", "refuted") and any(c.provenance != "real" for c in q):
+    pref = [c for c in ref if c.provenance == "real" and not c.is_lit]
+    if refutation_priority and dist(pref) >= refutations_needed:
+        v = "refuted"
+    elif all_sup and ref:
         v = "inconclusive"
-    d = sup + ref
+    elif dist(confirm_sup) >= k:
+        v = "supported"
+    elif dist(survived_sup) >= k:
+        v = "survived"
+    elif dist(ref) >= k:
+        v = "refuted"
+    else:
+        v = "inconclusive"
+    if v in ("supported", "refuted", "survived") and any(c.provenance != "real" for c in q):
+        v = "inconclusive"
+    d = all_sup + ref
     return v, bool(d) and all(c.is_lit for c in d)
 
 def study_fulfilled(question_verdicts, all_required_success):

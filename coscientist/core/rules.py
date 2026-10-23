@@ -72,13 +72,37 @@ class _ClaimLike(Protocol):
     def artifact_id(self) -> str: ...
 
 
-def verdict(claims: list[_ClaimLike], any_experiment_done: bool, k: int = 1):
+def _tests_intent(claim: _ClaimLike) -> str:
+    """Edge attr ``tests.intent``: confirm (default) | refute (DESIGN_M1 §3)."""
+    return str(getattr(claim, "intent", "confirm") or "confirm")
+
+
+def verdict(
+    claims: list[_ClaimLike],
+    any_experiment_done: bool,
+    k: int = 1,
+    *,
+    refutations_needed: int = 1,
+    refutation_priority: bool = False,
+):
+    """Hypothesis/question verdict (RM §4.1 + DESIGN_M1 PR 6).
+
+    ``tests.intent=refute`` + met → stance supports, but verdict ``survived``.
+    With ``refutation_priority``, distinct real non-lit refs ≥ k_ref → ``refuted``
+    even with supports; lit/non-real refs never override real supports.
+    """
     acc = [c for c in claims if c.accepted]
     if not acc and not any_experiment_done:
         return "untested", False
     q = [c for c in acc if c.counts()]
-    sup = [c for c in q if c.stance == "supports"]
+    confirm_sup = [
+        c for c in q if c.stance == "supports" and _tests_intent(c) != "refute"
+    ]
+    survived_sup = [
+        c for c in q if c.stance == "supports" and _tests_intent(c) == "refute"
+    ]
     ref = [c for c in q if c.stance == "refutes"]
+    all_sup = confirm_sup + survived_sup
 
     def distinct(cs: list[_ClaimLike]) -> int:
         return (
@@ -87,17 +111,30 @@ def verdict(claims: list[_ClaimLike], any_experiment_done: bool, k: int = 1):
             else 0
         )
 
-    if sup and ref:
+    def priority_refs(cs: list[_ClaimLike]) -> list[_ClaimLike]:
+        # Real computational/experimental only; literature must not flip priority.
+        return [c for c in cs if c.provenance == "real" and not c.is_lit]
+
+    v: str
+    if refutation_priority and distinct(priority_refs(ref)) >= refutations_needed:
+        v = "refuted"
+    elif all_sup and ref:
+        # Lit / non-real refs with supports → inconclusive (no priority win).
         v = "inconclusive"
-    elif distinct(sup) >= k:
+    elif distinct(confirm_sup) >= k:
         v = "supported"
+    elif distinct(survived_sup) >= k:
+        v = "survived"
     elif distinct(ref) >= k:
         v = "refuted"
     else:
         v = "inconclusive"
-    if v in ("supported", "refuted") and any(c.provenance != "real" for c in q):
+
+    if v in ("supported", "refuted", "survived") and any(
+        c.provenance != "real" for c in q
+    ):
         v = "inconclusive"
-    decisive = sup + ref
+    decisive = all_sup + ref
     return v, bool(decisive) and all(c.is_lit for c in decisive)
 
 

@@ -229,6 +229,9 @@ class Study(Frozen):
     parent_study_id: str | None = None
     budget: Budget | None = None
     finalize_reserve_s: int = Field(default=30, ge=0)
+    # PR 6 / DESIGN_M1 §3: fixed at create (like catalog_version); change only via fork.
+    refutations_needed: int = Field(default=1, ge=1)  # k_ref
+    refutation_priority: bool = False
 
     def effective_deadline(self) -> datetime:
         """Last instant usable by tasks/attempts/HITL (deadline − finalize reserve)."""

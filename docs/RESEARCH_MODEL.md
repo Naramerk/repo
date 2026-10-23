@@ -88,7 +88,7 @@ class SourceQuote(BaseModel):    # literature
 | `measured_by` | study → criterion, constraint → criterion, experiment → criterion | 1..n (experiment: 0..n) / 1..1 | spec/plan | experiment: ≥1 если required |
 | `addresses` | hypothesis → question, experiment → question | 0..n (hypothesis: 1..n) / 0..n | HYP-n/plan (TaskSpec.addresses) | hypothesis ≥1; ref обязателен, умолчания нет |
 | `plans` | plan → experiment | 1..n / 1..1 | PLAN-n |  |
-| `tests` | experiment → hypothesis | 0..n / 0..n | plan | у experiment ≥1 из tests/addresses |
+| `tests` | experiment → hypothesis | 0..n / 0..n | plan | у experiment ≥1 из tests/addresses; attrs.intent: confirm\|refute (default confirm); refute+met → survived |
 | `depends_on` | experiment → experiment | 0..n / 0..n | plan | ацикл. |
 | `uses_input` | experiment → artifact | 0..n / 0..n | ядро (P2) | provenance на ребре |
 | `produced` | experiment → artifact | 0..n / 1..1 | слой инструментов | attempt_n на ребре; повторно найденная paper — то же ребро |
@@ -110,7 +110,7 @@ class SourceQuote(BaseModel):    # literature
 | criterion | `pending` / `met` / `not_met` / `unassessed` | = статус NodeRequirement (claim к критерию не создаётся) |
 | evidence | `valid` / `invalid` | §6.1 |
 | claim | `accepted` / `rejected`; stance вычисляется | accepted ⇔ все cites → valid evidence и checked_against — замороженный criterion; stance = f(статус criterion) |
-| hypothesis / question (вердикт) | `untested` / `supported` / `refuted` / `inconclusive` | §4.1 |
+| hypothesis / question (вердикт) | `untested` / `supported` / `survived` / `refuted` / `inconclusive` | §4.1; `survived` при `tests.intent=refute` + met (M1 PR 6) |
 | conclusion | `draft` / `final` | final ⇔ задача report SUCCESS и шлюз report пройден |
 
 ### 4.1 Вердикт
@@ -121,18 +121,24 @@ Claim **засчитывается** (множество q), если однов
 Исключение «по литературе»: evidence(literature) из эксперимента `method=literature_search` со своим criterion и попыткой SUCCESS засчитывается; вердикт помечается «по литературе», только если все решающие claims литературные и их ≥1. Литература вне такого эксперимента вердикта не даёт.
 
 ```python
-def verdict(T):
+def verdict(T, *, refutations_needed=1, refutation_priority=False):
     acc = accepted_claims(T); q = [c for c in acc if counts(c)]
     if not acc and not any_done(experiments_for(T)): return "untested"
-    sup = [c for c in q if c.stance == "supports"]; ref = [c for c in q if c.stance == "refutes"]   # stance вычислен
-    distinct = lambda cs: min(len({c.attempt_id for c in cs}), len({c.artifact_id for c in cs}))      # k разных попыток И артефактов
-    if sup and ref: v = "inconclusive"
-    elif sup and distinct(sup) >= k: v = "supported"
-    elif ref and distinct(ref) >= k: v = "refuted"
+    # tests.intent=refute + met → stance supports, but bucket → survived (M1 PR 6)
+    confirm_sup = [c for c in q if c.stance == "supports" and intent(c) != "refute"]
+    survived_sup = [c for c in q if c.stance == "supports" and intent(c) == "refute"]
+    ref = [c for c in q if c.stance == "refutes"]
+    distinct = lambda cs: min(len({c.attempt_id for c in cs}), len({c.artifact_id for c in cs}))
+    pref = [c for c in ref if c.provenance == "real" and not is_lit(c)]
+    if refutation_priority and distinct(pref) >= refutations_needed: v = "refuted"
+    elif (confirm_sup or survived_sup) and ref: v = "inconclusive"
+    elif distinct(confirm_sup) >= k: v = "supported"
+    elif distinct(survived_sup) >= k: v = "survived"
+    elif distinct(ref) >= k: v = "refuted"
     else: v = "inconclusive"
-    if v != "inconclusive" and any(c.provenance != "real" for c in q): v = "inconclusive"   # потолок по q, не по acc
-    decisive = sup + ref
-    return v, bool(decisive) and all(is_lit(c) for c in decisive)    # «по литературе»; пустой список ≠ True
+    if v != "inconclusive" and any(c.provenance != "real" for c in q): v = "inconclusive"
+    decisive = confirm_sup + survived_sup + ref
+    return v, bool(decisive) and all(is_lit(c) for c in decisive)
 ```
 
 Study `fulfilled` только если все required задачи SUCCESS и у каждого question вердикт (своей гипотезы или ответа) ≠ untested (DESIGN §3.2).
