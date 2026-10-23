@@ -146,8 +146,9 @@ class InputSpec(Frozen):
 
     ``kind=artifact`` (default): ``from_task`` + ``output`` resolve an artifact.
     ``kind=claim``: ``ref`` is a claim node id; core adds ``uses_claim`` at P2.
-    ``kind=verdict``: ``ref`` is hypothesis/question id; P2 snapshots into
-    ``InputBinding.digest``.
+    ``kind=verdict``: kept in the enum for forward compat but **rejected at
+    accept_plan** until PR 8 wires runtime ``verdict()`` (then P2 snapshots into
+    ``InputBinding.digest``).
     """
 
     from_task: str = ""

@@ -220,6 +220,9 @@ class LifecycleMixin:
         self._validate_questions(questions, known_texts)
         known_texts = {**known_texts, **{q.id: q.text for q in questions}}
         self._validate_addresses(tasks, set(known_texts))
+        from coscientist.core.inputs import validate_input_specs
+
+        validate_input_specs(tasks)
         pid = plan_id()
         plan = Plan(
             plan_id=pid,

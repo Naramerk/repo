@@ -126,12 +126,17 @@ class AttemptsMixin:
 
         graph = getattr(self, "graph", None)
         known_claims: set[str] = set()
+        claim_provenance: dict[str, Provenance] = {}
         if graph is not None:
             try:
-                known_claims = {n.node_id for n in graph.nodes_by_kind("claim")}
+                for node in graph.nodes_by_kind("claim"):
+                    known_claims.add(node.node_id)
+                    # Producing-attempt provenance on claim node attrs (H-b).
+                    p = (node.attrs or {}).get("provenance")
+                    if p in _VALID_PROVENANCE:
+                        claim_provenance[node.node_id] = p  # type: ignore[assignment]
             except KeyError:
                 known_claims = set()
-        verdicts = dict(getattr(self, "verdict_snapshots", {}) or {})
         try:
             bindings, derived = bind_inputs(
                 task,
@@ -139,7 +144,7 @@ class AttemptsMixin:
                 dep_outputs=self.dep_outputs,
                 dep_provenance=self.dep_provenance,
                 known_claim_ids=known_claims,
-                verdicts=verdicts,
+                claim_provenance=claim_provenance,
             )
         except InputUnavailable:
             await self.cancel_task(task.task_id, reason=TaskReason.INPUT_UNAVAILABLE)
@@ -168,6 +173,8 @@ class AttemptsMixin:
             "deadline": deadline.isoformat(),
             "task_id": task.task_id,
             "study_id": sid,
+            # PR7: P2 bindings (+ digest) live in the journal for replay.
+            "inputs": [b.model_dump(mode="json") for b in bindings],
         }
         events: list[EventEnvelope] = [
             EventEnvelope(
@@ -177,7 +184,7 @@ class AttemptsMixin:
                 idem_key=make_idem("AttemptStarted", aid),
                 payload=payload,
                 ts=now,
-                schema_version=2,
+                schema_version=3,
             )
         ]
         # PR7: uses_claim edges for kind=claim inputs (DESIGN_M1 §3).

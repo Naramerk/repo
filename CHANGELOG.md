@@ -3,9 +3,11 @@
 ## Unreleased
 
 ### M1 PR7
-- `InputSpec.kind: artifact | claim | verdict` (+ `ref`); `uses_claim` edge (17th) at P2 for claim inputs; verdict snapshot in `InputBinding.digest`.
+- `InputSpec.kind: artifact | claim` (+ `ref`); `uses_claim` edge (17th) at P2; claim provenance from producing attempt (H-b).
+- P2 bindings (+ `digest`) persisted on `AttemptStarted` (v3 + upcaster); `GraphEdgeAdded` fails loudly on bad endpoints.
+- **`kind=verdict` deferred to PR 8** (rejected at `accept_plan` until runtime `verdict()` wiring); enum kept for forward compat.
 - TaskCreated v4→v5 upcaster defaults `kind=artifact`.
-- #12 leftovers: R17 confirm-only (refutes still count); refmodel `intent` Literal + raise; gen emits edge attrs; cancel patches `finalize_mod.finalize`; r17 import at rules module level.
+- #12 leftovers: R17 confirm-only; refmodel `intent` Literal; gen edge attrs; cancel `finalize_mod`; r17 module-level import.
 
 ### M1 PR6
 - `tests.intent` (confirm|refute, edge attr in graph_schema): refute+met → verdict `survived`; `Study.refutations_needed` / `refutation_priority` at create.
