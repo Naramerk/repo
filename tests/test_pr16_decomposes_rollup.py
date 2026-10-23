@@ -10,12 +10,9 @@ from coscientist.core.decomposes import (
     DECOMPOSITION_COVERS_ITEM_ID,
     assert_decomposes_acyclic,
     leaf_ids,
-    parent_map_from_questions,
 )
 from coscientist.core.dispositions import dispositions
 from coscientist.core.domain import (
-    AgentTaskOutput,
-    ArtifactHandle,
     OutputSpec,
     QuestionSpec,
     RequirementRef,
@@ -25,13 +22,17 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
+from coscientist.core.events import (
+    PLAN_ACCEPTED_SCHEMA_VERSION,
+    PLAN_EXPANDED_SCHEMA_VERSION,
+)
 from coscientist.core.minimal_report import render_markdown_report
 from coscientist.core.plan_validate import validate_decomposes
 from coscientist.core.reasons import Disposition, TaskReason
 from coscientist.core.rubric import freeze_rubric
 from coscientist.core.rubric_types import Rubric, RubricItem
 from coscientist.core.upcasters import upcast
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import close_runtime, open_runtime
 
 # --- helpers -----------------------------------------------------------------
 
@@ -133,6 +134,19 @@ def _task(
     )
 
 
+def _assert_single_finalized(events: list) -> dict:
+    """REVIEW_CHECKLIST: exactly one StudyFinalized; report XOR minimal; conclusion_ids."""
+    finals = [e for e in events if e.type == "StudyFinalized"]
+    assert len(finals) == 1
+    p = finals[0].payload or {}
+    has_report = bool(p.get("report_artifact_id"))
+    has_minimal = p.get("minimal_report") is not None
+    assert has_report ^ has_minimal, f"report XOR minimal_report required: {has_report=} {has_minimal=}"
+    cids = p.get("conclusion_ids") or []
+    assert len(cids) >= 1, "conclusion_ids must be non-empty"
+    return p
+
+
 # --- pure validators ---------------------------------------------------------
 
 
@@ -167,17 +181,15 @@ async def test_validator_requires_named_subquestions(tmp_path, clock):
     assert pid == ""
     assert getattr(rt, "_finalized", False)
     events = await rt.store.read_all()
-    assert any(e.type == "PlanRefused" for e in events)
     refused = next(e for e in events if e.type == "PlanRefused")
     assert "name/text required" in str(refused.payload.get("detail") or "")
-    assert any(e.type == "StudyFinalized" for e in events)
+    _assert_single_finalized(events)
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
 async def test_validator_requires_decomposition_covers_rubric(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "pr16-rubric")
-    # Artifact rubric without decomposition_covers item.
     other = freeze_rubric(
         Rubric(
             items=[RubricItem(id="exists", text="exists", required=True, check="judge")],
@@ -195,6 +207,7 @@ async def test_validator_requires_decomposition_covers_rubric(tmp_path, clock):
     events = await rt.store.read_all()
     refused = next(e for e in events if e.type == "PlanRefused")
     assert DECOMPOSITION_COVERS_ITEM_ID in str(refused.payload.get("detail") or "")
+    _assert_single_finalized(events)
     await close_runtime(rt)
 
 
@@ -205,7 +218,6 @@ async def test_validator_rejects_uncovered_leaf(tmp_path, clock):
     q_root = _q("Q", "root")
     q_a = _q("Q.a", "child A", parent="Q")
     q_b = _q("Q.b", "child B", parent="Q")
-    # Only Q.a addressed — Q.b uncovered.
     pid = await rt.accept_plan(
         [_exp("E0", addresses=["Q.a"], rubric=rub)],
         questions=[q_root, q_a, q_b],
@@ -215,6 +227,7 @@ async def test_validator_rejects_uncovered_leaf(tmp_path, clock):
     events = await rt.store.read_all()
     detail = next(e for e in events if e.type == "PlanRefused").payload.get("detail")
     assert "Q.b" in str(detail) and "uncovered" in str(detail)
+    _assert_single_finalized(events)
     await close_runtime(rt)
 
 
@@ -238,7 +251,6 @@ async def test_accept_plan_writes_decomposes_edge(tmp_path, clock):
     decomp = [e for e in edges if (e.payload or {}).get("kind") == "decomposes"]
     assert len(decomp) == 1
     assert decomp[0].payload["attrs"]["origin"] == "explicit"
-    # Writer version after main #24 (v9) → PR16 v10.
     accepted = next(e for e in await rt.store.read_all() if e.type == "PlanAccepted")
     assert accepted.schema_version == PLAN_ACCEPTED_SCHEMA_VERSION == 10
     await close_runtime(rt)
@@ -266,14 +278,11 @@ def test_rollup_rule():
         "tid:Ea": _task("Ea", addresses=["Q.a"]),
         "tid:Eb": _task("Eb", addresses=["Q.b"]),
     }
-    # No counting claims → leaves not_attempted; all → parent not_attempted.
     d = dispositions(tasks=tasks, plans=plans)
     assert d["Q.a"]["disposition"] == Disposition.NOT_ATTEMPTED.value
     assert d["Q"]["disposition"] == Disposition.NOT_ATTEMPTED.value
     assert d["Q"].get("rollup") == "all"
 
-    # Force leaf dispositions via synthetic override path: inject counting-like
-    # rows by using apply_rollup directly on pre-built leaf map.
     from coscientist.core.rollup import apply_rollup
 
     leaves = {
@@ -304,8 +313,7 @@ def test_rollup_rule():
     }
     plans_maj["p1"] = {
         **plans_maj["p1"],
-        "questions": plans_maj["p1"]["questions"]
-        + [{"id": "Q.c", "text": "c", "parent_id": "Q"}],
+        "questions": plans_maj["p1"]["questions"] + [{"id": "Q.c", "text": "c", "parent_id": "Q"}],
     }
     rolled_maj = apply_rollup(leaves_maj, plans=plans_maj)
     assert rolled_maj["Q"]["disposition"] == Disposition.REFUTED.value
@@ -313,7 +321,6 @@ def test_rollup_rule():
 
     plans_rub = {**plans, "p1": {**plans["p1"], "rollup": "rubric"}}
     rolled_rub = apply_rollup(leaves, plans=plans_rub)
-    # rubric: parent keeps own leaf disposition (not_attempted here).
     assert rolled_rub["Q"]["disposition"] == Disposition.NOT_ATTEMPTED.value
     assert rolled_rub["Q"].get("rollup") == "rubric"
 
@@ -335,11 +342,9 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
         rollup="all",
     )
     assert pid
-    # Simulate expansion adding emergent child + superseding E1.
     from coscientist.core.events import EventEnvelope, make_idem
 
     q_b = _q("Q.b", "emergent child", parent="Q", origin="emergent")
-    # HITL expand path
     rid = "hitl_pr16_tree"
     tid = next(iter(rt.tasks))
     await rt._append(
@@ -390,7 +395,6 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
         hitl_request_id=rid,
     )
     assert new_pid, "expand_plan refused (check ExpansionRefused in journal)"
-    # Pure render check with folded plans / tasks (including superseded E1).
     md = render_markdown_report(
         study_id=rt.study.study_id,
         terminal_reason="completed",
@@ -417,7 +421,6 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
     assert "origin=emergent" in md
     assert "`Q.b`" in md
     assert "~~`E1`~~" in md or "superseded" in md
-    # PlanExpanded writer version after main #24 (v3) → PR16 v4.
     expanded = [e for e in await rt.store.read_all() if e.type == "PlanExpanded"]
     assert expanded
     assert expanded[-1].schema_version == PLAN_EXPANDED_SCHEMA_VERSION == 4

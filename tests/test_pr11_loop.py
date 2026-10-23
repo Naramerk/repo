@@ -2119,8 +2119,9 @@ def test_upcast_plan_expanded_v2_loop_field_defaults():
             "added_questions": [],
         },
     )
-    assert v == 3
+    assert v == 4  # PR16 stacks decomposes after PR11 loop fields v3
     spec = p["added_tasks"][0]
     assert spec["loop_id"] is None
     assert spec["loop_iter"] is None
     assert spec["loop_template_key"] is None
+    assert p.get("rollup") == "all"

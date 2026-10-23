@@ -2,18 +2,16 @@
 
 ## Unreleased
 
-<<<<<<< HEAD
+### M1 PR16
+- `decomposes` acyclicity (self-loop + cycle) on accept/expand writes; `Plan.rollup` (`all|any|majority|rubric`) + `Plan.subquestions` / `QuestionSpec.origin` (`explicit` = PlanOut.subquestions; `implicit` = parent_id without subquestions listing; `emergent` = PlanExpanded origin=emergent).
+- PlanValidator: named subquestions; leaf coverage (task or disposition hook); frozen rubric item `decomposition_covers`; depth ≤ `max_depth`; question count ≤ `max_tasks`.
+- Parent disposition via `apply_rollup` in `dispositions()` (after PR11 loop-cap tagging). Strict majority `n//2+1` (1:1 / 2:2 → no majority). Rollup never **raises** a parent above its PR 8b claims-based verdict (may lower/keep); `expand_graph` cycle check uses the full existing decomposes tree. Report section «Дерево подзадач».
+- Upcasters (rebased on #24+#26 / main `fd4eefb` (#26)): PlanAccepted **v10** (after loops v9); PlanExpanded **v4** (after loop fields v3). StudyCreated unchanged (v10; #23 takes v11). **If #28 merges first** (also claims PlanAccepted v10 / PlanExpanded v4), renumber this PR to v11 / v5. `GraphEdgeAdded` → `graph_edges` stays in `_affected_tables` for #27 dirty-key projection. No duplicate `register_upcaster`.
+
 ### M1 PR14 follow-up
 - `append_source_fetched`: try/finally releases write permit if append fails after verify; `release_source_fetched_write_permit` raises when no handler is registered.
 - Replay pairing trusts journaled `AttemptTainted.{tool,is_fetch}`. Same-name reclassified `is_fetch=False` → domain `FetchToolReclassified` (caught on fold): paired `SourceFetched` uncounted. `FetchIntegrityRaised` journaled only on open/finalize; finalize fold fallback still puts `internal_error` in the report if reconcile fails. Proven by committed old-schema fixture + natural `tick` finalize (`tests/fixtures/journals/reclassified_fetch_old`).
 - `fetch_integrity` projection rows survive without `call_id` (key via tool/row_key).
-=======
-### M1 PR16
-- `decomposes` acyclicity (self-loop + cycle) on accept/expand writes; `Plan.rollup` (`all|any|majority|rubric`) + `Plan.subquestions` / `QuestionSpec.origin`.
-- PlanValidator: named subquestions; leaf coverage (task or disposition hook); frozen rubric item `decomposition_covers`; depth ≤ `max_depth`; question count ≤ `max_tasks`.
-- Parent disposition via `apply_rollup` in `dispositions()`; report section «Дерево подзадач» (origin/rev/tasks; superseded struck through).
-- Upcasters: PlanAccepted **v9** (after PR13 v8); PlanExpanded **v3** (after PR13 v2). **Note:** open #24 (LoopSpec) also targets PlanAccepted v9 — coordinator may renumber.
->>>>>>> 10f917e (M1 PR16: decomposes (acyclic) + rollup + subtask tree in report)
 
 ### Perf / journal write SLO
 - Restored honest DESIGN §3.5a measurement: 20 parallel attempts on real-disk `tmp_path`, full `StudyWriter` path (queue → `to_thread` → fence/insert/commit), `writer.latency_samples_ms`, 50ms p99, no retries/skips.

@@ -244,11 +244,6 @@ def render_subtask_tree(
     superseded = superseded_task_keys_from_plans(plans)
     by_key = {t.spec.task_key: t for t in tasks.values()}
     roots = sorted(qid for qid, p in parent_of.items() if not p)
-    # Orphans with parent missing from map still render under synthetic root.
-    attached = set(parent_of)
-    for qid, p in parent_of.items():
-        if p:
-            attached.add(p)
     lines: list[str] = []
 
     def _emit_question(qid: str, indent: int) -> None:

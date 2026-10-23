@@ -237,7 +237,7 @@ def _validate(
             parent_of[qid] = _parent_from_graph(runtime, sid, qid)
         elif parent_of[qid] is None:
             parent_of[qid] = _parent_from_graph(runtime, sid, qid)
-    for qid, parent in list(parent_of.items()):
+    for _qid, parent in list(parent_of.items()):
         if parent and parent not in parent_of:
             parent_of[parent] = _parent_from_graph(runtime, sid, parent)
     try:
