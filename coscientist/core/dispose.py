@@ -40,6 +40,9 @@ VALID_REF_PREFIXES: tuple[str, ...] = (
 )
 
 DISPOSE_REJECTED_LINE_PREFIX = "не выполнено: disposal rejected"
+# Live ``_note_reject`` and journaled payload share one truncate length so
+# restart/replay digests match (fold re-applies the same detail string).
+DISPOSE_REJECT_DETAIL_MAX = 500
 
 
 class QuestionDisposal(BaseModel):
@@ -152,7 +155,7 @@ def question_dispose_rejected_event(
 ) -> EventEnvelope:
     """Journal a rejected disposal (survives restart; feeds contributing_reasons)."""
     qid = str(question_id or "")
-    detail_s = str(detail or "")[:500]
+    detail_s = str(detail or "")[:DISPOSE_REJECT_DETAIL_MAX]
     digest = sha256_hex(detail_s)[:16]
     entity = qid or study_id
     payload = {
@@ -337,7 +340,7 @@ def _note_reject(
     if not isinstance(notes, list):
         runtime._disposal_rejects = []
         notes = runtime._disposal_rejects
-    detail_s = str(detail)[:200]
+    detail_s = str(detail)[:DISPOSE_REJECT_DETAIL_MAX]
     dig = sha256_hex(detail_s)[:16]
     for existing in notes:
         if sha256_hex(str(existing.get("detail") or ""))[:16] == dig:
@@ -346,6 +349,6 @@ def _note_reject(
         {
             "reason": MISSING_DESIGN_REASON,
             "detail": detail_s,
-            "report_line": report_line or dispose_reject_report_line(detail),
+            "report_line": report_line or dispose_reject_report_line(detail_s),
         }
     )

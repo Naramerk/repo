@@ -49,17 +49,25 @@ class LocalProjectMixin:
     _stamp_meta_missing: list[dict[str, Any]]
     _pending_kind_stamps: list[tuple[str, str]]
 
-    def _apply_kind_stamp_soft(self, artifact_id: str, kind: str) -> None:
-        """Apply journaled kind; missing meta → tainted/internal_error (never abort open)."""
+    def _apply_kind_stamp_soft(self, artifact_id: str, kind: str) -> bool:
+        """Apply journaled kind; missing meta → tainted/internal_error (never abort open).
+
+        Returns True only when meta was stamped. Callers must not record
+        ``artifact_kinds[aid]`` on failure — otherwise ``design_artifact_ok``
+        would unlock ``needs_more_data`` without a real design artifact.
+        """
         arts = getattr(self, "artifacts", None)
         if arts is None:
-            return
+            return False
         from coscientist.core.artifact_stamp import apply_kind_stamp
         from coscientist.core.errors import ArtifactRejected
 
         try:
             apply_kind_stamp(arts, artifact_id, kind)
         except ArtifactRejected:
+            kinds = getattr(self, "artifact_kinds", None)
+            if isinstance(kinds, dict):
+                kinds.pop(artifact_id, None)
             miss = getattr(self, "_stamp_meta_missing", None)
             if not isinstance(miss, list):
                 self._stamp_meta_missing = []
@@ -72,6 +80,8 @@ class LocalProjectMixin:
                     "internal_error": True,
                 }
             )
+            return False
+        return True
 
     def _flush_pending_kind_stamps(self) -> None:
         """Apply stamps deferred because fold ran before artifacts were bound."""
@@ -79,8 +89,13 @@ class LocalProjectMixin:
         if not pending:
             return
         self._pending_kind_stamps = []
+        kinds = getattr(self, "artifact_kinds", None)
+        if not isinstance(kinds, dict):
+            self.artifact_kinds = {}
+            kinds = self.artifact_kinds
         for art_id, kind in pending:
-            self._apply_kind_stamp_soft(art_id, kind)
+            if self._apply_kind_stamp_soft(art_id, kind):
+                kinds[art_id] = kind
 
     def _clear_expand_request(
         self, *, after_task: str | None = None, plan_key: str | None = None
@@ -225,21 +240,21 @@ class LocalProjectMixin:
             art_id = str(p.get("artifact_id") or ev.entity_key or "")
             kind = p.get("kind")
             if art_id and kind and bool(p.get("stamped")):
-                kinds = getattr(self, "artifact_kinds", None)
-                if not isinstance(kinds, dict):
-                    self.artifact_kinds = {}
-                    kinds = self.artifact_kinds
-                kinds[art_id] = str(kind)
                 arts = getattr(self, "artifacts", None)
                 if arts is None:
                     # open_runtime folds before make_executor — defer stamp apply.
+                    # Do not set artifact_kinds until soft stamp succeeds (flush).
                     pending = getattr(self, "_pending_kind_stamps", None)
                     if not isinstance(pending, list):
                         self._pending_kind_stamps = []
                         pending = self._pending_kind_stamps
                     pending.append((art_id, str(kind)))
-                else:
-                    self._apply_kind_stamp_soft(art_id, str(kind))
+                elif self._apply_kind_stamp_soft(art_id, str(kind)):
+                    kinds = getattr(self, "artifact_kinds", None)
+                    if not isinstance(kinds, dict):
+                        self.artifact_kinds = {}
+                        kinds = self.artifact_kinds
+                    kinds[art_id] = str(kind)
         elif ev.type == "QuestionDisposed":
             from coscientist.core.dispose import fold_question_disposed
 

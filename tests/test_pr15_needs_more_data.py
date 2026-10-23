@@ -382,27 +382,27 @@ def test_question_disposed_fold_first_wins():
 
 
 def test_honest_terminals_stamp_verdict_for_rollup():
-    """PR16 rollup clamps on ``verdict is not None`` — honest terminals must stamp it.
+    """Honest terminals use ``terminal=True`` (not disposition strings in ``verdict``).
 
-    needs_more_data / infeasible (PR15) and ill_posed (PR8 debt, still stamped
-    when present) so incomplete children cannot wipe the parent.
+    needs_more_data / infeasible / ill_posed must not put claim-vocabulary
+    pollution into ``verdict``; rollup clamps on ``terminal`` / disposition.
     """
     from coscientist.core.dispositions import stamp_honest_terminal_verdict
 
-    # ill_posed is computed elsewhere (PR8); contract helper still stamps it.
     for disp in (
         Disposition.NEEDS_MORE_DATA.value,
         Disposition.INFEASIBLE.value,
         Disposition.ILL_POSED.value,
     ):
         row = stamp_honest_terminal_verdict(
-            {"disposition": disp, "reason": disp, "formulation": "q"}
+            {"disposition": disp, "reason": disp, "formulation": "q", "verdict": disp}
         )
-        assert row.get("verdict") == disp
-    # not_attempted must not gain a fake terminal verdict.
+        assert row.get("terminal") is True
+        assert row.get("verdict") is None  # disposition string stripped from verdict
     na = stamp_honest_terminal_verdict(
         {"disposition": Disposition.NOT_ATTEMPTED.value, "reason": "no_task", "formulation": "q"}
     )
+    assert na.get("terminal") is not True
     assert na.get("verdict") is None
 
     plans = {
@@ -437,10 +437,11 @@ def test_honest_terminals_stamp_verdict_for_rollup():
         journal_kinds={"art_design": ARTIFACT_KIND_EXPERIMENT_DESIGN},
     )
     assert got["Q_nmd"]["disposition"] == Disposition.NEEDS_MORE_DATA.value
-    assert got["Q_nmd"].get("verdict") == Disposition.NEEDS_MORE_DATA.value
+    assert got["Q_nmd"].get("terminal") is True
+    assert got["Q_nmd"].get("verdict") is None
     assert got["Q_inf"]["disposition"] == Disposition.INFEASIBLE.value
-    assert got["Q_inf"].get("verdict") == Disposition.INFEASIBLE.value
-    # Missing design → not_attempted without terminal verdict (rollup may wipe).
+    assert got["Q_inf"].get("terminal") is True
+    assert got["Q_inf"].get("verdict") is None
     bad = dispositions(
         tasks={},
         plans={"p": {"questions": [{"id": "Q", "text": "q"}], "tasks": []}},
@@ -455,16 +456,16 @@ def test_honest_terminals_stamp_verdict_for_rollup():
         journal_kinds={},
     )
     assert bad["Q"]["disposition"] == Disposition.NOT_ATTEMPTED.value
+    assert bad["Q"].get("terminal") is not True
     assert bad["Q"].get("verdict") is None
 
-    # With main rollup: incomplete children must not wipe stamped needs_more_data.
     from coscientist.core.rollup import apply_rollup
     from tests.test_pr16_decomposes_rollup import _tree_plans
 
     leaves = {
         "Q": {
             "disposition": Disposition.NEEDS_MORE_DATA.value,
-            "verdict": Disposition.NEEDS_MORE_DATA.value,
+            "terminal": True,
             "reason": "need RCT",
             "formulation": "root",
         },
@@ -482,7 +483,8 @@ def test_honest_terminals_stamp_verdict_for_rollup():
     }
     rolled = apply_rollup(leaves, plans=_tree_plans("all"))
     assert rolled["Q"]["disposition"] == Disposition.NEEDS_MORE_DATA.value
-    assert rolled["Q"].get("verdict") == Disposition.NEEDS_MORE_DATA.value
+    assert rolled["Q"].get("terminal") is True
+    assert rolled["Q"].get("verdict") is None
     assert rolled["Q"].get("rollup_clamped") is True
 
 
@@ -567,7 +569,8 @@ async def test_needs_more_data_requires_design(tmp_path, clock):
         journal_kinds=rt.artifact_kinds,
     )
     assert d["Q1"]["disposition"] == Disposition.NEEDS_MORE_DATA.value
-    assert d["Q1"].get("verdict") == Disposition.NEEDS_MORE_DATA.value
+    assert d["Q1"].get("terminal") is True
+    assert d["Q1"].get("verdict") is None
     assert d["Q1"].get("design_artifact_id") == art.artifact_id
     # Kill / reopen replay
     await close_runtime(rt)
@@ -949,9 +952,10 @@ async def test_stamp_kind_e2e_replay_and_missing_meta_marks_internal_error(tmp_p
     Study must still open and reach StudyFinalized (no ArtifactRejected in fold).
     """
     rt = await _boot(tmp_path, clock, "st_stamp_ok")
+    # final_type=verdict so rubric MET does not force answered — disposal path is visible.
     await rt.accept_plan(
         tasks=[_exp_design("E0", addresses=["Q1"])],
-        questions=[QuestionSpec(id="Q1", text="dose?", final_type="artifact")],
+        questions=[QuestionSpec(id="Q1", text="dose?", final_type="verdict")],
     )
     ex, arts = attach_executor(rt, tmp_path)
     tid = next(t.task_id for t in rt.tasks.values() if t.spec.task_key == "E0")
@@ -990,9 +994,34 @@ async def test_stamp_kind_e2e_replay_and_missing_meta_marks_internal_error(tmp_p
     await close_runtime(rt)
 
     rt2 = await open_runtime(tmp_path, "st_stamp_ok", clock=clock, owner="t1")
-    assert rt2.artifact_kinds.get(art.artifact_id) == ARTIFACT_KIND_EXPERIMENT_DESIGN
+    # Missing meta must not leave artifact_kinds unlocked (needs_more_data would stick).
+    assert art.artifact_id not in (getattr(rt2, "artifact_kinds", {}) or {})
     miss = getattr(rt2, "_stamp_meta_missing", None) or []
     assert miss and miss[0].get("internal_error") is True and miss[0].get("tainted") is True
+    assert (
+        design_artifact_ok(
+            artifact_id=art.artifact_id,
+            artifact_lookup=arts.get_meta,
+            journal_kinds={art.artifact_id: ARTIFACT_KIND_EXPERIMENT_DESIGN},
+            tasks=rt2.tasks,
+            results=rt2.results,
+            task_keys={"E0"},
+        )
+        is False
+    )
+    d = dispositions(
+        tasks=rt2.tasks,
+        plans=rt2.plans,
+        graph=rt2.graph,
+        study=rt2.study,
+        results=rt2.results,
+        artifact_lookup=arts.get_meta,
+        question_disposals=rt2.question_disposals,
+        journal_kinds=rt2.artifact_kinds,
+    )
+    assert d["Q1"]["disposition"] == Disposition.NOT_ATTEMPTED.value
+    assert d["Q1"]["reason"] == MISSING_DESIGN_REASON
+    assert d["Q1"].get("terminal") is not True
     await rt2.ensure_lease(ttl_s=10_000)
     await _complete_report_and_finalize(rt2, tmp_path)
     assert rt2.view().phase == "closed"
@@ -1000,3 +1029,73 @@ async def test_stamp_kind_e2e_replay_and_missing_meta_marks_internal_error(tmp_p
     contrib = list(fin.payload.get("contributing_reasons") or [])
     assert "internal_error" in contrib
     await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_stamp_meta_missing_downgrades_needs_more_data(tmp_path, clock):
+    """Fold sets artifact_kinds only after successful stamp — missing meta → not_attempted."""
+    from coscientist.core.local_project import LocalProjectMixin
+
+    class _RT(LocalProjectMixin):
+        pass
+
+    rt = _RT()
+    rt.artifact_kinds = {"art_x": ARTIFACT_KIND_EXPERIMENT_DESIGN}  # pre-poison
+    rt._stamp_meta_missing = []
+    arts = __import__("coscientist.core.artifacts", fromlist=["LocalArtifactStore"]).LocalArtifactStore(
+        tmp_path / "arts"
+    )
+    rt.artifacts = arts
+    # Soft stamp with missing meta must clear kinds and record tainted.
+    assert rt._apply_kind_stamp_soft("art_x", ARTIFACT_KIND_EXPERIMENT_DESIGN) is False
+    assert "art_x" not in rt.artifact_kinds
+    assert rt._stamp_meta_missing and rt._stamp_meta_missing[0]["tainted"] is True
+    assert (
+        design_artifact_ok(
+            artifact_id="art_x",
+            artifact_lookup=arts.get_meta,
+            journal_kinds={"art_x": ARTIFACT_KIND_EXPERIMENT_DESIGN},
+        )
+        is False
+    )
+
+
+def test_dispose_reject_detail_length_aligned():
+    """``_note_reject`` and journaled QuestionDisposeRejected share one truncate length."""
+    from datetime import datetime, timezone
+
+    from coscientist.core.dispose import (
+        DISPOSE_REJECT_DETAIL_MAX,
+        _note_reject,
+        fold_question_dispose_rejected,
+        question_dispose_rejected_event,
+    )
+
+    long = "x" * (DISPOSE_REJECT_DETAIL_MAX + 80)
+    assert DISPOSE_REJECT_DETAIL_MAX == 500
+    ev = question_dispose_rejected_event(
+        study_id="st",
+        detail=long,
+        now=datetime.now(timezone.utc),
+        question_id="Q1",
+        disposition="needs_more_data",
+    )
+    assert len(str(ev.payload["detail"])) == DISPOSE_REJECT_DETAIL_MAX
+
+    class _RT:
+        _disposal_rejects: list = []
+
+    rt = _RT()
+    _note_reject(rt, long, report_line="line")
+    assert len(rt._disposal_rejects) == 1
+    assert len(rt._disposal_rejects[0]["detail"]) == DISPOSE_REJECT_DETAIL_MAX
+    # Same truncated detail → same digest; second note is a no-op.
+    _note_reject(rt, long, report_line="line")
+    assert len(rt._disposal_rejects) == 1
+    # Fold of the journaled payload matches live mirror length / digests.
+    folded: list = []
+    fold_question_dispose_rejected(folded, dict(ev.payload))
+    assert len(folded) == 1
+    assert folded[0]["detail"] == rt._disposal_rejects[0]["detail"]
+    fold_question_dispose_rejected(folded, dict(ev.payload))
+    assert len(folded) == 1

@@ -72,9 +72,9 @@ def _not_attempted_for_covering(
     return NotAttemptedReason(not_attempted_reason(outcomes)), _reasons_for(done)
 
 
-# Honest terminals for PR16 rollup clamp (``verdict is not None``). Explicit
-# needs_more_data / infeasible (PR15) and computed ill_posed (PR8) must stamp
-# ``verdict`` so incomplete children cannot wipe the parent.
+# Honest terminals for PR16 rollup clamp. Explicit needs_more_data / infeasible
+# (PR15) and computed ill_posed (PR8) stamp ``terminal=True`` — never put these
+# disposition strings into ``verdict`` (claim vocabulary: supported/refuted/…).
 _HONEST_TERMINAL_DISPOSITIONS: frozenset[str] = frozenset(
     {
         Disposition.NEEDS_MORE_DATA.value,
@@ -85,15 +85,19 @@ _HONEST_TERMINAL_DISPOSITIONS: frozenset[str] = frozenset(
 
 
 def stamp_honest_terminal_verdict(row: dict[str, Any]) -> dict[str, Any]:
-    """Ensure needs_more_data / infeasible / ill_posed carry a terminal verdict.
+    """Mark needs_more_data / infeasible / ill_posed with ``terminal=True``.
 
-    PR16 ``_has_own_terminal_verdict`` is true when ``disposition != not_attempted``
-    **or** ``verdict is not None``. Stamping ``verdict`` keeps the contract
-    explicit for claims-style clamp paths. not_attempted fallbacks omit it.
+    Does **not** write disposition strings into ``verdict`` (avoids report/graph
+    readers treating them as claim supported/refuted). Clears a mistaken
+    disposition-valued ``verdict`` if present. not_attempted fallbacks omit both.
     """
     disp = str(row.get("disposition") or "")
-    if disp in _HONEST_TERMINAL_DISPOSITIONS and row.get("verdict") is None:
-        row["verdict"] = disp
+    if disp not in _HONEST_TERMINAL_DISPOSITIONS:
+        return row
+    row["terminal"] = True
+    v = row.get("verdict")
+    if v is not None and str(v) in _HONEST_TERMINAL_DISPOSITIONS:
+        row.pop("verdict", None)
     return row
 
 
@@ -247,7 +251,7 @@ def _dispositions_inner(
                         "reason_detail": list(explicit_art.get("refs") or []),
                         "formulation": text,
                         "final_type": ft,
-                        "verdict": Disposition.NEEDS_MORE_DATA.value,
+                        "terminal": True,
                         "design_artifact_id": explicit_art.get("design_artifact_id"),
                     }
                     continue
@@ -426,7 +430,7 @@ def _dispositions_inner(
                 "reason": str(explicit.get("reason") or disp),
                 "reason_detail": list(explicit.get("refs") or []),
                 "formulation": text,
-                "verdict": disp,
+                "terminal": True,
             }
             if disp == Disposition.NEEDS_MORE_DATA.value:
                 row_ex["design_artifact_id"] = explicit.get("design_artifact_id")

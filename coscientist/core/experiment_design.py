@@ -173,15 +173,22 @@ def design_artifact_ok(
 
     Never trusts live ``meta.kind`` alone (pre-commit stamp mutation). Accepts:
     - ``pending_design_ids`` (same-batch OutputSpec.kind=experiment_design outputs)
-    - ``journal_kinds`` from folded ``ArtifactRegistered(stamped=True)``
+    - ``journal_kinds`` from folded ``ArtifactRegistered(stamped=True)`` after a
+      successful meta stamp (missing meta must not unlock needs_more_data)
     - covering-task OutputSpec.kind binding via results (not rubric-id spoof)
+
+    When ``artifact_lookup`` is provided, missing meta fails closed (replay
+    without the artifact file → not_attempted / missing_experiment_design).
     """
-    del artifact_lookup  # meta.kind is not authoritative without journal stamp
     if not artifact_id:
         return False
     aid = str(artifact_id)
     if pending_design_ids and aid in pending_design_ids:
         return True
+    if artifact_lookup is not None:
+        meta = artifact_lookup(aid) if callable(artifact_lookup) else None
+        if meta is None:
+            return False
     if journal_kinds and journal_kinds.get(aid) == ARTIFACT_KIND_EXPERIMENT_DESIGN:
         return True
     if tasks is None or results is None or not task_keys:
