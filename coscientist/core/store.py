@@ -60,6 +60,8 @@ class SqliteEventStore:
         self.epoch = epoch
         self.lease_ttl_s = lease_ttl_s
         self._closed = False
+        # None=unknown, False/True=cached; avoids a SELECT on every append.
+        self._finalized_cached: bool | None = None
         self._db_lock = threading.RLock()
         self._read_lock = threading.RLock()
         with self._db_lock:
@@ -275,11 +277,15 @@ class SqliteEventStore:
         return await self._to_thread(lambda: self._append_locked(event))
 
     def _study_is_finalized(self) -> bool:
+        if self._finalized_cached is not None:
+            return self._finalized_cached
         row = self._get_row_write("meta", self.study_id)
         if row and row.get("finalized"):
+            self._finalized_cached = True
             return True
         study = self._get_row_write("studies", self.study_id)
-        return bool(study and study.get("finalized"))
+        self._finalized_cached = bool(study and study.get("finalized"))
+        return self._finalized_cached
 
     def _reject_if_finalized(self, event_type: str) -> None:
         if self._study_is_finalized():
@@ -388,6 +394,8 @@ class SqliteEventStore:
             update={"seq": seq, "epoch": self.epoch, "payload_digest": digest, "ts": ts}
         )
         self._apply_projection(stored)
+        if event.type == "StudyFinalized":
+            self._finalized_cached = True
         return stored, None
 
     async def read_all(self) -> list[EventEnvelope]:
