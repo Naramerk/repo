@@ -23,7 +23,7 @@ class HitlForkMixin(CostlyHitlMixin):
         raise NotImplementedError
 
     def _proposed_check_decision_lock(self, proposal_id: str) -> asyncio.Lock:
-        """Per-proposal lock so accept/delegate/reject serialize side effects."""
+        """Per-proposal lock: accept/delegate/reject/timeout serialize side effects."""
         locks = getattr(self, "_hitl_decision_locks", None)
         if not isinstance(locks, dict):
             locks = {}
@@ -373,17 +373,48 @@ class HitlForkMixin(CostlyHitlMixin):
             await self._apply_costly_or_nonreal(h, answer=None)
             return
         # PR20: HITL timeout on proposed_check ≡ reject (StudyFinalized still runs).
+        # Must take the same per-proposal lock as answer_hitl — otherwise timeout can
+        # write CheckRejected while a human accept is still inside _append.
         if h.kind == "proposed_check":
             from coscientist.core.proposed_check import reject_check
 
-            pid = str(getattr(h, "payload_ref", None) or "")
-            await reject_check(
-                self,
-                pid,
-                source="timeout",
-                reason="human_timeout",
-                hitl_request_id_s=h.request_id,
-            )
+            pid = str(getattr(h, "payload_ref", None) or "").strip()
+            if not pid:
+                return
+            async with self._proposed_check_decision_lock(pid):
+                live = self.hitl.get(h.request_id) if hasattr(self, "hitl") else h
+                if live is not None and not getattr(live, "open", True):
+                    return
+                # Journal wins before any side effect.
+                existing = getattr(self, "_hitl_decisions", None) or {}
+                dec = (
+                    existing.get(h.request_id) if isinstance(existing, dict) else None
+                )
+                if isinstance(dec, dict):
+                    d = str(dec.get("decision") or "").strip()
+                    decided_by = str(
+                        dec.get("by") or dec.get("decided_by") or ""
+                    ).strip()
+                    if decided_by == "human" and d in (
+                        "accept",
+                        "approve",
+                        "delegate",
+                        "reject",
+                    ):
+                        return
+                row = (getattr(self, "_check_proposals", None) or {}).get(pid)
+                if isinstance(row, dict) and row.get("status") in (
+                    "approved",
+                    "rejected",
+                ):
+                    return
+                await reject_check(
+                    self,
+                    pid,
+                    source="timeout",
+                    reason="human_timeout",
+                    hitl_request_id_s=h.request_id,
+                )
             return
         now = self.clock.now()
         await self._append(

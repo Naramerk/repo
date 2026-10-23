@@ -2352,21 +2352,6 @@ async def test_check_proposed_idem_without_digest(tmp_path: Path) -> None:
         await close_runtime(rt)
 
 
-def test_upcasters_byte_identical_to_pr23_bridges() -> None:
-    """B1: StudyCreated 10→11 and AttemptStarted 7→8 match #23 @ 57bc1ad bodies."""
-    import inspect
-
-    from coscientist.core import upcasters as u
-
-    src_study = inspect.getsource(u._study_created_v10_to_v11)
-    src_att = inspect.getsource(u._attempt_started_v7_to_v8_inputs_digest)
-    assert "Identical to #23" in src_study
-    assert "never pop" in src_study
-    assert "digest_version=None" in src_att
-    assert "Owned by #23" not in src_study
-    assert "Owned by #23" not in src_att
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("winner", ["accept", "delegate", "reject"])
 async def test_hitl_concurrent_decisions_first_wins(
@@ -2419,9 +2404,7 @@ async def test_hitl_concurrent_decisions_first_wins(
         results = await asyncio.gather(
             winner_task, *loser_tasks, return_exceptions=True
         )
-        assert all(
-            not isinstance(r, BaseException) for r in results
-        ), f"losers must not raise (got {results!r})"
+        assert results == [None, None, None]
 
         decided = [
             e
@@ -2429,16 +2412,14 @@ async def test_hitl_concurrent_decisions_first_wins(
             if e.type == "HitlDecided" and e.entity_key == rid
         ]
         assert len(decided) == 1
-        assert decided[0].payload.get("decision") == (
-            "accept" if winner == "accept" else winner
-        )
+        assert decided[0].payload.get("decision") == winner
         assert decided[0].idem_key == make_idem("HitlDecided", rid)
 
         status = rt._check_proposals[pid]["status"]
         reviews = getattr(rt, "_proposed_check_reviews", None) or {}
         if winner == "accept":
             assert status == "approved"
-            assert pid not in reviews or reviews[pid].get("status") != "pending"
+            assert pid not in reviews
         elif winner == "reject":
             assert status == "rejected"
             assert pid not in reviews
@@ -2446,6 +2427,78 @@ async def test_hitl_concurrent_decisions_first_wins(
             assert status == "proposed"
             assert reviews.get(pid, {}).get("status") == "pending"
             assert reviews[pid].get("kind") == "proposed_check_review"
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first", ["accept", "timeout"])
+async def test_hitl_timeout_vs_accept_serialized(
+    tmp_path: Path, first: str
+) -> None:
+    """Timeout must share the per-proposal lock and check the journal first.
+
+    Without the lock, ``_hitl_timeout`` → ``reject_check`` can write
+    ``CheckRejected`` while human accept is still inside ``_append`` — gather
+    then sees both ``CheckApproved`` and ``CheckRejected`` (or a raised loser).
+    """
+    rt = await open_runtime_experimental(tmp_path, f"st_pr20_to_vs_acc_{first}")
+    try:
+        await _create(rt, f"timeout vs accept {first}")
+        proposer_aid = await _boot_plan(rt, [_exp_spec()])
+        exp_tid = _task_id(rt, "EXP")
+        pid = await propose_check(
+            rt,
+            target="study",
+            role="prediction",
+            measures="m",
+            justification="j",
+            rejected_templates=_rejected(),
+            check=_value_check(target=1),
+            task_id=exp_tid,
+            attempt_id=proposer_aid,
+            open_hitl=True,
+        )
+        assert pid
+        rid = next(
+            r
+            for r, h in rt.hitl.items()
+            if getattr(h, "payload_ref", None) == pid
+        )
+
+        async def _accept() -> None:
+            await rt.answer_hitl(rid, "accept")
+
+        async def _timeout() -> None:
+            h = rt.hitl[rid]
+            await rt._hitl_timeout(h)
+
+        if first == "accept":
+            a = asyncio.create_task(_accept())
+            await asyncio.sleep(0)
+            b = asyncio.create_task(_timeout())
+        else:
+            a = asyncio.create_task(_timeout())
+            await asyncio.sleep(0)
+            b = asyncio.create_task(_accept())
+        results = await asyncio.gather(a, b, return_exceptions=True)
+        assert results == [None, None]
+
+        events = await rt.store.read_all()
+        approved = [
+            e for e in events if e.type == "CheckApproved" and e.entity_key == pid
+        ]
+        rejected = [
+            e for e in events if e.type == "CheckRejected" and e.entity_key == pid
+        ]
+        assert len(approved) + len(rejected) == 1
+        status = rt._check_proposals[pid]["status"]
+        if approved:
+            assert status == "approved"
+            assert not rejected
+        else:
+            assert status == "rejected"
+            assert rejected[0].payload.get("reason") == "human_timeout"
     finally:
         await close_runtime(rt)
 

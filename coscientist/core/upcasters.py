@@ -642,7 +642,7 @@ def _study_created_v10_to_v11(payload: dict[str, Any]) -> dict[str, Any]:
 
     Identical to #23: ``setdefault`` only — never pop ``max_loop_iter`` (real
     LoopSpec cap on main). Journals with ``max_loop_iter=2`` must replay as 2.
-#23 owns writer v11; PR20 stacks v12 (max_proposals) after this bridge.
+    #23 owns writer v11; this bridge upcasts main v10 journals through v11.
     """
     out = dict(payload)
     out.setdefault("as_of", None)
