@@ -46,10 +46,12 @@ def test_watch_process_samples_host_cpu_before_poll(monkeypatch):
     monkeypatch.setattr(sb, "_cgroup_cpu_usage_usec", lambda leaf: None)
 
     lim = SandboxLimits(timeout_s=5.0, memory_mb=64, max_output_bytes=1024)
-    timed_out, overflow, _out, _err, kill_cause, cpu_s, tree_cpu_s = _watch_process(
-        FakeProc(),  # type: ignore[arg-type]
-        lim=lim,
-        cgroup_leaf=None,
+    timed_out, overflow, _out, _err, kill_cause, cpu_s, tree_cpu_s, drain_failed = (
+        _watch_process(
+            FakeProc(),  # type: ignore[arg-type]
+            lim=lim,
+            cgroup_leaf=None,
+        )
     )
 
     assert timed_out is False
@@ -57,6 +59,7 @@ def test_watch_process_samples_host_cpu_before_poll(monkeypatch):
     assert kill_cause is None
     assert cpu_s is None
     assert tree_cpu_s == 0.42
+    assert drain_failed is False
     # Alive iteration samples then polls None; exit iteration samples then polls 0.
     assert order[:2] == ["sample", "poll"]
     assert order.count("sample") == 2
@@ -99,13 +102,80 @@ def test_watch_process_joins_readers_before_returning_stdout(monkeypatch):
     monkeypatch.setattr(sb, "_cgroup_cpu_usage_usec", lambda leaf: None)
 
     lim = SandboxLimits(timeout_s=5.0, memory_mb=64, max_output_bytes=1024)
-    _to, _ov, out, err, _kc, _cpu, _tree = _watch_process(
+    _to, _ov, out, err, _kc, _cpu, _tree, drain_failed = _watch_process(
         FakeProc(),  # type: ignore[arg-type]
         lim=lim,
         cgroup_leaf=None,
     )
     assert out == b"999\n"
     assert err == b"999\n"
+    assert drain_failed is False
+
+
+def test_watch_process_stuck_reader_sets_output_drain_failed(monkeypatch):
+    """Grandchild holding the pipe → reader stays alive; flag, do not silent b''."""
+    import threading
+
+    block = threading.Event()
+
+    def stuck_read(
+        pipe: object,
+        limit: int,
+        sink: list[bytes],
+        overflow: list[bool],
+    ) -> None:
+        del pipe, limit, sink, overflow
+        block.wait(timeout=30.0)
+
+    class FakeProc:
+        pid = 4242
+        stdout = MagicMock()
+        stderr = MagicMock()
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(sb, "_OUTPUT_DRAIN_JOIN_S", 0.05)
+    monkeypatch.setattr(sb, "_host_tree_cpu_s", lambda _pid: None)
+    monkeypatch.setattr(sb, "_read_capped", stuck_read)
+    monkeypatch.setattr(sb, "_cgroup_cpu_usage_usec", lambda leaf: None)
+
+    lim = SandboxLimits(timeout_s=5.0, memory_mb=64, max_output_bytes=1024)
+    _to, _ov, out, err, _kc, _cpu, _tree, drain_failed = _watch_process(
+        FakeProc(),  # type: ignore[arg-type]
+        lim=lim,
+        cgroup_leaf=None,
+    )
+    block.set()
+    assert drain_failed is True
+    assert out == b""
+    assert err == b""
+
+    proc = MagicMock()
+    proc.returncode = 0
+    result = _classify(
+        timed_out=False,
+        overflow=False,
+        proc=proc,
+        cgroup_leaf=None,
+        oom_detectable=False,
+        infra_msg=b"",
+        out_b=out,
+        err_b=err,
+        duration=0.1,
+        net_i="hard",
+        fs_i="hard",
+        work_dir=None,
+        result_files={},
+        output_drain_failed=True,
+    )
+    assert result.status is SandboxStatus.UNAVAILABLE
+    assert result.reason == "sandbox_unavailable:output_drain"
+    assert result.output_drain_failed is True
+    assert result.status in sb.INFRA_STATUSES
 
 
 def test_watch_process_keeps_max_sample_across_zero_and_none(monkeypatch):
@@ -142,7 +212,7 @@ def test_watch_process_keeps_max_sample_across_zero_and_none(monkeypatch):
     monkeypatch.setattr(sb.time, "sleep", lambda _s: None)
 
     lim = SandboxLimits(timeout_s=5.0, memory_mb=64, max_output_bytes=1024)
-    _to, _ov, _o, _e, _kc, _cpu, tree_cpu_s = _watch_process(
+    _to, _ov, _o, _e, _kc, _cpu, tree_cpu_s, drain_failed = _watch_process(
         FakeProc(),  # type: ignore[arg-type]
         lim=lim,
         cgroup_leaf=None,
@@ -152,6 +222,7 @@ def test_watch_process_keeps_max_sample_across_zero_and_none(monkeypatch):
     assert order.count("sample") == 3
     assert order.count("poll") == 3
     assert tree_cpu_s == 0.9
+    assert drain_failed is False
 
 
 def test_sigxcpu_without_cgroup_yields_cpu_timeout_when_rusage_at_budget():

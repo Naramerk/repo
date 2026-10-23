@@ -87,6 +87,8 @@ DEFAULT_TIMEOUT_S = 30.0
 DEFAULT_MEMORY_MB = 256
 DEFAULT_MAX_OUTPUT_BYTES = 1_000_000
 _TERM_GRACE_S = 0.5
+# Shared budget to join both stdout/stderr drain threads after wait.
+_OUTPUT_DRAIN_JOIN_S = 5.0
 # Host-side idle detection: cpu_usage/wall below this → idle_timeout (sabotage).
 IDLE_CPU_WALL_RATIO = 0.05
 TIMEOUT_KINDS = frozenset({"idle_timeout", "cpu_timeout", "wall_timeout"})
@@ -156,6 +158,9 @@ class SandboxResult:
     cpu_usage_s: float | None = None
     # wall | cpu — which host budget tripped (None if not a timeout).
     timeout_kill: str | None = None
+    # True when a stdout/stderr drain thread was still alive after the join budget
+    # (e.g. grandchild still holding the write end) — do not trust empty sinks.
+    output_drain_failed: bool = False
 
     @property
     def limits_fully_held(self) -> bool:
@@ -603,12 +608,14 @@ def _watch_process(
     *,
     lim: SandboxLimits,
     cgroup_leaf: Path | None = None,
-) -> tuple[bool, bool, bytes, bytes, str | None, float | None, float | None]:
-    """Return (timed_out, overflow, stdout, stderr, kill_cause, cpu_s, rusage_cpu_s).
+) -> tuple[bool, bool, bytes, bytes, str | None, float | None, float | None, bool]:
+    """Return (timed_out, overflow, stdout, stderr, kill_cause, cpu_s, rusage_cpu_s, drain_failed).
 
     ``kill_cause`` is ``wall`` or ``cpu`` when the host budget tripped.
     ``cpu_s`` is cgroup ``cpu.stat`` when available; ``rusage_cpu_s`` is the
     host-measured process-tree CPU (for no-cgroup SIGXCPU classification).
+    ``drain_failed`` is True if a drain thread is still alive after the shared
+    join budget (pipe held open, e.g. by a grandchild) — sinks are incomplete.
     """
     out_sink: list[bytes] = []
     err_sink: list[bytes] = []
@@ -670,8 +677,13 @@ def _watch_process(
     except Exception:  # noqa: BLE001
         pass
     # Process exit alone does not mean readers have appended — join first.
+    # One shared deadline for both threads (not 5s + 5s sequential).
+    join_deadline = time.monotonic() + float(_OUTPUT_DRAIN_JOIN_S)
     for t in (out_t, err_t):
-        t.join(timeout=5)
+        remaining = join_deadline - time.monotonic()
+        if remaining > 0:
+            t.join(timeout=remaining)
+    drain_failed = out_t.is_alive() or err_t.is_alive()
     if last_usage is None:
         last_usage = _cgroup_cpu_usage_usec(cgroup_leaf)
     cpu_s = (last_usage / 1_000_000.0) if last_usage is not None else None
@@ -683,6 +695,7 @@ def _watch_process(
         kill_cause,
         cpu_s,
         tree_cpu_s,
+        drain_failed,
     )
 
 
@@ -739,6 +752,7 @@ def _classify(
     cpu_usage_s: float | None = None,
     rusage_cpu_s: float | None = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
+    output_drain_failed: bool = False,
 ) -> SandboxResult:
     note = soft_isolation_note(net_i, fs_i)
     if not oom_detectable:
@@ -750,6 +764,8 @@ def _classify(
                 **extra,
                 "timeout_kill": kill_cause if timed_out else None,
             }
+        if "output_drain_failed" not in extra:
+            extra = {**extra, "output_drain_failed": output_drain_failed}
         return _result(
             stdout=out_b,
             stderr=err_b,
@@ -771,6 +787,14 @@ def _classify(
             status=SandboxStatus.UNAVAILABLE,
             exit_code=proc.returncode,
             reason=f"sandbox_unavailable:{kind or 'wrapper'}",
+        )
+    # Drain still blocked (grandchild holding the pipe) — incomplete sinks.
+    if output_drain_failed:
+        return fin(
+            status=SandboxStatus.UNAVAILABLE,
+            exit_code=proc.returncode,
+            reason="sandbox_unavailable:output_drain",
+            output_drain_failed=True,
         )
     if overflow:
         # Guest-caused output flood — scientific, not infra.
@@ -984,9 +1008,16 @@ def _run_jailed(
         if oom_frag:
             note = f"{note}; {oom_frag}" if note else oom_frag
 
-        timed_out, overflow, out_b, err_b, kill_cause, cpu_s, rusage_s = (
-            _watch_process(proc, lim=lim, cgroup_leaf=leaf if oom_det else None)
-        )
+        (
+            timed_out,
+            overflow,
+            out_b,
+            err_b,
+            kill_cause,
+            cpu_s,
+            rusage_s,
+            drain_failed,
+        ) = _watch_process(proc, lim=lim, cgroup_leaf=leaf if oom_det else None)
         infra_msg = b""
         try:
             import select
@@ -1022,6 +1053,7 @@ def _run_jailed(
             cpu_usage_s=cpu_s,
             rusage_cpu_s=rusage_s,
             timeout_s=lim.timeout_s,
+            output_drain_failed=drain_failed,
         )
     finally:
         _cgroup_remove_leaf(leaf)
