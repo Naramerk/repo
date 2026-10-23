@@ -267,7 +267,6 @@ def guest_timeout_result(
         getattr(result, "note", None),
     )
     art_id = ""
-    digest = ""
     # Caller may have already stored a log; keep evidence only.
     return base_result(
         check_id=check_id,
