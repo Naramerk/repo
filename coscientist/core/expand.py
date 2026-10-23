@@ -19,6 +19,7 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
+from coscientist.core.errors import LeaseLost
 from coscientist.core.events import (
     PLAN_EXPANDED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
@@ -157,6 +158,8 @@ async def expand_plan(
             replan_allocated_s=replan_allocated_s,
             plan_key=plan_key,
         )
+    except LeaseLost:
+        raise
     except Exception:  # noqa: BLE001 — never raise to tick/record
         await refuse_expansion(runtime, after_task, reason="invalid", detail="expand_crash")
         return None

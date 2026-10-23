@@ -670,6 +670,8 @@ async def _build_finalized_payload(
             qdisp=qdisp,
             refusal=refusal,
         )
+    except LeaseLost:
+        raise
     except Exception as e:  # noqa: BLE001 — primary failure → minimal_report
         fallback = type(e).__name__
         log.warning("finalize primary path failed: %s", e, exc_info=True)
@@ -688,6 +690,8 @@ async def _build_finalized_payload(
                 hypotheses=hypothesis_verdicts or {},
                 hypotheses_unavailable=hypotheses_unavailable,
             )
+        except LeaseLost:
+            raise
         except Exception as e2:  # noqa: BLE001
             raise RuntimeError(f"minimal_report:{type(e2).__name__}") from e2
     return {

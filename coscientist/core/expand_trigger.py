@@ -18,6 +18,7 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
+from coscientist.core.errors import LeaseLost
 from coscientist.core.events import TASK_CREATED_SCHEMA_VERSION, EventEnvelope, make_idem
 from coscientist.core.expand_critic import PLAN_N_CRITIC_CRITERIA
 from coscientist.core.ids import task_id
@@ -262,6 +263,8 @@ async def maybe_expand_after_task_done(runtime: StudyRuntime, task_id_full: str)
         if task is not None:
             after = task.spec.task_key
         return await _maybe_expand(runtime, task_id_full)
+    except LeaseLost:
+        raise
     except Exception as e:  # noqa: BLE001 — MJ-c: no silent loss
         await refuse_expansion(
             runtime,
