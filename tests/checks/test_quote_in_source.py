@@ -595,6 +595,18 @@ def test_wrong_normalization_version_unassessed(tmp_path: Path):
     assert cr.detail == "normalization_version_mismatch"
 
 
+@pytest.fixture(autouse=True)
+def _clear_fetch_cap_registries():
+    """Keep effects issued/permit maps empty across tests (no manual .clear())."""
+    from coscientist.tools import effects as effects_mod
+
+    effects_mod._ISSUED_FETCH_CAPS.clear()
+    effects_mod._SOURCE_FETCHED_WRITE_PERMITS.clear()
+    yield
+    effects_mod._ISSUED_FETCH_CAPS.clear()
+    effects_mod._SOURCE_FETCHED_WRITE_PERMITS.clear()
+
+
 @pytest.fixture
 def fetch_registry():
     _reset_registry_for_tests()
@@ -1660,9 +1672,6 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
     """Two tool-producer artifacts in one fetch → remint + both SourceFetched."""
     from coscientist.tools import effects as effects_mod
 
-    effects_mod._ISSUED_FETCH_CAPS.clear()
-    effects_mod._SOURCE_FETCHED_WRITE_PERMITS.clear()
-
     class _MultiFetch:
         def __init__(self, arts: LocalArtifactStore):
             self.spec = ToolSpec(name="papers_get", effect="read", is_fetch=True)
@@ -1748,8 +1757,6 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
         if e.type == "SourceFetched" and e.payload.get("digest") in digests
     ]
     assert len(sf) == 2
-    from coscientist.tools import effects as effects_mod
-
     # Caps minted for this invoke_tool call must be gone (issued + write permits).
     assert effects_mod._ISSUED_FETCH_CAPS == {}
     assert effects_mod._SOURCE_FETCHED_WRITE_PERMITS == {}
@@ -1805,12 +1812,10 @@ def test_core_cannot_bypass_source_fetched_with_bool_flag(tmp_path: Path, clock)
 async def test_append_failure_on_second_digest_clears_permits(
     tmp_path: Path, clock, fetch_registry, monkeypatch
 ):
-    """Second digest append fails → write permit released; registries empty."""
-    from coscientist.core.source_fetch import append_source_fetched
+    """Remint inside invoke_tool (effects.py) fails on 2nd SourceFetched → permits cleared."""
+    import coscientist.core.source_fetch as sf_mod
     from coscientist.tools import effects as effects_mod
 
-    effects_mod._ISSUED_FETCH_CAPS.clear()
-    effects_mod._SOURCE_FETCHED_WRITE_PERMITS.clear()
     catalog = _catalog_quote()
     sid = "st_append_fail"
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog)
@@ -1841,43 +1846,65 @@ async def test_append_failure_on_second_digest_clears_permits(
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
-    call_id = f"{aid}:1"
-    # Journal AttemptTainted + first successful SourceFetched via invoke.
-    out = await invoke_tool(
-        _FetchTool(arts, b"First paper has four word tokens right here now."),
-        {"url": "https://agent.example/a"},
-        CallCtx(
-            study_id=sid,
-            task_key="LIT-0",
-            attempt_id=aid,
-            hitl_policy=HitlPolicy(),
-            call_seq=1,
-        ),
-        writer=rt.writer,
-        artifacts=arts,
-    )
-    assert out.artifacts
-    assert effects_mod._ISSUED_FETCH_CAPS == {}
-    assert effects_mod._SOURCE_FETCHED_WRITE_PERMITS == {}
 
-    # Remint for a second digest; make writer.append fail after verify.
-    cap2 = _cap(call_id, "papers_get", study_id=sid)
-    assert cap2.id in effects_mod._ISSUED_FETCH_CAPS
+    class _MultiFetch:
+        def __init__(self, store: LocalArtifactStore):
+            self.spec = ToolSpec(name="papers_get", effect="read", is_fetch=True)
+            self.arts = store
 
-    async def _boom(*_a, **_k):
-        raise RuntimeError("simulated append failure")
+        async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+            call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
+            arts_out = []
+            for i, body in enumerate(
+                (
+                    b"First paper has four word tokens right here now.",
+                    b"Second paper has four word tokens right here now.",
+                )
+            ):
+                arts_out.append(
+                    self.arts.put_fetched(
+                        body,
+                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name),
+                        name=f"p{i}.txt",
+                        media_type="text/plain",
+                        role="paper",
+                        capability=ctx.fetch_capability,
+                        expected_tool=self.spec.name,
+                        expected_call_id=call_id,
+                        expected_study_id=ctx.study_id,
+                        expected_attempt_id=ctx.attempt_id,
+                    )
+                )
+            return ToolOutput(
+                data={"url": "https://normalized.example/multi"},
+                artifacts=arts_out,
+            )
 
-    monkeypatch.setattr(rt.writer, "append", _boom)
+    real_append = sf_mod.append_source_fetched
+    n = {"k": 0}
+
+    async def _boom_second(*a, **k):
+        n["k"] += 1
+        if n["k"] >= 2:
+            raise RuntimeError("simulated append failure")
+        return await real_append(*a, **k)
+
+    monkeypatch.setattr(sf_mod, "append_source_fetched", _boom_second)
     with pytest.raises(RuntimeError, match="simulated append failure"):
-        await append_source_fetched(
-            rt.writer,
-            study_id=sid,
-            call_id=call_id,
-            tool="papers_get",
-            digest="deadbeef" * 8,
-            url="https://normalized.example/x",
-            capability=cap2,
+        await invoke_tool(
+            _MultiFetch(arts),
+            {"url": "https://agent.example/multi"},
+            CallCtx(
+                study_id=sid,
+                task_key="LIT-0",
+                attempt_id=aid,
+                hitl_policy=HitlPolicy(),
+                call_seq=1,
+            ),
+            writer=rt.writer,
+            artifacts=arts,
         )
+    assert n["k"] >= 2  # remint path reached second append_source_fetched
     assert effects_mod._ISSUED_FETCH_CAPS == {}
     assert effects_mod._SOURCE_FETCHED_WRITE_PERMITS == {}
     await close_runtime(rt)
@@ -1965,12 +1992,12 @@ def test_attempt_tainted_renamed_tool_still_pairs_from_journal(fetch_registry):
     assert marked == ("att:9", "papers_get_old_name")
 
 
-def test_attempt_tainted_reclassified_tool_fails_loudly(fetch_registry):
-    """Registered tool with is_fetch=False vs journaled True → RuntimeError."""
+def test_attempt_tainted_reclassified_raises_domain(fetch_registry):
+    """Registered tool with is_fetch=False vs journaled True → FetchToolReclassified."""
+    from coscientist.core.errors import FetchToolReclassified
     from coscientist.core.source_fetch import note_fetch_call_from_attempt_tainted
 
-    # catalog_read is registered is_fetch=False by fetch_registry fixture.
-    with pytest.raises(RuntimeError, match="refusing silent drop"):
+    with pytest.raises(FetchToolReclassified) as ei:
         note_fetch_call_from_attempt_tainted(
             {
                 "reason": "source_fetch",
@@ -1979,6 +2006,89 @@ def test_attempt_tainted_reclassified_tool_fails_loudly(fetch_registry):
                 "call_id": "att:1",
             }
         )
+    assert ei.value.tool == "catalog_read"
+    assert ei.value.call_id == "att:1"
+
+
+@pytest.mark.asyncio
+async def test_reclassified_tool_study_opens_finalizes_uncounted(
+    tmp_path: Path, clock, fetch_registry
+):
+    """MAJOR: reclassified is_fetch must not brick open/finalize; fetch uncounted."""
+    from coscientist.core.projections import fold_events
+    from coscientist.core.source_fetch import load_source_fetch_index_from_writer
+
+    catalog = _catalog_quote()
+    sid = "st_reclass"
+    rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0-pr14",
+        deadline=clock.now() + timedelta(seconds=120),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    _ex, arts = attach_executor(rt, tmp_path)
+    rt.artifacts = arts
+    for key in ("SPEC", "HYP", "LIT"):
+        await record_success(rt, await rt.start_attempt(key), arts)
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="LIT-0",
+                title="lit",
+                goal="g",
+                route="literature",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="quote_ok")],
+            )
+        ],
+        questions=[],
+    )
+    body = b"Four word tokens appear right here now for reclass."
+    paper = await store_fetched_source(
+        rt.writer,
+        arts,
+        body,
+        study_id=sid,
+        call_id="spoofatt:1",
+        tool="papers_get",
+        url="https://example.org/reclass",
+        capability=_cap("spoofatt:1", "papers_get", study_id=sid),
+    )
+    digest = paper.sha256
+    await close_runtime(rt)
+
+    # Same tool name, now is_fetch=False — old journal must still open.
+    _reset_registry_for_tests()
+    _register_tool_for_tests(
+        RegisteredToolSpec(name="papers_get", effect="read", is_fetch=False)
+    )
+    _register_tool_for_tests(
+        RegisteredToolSpec(name="catalog_read", effect="read", is_fetch=False)
+    )
+    freeze_registry()
+
+    rt2 = await open_runtime(
+        tmp_path, sid, clock=clock, catalog=catalog, owner="t2"
+    )
+    # Full fold must not raise (caught → fetch_integrity, no fetch_calls).
+    folded = fold_events(await rt2.store.read_all())
+    assert digest not in (folded.get("source_fetches") or {})
+    assert "spoofatt:1" in (folded.get("fetch_integrity") or {})
+
+    idx = await load_source_fetch_index_from_writer(rt2.writer)
+    assert digest not in idx.digests()
+    assert digest not in idx.digests_for_attempt("spoofatt")
+
+    await rt2.finalize(trigger="cancel")
+    assert rt2.view().phase == "closed"
+    events = await rt2.store.read_all()
+    assert any(e.type == "FetchIntegrityRaised" for e in events)
+    fin = next(e for e in events if e.type == "StudyFinalized")
+    assert "internal_error" in (fin.payload.get("contributing_reasons") or [])
+    await close_runtime(rt2)
 
 
 def test_fetch_capability_mismatch_on_wrong_bind(fetch_registry):
@@ -1990,8 +2100,6 @@ def test_fetch_capability_mismatch_on_wrong_bind(fetch_registry):
     )
     from coscientist.tools import effects as effects_mod
 
-    effects_mod._ISSUED_FETCH_CAPS.clear()
-    effects_mod._SOURCE_FETCHED_WRITE_PERMITS.clear()
     cap = _cap("att:1", "papers_get", study_id="st_x")
     with pytest.raises(ArtifactRejected, match="fetch_capability_mismatch"):
         assert_fetch_capability_bound(
@@ -2014,3 +2122,50 @@ def test_fetch_capability_mismatch_on_wrong_bind(fetch_registry):
     effects_mod._invalidate_fetch_capability(cap)
     assert effects_mod._ISSUED_FETCH_CAPS == {}
     assert effects_mod._SOURCE_FETCHED_WRITE_PERMITS == {}
+
+
+def test_take_source_fetched_write_permit_mismatches(fetch_registry):
+    """_take_source_fetched_write_permit rejects foreign tool / call / study."""
+    from coscientist.core.errors import ArtifactRejected
+    from coscientist.core.source_fetch import (
+        take_source_fetched_write_permit,
+        verify_fetch_capability,
+    )
+    from coscientist.tools import effects as effects_mod
+
+    cap = _cap("att:1", "papers_get", study_id="st_x")
+    verify_fetch_capability(
+        cap,
+        tool="papers_get",
+        call_id="att:1",
+        study_id="st_x",
+        attempt_id="att",
+    )
+    assert cap.id in effects_mod._SOURCE_FETCHED_WRITE_PERMITS
+    with pytest.raises(ArtifactRejected, match="fetch_capability_mismatch"):
+        take_source_fetched_write_permit(
+            cap.id, tool="foreign_tool", call_id="att:1", study_id="st_x"
+        )
+    # Mismatch must not consume the permit.
+    assert cap.id in effects_mod._SOURCE_FETCHED_WRITE_PERMITS
+    with pytest.raises(ArtifactRejected, match="fetch_capability_mismatch"):
+        take_source_fetched_write_permit(
+            cap.id, tool="papers_get", call_id="att:99", study_id="st_x"
+        )
+    with pytest.raises(ArtifactRejected, match="fetch_capability_mismatch"):
+        take_source_fetched_write_permit(
+            cap.id, tool="papers_get", call_id="att:1", study_id="st_other"
+        )
+    take_source_fetched_write_permit(
+        cap.id, tool="papers_get", call_id="att:1", study_id="st_x"
+    )
+    assert cap.id not in effects_mod._SOURCE_FETCHED_WRITE_PERMITS
+
+
+def test_release_without_handler_raises(monkeypatch):
+    """release must not silently no-op when no handler is registered."""
+    import coscientist.core.source_fetch as sf_mod
+
+    monkeypatch.setattr(sf_mod, "_release_write_permit_impl", None)
+    with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
+        sf_mod.release_source_fetched_write_permit("orphan-cap-id")

@@ -148,9 +148,29 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
                 row["reason"] = kept_reason
             _put(proj, "attempts", aid, row)
         # Pairing marker: trust journaled tool + is_fetch (see note_fetch_call…).
+        # Reclassified live registry → domain error caught here: do not brick fold.
+        from coscientist.core.errors import FetchToolReclassified
         from coscientist.core.source_fetch import note_fetch_call_from_attempt_tainted
 
-        marked = note_fetch_call_from_attempt_tainted(p if isinstance(p, dict) else {})
+        try:
+            marked = note_fetch_call_from_attempt_tainted(
+                p if isinstance(p, dict) else {}
+            )
+        except FetchToolReclassified as exc:
+            key = exc.call_id or exc.tool
+            _put(
+                proj,
+                "fetch_integrity",
+                key,
+                {
+                    "kind": "fetch_tool_reclassified",
+                    "tool": exc.tool,
+                    "call_id": exc.call_id,
+                    "attempt_id": aid,
+                    "internal_error": True,
+                },
+            )
+            marked = None
         if marked is not None:
             call_id, tool = marked
             _put(
@@ -158,6 +178,18 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
                 "fetch_calls",
                 call_id,
                 {"call_id": call_id, "tool": tool, "attempt_id": aid},
+            )
+    elif t == "FetchIntegrityRaised":
+        payload = p if isinstance(p, dict) else {}
+        key = str(
+            payload.get("call_id") or event.entity_key or payload.get("tool") or ""
+        )
+        if key:
+            _put(
+                proj,
+                "fetch_integrity",
+                key,
+                {**payload, "internal_error": True},
             )
     elif t == "SourceFetched":
         # Only fold when paired with a journaled fetch ToolCall (AttemptTainted).
@@ -223,6 +255,8 @@ def apply_event(store: Any, event: EventEnvelope) -> None:
         "artifacts",
         "effects",
         "source_fetches",
+        "fetch_calls",
+        "fetch_integrity",
         "requirements",
         "hitl_requests",
         "graph_nodes",
@@ -250,6 +284,8 @@ def _row_key(table: str, row: dict[str, Any]) -> str | None:
         "artifacts": "artifact_id",
         "effects": "key",
         "source_fetches": "digest",
+        "fetch_calls": "call_id",
+        "fetch_integrity": "call_id",
         "requirements": "id",
         "hitl_requests": "request_id",
         "graph_nodes": "node_id",
@@ -283,7 +319,8 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         "EffectDone": ("effects",),
         "SideEffectDenied": ("effects",),
         "SourceFetched": ("source_fetches",),
-        "AttemptTainted": ("attempts", "fetch_calls"),
+        "AttemptTainted": ("attempts", "fetch_calls", "fetch_integrity"),
+        "FetchIntegrityRaised": ("fetch_integrity",),
         "HitlOpened": ("hitl_requests",),
         "HitlDecided": ("hitl_requests",),
         "HitlTimedOut": ("hitl_requests",),

@@ -3,8 +3,8 @@
 ## Unreleased
 
 ### M1 PR14 follow-up
-- `append_source_fetched`: try/finally releases write permit if append fails after verify.
-- Replay pairing trusts journaled `AttemptTainted.{tool,is_fetch}`; reclassified same-name `is_fetch=False` fails loudly (no silent drop of old SourceFetched).
+- `append_source_fetched`: try/finally releases write permit if append fails after verify; `release_source_fetched_write_permit` raises when no handler is registered.
+- Replay pairing trusts journaled `AttemptTainted.{tool,is_fetch}`. Same-name reclassified `is_fetch=False` raises domain `FetchToolReclassified` (caught on fold): paired `SourceFetched` is **not** counted, `FetchIntegrityRaised` is journaled, study still opens/finalizes with `internal_error` in contributing_reasons.
 
 ### Sandbox (host CPU sample order)
 - `_watch_process`: sample host-tree CPU via `/proc` **before** `poll()` (poll reaps the child and `/proc` vanishes). Keeps no-cgroup SIGXCPU classification accurate; retains the max sample while the guest is alive. Split out of PR14 so quote work stays focused.

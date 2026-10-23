@@ -76,6 +76,7 @@ EventType = Literal[
     "SideEffectDenied",
     "SourceFetched",
     "AttemptTainted",
+    "FetchIntegrityRaised",
 ]
 
 

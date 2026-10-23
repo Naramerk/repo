@@ -63,6 +63,23 @@ class ArtifactRejected(CoreError):
         super().__init__(reason)
 
 
+class FetchToolReclassified(CoreError):
+    """Journaled ``AttemptTainted`` claims ``is_fetch`` but the live registry does not.
+
+    Replay must not raise through fold/open: callers catch this, skip counting
+    the paired ``SourceFetched``, and journal ``FetchIntegrityRaised`` so the
+    study can still finalize with ``internal_error`` in the report.
+    """
+
+    def __init__(self, tool: str, call_id: str = ""):
+        self.tool = tool
+        self.call_id = call_id
+        super().__init__(
+            f"AttemptTainted tool={tool!r} journaled is_fetch=True but current "
+            f"registry has is_fetch=False (reclassified)"
+        )
+
+
 class SandboxInfraError(CoreError):
     """Sandbox timeout/OOM/unavailable — close attempt as infra failure.
 

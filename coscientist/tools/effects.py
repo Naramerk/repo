@@ -164,12 +164,16 @@ def _take_source_fetched_write_permit(
     call_id: str,
     study_id: str,
 ) -> None:
-    """Consume the one-shot write permit granted by verify (effects-private)."""
-    entry = _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id, None)
+    """Consume the one-shot write permit granted by verify (effects-private).
+
+    Bind mismatches raise without consuming so a correct retry can still take.
+    """
+    entry = _SOURCE_FETCHED_WRITE_PERMITS.get(cap_id)
     if entry is None:
         raise ArtifactRejected("fetch_capability_required")
     if entry.tool != tool or entry.call_id != call_id or entry.study_id != study_id:
         raise ArtifactRejected("fetch_capability_mismatch")
+    _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id, None)
 
 
 def _release_source_fetched_write_permit(cap_id: str) -> None:
