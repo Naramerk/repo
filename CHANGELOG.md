@@ -51,6 +51,9 @@
 ### Perf / journal write SLO (configurable gate)
 - Defaults on and unchanged: **p99 ≤ 50ms**, **max-of-3** rounds, **≥1000 samples/round**. Env overrides (`COSCI_PERF_P99_MS` / `COSCI_PERF_ROUNDS` / `COSCI_PERF_SAMPLES`) allowed in both directions; values weaker than defaults emit `warnings.warn` + a `PERF GATE WEAKENED:` `record_property` on the SLO test (never silent). `COSCI_PERF_GATE=off` skips the SLO test with a clear reason; CI also rejects `GATE=off` and any weaker `COSCI_PERF_*`. Non-finite / out-of-range values raise (`math.isfinite`; p99 in `(0, 10000]`, rounds ≥ 1, samples ≥ 100). CI pins the defaults and, on SLO failure only, reruns the perf pytest **once** under the same 50/3/1000 config (job fails iff both attempts fail; both attempts’ p99 logs are kept). Local loosening/off stays allowed with the explicit warning. Goal: catch a steady slowdown. Demos clear host `COSCI_PERF_*` then use the resolved config.
 
+### Sandbox stdout drain race
+- `_watch_process` joins stdout/stderr reader threads after `wait` before sampling sinks. Previously a fast-exit guest could return empty `stdout`/`stderr` while readers had not yet appended (flake in `test_verifier_reads_reward_not_stdout`).
+
 ### Perf / journal write SLO (CI noise)
 - p99 ≤ 50ms unchanged. Gate is **max-of-3** independent full loads with **≥1000 samples/round**. `min`/best-of removed — hid intermittent regressions. No separate median SLO.
 

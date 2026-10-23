@@ -64,6 +64,50 @@ def test_watch_process_samples_host_cpu_before_poll(monkeypatch):
     assert order[-1] == "wait"
 
 
+def test_watch_process_joins_readers_before_returning_stdout(monkeypatch):
+    """Regression: empty stdout when sinks sampled before reader threads finish."""
+    import threading
+    import time as time_mod
+
+    released = threading.Event()
+
+    def slow_read(
+        pipe: object,
+        limit: int,
+        sink: list[bytes],
+        overflow: list[bool],
+    ) -> None:
+        del pipe, limit, overflow
+        assert released.wait(timeout=2.0)
+        time_mod.sleep(0.05)
+        sink.append(b"999\n")
+
+    class FakeProc:
+        pid = 4242
+        stdout = MagicMock()
+        stderr = MagicMock()
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            released.set()
+            return 0
+
+    monkeypatch.setattr(sb, "_host_tree_cpu_s", lambda _pid: None)
+    monkeypatch.setattr(sb, "_read_capped", slow_read)
+    monkeypatch.setattr(sb, "_cgroup_cpu_usage_usec", lambda leaf: None)
+
+    lim = SandboxLimits(timeout_s=5.0, memory_mb=64, max_output_bytes=1024)
+    _to, _ov, out, err, _kc, _cpu, _tree = _watch_process(
+        FakeProc(),  # type: ignore[arg-type]
+        lim=lim,
+        cgroup_leaf=None,
+    )
+    assert out == b"999\n"
+    assert err == b"999\n"
+
+
 def test_watch_process_keeps_max_sample_across_zero_and_none(monkeypatch):
     """Later 0.0 / None samples must not erase an earlier high watermark."""
     # Sequence consumed one-per-watch-iteration sample call.

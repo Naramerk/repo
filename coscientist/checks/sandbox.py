@@ -613,16 +613,20 @@ def _watch_process(
     out_sink: list[bytes] = []
     err_sink: list[bytes] = []
     overflow = [False]
-    threading.Thread(
+    # Reader threads append to sinks only after EOF/error — must join before
+    # sampling sinks or a fast-exit guest races to empty stdout/stderr.
+    out_t = threading.Thread(
         target=_read_capped,
         args=(proc.stdout, lim.max_output_bytes, out_sink, overflow),
         daemon=True,
-    ).start()
-    threading.Thread(
+    )
+    err_t = threading.Thread(
         target=_read_capped,
         args=(proc.stderr, lim.max_output_bytes, err_sink, overflow),
         daemon=True,
-    ).start()
+    )
+    out_t.start()
+    err_t.start()
     timed_out = False
     kill_cause: str | None = None
     started = time.monotonic()
@@ -665,6 +669,9 @@ def _watch_process(
         proc.wait(timeout=5)
     except Exception:  # noqa: BLE001
         pass
+    # Process exit alone does not mean readers have appended — join first.
+    for t in (out_t, err_t):
+        t.join(timeout=5)
     if last_usage is None:
         last_usage = _cgroup_cpu_usage_usec(cgroup_leaf)
     cpu_s = (last_usage / 1_000_000.0) if last_usage is not None else None
