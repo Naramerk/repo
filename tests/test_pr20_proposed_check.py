@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import unicodedata
@@ -2367,11 +2368,18 @@ def test_upcasters_byte_identical_to_pr23_bridges() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hitl_accept_delegate_reject_first_wins(tmp_path: Path) -> None:
-    """Race: accept/delegate/reject share HitlDecided idem — first decision wins."""
-    rt = await open_runtime_experimental(tmp_path, "st_pr20_hitl_race")
+@pytest.mark.parametrize("winner", ["accept", "delegate", "reject"])
+async def test_hitl_concurrent_decisions_first_wins(
+    tmp_path: Path, winner: str
+) -> None:
+    """asyncio.gather race: only the journal winner runs approve/reject/schedule.
+
+    Without the per-proposal lock + post-journal check, losers raise Conflict or
+    apply a second side effect — this test must fail on that old code.
+    """
+    rt = await open_runtime_experimental(tmp_path, f"st_pr20_hitl_race_{winner}")
     try:
-        await _create(rt, "hitl race")
+        await _create(rt, f"hitl race {winner}")
         proposer_aid = await _boot_plan(
             rt,
             [_exp_spec(task_key="EXP"), _exp_spec(task_key="REV", title="rev")],
@@ -2396,22 +2404,92 @@ async def test_hitl_accept_delegate_reject_first_wins(tmp_path: Path) -> None:
             for r, h in rt.hitl.items()
             if getattr(h, "payload_ref", None) == pid
         )
-        await rt.answer_hitl(rid, "accept")
-        assert rt._check_proposals[pid]["status"] == "approved"
-        # Second answer is a no-op (gate closed / decision already folded).
-        await rt.answer_hitl(
-            rid, "delegate", expansion={"reviewer_task_id": rev_tid}
+
+        async def _call(decision: str) -> None:
+            exp = (
+                {"reviewer_task_id": rev_tid} if decision == "delegate" else None
+            )
+            await rt.answer_hitl(rid, decision, expansion=exp)
+
+        # Schedule winner first so it acquires the per-proposal lock; losers race in.
+        order = [winner] + [d for d in ("accept", "delegate", "reject") if d != winner]
+        winner_task = asyncio.create_task(_call(order[0]))
+        await asyncio.sleep(0)
+        loser_tasks = [asyncio.create_task(_call(d)) for d in order[1:]]
+        results = await asyncio.gather(
+            winner_task, *loser_tasks, return_exceptions=True
         )
-        await rt.answer_hitl(rid, "reject")
-        assert rt._check_proposals[pid]["status"] == "approved"
+        assert all(
+            not isinstance(r, BaseException) for r in results
+        ), f"losers must not raise (got {results!r})"
+
         decided = [
             e
             for e in await rt.store.read_all()
             if e.type == "HitlDecided" and e.entity_key == rid
         ]
         assert len(decided) == 1
-        assert decided[0].payload.get("decision") == "accept"
+        assert decided[0].payload.get("decision") == (
+            "accept" if winner == "accept" else winner
+        )
         assert decided[0].idem_key == make_idem("HitlDecided", rid)
+
+        status = rt._check_proposals[pid]["status"]
+        reviews = getattr(rt, "_proposed_check_reviews", None) or {}
+        if winner == "accept":
+            assert status == "approved"
+            assert pid not in reviews or reviews[pid].get("status") != "pending"
+        elif winner == "reject":
+            assert status == "rejected"
+            assert pid not in reviews
+        else:
+            assert status == "proposed"
+            assert reviews.get(pid, {}).get("status") == "pending"
+            assert reviews[pid].get("kind") == "proposed_check_review"
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_answer_hitl_empty_and_foreign_proposal_id_guards(
+    tmp_path: Path,
+) -> None:
+    """Guards for empty / foreign proposal_id run through answer_hitl."""
+    rt = await open_runtime_experimental(tmp_path, "st_pr20_answer_guards")
+    try:
+        await _create(rt, "answer guards")
+        proposer_aid = await _boot_plan(rt, [_exp_spec()])
+        exp_tid = _task_id(rt, "EXP")
+        pid = await propose_check(
+            rt,
+            target="study",
+            role="prediction",
+            measures="m",
+            justification="j",
+            rejected_templates=_rejected(),
+            check=_value_check(target=1),
+            task_id=exp_tid,
+            attempt_id=proposer_aid,
+            open_hitl=True,
+        )
+        assert pid
+        rid = next(
+            r
+            for r, h in rt.hitl.items()
+            if getattr(h, "payload_ref", None) == pid
+        )
+        # Foreign: expansion proposal_id ≠ HitlOpened.payload_ref.
+        with pytest.raises(ValueError, match="payload_ref"):
+            await rt.answer_hitl(
+                rid, "accept", expansion={"proposal_id": "prop_not_this_one"}
+            )
+        # Empty: clear payload_ref on the open request.
+        h = rt.hitl[rid]
+        rt.hitl[rid] = h.model_copy(update={"payload_ref": ""})
+        with pytest.raises(ValueError, match="missing proposal_id|payload_ref"):
+            await rt.answer_hitl(rid, "accept")
+        assert rt._check_proposals[pid]["status"] == "proposed"
+        assert rid not in (getattr(rt, "_hitl_decisions", None) or {})
     finally:
         await close_runtime(rt)
 

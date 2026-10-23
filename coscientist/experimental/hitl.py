@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from typing import Any, Self
 
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import Clarification, HitlRequest, Task
+from coscientist.core.errors import Conflict
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.ids import hitl_request_id, study_id
 from coscientist.experimental.hitl_costly import CostlyHitlMixin
@@ -19,6 +21,14 @@ class HitlForkMixin(CostlyHitlMixin):
 
     def _resolve_task(self, task_key_or_id: str) -> Task:
         raise NotImplementedError
+
+    def _proposed_check_decision_lock(self, proposal_id: str) -> asyncio.Lock:
+        """Per-proposal lock so accept/delegate/reject serialize side effects."""
+        locks = getattr(self, "_hitl_decision_locks", None)
+        if not isinstance(locks, dict):
+            locks = {}
+            self._hitl_decision_locks = locks
+        return locks.setdefault(str(proposal_id), asyncio.Lock())
 
     async def open_hitl(
         self,
@@ -236,54 +246,44 @@ class HitlForkMixin(CostlyHitlMixin):
         """
         from coscientist.core.proposed_check import approve_check, reject_check
 
-        pid = str(
-            getattr(h, "payload_ref", None)
-            or (expansion or {}).get("proposal_id")
-            or ""
-        )
-        if not pid:
+        ref_pid = str(getattr(h, "payload_ref", None) or "").strip()
+        exp_pid = str((expansion or {}).get("proposal_id") or "").strip()
+        if not ref_pid:
             opens = getattr(self, "_hitl_requests", {}) or {}
             row = opens.get(request_id) if isinstance(opens, dict) else None
             if isinstance(row, dict):
-                pid = str(row.get("proposal_id") or row.get("payload_ref") or "")
+                ref_pid = str(
+                    row.get("payload_ref") or row.get("proposal_id") or ""
+                ).strip()
+        # Fail-closed: expansion must not retarget a different proposal than HitlOpened.
+        if ref_pid and exp_pid and ref_pid != exp_pid:
+            raise ValueError(
+                f"proposed_check HITL {request_id!r} payload_ref={ref_pid!r} "
+                f"!= proposal_id={exp_pid!r}"
+            )
+        pid = ref_pid or exp_pid
         if not h.open:
             return
-        # Fail-closed before journaling: empty / foreign pid must not mint HitlDecided.
         if not str(pid).strip():
             raise ValueError(
                 f"proposed_check HITL {request_id!r} missing proposal_id/payload_ref"
             )
-        bound = str(getattr(h, "payload_ref", "") or "")
-        if bound and bound != str(pid):
-            raise ValueError(
-                f"proposed_check HITL {request_id!r} payload_ref={bound!r} "
-                f"!= proposal_id={pid!r}"
-            )
-        # First decision wins — accept/reject/delegate share one idem_key (no :delegate suffix).
-        existing = getattr(self, "_hitl_decisions", None) or {}
-        if isinstance(existing, dict) and request_id in existing:
-            return
-        now = self.clock.now()
-        decided_idem = make_idem("HitlDecided", request_id)
 
-        async def _journal_decision(payload: dict[str, Any]) -> None:
-            await self._append(
-                [
-                    EventEnvelope(
-                        study_id=h.study_id,
-                        type="HitlDecided",
-                        entity_key=request_id,
-                        idem_key=decided_idem,
-                        payload=payload,
-                        ts=now,
-                    )
-                ]
-            )
+        # Serialize accept/delegate/reject: only the journal winner runs side effects.
+        async with self._proposed_check_decision_lock(pid):
+            # Refresh open flag under the lock (concurrent answer may have closed it).
+            live = self.hitl.get(request_id) if hasattr(self, "hitl") else h
+            if live is not None and not getattr(live, "open", True):
+                return
+            existing = getattr(self, "_hitl_decisions", None) or {}
+            if isinstance(existing, dict) and request_id in existing:
+                return
 
-        if decision in ("accept", "approve"):
-            # Journal human decision first; approve_check requires HitlDecided(by=human).
-            await _journal_decision(
-                {
+            now = self.clock.now()
+            decided_idem = make_idem("HitlDecided", request_id)
+            if decision in ("accept", "approve"):
+                want = "accept"
+                payload: dict[str, Any] = {
                     "request_id": request_id,
                     "decision": "accept",
                     "by": "human",
@@ -293,25 +293,9 @@ class HitlForkMixin(CostlyHitlMixin):
                     "proposal_id": pid,
                     "spent_rub": 0.0,
                 }
-            )
-            try:
-                await approve_check(
-                    self,
-                    pid,
-                    source="hitl",
-                    hitl_request_id_s=request_id,
-                )
-            except Exception:
-                # Orphaned accept: HitlDecided stands; caller may retry approve_check.
-                raise
-            return
-        if decision == "delegate":
-            # Mark HITL answered as delegated; reviewer agent decides later.
-            # Timeout≡reject still applies via ReviewScheduled.deadline.
-            from coscientist.core.proposed_check import schedule_proposed_check_review
-
-            await _journal_decision(
-                {
+            elif decision == "delegate":
+                want = "delegate"
+                payload = {
                     "request_id": request_id,
                     "decision": "delegate",
                     "by": "human",
@@ -319,40 +303,70 @@ class HitlForkMixin(CostlyHitlMixin):
                     "reason": "delegate→reviewer",
                     "proposal_id": pid,
                     "spent_rub": 0.0,
-                    # Keep proposal pending until reviewer CheckApproved.
                     "keep_open": False,
                     "effect": "WAIT_REVIEWER",
                 }
-            )
-            # reviewer_task_id from expansion (required before bind); timeout≡reject
-            # still applies even when unset (reject_stale does not need bind).
-            rev_tid = None
-            if isinstance(expansion, dict):
-                rev_tid = expansion.get("reviewer_task_id")
-            await schedule_proposed_check_review(
+            else:
+                want = "reject"
+                payload = {
+                    "request_id": request_id,
+                    "decision": "reject",
+                    "by": "human",
+                    "reason": "rejected",
+                    "proposal_id": pid,
+                    "spent_rub": 0.0,
+                }
+
+            try:
+                await self._append(
+                    [
+                        EventEnvelope(
+                            study_id=h.study_id,
+                            type="HitlDecided",
+                            entity_key=request_id,
+                            idem_key=decided_idem,
+                            payload=payload,
+                            ts=now,
+                        )
+                    ]
+                )
+            except Conflict:
+                # Idem collapse / loser — do not run side effects.
+                return
+
+            # Journal is authority: only the folded winner may approve/reject/schedule.
+            folded = (getattr(self, "_hitl_decisions", None) or {}).get(request_id)
+            if not isinstance(folded, dict) or str(folded.get("decision") or "") != want:
+                return
+
+            if want == "accept":
+                await approve_check(
+                    self,
+                    pid,
+                    source="hitl",
+                    hitl_request_id_s=request_id,
+                )
+                return
+            if want == "delegate":
+                from coscientist.core.proposed_check import schedule_proposed_check_review
+
+                rev_tid = None
+                if isinstance(expansion, dict):
+                    rev_tid = expansion.get("reviewer_task_id")
+                await schedule_proposed_check_review(
+                    self,
+                    pid,
+                    hitl_request_id_s=request_id,
+                    reviewer_task_id=str(rev_tid) if rev_tid else None,
+                )
+                return
+            await reject_check(
                 self,
                 pid,
+                source="hitl",
+                reason="rejected",
                 hitl_request_id_s=request_id,
-                reviewer_task_id=str(rev_tid) if rev_tid else None,
             )
-            return
-        await _journal_decision(
-            {
-                "request_id": request_id,
-                "decision": "reject",
-                "by": "human",
-                "reason": "rejected",
-                "proposal_id": pid,
-                "spent_rub": 0.0,
-            }
-        )
-        await reject_check(
-            self,
-            pid,
-            source="hitl",
-            reason="rejected",
-            hitl_request_id_s=request_id,
-        )
 
     async def _hitl_timeout(self, h: HitlRequest) -> None:
         if h.kind == "costly_or_nonreal":

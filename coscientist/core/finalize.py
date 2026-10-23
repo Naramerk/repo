@@ -757,6 +757,8 @@ def _safe_custom_checks(runtime: Any) -> list[dict[str, Any]]:
         from coscientist.core.proposed_check import custom_checks_report
 
         return list(custom_checks_report(runtime))
+    except LeaseLost:
+        raise
     except Exception as e:  # noqa: BLE001 — degrade to []
         log.warning("custom_checks_report failed: %s", e, exc_info=True)
         return []
