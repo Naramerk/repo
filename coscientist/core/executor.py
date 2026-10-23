@@ -611,8 +611,10 @@ class Executor:
                 reason=TaskReason.SANDBOX_INFRA.value,
                 detail=e.reason,
                 event_type="SandboxInfraRaised",
+                result_class="infra",
             )
         except CoreBugError as e:
+            # Own result_class (not infra); reported; never counts.
             provenance = _provenance(self.get_attempt(attempt_id))
             return await self._commit_failure(
                 attempt_id,
@@ -624,6 +626,7 @@ class Executor:
                 reason=TaskReason.CORE_BUG.value,
                 detail=e.reason,
                 event_type="CatalogErrorRaised",
+                result_class="core_bug",
             )
         for c in checks:
             if not c.is_code and c.status == ReqStatus.UNASSESSED:
@@ -774,8 +777,9 @@ class Executor:
         reason: str,
         detail: str,
         event_type: str = "CatalogErrorRaised",
+        result_class: str = "infra",
     ) -> Result:
-        """Infra/execution failure (catalog, sandbox, crash path) — drop claims."""
+        """Infra/core_bug failure path — drop claims; never counts scientifically."""
         rid = result_id(attempt_id)
         payload = {
             "result_id": rid,
@@ -790,7 +794,7 @@ class Executor:
             "agent_claim": claim.value if claim else None,
             "inputs": [],
             "detail": detail,
-            "result_class": "infra",
+            "result_class": result_class,
         }
         payload["payload_digest"] = payload_digest(payload)
         await self._append(

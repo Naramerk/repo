@@ -1,7 +1,7 @@
 """Cached bubblewrap probes and argv builders (M1 PR17).
 
 Hard isolation requires a real bwrap probe (host paths invisible, net down).
-No bwrap → soft/unavailable; never claim hard without a probe pass.
+No bwrap / probe fail → isolation unavailable; callers fail-closed (no guest exec).
 """
 
 from __future__ import annotations
@@ -26,12 +26,49 @@ _ENV_ALLOWLIST = (
     "LANG",
     "LC_ALL",
     "PYTHONUNBUFFERED",
+    "PYTHONPATH",
     "COSCIENTIST_INPUTS",
     "COSCIENTIST_RESULTS",
     "COSCIENTIST_HOLDOUT",
     "COSCIENTIST_PREDICTIONS",
     "COSCIENTIST_SCORER",
+    "COSCIENTIST_TESTS",
+    "COSCIENTIST_INFRA_FD",
+    "COSCIENTIST_CGROUP",
 )
+
+
+def _common_jail_flags(*, allow_network: bool) -> list[str]:
+    """Shared hardening after the bwrap binary name is prepended by callers."""
+    site_binds, _site_path = _python_site_ro_binds()
+    argv = [
+        "--die-with-parent",
+        "--unshare-user",
+        "--uid",
+        "0",
+        "--gid",
+        "0",
+        "--disable-userns",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--unshare-cgroup-try",
+        "--new-session",
+        "--cap-drop",
+        "ALL",
+        "--clearenv",
+        *_system_ro_binds(),
+        *site_binds,
+        "--tmpfs",
+        "/tmp",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+    ]
+    if not allow_network:
+        argv.append("--unshare-net")
+    return argv
 
 
 @lru_cache(maxsize=1)
@@ -52,6 +89,37 @@ def _system_ro_binds() -> list[str]:
         if Path(p).exists():
             args.extend(["--ro-bind", p, p])
     return args
+
+
+def _python_site_ro_binds() -> tuple[list[str], str]:
+    """RO-bind host site-packages (pytest etc.) without mounting the workspace."""
+    import site
+
+    args: list[str] = []
+    paths: list[str] = []
+    seen: set[str] = set()
+    candidates: list[str] = []
+    try:
+        candidates.extend(site.getsitepackages())
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        candidates.append(site.getusersitepackages())
+    except Exception:  # noqa: BLE001
+        pass
+    for p in candidates:
+        if not p or p in seen:
+            continue
+        path = Path(p)
+        if not path.is_dir():
+            continue
+        # Never mount the workspace / project tree into the jail.
+        if path.resolve() == Path.cwd().resolve():
+            continue
+        seen.add(p)
+        args.extend(["--ro-bind", p, p])
+        paths.append(p)
+    return args, ":".join(paths)
 
 
 @lru_cache(maxsize=2)
@@ -85,23 +153,10 @@ def probe_bwrap_hard(*, allow_network: bool) -> bool:
             )
             # --unshare-user is required on GHA/CI: unshare-net alone fails
             # with "loopback: Failed RTM_NEWADDR: Operation not permitted".
+            # Ubuntu 24.04 also needs apparmor_restrict_unprivileged_userns=0.
             argv = [
                 bwrap,
-                "--die-with-parent",
-                "--unshare-user",
-                "--uid",
-                "0",
-                "--gid",
-                "0",
-                "--unshare-pid",
-                "--clearenv",
-                *_system_ro_binds(),
-                "--tmpfs",
-                "/tmp",
-                "--proc",
-                "/proc",
-                "--dev",
-                "/dev",
+                *_common_jail_flags(allow_network=allow_network),
                 "--bind",
                 str(work),
                 "/work",
@@ -119,8 +174,6 @@ def probe_bwrap_hard(*, allow_network: bool) -> bool:
             ]
             if allow_network:
                 argv.extend(["--setenv", "ALLOW_NET", "1"])
-            else:
-                argv.append("--unshare-net")
             argv.extend(["--", "python3", "/work/probe.py"])
             r = subprocess.run(argv, capture_output=True, timeout=10, check=False)
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -141,7 +194,7 @@ def resolve_isolation(*, allow_network: bool) -> tuple[Isolation, Isolation]:
     if not bwrap_available():
         log.warning(
             "sandbox isolation unavailable: bubblewrap not installed; "
-            "evidence not trusted"
+            "checks fail-closed (no guest exec)"
         )
         return ("none" if allow_network else "soft"), "soft"
 
@@ -151,8 +204,8 @@ def resolve_isolation(*, allow_network: bool) -> tuple[Isolation, Isolation]:
         return "hard", "hard"
 
     log.warning(
-        "sandbox soft isolation: bwrap hard probe failed — network may be open "
-        "(fetcher blocklist is bypassable); evidence not trusted"
+        "sandbox isolation unavailable: bwrap hard probe failed — "
+        "checks fail-closed (no guest exec); evidence not trusted"
     )
     return ("none" if allow_network else "soft"), "soft"
 
@@ -167,27 +220,14 @@ def build_agent_bwrap(
     allow_network: bool,
     extra_env: Sequence[tuple[str, str]] = (),
 ) -> list[str]:
-    """Agent jail: system RO, only ``work`` RW, clearenv, unshare net/pid."""
+    """Agent jail: system RO, only ``work`` RW, clearenv, hardened unshare."""
     bwrap = _bwrap_bin()
     if bwrap is None:
         raise OSError("bwrap_missing")
+    _binds, site_path = _python_site_ro_binds()
     argv = [
         bwrap,
-        "--die-with-parent",
-        "--unshare-user",
-        "--uid",
-        "0",
-        "--gid",
-        "0",
-        "--unshare-pid",
-        "--clearenv",
-        *_system_ro_binds(),
-        "--tmpfs",
-        "/tmp",
-        "--proc",
-        "/proc",
-        "--dev",
-        "/dev",
+        *_common_jail_flags(allow_network=allow_network),
         "--bind",
         str(work),
         "/work",
@@ -209,8 +249,8 @@ def build_agent_bwrap(
         "PYTHONUNBUFFERED",
         "1",
     ]
-    if not allow_network:
-        argv.append("--unshare-net")
+    if site_path:
+        argv.extend(["--setenv", "PYTHONPATH", site_path])
     for k, v in extra_env:
         if k in _ENV_ALLOWLIST or k.startswith("COSCIENTIST_"):
             argv.extend(["--setenv", k, v])
@@ -223,36 +263,24 @@ def build_verifier_bwrap(
     inputs: Path,
     scorer: Path | None,
     holdout: Path | None,
+    tests: Path | None = None,
     allow_network: bool = False,
     extra_ro: Sequence[tuple[Path, str]] = (),
     extra_env: Sequence[tuple[str, str]] = (),
 ) -> list[str]:
-    """Verifier jail: agent outputs/scorer/holdout RO; only results RW.
+    """Verifier jail: agent outputs/scorer/holdout/tests RO; only results RW.
 
-    No agent code executes as the entrypoint — catalog scorer does.
+    No agent code executes as the entrypoint — catalog scorer / task tests do.
     Journal/CAS/meta are simply not mounted.
     """
     bwrap = _bwrap_bin()
     if bwrap is None:
         raise OSError("bwrap_missing")
+    _binds, site_path = _python_site_ro_binds()
+    py_path = "/inputs" + (f":{site_path}" if site_path else "")
     argv = [
         bwrap,
-        "--die-with-parent",
-        "--unshare-user",
-        "--uid",
-        "0",
-        "--gid",
-        "0",
-        "--unshare-pid",
-        "--unshare-net",
-        "--clearenv",
-        *_system_ro_binds(),
-        "--tmpfs",
-        "/tmp",
-        "--proc",
-        "/proc",
-        "--dev",
-        "/dev",
+        *_common_jail_flags(allow_network=allow_network),
         "--ro-bind",
         str(inputs),
         "/inputs",
@@ -282,16 +310,19 @@ def build_verifier_bwrap(
         "--setenv",
         "COSCIENTIST_RESULTS",
         "/results",
+        "--setenv",
+        "PYTHONPATH",
+        py_path,
     ]
-    if allow_network:
-        # Verifier never needs net by default; allow only if catalog asks.
-        argv = [a for a in argv if a != "--unshare-net"]
     if scorer is not None:
         argv.extend(["--ro-bind", str(scorer), "/scorer"])
         argv.extend(["--setenv", "COSCIENTIST_SCORER", "/scorer"])
     if holdout is not None:
         argv.extend(["--ro-bind", str(holdout), "/holdout"])
         argv.extend(["--setenv", "COSCIENTIST_HOLDOUT", "/holdout"])
+    if tests is not None:
+        argv.extend(["--ro-bind", str(tests), "/tests"])
+        argv.extend(["--setenv", "COSCIENTIST_TESTS", "/tests"])
     for host_path, guest_path in extra_ro:
         argv.extend(["--ro-bind", str(host_path), guest_path])
     for k, v in extra_env:

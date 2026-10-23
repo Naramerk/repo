@@ -166,7 +166,7 @@ def whitelist_claim_attrs(raw: Mapping[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in raw.items() if k in CLAIM_ATTR_WHITELIST}
 
 
-_INFRA_RESULT = "infra"
+_NONCOUNT_RESULTS = frozenset({"infra", "core_bug"})
 _INFRA_REASONS = frozenset(
     {
         "catalog_error",
@@ -174,6 +174,8 @@ _INFRA_REASONS = frozenset(
         "invalid_output",
         "timeout",
         "human_timeout",
+        "core_bug",
+        "sandbox_infra",
     }
 )
 
@@ -183,16 +185,17 @@ def producer_attempt_failed(
     *,
     results: Mapping[str, Mapping[str, Any]] | None,
 ) -> bool:
-    """True when the producing attempt is an **infra** failure (not criteria).
+    """True when the producing attempt is infra/core_bug (not criteria).
 
     Scientific FAILED (criteria not met) still yields bindable claims.
+    ``result_class=core_bug`` is reported but never counts.
     """
     if not attempt_id or not results:
         return False
     row = results.get(attempt_id)
     if not row:
         return False
-    if str(row.get("result_class") or "") == _INFRA_RESULT:
+    if str(row.get("result_class") or "") in _NONCOUNT_RESULTS:
         return True
     if str(row.get("result_class") or "") == "scientific":
         return False

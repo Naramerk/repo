@@ -522,8 +522,9 @@ class CodeCheck(Frozen):
     memory_mb: int | None = None
     max_output_bytes: int | None = None
     allow_network: bool = False
-    # tests_pass
+    # tests_pass — catalog/task tests (not agent tests), mounted RO into verifier
     min_tests: int | None = None
+    tests: dict[str, str] | None = None  # relative path → source text
     # metric_on_holdout
     holdout_output: str | None = None
     holdout_digest: str | None = None

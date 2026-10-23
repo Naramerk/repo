@@ -4,11 +4,12 @@
 
 ### M1 PR17
 - Executable CodeCheck kinds + sandbox limits (B7, B8, K5): `exec_runs`, `tests_pass`, `metric_on_holdout`, `reproducible_rerun`.
-- **Separate verifier (B1):** collect agent declared outputs (sha256); catalog scorer in a second fresh bwrap jail (outputs/scorer/holdout RO; only results RW); read `reward.txt` — never stdout. No agent code during verification.
-- **bwrap hard isolation (B2):** `--clearenv`, system `--ro-bind`, `--tmpfs /tmp`, `--unshare-net`/`--unshare-pid`, `--die-with-parent`; journal/CAS never mounted. Hard only after a real probe; no bwrap → soft, `trusted=false`. CI installs `bubblewrap`.
+- **Separate verifier (B1):** collect agent declared outputs (sha256); catalog scorer / task tests in a second fresh bwrap jail (outputs/scorer/holdout/tests RO; only results RW); read structured `reward.txt` JSON / junit — never stdout. `catalog:metric` computes score from predictions + holdout labels (agent-claimed scores ignored). `tests_pass` runs catalog/task tests (`CodeCheck.tests`) with agent conftest/plugins disabled.
+- **bwrap hard isolation (B2):** `--clearenv`, system `--ro-bind`, `--tmpfs /tmp`, `--unshare-net`/`--unshare-pid`/`--unshare-ipc`/`uts`/`cgroup-try`, `--disable-userns`, `--cap-drop ALL`, `--new-session`, `--die-with-parent`; journal/CAS never mounted. Hard only after a real probe.
+- **Fail-closed:** without verified hard FS isolation → `sandbox_unavailable` (no guest exec). CI installs `bubblewrap` and lifts Ubuntu 24.04 AppArmor userns restrict.
 - **`trusted=true` only when both net and fs are hard** (never fake hard). Isolation for replay from journal effect, not artifact meta.
-- Infra: host-observed timeout (TERM→KILL) or cgroup OOM only; guest self-signals stay scientific. Unexpected host exceptions → `CoreBugError` / `TaskReason.CORE_BUG`.
-- Docs: `DESIGN_HYP_DELTA` / CHANGELOG no longer say “sandbox not wired in M1”.
+- Infra: wrapper private channel / host timeout (TERM→KILL) / delegated cgroup OOM only; guest exit codes and output overflow are scientific. `CoreBugError` → `result_class=core_bug` (not infra; never counts).
+- Docs: host requirements (bwrap, userns/AppArmor sysctl, cgroup delegation) in `DESIGN_HYP_DELTA` / `DESIGN_M1`.
 
 ### M1 PR10
 - `TaskSpec.foreach` (selected/all hypothesis|question of a source task): core materializes N `EXP-<n>` via `PlanExpanded(foreach=true)` — no planner, no expansion quota; restart/recover resumes; report lines in Russian.

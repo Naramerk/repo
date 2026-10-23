@@ -1,15 +1,18 @@
 """Core-owned sandbox + separate catalog verifier (M1 PR17).
 
 Agent jail (``run_sandbox``): bwrap --clearenv, system RO, only work RW,
---unshare-net/--unshare-pid, --die-with-parent.
+--unshare-net/--unshare-pid/--unshare-ipc/uts/cgroup-try, --disable-userns,
+--cap-drop ALL, --new-session, --die-with-parent.
 
-Verifier jail (``run_verifier``): fresh bwrap; agent outputs/scorer/holdout RO;
-only results RW; read reward/result files — never trust stdout. No agent code
-runs during verification.
+Verifier jail (``run_verifier``): fresh bwrap; agent outputs/scorer/holdout/tests
+RO; only results RW; read reward/result files — never trust stdout. No agent
+code runs during verification.
 
-trusted requires both net and fs hard after a real bwrap probe. No bwrap →
-soft, trusted=False. Infra only from host-observed timeout kill or cgroup OOM;
-guest self-signals are scientific.
+Fail-closed: without verified hard FS isolation (real bwrap probe), do **not**
+execute guest code — return ``sandbox_unavailable``. ``trusted`` requires both
+net and fs hard. Infra only from the wrapper private channel (rlimit), host
+timeout kill, or delegated cgroup OOM; guest exit codes never map to infra.
+Guest output overflow is scientific (``output_exceeded``).
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -41,8 +45,11 @@ log = logging.getLogger(__name__)
 NetIsolation = Isolation
 FsIsolation = Isolation
 
-# Wrapper exits with this before exec when setrlimit fails (host-visible).
-RLIMIT_EXIT = 75
+# Wrapper private-channel magic (FD, not exit code). Guest exit 75 is scientific.
+_INFRA_MAGIC = b"COS_SBX_INFRA_v1:"
+_INFRA_RLIMIT = b"COS_SBX_INFRA_v1:rlimit\n"
+# Exit after writing private channel (ignored for classification if magic present).
+_WRAPPER_ABORT_EXIT = 75
 
 
 class SandboxStatus(StrEnum):
@@ -57,13 +64,12 @@ class SandboxStatus(StrEnum):
     MALFORMED = "malformed"
 
 
-# Guest self-signal/kill is scientific (NONZERO). Only host timeout / cgroup OOM
-# / output cap / blocked / unavailable are infra.
+# Infra: host timeout / delegated cgroup OOM / private-channel rlimit /
+# blocked / unavailable. OUTPUT_EXCEEDED is scientific (guest's fault).
 INFRA_STATUSES = frozenset(
     {
         SandboxStatus.TIMEOUT,
         SandboxStatus.OOM,
-        SandboxStatus.OUTPUT_EXCEEDED,
         SandboxStatus.UNAVAILABLE,
         SandboxStatus.BLOCKED,
     }
@@ -130,10 +136,6 @@ class SandboxResult:
     @property
     def limits_fully_held(self) -> bool:
         return isolation_fully_hard(self.net_isolation, self.fs_isolation)
-
-    @property
-    def core_outputs(self) -> dict[str, bytes]:
-        return self.result_files
 
 
 def limits_fully_held(
@@ -244,27 +246,56 @@ def _collect_results(results_dir: Path, names: Sequence[str] | None) -> dict[str
 
 
 def _wrapper_script(*, memory_mb: int, timeout_s: float) -> str:
-    """setrlimit then exec; rlimit failure → exit 75 (host classifies)."""
+    """setrlimit / join cgroup via private channel, then exec.
+
+    Rlimit failure writes magic to ``COSCIENTIST_INFRA_FD`` then aborts.
+    Guest exit codes alone never classify as infra.
+    """
     return f"""
 import os, sys
+infra_fd = os.environ.get("COSCIENTIST_INFRA_FD")
+cg = os.environ.get("COSCIENTIST_CGROUP")
+if cg:
+    try:
+        with open(os.path.join(cg, "cgroup.procs"), "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
 try:
     import resource
 except ImportError:
-    sys.exit({RLIMIT_EXIT})
+    if infra_fd is not None:
+        try:
+            os.write(int(infra_fd), {_INFRA_RLIMIT!r})
+        except OSError:
+            pass
+    sys.exit({_WRAPPER_ABORT_EXIT})
 as_bytes = {int(memory_mb)} * 1024 * 1024
 try:
     resource.setrlimit(resource.RLIMIT_AS, (as_bytes, as_bytes))
     cpu = max(1, {int(timeout_s)} + 5)
     resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 5))
 except (ValueError, OSError):
-    sys.exit({RLIMIT_EXIT})
+    if infra_fd is not None:
+        try:
+            os.write(int(infra_fd), {_INFRA_RLIMIT!r})
+        except OSError:
+            pass
+    sys.exit({_WRAPPER_ABORT_EXIT})
 argv = sys.argv[1:]
 if not argv:
     sys.exit(64)
+if infra_fd is not None:
+    try:
+        os.close(int(infra_fd))
+    except OSError:
+        pass
+    os.environ.pop("COSCIENTIST_INFRA_FD", None)
+os.environ.pop("COSCIENTIST_CGROUP", None)
 try:
     os.execvp(argv[0], argv)
 except MemoryError:
-    # Without cgroup this stays scientific (host notes OOM not detectable).
+    # Without delegated cgroup this stays scientific (host notes OOM not detectable).
     sys.exit(1)
 except OSError as e:
     sys.stderr.write(str(e) + "\\n")
@@ -272,21 +303,71 @@ except OSError as e:
 """
 
 
-def _cgroup_oom_setup(pid: int, memory_mb: int) -> Path | None:
-    """Move pid into a memory-limited cgroup v2 leaf; return leaf path or None."""
+def _current_cgroup_path() -> Path | None:
     base = Path("/sys/fs/cgroup")
     if not (base / "cgroup.controllers").is_file():
         return None
     try:
-        leaf = base / f"cos_sbx_{os.getpid()}_{pid}"
-        leaf.mkdir(exist_ok=True)
-        controllers = (base / "cgroup.controllers").read_text()
+        text = Path("/proc/self/cgroup").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        # v2: 0::/path
+        if line.startswith("0::"):
+            rel = line.split("::", 1)[1].lstrip("/")
+            return base / rel if rel else base
+    return base
+
+
+def _cgroup_delegation_available() -> bool:
+    """True when we can create a child leaf and write memory.max (delegated)."""
+    cur = _current_cgroup_path()
+    if cur is None or not cur.is_dir():
+        return False
+    probe = cur / f"cos_sbx_probe_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    try:
+        probe.mkdir(exist_ok=False)
+        (probe / "memory.max").write_text("1048576")
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            if probe.exists():
+                for child in probe.iterdir():
+                    try:
+                        child.unlink()
+                    except OSError:
+                        pass
+                probe.rmdir()
+        except OSError:
+            pass
+
+
+def _cgroup_prepare_leaf(memory_mb: int) -> Path | None:
+    """Create a memory-limited leaf under a delegated cgroup v2 subtree."""
+    if not _cgroup_delegation_available():
+        return None
+    cur = _current_cgroup_path()
+    if cur is None:
+        return None
+    leaf = cur / f"cos_sbx_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    try:
+        leaf.mkdir(exist_ok=False)
+        controllers = (cur / "cgroup.controllers").read_text()
         if "memory" in controllers:
-            (leaf / "cgroup.subtree_control").write_text("+memory")
+            try:
+                (cur / "cgroup.subtree_control").write_text("+memory")
+            except OSError:
+                pass
         (leaf / "memory.max").write_text(str(max(1, int(memory_mb)) * 1024 * 1024))
-        (leaf / "cgroup.procs").write_text(str(pid))
         return leaf
     except OSError:
+        try:
+            if leaf.exists():
+                leaf.rmdir()
+        except OSError:
+            pass
         return None
 
 
@@ -303,6 +384,22 @@ def _cgroup_oom_killed(leaf: Path | None) -> bool:
     return False
 
 
+def _cgroup_remove_leaf(leaf: Path | None) -> None:
+    if leaf is None:
+        return
+    try:
+        for child in leaf.iterdir():
+            try:
+                child.unlink()
+            except IsADirectoryError:
+                pass
+            except OSError:
+                pass
+        leaf.rmdir()
+    except OSError:
+        pass
+
+
 def _result(**kw: object) -> SandboxResult:
     return SandboxResult(**kw)  # type: ignore[arg-type]
 
@@ -311,9 +408,8 @@ def _watch_process(
     proc: subprocess.Popen[bytes],
     *,
     lim: SandboxLimits,
-    cgroup_leaf: Path | None,
-) -> tuple[bool, bool, bytes, bytes, bool]:
-    """Return (timed_out, overflow, stdout, stderr, oom_detectable)."""
+) -> tuple[bool, bool, bytes, bytes]:
+    """Return (timed_out, overflow, stdout, stderr)."""
     out_sink: list[bytes] = []
     err_sink: list[bytes] = []
     overflow = [False]
@@ -348,7 +444,6 @@ def _watch_process(
         overflow[0],
         out_sink[0] if out_sink else b"",
         err_sink[0] if err_sink else b"",
-        cgroup_leaf is not None,
     )
 
 
@@ -359,6 +454,7 @@ def _classify(
     proc: subprocess.Popen[bytes],
     cgroup_leaf: Path | None,
     oom_detectable: bool,
+    infra_msg: bytes,
     out_b: bytes,
     err_b: bytes,
     duration: float,
@@ -385,11 +481,20 @@ def _classify(
             **extra,
         )
 
+    # Private channel first — guest cannot forge without the FD.
+    if infra_msg.startswith(_INFRA_MAGIC):
+        kind = infra_msg.split(b":", 1)[-1].strip().decode("ascii", "replace")
+        return fin(
+            status=SandboxStatus.UNAVAILABLE,
+            exit_code=proc.returncode,
+            reason=f"sandbox_unavailable:{kind or 'wrapper'}",
+        )
     if overflow:
+        # Guest-caused output flood — scientific, not infra.
         return fin(
             status=SandboxStatus.OUTPUT_EXCEEDED,
             exit_code=proc.returncode,
-            reason="sandbox_output_exceeded",
+            reason="output_exceeded",
         )
     if timed_out:
         return fin(
@@ -404,13 +509,7 @@ def _classify(
             reason="sandbox_oom",
         )
     code = proc.returncode if proc.returncode is not None else -1
-    if code == RLIMIT_EXIT:
-        return fin(
-            status=SandboxStatus.UNAVAILABLE,
-            exit_code=code,
-            reason="sandbox_unavailable:rlimit",
-        )
-    # Guest signals / nonzero exits are scientific — not infra.
+    # Guest signals / nonzero exits (including forged 75) are scientific.
     if code == 0:
         return fin(status=SandboxStatus.OK, exit_code=0, reason="ok")
     return fin(
@@ -418,6 +517,134 @@ def _classify(
         exit_code=code,
         reason=f"exit:{code}",
     )
+
+
+def _unavailable(
+    *,
+    reason: str,
+    net_i: Isolation,
+    fs_i: Isolation,
+    note: str | None,
+    stderr: bytes = b"",
+) -> SandboxResult:
+    return _result(
+        status=SandboxStatus.UNAVAILABLE,
+        exit_code=None,
+        stdout=b"",
+        stderr=stderr,
+        reason=reason,
+        duration_s=0.0,
+        net_isolation=net_i,
+        fs_isolation=fs_i,
+        note=note,
+    )
+
+
+def _run_jailed(
+    *,
+    cmd: list[str],
+    lim: SandboxLimits,
+    net_i: Isolation,
+    fs_i: Isolation,
+    work_dir: str | None,
+    result_files_dir: Path | None,
+    collect: Sequence[str] | None,
+    extra_env: Mapping[str, str] | None = None,
+) -> SandboxResult:
+    """Spawn bwrap+wrapper with private infra FD and optional cgroup leaf."""
+    note = soft_isolation_note(net_i, fs_i)
+    leaf = _cgroup_prepare_leaf(lim.memory_mb)
+    oom_det = leaf is not None
+    if not oom_det:
+        note = f"{note}; OOM not detectable" if note else "OOM not detectable"
+
+    r_fd, w_fd = os.pipe()
+    os.set_inheritable(w_fd, True)
+    os.set_inheritable(r_fd, False)
+
+    env_pairs: list[tuple[str, str]] = [("COSCIENTIST_INFRA_FD", str(w_fd))]
+    if leaf is not None:
+        env_pairs.append(("COSCIENTIST_CGROUP", str(leaf)))
+    if extra_env:
+        env_pairs.extend((str(k), str(v)) for k, v in extra_env.items())
+
+    # Re-inject env into bwrap argv: cmd already built; append --setenv before --.
+    if "--" in cmd:
+        idx = cmd.index("--")
+        injected: list[str] = []
+        for k, v in env_pairs:
+            injected.extend(["--setenv", k, v])
+        cmd = [*cmd[:idx], *injected, *cmd[idx:]]
+    else:
+        return _unavailable(
+            reason="sandbox_unavailable:bad_argv",
+            net_i=net_i,
+            fs_i=fs_i,
+            note=note,
+        )
+
+    started = time.monotonic()
+    try:
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=None,
+                env=None,  # clearenv inside bwrap; host env not passed
+                start_new_session=True,
+                pass_fds=(w_fd,),
+            )
+        except OSError as e:
+            return _unavailable(
+                reason=f"sandbox_unavailable:{e.__class__.__name__}",
+                net_i=net_i,
+                fs_i=fs_i,
+                note=note,
+                stderr=str(e).encode(),
+            )
+        finally:
+            try:
+                os.close(w_fd)
+            except OSError:
+                pass
+
+        timed_out, overflow, out_b, err_b = _watch_process(proc, lim=lim)
+        infra_msg = b""
+        try:
+            # Non-blocking drain of private channel.
+            import select
+
+            if select.select([r_fd], [], [], 0)[0]:
+                infra_msg = os.read(r_fd, 256)
+        except OSError:
+            infra_msg = b""
+        finally:
+            try:
+                os.close(r_fd)
+            except OSError:
+                pass
+
+        files: dict[str, bytes] = {}
+        if result_files_dir is not None and collect:
+            files = _collect_results(result_files_dir, collect)
+        return _classify(
+            timed_out=timed_out,
+            overflow=overflow,
+            proc=proc,
+            cgroup_leaf=leaf,
+            oom_detectable=oom_det,
+            infra_msg=infra_msg,
+            out_b=out_b,
+            err_b=err_b,
+            duration=time.monotonic() - started,
+            net_i=net_i,
+            fs_i=fs_i,
+            work_dir=work_dir,
+            result_files=files,
+        )
+    finally:
+        _cgroup_remove_leaf(leaf)
 
 
 def run_sandbox(
@@ -431,23 +658,20 @@ def run_sandbox(
     collect_core: Sequence[str] | None = None,
     protect_paths: Sequence[str] | None = None,
 ) -> SandboxResult:
-    """Agent jail. Journal/CAS are not mounted (protect_paths ignored)."""
+    """Agent jail. Journal/CAS are not mounted (protect_paths ignored).
+
+    Fail-closed without hard FS isolation — no guest exec.
+    """
     del core_files, collect_core, protect_paths
     lim = limits or SandboxLimits()
     net_i, fs_i = resolve_isolation(allow_network=lim.allow_network)
-    hard = isolation_fully_hard(net_i, fs_i)
     note = soft_isolation_note(net_i, fs_i)
 
     if not argv:
-        return _result(
-            status=SandboxStatus.UNAVAILABLE,
-            exit_code=None,
-            stdout=b"",
-            stderr=b"",
+        return _unavailable(
             reason="sandbox_unavailable:empty_argv",
-            duration_s=0.0,
-            net_isolation=net_i,
-            fs_isolation=fs_i,
+            net_i=net_i,
+            fs_i=fs_i,
             note=note,
         )
     blocked = _blocked(" ".join(str(a) for a in argv), allow_network=lim.allow_network)
@@ -461,6 +685,15 @@ def run_sandbox(
             duration_s=0.0,
             net_isolation=net_i,
             fs_isolation=fs_i,
+            note=note,
+        )
+
+    # Fail-closed: soft / no bwrap → do not execute agent code.
+    if fs_i != "hard":
+        return _unavailable(
+            reason="sandbox_unavailable:isolation",
+            net_i=net_i,
+            fs_i=fs_i,
             note=note,
         )
 
@@ -478,76 +711,32 @@ def run_sandbox(
             encoding="utf-8",
         )
         extra_env = [(str(k), str(v)) for k, v in (env or {}).items()]
-        if hard:
-            prefix = build_agent_bwrap(
-                work=work, allow_network=lim.allow_network, extra_env=extra_env
-            )
-            cmd = [*prefix, "--", "python3", "/work/_cos_wrapper.py", *[str(a) for a in argv]]
-            popen_cwd = None
-            popen_env = None
-        else:
-            cmd = ["python3", str(wrapper), *[str(a) for a in argv]]
-            popen_cwd = str(work)
-            popen_env = {
-                "PATH": "/usr/bin:/bin",
-                "HOME": str(work),
-                "TMPDIR": str(work),
-                "LANG": "C.UTF-8",
-                "PYTHONUNBUFFERED": "1",
-                **dict(extra_env),
-            }
-
-        started = time.monotonic()
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                cwd=popen_cwd,
-                env=popen_env,
-                start_new_session=True,
-            )
-        except OSError as e:
-            return _result(
-                status=SandboxStatus.UNAVAILABLE,
-                exit_code=None,
-                stdout=b"",
-                stderr=str(e).encode(),
-                reason=f"sandbox_unavailable:{e.__class__.__name__}",
-                duration_s=0.0,
-                net_isolation=net_i,
-                fs_isolation=fs_i,
-                note=note,
-            )
-        leaf = _cgroup_oom_setup(proc.pid, lim.memory_mb)
-        timed_out, overflow, out_b, err_b, oom_det = _watch_process(
-            proc, lim=lim, cgroup_leaf=leaf
+        prefix = build_agent_bwrap(
+            work=work, allow_network=lim.allow_network, extra_env=extra_env
         )
-        return _classify(
-            timed_out=timed_out,
-            overflow=overflow,
-            proc=proc,
-            cgroup_leaf=leaf,
-            oom_detectable=oom_det,
-            out_b=out_b,
-            err_b=err_b,
-            duration=time.monotonic() - started,
+        cmd = [
+            *prefix,
+            "--",
+            "python3",
+            "/work/_cos_wrapper.py",
+            *[str(a) for a in argv],
+        ]
+        return _run_jailed(
+            cmd=cmd,
+            lim=lim,
             net_i=net_i,
             fs_i=fs_i,
             work_dir=str(work),
-            result_files={},
+            result_files_dir=None,
+            collect=None,
         )
     except OSError as e:
-        return _result(
-            status=SandboxStatus.UNAVAILABLE,
-            exit_code=None,
-            stdout=b"",
-            stderr=str(e).encode(),
+        return _unavailable(
             reason=f"sandbox_unavailable:host_io:{e.__class__.__name__}",
-            duration_s=0.0,
-            net_isolation=net_i,
-            fs_isolation=fs_i,
+            net_i=net_i,
+            fs_i=fs_i,
             note=note,
+            stderr=str(e).encode(),
         )
     finally:
         if own:
@@ -563,28 +752,32 @@ def run_verifier(
     limits: SandboxLimits | None = None,
     holdout: bytes | None = None,
     scorer_bytes: bytes | None = None,
+    tests: Mapping[str, bytes] | None = None,
     collect: Sequence[str] = ("reward.txt",),
     extra_ro_files: Mapping[str, bytes] | None = None,
 ) -> SandboxResult:
-    """Catalog verifier in a fresh jail. Agent outputs RO; only results RW.
+    """Catalog verifier in a fresh jail. Agent outputs/tests RO; only results RW.
 
-    Reads ``collect`` via O_NOFOLLOW — never stdout. No agent code runs.
+    Reads ``collect`` via O_NOFOLLOW — never stdout. No agent code as entrypoint.
+    Fail-closed without hard isolation.
     """
     lim = limits or SandboxLimits()
     net_i, fs_i = resolve_isolation(allow_network=False)
-    hard = isolation_fully_hard(net_i, fs_i)
     note = soft_isolation_note(net_i, fs_i)
 
     if not scorer_argv:
-        return _result(
-            status=SandboxStatus.UNAVAILABLE,
-            exit_code=None,
-            stdout=b"",
-            stderr=b"",
+        return _unavailable(
             reason="sandbox_unavailable:missing_scorer",
-            duration_s=0.0,
-            net_isolation=net_i,
-            fs_isolation=fs_i,
+            net_i=net_i,
+            fs_i=fs_i,
+            note=note,
+        )
+
+    if fs_i != "hard":
+        return _unavailable(
+            reason="sandbox_unavailable:isolation",
+            net_i=net_i,
+            fs_i=fs_i,
             note=note,
         )
 
@@ -592,8 +785,10 @@ def run_verifier(
     try:
         inputs_dir = root / "inputs"
         results_dir = root / "results"
+        tests_dir = root / "tests"
         inputs_dir.mkdir()
         results_dir.mkdir()
+        tests_dir.mkdir()
         for name, data in inputs.items():
             p = inputs_dir / Path(name).name
             p.write_bytes(data)
@@ -615,6 +810,19 @@ def run_verifier(
             scorer_path.write_bytes(scorer_bytes)
             scorer_path.chmod(0o555)
 
+        tests_path = None
+        if tests:
+            for name, data in tests.items():
+                # Keep relative path structure under tests_dir (no escape).
+                rel = Path(name)
+                if rel.is_absolute() or ".." in rel.parts:
+                    continue
+                dest = tests_dir / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(data)
+                dest.chmod(0o444)
+            tests_path = tests_dir
+
         wrapper = results_dir / "_cos_wrapper.py"
         wrapper.write_text(
             _wrapper_script(memory_mb=lim.memory_mb, timeout_s=lim.timeout_s),
@@ -622,107 +830,44 @@ def run_verifier(
         )
 
         guest_argv = [str(a) for a in scorer_argv]
-        if hard:
-            prefix = build_verifier_bwrap(
-                results=results_dir,
-                inputs=inputs_dir,
-                scorer=scorer_path,
-                holdout=holdout_path,
-                allow_network=False,
-            )
-            if scorer_path is not None:
-                guest_argv = [
-                    "/scorer"
-                    if (a == str(scorer_path) or a.endswith("scorer.py") or a == "/scorer")
-                    else a
-                    for a in guest_argv
-                ]
-            cmd = [
-                *prefix,
-                "--",
-                "python3",
-                "/results/_cos_wrapper.py",
-                *guest_argv,
+        if scorer_path is not None:
+            guest_argv = [
+                "/scorer"
+                if (a == str(scorer_path) or a.endswith("scorer.py") or a == "/scorer")
+                else a
+                for a in guest_argv
             ]
-            popen_cwd = None
-            popen_env = None
-        else:
-            # Soft: remap guest paths (/scorer, /results/…) to host paths.
-            if scorer_path is not None:
-                guest_argv = [
-                    str(scorer_path)
-                    if (a == "/scorer" or a.endswith("scorer.py"))
-                    else a
-                    for a in guest_argv
-                ]
-            cmd = ["python3", str(wrapper), *guest_argv]
-            popen_cwd = str(results_dir)
-            popen_env = {
-                "PATH": "/usr/bin:/bin",
-                "HOME": str(results_dir),
-                "TMPDIR": str(results_dir),
-                "LANG": "C.UTF-8",
-                "PYTHONUNBUFFERED": "1",
-                "COSCIENTIST_INPUTS": str(inputs_dir),
-                "COSCIENTIST_RESULTS": str(results_dir),
-            }
-            if holdout_path is not None:
-                popen_env["COSCIENTIST_HOLDOUT"] = str(holdout_path)
-            if scorer_path is not None:
-                popen_env["COSCIENTIST_SCORER"] = str(scorer_path)
-
-        started = time.monotonic()
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                cwd=popen_cwd,
-                env=popen_env,
-                start_new_session=True,
-            )
-        except OSError as e:
-            return _result(
-                status=SandboxStatus.UNAVAILABLE,
-                exit_code=None,
-                stdout=b"",
-                stderr=str(e).encode(),
-                reason=f"sandbox_unavailable:{e.__class__.__name__}",
-                duration_s=0.0,
-                net_isolation=net_i,
-                fs_isolation=fs_i,
-                note=note,
-            )
-        leaf = _cgroup_oom_setup(proc.pid, lim.memory_mb)
-        timed_out, overflow, out_b, err_b, oom_det = _watch_process(
-            proc, lim=lim, cgroup_leaf=leaf
+        prefix = build_verifier_bwrap(
+            results=results_dir,
+            inputs=inputs_dir,
+            scorer=scorer_path,
+            holdout=holdout_path,
+            tests=tests_path,
+            allow_network=False,
         )
-        files = _collect_results(results_dir, collect)
-        return _classify(
-            timed_out=timed_out,
-            overflow=overflow,
-            proc=proc,
-            cgroup_leaf=leaf,
-            oom_detectable=oom_det,
-            out_b=out_b,
-            err_b=err_b,
-            duration=time.monotonic() - started,
+        cmd = [
+            *prefix,
+            "--",
+            "python3",
+            "/results/_cos_wrapper.py",
+            *guest_argv,
+        ]
+        return _run_jailed(
+            cmd=cmd,
+            lim=lim,
             net_i=net_i,
             fs_i=fs_i,
             work_dir=str(results_dir),
-            result_files=files,
+            result_files_dir=results_dir,
+            collect=collect,
         )
     except OSError as e:
-        return _result(
-            status=SandboxStatus.UNAVAILABLE,
-            exit_code=None,
-            stdout=b"",
-            stderr=str(e).encode(),
+        return _unavailable(
             reason=f"sandbox_unavailable:host_io:{e.__class__.__name__}",
-            duration_s=0.0,
-            net_isolation=net_i,
-            fs_isolation=fs_i,
+            net_i=net_i,
+            fs_i=fs_i,
             note=note,
+            stderr=str(e).encode(),
         )
     finally:
         import shutil

@@ -1,8 +1,9 @@
 """Executable CodeCheck kinds (DESIGN_M1 §7).
 
-B1 pattern: collect agent declared outputs (sha256); run catalog scorer in a
-second fresh verifier jail (agent outputs/scorer/holdout RO; results RW only);
-read reward/result files — never guest stdout. No agent code during verify.
+B1 pattern: collect agent declared outputs (sha256); run catalog scorer / task
+tests in a second fresh verifier jail (agent outputs/scorer/holdout/tests RO;
+results RW only); read reward/result files — never guest stdout. No agent code
+during verify. Fail-closed without hard isolation.
 """
 
 from __future__ import annotations
@@ -19,7 +20,6 @@ from coscientist.checks.kinds._util import (
     merge_detail,
     merge_numeric_extra,
     parse_junit,
-    pointer_get,
     raise_if_infra,
     sandbox_effect,
     slot_filename,
@@ -48,8 +48,8 @@ EXECUTABLE_KINDS = frozenset(
 )
 
 REWARD_NAME = "reward.txt"
+REWARD_SCHEMA = "coscientist.reward.v1"
 JUNIT_NAME = "junit.xml"
-METRICS_NAME = "metrics.json"
 DIGEST_NAME = "out.digest"
 
 
@@ -68,6 +68,22 @@ def _limits(check: CodeCheck):
         max_output_bytes=check.max_output_bytes,
         allow_network=bool(check.allow_network),
     )
+
+
+def parse_reward(raw: bytes) -> float:
+    """Strict reward.txt: JSON ``{schema, value}`` only — no pass/fail strings."""
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise ValueError(f"reward_not_json:{e.__class__.__name__}") from e
+    if not isinstance(doc, dict):
+        raise ValueError("reward_not_object")
+    if doc.get("schema") != REWARD_SCHEMA:
+        raise ValueError("reward_bad_schema")
+    val = doc.get("value")
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
+        raise ValueError("reward_bad_value")
+    return float(val)
 
 
 def _collect_declared_outputs(
@@ -139,8 +155,27 @@ def evaluate_exec_runs(
         net_isolation=result.net_isolation,
         fs_isolation=result.fs_isolation,
     )
-    ok = result.status is SandboxStatus.OK and result.exit_code == 0
     note = result.note or soft_note(result.net_isolation, result.fs_isolation)
+    # OUTPUT_EXCEEDED is scientific (guest fault); not infra.
+    if result.status is SandboxStatus.OUTPUT_EXCEEDED:
+        return base_result(
+            check_id=check_id,
+            template_id=template_id,
+            role=role,
+            ok=False,
+            evidence=[EvidenceRef(artifact_id=art_id, digest=digest)],
+            detail=merge_detail("output_exceeded", note),
+            effect=sandbox_effect(
+                attempt_id=attempt_id,
+                check_id=check_id,
+                art_id=art_id,
+                trusted=trusted,
+                net_isolation=result.net_isolation,
+                fs_isolation=result.fs_isolation,
+                note=note,
+            ),
+        )
+    ok = result.status is SandboxStatus.OK and result.exit_code == 0
     return base_result(
         check_id=check_id,
         template_id=template_id,
@@ -160,6 +195,18 @@ def evaluate_exec_runs(
     )
 
 
+def _path_name(cmd: str) -> str:
+    from pathlib import Path as P
+
+    return P(cmd).name
+
+
+def _catalog_tests_bytes(check: CodeCheck) -> dict[str, bytes] | None:
+    if not check.tests:
+        return None
+    return {rel: src.encode("utf-8") for rel, src in check.tests.items()}
+
+
 def evaluate_tests_pass(
     check: CodeCheck,
     *,
@@ -170,9 +217,14 @@ def evaluate_tests_pass(
     role: CheckRole,
     attempt_id: str | None,
 ) -> CheckResult:
-    """Verifier runs catalog scorer; junit/reward from results dir only."""
+    """Verifier runs catalog/task tests (RO) against agent code; junit in results."""
     argv = _argv_for(check)
-    if not argv:
+    catalog_tests = _catalog_tests_bytes(check)
+    use_catalog_pytest = (
+        (not argv or argv == ["catalog:pytest"] or argv[0] == "catalog:pytest")
+        and catalog_tests is not None
+    )
+    if not argv and catalog_tests is None:
         return base_result(
             check_id=check_id,
             template_id=template_id,
@@ -186,36 +238,51 @@ def evaluate_tests_pass(
                 "core_evaluated": True,
                 "countable": bool(attempt_id),
                 "produced_by_call_id": f"{attempt_id or 'noattempt'}:core:{check_id}",
-                "note": "tests_pass requires catalog scorer argv; not trusted",
+                "note": "tests_pass requires catalog tests or scorer argv",
             },
         )
 
-    # Agent supplies code under test as declared outputs (RO into verifier).
-    inputs, ev = _collect_declared_outputs(out, artifacts)
-    # Default catalog scorer writes junit.xml into COSCIENTIST_RESULTS when argv
-    # is a custom script; for pytest-style argv we wrap with controlled flags.
-    scorer_bytes = None
+    # Agent supplies code under test as declared outputs (RO at /inputs).
+    # Catalog/task tests are separate (RO at /tests) — never agent tests.
+    code_inputs, ev = _collect_declared_outputs(out, artifacts)
     collect = [JUNIT_NAME, REWARD_NAME]
-    guest_argv = list(argv)
-    if guest_argv and Path_name(guest_argv[0]) in {"pytest", "py.test"}:
-        # Catalog-controlled pytest: no agent conftest, junit outside agent tree.
+
+    if use_catalog_pytest:
+        # Catalog-controlled pytest: task tests only; agent conftest/plugins off.
         guest_argv = [
-            *guest_argv,
+            "python3",
+            "-m",
+            "pytest",
             "--noconftest",
             "-p",
             "no:cacheprovider",
+            "-o",
+            "addopts=",
             f"--junitxml=/results/{JUNIT_NAME}",
-            "/inputs",
+            "/tests",
         ]
-        # pytest binary path: run via python -m pytest for RO bind simplicity
-        if guest_argv[0] in {"pytest", "py.test"}:
-            guest_argv = ["python3", "-m", "pytest", *guest_argv[1:]]
+    else:
+        guest_argv = list(argv)
+        if guest_argv and _path_name(guest_argv[0]) in {"pytest", "py.test"}:
+            if guest_argv[0] in {"pytest", "py.test"}:
+                guest_argv = ["python3", "-m", "pytest", *guest_argv[1:]]
+            guest_argv = [
+                *guest_argv,
+                "--noconftest",
+                "-p",
+                "no:cacheprovider",
+                "-o",
+                "addopts=",
+                f"--junitxml=/results/{JUNIT_NAME}",
+            ]
+            if catalog_tests is not None and "/tests" not in guest_argv:
+                guest_argv.append("/tests")
 
     result = run_verifier(
         guest_argv,
-        inputs=inputs,
+        inputs=code_inputs,
         limits=_limits(check),
-        scorer_bytes=scorer_bytes,
+        tests=catalog_tests,
         collect=collect,
     )
     raise_if_infra(
@@ -228,41 +295,11 @@ def evaluate_tests_pass(
     note = result.note or soft_note(result.net_isolation, result.fs_isolation)
     raw = result.result_files.get(JUNIT_NAME)
     if raw is None:
-        # Accept reward.txt "pass"/"fail" as alternate catalog signal.
-        reward = result.result_files.get(REWARD_NAME)
-        if reward is not None:
-            ok = reward.strip() in (b"1", b"pass", b"ok", b"true")
-            art_id, digest, trusted = store_log(
-                artifacts,
-                attempt_id=attempt_id,
-                check_id=check_id,
-                body=b"reward=" + reward,
-                name="tests_eval.log",
-                net_isolation=result.net_isolation,
-                fs_isolation=result.fs_isolation,
-            )
-            return base_result(
-                check_id=check_id,
-                template_id=template_id,
-                role=role,
-                ok=ok,
-                evidence=[*ev, EvidenceRef(artifact_id=art_id, digest=digest)],
-                detail=merge_detail(None if ok else MALFORMED_REWARD, note),
-                effect=sandbox_effect(
-                    attempt_id=attempt_id,
-                    check_id=check_id,
-                    art_id=art_id,
-                    trusted=trusted,
-                    net_isolation=result.net_isolation,
-                    fs_isolation=result.fs_isolation,
-                    note=note,
-                ),
-            )
         art_id, digest, trusted = store_log(
             artifacts,
             attempt_id=attempt_id,
             check_id=check_id,
-            body=b"missing junit/reward\n" + result.stderr,
+            body=b"missing junit\n" + result.stderr,
             name="tests_eval.log",
             net_isolation=result.net_isolation,
             fs_isolation=result.fs_isolation,
@@ -349,12 +386,6 @@ def evaluate_tests_pass(
     )
 
 
-def Path_name(cmd: str) -> str:
-    from pathlib import Path as P
-
-    return P(cmd).name
-
-
 def evaluate_metric_on_holdout(
     check: CodeCheck,
     *,
@@ -366,14 +397,11 @@ def evaluate_metric_on_holdout(
     attempt_id: str | None,
     prov_fields: dict[str, Any],
 ) -> CheckResult:
-    """metric = catalog scorer(agent predictions, holdout) in verifier jail."""
+    """metric = catalog scorer(agent predictions, holdout labels) in verifier."""
     holdout_slot = check.holdout_output or "holdout"
     pred_slot = check.output or "predictions"
     holdout = out.outputs.get(holdout_slot)
     predictions = out.outputs.get(pred_slot)
-    # Also accept legacy "metrics" slot name as predictions input.
-    if predictions is None:
-        predictions = out.outputs.get("metrics")
     if holdout is None or predictions is None:
         return base_result(
             check_id=check_id,
@@ -449,11 +477,9 @@ def evaluate_metric_on_holdout(
             },
         )
 
-    # Default inline scorer when argv is a marker; otherwise use catalog argv.
     scorer_bytes = None
     if argv == ["catalog:metric"] or argv[0] == "catalog:metric":
-        pointer = check.pointer or (f"/{check.metric}" if check.metric else "/score")
-        scorer_bytes = _default_metric_scorer(pointer).encode()
+        scorer_bytes = _default_metric_scorer().encode()
         guest_argv = ["python3", "/scorer"]
     else:
         guest_argv = argv
@@ -464,7 +490,7 @@ def evaluate_metric_on_holdout(
         holdout=holdout_bytes,
         scorer_bytes=scorer_bytes,
         limits=_limits(check),
-        collect=[REWARD_NAME, METRICS_NAME],
+        collect=[REWARD_NAME],
         extra_ro_files={"predictions.json": pred_bytes},
     )
     raise_if_infra(
@@ -478,27 +504,17 @@ def evaluate_metric_on_holdout(
 
     left: Any = None
     reward = result.result_files.get(REWARD_NAME)
-    metrics_raw = result.result_files.get(METRICS_NAME)
     if reward is not None:
         try:
-            left = float(reward.strip())
+            left = parse_reward(reward)
         except ValueError:
-            left = None
-    if left is None and metrics_raw is not None:
-        try:
-            doc = json.loads(metrics_raw)
-            ptr: str | None = check.pointer or (
-                f"/{check.metric}" if check.metric else None
-            )
-            left = pointer_get(doc, ptr)
-        except Exception:  # noqa: BLE001
             left = None
     if left is None:
         art_id, digest, trusted = store_log(
             artifacts,
             attempt_id=attempt_id,
             check_id=check_id,
-            body=b"missing reward/metrics\n" + result.stderr,
+            body=b"missing/malformed reward\n" + result.stderr,
             net_isolation=result.net_isolation,
             fs_isolation=result.fs_isolation,
         )
@@ -548,18 +564,16 @@ def evaluate_metric_on_holdout(
         net_isolation=result.net_isolation,
         fs_isolation=result.fs_isolation,
     )
-    effect = None
-    if isinstance(left, (int, float)):
-        effect = sandbox_effect(
-            attempt_id=attempt_id,
-            check_id=check_id,
-            art_id=art_id,
-            trusted=trusted,
-            net_isolation=result.net_isolation,
-            fs_isolation=result.fs_isolation,
-            note=note,
-            extra=merge_numeric_extra(prov_fields, est=float(left)),
-        )
+    effect = sandbox_effect(
+        attempt_id=attempt_id,
+        check_id=check_id,
+        art_id=art_id,
+        trusted=trusted,
+        net_isolation=result.net_isolation,
+        fs_isolation=result.fs_isolation,
+        note=note,
+        extra=merge_numeric_extra(prov_fields, est=float(left)),
+    )
     return base_result(
         check_id=check_id,
         template_id=template_id,
@@ -578,25 +592,28 @@ def evaluate_metric_on_holdout(
     )
 
 
-def _default_metric_scorer(pointer: str) -> str:
-    """Catalog scorer: read predictions + holdout, write reward.txt (never stdout)."""
+def _default_metric_scorer() -> str:
+    """Compute accuracy(y_hat, holdout.y); ignore any agent-claimed score."""
     return f"""
 import json, os, pathlib
 results = pathlib.Path(os.environ["COSCIENTIST_RESULTS"])
 inputs = pathlib.Path(os.environ["COSCIENTIST_INPUTS"])
+holdout_path = os.environ["COSCIENTIST_HOLDOUT"]
 pred_path = inputs / "predictions.json"
 if not pred_path.exists():
     pred_path = inputs / "predictions"
-doc = json.loads(pred_path.read_bytes())
-# Holdout is mounted RO at COSCIENTIST_HOLDOUT; presence is the freeze check.
-_ = os.environ.get("COSCIENTIST_HOLDOUT")
-pointer = {pointer!r}
-cur = doc
-if pointer and pointer != "/":
-    for part in pointer[1:].split("/"):
-        cur = cur[part]
-(results / "reward.txt").write_text(str(float(cur)))
-(results / "metrics.json").write_bytes(pred_path.read_bytes())
+pred = json.loads(pred_path.read_bytes())
+hold = json.loads(pathlib.Path(holdout_path).read_bytes())
+y = hold["y"]
+y_hat = pred["y_hat"]
+if len(y) != len(y_hat) or not y:
+    raise SystemExit("length_mismatch")
+correct = sum(int(a == b) for a, b in zip(y_hat, y))
+value = correct / len(y)
+# Never copy pred.get("score") — agent claims are ignored.
+(results / "reward.txt").write_text(
+    json.dumps({{"schema": {REWARD_SCHEMA!r}, "value": float(value)}})
+)
 """
 
 
@@ -611,7 +628,7 @@ def evaluate_reproducible_rerun(
     attempt_id: str | None,
     prov_fields: dict[str, Any],
 ) -> CheckResult:
-    """Two verifier runs; compare digests of core result files — not stdout."""
+    """Two verifier runs; compare digests / reward values — not stdout."""
     argv = _argv_for(check)
     if not argv:
         raise SandboxInfraError("sandbox_unavailable:missing_command")
@@ -712,13 +729,12 @@ def evaluate_reproducible_rerun(
         blobs.append(blob)
         digests.append(sha256_hex(blob))
 
-    # Prefer digest equality; if both rewards parse as floats, allow |Δ| ≤ tol.
     ok = digests[0] == digests[1]
     delta = 0.0
     est = 0.0
     try:
-        v0 = float(blobs[0].strip())
-        v1 = float(blobs[1].strip())
+        v0 = parse_reward(blobs[0])
+        v1 = parse_reward(blobs[1])
         delta = abs(v0 - v1)
         est = v0
         ok = delta <= tol
@@ -818,4 +834,4 @@ def evaluate_executable(
             attempt_id=attempt_id,
             prov_fields=prov_fields,
         )
-    raise SandboxInfraError(f"sandbox_unavailable:unhandled_kind:{check.kind}")
+    raise SandboxInfraError(f"sandbox_unavailable:unknown_kind:{check.kind}")

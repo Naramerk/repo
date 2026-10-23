@@ -88,13 +88,15 @@ Study disposition / `StudyFinalized.question_dispositions[].reason` and `exclude
 Executable catalog CodeCheck kinds (`exec_runs`, `tests_pass`, `metric_on_holdout`, `reproducible_rerun`) run in a **core-owned** local sandbox (`coscientist.checks.sandbox`) and store logs via `put_sandbox` (`Artifact.producer=sandbox`). Agent `put` + non-executable catalog eval still yields `trusted=false`.
 
 - **`net_isolation: hard | soft | none`** is recorded on every `SandboxResult` and on sandbox `Artifact` meta (and stamped into `effect`).
-  - `allow_network=True` → `none` (network permitted by catalog).
-  - `allow_network=False` + working `unshare` netns → `hard`.
-  - `allow_network=False` + unshare forbidden (e.g. GitHub Actions `uid_map` EPERM) → `soft` (proxy poison + curl/wget blocklist); **warning logged**.
-- **`trusted=true` only when both `net_isolation` and `fs_isolation` are `hard`** (not merely `!= soft`). Soft/none isolation stores `trusted=false` (still `core_evaluated` / **countable**) and adds a report note that network may be open (blocklist is bypassable). `allow_network=True` ⇒ not trusted. There is no silent downgrade to trusted.
+  - `allow_network=True` → `none` (network permitted by catalog) with FS still hard when the probe passes.
+  - `allow_network=False` + working bwrap netns → `hard`.
+  - Probe fail / no bubblewrap → `soft` **fail-closed**: no guest exec; reason `sandbox_unavailable:isolation` (recorded/reported; study still closes).
+- **`trusted=true` only when both `net_isolation` and `fs_isolation` are `hard`**. `allow_network=True` ⇒ not trusted. There is no silent downgrade to trusted.
 - **trusted** remains a severity **tag** for reporting only — it does **not** gate `refuted` / `supported` (countable does).
-- Sandbox infra failures (timeout, OOM, crash, output exceeded, unavailable, blocked) close the attempt as `result_class=infra` with a stable reason; they never hang or crash the host. `StudyFinalized` still holds.
-- Enforced limits: time, memory (`RLIMIT_AS`), output size, network policy as above.
+- Sandbox infra (host timeout, delegated cgroup OOM, wrapper private-channel rlimit, blocked, unavailable) → `result_class=infra`. Guest output overflow → scientific `output_exceeded`. Guest exit codes never map to infra. Unexpected core bugs → `result_class=core_bug` (reported, never counts). `StudyFinalized` still holds.
+- **Host requirements:** `bubblewrap`; unprivileged user namespaces (on Ubuntu 24.04 runners set `kernel.apparmor_restrict_unprivileged_userns=0`); cgroup v2 memory delegation for OOM detection (else note `OOM not detectable`, `MemoryError` stays scientific).
+- Enforced limits: time, memory (`RLIMIT_AS` + optional cgroup), output size, network policy as above.
+- `reward.txt` is strict JSON `{"schema":"coscientist.reward.v1","value": <number>}` — never `pass`/`fail` strings.
 
 ### M1 limits (call_id + catalog kinds)
 
