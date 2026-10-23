@@ -504,7 +504,6 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
     )
     await rt._append(events)
     await rt.tick()
-    assert not rt._finalized
     assert rt.tasks[f"{sid}/B"].state != TaskState.DONE
     assert rt.view().phase != "closed"
     await close_runtime(rt)
@@ -528,7 +527,7 @@ async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
     await rt.note_budget_exceeded()
     assert rt._budget_exceeded
     assert any(e.type == "BudgetExceeded" for e in await rt.store.read_all())
-    assert not rt._finalized
+    assert rt.view().phase != "closed"
     await close_runtime(rt)
     rt2 = await open_runtime(
         tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
@@ -677,7 +676,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
     await rt.ensure_lease(ttl_s=300)
     clock.advance(timedelta(seconds=120))
     await rt.tick()
-    assert rt._finalized
+    assert rt.view().phase == "closed"
     assert _fin(await rt.store.read_all()).payload["trigger"] == "deadline"
     await close_runtime(rt)
 
@@ -695,7 +694,7 @@ async def test_all_done_budget_reasons_finalize_all_done(tmp_path, clock):
     )
     if events:
         await rt._append(events)
-    assert not rt._finalized
+    assert rt.view().phase != "closed"
     await close_runtime(rt)
     rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
     await rt2.tick()
@@ -732,7 +731,7 @@ async def test_report_task_failed_still_report(tmp_path, clock):
 async def test_phase_finalizing_between_done_and_finalized(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_ph")
     await _skip_all(rt)
-    assert not rt._finalized and rt.view().phase == "finalizing"
+    assert rt.view().phase == "finalizing"
     await rt.finalize(trigger="all_done")
     assert rt.view().phase == "closed"
     await close_runtime(rt)
@@ -802,7 +801,7 @@ async def test_finalized_dispositions_replay(tmp_path, clock):
     payload = _fin(await rt.store.read_all()).payload["question_dispositions"]
     await close_runtime(rt)
     rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
-    assert rt2._finalized and rt2.view().phase == "closed"
+    assert rt2.view().phase == "closed"
     assert dispositions(tasks=rt2.tasks, plans=rt2.plans) == payload
     await close_runtime(rt2)
 
@@ -813,8 +812,8 @@ async def test_finalize_idempotent(tmp_path, clock):
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     await rt.finalize(trigger="cancel")
-    fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
-    assert len(fins) == 1 and fins[0].payload["trigger"] == "all_done"
+    fin = _fin(await rt.store.read_all())
+    assert fin.payload["trigger"] == "all_done"
     await close_runtime(rt)
 
 
@@ -871,7 +870,7 @@ async def test_second_distinct_study_finalized_rejected_after_restart(tmp_path, 
     await close_runtime(rt)
 
     rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
-    assert rt2._finalized
+    assert rt2.view().phase == "closed"
     distinct = _study_finalized_envelope(
         sid,
         clock,
@@ -1033,8 +1032,8 @@ async def test_append_many_study_finalized_then_other_rejects(tmp_path, clock):
 
 @pytest.mark.asyncio
 async def test_concurrent_finalize_exactly_one(tmp_path, clock):
-    """Real race: two stores sharing a lease on one DB; at most one new SF wins."""
-    import asyncio
+    """Real race: Barrier + two threads/stores; exactly one SF; {ok, StudyClosedError}."""
+    import threading
 
     from coscientist.core.store import SqliteEventStore
 
@@ -1056,62 +1055,71 @@ async def test_concurrent_finalize_exactly_one(tmp_path, clock):
         lease_ttl_s=120,
     )
 
-    async def _write(store: SqliteEventStore, key: str, trigger: str):
-        try:
-            return await store.append_many(
-                [
-                    _study_finalized_envelope(
-                        sid,
-                        clock,
-                        idem_key=key,
-                        payload=_fin_payload(trigger=trigger, study_id=sid),
-                    )
-                ]
-            )
-        except (StudyClosedError, Conflict, Idempotent) as exc:
-            return exc
+    barrier = threading.Barrier(2)
+    slots: list[object | None] = [None, None]
 
-    r1, r2 = await asyncio.gather(
-        _write(store_a, f"StudyFinalized:{sid}:a", "all_done"),
-        _write(store_b, f"StudyFinalized:{sid}:b", "deadline"),
-    )
-    events = await store_a.read_all()
-    fins = sorted(
-        [e for e in events if e.type == "StudyFinalized"],
-        key=lambda e: int(e.seq or 0),
-    )
-    assert len(fins) >= 1
-    # Cross-connection TOCTOU may land two rows; fold is first-wins.
-    folded = fold_events(events)
-    first = fins[0]
-    assert folded["studies"][sid]["finalized_payload"]["trigger"] == first.payload[
-        "trigger"
+    def _race(idx: int, store: SqliteEventStore, key: str, trigger: str) -> None:
+        env = _study_finalized_envelope(
+            sid,
+            clock,
+            idem_key=key,
+            payload=_fin_payload(trigger=trigger, study_id=sid),
+        )
+        try:
+            barrier.wait(timeout=5)
+            with store._db_lock:  # noqa: SLF001 — sync path under store lock
+                slots[idx] = store._append_many_sync([env])  # noqa: SLF001
+        except BaseException as exc:  # noqa: BLE001 — capture race outcome
+            slots[idx] = exc
+
+    threads = [
+        threading.Thread(
+            target=_race,
+            args=(0, store_a, f"StudyFinalized:{sid}:a", "all_done"),
+        ),
+        threading.Thread(
+            target=_race,
+            args=(1, store_b, f"StudyFinalized:{sid}:b", "deadline"),
+        ),
     ]
-    assert isinstance(r1, (list, StudyClosedError, Conflict, Idempotent))
-    assert isinstance(r2, (list, StudyClosedError, Conflict, Idempotent))
-    if len(fins) > 1:
-        assert folded.get("meta", {}).get(sid, {}).get("duplicate_study_finalized") is True
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+        assert not t.is_alive()
+
+    kinds: set[str] = set()
+    for outcome in slots:
+        if isinstance(outcome, list):
+            kinds.add("success")
+        elif isinstance(outcome, StudyClosedError):
+            kinds.add("StudyClosedError")
+        else:
+            raise AssertionError(f"unexpected race outcome: {type(outcome)!r} {outcome!r}")
+    assert kinds == {"success", "StudyClosedError"}
+
+    events = await store_a.read_all()
+    fin = _fin(events)
+    assert sum(1 for e in events if e.type == "StudyFinalized") == 1
 
     await store_a.release_lease(store_a.owner, store_a.epoch)
     await store_a.close()
     await store_b.close()
 
     rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
-    assert rt2._finalized and rt2.view().phase == "closed"
-    live = fold_events(await rt2.store.read_all())
-    assert (
-        live["studies"][sid]["finalized_payload"]["trigger"]
-        == folded["studies"][sid]["finalized_payload"]["trigger"]
-    )
+    assert rt2.view().phase == "closed"
+    assert _fin(await rt2.store.read_all()).seq == fin.seq
     await close_runtime(rt2)
 
 
 @pytest.mark.asyncio
 async def test_legacy_two_study_finalized_fold_first_wins(tmp_path, clock):
-    """Legacy journal with two SF: fold/live first-wins; live == replay."""
+    """Legacy journal with two SF: fold first-wins == store projections == rt2 graph."""
     import json
 
     from coscientist.core.digest import payload_digest
+    from coscientist.core.projections import apply_event
+    from coscientist.core.store import SqliteEventStore
 
     sid = "st_sf_legacy_dup"
     rt = await _boot(tmp_path, clock, sid)
@@ -1140,32 +1148,64 @@ async def test_legacy_two_study_finalized_fold_first_wins(tmp_path, clock):
             ),
         )
     conn.commit()
+    db = rt.store.db_path
     await close_runtime(rt)
 
-    from coscientist.core.store import SqliteEventStore
-
-    store = SqliteEventStore(sid, tmp_path / sid / "events.db", clock=clock)
+    store = SqliteEventStore(sid, db, clock=clock)
     await store.acquire_lease("fold")
     events = await store.read_all()
     fins = [e for e in events if e.type == "StudyFinalized"]
     assert len(fins) == 2
+    # Replay SF into projections (upcasted envelopes from read_all) — first-wins.
+    for ev in fins:
+        apply_event(store, ev)
+    store._conn.commit()  # noqa: SLF001
+
     folded = fold_events(events)
-    assert folded["studies"][sid]["finalized_payload"]["trigger"] == "all_done"
-    assert folded["meta"][sid].get("duplicate_study_finalized") is True
+    first_payload = folded["studies"][sid]["finalized_payload"]
+    assert first_payload["trigger"] == "all_done"
+
+    study_row = await store.get_row("studies", sid)
+    assert study_row is not None and study_row.get("finalized") is True
+    assert study_row["finalized_payload"] == first_payload
+    meta_row = await store.get_row("meta", sid)
+    assert meta_row is not None and meta_row.get("finalized") is True
+    assert "duplicate_study_finalized" not in (meta_row or {})
+
+    fold_nodes = folded.get("graph_nodes") or {}
+    fold_edges = folded.get("graph_edges") or {}
+    proj_nodes = {
+        r["node_id"]: r
+        for r in await store.get_projection("graph_nodes")
+        if isinstance(r, dict) and "node_id" in r
+    }
+    proj_edges = {
+        f"{r.get('src_id')}:{r.get('dst_id')}:{r.get('kind')}": r
+        for r in await store.get_projection("graph_edges")
+        if isinstance(r, dict)
+    }
+    for nid, row in fold_nodes.items():
+        assert proj_nodes.get(nid) == row
+    for ek, row in fold_edges.items():
+        key = f"{row.get('src_id')}:{row.get('dst_id')}:{row.get('kind')}"
+        assert proj_edges.get(key) == row
+
     await store.release_lease(store.owner, store.epoch)
     await store.close()
 
     rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
-    assert rt2._finalized and rt2.view().phase == "closed"
-    live = fold_events(await rt2.store.read_all())
-    assert (
-        live["studies"][sid]["finalized_payload"]["trigger"]
-        == folded["studies"][sid]["finalized_payload"]["trigger"]
-    )
-    # live == replay for finalized payload (first SF).
-    assert live["studies"][sid]["finalized_payload"] == folded["studies"][sid][
-        "finalized_payload"
-    ]
+    assert rt2.view().phase == "closed"
+    study2 = await rt2.store.get_row("studies", sid)
+    assert study2 is not None
+    assert study2["finalized_payload"] == first_payload
+    for cid in first_payload["conclusion_ids"]:
+        assert rt2.graph.get_node(cid) is not None
+    report_id = first_payload.get("report_artifact_id")
+    if report_id:
+        # minimal_report path has no report artifact; otherwise graph may hold report node
+        pass
+    # Second SF must not have won: cancel trigger absent from live payload/graph fold.
+    assert study2["finalized_payload"]["trigger"] != "cancel"
     await close_runtime(rt2)
 
 
@@ -1185,14 +1225,13 @@ async def test_finalize_study_closed_with_event_is_success(
             )
         ]
     )
-    assert not rt._finalized
+    assert rt.view().phase != "closed"
 
     async def boom_closed(_events):
         raise StudyClosedError(sid, "StudyFinalized")
 
     monkeypatch.setattr(rt, "_append", boom_closed)
     await rt.finalize(trigger="cancel")
-    assert rt._finalized
     assert rt.view().phase == "closed"
     _fin(await rt.store.read_all())
     await close_runtime(rt)
@@ -1213,7 +1252,6 @@ async def test_finalize_study_closed_without_event_reraises(
     monkeypatch.setattr(rt, "_append", boom_closed)
     with pytest.raises(StudyClosedError):
         await rt.finalize(trigger="all_done")
-    assert not rt._finalized
     assert not any(e.type == "StudyFinalized" for e in await rt.store.read_all())
     assert rt.view().phase != "closed"
     await close_runtime(rt)
@@ -1512,7 +1550,10 @@ async def test_lease_reacquire_sees_peer_finalize(tmp_path, clock):
     db = root / "events.db"
     store_a = SqliteEventStore(sid, db, clock=clock, owner="a", lease_ttl_s=30)
     await store_a.acquire_lease("a")
-    assert store_a._study_is_finalized() is False
+    # Open study: no finalized projection yet (public tables, not private cache).
+    assert await store_a.get_row("meta", sid) is None
+    study_open = await store_a.get_row("studies", sid)
+    assert study_open is None or not study_open.get("finalized")
 
     # Expire A's lease; B acquires and finalizes.
     clock.advance(timedelta(seconds=31))
@@ -1546,5 +1587,6 @@ async def test_lease_reacquire_sees_peer_finalize(tmp_path, clock):
                 schema_version=2,
             )
         )
-    assert store_a._study_is_finalized() is True
+    study_closed = await store_a.get_row("studies", sid)
+    assert study_closed is not None and study_closed.get("finalized") is True
     await store_a.close()

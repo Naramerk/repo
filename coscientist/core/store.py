@@ -331,6 +331,9 @@ class SqliteEventStore:
     def _append_locked(self, event: EventEnvelope) -> EventEnvelope:
         mutated = False
         try:
+            # IMMEDIATE so a peer writer's fence/insert waits until we commit —
+            # otherwise two connections can both observe "not finalized".
+            self._conn.execute("BEGIN IMMEDIATE")
             self._fence()
             self._ensure_append_allowed(event)
             stored, idem = self._insert_one(event)
@@ -383,6 +386,7 @@ class SqliteEventStore:
         out: list[EventEnvelope] = []
         mutated = False
         try:
+            self._conn.execute("BEGIN IMMEDIATE")
             self._fence()
             # Probe finalized only after fence so lease ownership is confirmed.
             # In-batch flag: first StudyFinalized closes the rest of the batch

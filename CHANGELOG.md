@@ -4,8 +4,8 @@
 
 ### Store (StudyFinalized once)
 - After a study is finalized, a second distinct `StudyFinalized` (different idem_key) is rejected with `StudyClosedError` (I3 / exactly one finalize). For **any** event type, identical idem_key+payload retry is checked **before** StudyClosedError so honest retries return the original.
-- Same-batch guard: `append_many([SF, …])` probes finalized **after** `_fence()` and treats the batch as closed after the first `StudyFinalized` (in-batch flag + never cache a False finalized probe).
-- **Legacy journals** with two `StudyFinalized` rows: fold/`apply_event` / local project are **first-wins** for `studies.finalized_payload` / graph (subsequent SF ignored with a warning log + `meta.duplicate_study_finalized`); live reopen matches fold. New writes still refuse another SF.
+- Same-batch guard: `append_many([SF, …])` probes finalized **after** `_fence()` and treats the batch as closed after the first `StudyFinalized` (in-batch flag + never cache a False finalized probe). Append uses `BEGIN IMMEDIATE` so peer writers wait and see the commit.
+- **Legacy journals** with two `StudyFinalized` rows: fold/`apply_event` / local project are **first-wins** for `studies.finalized_payload` / graph (subsequent SF ignored with a warning log); live reopen matches fold. New writes still refuse another SF.
 
 ### M1 PR15
 - `needs_more_data` + required `artifact(role=report, kind=experiment_design)` with rubric ids `hypothesis` / `variables` / `sample_size` / `success_criterion` (DESIGN_M1 §6.4). Event `QuestionDisposed` (v1; **first-wins**); rejected disposals → journaled `QuestionDisposeRejected` (`_note_reject` only after successful append; fold + `contributing_reasons`).
