@@ -35,7 +35,7 @@ from coscientist.core.projections import fold_events
 from coscientist.core.question_tasks import known_questions
 from coscientist.core.reasons import TaskReason
 from coscientist.core.recover import recover
-from coscientist.core.runtime_factory import close_runtime, open_runtime
+from tests.helpers import close_runtime, open_runtime
 
 _RULE_ERR = (
     KeyError,

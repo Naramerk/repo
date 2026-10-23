@@ -15,9 +15,8 @@ from coscientist.core.domain import Budget
 from coscientist.core.finalize_nodes import conclusion_id_for_study
 from coscientist.core.intake import REASON_MAX, IntakeAccept, IntakeRefuse, intake
 from coscientist.core.reasons import RefusalKind
-from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.study_view import study_phase, study_view
-from tests.helpers import attach_executor
+from tests.helpers import attach_executor, close_runtime, open_runtime
 
 
 @pytest.mark.asyncio

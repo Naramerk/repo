@@ -23,9 +23,9 @@ from coscientist.core.reasons import (
     TerminalReason,
     intake,
 )
-from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.study_view import study_view
 from coscientist.core.upcasters import upcast
+from tests.helpers import close_runtime, open_runtime
 
 # Legacy reason strings from §0.1 that map to TaskReason / CloseReason.
 _TASK_REASON_STRINGS = [

@@ -34,8 +34,7 @@ from coscientist.core.inputs import (
     collect_bindable_claims,
     verdict_binding_digest,
 )
-from coscientist.core.runtime_factory import close_runtime, open_runtime
-from tests.helpers import attach_executor
+from tests.helpers import attach_executor, close_runtime, open_runtime
 from tests.test_inputs import _task
 
 _DERIVED_OK = {
@@ -362,7 +361,8 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
-async def test_failed_attempt_claims_not_emitted(tmp_path, clock, runtime_cls):
+async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
+    """Criteria FAILED is a scientific result — claims kept with not_met."""
     from coscientist.core.domain import AgentTaskOutput
 
     sid = "st_fail_cl"
@@ -396,22 +396,28 @@ async def test_failed_attempt_claims_not_emitted(tmp_path, clock, runtime_cls):
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid0 = await rt.start_attempt("E0")
+    # No artifact → default artifact_present FAILED → scientific FAILED/PARTIAL.
     result = await ex.record(
         aid0,
         AgentTaskOutput(
             summary="fail",
             outputs={},
             values={},
-            claims=[{"id": "bad", "target": "Q1"}],
+            claims=[{"id": "sci", "target": "Q1", "checked_against": "artifact_present"}],
         ),
     )
-    assert result.outcome.value == "FAILED"
-    assert list(rt.graph.nodes_by_kind("claim")) == []
+    assert result.outcome.value in ("FAILED", "PARTIAL")
+    claims = list(rt.graph.nodes_by_kind("claim"))
+    assert len(claims) == 1
+    assert claims[0].attrs["criterion_status"] == "not_met"
+    assert claims[0].attrs["accepted"] is True
+    assert rt.results[aid0].get("result_class") == "scientific"
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
-async def test_failed_producer_claim_not_bindable(tmp_path, clock, runtime_cls):
+async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime_cls):
+    """Infra FAILED (result_class=infra) claims are not bindable."""
     sid = "st_bind_fail"
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
@@ -446,13 +452,22 @@ async def test_failed_producer_claim_not_bindable(tmp_path, clock, runtime_cls):
                         "attempt_id": aid_fake,
                         "attempt_outcome": "FAILED",
                         "target": "Q1",
+                        "accepted": True,
+                        "criterion_status": "met",
+                        "frozen": True,
+                        "evidence_kind": "computational",
                     },
                 ).model_dump(mode="json"),
                 ts=clock.now(),
             )
         ]
     )
-    rt.results[aid_fake] = {"attempt_id": aid_fake, "outcome": "FAILED"}
+    rt.results[aid_fake] = {
+        "attempt_id": aid_fake,
+        "outcome": "FAILED",
+        "result_class": "infra",
+        "reason": "catalog_error",
+    }
     known, _ = collect_bindable_claims(rt.graph, results=rt.results)
     assert claim_id not in known
     child = _task("B", None, inputs=[InputSpec(kind="claim", ref=claim_id)])
@@ -465,6 +480,20 @@ async def test_failed_producer_claim_not_bindable(tmp_path, clock, runtime_cls):
             known_claim_ids=known,
         )
     await close_runtime(rt)
+
+
+def test_open_runtime_requires_catalog():
+    """Production factory has no minimal_test_catalog fallback."""
+    import asyncio
+    from pathlib import Path
+
+    from coscientist.core.runtime_factory import open_runtime as prod_open
+
+    async def _run():
+        with pytest.raises(TypeError, match="catalog"):
+            await prod_open(Path("/tmp"), "st_no_cat", catalog=None)  # type: ignore[arg-type]
+
+    asyncio.run(_run())
 
 
 def test_bind_verdict_snapshot_digest():
@@ -843,47 +872,6 @@ def test_criterion_status_not_met_from_failed_check():
     assert attrs["frozen"] is False  # no freeze node
 
 
-def test_accepted_false_when_required_check_failed():
-    """SUCCESS outcome + required FAILED check ⇒ accepted=False."""
-    from coscientist.core.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
-    from coscientist.core.executor import _derive_claim_core_attrs
-
-    now = datetime(2026, 1, 1, tzinfo=UTC)
-    task = Task(
-        task_id="st/E0",
-        kind=TaskKind.EXPERIMENT,
-        spec=TaskSpec(
-            task_key="E0",
-            title="e",
-            goal="g",
-            route="experiment",
-            criteria=[],
-        ),
-        state=TaskState.DONE,
-        outcome=TaskOutcome.SUCCESS,
-        deadline=now,
-    )
-    checks = [
-        CheckResult(
-            check_id="artifact_present#0",
-            template_id="artifact_present",
-            status=ReqStatus.FAILED,
-            is_code=True,
-            required=True,
-        )
-    ]
-    attrs = _derive_claim_core_attrs(
-        task,
-        TaskOutcome.SUCCESS,
-        raw={"target": "Q1"},
-        checks=checks,
-        graph=None,
-        study_id="st",
-        validated=True,
-    )
-    assert attrs["accepted"] is False
-
-
 def test_frozen_normalizes_check_id_to_template_id():
     """checked_against=check_id maps to criterion node keyed by template_id."""
     from coscientist.core.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
@@ -977,8 +965,12 @@ def test_criterion_match_is_exact_not_endswith():
 
 
 @pytest.mark.asyncio
-async def test_runtime_refuted_end_to_end(tmp_path, clock, runtime_cls):
-    """SUCCESS attempt + optional failed checked_against ⇒ refuted at runtime."""
+async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cls):
+    """Falsification: required check FAILED → scientific result, not_met, refuted.
+
+    accepted stays True (result recorded + structurally valid). Outcome may be
+    FAILED/PARTIAL; claims are kept (not infra). graph_schema invariant 10.
+    """
     from coscientist.core.artifacts import make_tool_ref
     from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
 
@@ -1003,30 +995,31 @@ async def test_runtime_refuted_end_to_end(tmp_path, clock, runtime_cls):
         [
             TaskSpec(
                 task_key="E0",
-                title="producer",
+                title="falsify",
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[
-                    RequirementRef(template_id="artifact_present", required=True),
-                    RequirementRef(template_id="value_match", required=False),
+                    RequirementRef(template_id="value_match", required=True),
                 ],
                 addresses=["Q1"],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
-    # Criterion nodes frozen at accept_plan.
     assert any(n.kind == "criterion" for n in rt.graph.nodes_by_kind("criterion"))
     aid0 = await rt.start_attempt("E0", provenance="real")
-    content = b'{"count": 999}'  # fails optional value_match (target 225)
+    # value_match required, target 225 — wrong count ⇒ FAILED/PARTIAL scientific.
     art = arts.put(
-        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
+        b'{"count": 999}',
+        make_tool_ref(f"{aid0}:1"),
+        name="main",
+        media_type="application/json",
     )
     await rt.executor.record(
         aid0,
         AgentTaskOutput(
-            summary="ok",
+            summary="falsified",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 999},
             claims=[
@@ -1042,6 +1035,9 @@ async def test_runtime_refuted_end_to_end(tmp_path, clock, runtime_cls):
     assert claim.attrs["criterion_status"] == "not_met"
     assert claim.attrs["accepted"] is True
     assert claim.attrs["frozen"] is True
+    assert claim.attrs["attempt_outcome"] in ("FAILED", "PARTIAL")
+    res = rt.results[aid0]
+    assert res.get("result_class") == "scientific"
     d = dispositions(
         tasks=rt.tasks,
         plans=rt.plans,
@@ -1059,13 +1055,11 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
     """open_runtime (core + experimental) builds Executor via make_executor — no manual call."""
     from coscientist.core.artifacts import make_tool_ref
     from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
-    from coscientist.experimental.runtime_factory import (
-        open_runtime as open_runtime_exp,
-    )
+    from tests.helpers import open_runtime_experimental
 
     for factory, sid in (
         (open_runtime, "st_core_fac"),
-        (open_runtime_exp, "st_exp_fac"),
+        (open_runtime_experimental, "st_exp_fac"),
     ):
         rt = await factory(tmp_path, sid, clock=clock, owner="t1")
         assert rt.executor is not None

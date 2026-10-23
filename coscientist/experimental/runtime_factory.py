@@ -18,25 +18,25 @@ async def open_runtime(
     data_root: Path | str,
     study_id: str,
     *,
+    catalog: Any,
     owner: str | None = None,
     clock: Clock | None = None,
     registry: KindRegistry | None = None,
     acquire: bool = True,
     runtime_cls: type[StudyRuntime] | None = None,
-    catalog: Any | None = None,
     artifacts: Any | None = None,
 ) -> StudyRuntime:
-    """Open experimental runtime; Executor is built via ``make_executor`` in core."""
+    """Open experimental runtime; ``catalog`` required (forwarded to core)."""
     cls = runtime_cls or StudyRuntime
     rt = await open_runtime_core(
         data_root,
         study_id,
+        catalog=catalog,
         owner=owner,
         clock=clock,
         registry=registry,
         acquire=acquire,
         runtime_cls=cls,
-        catalog=catalog,
         artifacts=artifacts,
     )
     assert isinstance(rt, StudyRuntime)

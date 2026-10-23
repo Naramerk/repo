@@ -130,28 +130,6 @@ def _criterion_is_frozen(graph: Any, study_id: str, template_id: Any) -> bool:
     return attrs.get("frozen_at_seq") is not None or bool(attrs.get("frozen"))
 
 
-def _checks_validate_acceptance(checks: list[Any]) -> bool:
-    """Result validation: required checks must not be FAILED / MIGRATION_ERROR.
-
-    Optional (``required=False``) failures do not reject acceptance — they drive
-    ``criterion_status`` / stance instead (refuted path).
-    """
-    for c in checks:
-        if _check_field(c, "required") is False:
-            continue
-        st = _check_field(c, "status")
-        if isinstance(st, ReqStatus):
-            status = st
-        else:
-            try:
-                status = ReqStatus(str(st))
-            except ValueError:
-                continue
-        if status in (ReqStatus.FAILED, ReqStatus.MIGRATION_ERROR):
-            return False
-    return True
-
-
 def _derive_claim_core_attrs(
     task: Any,
     task_outcome: TaskOutcome,
@@ -162,7 +140,14 @@ def _derive_claim_core_attrs(
     study_id: str,
     validated: bool,
 ) -> dict[str, Any]:
-    """Core-owned counting fields from plan/checks/freeze — never agent attrs."""
+    """Core-owned counting fields from plan/checks/freeze — never agent attrs.
+
+    ``accepted`` means the result was recorded and the claim is structurally
+    valid — **not** that criteria passed (graph_schema invariant 10: stance /
+    ``criterion_status`` come from ReqStatus; failed required → ``not_met`` →
+    refutes). Criteria outcomes are SUCCESS / PARTIAL / FAILED equally.
+    """
+    del task_outcome  # outcome is scientific whenever we derive; criteria ≠ accepted
     spec = getattr(task, "spec", None)
     method = getattr(spec, "method", None) if spec is not None else None
     lit = method == ExperimentMethod.LITERATURE_SEARCH or str(method or "") == (
@@ -170,16 +155,12 @@ def _derive_claim_core_attrs(
     )
     criteria = list(getattr(spec, "criteria", None) or []) if spec is not None else []
     key = _criterion_key_for_claim(raw, checks, criteria)
-    checks_ok = _checks_validate_acceptance(checks)
     return {
         "criterion_status": _criterion_status_for_claim(raw, checks, criteria),
         "evidence_kind": "literature" if lit else "computational",
         "frozen": _criterion_is_frozen(graph, study_id, key),
         "lit_own_criterion": bool(lit and criteria),
-        # SUCCESS ∧ claim validation ∧ result required-check validation.
-        "accepted": bool(
-            task_outcome == TaskOutcome.SUCCESS and validated and checks_ok
-        ),
+        "accepted": bool(validated),
     }
 
 
@@ -368,6 +349,9 @@ class Executor:
             ),
             "inputs": [],
         }
+        # Scientific result: criteria evaluated (SUCCESS / PARTIAL / FAILED).
+        # Keep claims so not_met can refute (invariant 10); only infra drops them.
+        payload["result_class"] = "scientific"
         payload["payload_digest"] = payload_digest(payload)
         return await self._commit_result(
             attempt_id,
@@ -378,6 +362,7 @@ class Executor:
             None,
             claims=list(out.claims or []),
             checks=checks,
+            infra_failure=False,
         )
 
     async def _commit_failure(
@@ -392,6 +377,7 @@ class Executor:
         reason: str,
         detail: str,
     ) -> Result:
+        """Infra/execution failure (catalog, crash path) — drop claims."""
         rid = result_id(attempt_id)
         payload = {
             "result_id": rid,
@@ -406,6 +392,7 @@ class Executor:
             "agent_claim": claim.value if claim else None,
             "inputs": [],
             "detail": detail,
+            "result_class": "infra",
         }
         payload["payload_digest"] = payload_digest(payload)
         await self._append(
@@ -420,8 +407,6 @@ class Executor:
                 )
             ]
         )
-        # Carry-over #2: do not emit claim nodes from a FAILED attempt —
-        # they must not become bindable inputs.
         return await self._commit_result(
             attempt_id,
             study_id,
@@ -431,6 +416,7 @@ class Executor:
             reason,
             claims=[],
             checks=[],
+            infra_failure=True,
         )
 
     async def _commit_result(
@@ -444,6 +430,7 @@ class Executor:
         *,
         claims: list[dict[str, Any]] | None = None,
         checks: list[Any] | None = None,
+        infra_failure: bool = False,
     ) -> Result:
         # Attempt-open check runs inside the write transaction (_append_many_sync).
         now = self.clock.now()
@@ -451,7 +438,7 @@ class Executor:
         task = self.get_task(task_id)
         # PR7/PR8: claim nodes carry producing-attempt provenance (H-b);
         # re-upsert keeps worst provenance; about edges + attr whitelist.
-        # Per-claim derived attrs (criterion_status from checked_against ReqStatus).
+        # Scientific FAILED/PARTIAL keep claims (not_met → refute); infra drops.
         claim_events, drops = claim_nodes_from_attempt(
             study_id=study_id,
             attempt_id=attempt_id,
@@ -460,6 +447,7 @@ class Executor:
             now=now,
             graph=graph,
             attempt_outcome=task_outcome.value,
+            infra_failure=infra_failure,
             derive_attrs=lambda raw, validated: _derive_claim_core_attrs(
                 task,
                 task_outcome,

@@ -133,8 +133,7 @@ async def test_recovery_stage_task_not_rerun(tmp_path, clock, runtime_cls):
     from coscientist.core.domain import TaskState
     from coscientist.core.ids import result_id
     from coscientist.core.recover import recover
-    from coscientist.core.runtime_factory import close_runtime, open_runtime
-    from tests.helpers import attach_executor, record_success
+    from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
     rt = await open_runtime(
         tmp_path, "st_rec_mr", clock=clock, runtime_cls=runtime_cls

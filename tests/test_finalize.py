@@ -31,10 +31,9 @@ from coscientist.core.metrics import late_write_rejected_total
 from coscientist.core.minimal_report import MAX_BYTES, build_minimal_report
 from coscientist.core.question_tasks import question_tasks, questions_from_spec_output
 from coscientist.core.reasons import NotAttemptedReason, TaskReason, TerminalReason
-from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.study_view import study_view
 from coscientist.core.upcasters import upcast
-from tests.helpers import attach_executor, record_success
+from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
 _TS = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
 
@@ -677,10 +676,19 @@ async def test_finalize_total_on_render_failure(tmp_path, clock, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_finalize_total_on_cas_failure(tmp_path, clock):
+    from coscientist.core.errors import CASUnavailable
+
+    class _BoomArts:
+        """Realistic CAS failure: store attached but put raises CASUnavailable."""
+
+        def put(self, *_a, **_k):
+            raise CASUnavailable("cas unreachable")
+
     rt = await _boot(tmp_path, clock, "st_cas")
-    # open_runtime wires make_executor + arts; strip them to force CASUnavailable.
-    rt.executor = None
-    rt.artifacts = None
+    boom = _BoomArts()
+    rt.artifacts = boom
+    if rt.executor is not None:
+        rt.executor.artifacts = boom
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     ev = _fin(await rt.store.read_all())

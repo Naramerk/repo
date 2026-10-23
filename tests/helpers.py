@@ -15,6 +15,48 @@ from coscientist.core.domain import (
     TaskSpec,
 )
 from coscientist.core.executor import Executor
+from coscientist.core.runtime_factory import close_runtime as close_runtime
+from coscientist.core.runtime_factory import open_runtime as _open_runtime_core
+
+
+async def open_runtime(
+    data_root: Path | str,
+    study_id: str,
+    *,
+    catalog: Any | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Test wrapper: injects ``minimal_test_catalog`` when catalog omitted.
+
+    Production ``coscientist.core.runtime_factory.open_runtime`` requires
+    ``catalog=`` explicitly and never imports this helper.
+    """
+    return await _open_runtime_core(
+        data_root,
+        study_id,
+        catalog=catalog if catalog is not None else minimal_test_catalog(),
+        **kwargs,
+    )
+
+
+async def open_runtime_experimental(
+    data_root: Path | str,
+    study_id: str,
+    *,
+    catalog: Any | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Test wrapper for experimental factory (catalog required in production)."""
+    from coscientist.experimental.runtime_factory import (
+        open_runtime as _open_exp,
+    )
+
+    return await _open_exp(
+        data_root,
+        study_id,
+        catalog=catalog if catalog is not None else minimal_test_catalog(),
+        **kwargs,
+    )
 
 
 class RuntimeLike(Protocol):

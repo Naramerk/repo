@@ -251,18 +251,20 @@ def claim_nodes_from_attempt(
     attempt_outcome: str = "SUCCESS",
     derived: dict[str, Any] | None = None,
     derive_attrs: Any | None = None,
+    infra_failure: bool = False,
 ) -> tuple[list[EventEnvelope], list[dict[str, str]]]:
     """Emit ``GraphNodeUpserted`` (+ ``about`` edges) for agent claims.
 
     Returns ``(events, drops)`` where drops are ``{key, reason}`` for rejected
     claims (never raises). Agent fields are whitelisted; counting fields come
     from ``derive_attrs(raw, validated)`` or static ``derived`` (Executor).
-    Claim ids are namespaced per attempt. Unknown targets are rejected — never
-    auto-created. Existing target nodes are never clobbered. Re-upsert of the
-    same namespaced id keeps worst provenance.
+
+    ``infra_failure=True`` (crash / timeout / catalog / invalid output) drops
+    all claims. Scientific FAILED/PARTIAL (criteria not met) **keep** claims so
+    ``not_met`` can refute (graph_schema invariant 10).
     """
     drops: list[dict[str, str]] = []
-    if attempt_outcome == "FAILED":
+    if infra_failure:
         return [], drops
     if provenance not in VALID_PROVENANCE:
         provenance = "stub"  # type: ignore[assignment]
@@ -287,22 +289,36 @@ def claim_nodes_from_attempt(
             continue
         target_id, _target_kind = resolved
 
-        structurally_ok = True
+        id_collides = False
+        target_changed = False
+        about_retarget = False
         if graph is not None:
             existing = graph.get_node(cid)
             if existing is not None:
                 if existing.kind != "claim":
-                    drops.append({"key": agent_key, "reason": "id_collides_non_claim"})
-                    continue
-                old_target = (existing.attrs or {}).get("target")
-                if old_target is not None and str(old_target) != str(target):
-                    drops.append({"key": agent_key, "reason": "target_change_forbidden"})
-                    continue
-                # Existing about must not retarget.
-                old_about = [e for e in graph.edges_from(cid) if e.kind == "about"]
-                if old_about and old_about[0].dst_id != target_id:
-                    drops.append({"key": agent_key, "reason": "about_retarget_forbidden"})
-                    continue
+                    id_collides = True
+                else:
+                    old_target = (existing.attrs or {}).get("target")
+                    if old_target is not None and str(old_target) != str(target):
+                        target_changed = True
+                    old_about = [e for e in graph.edges_from(cid) if e.kind == "about"]
+                    if old_about and old_about[0].dst_id != target_id:
+                        about_retarget = True
+        if id_collides:
+            drops.append({"key": agent_key, "reason": "id_collides_non_claim"})
+            continue
+        if target_changed:
+            drops.append({"key": agent_key, "reason": "target_change_forbidden"})
+            continue
+        if about_retarget:
+            drops.append({"key": agent_key, "reason": "about_retarget_forbidden"})
+            continue
+
+        # Real structural validation (not a literal): id/target/about gates passed.
+        structurally_ok = bool(
+            cid and target and resolved is not None and not id_collides
+            and not target_changed and not about_retarget
+        )
 
         new_prov: Provenance = provenance
         if graph is not None:
@@ -486,7 +502,8 @@ def collect_bindable_claims(
 ) -> tuple[set[str], dict[str, Provenance]]:
     """Claim ids eligible as ``kind=claim`` inputs + their provenance.
 
-    Skips claims whose producing attempt is FAILED (carry-over #2).
+    Skips claims whose producing attempt is an **infra** failure; scientific
+    FAILED (criteria not met) remains bindable.
     """
     known: set[str] = set()
     claim_provenance: dict[str, Provenance] = {}
@@ -499,7 +516,7 @@ def collect_bindable_claims(
     for node in nodes:
         attrs = node.attrs or {}
         aid = attrs.get("attempt_id")
-        if str(attrs.get("attempt_outcome") or "") == "FAILED":
+        if producer_attempt_failed(str(aid) if aid else None, results=results):
             continue
         if producer_attempt_failed(str(aid) if aid else None, results=results):
             continue

@@ -15,8 +15,8 @@ from coscientist.core.inputs import (
     bind_inputs,
     input_binding_digest,
 )
-from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.upcasters import upcast
+from tests.helpers import close_runtime, open_runtime
 from tests.test_inputs import _task
 
 

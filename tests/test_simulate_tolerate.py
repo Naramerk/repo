@@ -18,9 +18,8 @@ from coscientist.core.domain import (
 )
 from coscientist.core.inputs import InputUnavailable, bind_inputs
 from coscientist.core.reasons import TaskReason
-from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.upcasters import upcast
-from tests.helpers import attach_executor, record_success
+from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
 
 def _task(key: str, outcome: TaskOutcome | None, *, inputs=None, **spec_kw):

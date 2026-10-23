@@ -14,8 +14,8 @@ from coscientist.core.r17 import (
     r17_threshold_source_not_counted,
 )
 from coscientist.core.reasons import TaskReason
-from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.upcasters import upcast
+from tests.helpers import close_runtime, open_runtime
 
 
 def test_refute_intent_met_is_survived(impl):

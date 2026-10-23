@@ -104,15 +104,15 @@ class RuntimeClaim:
         return self.evidence_kind == "literature"
 
     def counts(self) -> bool:
+        """Counting set q (RM §4.1 + PR8): accepted scientific result.
+
+        Attempt outcome may be SUCCESS / PARTIAL / FAILED when failure is
+        criteria-not-met (scientific). Infra failures never set ``accepted``.
+        """
         ok = self.evidence_kind in ("computational", "experimental") or (
             self.is_lit and self.lit_own_criterion
         )
-        return (
-            self.accepted
-            and ok
-            and self.frozen
-            and self.attempt_outcome == "SUCCESS"
-        )
+        return self.accepted and ok and self.frozen
 
 
 def whitelist_claim_attrs(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -120,18 +120,41 @@ def whitelist_claim_attrs(raw: Mapping[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in raw.items() if k in CLAIM_ATTR_WHITELIST}
 
 
+_INFRA_RESULT = "infra"
+_INFRA_REASONS = frozenset(
+    {
+        "catalog_error",
+        "crash",
+        "invalid_output",
+        "timeout",
+        "human_timeout",
+    }
+)
+
+
 def producer_attempt_failed(
     attempt_id: str | None,
     *,
     results: Mapping[str, Mapping[str, Any]] | None,
 ) -> bool:
-    """True when the producing attempt is known FAILED (bind-time guard)."""
+    """True when the producing attempt is an **infra** failure (not criteria).
+
+    Scientific FAILED (criteria not met) still yields bindable claims.
+    """
     if not attempt_id or not results:
         return False
     row = results.get(attempt_id)
     if not row:
         return False
-    return str(row.get("outcome") or "") == "FAILED"
+    if str(row.get("result_class") or "") == _INFRA_RESULT:
+        return True
+    if str(row.get("result_class") or "") == "scientific":
+        return False
+    # Legacy journals without result_class: FAILED + infra reason only.
+    if str(row.get("outcome") or "") != "FAILED":
+        return False
+    reason = str(row.get("reason") or "")
+    return reason in _INFRA_REASONS or reason.endswith("timeout")
 
 
 def _coerce_str(val: Any, *, allow_empty: bool = False) -> str | None:
@@ -310,7 +333,8 @@ def runtime_claim_from_node(
         outcome = _coerce_str(attrs.get("attempt_outcome"), allow_empty=True) or ""
         if results and aid and aid in results:
             outcome = str(results[aid].get("outcome") or outcome)
-        if outcome == "FAILED" or producer_attempt_failed(aid, results=results):
+        # Drop only infra failures; scientific FAILED (criteria) still counts.
+        if producer_attempt_failed(aid, results=results):
             return None, "producer_failed"
         if not outcome:
             outcome = "SUCCESS"

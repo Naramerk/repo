@@ -15,8 +15,8 @@ from coscientist.core.finalize_nodes import (
     conclusion_id_for_study,
     conclusion_ids_for,
 )
-from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.store import SqliteEventStore
+from tests.helpers import close_runtime, open_runtime
 from tests.test_finalize import _boot, _fin, _skip_all, _spec
 
 
