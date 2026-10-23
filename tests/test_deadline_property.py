@@ -34,7 +34,8 @@ from coscientist.core.recover import recover
 from coscientist.core.runtime_factory import close_runtime, open_runtime
 
 # Expected failures when a random rule hits an invalid transition / missing key.
-_RULE_ERR = (RuntimeError, KeyError, ValueError, InputUnavailable, AssertionError)
+# Do not include AssertionError — that would swallow production asserts.
+_RULE_ERR = (RuntimeError, KeyError, ValueError, InputUnavailable)
 
 
 class StudyClosesMachine(RuleBasedStateMachine):

@@ -215,7 +215,7 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
                     ),
                 ]
             )
-            await racer.release_lease("racer")
+            await racer.release_lease("racer", racer.epoch)
             racer.close()
         return await real_acquire(self, acq_owner, ttl_s=ttl_s)
 

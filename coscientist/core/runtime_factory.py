@@ -29,6 +29,9 @@ async def open_runtime(
     A cheap pre-lease HITL check is a fast path only. After ``acquire_lease``,
     the journal is re-read and that post-lease snapshot is the sole source for
     HITL re-check and local rebuild (closes the TOCTOU window).
+
+    Any failure after the lease is acquired releases the lease, stops a started
+    writer, and closes the store.
     """
     cls = runtime_cls or StudyRuntime
     clock = clock or SystemClock()
@@ -45,32 +48,43 @@ async def open_runtime(
         raise
 
     acquired = False
-    if acquire:
-        await store.acquire_lease(owner)
-        acquired = True
-
-    # Authoritative read under the lease — never rebuild from the pre-lease snapshot.
-    events = store.read_all()
+    writer: StudyWriter | None = None
+    writer_started = False
     try:
+        if acquire:
+            await store.acquire_lease(owner)
+            acquired = True
+
+        # Authoritative read under the lease — never rebuild from the pre-lease snapshot.
+        events = store.read_all()
         reject_open_hitl_if_unsupported(cls, events)
+
+        writer = StudyWriter(store)
+        writer.start()
+        writer_started = True
+        rt = cls(
+            store,
+            writer,
+            clock=clock,
+            registry=registry or default_execution_registry(),
+            owner=owner,
+        )
+        for ev in events:
+            rt._project_local(ev)  # noqa: SLF001
+        return rt
     except Exception:
         if acquired:
-            await store.release_lease(owner)
+            try:
+                await store.release_lease(owner, store.epoch)
+            except Exception:
+                pass
+        if writer_started and writer is not None:
+            try:
+                await writer.stop()
+            except Exception:
+                pass
         store.close()
         raise
-
-    writer = StudyWriter(store)
-    writer.start()
-    rt = cls(
-        store,
-        writer,
-        clock=clock,
-        registry=registry or default_execution_registry(),
-        owner=owner,
-    )
-    for ev in events:
-        rt._project_local(ev)  # noqa: SLF001
-    return rt
 
 
 async def close_runtime(rt: StudyRuntime) -> None:
@@ -78,5 +92,11 @@ async def close_runtime(rt: StudyRuntime) -> None:
         t.cancel()
     for t in list(rt._attempt_tasks.values()):  # noqa: SLF001
         t.cancel()
-    await rt.writer.stop()
-    rt.store.close()
+    try:
+        await rt.writer.stop()
+    finally:
+        try:
+            if rt.store.owner is not None:
+                await rt.store.release_lease(rt.owner, rt.store.epoch)
+        finally:
+            rt.store.close()
