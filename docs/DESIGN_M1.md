@@ -224,7 +224,7 @@ class Disposition(StrEnum):
 - `InputSpec.mode` по умолчанию `forbid` (было `use_partial` / schema_stub, D §2). Заглушки — только явным флагом; upcaster TaskCreated v3→v4 сохраняет `use_partial` для старых журналов.
 - `experiment.method=simulation` — научная симуляция (enum как в graph schema); provenance попытки всё равно capped входами (H-b / §6.7), simulation не повышает stub→real.
 
-**Тесты.** `test_uses_claim_edge`, `test_refute_intent_met_is_survived`, `test_refutation_priority_k_ref`, `test_depends_on_failed_parent_skipped`, `test_tolerate_failed_dep`, `test_default_forbid_no_stubs`; обновить refmodel.verdict.
+**Тесты.** `test_uses_claim_edge`, `test_refute_intent_met_is_survived`, `test_refutation_priority_k_ref`, `test_priority_refuted_not_capped_by_stub_supports`, `test_priority_refuted_stub_support_note_in_report_payload`, `test_depends_on_failed_parent_skipped`, `test_tolerate_failed_dep`, `test_default_forbid_no_stubs`; обновить refmodel.verdict.
 
 ## 4. Расширение плана: PlanExpanded, foreach, LoopSpec (S6, S9, S10, H-d, H-f, H-g, строки 11–15)
 
