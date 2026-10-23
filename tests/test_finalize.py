@@ -109,6 +109,15 @@ def test_terminal_reason_trigger_deadline():
     assert terminal_reason_for("deadline", tasks={}, question_dispositions={}) == TerminalReason.DEADLINE
 
 
+def test_terminal_reason_trigger_intake_refused():
+    assert terminal_reason_for("intake", tasks={}, question_dispositions={}) == TerminalReason.REFUSED
+
+
+def test_terminal_reason_trigger_internal_error():
+    """Public payload: trigger=internal_error → TerminalReason.INTERNAL_ERROR (PR13)."""
+    assert terminal_reason_for("internal_error", tasks={}, question_dispositions={}) == TerminalReason.INTERNAL_ERROR
+
+
 def test_terminal_reason_trigger_all_done_completed():
     term = terminal_reason_for(
         "all_done", tasks={"a": _task("A")}, question_dispositions={}
