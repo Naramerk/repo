@@ -2588,85 +2588,104 @@ def _nested_meta_chain(n: int, typeflag: str = "x") -> bytes:
     )
 
 
-@pytest.mark.parametrize(
-    "mode,wrap,typeflag",
-    [
-        ("r:gz", lambda raw: gzip.compress(raw), "x"),
-        ("r:xz", lambda raw: __import__("lzma").compress(raw), "x"),
-        ("r:bz2", lambda raw: __import__("bz2").compress(raw), "x"),
-        ("r:", lambda raw: raw, "x"),
-        ("r:gz", lambda raw: gzip.compress(raw), "L"),
-        ("r:xz", lambda raw: __import__("lzma").compress(raw), "L"),
-        ("r:bz2", lambda raw: __import__("bz2").compress(raw), "g"),
-        ("r:", lambda raw: raw, "K"),
-    ],
-)
-def test_nested_meta_chain_over_limit_rejected(mode, wrap, typeflag):
-    """B5: >8 consecutive x/L/K/g must not RecursionError — INPUT_INVALID."""
+def _meta_wrap_specs() -> list[tuple[str, object, str, str]]:
+    """(inspect_mode, wrap, filename, media_type) for plain/gz/xz/bz2."""
+    import bz2
+    import lzma
+
+    return [
+        ("r:", lambda raw: raw, "meta.tar", "application/x-tar"),
+        ("r:gz", gzip.compress, "meta.tgz", "application/gzip"),
+        ("r:xz", lzma.compress, "meta.txz", "application/x-xz"),
+        ("r:bz2", bz2.compress, "meta.tbz2", "application/x-bzip2"),
+    ]
+
+
+@pytest.mark.parametrize("typeflag", ["x", "L", "K", "g"])
+@pytest.mark.parametrize("mode,wrap,fname,mt", _meta_wrap_specs())
+@pytest.mark.parametrize("via", ["inspect_tar_streaming", "check_user_inputs_limits"])
+def test_nested_meta_chain_over_limit_rejected(via, mode, wrap, fname, mt, typeflag):
+    """B5: both gate paths × x/L/K/g × gz/xz/bz2/plain → INPUT_INVALID, no raise."""
     from coscientist.core.archive_limits import MAX_TAR_META_CHAIN, inspect_tar_streaming
 
     raw = _nested_meta_chain(MAX_TAR_META_CHAIN + 1, typeflag=typeflag)
     data = wrap(raw)
-    bad = inspect_tar_streaming(
-        data,
-        max_bytes=10_000_000,
-        max_unpack_ratio=100.0,
-        max_zip_members=10_000,
-        name=f"meta_{typeflag}.tar{mode}",
-        mode=mode,
-    )
+    lim = InputLimits(max_bytes=10_000_000, max_unpack_ratio=100.0, max_zip_members=10_000)
+    if via == "inspect_tar_streaming":
+        bad = inspect_tar_streaming(
+            data,
+            max_bytes=lim.max_bytes,
+            max_unpack_ratio=lim.max_unpack_ratio,
+            max_zip_members=lim.max_zip_members,
+            name=fname,
+            mode=mode,  # type: ignore[arg-type]
+        )
+    else:
+        bad = check_user_inputs_limits(
+            [UserInput(name=fname, content=data, media_type=mt)],
+            lim,
+        )
     assert bad is not None and bad[0] == RefusalKind.INPUT_INVALID
     assert "meta chain" in bad[1]
 
 
-@pytest.mark.parametrize(
-    "mode,wrap",
-    [
-        ("r:gz", lambda raw: gzip.compress(raw)),
-        ("r:xz", lambda raw: __import__("lzma").compress(raw)),
-        ("r:bz2", lambda raw: __import__("bz2").compress(raw)),
-        ("r:", lambda raw: raw),
-    ],
-)
-def test_deep_nested_meta_2000_no_recursion_error(mode, wrap):
-    """B5 repro: 2000× empty x + file — refusal, never RecursionError/500."""
+@pytest.mark.parametrize("typeflag", ["x", "L", "K", "g"])
+@pytest.mark.parametrize("mode,wrap,fname,mt", _meta_wrap_specs())
+@pytest.mark.parametrize("via", ["inspect_tar_streaming", "check_user_inputs_limits"])
+def test_deep_nested_meta_2000_no_recursion_error(via, mode, wrap, fname, mt, typeflag):
+    """B5 repro: 2000× nested meta — both paths refuse, never RecursionError."""
     from coscientist.core.archive_limits import inspect_tar_streaming
 
-    raw = _nested_meta_chain(2000, typeflag="x")
+    raw = _nested_meta_chain(2000, typeflag=typeflag)
     data = wrap(raw)
-    bad = inspect_tar_streaming(
-        data,
-        max_bytes=50_000_000,
-        max_unpack_ratio=100.0,
-        max_zip_members=10_000,
-        name=f"meta2000.tar{mode}",
-        mode=mode,
-    )
+    lim = InputLimits(max_bytes=50_000_000, max_unpack_ratio=100.0, max_zip_members=10_000)
+    if via == "inspect_tar_streaming":
+        bad = inspect_tar_streaming(
+            data,
+            max_bytes=lim.max_bytes,
+            max_unpack_ratio=lim.max_unpack_ratio,
+            max_zip_members=lim.max_zip_members,
+            name=fname,
+            mode=mode,  # type: ignore[arg-type]
+        )
+    else:
+        bad = check_user_inputs_limits(
+            [UserInput(name=fname, content=data, media_type=mt)],
+            lim,
+        )
     assert bad is not None and bad[0] == RefusalKind.INPUT_INVALID
     assert "meta chain" in bad[1]
 
 
 @pytest.mark.parametrize(
-    "mode,wrap",
+    "mode,wrap,fname,mt",
     [
-        ("r:gz", lambda raw: gzip.compress(raw)),
-        ("r:", lambda raw: raw),
+        ("r:gz", gzip.compress, "meta_ok.tgz", "application/gzip"),
+        ("r:", lambda raw: raw, "meta_ok.tar", "application/x-tar"),
     ],
 )
-def test_nested_meta_within_limit_accepted(mode, wrap):
-    """Exactly MAX_TAR_META_CHAIN empty pax headers still accept."""
+@pytest.mark.parametrize("via", ["inspect_tar_streaming", "check_user_inputs_limits"])
+def test_nested_meta_within_limit_accepted(via, mode, wrap, fname, mt):
+    """Exactly MAX_TAR_META_CHAIN empty pax headers still accept on both paths."""
     from coscientist.core.archive_limits import MAX_TAR_META_CHAIN, inspect_tar_streaming
 
     raw = _nested_meta_chain(MAX_TAR_META_CHAIN, typeflag="x")
     data = wrap(raw)
-    bad = inspect_tar_streaming(
-        data,
-        max_bytes=10_000_000,
-        max_unpack_ratio=100.0,
-        max_zip_members=10_000,
-        name=f"meta_ok.tar{mode}",
-        mode=mode,
-    )
+    lim = InputLimits(max_bytes=10_000_000, max_unpack_ratio=100.0, max_zip_members=10_000)
+    if via == "inspect_tar_streaming":
+        bad = inspect_tar_streaming(
+            data,
+            max_bytes=lim.max_bytes,
+            max_unpack_ratio=lim.max_unpack_ratio,
+            max_zip_members=lim.max_zip_members,
+            name=fname,
+            mode=mode,  # type: ignore[arg-type]
+        )
+    else:
+        bad = check_user_inputs_limits(
+            [UserInput(name=fname, content=data, media_type=mt)],
+            lim,
+        )
     assert bad is None, bad
 
 
@@ -2689,3 +2708,66 @@ def test_many_small_pax_headers_budget_too_large():
     )
     assert bad is not None and bad[0] == RefusalKind.INPUT_TOO_LARGE
     assert "max_bytes" in bad[1] or "uncompressed" in bad[1]
+
+    # Same via check_user_inputs_limits.
+    bad2 = check_user_inputs_limits(
+        [UserInput(name="many_pax.tar", content=raw, media_type="application/x-tar")],
+        InputLimits(max_bytes=8_000, max_unpack_ratio=100.0, max_zip_members=10_000),
+    )
+    assert bad2 is not None and bad2[0] == RefusalKind.INPUT_TOO_LARGE
+
+
+@pytest.mark.asyncio
+async def test_nested_meta_intake_finalized_store_rejects_late_write(
+    tmp_path, clock, runtime_cls
+):
+    """PR19 intake refuse → one StudyFinalized; #31 store guard blocks later writes."""
+    from coscientist.core.archive_limits import MAX_TAR_META_CHAIN
+    from coscientist.core.errors import StudyClosedError
+    from coscientist.core.events import EventEnvelope, make_idem
+
+    sid = "st_b5_meta_closed"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    raw = _nested_meta_chain(MAX_TAR_META_CHAIN + 1, typeflag="x")
+    data = gzip.compress(raw)
+    await _create_with_inputs(
+        rt,
+        profile="research",
+        request="analyse nested meta",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=120),
+        sid=sid,
+        finalize_reserve_s=5,
+        inputs=[
+            UserInput(name="evil.tgz", content=data, media_type="application/gzip")
+        ],
+        input_limits=InputLimits(
+            max_bytes=10_000_000, max_unpack_ratio=100.0, max_zip_members=10_000
+        ),
+    )
+    events = await rt.store.read_all()
+    types = [e.type for e in events]
+    assert "StudyRefused" in types
+    fins = [e for e in events if e.type == "StudyFinalized"]
+    assert len(fins) == 1
+    assert fins[0].payload["terminal_reason"] == TerminalReason.REFUSED.value
+    assert fins[0].payload["trigger"] == "intake"
+    # StudyFinalized is last — PR19 must not append after it.
+    assert types[-1] == "StudyFinalized"
+    n_before = len(events)
+    late = EventEnvelope(
+        study_id=sid,
+        type="GraphNodeUpserted",
+        entity_key=f"{sid}:late",
+        idem_key=make_idem("GraphNodeUpserted", f"{sid}:late"),
+        payload={"node_id": f"{sid}:late", "kind": "study", "study_id": sid},
+        ts=clock.now(),
+    )
+    with pytest.raises(StudyClosedError):
+        await rt.store.append(late)
+    events2 = await rt.store.read_all()
+    assert len(events2) == n_before
+    assert len([e for e in events2 if e.type == "StudyFinalized"]) == 1
+    await close_runtime(rt)
