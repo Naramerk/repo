@@ -658,7 +658,7 @@ def test_upcaster_studyfinalized_v3_to_v4_custom_checks() -> None:
 
 
 def test_register_upcaster_refuses_overwrite() -> None:
-    with pytest.raises(ValueError, match="already registered"):
+    with pytest.raises(ValueError, match="duplicate upcaster"):
         register_upcaster("StudyCreated", 9, lambda p: p)
     assert 9 in UPCASTERS["StudyCreated"]
 
