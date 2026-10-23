@@ -29,6 +29,8 @@ packages = ["coscientist"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "coscientist/schema/graph_schema.yaml" = "coscientist/schema/graph_schema.yaml"
+"coscientist/schema/minimal_report.schema.json" = "coscientist/schema/minimal_report.schema.json"
+"coscientist/schema/study_refused.schema.json" = "coscientist/schema/study_refused.schema.json"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -73,9 +73,12 @@ def test_task_reason_enum_roundtrip():
     assert Disposition.NOT_ATTEMPTED.value == "not_attempted"
     assert NotAttemptedReason.NO_TASK.value == "no_task"
     assert RefusalKind.BUDGET_ZERO.value == "budget_zero"
+    assert RefusalKind.DURATION_TOO_SHORT.value == "duration_too_short"
+    import asyncio
+
     from coscientist.core.intake import IntakeRefuse
 
-    refused = intake("", [], "p", None)
+    refused = asyncio.run(intake("", [], "p", None))
     assert isinstance(refused, IntakeRefuse)
     assert refused.kind == RefusalKind.EMPTY_REQUEST
 

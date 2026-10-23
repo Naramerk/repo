@@ -381,16 +381,28 @@ async def test_task_budget_does_not_close_study(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_budget_exceeded_survives_crash(tmp_path, clock):
-    """BudgetExceeded persisted → reopen finalizes trigger=budget."""
+async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
+    """BudgetExceeded persisted → reopen finalizes trigger=budget (core + exp)."""
     sid = "st_bg_crash"
-    rt = await _boot(tmp_path, clock, sid)
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=60),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
     await rt.note_budget_exceeded()
     assert rt._budget_exceeded
     assert any(e.type == "BudgetExceeded" for e in await rt.store.read_all())
     assert not rt._finalized
     await close_runtime(rt)
-    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    rt2 = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
+    )
     assert rt2._budget_exceeded
     await rt2.tick()
     assert _fin(await rt2.store.read_all()).payload["trigger"] == "budget"

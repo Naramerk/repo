@@ -2,35 +2,45 @@
 
 from __future__ import annotations
 
+import json
+import time
 from datetime import timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
 from coscientist.core.domain import Budget
-from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.finalize_nodes import conclusion_id_for_study
-from coscientist.core.intake import IntakeAccept, IntakeRefuse, intake
+from coscientist.core.intake import REASON_MAX, IntakeAccept, IntakeRefuse, intake
 from coscientist.core.reasons import RefusalKind
 from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.study_view import study_phase, study_view
 from tests.helpers import attach_executor
 
+try:
+    import jsonschema
+except ImportError:  # pragma: no cover
+    jsonschema = None
 
-def test_intake_empty_request():
-    r = intake("", [], "research", None)
+
+@pytest.mark.asyncio
+async def test_intake_empty_request():
+    r = await intake("", [], "research", None)
     assert isinstance(r, IntakeRefuse)
     assert r.kind == RefusalKind.EMPTY_REQUEST
 
 
-def test_intake_budget_zero():
-    r = intake("q", [], "research", Budget(max_cost_rub=Decimal("0")))
+@pytest.mark.asyncio
+async def test_intake_budget_zero():
+    r = await intake("q", [], "research", Budget(max_cost_rub=Decimal("0")))
     assert isinstance(r, IntakeRefuse)
     assert r.kind == RefusalKind.BUDGET_ZERO
 
 
-def test_intake_below_min_plan_cost():
-    r = intake(
+@pytest.mark.asyncio
+async def test_intake_below_min_plan_cost():
+    r = await intake(
         "q",
         [],
         "research",
@@ -40,8 +50,9 @@ def test_intake_below_min_plan_cost():
     assert isinstance(r, IntakeRefuse) and r.kind == RefusalKind.BUDGET_ZERO
 
 
-def test_intake_duration_too_short():
-    r = intake(
+@pytest.mark.asyncio
+async def test_intake_duration_too_short():
+    r = await intake(
         "q",
         [],
         "research",
@@ -53,58 +64,107 @@ def test_intake_duration_too_short():
     assert r.kind == RefusalKind.DURATION_TOO_SHORT
 
 
-def test_intake_accepts_ok():
+@pytest.mark.asyncio
+async def test_intake_accepts_ok():
     assert isinstance(
-        intake("do science", [], "research", Budget(max_cost_rub=Decimal("100"))),
+        await intake(
+            "do science", [], "research", Budget(max_cost_rub=Decimal("100"))
+        ),
         IntakeAccept,
     )
 
 
-def test_intake_safety_port_refuses():
+@pytest.mark.asyncio
+async def test_intake_safety_port_refuses():
     class Port:
         def classify(self, request, inputs):
             return RefusalKind.OUT_OF_SCOPE
 
-    r = intake("q", [], "research", None, safety=Port())
+    r = await intake("q", [], "research", None, safety=Port())
     assert isinstance(r, IntakeRefuse) and r.kind == RefusalKind.OUT_OF_SCOPE
     assert r.classifier_error is False
 
 
-def test_intake_safety_port_timeout():
+@pytest.mark.asyncio
+async def test_intake_safety_port_timeout():
     class Port:
         def classify(self, request, inputs):
             raise TimeoutError
 
-    r = intake("q", [], "research", None, safety=Port(), safety_timeout_s=0.5)
+    r = await intake("q", [], "research", None, safety=Port(), safety_timeout_s=0.5)
     assert isinstance(r, IntakeRefuse) and r.kind == RefusalKind.SAFETY
     assert r.classifier_error is True
 
 
-def test_intake_safety_port_hung_enforces_timeout():
-    import time
+@pytest.mark.asyncio
+async def test_intake_safety_port_hung_enforces_timeout():
+    """Hung sync classify must not block past safety_timeout_s (event-loop safe)."""
+    import threading
+
+    started = threading.Event()
+    release = threading.Event()
 
     class Port:
         def classify(self, request, inputs):
-            time.sleep(2.0)
+            started.set()
+            # Hang far longer than safety_timeout_s; release cleans up the thread.
+            release.wait(timeout=60.0)
             return None
 
-    r = intake("q", [], "research", None, safety=Port(), safety_timeout_s=0.2)
+    t0 = time.monotonic()
+    r = await intake("q", [], "research", None, safety=Port(), safety_timeout_s=0.2)
+    elapsed = time.monotonic() - t0
+    assert elapsed < 1.0, f"timeout waited too long: {elapsed:.2f}s"
     assert isinstance(r, IntakeRefuse)
     assert r.kind == RefusalKind.SAFETY
     assert r.classifier_error is True
     assert "timeout" in r.reason
+    assert started.wait(1.0)
+    release.set()
 
 
-def test_intake_safety_port_error_sets_classifier_error():
+@pytest.mark.asyncio
+async def test_intake_safety_port_error_sets_classifier_error():
     class Port:
         def classify(self, request, inputs):
             raise RuntimeError("boom")
 
-    r = intake("q", [], "research", None, safety=Port())
+    r = await intake("q", [], "research", None, safety=Port())
     assert isinstance(r, IntakeRefuse)
     assert r.kind == RefusalKind.SAFETY
     assert r.classifier_error is True
     assert "RuntimeError" in r.reason
+
+
+@pytest.mark.asyncio
+async def test_intake_classifier_reason_truncated():
+    class Port:
+        def classify(self, request, inputs):
+            raise RuntimeError("x" * 500)
+
+    r = await intake("q", [], "research", None, safety=Port())
+    assert isinstance(r, IntakeRefuse)
+    assert len(r.reason) <= REASON_MAX
+
+
+def test_study_refused_schema_valid():
+    schema = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "coscientist/schema/study_refused.schema.json"
+        ).read_text()
+    )
+    payload = {
+        "kind": "empty_request",
+        "reason": "empty request",
+        "classifier_error": False,
+    }
+    if jsonschema is not None:
+        jsonschema.validate(payload, schema)
+    else:
+        for k in schema["required"]:
+            assert k in payload
+    assert "duration_too_short" in schema["properties"]["kind"]["enum"]
 
 
 @pytest.mark.asyncio
@@ -126,13 +186,20 @@ async def test_intake_refuses_before_spec(tmp_path, clock):
     refused = [e for e in events if e.type == "StudyRefused"]
     assert len(refused) == 1
     assert refused[0].payload["kind"] == "empty_request"
+    if jsonschema is not None:
+        schema = json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "coscientist/schema/study_refused.schema.json"
+            ).read_text()
+        )
+        jsonschema.validate(refused[0].payload, schema)
     fins = [e for e in events if e.type == "StudyFinalized"]
     assert len(fins) == 1
     assert fins[0].payload["trigger"] == "intake"
     assert fins[0].payload["terminal_reason"] == "refused"
     refusal = str(fins[0].payload.get("refusal") or "")
     assert "empty_request" in refusal
-    # M1: report and study conclusion both explain the refusal.
     art_id = fins[0].payload.get("report_artifact_id")
     assert art_id
     md = arts.read(art_id).decode("utf-8")
@@ -188,71 +255,37 @@ async def test_duration_le_reserve_refused(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_intake_refuse_survives_crash(tmp_path, clock):
-    """Crash after StudyCreated+StudyRefused → reopen finalizes trigger=intake."""
-    from coscientist.core.domain import HitlPolicy, Study
-    from coscientist.core.graph import GraphNode
-
+async def test_intake_refuse_survives_crash(tmp_path, clock, runtime_cls, monkeypatch):
+    """create_study writes StudyRefused then finalize crashes → reopen → intake."""
     sid = "st_crash_ref"
-    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
-    now = clock.now()
-    dl = now + timedelta(seconds=60)
-    study = Study(
-        study_id=sid,
-        profile="research",
-        request="",
-        catalog_version="0.1.0",
-        hitl_policy=HitlPolicy(),
-        deadline=dl,
-        created_at=now,
-        finalize_reserve_s=5,
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("inject:finalize_crash")
+
+    monkeypatch.setattr("coscientist.core.finalize.finalize", boom)
+
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt._append(
-        [
-            EventEnvelope(
-                study_id=sid,
-                type="StudyCreated",
-                entity_key=sid,
-                idem_key=make_idem("StudyCreated", sid),
-                payload=study.model_dump(mode="json"),
-                ts=now,
-                schema_version=2,
-            ),
-            EventEnvelope(
-                study_id=sid,
-                type="GraphNodeUpserted",
-                entity_key=f"{sid}:study",
-                idem_key=make_idem("GraphNodeUpserted", f"{sid}:study"),
-                payload=GraphNode(
-                    node_id=f"{sid}:study",
-                    kind="study",
-                    study_id=sid,
-                    ref_id=sid,
-                    created_at=now,
-                ).model_dump(mode="json"),
-                ts=now,
-            ),
-            EventEnvelope(
-                study_id=sid,
-                type="StudyRefused",
-                entity_key=sid,
-                idem_key=make_idem("StudyRefused", sid),
-                payload={
-                    "kind": RefusalKind.EMPTY_REQUEST.value,
-                    "reason": "empty request",
-                    "classifier_error": False,
-                },
-                ts=now,
-                schema_version=1,
-            ),
-        ]
-    )
+    with pytest.raises(RuntimeError, match="inject:finalize_crash"):
+        await rt.create_study(
+            profile="research",
+            request="",
+            catalog_version="0.1.0",
+            deadline=clock.now() + timedelta(seconds=60),
+            sid=sid,
+            finalize_reserve_s=5,
+        )
+    types = {e.type for e in await rt.store.read_all()}
+    assert "StudyCreated" in types and "StudyRefused" in types
+    assert "StudyFinalized" not in types
     assert rt._intake_refusal is not None
-    assert not rt._finalized
     await close_runtime(rt)
 
     clock.advance(timedelta(seconds=120))  # past ed — intake must still win
-    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    rt2 = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
+    )
     assert rt2._intake_refusal is not None
     assert rt2._intake_refusal.kind == RefusalKind.EMPTY_REQUEST
     assert not rt2._finalized

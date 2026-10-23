@@ -41,6 +41,8 @@ class Study(BaseModel):
     hitl_policy: HitlPolicy    # §7.3
     deadline: datetime         # верхняя граница всего study (§3.3)
     finalize_reserve_s: int = 30  # резерв под финализацию; effective_deadline = deadline − reserve (§0.5/M1)
+    # Intake (M1 PR4): duration ≤ finalize_reserve_s → Refuse(DURATION_TOO_SHORT), not ValueError;
+    # empty/budget_zero/safety → other RefusalKind; event StudyRefused in same txn as StudyCreated.
     parent_study_id: str | None = None   # «продолжить сессию» (§3.6)
     goal: Goal                 # statement, research_form, trl (заполняет spec)
     constraints: list[Constraint] = []   # узел constraint — только для проверяемых
@@ -611,6 +613,8 @@ class Budget(BaseModel):
     max_tool_calls: int; deadline: datetime
 ```
 Бюджеты: на study, на попытку (из RouteConfig), на роль. Превышение → `BudgetExceeded(scope)`: попытка failure(retryable=False), при превышении бюджета study все не-DONE задачи → DONE(SKIPPED, budget) (P6), study закрывается с verdict partial/failed.
+
+**M1 / PR4 note.** Core persists and folds `BudgetExceeded(scope=study)` (via `note_budget_exceeded()`); tick finalizes with `trigger=budget`. A production producer that *emits* study-level `BudgetExceeded` when `max_llm_calls` / `max_cost_rub` / … are exhausted is **deferred**: M0/experimental only accounts `Budget.delegated_costly` (HITL costly gate → task-level `TaskDone(budget)`, which must not close the study). Study-wide spend accounting lands with later budget/share work; until then tests call `note_budget_exceeded()` directly.
 
 ### 7.5 ТЗ исследования (#1)
 Роль `tz_spec`: вход — запрос, выход `ResearchSpec(object, goal, scope, constraints, success_metrics)`. Задача kind=spec — первая в DAG; `spec_approval` по политике HITL; FAILED → потомки работают по §3.4 (plan строится на запросе как есть).

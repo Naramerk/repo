@@ -95,7 +95,7 @@ class RefusalKind(StrEnum):
     DURATION_TOO_SHORT = "duration_too_short"
 
 
-def intake(
+async def intake(
     request: str,
     inputs: list[Any],
     profile: str,
@@ -105,7 +105,7 @@ def intake(
     """Delegate to ``coscientist.core.intake.intake`` (PR 4)."""
     from coscientist.core.intake import intake as _intake
 
-    return _intake(request, inputs, profile, budget, **kwargs)
+    return await _intake(request, inputs, profile, budget, **kwargs)
 
 
 def coerce_task_reason(value: str | TaskReason | None) -> TaskReason | None:

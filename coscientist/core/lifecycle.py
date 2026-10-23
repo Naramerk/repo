@@ -68,7 +68,7 @@ class LifecycleMixin:
         if finalize_reserve_s < 0:
             raise ValueError(f"finalize_reserve_s must be >= 0, got {finalize_reserve_s}")
         duration_s = (dl - now).total_seconds()
-        decision = intake(
+        decision = await intake(
             request,
             list(inputs or []),
             profile,
