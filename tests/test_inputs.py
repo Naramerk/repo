@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from coscientist.core.domain import (
+from coscientist.core.execution.domain import (
     InputSpec,
     Task,
     TaskKind,
@@ -14,7 +14,7 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.inputs import InputUnavailable, bind_inputs, worst_provenance
+from coscientist.core.execution.inputs import InputUnavailable, bind_inputs, worst_provenance
 
 
 def _task(key: str, outcome: TaskOutcome | None, *, inputs=None):

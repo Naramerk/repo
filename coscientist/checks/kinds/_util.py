@@ -14,9 +14,9 @@ from coscientist.checks.sandbox import (
     limits_fully_held,
     soft_isolation_note,
 )
-from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
-from coscientist.core.domain import CheckResult, CheckRole, EvidenceRef, ReqStatus
-from coscientist.core.errors import SandboxInfraError
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.execution.domain import CheckResult, CheckRole, EvidenceRef, ReqStatus
+from coscientist.core.events.errors import SandboxInfraError
 
 MALFORMED_JUNIT = "malformed_output:junit"
 MALFORMED_METRICS = "malformed_output:metrics"

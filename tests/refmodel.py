@@ -282,7 +282,7 @@ _FULFILLMENT_BLOCKING = frozenset(
 
 
 def study_fulfilled(question_verdicts, all_required_success):
-    """Oracle: same blocking set as coscientist.core.rules.study_fulfilled."""
+    """Oracle: same blocking set as coscientist.core.claims.rules.study_fulfilled."""
     return all_required_success and all(
         v not in _FULFILLMENT_BLOCKING for v in question_verdicts.values()
     )

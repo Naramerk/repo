@@ -20,26 +20,26 @@ from hypothesis.stateful import (
     run_state_machine_as_test,
 )
 
-from coscientist.core.clock import FakeClock
-from coscientist.core.domain import (
+from coscientist.core.events.clock import FakeClock
+from coscientist.core.execution.domain import (
     QuestionSpec,
     QuestionSupersede,
     TaskSpec,
     TaskState,
 )
-from coscientist.core.errors import (
+from coscientist.core.events.errors import (
     AttemptClosedError,
     HitlUnsupported,
     LeaseLost,
     StudyClosedError,
 )
-from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.finalize_nodes import conclusion_id_for_question
-from coscientist.core.inputs import InputUnavailable
-from coscientist.core.projections import fold_events
-from coscientist.core.question_tasks import known_questions
-from coscientist.core.reasons import TaskReason
-from coscientist.core.recover import recover
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.finalize.finalize_nodes import conclusion_id_for_question
+from coscientist.core.execution.inputs import InputUnavailable
+from coscientist.core.events.projections import fold_events
+from coscientist.core.plan.question_tasks import known_questions
+from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.execution.recover import recover
 from tests.helpers import close_runtime, open_runtime
 
 _RULE_ERR = (
@@ -293,7 +293,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
             addresses=[new_id],
         )
         # MJ-d: human quota only via HitlDecided matching hitl_request_id.
-        from coscientist.core.events import EventEnvelope, make_idem
+        from coscientist.core.events.events import EventEnvelope, make_idem
 
         rid = f"hitl_prop_{rev}"
         now = self.rt.clock.now()

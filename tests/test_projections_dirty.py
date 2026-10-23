@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.projections import _DIRTY_KEYS, _put, apply_event, apply_to_map
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.projections import _DIRTY_KEYS, _put, apply_event, apply_to_map
 
 
 def test_put_records_dirty_keys_when_tracking():
@@ -84,7 +84,7 @@ def test_source_fetched_apply_event_loads_fetch_calls(monkeypatch):
     Without loading fetch_calls into the apply_event scratch, a prior AttemptTainted
     marker is invisible and SourceFetched is dropped on the write path.
     """
-    from coscientist.core.projections import _projection_load_tables
+    from coscientist.core.events.projections import _projection_load_tables
 
     assert "fetch_calls" in _projection_load_tables("SourceFetched")
     assert "source_fetches" in _projection_load_tables("SourceFetched")
@@ -135,7 +135,7 @@ def test_source_fetched_apply_event_loads_fetch_calls(monkeypatch):
 
     # Old apply_event table list omitted fetch_calls — pair invisible despite DB row.
     monkeypatch.setattr(
-        "coscientist.core.projections._projection_load_tables",
+        "coscientist.core.events.projections._projection_load_tables",
         lambda _t: ("source_fetches",),
     )
     store_blind = _FakeStore()

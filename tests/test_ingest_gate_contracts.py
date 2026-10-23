@@ -37,9 +37,10 @@ def test_ingest_gate_contract_sources_cover_filesystem():
     c = _contract("_ingest_gate + user_ingest only via api.studies + lifecycle")
     listed = set(c["source_modules"])
     allowed = {
-        "coscientist.core.lifecycle",
-        "coscientist.core._ingest_gate",
+        "coscientist.core.plan.lifecycle",
+        "coscientist.core.execution._ingest_gate",
         "coscientist.core",  # parent overlaps forbidden — excluded from sources
+        "coscientist.core.execution",  # parent of _ingest_gate / user_ingest
     }
     expected = _all_modules() - allowed
     missing = expected - listed
@@ -47,13 +48,13 @@ def test_ingest_gate_contract_sources_cover_filesystem():
     assert not missing, f"contract missing modules: {sorted(missing)}"
     assert not extra, f"contract lists unknown modules: {sorted(extra)}"
     assert set(c["forbidden_modules"]) == {
-        "coscientist.core._ingest_gate",
-        "coscientist.core.user_ingest",
+        "coscientist.core.execution._ingest_gate",
+        "coscientist.core.execution.user_ingest",
     }
     ignores = set(c.get("ignore_imports") or [])
-    assert "coscientist.api.studies -> coscientist.core._ingest_gate" in ignores
-    assert "coscientist.core.lifecycle -> coscientist.core._ingest_gate" in ignores
-    assert "coscientist.core.artifacts -> coscientist.core._ingest_gate" in ignores
+    assert "coscientist.api.studies -> coscientist.core.execution._ingest_gate" in ignores
+    assert "coscientist.core.plan.lifecycle -> coscientist.core.execution._ingest_gate" in ignores
+    assert "coscientist.core.execution.artifacts -> coscientist.core.execution._ingest_gate" in ignores
 
 
 def test_tools_must_not_import_api_contract():
@@ -69,26 +70,27 @@ def test_lifecycle_only_via_api_runtime():
     c = _contract("lifecycle only via api.runtime")
     listed = set(c["source_modules"])
     allowed = {
-        "coscientist.core.lifecycle",
+        "coscientist.core.plan.lifecycle",
         "coscientist.api.runtime",
         "coscientist.core",  # parent package
+        "coscientist.core.plan",  # parent of lifecycle
     }
     expected = _all_modules() - allowed
     missing = expected - listed
     extra = listed - expected
     assert not missing, f"lifecycle contract missing: {sorted(missing)}"
     assert not extra, f"lifecycle contract unknown: {sorted(extra)}"
-    assert "coscientist.core.machine" in listed
-    assert "coscientist.core.executor" in listed
+    assert "coscientist.core.execution.machine" in listed
+    assert "coscientist.core.execution.executor" in listed
     assert "coscientist.agents" in listed
     ignores = set(c.get("ignore_imports") or [])
-    assert ignores == {"coscientist.api.runtime -> coscientist.core.lifecycle"}
+    assert ignores == {"coscientist.api.runtime -> coscientist.core.plan.lifecycle"}
 
 
 def test_lifecycle_direct_importers_only_api_runtime():
     """Direct ``lifecycle`` imports: only api.runtime."""
     pat = re.compile(
-        r"^\s*(from\s+coscientist\.core\.lifecycle\s+import|import\s+coscientist\.core\.lifecycle)\b",
+        r"^\s*(from\s+coscientist\.core\.plan\.lifecycle\s+import|import\s+coscientist\.core\.plan\.lifecycle)\b",
         re.M,
     )
     offenders: list[str] = []
@@ -96,7 +98,7 @@ def test_lifecycle_direct_importers_only_api_runtime():
         mod = ".".join(p.relative_to(ROOT).with_suffix("").parts)
         if p.name == "__init__.py":
             mod = ".".join(p.relative_to(ROOT).parent.parts)
-        if mod in ("coscientist.core.lifecycle", "coscientist.api.runtime"):
+        if mod in ("coscientist.core.plan.lifecycle", "coscientist.api.runtime"):
             continue
         text = p.read_text(encoding="utf-8")
         if pat.search(text):
@@ -107,9 +109,9 @@ def test_lifecycle_direct_importers_only_api_runtime():
 def test_no_dynamic_import_of_ingest_gate():
     """Grep/AST: no import_module / __import__ of _ingest_gate or user_ingest."""
     banned = (
-        "coscientist.core._ingest_gate",
-        "coscientist.core.user_ingest",
-        "coscientist.core._attempt_frame",
+        "coscientist.core.execution._ingest_gate",
+        "coscientist.core.execution.user_ingest",
+        "coscientist.core.execution._attempt_frame",
     )
     hits: list[str] = []
     for p in PKG.rglob("*.py"):
@@ -152,17 +154,17 @@ def test_bypass_modules_listed_as_gate_sources():
     c = _contract("_ingest_gate + user_ingest only via api.studies + lifecycle")
     listed = set(c["source_modules"])
     for mod in (
-        "coscientist.core.finalize",
-        "coscientist.core.intake",
-        "coscientist.core.executor",
+        "coscientist.core.finalize.finalize",
+        "coscientist.core.plan.intake",
+        "coscientist.core.execution.executor",
         "coscientist.agents",
-        "coscientist.core.machine",
+        "coscientist.core.execution.machine",
     ):
         assert mod in listed, mod
 
 
 def test_user_ingest_exports_nothing():
-    import coscientist.core.user_ingest as ui
+    import coscientist.core.execution.user_ingest as ui
 
     assert ui.__all__ == []
     assert not hasattr(ui, "put_user")

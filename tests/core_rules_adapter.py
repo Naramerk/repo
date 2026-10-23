@@ -16,11 +16,11 @@ import refmodel
 
 def make_core_impl() -> Any:
     """Build an impl surface: core rule functions + experimental costly + refmodel Graph/Claim."""
-    import coscientist.core.dispositions as dispositions
-    import coscientist.core.errors as errors
-    import coscientist.core.finalize as finalize
-    import coscientist.core.rules as core
-    import coscientist.core.study_view as study_view
+    import coscientist.core.claims.dispositions as dispositions
+    import coscientist.core.events.errors as errors
+    import coscientist.core.finalize.finalize as finalize
+    import coscientist.core.claims.rules as core
+    import coscientist.core.finalize.study_view as study_view
     import coscientist.experimental.costly as costly
 
     def terminal_reason_for(trigger, *, tasks=None, question_dispositions=None):

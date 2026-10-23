@@ -18,17 +18,17 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from coscientist.core.digest import canonical_json, sha256_hex
-from coscientist.core.domain import Budget, HitlPolicy
-from coscientist.core.errors import Conflict, LeaseLost
-from coscientist.core.input_limits import (
+from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.execution.domain import Budget, HitlPolicy
+from coscientist.core.events.errors import Conflict, LeaseLost
+from coscientist.core.execution.input_limits import (
     InputLimits,
     default_input_limits,
     enforce_request_body_limit,
     merge_input_limits,
 )
-from coscientist.core.reasons import RefusalKind
-from coscientist.core.runtime_factory import close_runtime, open_runtime
+from coscientist.core.claims.reasons import RefusalKind
+from coscientist.core.execution.runtime_factory import close_runtime, open_runtime
 
 # Default wait for another worker to finish create_study before takeover.
 _WAIT_COMPLETE_S = 2.0
@@ -373,7 +373,7 @@ async def post_studies(
         else:
             sid = str(mapping["study_id"])
     else:
-        from coscientist.core.ids import study_id as new_study_id
+        from coscientist.core.events.ids import study_id as new_study_id
 
         sid = new_study_id()
         path = None
@@ -397,14 +397,14 @@ async def post_studies(
     created_id: str | None = None
     try:
         try:
-            from coscientist.core.intake import IntakeRefuse
+            from coscientist.core.plan.intake import IntakeRefuse
 
             force_refuse = (
                 IntakeRefuse(refuse_kind, str(refuse_reason or "invalid")[:200])
                 if refuse_kind is not None
                 else None
             )
-            from coscientist.core._ingest_gate import (
+            from coscientist.core.execution._ingest_gate import (
                 mint_user_put_capability,
                 release_user_put_capability,
             )

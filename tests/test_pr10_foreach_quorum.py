@@ -6,8 +6,8 @@ from datetime import timedelta
 
 import pytest
 
-from coscientist.core.artifacts import make_tool_ref
-from coscientist.core.domain import (
+from coscientist.core.execution.artifacts import make_tool_ref
+from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     ForEachSpec,
@@ -18,13 +18,13 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.graph import GraphNode
-from coscientist.core.ids import hypothesis_node_id, task_id
-from coscientist.core.inputs import InputUnavailable
-from coscientist.core.reasons import CloseReason, TaskReason
-from coscientist.core.recover import recover
-from coscientist.core.upcasters import upcast
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.claims.graph import GraphNode
+from coscientist.core.events.ids import hypothesis_node_id, task_id
+from coscientist.core.execution.inputs import InputUnavailable
+from coscientist.core.claims.reasons import CloseReason, TaskReason
+from coscientist.core.execution.recover import recover
+from coscientist.core.events.upcasters import upcast
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
 
@@ -77,8 +77,8 @@ def test_foreach_selected_ignores_verdict():
     """
     from pathlib import Path
 
-    from coscientist.core.foreach import select_foreach_items
-    from coscientist.core.graph import GraphStore, default_execution_registry
+    from coscientist.core.plan.foreach import select_foreach_items
+    from coscientist.core.claims.graph import GraphStore, default_execution_registry
 
     # Static guarantee: no production write of selected from verdict/planner.
     root = Path(__file__).resolve().parents[1] / "coscientist"
@@ -995,7 +995,7 @@ async def test_quorum_zero_inputs_edge(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_foreach_refuse_skips_template(tmp_path, clock, runtime_cls, monkeypatch):
     """N1: ExpansionRefused → template TaskDone SKIPPED (never left PENDING)."""
-    from coscientist.core import foreach as foreach_mod
+    from coscientist.core.plan import foreach as foreach_mod
 
     sid = "st_fe_ref"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
@@ -1077,7 +1077,7 @@ async def test_driver_loop_skips_pending_foreach_template(
     tmp_path, clock, runtime_cls, monkeypatch
 ):
     """Test harness loop over iter_dispatchable_tasks (no product driver yet)."""
-    from coscientist.core import foreach as foreach_mod
+    from coscientist.core.plan import foreach as foreach_mod
 
     sid = "st_fe_drv"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
@@ -1133,7 +1133,7 @@ async def test_foreach_refused_in_expand_after_queues_plan_n(
     tmp_path, clock, runtime_cls, monkeypatch
 ):
     """Documented: TaskDone(refused) on expand_after template still queues PLAN-n."""
-    from coscientist.core import foreach as foreach_mod
+    from coscientist.core.plan import foreach as foreach_mod
 
     sid = "st_fe_ea"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
@@ -1299,7 +1299,7 @@ async def test_foreach_when_source_done_via_expand_plan(tmp_path, clock, runtime
 
 
 def test_quorum_rejects_zero():
-    from coscientist.core.quorum import validate_quorum_specs
+    from coscientist.core.execution.quorum import validate_quorum_specs
 
     with pytest.raises(ValueError, match="quorum"):
         validate_quorum_specs(
@@ -1316,7 +1316,7 @@ def test_quorum_rejects_zero():
 
 
 def test_quorum_rejects_gt_static_pool():
-    from coscientist.core.quorum import validate_quorum_specs
+    from coscientist.core.execution.quorum import validate_quorum_specs
 
     with pytest.raises(ValueError, match="pool size"):
         validate_quorum_specs(
@@ -1337,7 +1337,7 @@ def test_quorum_rejects_gt_static_pool():
 
 def test_quorum_rejects_mix_all_and_int():
     """M-A: static pool cannot mix 'all' and int (order-independent reject)."""
-    from coscientist.core.quorum import validate_quorum_specs
+    from coscientist.core.execution.quorum import validate_quorum_specs
 
     with pytest.raises(ValueError, match="mix"):
         validate_quorum_specs(

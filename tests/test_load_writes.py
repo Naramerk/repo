@@ -16,10 +16,10 @@ from typing import Any, Mapping
 
 import pytest
 
-from coscientist.core.clock import SystemClock
-from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.projections import _row_key, fold_events
-from coscientist.core.source_fetch import verify_fetch_capability
+from coscientist.core.events.clock import SystemClock
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.projections import _row_key, fold_events
+from coscientist.core.execution.source_fetch import verify_fetch_capability
 from coscientist.tools.effects import _mint_fetch_capability_for_tests
 from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success
 
@@ -672,7 +672,7 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
     ``cfg.rounds`` real rounds through the append_many path (resolved config),
     each with a slow append; gate sees measured round p99s only.
     """
-    from coscientist.core.store import SqliteEventStore
+    from coscientist.core.events.store import SqliteEventStore
 
     _clear_perf_gate_env(monkeypatch)
     cfg = resolve_perf_gate_config()

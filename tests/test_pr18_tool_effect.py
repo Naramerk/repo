@@ -25,18 +25,18 @@ from coscientist.api.studies import (
     study_id_from_idempotency_key,
 )
 from coscientist.checks.catalog import minimal_test_catalog
-from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
-from coscientist.core.domain import Artifact, HitlPolicy
-from coscientist.core.errors import Conflict
-from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.finalize import contributing_reasons_ordered
-from coscientist.core.taint import (
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.execution.domain import Artifact, HitlPolicy
+from coscientist.core.events.errors import Conflict
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.finalize.finalize import contributing_reasons_ordered
+from coscientist.core.execution.taint import (
     current_attempt_taint,
     derived_tainted,
     push_attempt_taint,
     reset_attempt_taint,
 )
-from coscientist.core.tool_registry import (
+from coscientist.core.execution.tool_registry import (
     RegisteredToolSpec,
     RegistryDuplicateError,
     RegistryFrozenError,
@@ -103,7 +103,7 @@ def test_register_tool_rejects_non_loader_callers():
 def test_registry_freeze_forbids_replace_and_spoof():
     freeze_registry()
     assert is_registry_frozen()
-    from coscientist.core import tool_registry as tr
+    from coscientist.core.execution import tool_registry as tr
 
     assert isinstance(tr._REGISTRY, MappingProxyType)
     with pytest.raises(RegistryFrozenError):
@@ -124,7 +124,7 @@ async def test_register_tool_after_runtime_start_raises(tmp_path: Path):
     rt = await open_runtime(tmp_path, "st_freeze")
     try:
         assert is_registry_frozen()
-        from coscientist.core import tool_registry as tr
+        from coscientist.core.execution import tool_registry as tr
 
         assert isinstance(tr._REGISTRY, MappingProxyType)
         with pytest.raises(RegistryFrozenError):

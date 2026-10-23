@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
-from coscientist.core.errors import ArtifactCorrupt, ArtifactRejected
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.events.errors import ArtifactCorrupt, ArtifactRejected
 
 
 def test_put_read_roundtrip(tmp_path):

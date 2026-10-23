@@ -7,8 +7,8 @@ from decimal import Decimal
 
 import pytest
 
-from coscientist.core.artifacts import make_tool_ref
-from coscientist.core.domain import (
+from coscientist.core.execution.artifacts import make_tool_ref
+from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     Budget,
@@ -21,14 +21,14 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.errors import CoreBugError, SandboxInfraError
-from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.expand_critic import critic_gate
-from coscientist.core.graph import GraphNode
-from coscientist.core.ids import hypothesis_node_id, task_id
-from coscientist.core.reasons import TaskReason
-from coscientist.core.recover import recover
-from coscientist.core.shares import (
+from coscientist.core.events.errors import CoreBugError, SandboxInfraError
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.plan.expand_critic import critic_gate
+from coscientist.core.claims.graph import GraphNode
+from coscientist.core.events.ids import hypothesis_node_id, task_id
+from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.execution.recover import recover
+from coscientist.core.plan.shares import (
     BUDGET_EXHAUSTED_LINE,
     BUDGET_SHARES_REFUSED_LINE,
     TASK_BUDGET_EXHAUSTED_LINE,
@@ -42,7 +42,7 @@ from coscientist.core.shares import (
     validate_deadline_shares,
     validate_plan_shares,
 )
-from coscientist.core.upcasters import upcast
+from coscientist.core.events.upcasters import upcast
 from tests.helpers import attach_executor, close_runtime, open_runtime, open_runtime_experimental
 
 
@@ -53,7 +53,7 @@ def _exp(key: str, *, depends_on: list[str] | None = None, **kw) -> TaskSpec:
     addresses by default. Addressing tasks always get an explicit RequirementRef
     so ``accept_plan`` / ``validate_final_types`` accept them.
     """
-    from coscientist.core.plan_validate import _has_criterion
+    from coscientist.core.plan.plan_validate import _has_criterion
 
     want_criteria = kw.get("criteria", True)
     if want_criteria is False:
@@ -646,7 +646,7 @@ async def test_zero_pool_refuses_start(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_retry_keeps_fixed_task_cap(tmp_path, clock):
     """M3: first allocation is fixed; retries reuse it (spend accumulates)."""
-    from coscientist.core.shares import p2_share_payload_fields
+    from coscientist.core.plan.shares import p2_share_payload_fields
 
     rt = await _boot(
         tmp_path,
@@ -827,9 +827,9 @@ async def _plan_one(rt, *, share: float = 0.5):
 )
 async def test_debit_cost_rub_on_every_result_path(tmp_path, clock, monkeypatch, path):
     """B1: cost_rub debits on scientific/timeout/same_digest/core_bug/catalog/infra."""
-    from coscientist.core.digest import canonical_json, sha256_hex
-    from coscientist.core.domain import CheckResult, ReqStatus
-    from coscientist.core.errors import CatalogError
+    from coscientist.core.events.digest import canonical_json, sha256_hex
+    from coscientist.core.execution.domain import CheckResult, ReqStatus
+    from coscientist.core.events.errors import CatalogError
 
     rt = await _boot(
         tmp_path,
@@ -859,23 +859,23 @@ async def test_debit_cost_rub_on_every_result_path(tmp_path, clock, monkeypatch,
         )
     elif path == "infra":
         monkeypatch.setattr(
-            "coscientist.core.executor.evaluate_task_checks",
+            "coscientist.core.execution.executor.evaluate_task_checks",
             lambda *a, **k: (_ for _ in ()).throw(
                 SandboxInfraError("sandbox_unavailable:host")
             ),
         )
     elif path == "core_bug":
         monkeypatch.setattr(
-            "coscientist.core.executor.evaluate_task_checks",
+            "coscientist.core.execution.executor.evaluate_task_checks",
             lambda *a, **k: (_ for _ in ()).throw(CoreBugError("boom")),
         )
     elif path == "catalog_error":
         monkeypatch.setattr(
-            "coscientist.core.executor.evaluate_task_checks",
+            "coscientist.core.execution.executor.evaluate_task_checks",
             lambda *a, **k: [],
         )
         monkeypatch.setattr(
-            "coscientist.core.executor.compute_outcome",
+            "coscientist.core.execution.executor.compute_outcome",
             lambda *a, **k: (_ for _ in ()).throw(CatalogError("bad catalog")),
         )
     elif path == "timeout":
@@ -889,7 +889,7 @@ async def test_debit_cost_rub_on_every_result_path(tmp_path, clock, monkeypatch,
             effect={"timeout_kind": "wall_timeout"},
         )
         monkeypatch.setattr(
-            "coscientist.core.executor.evaluate_task_checks",
+            "coscientist.core.execution.executor.evaluate_task_checks",
             lambda *a, **k: [timeout_check],
         )
     elif path == "same_digest":
@@ -903,7 +903,7 @@ async def test_debit_cost_rub_on_every_result_path(tmp_path, clock, monkeypatch,
             effect={"timeout_kind": "wall_timeout"},
         )
         monkeypatch.setattr(
-            "coscientist.core.executor.evaluate_task_checks",
+            "coscientist.core.execution.executor.evaluate_task_checks",
             lambda *a, **k: [timeout_check],
         )
         await ex.record(aid, AgentTaskOutput(summary="to", outputs={}, cost_rub=Decimal("1")))
@@ -1098,7 +1098,7 @@ async def test_single_attempt_budget_overrun(tmp_path, clock):
 
 
 def test_would_exceed_budget_limit_helper():
-    from coscientist.core.shares import would_exceed_budget_limit
+    from coscientist.core.plan.shares import would_exceed_budget_limit
 
     assert not would_exceed_budget_limit(
         spent_so_far=1, next_cost=2, limit=Decimal("10")

@@ -1,13 +1,13 @@
 # tests
 
 - `refmodel.py` — исполняемая эталонная модель правил RESEARCH_MODEL.md (уровень валидатора, без runtime; **без** импортов `coscientist.*`).
-- Фикстура `impl` (conftest.py) прогоняет тесты правил на `refmodel` и на ядре `coscientist.core.rules`.
+- Фикстура `impl` (conftest.py) прогоняет тесты правил на `refmodel` и на ядре `coscientist.core.claims.claims.rules`.
 - `impl=core` использует `core_rules_adapter.py`: Graph/Claim из refmodel + функции из `core.rules`
   (verdict / validate_plan / cardinality). **Paper dedupe** (`add_paper`) — только refmodel
   (`test_paper_dedupe_two_lits_same_doi`); под `impl=core` адаптер всё равно даёт refmodel.Graph,
   поэтому dual-param не проверял бы ядро. Дедуп в core — M1 GraphBuilder.
 - `Graph` / `add_paper` / `Claim` (с тестовыми дефолтами X1#1/A1) живут только в `refmodel`;
-  runtime `coscientist.core.rules` держит edge_allowed, validate_plan/check_cardinality (duck-typed),
+  runtime `coscientist.core.claims.claims.rules` держит edge_allowed, validate_plan/check_cardinality (duck-typed),
   claim_stance/verdict/study_*.
 - HITL / `DelegatedBudget` / `costly_gate` / report — `coscientist.experimental` (pre-M2/M5);
   тесты в `tests/experimental/`. Каталог — `coscientist.checks` (M1); тесты в `tests/checks/`.
@@ -20,7 +20,7 @@
   `test_every_study_closes_by_deadline` гоняется на обоих; HITL/fork rules —
   `@precondition(supports_hitl)`.
 
-## Требуемый API `coscientist.core.rules` (M0 runtime)
+## Требуемый API `coscientist.core.claims.claims.rules` (M0 runtime)
 
 ```python
 edge_allowed(name: str, src_kind: str, dst_kind: str) -> bool

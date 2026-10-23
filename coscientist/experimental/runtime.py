@@ -7,9 +7,9 @@ from decimal import Decimal
 from typing import Any
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
-from coscientist.core.domain import HitlRequest
-from coscientist.core.events import EventEnvelope
-from coscientist.core.study_view import study_view
+from coscientist.core.execution.domain import HitlRequest
+from coscientist.core.events.events import EventEnvelope
+from coscientist.core.finalize.study_view import study_view
 from coscientist.experimental.costly import DelegatedBudget
 from coscientist.experimental.hitl import HitlForkMixin
 
@@ -81,7 +81,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
         super()._project_local(ev)
 
     def view(self):
-        from coscientist.core.dispositions import dispositions
+        from coscientist.core.claims.dispositions import dispositions
 
         open_hitl = sum(1 for h in self.hitl.values() if h.open)
         arts = getattr(self, "artifacts", None)
@@ -131,7 +131,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
             if h.open and now > h.deadline:
                 await self._hitl_timeout(h)
         # PR20: delegated proposed_check_review timeout ≡ reject (no PENDING hang).
-        from coscientist.core.proposed_check import reject_stale_proposed_check_reviews
+        from coscientist.core.plan.proposed_check import reject_stale_proposed_check_reviews
 
         await reject_stale_proposed_check_reviews(self)
         await super().tick()

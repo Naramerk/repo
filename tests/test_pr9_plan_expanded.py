@@ -7,8 +7,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from coscientist.checks.evaluate import evaluate_code_check
-from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
-from coscientist.core.domain import (
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     CodeCheck,
@@ -20,15 +20,15 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.expand import apply_pending_expansion
-from coscientist.core.expand_trigger import maybe_expand_after_task_done, refuse_expansion
-from coscientist.core.graph import GraphEdge, GraphNode
-from coscientist.core.ids import experiment_node_id, hypothesis_node_id, question_node_id
-from coscientist.core.reasons import TaskReason
-from coscientist.core.supersede import question_is_superseded
-from coscientist.core.upcasters import upcast
-from coscientist.core.verdict import recompute_effect_provenance
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.plan.expand import apply_pending_expansion
+from coscientist.core.plan.expand_trigger import maybe_expand_after_task_done, refuse_expansion
+from coscientist.core.claims.graph import GraphEdge, GraphNode
+from coscientist.core.events.ids import experiment_node_id, hypothesis_node_id, question_node_id
+from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.plan.supersede import question_is_superseded
+from coscientist.core.events.upcasters import upcast
+from coscientist.core.claims.verdict import recompute_effect_provenance
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
 
@@ -490,10 +490,10 @@ async def test_agent_refutation_blocks_supersede_k_ref_2(tmp_path, clock, runtim
             return True
 
     with patch(
-        "coscientist.core.claims.filtered_claims_by_target",
+        "coscientist.core.claims.claims.filtered_claims_by_target",
         return_value={"question:Q1": [FakeClaim()]},
     ), patch(
-        "coscientist.core.verdict.effective_outcome",
+        "coscientist.core.claims.verdict.effective_outcome",
         return_value="inconsistent",
     ):
         refused = await rt.expand_plan(
@@ -604,9 +604,9 @@ async def test_agent_cannot_skip_refuted_question_tasks(tmp_path, clock, runtime
     from unittest.mock import patch
 
     with patch(
-        "coscientist.core.claims.filtered_claims_by_target",
+        "coscientist.core.claims.claims.filtered_claims_by_target",
         return_value={"question:Q1": [FakeClaim()]},
-    ), patch("coscientist.core.verdict.effective_outcome", return_value="inconsistent"):
+    ), patch("coscientist.core.claims.verdict.effective_outcome", return_value="inconsistent"):
         await rt.expand_plan(
             after_task="E0",
             added_tasks=[_task(key="E2", addresses=["Q2"], depends_on=["E0"])],
@@ -658,9 +658,9 @@ async def test_hitl_supersede_still_reports_refuted(tmp_path, clock, runtime_cls
     from unittest.mock import patch
 
     with patch(
-        "coscientist.core.claims.filtered_claims_by_target",
+        "coscientist.core.claims.claims.filtered_claims_by_target",
         return_value={"question:Q1": [FakeClaim()]},
-    ), patch("coscientist.core.verdict.effective_outcome", return_value="inconsistent"):
+    ), patch("coscientist.core.claims.verdict.effective_outcome", return_value="inconsistent"):
         pid = await _human_expand(
             rt,
             after_task="E0",
@@ -674,9 +674,9 @@ async def test_hitl_supersede_still_reports_refuted(tmp_path, clock, runtime_cls
     assert question_is_superseded(rt.graph, sid, "Q1")
     # Disposition of superseded Q1 still surfaces as refuted against original text.
     with patch(
-        "coscientist.core.claims.filtered_claims_by_target",
+        "coscientist.core.claims.claims.filtered_claims_by_target",
         return_value={"question:Q1": [FakeClaim()]},
-    ), patch("coscientist.core.verdict.effective_outcome", return_value="inconsistent"):
+    ), patch("coscientist.core.claims.verdict.effective_outcome", return_value="inconsistent"):
         # Force a disposition note via expand payload / graph attrs.
         qnode = rt.graph.get_node(question_node_id(sid, "Q1"))
         assert qnode is not None
@@ -775,7 +775,7 @@ async def test_swallowed_exception_writes_refusal(tmp_path, clock, runtime_cls):
     from unittest.mock import patch
 
     with patch(
-        "coscientist.core.expand_trigger._maybe_expand",
+        "coscientist.core.plan.expand_trigger._maybe_expand",
         side_effect=RuntimeError("boom"),
     ):
         await maybe_expand_after_task_done(rt, tid)
@@ -797,7 +797,7 @@ async def test_swallowed_exception_writes_refusal(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_restart_after_apply_no_duplicate_events(tmp_path, clock, runtime_cls):
     """MAJOR: PLAN-n DONE/SUCCESS → PlanExpanded; close/reopen must not re-apply."""
-    from coscientist.core.recover import recover
+    from coscientist.core.execution.recover import recover
 
     sid = "st_re_apply"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
@@ -854,7 +854,7 @@ async def test_restart_after_apply_no_duplicate_events(tmp_path, clock, runtime_
 @pytest.mark.asyncio
 async def test_restart_after_refusal_no_duplicate_events(tmp_path, clock, runtime_cls):
     """MAJOR: after ExpansionRefused for PLAN-n, close/reopen must not duplicate."""
-    from coscientist.core.recover import recover
+    from coscientist.core.execution.recover import recover
 
     sid = "st_re_refuse"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
@@ -1356,7 +1356,7 @@ async def _finalize_for_report(rt) -> list[str]:
 @pytest.mark.asyncio
 async def test_hitl_open_plan_approval_keeps_kind_and_binds(tmp_path, clock):
     """open_hitl(plan_approval) keeps kind; sets expand_after_task; policy by kind."""
-    from coscientist.core.domain import GateConfig, HitlPolicy
+    from coscientist.core.execution.domain import GateConfig, HitlPolicy
     from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
 
     sid = "st_hitl_promo"
@@ -1499,7 +1499,7 @@ async def test_hitl_wrong_kind_edit_refused_and_reported(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_hitl_decide_yourself_delegation_marked(tmp_path, clock):
     """Real path: answer_hitl('delegate') marks plan delegated_by=human."""
-    from coscientist.core.supersede import plan_node_id
+    from coscientist.core.plan.supersede import plan_node_id
     from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
 
     sid = "st_hitl_diy"
@@ -1561,7 +1561,7 @@ async def test_hitl_decide_yourself_delegation_marked(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_hitl_plan_approval_timeout_fail_no_auto_accept(tmp_path, clock):
     """User GateConfig plan_approval.on_timeout=fail → no critic auto-accept; fail reported."""
-    from coscientist.core.domain import GateConfig, HitlPolicy, TaskOutcome
+    from coscientist.core.execution.domain import GateConfig, HitlPolicy, TaskOutcome
     from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
 
     sid = "st_hitl_failto"
@@ -1616,7 +1616,7 @@ async def test_hitl_plan_approval_timeout_fail_no_auto_accept(tmp_path, clock):
 async def test_plan_expansion_marker_not_met_on_exp(tmp_path, clock, runtime_cls):
     """MAJOR-1: plan_expansion_* on EXP task → FAILED, not MET bypass."""
     from coscientist.checks.evaluate import evaluate_task_checks
-    from coscientist.core.domain import ReqStatus
+    from coscientist.core.execution.domain import ReqStatus
 
     sid = "st_mark"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
@@ -1669,7 +1669,7 @@ async def test_plan_expansion_marker_not_met_on_exp(tmp_path, clock, runtime_cls
 @pytest.mark.asyncio
 async def test_critic_rejects_plan_expansion_marker_on_added(tmp_path, clock, runtime_cls):
     """MAJOR-1: critic rejects added tasks with plan_expansion_* markers."""
-    from coscientist.core.expand_critic import critic_gate
+    from coscientist.core.plan.expand_critic import critic_gate
 
     sid = "st_critmark"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
@@ -1790,7 +1790,7 @@ async def test_critic_rejects_missing_criteria(tmp_path, clock, runtime_cls):
         tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
-    from coscientist.core.expand_trigger import ensure_plan_n_task
+    from coscientist.core.plan.expand_trigger import ensure_plan_n_task
 
     key = await ensure_plan_n_task(
         rt,
@@ -1803,7 +1803,7 @@ async def test_critic_rejects_missing_criteria(tmp_path, clock, runtime_cls):
     # Bypass the auto-patch in apply_pending by calling critic directly after clearing patch path:
     # apply_pending patches empty criteria — so force critic via pending that we re-inject post-patch.
     # Instead: call critic_gate on unpatched request.
-    from coscientist.core.expand_critic import critic_gate
+    from coscientist.core.plan.expand_critic import critic_gate
 
     req = ExpansionRequest(
         tasks=[_task(key="E1", addresses=["Q1"], depends_on=["E0"], criteria=False)],
@@ -1824,7 +1824,7 @@ async def test_critic_rejects_missing_criteria(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_superseded_question_claims_not_counted(tmp_path, clock, runtime_cls):
-    from coscientist.core.claims import filtered_claims_by_target
+    from coscientist.core.claims.claims import filtered_claims_by_target
 
     sid = "st_c10"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
@@ -1988,7 +1988,7 @@ async def test_core_assigns_lit_keys(tmp_path, clock, runtime_cls):
         tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
-    from coscientist.core.expand_validate import assign_core_keys
+    from coscientist.core.plan.expand_validate import assign_core_keys
 
     keyed = assign_core_keys(
         rt,
@@ -2070,7 +2070,7 @@ def test_upcaster_planaccepted_v3_to_v4_expand_after():
 
 
 def test_schema_valid_missing_artifact(tmp_path):
-    from coscientist.core.domain import ReqStatus
+    from coscientist.core.execution.domain import ReqStatus
 
     arts = LocalArtifactStore(tmp_path / "arts")
     check = CodeCheck(kind="schema_valid", output="main")

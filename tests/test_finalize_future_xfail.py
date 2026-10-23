@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from coscientist.core.domain import (
+from coscientist.core.execution.domain import (
     HitlPolicy,
     Study,
     Task,
@@ -27,7 +27,7 @@ from coscientist.core.domain import (
     reason="PR 6/8: based_on required for counted dispositions",
 )
 def test_based_on_required_for_counted_dispositions():
-    from coscientist.core.finalize_nodes import graph_rows_from_finalized
+    from coscientist.core.finalize.finalize_nodes import graph_rows_from_finalized
 
     _nodes, edges = graph_rows_from_finalized(
         "st_bo",
@@ -45,10 +45,10 @@ def test_based_on_required_for_counted_dispositions():
 
 def test_question_disposition_computed_from_verdict():
     """PR8: counting claims on graph → answered via verdict()."""
-    from coscientist.core.dispositions import dispositions
-    from coscientist.core.graph import GraphEdge, GraphNode, GraphStore, default_execution_registry
-    from coscientist.core.ids import question_node_id
-    from coscientist.core.inputs import claim_nodes_from_attempt
+    from coscientist.core.claims.dispositions import dispositions
+    from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore, default_execution_registry
+    from coscientist.core.events.ids import question_node_id
+    from coscientist.core.execution.inputs import claim_nodes_from_attempt
 
     sid = "st"
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -151,7 +151,7 @@ def test_question_disposition_computed_from_verdict():
     reason="PR 8: explicit QuestionDisposed infeasible",
 )
 def test_question_disposition_explicit_infeasible():
-    from coscientist.core.dispositions import dispositions
+    from coscientist.core.claims.dispositions import dispositions
 
     plan = {
         "plan_id": "pl",
@@ -168,7 +168,7 @@ def test_question_disposition_explicit_infeasible():
     reason="PR 8: all_done→infeasible; PR2 only human_timeout|completed",
 )
 def test_terminal_reason_trigger_all_done_infeasible():
-    from coscientist.core.finalize import terminal_reason_for
+    from coscientist.core.finalize.finalize import terminal_reason_for
 
     tr = terminal_reason_for(
         "all_done",

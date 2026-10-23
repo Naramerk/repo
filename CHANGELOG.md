@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Core layout
+- Move flat `coscientist/core/*.py` into subpackages `events/`, `plan/`, `claims/`, `execution/`, `finalize/` (`git mv`); update imports, import-linter contracts, and tests. No logic changes.
+
 ### Store (StudyFinalized once)
 - After a study is finalized, a second distinct `StudyFinalized` (different idem_key) is rejected with `StudyClosedError` (I3 / exactly one finalize). For **any** event type, identical idem_key+payload retry is checked **before** StudyClosedError so honest retries return the original.
 - Same-batch guard: `append_many([SF, …])` probes finalized **after** `_fence()` and treats the batch as closed after the first `StudyFinalized` (in-batch flag + never cache a False finalized probe). `BEGIN IMMEDIATE` on append is **defensive**; peer writers are serialized by the lease `UPDATE` inside `_fence`.
@@ -197,4 +200,4 @@
 - `ExperimentMethod` enum matches graph schema; `method=simulation` is scientific metadata and does **not** upgrade stub/partial input provenance.
 
 ### M1 PR4 (API note)
-- `coscientist.core.intake.intake` / `coscientist.core.reasons.intake` are **async** (`await intake(...)`). Sync call sites must use `asyncio.run` or an event loop. Classifier timeouts use `asyncio.wait_for(asyncio.to_thread(...))`.
+- `coscientist.core.plan.intake.intake` / `coscientist.core.claims.reasons.intake` are **async** (`await intake(...)`). Sync call sites must use `asyncio.run` or an event loop. Classifier timeouts use `asyncio.wait_for(asyncio.to_thread(...))`.

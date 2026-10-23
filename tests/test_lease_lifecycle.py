@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from coscientist.core.clock import FakeClock
-from coscientist.core.errors import LeaseLost
-from coscientist.core.machine import StudyRuntime
-from coscientist.core.store import SqliteEventStore
-from coscientist.core.writer import StudyWriter
+from coscientist.core.events.clock import FakeClock
+from coscientist.core.events.errors import LeaseLost
+from coscientist.core.execution.machine import StudyRuntime
+from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.events.writer import StudyWriter
 from tests.helpers import close_runtime, open_runtime
 
 
@@ -163,7 +163,7 @@ async def test_open_runtime_cancelled_during_acquire_releases_lease(
     tmp_path, clock, monkeypatch
 ):
     """CancelledError after to_thread commits the lease still releases (owner_nonce set)."""
-    from coscientist.core import runtime_factory as rf
+    from coscientist.core.execution import runtime_factory as rf
 
     sid = "st_acq_cancel"
     db = tmp_path / sid / "events.db"
@@ -190,7 +190,7 @@ async def test_open_runtime_cancel_mid_acquire_thread_releases_lease(
     """Cancel while acquire thread is still running: shield waits, then release."""
     import threading
 
-    from coscientist.core import runtime_factory as rf
+    from coscientist.core.execution import runtime_factory as rf
 
     sid = "st_acq_mid"
     db = tmp_path / sid / "events.db"
@@ -229,7 +229,7 @@ async def test_open_runtime_acquire_false_does_not_release_seeded_nonce(
     tmp_path, clock, monkeypatch
 ):
     """acquire=False with a constructor nonce must not spuriously release on failure."""
-    from coscientist.core import runtime_factory as rf
+    from coscientist.core.execution import runtime_factory as rf
 
     sid = "st_seed_nonce"
     db = tmp_path / sid / "events.db"
@@ -276,7 +276,7 @@ async def test_open_runtime_cancelled_error_stops_writer_before_release(
     """CancelledError after acquire must release; writer.stop before release_lease."""
     from datetime import timedelta
 
-    from coscientist.core import runtime_factory as rf
+    from coscientist.core.execution import runtime_factory as rf
 
     sid = "st_cancel"
     db = tmp_path / sid / "events.db"
@@ -342,8 +342,8 @@ async def test_open_runtime_releases_lease_on_post_acquire_failure(
     """Any failure after acquire_lease must release the lease and close the store."""
     from datetime import timedelta
 
-    from coscientist.core import hitl_guard
-    from coscientist.core import runtime_factory as rf
+    from coscientist.core.execution import hitl_guard
+    from coscientist.core.execution import runtime_factory as rf
 
     sid = f"st_fail_{fail_at}"
     db = tmp_path / sid / "events.db"

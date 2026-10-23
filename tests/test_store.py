@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from coscientist.core.clock import FakeClock
-from coscientist.core.digest import payload_digest
-from coscientist.core.errors import Conflict, Idempotent, LeaseLost
-from coscientist.core.events import EventEnvelope
-from coscientist.core.projections import fold_events
-from coscientist.core.store import SqliteEventStore
+from coscientist.core.events.clock import FakeClock
+from coscientist.core.events.digest import payload_digest
+from coscientist.core.events.errors import Conflict, Idempotent, LeaseLost
+from coscientist.core.events.events import EventEnvelope
+from coscientist.core.events.projections import fold_events
+from coscientist.core.events.store import SqliteEventStore
 from tests.helpers import close_runtime, open_runtime
 
 
@@ -69,7 +69,7 @@ async def test_store_close_idempotent(tmp_path: Path, clock: FakeClock):
 async def test_writer_idempotent_append_returns_existing(
     tmp_path: Path, clock: FakeClock
 ):
-    from coscientist.core.writer import StudyWriter
+    from coscientist.core.events.writer import StudyWriter
 
     store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock)
     await store.acquire_lease("o1")
@@ -259,7 +259,7 @@ async def test_attempt_closed_tasks_projection_is_strict_json(
     tmp_path: Path, clock: FakeClock, runtime_cls: type
 ):
     """AttemptClosed writes tasks (incl. retry_at); all projection values are JSON types."""
-    from coscientist.core.attempts import RETRY_BACKOFF_S
+    from coscientist.core.execution.attempts import RETRY_BACKOFF_S
     from tests.helpers import attach_executor
 
     rt = await open_runtime(
@@ -302,7 +302,7 @@ async def test_event_loop_progresses_during_slow_write(
     """Write sleeps off-loop; concurrent tick stays schedulable mid-write."""
     import threading
 
-    from coscientist.core import runtime_factory as rf
+    from coscientist.core.execution import runtime_factory as rf
     from tests.store_doubles import SlowWriteStore
 
     monkeypatch.setattr(rf, "SqliteEventStore", SlowWriteStore)
@@ -363,7 +363,7 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(
     """WAL read connection: read_all completes while a slow write still holds the write lock."""
     import threading
 
-    from coscientist.core import runtime_factory as rf
+    from coscientist.core.execution import runtime_factory as rf
     from tests.store_doubles import SlowWriteStore
 
     monkeypatch.setattr(rf, "SqliteEventStore", SlowWriteStore)

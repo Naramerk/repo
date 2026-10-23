@@ -8,18 +8,18 @@ from pathlib import Path
 
 import pytest
 
-from coscientist.core.artifacts import make_tool_ref
-from coscientist.core.clock import FakeClock
-from coscientist.core.domain import (
+from coscientist.core.execution.artifacts import make_tool_ref
+from coscientist.core.events.clock import FakeClock
+from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     RequirementRef,
     TaskOutcome,
     TaskState,
 )
-from coscientist.core.errors import AttemptClosedError
-from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.recover import recover
+from coscientist.core.events.errors import AttemptClosedError
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.execution.recover import recover
 from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success
 
 
@@ -52,7 +52,7 @@ async def test_p1_p2_p4_happy_path(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_p3_retry_then_done(tmp_path, clock, runtime_cls):
-    from coscientist.core.attempts import RETRY_BACKOFF_S
+    from coscientist.core.execution.attempts import RETRY_BACKOFF_S
 
     rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
     _, arts = attach_executor(rt, tmp_path)
@@ -89,7 +89,7 @@ async def test_p3_retry_then_done(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_p3_retry_survives_crash_then_recover(tmp_path, clock, runtime_cls):
     """Pending retry_at is folded from the journal; tick fires it after Clock advance."""
-    from coscientist.core.attempts import RETRY_BACKOFF_S
+    from coscientist.core.execution.attempts import RETRY_BACKOFF_S
 
     rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
     attach_executor(rt, tmp_path)
@@ -125,7 +125,7 @@ async def test_p3_retry_survives_crash_then_recover(tmp_path, clock, runtime_cls
 @pytest.mark.asyncio
 async def test_p3_retry_fires_exactly_once(tmp_path, clock, runtime_cls):
     """Due retry_at is removed from _retry_at when fired; a second tick does not re-start."""
-    from coscientist.core.attempts import RETRY_BACKOFF_S
+    from coscientist.core.execution.attempts import RETRY_BACKOFF_S
 
     rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
     attach_executor(rt, tmp_path)

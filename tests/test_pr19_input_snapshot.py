@@ -11,17 +11,17 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from coscientist.core._ingest_gate import (
+from coscientist.core.execution._ingest_gate import (
     mint_user_put_capability,
     put_user,
     release_user_put_capability,
 )
-from coscientist.core.domain import (
+from coscientist.core.execution.domain import (
     Limitation,
     TaskSpec,
 )
-from coscientist.core.errors import ArtifactRejected
-from coscientist.core.input_limits import (
+from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.execution.input_limits import (
     InputLimits,
     UserInput,
     apply_input_drift,
@@ -36,8 +36,8 @@ from coscientist.core.input_limits import (
     merge_input_limits,
     snapshot_bindings_at_p2,
 )
-from coscientist.core.reasons import RefusalKind, TerminalReason
-from coscientist.core.upcasters import upcast
+from coscientist.core.claims.reasons import RefusalKind, TerminalReason
+from coscientist.core.events.upcasters import upcast
 from tests.helpers import close_runtime, open_runtime
 
 
@@ -117,7 +117,7 @@ def test_user_producer_not_quote_source():
 
 
 def test_put_user_is_task_data_not_paper(tmp_path):
-    from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
+    from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 
     arts = LocalArtifactStore(tmp_path / "arts")
 
@@ -139,7 +139,7 @@ def test_put_user_is_task_data_not_paper(tmp_path):
 
 
 def test_put_user_denied_without_capability(tmp_path):
-    from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
+    from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 
     arts = LocalArtifactStore(tmp_path / "arts")
     with pytest.raises(ArtifactRejected, match="user_put_capability_required"):
@@ -155,7 +155,7 @@ def test_put_user_denied_without_capability(tmp_path):
 
 def test_store_producer_user_requires_capability(tmp_path):
     """Runtime bypass: raw ``_store(producer=user)`` without token is rejected."""
-    from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
+    from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 
     arts = LocalArtifactStore(tmp_path / "arts")
     with pytest.raises(ArtifactRejected, match="user_put_capability_required"):
@@ -172,7 +172,7 @@ def test_store_producer_user_requires_capability(tmp_path):
 
 def test_store_forged_capability_object_rejected(tmp_path):
     """Duck-typed ``is_live()`` alone must not pass — exact type + hmac required."""
-    from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
+    from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 
     class _Forged:
         def is_live(self) -> bool:
@@ -196,7 +196,7 @@ def test_issued_registry_not_module_global():
     """sys.modules / setattr cannot inject nonce→token into the put registry."""
     import sys
 
-    import coscientist.core._ingest_gate as gate
+    import coscientist.core.execution._ingest_gate as gate
 
     mod = sys.modules[gate.__name__]
     assert not hasattr(mod, "_issued")
@@ -216,12 +216,12 @@ def test_issued_registry_not_module_global():
 
 def test_put_user_denied_when_attempt_active(tmp_path):
     """Attempt frame cannot launder via put_user even with a live capability."""
-    from coscientist.core._attempt_frame import (
+    from coscientist.core.execution._attempt_frame import (
         push_attempt_active,
         reset_attempt_active,
     )
-    from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
-    from coscientist.core.taint import push_attempt_taint, reset_attempt_taint
+    from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+    from coscientist.core.execution.taint import push_attempt_taint, reset_attempt_taint
 
     arts = LocalArtifactStore(tmp_path / "arts")
     t_tok = push_attempt_taint(True)
@@ -304,7 +304,7 @@ def _corrupt_deflate_zip() -> bytes:
 
 def test_corrupt_deflate_refused_input_invalid_not_raise():
     """zlib.error on corrupt deflate → INPUT_INVALID; check never raises."""
-    from coscientist.core.input_limits import check_user_inputs_limits
+    from coscientist.core.execution.input_limits import check_user_inputs_limits
 
     data = _corrupt_deflate_zip()
     bad = check_user_inputs_limits(
@@ -512,7 +512,7 @@ def test_merge_rejects_unknown_limit_keys():
 
 def test_limits_is_not_none_not_truthiness():
     """Zero must not disable via truthiness — client 0 rejected; profile None = off."""
-    from coscientist.core.input_limits import check_user_inputs_limits
+    from coscientist.core.execution.input_limits import check_user_inputs_limits
 
     # Profile None = unlimited for that field.
     lim = InputLimits(max_bytes=None, max_pages=None, max_rows=None, max_wire_bytes=None)
@@ -523,7 +523,7 @@ def test_limits_is_not_none_not_truthiness():
 
 
 def test_inputs_digest_stable_sorted():
-    from coscientist.core.domain import InputBinding
+    from coscientist.core.execution.domain import InputBinding
 
     a = InputBinding(input="b", artifact_id="1", source="real", digest="aa")
     b = InputBinding(input="a", artifact_id="2", source="real", digest="bb")
@@ -565,8 +565,8 @@ def test_legacy_null_digest_drift_unknown_not_partial():
 
 
 def test_snapshot_bindings_uses_cas_sha(tmp_path):
-    from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
-    from coscientist.core.domain import InputBinding
+    from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+    from coscientist.core.execution.domain import InputBinding
 
     arts = LocalArtifactStore(tmp_path / "arts")
     art = _with_user_put(
@@ -596,7 +596,7 @@ def test_snapshot_bindings_uses_cas_sha(tmp_path):
 
 
 def test_snapshot_get_meta_errors_propagate():
-    from coscientist.core.domain import InputBinding
+    from coscientist.core.execution.domain import InputBinding
 
     b = InputBinding(input="n", artifact_id="art_x", source="real")
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -609,7 +609,7 @@ def test_snapshot_get_meta_errors_propagate():
 
 
 def test_snapshot_missing_meta_yields_limitation():
-    from coscientist.core.domain import InputBinding
+    from coscientist.core.execution.domain import InputBinding
 
     b = InputBinding(
         input="n",
@@ -632,7 +632,7 @@ def test_wire_body_limit_before_decode():
 
 @pytest.mark.asyncio
 async def test_intake_zip_bomb_refused():
-    from coscientist.core.intake import IntakeRefuse, intake
+    from coscientist.core.plan.intake import IntakeRefuse, intake
 
     raw = b"\x00" * 200_000
     buf = io.BytesIO()
@@ -693,7 +693,7 @@ async def test_zip_bomb_refuse_survives_finalize_crash(
     async def boom(*_a, **_k):
         raise RuntimeError("inject:finalize_crash")
 
-    monkeypatch.setattr("coscientist.core.finalize.finalize", boom)
+    monkeypatch.setattr("coscientist.core.finalize.finalize.finalize", boom)
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
@@ -898,8 +898,8 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
     """Retry after CAS content change on bound artifact → input_drift + partial."""
-    from coscientist.core.artifacts import make_tool_ref
-    from coscientist.core.domain import InputSpec, OutputSpec, TaskOutcome
+    from coscientist.core.execution.artifacts import make_tool_ref
+    from coscientist.core.execution.domain import InputSpec, OutputSpec, TaskOutcome
     from tests.helpers import attach_executor, record_success
 
     sid = "st_drift"
@@ -1303,7 +1303,7 @@ async def test_api_validation_error_becomes_study_finalized(tmp_path, catalog):
 def test_artifact_producer_includes_tool_and_user():
     from typing import get_args
 
-    from coscientist.core.domain import ArtifactProducer
+    from coscientist.core.execution.domain import ArtifactProducer
 
     assert set(get_args(ArtifactProducer)) == {
         "agent",
@@ -1316,8 +1316,8 @@ def test_artifact_producer_includes_tool_and_user():
 
 def test_tgz_symlink_and_char_device_invalid():
     """tar.gz with symlink ../../etc/x or char device → INPUT_INVALID."""
-    from coscientist.core.archive_limits import inspect_archive
-    from coscientist.core.input_limits import check_user_inputs_limits
+    from coscientist.core.execution.archive_limits import inspect_archive
+    from coscientist.core.execution.input_limits import check_user_inputs_limits
 
     # Symlink member via tar.gz
     tar_buf = io.BytesIO()
@@ -1366,7 +1366,7 @@ def test_bz2_bomb_refused():
     raw = b"\x00" * 200_000
     data = bz2.compress(raw)
     lim = InputLimits(max_bytes=50_000_000, max_unpack_ratio=5.0, max_zip_members=100)
-    from coscientist.core.input_limits import check_user_inputs_limits
+    from coscientist.core.execution.input_limits import check_user_inputs_limits
 
     bad = check_user_inputs_limits(
         [UserInput(name="z.bz2", content=data, media_type="application/x-bzip2")],
@@ -1377,7 +1377,7 @@ def test_bz2_bomb_refused():
 
 
 def test_unsafe_path_nfkc_and_drive():
-    from coscientist.core.archive_limits import _is_unsafe_path
+    from coscientist.core.execution.archive_limits import _is_unsafe_path
 
     assert _is_unsafe_path("../x")
     assert _is_unsafe_path("C:/Windows/x")
@@ -1426,8 +1426,8 @@ async def test_api_corrupt_deflate_study_finalized_not_500(tmp_path, catalog):
 @pytest.mark.asyncio
 async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls):
     """Persist AttemptStarted schema_version=7, reopen (upcast), next attempt unknown."""
-    from coscientist.core.events import EventEnvelope, make_idem
-    from coscientist.core.reasons import CloseReason
+    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.claims.reasons import CloseReason
 
     sid = "st_v7_replay"
     rt = await open_runtime(
@@ -1523,9 +1523,9 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
 
 def test_study_created_writer_is_v11_after_loopspec():
     """#24 owns max_loop_iter (v10); #23 writer was v11; PR20 stacks v12."""
-    from coscientist.core.domain import Study
-    from coscientist.core.events import STUDY_CREATED_SCHEMA_VERSION
-    from coscientist.core.upcasters import writer_schema_version
+    from coscientist.core.execution.domain import Study
+    from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION
+    from coscientist.core.events.upcasters import writer_schema_version
 
     assert "max_loop_iter" in Study.model_fields
     assert "max_proposals" in Study.model_fields
@@ -1537,7 +1537,7 @@ def test_tar_many_members_early_exit():
     """DoS: iterate members lazily — exit at max_zip_members without getmembers()."""
     import time
 
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     buf = io.BytesIO()
     n = 20_000
@@ -1565,7 +1565,7 @@ def test_tar_declared_huge_size_early_exit():
     """DoS: member declared 3GB must fail on declared size before streaming content."""
     import time
 
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     info = tarfile.TarInfo(name="big")
     info.size = 3_000_000_000
@@ -1587,7 +1587,7 @@ def test_valid_tar_bz2_and_tar_xz_accepted():
     import bz2
     import lzma
 
-    from coscientist.core.archive_limits import detect_archive_kind, inspect_archive
+    from coscientist.core.execution.archive_limits import detect_archive_kind, inspect_archive
 
     tar_buf = io.BytesIO()
     with tarfile.open(fileobj=tar_buf, mode="w") as tf:
@@ -1628,7 +1628,7 @@ def test_valid_tar_bz2_and_tar_xz_accepted():
 
 
 def test_stale_digest_version_garbage_fails_closed():
-    from coscientist.core.input_limits import bindings_have_stale_digest_version
+    from coscientist.core.execution.input_limits import bindings_have_stale_digest_version
 
     assert bindings_have_stale_digest_version(
         [{"input": "x", "digest": "abc", "digest_version": "not-an-int"}]
@@ -1646,9 +1646,9 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
 
     Absent digest_version → input_drift_unknown without partial (not empty digest).
     """
-    from coscientist.core.events import EventEnvelope, make_idem
-    from coscientist.core.reasons import CloseReason
-    from coscientist.core.schema_versions import STUDY_CREATED_SCHEMA_VERSION
+    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.claims.reasons import CloseReason
+    from coscientist.core.events.schema_versions import STUDY_CREATED_SCHEMA_VERSION
 
     sid = "st_v9_digest"
     rt = await open_runtime(
@@ -1805,7 +1805,7 @@ def _zip_corrupt_bzip2_member() -> bytes:
     ],
 )
 def test_zip_member_errors_input_invalid(factory, token):
-    from coscientist.core.archive_limits import inspect_zip_streaming
+    from coscientist.core.execution.archive_limits import inspect_zip_streaming
 
     bad = inspect_zip_streaming(
         factory(),
@@ -1859,7 +1859,7 @@ def test_tar_longname_capped_no_oom():
     """GNU longname declaring 200MB must reject before reading payload."""
     import time
 
-    from coscientist.core.archive_limits import (
+    from coscientist.core.execution.archive_limits import (
         MAX_TAR_XATTR_BYTES,
         inspect_tar_streaming,
     )
@@ -1890,7 +1890,7 @@ def test_tar_longname_capped_no_oom():
 def test_tar_many_members_early_exit_compressed(mode, wrap):
     import time
 
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tf:
@@ -1922,7 +1922,7 @@ def test_tar_many_members_early_exit_compressed(mode, wrap):
 def test_tar_declared_huge_size_compressed(mode, wrap):
     import time
 
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     info = tarfile.TarInfo(name="big")
     info.size = 3_000_000_000
@@ -1946,7 +1946,7 @@ def test_tar_bz2_xz_detected_without_extension():
     import bz2
     import lzma
 
-    from coscientist.core.archive_limits import detect_archive_kind, inspect_archive
+    from coscientist.core.execution.archive_limits import detect_archive_kind, inspect_archive
 
     tar_buf = io.BytesIO()
     with tarfile.open(fileobj=tar_buf, mode="w") as tf:
@@ -1986,7 +1986,7 @@ def test_tar_bz2_xz_detected_without_extension():
 def test_truncated_gzip_xz_report_corrupt_not_ratio():
     import lzma
 
-    from coscientist.core.archive_limits import (
+    from coscientist.core.execution.archive_limits import (
         inspect_gzip_streaming,
         inspect_xz_streaming,
     )
@@ -2048,7 +2048,7 @@ def _pax_block(records: dict[str, str], typeflag: str = "x") -> bytes:
 
 def test_pax_path_traversal_tgz_rejected():
     """ustar safe.txt + pax path=../../etc/evil must not be accepted."""
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     body = b"hello safe"
     info = tarfile.TarInfo(name="safe.txt")
@@ -2074,7 +2074,7 @@ def test_pax_path_traversal_tgz_rejected():
 def test_pax_abs_path_txz_rejected():
     import lzma
 
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     body = b"hello"
     info = tarfile.TarInfo(name="safe.txt")
@@ -2097,7 +2097,7 @@ def test_pax_abs_path_txz_rejected():
 
 def test_pax_size_zero_hides_symlink_rejected():
     """pax size=0 over ustar 512 (symlink body) — pax size key rejected."""
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     sym = _ustar_header("../../evil_link", 0, typeflag="2", linkname="/etc/passwd")
     body = sym + (b"\x00" * (512 - len(sym)))
@@ -2121,7 +2121,7 @@ def test_pax_size_zero_hides_symlink_rejected():
 
 def test_pax_size_override_hides_nested_zip_rejected():
     """pax size over ustar size 0 (nested zip body) — pax size key rejected."""
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     zbuf = io.BytesIO()
     with zipfile.ZipFile(zbuf, "w") as zf:
@@ -2175,7 +2175,7 @@ def test_pax_size_oom_bypass_rejected(mode, wrap, global_pax, long_size):
     """gz/bz2/xz: pax size fake-EOF + huge longname must not OOM or accept."""
     import time
 
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     raw = _pax_size_fake_eof_huge_longname(long_size=long_size, global_pax=global_pax)
     data = wrap(raw)
@@ -2244,7 +2244,7 @@ def test_gnu_sparse_s_oom_bypass_rejected(mode, wrap, long_size):
     """gz/bz2/xz: GNU sparse S + ext-blocks fake-EOF must not OOM or accept."""
     import time
 
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     raw = _gnu_sparse_s_fake_eof_huge_longname(long_size=long_size)
     data = wrap(raw)
@@ -2290,7 +2290,7 @@ def test_gnu_sparse_s_oom_bypass_rejected(mode, wrap, long_size):
 )
 def test_pax_gnu_sparse_keys_rejected(mode, wrap, records):
     """gz/bz2/xz: any pax GNU.sparse.* (map / size / 1.0) must be rejected."""
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     archive = (
         _pax_block(records)
@@ -2470,7 +2470,7 @@ def test_pax_keys_smuggled_in_padding_rejected(
     """gz/bz2/xz × x/g: keys in pax padding must not bypass the resource gate."""
     import time
 
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     raw = _pax_with_smuggled_in_padding(
         smuggle, typeflag=typeflag, long_size=long_size
@@ -2521,7 +2521,7 @@ def test_dir_body_smuggled_longname_rejected(mode, wrap, v7_dir, long_size):
     """z11: DIR/V7-dir size>0 body must not skip smuggled huge GNU L (tarfile-driven)."""
     import time
 
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     raw = _dir_body_smuggles_longname(v7_dir=v7_dir, long_size=long_size)
     data = wrap(raw)
@@ -2617,7 +2617,7 @@ def _legit_tar_bytes(kind: str) -> tuple[bytes, str]:
 )
 def test_legitimate_tar_archives_accepted(kind):
     """12 legitimate tar variants must pass the tarfile-driven gate."""
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     data, mode = _legit_tar_bytes(kind)
     bad = inspect_tar_streaming(
@@ -2659,7 +2659,7 @@ def _meta_wrap_specs() -> list[tuple[str, object, str, str]]:
 @pytest.mark.parametrize("via", ["inspect_tar_streaming", "check_user_inputs_limits"])
 def test_nested_meta_chain_over_limit_rejected(via, mode, wrap, fname, mt, typeflag):
     """B5: both gate paths × x/L/K/g × gz/xz/bz2/plain → INPUT_INVALID, no raise."""
-    from coscientist.core.archive_limits import MAX_TAR_META_CHAIN, inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import MAX_TAR_META_CHAIN, inspect_tar_streaming
 
     raw = _nested_meta_chain(MAX_TAR_META_CHAIN + 1, typeflag=typeflag)
     data = wrap(raw)
@@ -2687,7 +2687,7 @@ def test_nested_meta_chain_over_limit_rejected(via, mode, wrap, fname, mt, typef
 @pytest.mark.parametrize("via", ["inspect_tar_streaming", "check_user_inputs_limits"])
 def test_deep_nested_meta_2000_no_recursion_error(via, mode, wrap, fname, mt, typeflag):
     """B5 repro: 2000× nested meta — both paths refuse, never RecursionError."""
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     raw = _nested_meta_chain(2000, typeflag=typeflag)
     data = wrap(raw)
@@ -2720,7 +2720,7 @@ def test_deep_nested_meta_2000_no_recursion_error(via, mode, wrap, fname, mt, ty
 @pytest.mark.parametrize("via", ["inspect_tar_streaming", "check_user_inputs_limits"])
 def test_nested_meta_within_limit_accepted(via, mode, wrap, fname, mt):
     """Exactly MAX_TAR_META_CHAIN empty pax headers still accept on both paths."""
-    from coscientist.core.archive_limits import MAX_TAR_META_CHAIN, inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import MAX_TAR_META_CHAIN, inspect_tar_streaming
 
     raw = _nested_meta_chain(MAX_TAR_META_CHAIN, typeflag="x")
     data = wrap(raw)
@@ -2744,7 +2744,7 @@ def test_nested_meta_within_limit_accepted(via, mode, wrap, fname, mt):
 
 def test_many_small_pax_headers_budget_too_large():
     """Many tiny pax headers hit byte budget → INPUT_TOO_LARGE (not ReadError)."""
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     # Depth limit fires at 9; keep chain short and repeat pax+file pairs so
     # uncompressed header bytes exceed max_bytes via the counting reader.
@@ -2781,7 +2781,7 @@ def test_z13_z14_nested_meta_2000_both_paths(via, typeflag):
 
     Both ``inspect_tar_streaming`` and ``check_user_inputs_limits``.
     """
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     raw = _nested_meta_chain(2000, typeflag=typeflag)
     data = gzip.compress(raw)
@@ -2815,7 +2815,7 @@ def _meta_boundary_lk_g_xz_bz2_specs() -> list[tuple[str, object, str, str]]:
 
 
 def _check_meta_chain_via(via: str, data: bytes, *, mode: str, fname: str, mt: str):
-    from coscientist.core.archive_limits import inspect_tar_streaming
+    from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
     lim = InputLimits(max_bytes=10_000_000, max_unpack_ratio=100.0, max_zip_members=10_000)
     if via == "inspect_tar_streaming":
@@ -2838,7 +2838,7 @@ def _check_meta_chain_via(via: str, data: bytes, *, mode: str, fname: str, mt: s
 @pytest.mark.parametrize("via", ["inspect_tar_streaming", "check_user_inputs_limits"])
 def test_meta_chain_depth_8_accepted_lk_g_xz_bz2(via, mode, wrap, fname, mt, typeflag):
     """Boundary depth 8: L/K/g on xz/bz2 accepted on both gate paths."""
-    from coscientist.core.archive_limits import MAX_TAR_META_CHAIN
+    from coscientist.core.execution.archive_limits import MAX_TAR_META_CHAIN
 
     data = wrap(_nested_meta_chain(MAX_TAR_META_CHAIN, typeflag=typeflag))
     bad = _check_meta_chain_via(via, data, mode=mode, fname=fname, mt=mt)
@@ -2850,7 +2850,7 @@ def test_meta_chain_depth_8_accepted_lk_g_xz_bz2(via, mode, wrap, fname, mt, typ
 @pytest.mark.parametrize("via", ["inspect_tar_streaming", "check_user_inputs_limits"])
 def test_meta_chain_depth_9_rejected_lk_g_xz_bz2(via, mode, wrap, fname, mt, typeflag):
     """Boundary depth 9: L/K/g on xz/bz2 → INPUT_INVALID on both gate paths."""
-    from coscientist.core.archive_limits import MAX_TAR_META_CHAIN
+    from coscientist.core.execution.archive_limits import MAX_TAR_META_CHAIN
 
     data = wrap(_nested_meta_chain(MAX_TAR_META_CHAIN + 1, typeflag=typeflag))
     bad = _check_meta_chain_via(via, data, mode=mode, fname=fname, mt=mt)
@@ -2863,9 +2863,9 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
     tmp_path, clock, runtime_cls
 ):
     """PR19 intake refuse → one StudyFinalized; #31 store guard blocks later writes."""
-    from coscientist.core.archive_limits import MAX_TAR_META_CHAIN
-    from coscientist.core.errors import StudyClosedError
-    from coscientist.core.events import EventEnvelope, make_idem
+    from coscientist.core.execution.archive_limits import MAX_TAR_META_CHAIN
+    from coscientist.core.events.errors import StudyClosedError
+    from coscientist.core.events.events import EventEnvelope, make_idem
 
     sid = "st_b5_meta_closed"
     rt = await open_runtime(

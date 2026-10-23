@@ -1,7 +1,7 @@
 """ToolSpec / ToolError / ToolOutput (DESIGN §6.1 + DESIGN_M1 §8 effect class).
 
 ``ToolSpec.effect`` is advisory for catalog authors only. ``invoke_tool`` takes
-the authoritative effect from ``coscientist.core.tool_registry`` (unregistered
+the authoritative effect from ``coscientist.core.execution.tool_registry`` (unregistered
 → ``external_effect``). Direct ``Tool.call`` bypasses gates — do not use it
 outside tests; agent wiring must go through ``invoke_tool``.
 """
@@ -13,7 +13,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from coscientist.core.domain import Artifact, HitlPolicy
+from coscientist.core.execution.domain import Artifact, HitlPolicy
 
 ToolEffect = Literal["read", "write", "external_effect"]
 ToolErrorKind = Literal["local", "transport_unsent", "transport_sent", "opaque"]

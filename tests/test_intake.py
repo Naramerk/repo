@@ -11,11 +11,11 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from coscientist.core.domain import Budget
-from coscientist.core.finalize_nodes import conclusion_id_for_study
-from coscientist.core.intake import REASON_MAX, IntakeAccept, IntakeRefuse, intake
-from coscientist.core.reasons import RefusalKind
-from coscientist.core.study_view import study_phase, study_view
+from coscientist.core.execution.domain import Budget
+from coscientist.core.finalize.finalize_nodes import conclusion_id_for_study
+from coscientist.core.plan.intake import REASON_MAX, IntakeAccept, IntakeRefuse, intake
+from coscientist.core.claims.reasons import RefusalKind
+from coscientist.core.finalize.study_view import study_phase, study_view
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
 
@@ -252,7 +252,7 @@ async def test_intake_refuse_survives_crash(tmp_path, clock, runtime_cls, monkey
     async def boom(*_a, **_k):
         raise RuntimeError("inject:finalize_crash")
 
-    monkeypatch.setattr("coscientist.core.finalize.finalize", boom)
+    monkeypatch.setattr("coscientist.core.finalize.finalize.finalize", boom)
 
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls

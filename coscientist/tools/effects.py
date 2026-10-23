@@ -19,17 +19,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
-from coscientist.core.digest import canonical_json, sha256_hex
-from coscientist.core.errors import ArtifactRejected
-from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.source_fetch import (
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.execution.source_fetch import (
     FetchCapability,
     register_fetch_capability_verifier,
 )
-from coscientist.core.taint import mark_attempt_tainted
-from coscientist.core.tool_registry import resolve_effect, resolve_spec
-from coscientist.core.writer import StudyWriter
+from coscientist.core.execution.taint import mark_attempt_tainted
+from coscientist.core.execution.tool_registry import resolve_effect, resolve_spec
+from coscientist.core.events.writer import StudyWriter
 from coscientist.tools.contract import CallCtx, Tool, ToolError, ToolOutput
 from coscientist.tools.gate import side_effect_allowed
 
@@ -445,7 +445,7 @@ async def _journal_attempt_tainted(
     # Keep SourceFetchIndex cache in sync when open/finalize warmed it — otherwise
     # a later SourceFetched Δ fold can advance seq past this AttemptTainted and
     # leave fetch_calls empty (quote_in_source would miss the digest).
-    from coscientist.core.source_fetch import _cache_note_fetch
+    from coscientist.core.execution.source_fetch import _cache_note_fetch
 
     _cache_note_fetch(writer, stored)
     if on_event is not None:
@@ -539,7 +539,7 @@ async def invoke_tool(
 ) -> ToolOutput:
     """Call a tool under the closed registry + side_effect gate + effect protocol.
 
-    Effect is resolved from ``coscientist.core.tool_registry`` by tool name.
+    Effect is resolved from ``coscientist.core.execution.tool_registry`` by tool name.
     Unregistered names → ``external_effect``. Read calls skip the effect journal.
     Taint is read from ``AttemptStarted.tainted_context`` in the journal.
     """
@@ -586,7 +586,7 @@ async def invoke_tool(
                 and artifacts is not None
                 and output.artifacts
             ):
-                from coscientist.core.source_fetch import append_source_fetched
+                from coscientist.core.execution.source_fetch import append_source_fetched
 
                 # URL from normalized tool result — never raw agent args.
                 url = ""

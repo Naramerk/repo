@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from coscientist.core.clock import FakeClock
-from coscientist.core.domain import HitlPolicy
+from coscientist.core.events.clock import FakeClock
+from coscientist.core.execution.domain import HitlPolicy
 from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
 from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 

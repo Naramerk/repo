@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from coscientist.core.domain import HitlRequest, Task, TaskOutcome, TaskState
-from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.reasons import TaskReason
+from coscientist.core.execution.domain import HitlRequest, Task, TaskOutcome, TaskState
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.claims.reasons import TaskReason
 from coscientist.experimental.costly import DelegatedBudget, costly_gate, settle
 
 
