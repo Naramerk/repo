@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 
 from coscientist.core.clock import Clock, SystemClock
+from coscientist.core.errors import LeaseLost
 from coscientist.core.graph import KindRegistry, default_execution_registry
 from coscientist.core.hitl_guard import reject_open_hitl_if_unsupported
 from coscientist.core.machine import StudyRuntime, new_owner
@@ -112,5 +113,8 @@ async def close_runtime(rt: StudyRuntime) -> None:
         try:
             if rt.store.owner is not None:
                 await rt.store.release_lease(rt.owner, rt.store.epoch)
+        except LeaseLost:
+            # Lease already gone or identity mismatch — still close the store.
+            log.warning("release_lease during close_runtime", exc_info=True)
         finally:
             rt.store.close()

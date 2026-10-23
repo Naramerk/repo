@@ -66,7 +66,13 @@ def _json_default(obj: Any) -> str:
 
 
 class SqliteEventStore:
-    """One DB per study. All writes go through append/append_many under lease fencing."""
+    """One DB per study. All writes go through append/append_many under lease fencing.
+
+    Write fencing requires a full holder identity ``(owner, epoch, owner_nonce)``.
+    Prefer ``acquire_lease`` to mint that identity. Seeding ``owner``/``epoch`` on
+    the constructor without a matching ``owner_nonce`` (and a matching lease row)
+    cannot write — ``_fence`` raises ``LeaseLost``.
+    """
 
     def __init__(
         self,
@@ -76,6 +82,7 @@ class SqliteEventStore:
         *,
         owner: str | None = None,
         epoch: int = 0,
+        owner_nonce: str | None = None,
         lease_ttl_s: float = 30.0,
     ) -> None:
         self.study_id = study_id
@@ -83,7 +90,7 @@ class SqliteEventStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.clock = clock or SystemClock()
         self.owner = owner
-        self.owner_nonce: str | None = None
+        self.owner_nonce = owner_nonce
         self.epoch = epoch
         self.lease_ttl_s = lease_ttl_s
         self._closed = False
@@ -120,8 +127,10 @@ class SqliteEventStore:
     async def acquire_lease(self, owner: str, ttl_s: float | None = None) -> int:
         """Acquire or renew the study lease for this runtime instance.
 
-        Each holder mints a unique ``owner_nonce``. Same owner name with a
-        different nonce cannot renew or steal a still-valid lease.
+        Each holder mints a unique ``owner_nonce``. While a lease is still live,
+        a *new* process that reuses the same owner name (different nonce) gets
+        ``LeaseLost`` instead of renewing in place — crash recovery and migrated
+        rows with ``owner_nonce=''`` must wait for TTL before re-acquire.
         """
         ttl = self.lease_ttl_s if ttl_s is None else ttl_s
         async with self._lock:
@@ -188,6 +197,8 @@ class SqliteEventStore:
         *,
         nonce: str | None = None,
     ) -> None:
+        """Extend the lease. Raises ``LeaseLost`` if nonce is missing or the row
+        does not match ``owner``+``epoch``+``nonce`` (or is expired)."""
         ttl = self.lease_ttl_s if ttl_s is None else ttl_s
         nonce = self.owner_nonce if nonce is None else nonce
         if not nonce:
@@ -211,12 +222,18 @@ class SqliteEventStore:
         self,
         owner: str,
         epoch: int,
+        *,
         nonce: str | None = None,
     ) -> None:
-        """Drop the lease row only if ``owner``+``epoch``+``nonce`` still hold it."""
+        """Drop the lease row only if ``owner``+``epoch``+``nonce`` still hold it.
+
+        Raises ``LeaseLost`` when nonce is missing or the DELETE matches no row —
+        the same failure mode as ``renew_lease`` (callers must not assume a silent
+        no-op).
+        """
         nonce = self.owner_nonce if nonce is None else nonce
         if not nonce:
-            return
+            raise LeaseLost("release failed: missing owner nonce")
         async with self._lock:
             cur = self._conn.execute(
                 "DELETE FROM lease WHERE study_id=? AND owner=? AND epoch=? "
@@ -224,7 +241,9 @@ class SqliteEventStore:
                 (self.study_id, owner, epoch, nonce),
             )
             self._conn.commit()
-            if cur.rowcount and self.owner == owner and self.epoch == epoch:
+            if cur.rowcount == 0:
+                raise LeaseLost("release failed: lease lost or epoch/nonce mismatch")
+            if self.owner == owner and self.epoch == epoch:
                 self.owner = None
                 self.owner_nonce = None
                 self.epoch = 0

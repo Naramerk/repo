@@ -118,14 +118,40 @@ async def test_lease_epoch_fencing(tmp_path: Path, clock: FakeClock):
     store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock)
     epoch1 = await store.acquire_lease("o1", ttl_s=30)
     assert epoch1 == 1
+    stale_nonce = store.owner_nonce
+    assert stale_nonce
     # expire lease
     clock.advance(timedelta(seconds=31))
     epoch2 = await store.acquire_lease("o2", ttl_s=30)
     assert epoch2 == 2
-    # stale owner cannot write
+    # Stale holder identity (owner+epoch+nonce) cannot write — seeding owner/epoch
+    # alone is not enough once fencing requires owner_nonce.
     store.owner = "o1"
     store.epoch = epoch1
+    store.owner_nonce = stale_nonce
     with pytest.raises(LeaseLost):
+        await store.append(
+            EventEnvelope(
+                study_id="st1",
+                type="StudyCreated",
+                entity_key="st1",
+                idem_key="StudyCreated:st1",
+                payload={},
+                ts=clock.now(),
+            )
+        )
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_seeded_owner_epoch_without_nonce_cannot_write(
+    tmp_path: Path, clock: FakeClock
+):
+    """Constructor owner/epoch without owner_nonce (no acquire_lease) cannot write."""
+    store = SqliteEventStore(
+        "st1", tmp_path / "seed.db", clock=clock, owner="seeded", epoch=1
+    )
+    with pytest.raises(LeaseLost, match="no lease owner"):
         await store.append(
             EventEnvelope(
                 study_id="st1",

@@ -36,7 +36,11 @@ class EventStore(Protocol):
     ) -> None: ...
 
     async def release_lease(
-        self, owner: str, epoch: int, nonce: str | None = None
+        self,
+        owner: str,
+        epoch: int,
+        *,
+        nonce: str | None = None,
     ) -> None: ...
 
     def current_lease(self) -> tuple[str | None, int, datetime | None]: ...

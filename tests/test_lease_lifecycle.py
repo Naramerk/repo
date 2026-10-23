@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import sqlite3
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -38,8 +41,8 @@ async def test_close_runtime_releases_lease(tmp_path, clock):
 async def test_release_lease_requires_matching_epoch(tmp_path, clock):
     store = SqliteEventStore("st_ep", tmp_path / "st_ep.db", clock=clock)
     epoch = await store.acquire_lease("same-owner", ttl_s=30)
-    # Stale epoch must not delete the live lease.
-    await store.release_lease("same-owner", epoch - 1)
+    with pytest.raises(LeaseLost, match="epoch/nonce mismatch"):
+        await store.release_lease("same-owner", epoch - 1)
     owner, live_epoch, _ = store.current_lease()
     assert owner == "same-owner"
     assert live_epoch == epoch
@@ -54,9 +57,10 @@ async def test_release_lease_rejects_foreign_owner(tmp_path, clock):
     epoch = await store.acquire_lease("owner-a", ttl_s=30)
     nonce = store.owner_nonce
     assert nonce
-    await store.release_lease("owner-b", epoch, nonce)
+    with pytest.raises(LeaseLost, match="epoch/nonce mismatch"):
+        await store.release_lease("owner-b", epoch, nonce=nonce)
     assert store.current_lease()[0] == "owner-a"
-    await store.release_lease("owner-a", epoch, nonce)
+    await store.release_lease("owner-a", epoch, nonce=nonce)
     assert store.current_lease()[0] is None
     store.close()
 
@@ -65,10 +69,25 @@ async def test_release_lease_rejects_foreign_owner(tmp_path, clock):
 async def test_release_lease_rejects_foreign_nonce(tmp_path, clock):
     store = SqliteEventStore("st_fn", tmp_path / "st_fn.db", clock=clock)
     epoch = await store.acquire_lease("owner-a", ttl_s=30)
-    await store.release_lease("owner-a", epoch, "not-the-holder-nonce")
+    with pytest.raises(LeaseLost, match="epoch/nonce mismatch"):
+        await store.release_lease("owner-a", epoch, nonce="not-the-holder-nonce")
     assert store.current_lease()[0] == "owner-a"
-    await store.release_lease("owner-a", epoch, store.owner_nonce)
+    await store.release_lease("owner-a", epoch, nonce=store.owner_nonce)
     assert store.current_lease()[0] is None
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_release_and_renew_raise_on_missing_nonce(tmp_path, clock):
+    """release_lease and renew_lease share the same missing-nonce failure mode."""
+    store = SqliteEventStore("st_mn", tmp_path / "st_mn.db", clock=clock)
+    epoch = await store.acquire_lease("owner-a", ttl_s=30)
+    store.owner_nonce = None
+    with pytest.raises(LeaseLost, match="missing owner nonce"):
+        await store.renew_lease("owner-a", epoch)
+    with pytest.raises(LeaseLost, match="missing owner nonce"):
+        await store.release_lease("owner-a", epoch)
+    assert store.current_lease()[0] == "owner-a"
     store.close()
 
 
@@ -89,6 +108,47 @@ async def test_same_owner_name_different_nonce_cannot_steal(tmp_path, clock):
 
 
 @pytest.mark.asyncio
+async def test_migrated_live_lease_empty_nonce_waits_for_ttl(tmp_path, clock):
+    """Old schema rows get owner_nonce=''; same owner cannot steal until TTL."""
+    db = tmp_path / "st_mig.db"
+    sid = "st_mig"
+    expires = (clock.now() + timedelta(seconds=30)).isoformat()
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE lease("
+        "study_id TEXT PRIMARY KEY, owner TEXT NOT NULL, "
+        "epoch INT NOT NULL, expires_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO lease(study_id, owner, epoch, expires_at) VALUES (?,?,?,?)",
+        (sid, "migrated-owner", 3, expires),
+    )
+    conn.commit()
+    conn.close()
+
+    store = SqliteEventStore(sid, db, clock=clock)
+    cols = {
+        str(r[1]) for r in store._conn.execute("PRAGMA table_info(lease)").fetchall()
+    }
+    assert "owner_nonce" in cols
+    held = store._conn.execute(
+        "SELECT owner_nonce, epoch FROM lease WHERE study_id=?", (sid,)
+    ).fetchone()
+    assert held["owner_nonce"] == ""
+    assert int(held["epoch"]) == 3
+
+    with pytest.raises(LeaseLost, match="different nonce"):
+        await store.acquire_lease("migrated-owner", ttl_s=30)
+    assert store.current_lease()[0] == "migrated-owner"
+
+    clock.advance(timedelta(seconds=31))
+    epoch = await store.acquire_lease("migrated-owner", ttl_s=30)
+    assert epoch == 4
+    assert store.owner_nonce
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_store_close_is_idempotent(tmp_path, clock):
     store = SqliteEventStore("st_close2", tmp_path / "st_close2.db", clock=clock)
     assert store.closed is False
@@ -96,6 +156,68 @@ async def test_store_close_is_idempotent(tmp_path, clock):
     assert store.closed is True
     store.close()  # second close must not raise
     assert store.closed is True
+
+
+@pytest.mark.asyncio
+async def test_open_runtime_cancelled_error_stops_writer_before_release(
+    tmp_path, clock, monkeypatch
+):
+    """CancelledError after acquire must release; writer.stop before release_lease."""
+    from datetime import timedelta
+
+    from coscientist.core import runtime_factory as rf
+
+    sid = "st_cancel"
+    db = tmp_path / sid / "events.db"
+    seed = await open_runtime(tmp_path, sid, clock=clock, owner="seeder")
+    await seed.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(minutes=30),
+        sid=sid,
+    )
+    await close_runtime(seed)
+
+    order: list[str] = []
+    stores: list[SqliteEventStore] = []
+    writers: list[StudyWriter] = []
+
+    class TrackingStore(SqliteEventStore):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            stores.append(self)
+
+        async def release_lease(self, owner, epoch, *, nonce=None):
+            order.append("release_lease")
+            return await SqliteEventStore.release_lease(
+                self, owner, epoch, nonce=nonce
+            )
+
+    class TrackingWriter(StudyWriter):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            writers.append(self)
+
+        async def stop(self):
+            order.append("writer_stop")
+            return await StudyWriter.stop(self)
+
+    monkeypatch.setattr(rf, "SqliteEventStore", TrackingStore)
+    monkeypatch.setattr(rf, "StudyWriter", TrackingWriter)
+
+    def boom_project(self, ev):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(StudyRuntime, "_project_local", boom_project)
+
+    with pytest.raises(asyncio.CancelledError):
+        await open_runtime(tmp_path, sid, clock=clock, owner="owner-cancel")
+
+    assert _lease_owner(db, sid, clock) is None
+    assert stores and stores[-1].closed
+    assert writers and writers[-1].running is False
+    assert order == ["writer_stop", "release_lease"]
 
 
 @pytest.mark.asyncio
