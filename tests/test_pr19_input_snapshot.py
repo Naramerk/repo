@@ -2576,3 +2576,116 @@ def test_legitimate_tar_archives_accepted(kind):
         mode=mode,  # type: ignore[arg-type]
     )
     assert bad is None, bad
+
+
+def _nested_meta_chain(n: int, typeflag: str = "x") -> bytes:
+    """``n`` consecutive empty meta headers + empty file + double-zero EOF."""
+    name = "././@LongLink" if typeflag in ("L", "K") else "././@PaxHeader"
+    return (
+        b"".join(_ustar_header(name, 0, typeflag=typeflag) for _ in range(n))
+        + _ustar_header("e.txt", 0, typeflag="0")
+        + (b"\x00" * 1024)
+    )
+
+
+@pytest.mark.parametrize(
+    "mode,wrap,typeflag",
+    [
+        ("r:gz", lambda raw: gzip.compress(raw), "x"),
+        ("r:xz", lambda raw: __import__("lzma").compress(raw), "x"),
+        ("r:bz2", lambda raw: __import__("bz2").compress(raw), "x"),
+        ("r:", lambda raw: raw, "x"),
+        ("r:gz", lambda raw: gzip.compress(raw), "L"),
+        ("r:xz", lambda raw: __import__("lzma").compress(raw), "L"),
+        ("r:bz2", lambda raw: __import__("bz2").compress(raw), "g"),
+        ("r:", lambda raw: raw, "K"),
+    ],
+)
+def test_nested_meta_chain_over_limit_rejected(mode, wrap, typeflag):
+    """B5: >8 consecutive x/L/K/g must not RecursionError — INPUT_INVALID."""
+    from coscientist.core.archive_limits import MAX_TAR_META_CHAIN, inspect_tar_streaming
+
+    raw = _nested_meta_chain(MAX_TAR_META_CHAIN + 1, typeflag=typeflag)
+    data = wrap(raw)
+    bad = inspect_tar_streaming(
+        data,
+        max_bytes=10_000_000,
+        max_unpack_ratio=100.0,
+        max_zip_members=10_000,
+        name=f"meta_{typeflag}.tar{mode}",
+        mode=mode,
+    )
+    assert bad is not None and bad[0] == RefusalKind.INPUT_INVALID
+    assert "meta chain" in bad[1]
+
+
+@pytest.mark.parametrize(
+    "mode,wrap",
+    [
+        ("r:gz", lambda raw: gzip.compress(raw)),
+        ("r:xz", lambda raw: __import__("lzma").compress(raw)),
+        ("r:bz2", lambda raw: __import__("bz2").compress(raw)),
+        ("r:", lambda raw: raw),
+    ],
+)
+def test_deep_nested_meta_2000_no_recursion_error(mode, wrap):
+    """B5 repro: 2000× empty x + file — refusal, never RecursionError/500."""
+    from coscientist.core.archive_limits import inspect_tar_streaming
+
+    raw = _nested_meta_chain(2000, typeflag="x")
+    data = wrap(raw)
+    bad = inspect_tar_streaming(
+        data,
+        max_bytes=50_000_000,
+        max_unpack_ratio=100.0,
+        max_zip_members=10_000,
+        name=f"meta2000.tar{mode}",
+        mode=mode,
+    )
+    assert bad is not None and bad[0] == RefusalKind.INPUT_INVALID
+    assert "meta chain" in bad[1]
+
+
+@pytest.mark.parametrize(
+    "mode,wrap",
+    [
+        ("r:gz", lambda raw: gzip.compress(raw)),
+        ("r:", lambda raw: raw),
+    ],
+)
+def test_nested_meta_within_limit_accepted(mode, wrap):
+    """Exactly MAX_TAR_META_CHAIN empty pax headers still accept."""
+    from coscientist.core.archive_limits import MAX_TAR_META_CHAIN, inspect_tar_streaming
+
+    raw = _nested_meta_chain(MAX_TAR_META_CHAIN, typeflag="x")
+    data = wrap(raw)
+    bad = inspect_tar_streaming(
+        data,
+        max_bytes=10_000_000,
+        max_unpack_ratio=100.0,
+        max_zip_members=10_000,
+        name=f"meta_ok.tar{mode}",
+        mode=mode,
+    )
+    assert bad is None, bad
+
+
+def test_many_small_pax_headers_budget_too_large():
+    """Many tiny pax headers hit byte budget → INPUT_TOO_LARGE (not ReadError)."""
+    from coscientist.core.archive_limits import inspect_tar_streaming
+
+    # Depth limit fires at 9; keep chain short and repeat pax+file pairs so
+    # uncompressed header bytes exceed max_bytes via the counting reader.
+    unit = _pax_block({"path": "f.txt"}) + _ustar_header("f.txt", 0)
+    # ~1KB per unit; 40 units → ~40KB uncompressed
+    raw = unit * 40 + (b"\x00" * 1024)
+    bad = inspect_tar_streaming(
+        raw,
+        max_bytes=8_000,
+        max_unpack_ratio=100.0,
+        max_zip_members=10_000,
+        name="many_pax.tar",
+        mode="r:",
+    )
+    assert bad is not None and bad[0] == RefusalKind.INPUT_TOO_LARGE
+    assert "max_bytes" in bad[1] or "uncompressed" in bad[1]

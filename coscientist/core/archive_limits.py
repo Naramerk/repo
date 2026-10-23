@@ -10,6 +10,14 @@ wrapper, with ``TarInfo`` hooks that reject oversized longname/pax, pax
 parallel header skipper (those desync on DIR/V7-dir bodies). Ustarseize
 fields including POSIX base-256 are interpreted only by ``tarfile``;
 hostile encodings become ``HeaderError``/``ReadError`` → ``INPUT_INVALID``.
+
+EOF matches stdlib ``tarfile``: a zero block ends the archive (a non-zero
+tail after a single zero block is ignored the same way). Callers must
+unpack accepted archives only via stdlib ``tarfile`` (or treat gate reject
+as authoritative) — do not hand-roll parsers that continue past one zero
+block. Nested meta headers (typeflag ``x``/``L``/``K``/``g``) recurse in
+``tarfile``; we cap consecutive depth at ``MAX_TAR_META_CHAIN`` and map
+any unexpected ``Exception`` (incl. ``RecursionError``) to ``INPUT_INVALID``.
 """
 
 from __future__ import annotations
@@ -33,6 +41,8 @@ ArchiveViolation = tuple[RefusalKind, str]
 _CHUNK = 64 * 1024
 # Cap GNU longname / longlink / pax extended headers (DoS).
 MAX_TAR_XATTR_BYTES = 64 * 1024
+# Cap nested meta recursion (``_proc_pax`` / ``_proc_gnulong`` → ``fromtarfile``).
+MAX_TAR_META_CHAIN = 8
 # Real decompress / format failures only — never mask internal bugs.
 _DECOMPRESS_ERRORS: tuple[type[BaseException], ...] = (
     zipfile.BadZipFile,
@@ -53,20 +63,6 @@ _ZIP_MEMBER_ERRORS: tuple[type[BaseException], ...] = (
     zlib.error,
     EOFError,
     struct.error,
-)
-# Tar stream open/decompress (module-level tuple — mypy rejects ``*`` in except).
-_TAR_STREAM_ERRORS: tuple[type[BaseException], ...] = (
-    gzip.BadGzipFile,
-    EOFError,
-    zlib.error,
-    OSError,
-    struct.error,
-    lzma.LZMAError,
-    zipfile.BadZipFile,
-    tarfile.ReadError,
-    tarfile.CompressionError,
-    tarfile.StreamError,
-    tarfile.HeaderError,
 )
 
 # Unicode slashes / invisibles that bypass naive ``/`` + ``..`` checks.
@@ -408,8 +404,7 @@ class _CountingReader:
 
     ``tarfile`` in ``r|`` mode is the sole header/body reader; every
     ``read`` (headers, longname/pax, file data) counts toward ``max_bytes``
-    / unpack ratio. ``push`` returns already-counted bytes for one-shot
-    re-parse (pax inspect-then-``super``).
+    / unpack ratio.
     """
 
     def __init__(
@@ -423,45 +418,20 @@ class _CountingReader:
         name: str,
     ) -> None:
         self._raw = raw
-        self._pending = b""
-        self._pending_counted = 0
         self.running = running
         self.max_bytes = max_bytes
         self.max_unpack_ratio = max_unpack_ratio
         self.compressed_total = compressed_total
         self.name = name
 
-    def push(self, data: bytes) -> None:
-        """Prepend bytes that were already counted on a prior ``read``."""
-        if not data:
-            return
-        self._pending = data + self._pending
-        self._pending_counted += len(data)
-
     def read(self, n: int = -1) -> bytes:
         if n == 0:
             return b""
-        out = bytearray()
-        if self._pending:
-            if n < 0 or n >= len(self._pending):
-                take = self._pending
-                self._pending = b""
-            else:
-                take = self._pending[:n]
-                self._pending = self._pending[n:]
-            # pending was counted when first read — do not double-count
-            already = min(len(take), self._pending_counted)
-            self._pending_counted -= already
-            out += take
-            if n > 0:
-                n -= len(take)
-        if n != 0:
-            chunk = self._raw.read(n if n > 0 else -1)
-            if chunk:
-                out += chunk
-                self.running[0] += len(chunk)
-                self._check_budget()
-        return bytes(out)
+        chunk = self._raw.read(n if n > 0 else -1)
+        if chunk:
+            self.running[0] += len(chunk)
+            self._check_budget()
+        return chunk if chunk else b""
 
     def _check_budget(self) -> None:
         if self.max_bytes is not None and self.running[0] > self.max_bytes:
@@ -497,10 +467,44 @@ class _CountingReader:
         tell = getattr(self._raw, "tell", None)
         if tell is not None:
             try:
-                return int(tell()) - len(self._pending)
+                return int(tell())
             except Exception:  # noqa: BLE001
                 pass
         return self.running[0]
+
+
+class _PrefixFileobj:
+    """Unread ``prefix`` in front of an existing binary fileobj.
+
+    Used so ``_proc_pax`` can inspect pax bytes then let stdlib
+    ``TarInfo._proc_pax`` re-read them without poking ``tarfile._Stream``
+    private ``buf``/``pos``.
+    """
+
+    def __init__(self, prefix: bytes, inner: Any) -> None:
+        self._prefix = prefix
+        self._inner = inner
+
+    def read(self, n: int = -1) -> bytes:
+        if n == 0:
+            return b""
+        if self._prefix:
+            if n < 0 or n >= len(self._prefix):
+                take = self._prefix
+                self._prefix = b""
+                if n < 0:
+                    return take + (self._inner.read(-1) or b"")
+                need = n - len(take)
+                if need > 0:
+                    return take + (self._inner.read(need) or b"")
+                return take
+            take = self._prefix[:n]
+            self._prefix = self._prefix[n:]
+            return take
+        return self._inner.read(n) or b""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
 
 
 def _tar_block_size(size: int) -> int:
@@ -518,20 +522,46 @@ class _GuardedTarInfo(tarfile.TarInfo):
     gate longname/pax/sparse. Size fields (including POSIX base-256) are
     interpreted by ``tarfile``; hostile encodings surface as
     ``HeaderError`` / ``ReadError`` → ``INPUT_INVALID`` (safe reject).
+
+    Consecutive typeflag ``x``/``g``/``L``/``K`` recurse via
+    ``_proc_pax``/``_proc_gnulong`` → ``fromtarfile``; ``_meta_chain``
+    caps that depth at ``MAX_TAR_META_CHAIN``.
     """
 
     archive_name: str = "archive.tar"
+    # Per-open mutable depth — ``inspect_tar_streaming`` subclasses with a fresh list.
+    _meta_chain: list[int] = []
 
-    def _proc_gnulong(self, tarf: tarfile.TarFile) -> tarfile.TarInfo:
-        if self.size is None or self.size < 0 or self.size > MAX_TAR_XATTR_BYTES:
+    def _enter_meta(self) -> None:
+        chain = type(self)._meta_chain
+        chain[0] += 1
+        if chain[0] > MAX_TAR_META_CHAIN:
             raise _TarGateReject(
                 _invalid(
-                    f"tar longname/pax {self.size} > {MAX_TAR_XATTR_BYTES} "
+                    f"tar meta chain {chain[0]} > {MAX_TAR_META_CHAIN} "
                     f"({self.archive_name})"
                 )
             )
-        # typeshed hides private ``_proc_*``; call the real CPython impl.
-        return cast(Any, tarfile.TarInfo)._proc_gnulong(self, tarf)
+
+    def _leave_meta(self) -> None:
+        chain = type(self)._meta_chain
+        if chain[0] > 0:
+            chain[0] -= 1
+
+    def _proc_gnulong(self, tarf: tarfile.TarFile) -> tarfile.TarInfo:
+        self._enter_meta()
+        try:
+            if self.size is None or self.size < 0 or self.size > MAX_TAR_XATTR_BYTES:
+                raise _TarGateReject(
+                    _invalid(
+                        f"tar longname/pax {self.size} > {MAX_TAR_XATTR_BYTES} "
+                        f"({self.archive_name})"
+                    )
+                )
+            # typeshed hides private ``_proc_*``; call the real CPython impl.
+            return cast(Any, tarfile.TarInfo)._proc_gnulong(self, tarf)
+        finally:
+            self._leave_meta()
 
     def _proc_sparse(self, tarf: tarfile.TarFile) -> tarfile.TarInfo:
         raise _TarGateReject(
@@ -539,50 +569,40 @@ class _GuardedTarInfo(tarfile.TarInfo):
         )
 
     def _proc_pax(self, tarf: tarfile.TarFile) -> tarfile.TarInfo:
-        if self.size is None or self.size < 0 or self.size > MAX_TAR_XATTR_BYTES:
-            raise _TarGateReject(
-                _invalid(
-                    f"tar longname/pax {self.size} > {MAX_TAR_XATTR_BYTES} "
-                    f"({self.archive_name})"
+        self._enter_meta()
+        try:
+            if self.size is None or self.size < 0 or self.size > MAX_TAR_XATTR_BYTES:
+                raise _TarGateReject(
+                    _invalid(
+                        f"tar longname/pax {self.size} > {MAX_TAR_XATTR_BYTES} "
+                        f"({self.archive_name})"
+                    )
                 )
-            )
-        n = _tar_block_size(self.size)
-        fobj = tarf.fileobj
-        if fobj is None:
-            raise _TarGateReject(_invalid(f"tar pax missing fileobj ({self.archive_name})"))
-        buf = fobj.read(n)
-        if len(buf) < n:
-            raise tarfile.HeaderError("invalid header")
-        records = _parse_pax_records(buf)
-        an = self.archive_name
-        if "size" in records:
-            raise _TarGateReject(_invalid(f"tar pax size forbidden ({an})"))
-        if any(k.startswith("GNU.sparse.") for k in records):
-            raise _TarGateReject(_invalid(f"tar pax GNU.sparse forbidden ({an})"))
-        if self.size < len(buf) and any(buf[self.size :]):
-            raise _TarGateReject(_invalid(f"tar pax non-zero padding ({an})"))
-        # ``r|`` uses ``tarfile._Stream`` with an internal ``buf``; push there
-        # so ``_proc_pax`` re-reads without touching the decompressor.
-        _push_tar_stream_bytes(fobj, buf)
-        return cast(Any, tarfile.TarInfo)._proc_pax(self, tarf)
-
-
-def _push_tar_stream_bytes(fh: Any, data: bytes) -> None:
-    """Unread ``data`` onto ``tarfile``'s stream (``_Stream.buf`` or our reader)."""
-    if not data:
-        return
-    push = getattr(fh, "push", None)
-    if push is not None:
-        push(data)
-        return
-    buf = getattr(fh, "buf", None)
-    if isinstance(buf, (bytes, bytearray)):
-        fh.buf = data + bytes(buf)
-        pos = getattr(fh, "pos", None)
-        if isinstance(pos, int):
-            fh.pos = max(0, pos - len(data))
-        return
-    raise _TarGateReject(_invalid("tar pax gate misconfigured"))
+            n = _tar_block_size(self.size)
+            fobj = tarf.fileobj
+            if fobj is None:
+                raise _TarGateReject(
+                    _invalid(f"tar pax missing fileobj ({self.archive_name})")
+                )
+            buf = fobj.read(n)
+            if len(buf) < n:
+                raise tarfile.HeaderError("invalid header")
+            records = _parse_pax_records(buf)
+            an = self.archive_name
+            if "size" in records:
+                raise _TarGateReject(_invalid(f"tar pax size forbidden ({an})"))
+            if any(k.startswith("GNU.sparse.") for k in records):
+                raise _TarGateReject(_invalid(f"tar pax GNU.sparse forbidden ({an})"))
+            if self.size < len(buf) and any(buf[self.size :]):
+                raise _TarGateReject(_invalid(f"tar pax non-zero padding ({an})"))
+            # Re-present inspected bytes to stdlib without touching ``_Stream``.
+            tarf.fileobj = _PrefixFileobj(buf, fobj)
+            try:
+                return cast(Any, tarfile.TarInfo)._proc_pax(self, tarf)
+            finally:
+                tarf.fileobj = fobj
+        finally:
+            self._leave_meta()
 
 
 def _tar_member_over_budget(
@@ -644,8 +664,11 @@ def inspect_tar_streaming(
     typeflags skip a data body (DIR / V7-dir / specials do **not**), so a
     DIR ``size>0`` body is parsed as subsequent headers (catching smuggled
     L / pax / sparse) rather than skipped. ``_GuardedTarInfo`` rejects
-    oversized longname/pax, pax ``size`` / ``GNU.sparse.*``, and typeflag
-    ``S`` before the corresponding ``read()``.
+    oversized longname/pax, pax ``size`` / ``GNU.sparse.*``, typeflag
+    ``S``, and meta chains longer than ``MAX_TAR_META_CHAIN`` before the
+    corresponding ``read()``. Unexpected stream errors (including
+    ``RecursionError``) map to ``INPUT_INVALID``. EOF follows stdlib
+    ``tarfile`` (see module docstring).
     """
     if not data:
         return None
@@ -666,7 +689,7 @@ def inspect_tar_streaming(
         guarded = type(
             "_GuardedTarInfoNamed",
             (_GuardedTarInfo,),
-            {"archive_name": name},
+            {"archive_name": name, "_meta_chain": [0]},
         )
         # bufsize=512: avoid _Stream read-ahead past tar EOF (blocking
         # factor padding would inflate unpack-ratio on tiny archives).
@@ -725,7 +748,7 @@ def inspect_tar_streaming(
                         return bad
     except _TarGateReject as e:
         return e.violation
-    except _TAR_STREAM_ERRORS as e:
+    except Exception as e:  # noqa: BLE001 — fail closed (RecursionError, etc.)
         return _invalid(f"corrupt tar:{type(e).__name__} ({name})")
     finally:
         if counting is not None:
