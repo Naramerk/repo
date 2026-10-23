@@ -162,35 +162,32 @@ def _artifact_produced_by_covering_task(
 def design_artifact_ok(
     *,
     artifact_id: str | None,
-    artifact_lookup: Any | None,
+    artifact_lookup: Any | None = None,
     tasks: Any | None = None,
     results: Any | None = None,
     task_keys: set[str] | None = None,
+    journal_kinds: dict[str, str] | None = None,
+    pending_design_ids: set[str] | None = None,
 ) -> bool:
-    """True when ``artifact_id`` is a report experiment_design bound to the task.
+    """True when ``artifact_id`` is a journaled/pending experiment_design.
 
-    Prefer stamped ``Artifact.kind``. Fallback (legacy puts without stamp) requires
-    the artifact to appear in a covering task's outputs whose OutputSpec.kind is
-    ``experiment_design`` — never a bare rubric-id match on unrelated tasks.
+    Never trusts live ``meta.kind`` alone (pre-commit stamp mutation). Accepts:
+    - ``pending_design_ids`` (same-batch OutputSpec.kind=experiment_design outputs)
+    - ``journal_kinds`` from folded ``ArtifactRegistered(stamped=True)``
+    - covering-task OutputSpec.kind binding via results (not rubric-id spoof)
     """
+    del artifact_lookup  # meta.kind is not authoritative without journal stamp
     if not artifact_id:
         return False
-    meta = None
-    if artifact_lookup is not None:
-        try:
-            meta = artifact_lookup(str(artifact_id))
-        except (KeyError, FileNotFoundError, OSError, TypeError, ValueError):
-            meta = None
-    if meta is not None:
-        kind = getattr(meta, "kind", None)
-        if kind == ARTIFACT_KIND_EXPERIMENT_DESIGN:
-            return True
-    # Fallback (no stamp): artifact must be an output of a covering task whose
-    # OutputSpec.kind is experiment_design — never a bare rubric-id match.
+    aid = str(artifact_id)
+    if pending_design_ids and aid in pending_design_ids:
+        return True
+    if journal_kinds and journal_kinds.get(aid) == ARTIFACT_KIND_EXPERIMENT_DESIGN:
+        return True
     if tasks is None or results is None or not task_keys:
         return False
     return _artifact_produced_by_covering_task(
-        artifact_id=str(artifact_id),
+        artifact_id=aid,
         tasks=tasks,
         results=results,
         task_keys=task_keys,

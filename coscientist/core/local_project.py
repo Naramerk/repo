@@ -44,6 +44,8 @@ class LocalProjectMixin:
     _loop_capped: dict[str, dict[str, Any]]
     _loop_done: set[str]
     question_disposals: dict[str, dict[str, Any]]
+    artifact_kinds: dict[str, str]
+    _disposal_rejects: list[dict[str, Any]]
 
     def _clear_expand_request(
         self, *, after_task: str | None = None, plan_key: str | None = None
@@ -184,13 +186,21 @@ class LocalProjectMixin:
             self._study_cancelled = True
         elif ev.type == "ArtifactRegistered":
             # PR15: core-stamped Artifact.kind (experiment_design / contradiction_map).
+            # Journal is authority; meta mutation only here (after successful append).
             art_id = str(p.get("artifact_id") or ev.entity_key or "")
             kind = p.get("kind")
-            arts = getattr(self, "artifacts", None)
-            if art_id and kind and arts is not None and bool(p.get("stamped")):
-                from coscientist.core.artifact_stamp import apply_kind_stamp
+            if art_id and kind and bool(p.get("stamped")):
+                kinds = getattr(self, "artifact_kinds", None)
+                if not isinstance(kinds, dict):
+                    self.artifact_kinds = {}
+                    kinds = self.artifact_kinds
+                kinds[art_id] = str(kind)
+                arts = getattr(self, "artifacts", None)
+                if arts is not None:
+                    from coscientist.core.artifact_stamp import apply_kind_stamp
 
-                apply_kind_stamp(arts, art_id, str(kind))
+                    # Missing meta file → fail-closed (never silent skip).
+                    apply_kind_stamp(arts, art_id, str(kind))
         elif ev.type == "QuestionDisposed":
             from coscientist.core.dispose import fold_question_disposed
 
@@ -199,6 +209,14 @@ class LocalProjectMixin:
                 self.question_disposals = {}
                 store = self.question_disposals
             fold_question_disposed(store, p if isinstance(p, dict) else {})
+        elif ev.type == "QuestionDisposeRejected":
+            from coscientist.core.dispose import fold_question_dispose_rejected
+
+            notes = getattr(self, "_disposal_rejects", None)
+            if not isinstance(notes, list):
+                self._disposal_rejects = []
+                notes = self._disposal_rejects
+            fold_question_dispose_rejected(notes, p if isinstance(p, dict) else {})
         elif ev.type == "StudyFinalized":
             self._finalized = True
             self._fold_finalized_graph(ev.study_id, p, created_at=ev.ts)

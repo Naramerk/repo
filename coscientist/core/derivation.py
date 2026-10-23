@@ -1,21 +1,20 @@
 """Derivation evidence kind (M1 PR15 / DESIGN_M1 §6.6).
 
-``evidence_kind=derivation``:
+``evidence_kind=derivation`` is set only via explicit ``OutputSpec.evidence_kind``
+(PlanValidator-enforced). Rubric item ids never imply derivation.
+
 - review-only (ReviewCheck / rubric judge, no real executable CodeCheck) →
   **never counts** toward k_sup/k_ref; may still mark ``by_theory`` and yield
   ``inconclusive`` when it is the only evidence;
-- with a real executable CodeCheck MET (not WAIVED) → full counting + ``by_theory``.
+- with a real executable CodeCheck MET (not WAIVED) bound to the claim →
+  full counting + ``by_theory``.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from pydantic import ValidationError
-
 EVIDENCE_KIND_DERIVATION = "derivation"
-# Rubric item ids that mark a first-principles derivation deliverable (§6.6).
-DERIVATION_RUBRIC_IDS: frozenset[str] = frozenset({"steps", "assumptions"})
 VALID_EVIDENCE_KINDS: frozenset[str] = frozenset(
     {
         "computational",
@@ -108,34 +107,42 @@ def apply_derivation_ceiling(verdict_value: str, claims: list[Any]) -> str:
 
 
 def is_derivation_task_spec(spec: Any | None) -> bool:
-    """True when OutputSpec role=code|report carries steps+assumptions rubric."""
+    """True when any OutputSpec declares ``evidence_kind=derivation`` (explicit only)."""
     if spec is None:
         return False
-    from coscientist.core.rubric_types import Rubric
-
     for o in getattr(spec, "expected_outputs", None) or []:
-        role = getattr(o, "role", None)
-        if role not in ("code", "report"):
-            continue
-        rub = getattr(o, "rubric", None)
-        if rub is None:
-            continue
-        try:
-            r = rub if isinstance(rub, Rubric) else Rubric.model_validate(rub)
-        except ValidationError:
-            continue
-        ids = {it.id for it in r.items if it.required}
-        if DERIVATION_RUBRIC_IDS <= ids:
+        if getattr(o, "evidence_kind", None) == EVIDENCE_KIND_DERIVATION:
             return True
     return False
 
 
-def executable_check_met(checks: list[Any] | None) -> bool:
-    """True if any real executable CodeCheck is MET/PASSED (not WAIVED)."""
+def executable_check_met(
+    checks: list[Any] | None,
+    *,
+    bound_key: str | None = None,
+) -> bool:
+    """True if a real executable CodeCheck bound to the claim is MET/PASSED.
+
+    When ``bound_key`` is set, only checks whose ``template_id`` or ``check_id``
+    equals that key are considered — unrelated MET checks must not lift §6.6.
+    When ``bound_key`` is None/empty, return False (fail-closed).
+    """
     from coscientist.core.domain import ReqStatus
 
+    if not bound_key:
+        return False
+    key = str(bound_key)
     for c in checks or ():
+        tid = getattr(c, "template_id", None)
+        cid = getattr(c, "check_id", None)
+        if tid is None and isinstance(c, dict):
+            tid = c.get("template_id")
+            cid = c.get("check_id")
+        if str(tid or "") != key and str(cid or "") != key:
+            continue
         kind = getattr(c, "kind", None)
+        if kind is None and isinstance(c, dict):
+            kind = c.get("kind")
         if kind is None:
             continue  # ReviewCheck — no kind
         kind_s = getattr(kind, "value", kind)
@@ -144,6 +151,8 @@ def executable_check_met(checks: list[Any] | None) -> bool:
         if str(kind_s) not in _EXECUTABLE_KINDS:
             continue
         st = getattr(c, "status", None)
+        if st is None and isinstance(c, dict):
+            st = c.get("status")
         st_s = getattr(st, "value", st)
         if st_s in (ReqStatus.MET, "MET", "PASSED"):
             return True

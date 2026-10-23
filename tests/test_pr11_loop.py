@@ -1217,7 +1217,7 @@ def test_upcast_task_created_loop_fields():
             "deadline": "2026-01-01T01:00:00+00:00",
         },
     )
-    assert v == 12
+    assert v == 13
     assert p["spec"]["loop_id"] is None
     assert p["spec"]["loop_iter"] is None
 
@@ -2126,17 +2126,11 @@ def test_upcast_plan_expanded_v2_loop_field_defaults():
             "added_questions": [],
         },
     )
-<<<<<<< HEAD
-    assert v == 5  # PR15 kind after PR16 decomposes v4
-=======
-    assert v == 4
->>>>>>> 4b5f306 (fix(pr15): rebase onto #24 — kind at v12/v10/v4; LeaseLost; termination XOR)
+    assert v == 5  # PR15 kind+evidence after PR16 decomposes v4
     spec = p["added_tasks"][0]
     assert spec["loop_id"] is None
     assert spec["loop_iter"] is None
     assert spec["loop_template_key"] is None
-<<<<<<< HEAD
     assert p.get("rollup") == "all"
-=======
     assert spec["expected_outputs"][0].get("kind") is None
->>>>>>> 4b5f306 (fix(pr15): rebase onto #24 — kind at v12/v10/v4; LeaseLost; termination XOR)
+    assert spec["expected_outputs"][0].get("evidence_kind") is None

@@ -1,8 +1,9 @@
 """Journaled Artifact.kind stamps (M1 PR15).
 
-Agents must not import this module (import-linter). Core stamps
-``experiment_design`` / ``contradiction_map`` via ``ArtifactRegistered`` in the
-same append batch as ``ResultRecorded``; fold applies meta atomically.
+Agents must not import this module (import-linter). Core emits
+``ArtifactRegistered(stamped=True)`` in the same append batch as
+``ResultRecorded``; ``apply_kind_stamp`` mutates meta **only in fold** after a
+successful append. Pre-commit mutation is forbidden.
 """
 
 from __future__ import annotations
@@ -25,7 +26,11 @@ __all__ = [
 
 
 def stamp_kind(store: Any, artifact_id: str, kind: str | None) -> Artifact:
-    """Apply ``kind`` to artifact meta (core-only; raises on invalid / missing)."""
+    """Apply ``kind`` to artifact meta (fold/tests only; raises on invalid / missing).
+
+    Callers on the write path must emit ``kind_stamped_event`` and let fold
+    invoke this — never mutate before ``_commit_result`` succeeds.
+    """
     if kind is not None and kind not in VALID_ARTIFACT_KINDS:
         raise ArtifactRejected(f"invalid artifact kind: {kind!r}")
     art = store.get_meta(artifact_id)
@@ -41,13 +46,13 @@ def stamp_kind(store: Any, artifact_id: str, kind: str | None) -> Artifact:
     return updated
 
 
-def apply_kind_stamp(store: Any, artifact_id: str, kind: str | None) -> Artifact | None:
-    """Fold-time apply; returns None only when store has no meta yet (CAS race)."""
+def apply_kind_stamp(store: Any, artifact_id: str, kind: str | None) -> Artifact:
+    """Fold-time apply. Missing meta → fail-closed (never silent skip)."""
     if kind is not None and kind not in VALID_ARTIFACT_KINDS:
         raise ArtifactRejected(f"invalid artifact kind: {kind!r}")
     art = store.get_meta(artifact_id)
     if art is None:
-        return None
+        raise ArtifactRejected(f"artifact missing for kind stamp on replay: {artifact_id!r}")
     if art.kind == kind:
         return art
     return stamp_kind(store, artifact_id, kind)

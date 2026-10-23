@@ -49,13 +49,14 @@ from coscientist.core.experiment_design import (
     is_experiment_design_rubric,
 )
 from coscientist.core.graph import GraphEdge, GraphNode, GraphStore, registry_from_schema
-from coscientist.core.plan_validate import validate_output_kinds
+from coscientist.core.plan_validate import validate_evidence_kinds, validate_output_kinds
 from coscientist.core.reasons import Disposition
 from coscientist.core.rubric_types import Rubric, RubricItem
 from coscientist.core.upcasters import (
     UPCASTERS,
     assert_upcaster_chain_continuous,
     register_upcaster,
+    upcast,
     writer_schema_version,
 )
 from coscientist.core.verdict import hypothesis_verdict
@@ -229,8 +230,8 @@ def test_refs_require_known_prefix():
         validate_disposal(d, known_question_ids={"Q1"})
 
 
-def test_design_artifact_ok_fallback_binds_to_task(tmp_path):
-    """Fallback without stamped kind must bind artifact_id to covering task outputs."""
+def test_design_artifact_ok_ignores_meta_kind_without_journal(tmp_path):
+    """meta.kind alone must not unlock needs_more_data (pre-commit stamp spoof)."""
     arts = __import__("coscientist.core.artifacts", fromlist=["LocalArtifactStore"]).LocalArtifactStore(
         tmp_path / "arts"
     )
@@ -241,7 +242,9 @@ def test_design_artifact_ok_fallback_binds_to_task(tmp_path):
         media_type="text/markdown",
         role="report",
     )
-    # Unstamped + no results → False.
+    stamp_kind(arts, art.artifact_id, ARTIFACT_KIND_EXPERIMENT_DESIGN)
+    assert arts.get_meta(art.artifact_id).kind == ARTIFACT_KIND_EXPERIMENT_DESIGN
+    # Without journal_kinds / pending / covering-task → False.
     assert design_artifact_ok(
         artifact_id=art.artifact_id,
         artifact_lookup=arts.get_meta,
@@ -249,20 +252,110 @@ def test_design_artifact_ok_fallback_binds_to_task(tmp_path):
         results={},
         task_keys={"E0"},
     ) is False
-    # Stamped kind → True.
-    stamp_kind(arts, art.artifact_id, ARTIFACT_KIND_EXPERIMENT_DESIGN)
     assert design_artifact_ok(
         artifact_id=art.artifact_id,
-        artifact_lookup=arts.get_meta,
-        tasks={},
-        results={},
-        task_keys={"E0"},
+        journal_kinds={art.artifact_id: ARTIFACT_KIND_EXPERIMENT_DESIGN},
+    ) is True
+    assert design_artifact_ok(
+        artifact_id=art.artifact_id,
+        pending_design_ids={art.artifact_id},
     ) is True
 
 
 def test_stamp_kind_rejects_invalid():
     with pytest.raises(ArtifactRejected):
         stamp_kind(object(), "art_x", "nope")
+
+
+def test_apply_kind_stamp_fail_closed_missing_meta(tmp_path):
+    from coscientist.core.artifact_stamp import apply_kind_stamp
+    from coscientist.core.artifacts import LocalArtifactStore
+
+    arts = LocalArtifactStore(tmp_path / "arts")
+    with pytest.raises(ArtifactRejected, match="missing"):
+        apply_kind_stamp(arts, "art_missing", ARTIFACT_KIND_EXPERIMENT_DESIGN)
+
+
+def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
+    """steps+assumptions rubric alone must NOT imply derivation (§6.6)."""
+    from coscientist.core.derivation import is_derivation_task_spec
+
+    rub = Rubric(
+        items=[
+            RubricItem(id="steps", text="s", required=True, check="code", code_kind="artifact_exists"),
+            RubricItem(
+                id="assumptions", text="a", required=True, check="code", code_kind="artifact_exists"
+            ),
+        ],
+        aggregate="all_required",
+    )
+    spoof = TaskSpec(
+        task_key="D0",
+        title="t",
+        goal="g",
+        route="experiment",
+        depends_on=["PLAN"],
+        addresses=["Q1"],
+        expected_outputs=[
+            OutputSpec(name="main", media_type="text/plain", role="code", rubric=rub)
+        ],
+    )
+    assert is_derivation_task_spec(spoof) is False
+    with pytest.raises(ValidationError):
+        OutputSpec(
+            name="main",
+            media_type="text/plain",
+            role="code",
+            evidence_kind="not_a_kind",  # type: ignore[arg-type]
+        )
+    bad_role = TaskSpec(
+        task_key="D1",
+        title="t",
+        goal="g",
+        route="experiment",
+        depends_on=["PLAN"],
+        addresses=["Q1"],
+        expected_outputs=[
+            OutputSpec(
+                name="main",
+                media_type="text/plain",
+                role="data",
+                evidence_kind="derivation",
+            )
+        ],
+    )
+    with pytest.raises(ValueError, match="derivation"):
+        validate_evidence_kinds([bad_role])
+    ok = TaskSpec(
+        task_key="D2",
+        title="t",
+        goal="g",
+        route="experiment",
+        depends_on=["PLAN"],
+        addresses=["Q1"],
+        expected_outputs=[
+            OutputSpec(
+                name="main",
+                media_type="text/plain",
+                role="code",
+                evidence_kind="derivation",
+            )
+        ],
+    )
+    validate_evidence_kinds([ok])
+    assert is_derivation_task_spec(ok) is True
+
+
+def test_executable_check_met_only_bound_check():
+    """Unrelated MET executable must not lift §6.6 for this claim."""
+    met = type("C", (), {"kind": "exec_runs", "status": ReqStatus.MET, "template_id": "other", "check_id": "c1"})()
+    bound = type(
+        "C", (), {"kind": "exec_runs", "status": ReqStatus.MET, "template_id": "mine", "check_id": "c2"}
+    )()
+    assert executable_check_met([met, bound], bound_key="mine") is True
+    assert executable_check_met([met], bound_key="mine") is False
+    assert executable_check_met([met, bound], bound_key=None) is False
+    assert executable_check_met([met, bound]) is False
 
 
 def test_question_disposed_fold_first_wins():
@@ -316,16 +409,33 @@ async def test_needs_more_data_requires_design(tmp_path, clock):
     assert got is None
     assert "Q1" not in rt.question_disposals
     assert getattr(rt, "_disposal_rejects", None)
+    reject_evs = [e for e in await rt.store.read_all() if e.type == "QuestionDisposeRejected"]
+    assert len(reject_evs) >= 1
 
-    # Core-stamped experiment_design artifact unlocks needs_more_data.
+    # Journaled ArtifactRegistered(stamped) unlocks needs_more_data (not meta alone).
     art = arts.put_core(
         b"# design\nhypothesis / variables / n / criterion\n",
         make_tool_ref("core:design"),
         name="main",
         media_type="text/markdown",
         role="report",
-        kind=ARTIFACT_KIND_EXPERIMENT_DESIGN,
     )
+    from coscientist.core.artifact_stamp import kind_stamped_event
+
+    await rt._append(  # noqa: SLF001
+        [
+            kind_stamped_event(
+                study_id="st_nmd1",
+                artifact_id=art.artifact_id,
+                kind=ARTIFACT_KIND_EXPERIMENT_DESIGN,
+                now=clock.now(),
+                name=art.name,
+                sha256=art.sha256,
+                role=art.role,
+            )
+        ]
+    )
+    assert rt.artifact_kinds.get(art.artifact_id) == ARTIFACT_KIND_EXPERIMENT_DESIGN
     got2 = await rt.dispose_question(
         QuestionDisposal(
             question_id="Q1",
@@ -353,6 +463,7 @@ async def test_needs_more_data_requires_design(tmp_path, clock):
         results=rt.results,
         artifact_lookup=arts.get_meta,
         question_disposals=rt.question_disposals,
+        journal_kinds=rt.artifact_kinds,
     )
     assert d["Q1"]["disposition"] == Disposition.NEEDS_MORE_DATA.value
     assert d["Q1"].get("design_artifact_id") == art.artifact_id
@@ -395,13 +506,47 @@ async def test_disposal_unknown_question_fail_closed_empty_graph(tmp_path, clock
         ),
     )
     assert "QX" not in rt.question_disposals
-    assert any("unknown question" in str(n.get("detail", "")) for n in getattr(ex, "_disposal_rejects", []))
+    reject_evs = [e for e in await rt.store.read_all() if e.type == "QuestionDisposeRejected"]
+    assert any("unknown question" in str(e.payload.get("detail") or "") for e in reject_evs)
     # REPORT completion finalizes; assert honest termination shape.
     await rt.ensure_lease(ttl_s=10_000)
     await rt.tick()
-    if rt.view().phase == "closed":
-        _assert_terminated(await rt.store.read_all())
+    assert rt.view().phase == "closed"
+    events = await rt.store.read_all()
+    fin = _assert_terminated(events)
+    contrib = list(fin.payload.get("contributing_reasons") or [])
+    assert any("disposal rejected" in str(c) or "не выполнено" in str(c) for c in contrib)
     await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_dispose_rejected_survives_restart(tmp_path, clock):
+    """QuestionDisposeRejected is journaled; reopen restores _disposal_rejects + report line."""
+    rt = await _boot(tmp_path, clock, "st_rej_rp")
+    await rt.accept_plan(
+        tasks=[_exp_design("E0", addresses=["Q1"])],
+        questions=[QuestionSpec(id="Q1", text="dose?", final_type="artifact")],
+    )
+    got = await rt.dispose_question(
+        {
+            "question_id": "Q1",
+            "disposition": "needs_more_data",
+            "reason": "need design",
+            "refs": ["evidence:e1"],
+        }
+    )
+    assert got is None
+    assert any(e.type == "QuestionDisposeRejected" for e in await rt.store.read_all())
+    await close_runtime(rt)
+    rt2 = await open_runtime(tmp_path, "st_rej_rp", clock=clock, owner="t1")
+    notes = getattr(rt2, "_disposal_rejects", None) or []
+    assert notes, "fold must restore disposal rejects after restart"
+    assert any(
+        "missing_experiment_design" in str(n.get("detail") or "")
+        or "design" in str(n.get("report_line") or "")
+        for n in notes
+    )
+    await close_runtime(rt2)
 
 
 @pytest.mark.asyncio
@@ -583,12 +728,20 @@ def test_derivation_verdict_marked():
 
 
 def test_executable_check_met_excludes_presence_and_waived():
-    row = type("C", (), {"kind": "exec_runs", "status": ReqStatus.WAIVED})()
-    assert executable_check_met([row]) is False
-    presence = type("C", (), {"kind": "artifact_exists", "status": ReqStatus.MET})()
-    assert executable_check_met([presence]) is False
-    real = type("C", (), {"kind": "exec_runs", "status": ReqStatus.MET})()
-    assert executable_check_met([real]) is True
+    row = type(
+        "C", (), {"kind": "exec_runs", "status": ReqStatus.WAIVED, "template_id": "x", "check_id": "c"}
+    )()
+    assert executable_check_met([row], bound_key="x") is False
+    presence = type(
+        "C",
+        (),
+        {"kind": "artifact_exists", "status": ReqStatus.MET, "template_id": "x", "check_id": "c"},
+    )()
+    assert executable_check_met([presence], bound_key="x") is False
+    real = type(
+        "C", (), {"kind": "exec_runs", "status": ReqStatus.MET, "template_id": "x", "check_id": "c"}
+    )()
+    assert executable_check_met([real], bound_key="x") is True
 
 
 def test_upcaster_chains_continuous_and_no_overwrite():
@@ -604,14 +757,29 @@ def test_upcaster_chains_continuous_and_no_overwrite():
         "TaskDone",
         "AttemptClosed",
         "QuestionDisposed",
+        "QuestionDisposeRejected",
     ):
         w = writer_schema_version(et)
         assert_upcaster_chain_continuous(et, w)
     # Writers for plan events match registered chain ends (PR15 OutputSpec.kind).
-    assert writer_schema_version("TaskCreated") == TASK_CREATED_SCHEMA_VERSION == 12
+    assert writer_schema_version("TaskCreated") == TASK_CREATED_SCHEMA_VERSION == 13
     assert writer_schema_version("PlanAccepted") == PLAN_ACCEPTED_SCHEMA_VERSION == 11
     assert writer_schema_version("PlanExpanded") == PLAN_EXPANDED_SCHEMA_VERSION == 5
     assert writer_schema_version("QuestionDisposed") == 1
+    assert writer_schema_version("QuestionDisposeRejected") == 1
+    v, p = upcast(
+        "TaskCreated",
+        12,
+        {
+            "task_id": "t",
+            "spec": {
+                "task_key": "E0",
+                "expected_outputs": [{"name": "main", "media_type": "text/plain"}],
+            },
+        },
+    )
+    assert v == 13
+    assert p["spec"]["expected_outputs"][0].get("evidence_kind") is None
     # Duplicate guard without mutating production event registries.
     register_upcaster("_pr15_dup_guard", 1, lambda p: p)
     with pytest.raises(ValueError, match="duplicate upcaster"):
@@ -630,3 +798,99 @@ async def test_impossible_task_still_closes_with_report(tmp_path, clock):
     assert rt.view().verdict is not None
     _assert_terminated(await rt.store.read_all())
     await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_stamp_kind_not_applied_before_commit_failure(tmp_path, clock):
+    """Commit failure must leave meta.kind unset (fold-only stamp)."""
+    rt = await _boot(tmp_path, clock, "st_stamp_fail")
+    await rt.accept_plan(
+        tasks=[_exp_design("E0", addresses=["Q1"])],
+        questions=[QuestionSpec(id="Q1", text="dose?", final_type="artifact")],
+    )
+    ex, arts = attach_executor(rt, tmp_path)
+    # Start the design task attempt.
+    tid = next(t.task_id for t in rt.tasks.values() if t.spec.task_key == "E0")
+    aid = await rt.start_attempt(tid)
+    assert aid is not None
+    art = arts.put(
+        b"# design\n",
+        make_tool_ref(f"{aid}:main"),
+        name="main",
+        media_type="text/markdown",
+        role="report",
+    )
+    assert art.kind is None
+
+    async def _boom(events, **kwargs):
+        raise RuntimeError("commit failed")
+
+    ex._append = _boom  # noqa: SLF001
+    with pytest.raises(RuntimeError, match="commit failed"):
+        await ex.record(
+            aid,
+            AgentTaskOutput(
+                summary="design",
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            ),
+        )
+    meta = arts.get_meta(art.artifact_id)
+    assert meta is not None and meta.kind is None
+    assert art.artifact_id not in (getattr(rt, "artifact_kinds", {}) or {})
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_stamp_kind_e2e_replay_and_missing_meta_fail_closed(tmp_path, clock):
+    """Successful stamp folds; replay restores kind; missing meta file fails closed."""
+    from coscientist.core.artifact_stamp import apply_kind_stamp
+
+    rt = await _boot(tmp_path, clock, "st_stamp_ok")
+    await rt.accept_plan(
+        tasks=[_exp_design("E0", addresses=["Q1"])],
+        questions=[QuestionSpec(id="Q1", text="dose?", final_type="artifact")],
+    )
+    ex, arts = attach_executor(rt, tmp_path)
+    tid = next(t.task_id for t in rt.tasks.values() if t.spec.task_key == "E0")
+    aid = await rt.start_attempt(tid)
+    assert aid is not None
+    art = arts.put(
+        b"# design\n",
+        make_tool_ref(f"{aid}:main"),
+        name="main",
+        media_type="text/markdown",
+        role="report",
+    )
+    await ex.record(
+        aid,
+        AgentTaskOutput(
+            summary="design",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            question_disposals=[
+                {
+                    "question_id": "Q1",
+                    "disposition": "needs_more_data",
+                    "reason": "need RCT",
+                    "refs": ["evidence:e1"],
+                    "design_artifact_id": art.artifact_id,
+                }
+            ],
+        ),
+    )
+    assert rt.artifact_kinds.get(art.artifact_id) == ARTIFACT_KIND_EXPERIMENT_DESIGN
+    assert arts.get_meta(art.artifact_id).kind == ARTIFACT_KIND_EXPERIMENT_DESIGN
+    assert "Q1" in rt.question_disposals
+    await close_runtime(rt)
+
+    rt2 = await open_runtime(tmp_path, "st_stamp_ok", clock=clock, owner="t1")
+    arts2 = rt2.artifacts
+    assert arts2 is not None
+    assert rt2.artifact_kinds.get(art.artifact_id) == ARTIFACT_KIND_EXPERIMENT_DESIGN
+    assert arts2.get_meta(art.artifact_id).kind == ARTIFACT_KIND_EXPERIMENT_DESIGN
+    # Missing meta on replay → fail-closed.
+    meta_path = arts2.meta / f"{art.artifact_id}.json"
+    meta_path.unlink()
+    arts2._index.pop(art.artifact_id, None)  # noqa: SLF001
+    with pytest.raises(ArtifactRejected, match="missing"):
+        apply_kind_stamp(arts2, art.artifact_id, ARTIFACT_KIND_EXPERIMENT_DESIGN)
+    await close_runtime(rt2)

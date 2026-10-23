@@ -83,6 +83,7 @@ def dispositions(
     artifact_lookup: Any | None = None,
     loop_capped_questions: Mapping[str, Any] | None = None,
     question_disposals: Mapping[str, Mapping[str, Any]] | None = None,
+    journal_kinds: Mapping[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-question disposition.
 
@@ -108,6 +109,7 @@ def dispositions(
             artifact_lookup=artifact_lookup,
             loop_capped_questions=loop_capped_questions,
             question_disposals=question_disposals,
+            journal_kinds=journal_kinds,
         )
     except Exception:  # noqa: BLE001 — finalize/view must never crash
         qmap = known_questions(plans)
@@ -133,6 +135,7 @@ def _dispositions_inner(
     artifact_lookup: Any | None = None,
     loop_capped_questions: Mapping[str, Any] | None = None,
     question_disposals: Mapping[str, Mapping[str, Any]] | None = None,
+    journal_kinds: Mapping[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     qmap = known_questions(plans)
     cover = question_tasks(plans)
@@ -206,6 +209,7 @@ def _dispositions_inner(
                     tasks=tasks,
                     results=results,
                     task_keys=keys,
+                    journal_kinds=dict(journal_kinds) if journal_kinds else None,
                 ):
                     result[qid] = {
                         "disposition": Disposition.NEEDS_MORE_DATA.value,
@@ -374,6 +378,7 @@ def _dispositions_inner(
                     tasks=tasks,
                     results=results,
                     task_keys=keys,
+                    journal_kinds=dict(journal_kinds) if journal_kinds else None,
                 ):
                     # Honest: disposal without design does not stick.
                     reason, detail = _not_attempted_for_covering(covering)

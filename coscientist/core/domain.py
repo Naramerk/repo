@@ -157,6 +157,14 @@ class HitlPolicy(Frozen):
 ArtifactRole = Literal["paper", "data", "code", "figure", "table", "log", "report"]
 # M1 PR15: subtype on report artifacts (core-stamped from OutputSpec.kind).
 ArtifactKind = Literal["experiment_design", "contradiction_map"]
+# M1 PR15 §6.6: explicit claim evidence kind on OutputSpec (never inferred from rubric ids).
+EvidenceKind = Literal[
+    "computational",
+    "experimental",
+    "literature",
+    "expert",
+    "derivation",
+]
 # Who stored the artifact bytes. effect.trusted is a reporting tag (M1 verdicts
 # gate on countable). Sandbox puts are trusted only when both net and fs
 # isolation are hard (soft/none ⇒ trusted=False). ``tests_pass`` is
@@ -179,6 +187,8 @@ class OutputSpec(Frozen):
     rubric: Rubric | None = None
     # M1 PR15: explicit deliverable kind (PlanValidator-enforced; not inferred).
     kind: ArtifactKind | None = None
+    # M1 PR15 §6.6: explicit evidence_kind (PlanValidator; never inferred from rubric ids).
+    evidence_kind: EvidenceKind | None = None
 
 
 class InputSpec(Frozen):

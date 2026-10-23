@@ -77,6 +77,10 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         # nested _append(TaskDone) must not re-enter expand/foreach/loop hooks.
         self._finalizing = False
         self.question_disposals: dict[str, dict] = {}
+        # PR15: ArtifactRegistered(stamped) → artifact_id → kind (journal authority).
+        self.artifact_kinds: dict[str, str] = {}
+        # PR15: folded QuestionDisposeRejected rows (also in contributing_reasons).
+        self._disposal_rejects: list[dict] = []
         self._study_cancelled = False
         self._budget_exceeded = False
         self._intake_refusal: IntakeRefuse | None = None
@@ -153,6 +157,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             review_statuses=review_statuses,
             get_graph=lambda: self.graph,
             get_results=lambda: self.results,
+            get_artifact_kinds=lambda: self.artifact_kinds,
             max_attempts=self.max_attempts,
             on_budget_debit=make_budget_debit_cb(self),
         )
@@ -254,6 +259,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                 artifact_lookup=lookup if callable(lookup) else None,
                 loop_capped_questions=capped_scope_questions(self),
                 question_disposals=getattr(self, "question_disposals", None),
+                journal_kinds=getattr(self, "artifact_kinds", None),
             )
         ed = self.study.effective_deadline() if self.study else None
         ftypes = None

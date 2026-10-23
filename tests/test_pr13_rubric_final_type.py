@@ -927,8 +927,8 @@ def test_upcast_taskcreated_v10_and_plan_expanded_v2():
             },
         },
     )
-    # PR13 rubric (v10) + PR11 loop (v11) + PR15 kind (v12).
-    assert v == 12
+    # PR13 rubric (v10) + PR11 loop (v11) + PR15 kind (v12) + evidence_kind (v13).
+    assert v == 13
     assert p["spec"]["expected_outputs"][0]["rubric"] is None
     assert p["spec"]["expected_outputs"][0]["kind"] is None
     v2, p2 = upcast(

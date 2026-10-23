@@ -10,6 +10,8 @@ import json
 from datetime import datetime
 from typing import Any
 
+from pydantic import ValidationError
+
 from coscientist.core.digest import sha256_hex
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.experiment_design import ARTIFACT_KIND_CONTRADICTION_MAP
@@ -113,7 +115,7 @@ def contradicts_events_for_new_claims(
         if ev.type == "GraphNodeUpserted":
             try:
                 node = GraphNode.model_validate(ev.payload)
-            except Exception:  # noqa: BLE001
+            except ValidationError:
                 continue
             if node.kind == "claim":
                 overlay[node.node_id] = node

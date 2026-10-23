@@ -6,6 +6,9 @@ until the first counting claim. ``needs_more_data`` additionally requires an
 
 Idempotency: first-wins per (study, question) — journal ``idem_key`` and fold
 agree (later disposals are no-ops / Idempotent).
+
+Rejected disposals are journaled as ``QuestionDisposeRejected`` (never memory-only)
+and surface in finalize ``contributing_reasons``.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from coscientist.core.digest import sha256_hex
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.experiment_design import (
     MISSING_DESIGN_LINE,
@@ -34,6 +38,8 @@ VALID_REF_PREFIXES: tuple[str, ...] = (
     "art_",
     "claim:",
 )
+
+DISPOSE_REJECTED_LINE_PREFIX = "не выполнено: disposal rejected"
 
 
 class QuestionDisposal(BaseModel):
@@ -75,8 +81,11 @@ def validate_disposal(
     tasks: Any | None = None,
     results: Any | None = None,
     covering_task_keys: set[str] | None = None,
+    journal_kinds: dict[str, str] | None = None,
+    pending_design_ids: set[str] | None = None,
 ) -> None:
     """Raise ``DisposeRejected`` when the disposal is invalid (fail-closed)."""
+    del artifact_lookup  # meta.kind alone is never trusted (journal / covering task only)
     if disposal.disposition not in EXPLICIT_DISPOSITIONS:
         raise DisposeRejected(
             f"disposition must be needs_more_data|infeasible, got {disposal.disposition!r}"
@@ -90,7 +99,8 @@ def validate_disposal(
     if disposal.disposition == Disposition.NEEDS_MORE_DATA.value:
         if not design_artifact_ok(
             artifact_id=disposal.design_artifact_id,
-            artifact_lookup=artifact_lookup,
+            journal_kinds=journal_kinds,
+            pending_design_ids=pending_design_ids,
             tasks=tasks,
             results=results,
             task_keys=covering_task_keys,
@@ -123,6 +133,46 @@ def question_disposed_event(
     )
 
 
+def dispose_reject_report_line(detail: str) -> str:
+    """Russian contributing_reasons line for a rejected disposal."""
+    d = str(detail or "")
+    if MISSING_DESIGN_REASON in d or MISSING_DESIGN_LINE in d:
+        return MISSING_DESIGN_LINE
+    short = d[:120] if d else "unknown"
+    return f"{DISPOSE_REJECTED_LINE_PREFIX}: {short}"
+
+
+def question_dispose_rejected_event(
+    *,
+    study_id: str,
+    detail: str,
+    now: datetime,
+    question_id: str | None = None,
+    disposition: str | None = None,
+) -> EventEnvelope:
+    """Journal a rejected disposal (survives restart; feeds contributing_reasons)."""
+    qid = str(question_id or "")
+    detail_s = str(detail or "")[:500]
+    digest = sha256_hex(detail_s)[:16]
+    entity = qid or study_id
+    payload = {
+        "question_id": qid or None,
+        "disposition": disposition,
+        "detail": detail_s,
+        "reason": MISSING_DESIGN_REASON if MISSING_DESIGN_REASON in detail_s else "dispose_rejected",
+        "report_line": dispose_reject_report_line(detail_s),
+    }
+    return EventEnvelope(
+        study_id=study_id,
+        type="QuestionDisposeRejected",
+        entity_key=entity,
+        idem_key=make_idem("QuestionDisposeRejected", study_id, entity, digest),
+        payload=payload,
+        ts=now,
+        schema_version=1,
+    )
+
+
 def fold_question_disposed(
     store: dict[str, dict[str, Any]],
     payload: dict[str, Any],
@@ -142,51 +192,93 @@ def fold_question_disposed(
     }
 
 
+def fold_question_dispose_rejected(
+    store: list[dict[str, Any]],
+    payload: dict[str, Any],
+) -> None:
+    """Append rejection note (idempotent by detail digest in payload)."""
+    row = {
+        "question_id": payload.get("question_id"),
+        "disposition": payload.get("disposition"),
+        "detail": str(payload.get("detail") or ""),
+        "reason": str(payload.get("reason") or ""),
+        "report_line": str(payload.get("report_line") or dispose_reject_report_line(str(payload.get("detail") or ""))),
+    }
+    dig = sha256_hex(str(row["detail"]))[:16]
+    for existing in store:
+        if sha256_hex(str(existing.get("detail") or ""))[:16] == dig and existing.get(
+            "question_id"
+        ) == row["question_id"]:
+            return
+    store.append(row)
+
+
 async def dispose_question(
     runtime: Any,
     disposal: QuestionDisposal | dict[str, Any],
 ) -> str | None:
     """Validate + append QuestionDisposed. Returns question_id or None if rejected.
 
-    Rejection is recorded via ``_note_reject`` — study still closes.
+    Rejection is journaled as ``QuestionDisposeRejected`` — study still closes.
     ``LeaseLost`` always propagates. Post-``StudyFinalized`` writes return None
     (nothing may be appended after finalize).
     """
     from coscientist.core.errors import LeaseLost, StudyClosedError
     from coscientist.core.question_tasks import known_questions, question_tasks
 
-    if isinstance(disposal, dict):
-        try:
-            disposal = QuestionDisposal.model_validate(disposal)
-        except ValidationError:
-            _note_reject(runtime, "invalid_disposal_payload")
-            return None
     study = getattr(runtime, "study", None)
     if study is None:
         return None
     sid = study.study_id
+    now = runtime.clock.now()
+    qid_hint: str | None = None
+    disp_hint: str | None = None
+
+    if isinstance(disposal, dict):
+        qid_hint = str(disposal.get("question_id") or "") or None
+        disp_hint = str(disposal.get("disposition") or "") or None
+        try:
+            disposal = QuestionDisposal.model_validate(disposal)
+        except ValidationError:
+            await _journal_reject(
+                runtime,
+                study_id=sid,
+                detail="invalid_disposal_payload",
+                now=now,
+                question_id=qid_hint,
+                disposition=disp_hint,
+            )
+            return None
+    qid_hint = disposal.question_id
+    disp_hint = disposal.disposition
     qmap = known_questions(getattr(runtime, "plans", {}) or {})
     cover = question_tasks(getattr(runtime, "plans", {}) or {})
-    arts = getattr(runtime, "artifacts", None)
-    lookup = getattr(arts, "get_meta", None) if arts is not None else None
+    kinds = getattr(runtime, "artifact_kinds", None)
     try:
         validate_disposal(
             disposal,
             known_question_ids=set(qmap),
-            artifact_lookup=lookup if callable(lookup) else None,
+            journal_kinds=kinds if isinstance(kinds, dict) else None,
             tasks=getattr(runtime, "tasks", None),
             results=getattr(runtime, "results", None),
             covering_task_keys=set(cover.get(disposal.question_id, set())),
         )
     except DisposeRejected as e:
-        _note_reject(runtime, str(e))
+        await _journal_reject(
+            runtime,
+            study_id=sid,
+            detail=str(e),
+            now=now,
+            question_id=qid_hint,
+            disposition=disp_hint,
+        )
         return None
     if getattr(runtime, "_finalized", False):
         return None
     ev = question_disposed_event(
         study_id=sid,
         disposal=disposal,
-        now=runtime.clock.now(),
+        now=now,
     )
     append = getattr(runtime, "_append", None)
     if append is None:
@@ -200,9 +292,54 @@ async def dispose_question(
     return disposal.question_id
 
 
-def _note_reject(runtime: Any, detail: str) -> None:
+async def _journal_reject(
+    runtime: Any,
+    *,
+    study_id: str,
+    detail: str,
+    now: datetime,
+    question_id: str | None = None,
+    disposition: str | None = None,
+) -> None:
+    """Append QuestionDisposeRejected; LeaseLost propagates; StudyClosed → memory note only."""
+    from coscientist.core.errors import LeaseLost, StudyClosedError
+
+    ev = question_dispose_rejected_event(
+        study_id=study_id,
+        detail=detail,
+        now=now,
+        question_id=question_id,
+        disposition=disposition,
+    )
+    # Live mirror for same-tick callers; fold re-applies on replay.
+    _note_reject(runtime, detail, report_line=ev.payload.get("report_line"))
+    if getattr(runtime, "_finalized", False):
+        return
+    append = getattr(runtime, "_append", None)
+    if append is None:
+        return
+    try:
+        await append([ev])
+    except LeaseLost:
+        raise
+    except StudyClosedError:
+        return
+
+
+def _note_reject(
+    runtime: Any,
+    detail: str,
+    *,
+    report_line: str | None = None,
+) -> None:
     notes = getattr(runtime, "_disposal_rejects", None)
     if not isinstance(notes, list):
         runtime._disposal_rejects = []
         notes = runtime._disposal_rejects
-    notes.append({"reason": MISSING_DESIGN_REASON, "detail": str(detail)[:200]})
+    notes.append(
+        {
+            "reason": MISSING_DESIGN_REASON,
+            "detail": str(detail)[:200],
+            "report_line": report_line or dispose_reject_report_line(detail),
+        }
+    )

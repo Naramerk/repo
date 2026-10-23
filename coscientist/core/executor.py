@@ -517,7 +517,11 @@ def _derive_claim_core_attrs(
         ek = EVIDENCE_KIND_DERIVATION
     else:
         ek = "computational"
-    der_exec = bool(ek == EVIDENCE_KIND_DERIVATION and executable_check_met(list(checks or [])))
+    # §6.6: only the check bound to this claim may lift review-only derivation.
+    der_exec = bool(
+        ek == EVIDENCE_KIND_DERIVATION
+        and executable_check_met(list(checks or []), bound_key=key)
+    )
     out: dict[str, Any] = {
         "criterion_status": status,
         "evidence_kind": ek,
@@ -575,6 +579,7 @@ class Executor:
         review_statuses: dict[str, ReqStatus] | None = None,
         get_graph: Any | None = None,
         get_results: Any | None = None,
+        get_artifact_kinds: Any | None = None,
         max_attempts: int = 3,
         on_budget_debit: Any | None = None,
     ) -> None:
@@ -593,6 +598,8 @@ class Executor:
         self._output_digests: dict[str, str] = {}
         self.get_graph = get_graph
         self.get_results = get_results
+        # PR15: folded ArtifactRegistered(stamped) kinds (never trust meta alone).
+        self.get_artifact_kinds = get_artifact_kinds
         self.max_attempts = int(max_attempts)
         # PR12: async (task_id, spent_rub, request_id) → record_budget_debit
         self.on_budget_debit = on_budget_debit
@@ -1014,14 +1021,15 @@ class Executor:
         # Keep claims so not_met can refute (invariant 10); only infra drops them.
         payload["result_class"] = "scientific"
         payload["payload_digest"] = payload_digest(payload)
-        # PR15: journaled kind stamps + QuestionDisposed in the same append as result.
+        # PR15: journal kind stamps + QuestionDisposed in the same append as result.
+        # Meta.kind is applied only in fold after a successful append (never pre-commit).
         from pydantic import ValidationError
 
-        from coscientist.core.artifact_stamp import kind_stamped_event, stamp_kind
+        from coscientist.core.artifact_stamp import kind_stamped_event
         from coscientist.core.dispose import (
             DisposeRejected,
             QuestionDisposal,
-            _note_reject,
+            question_dispose_rejected_event,
             question_disposed_event,
             validate_disposal,
         )
@@ -1031,6 +1039,7 @@ class Executor:
         out_map = dict(out.outputs or {})
         extra_events: list[EventEnvelope] = []
         now_stamp = self.clock.now()
+        pending_design_ids: set[str] = set()
         for ospec in getattr(task.spec, "expected_outputs", None) or ():
             kind = artifact_kind_from_output_spec(ospec)
             if not kind:
@@ -1046,9 +1055,9 @@ class Executor:
                 raise ArtifactRejected(
                     f"artifact missing for kind stamp: {handle.artifact_id!r}"
                 )
-            # Journal event + live meta in lockstep; fold re-applies on replay.
-            # Errors propagate (never swallowed).
-            stamp_kind(self.artifacts, handle.artifact_id, kind)
+            if kind == "experiment_design":
+                pending_design_ids.add(handle.artifact_id)
+            # Journal only — fold applies meta via apply_kind_stamp after append.
             extra_events.append(
                 kind_stamped_event(
                     study_id=study_id,
@@ -1061,12 +1070,19 @@ class Executor:
                 )
             )
         for raw in list(out.question_disposals or []):
+            qid_hint: str | None = None
+            disp_hint: str | None = None
             try:
+                if isinstance(raw, dict):
+                    qid_hint = str(raw.get("question_id") or "") or None
+                    disp_hint = str(raw.get("disposition") or "") or None
                 disposal = (
                     raw
                     if isinstance(raw, QuestionDisposal)
                     else QuestionDisposal.model_validate(raw)
                 )
+                qid_hint = disposal.question_id
+                disp_hint = disposal.disposition
                 if (
                     disposal.disposition == "needs_more_data"
                     and not disposal.design_artifact_id
@@ -1089,13 +1105,16 @@ class Executor:
                             known.add(n.ref_id or n.node_id.split(":")[-1])
                 if not known:
                     known = {str(a) for a in (task.spec.addresses or []) if a}
+                kinds_fn = getattr(self, "get_artifact_kinds", None)
+                rt_kinds = kinds_fn() if callable(kinds_fn) else None
                 validate_disposal(
                     disposal,
                     known_question_ids=known,
-                    artifact_lookup=getattr(self.artifacts, "get_meta", None),
                     covering_task_keys={task.spec.task_key},
                     tasks={task_id: task},
                     results=self.get_results() if self.get_results is not None else None,
+                    journal_kinds=rt_kinds if isinstance(rt_kinds, dict) else None,
+                    pending_design_ids=pending_design_ids,
                 )
                 extra_events.append(
                     question_disposed_event(
@@ -1105,7 +1124,15 @@ class Executor:
                     )
                 )
             except (DisposeRejected, ValidationError) as e:
-                _note_reject(self, str(e))
+                extra_events.append(
+                    question_dispose_rejected_event(
+                        study_id=study_id,
+                        detail=str(e),
+                        now=now_stamp,
+                        question_id=qid_hint,
+                        disposition=disp_hint,
+                    )
+                )
                 continue
 
         return await self._commit_result(

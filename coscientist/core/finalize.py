@@ -234,6 +234,16 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
         elif ev.type == "FetchIntegrityRaised":
             if "internal_error" not in seen:
                 seen.append("internal_error")
+        elif ev.type == "QuestionDisposeRejected":
+            custom = (ev.payload or {}).get("report_line")
+            if custom:
+                line = str(custom)
+            else:
+                from coscientist.core.dispose import dispose_reject_report_line
+
+                line = dispose_reject_report_line(str(ev.payload.get("detail") or ""))
+            if line and line not in seen:
+                seen.append(line)
         elif ev.type == "EffectIntended":
             # Track for unknown (Intended without Done) pass below.
             pass
@@ -552,6 +562,7 @@ async def _build_rich_payload(
         artifact_lookup=lookup,
         loop_capped_questions=capped_scope_questions(runtime),
         question_disposals=getattr(runtime, "question_disposals", None),
+        journal_kinds=getattr(runtime, "artifact_kinds", None),
     )
     hyp_verdicts, hyp_unavail = report_hypothesis_verdicts(
         graph=getattr(runtime, "graph", None),

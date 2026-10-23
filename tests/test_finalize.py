@@ -193,8 +193,8 @@ def test_questions_from_spec_output_wired():
 
 def test_upcast_taskcreated_addresses_default():
     v, p = upcast("TaskCreated", 2, {"task_id": "t", "spec": {"task_key": "E1"}})
-# …→v10 rubric → v11 loop → v12 OutputSpec.kind.
-    assert v == 12 and p["spec"]["addresses"] == []
+# …→v10 rubric → v11 loop → v12 kind → v13 evidence_kind.
+    assert v == 13 and p["spec"]["addresses"] == []
     assert p["spec"]["foreach"] is None
     assert p["spec"]["sandbox_timeout_s"] is None
     assert p["spec"]["budget_share"] is None
@@ -214,7 +214,7 @@ def test_upcast_taskcreated_input_mode_old_default():
             },
         },
     )
-    assert v == 12
+    assert v == 13
     assert p["spec"]["inputs"][0]["mode"] == "use_partial"
     assert p["spec"]["inputs"][0]["kind"] == "artifact"
     assert p["spec"]["inputs"][0]["quorum"] is None
@@ -248,6 +248,7 @@ def test_upcast_planaccepted_questions_default():
     assert p2["loops"] == []
     assert p2.get("rollup") == "all"
     assert p2["tasks"][0]["expected_outputs"][0]["kind"] is None
+    assert p2["tasks"][0]["expected_outputs"][0]["evidence_kind"] is None
 
     assert p["expand_after"] == []
     assert p["loops"] == []
@@ -278,7 +279,7 @@ def test_upcast_taskcreated_strips_plan_criterion_role():
             },
         },
     )
-    assert v == 12
+    assert v == 13
     for c in p["spec"]["criteria"]:
         assert "role" not in c
     assert p["spec"]["foreach"] is None

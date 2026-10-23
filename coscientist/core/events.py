@@ -27,12 +27,13 @@ class EventEnvelope(BaseModel):
 
 # Writer constants after #29 (PR16) on main bd413e0:
 #   TaskCreated v11, PlanAccepted v10, PlanExpanded v4, StudyCreated v10.
-# PR15 stacks OutputSpec.kind → TaskCreated v12 / PlanAccepted v11 / PlanExpanded v5.
+# PR15 stacks: TC12 kind → TC13 evidence_kind; PA11 / PE5 apply kind+evidence_kind
+# in one continuous step after PR16 PA10/PE4 (no duplicate register_upcaster).
 # StudyCreated stays v10 — #23 takes v11.
 PLAN_EXPANDED_SCHEMA_VERSION = 5
 STUDY_CREATED_SCHEMA_VERSION = 10
 PLAN_ACCEPTED_SCHEMA_VERSION = 11
-TASK_CREATED_SCHEMA_VERSION = 12
+TASK_CREATED_SCHEMA_VERSION = 13
 
 EventType = Literal[
     "StudyCreated",
@@ -79,6 +80,7 @@ EventType = Literal[
     "AttemptTainted",
     "FetchIntegrityRaised",
     "QuestionDisposed",
+    "QuestionDisposeRejected",
 ]
 
 
