@@ -236,8 +236,8 @@ def evaluate_exec_runs(
         fs_isolation=result.fs_isolation,
     )
     note = result.note or soft_note(result.net_isolation, result.fs_isolation)
-    # Guest-caused: output flood or RLIMIT_CPU (cpu_limit). Wall timeout is infra.
-    if result.status is SandboxStatus.OUTPUT_EXCEEDED or result.reason == "cpu_limit":
+    # Guest-caused: output flood or timeout (wall / CPU budget) — scientific not_met.
+    if result.status in (SandboxStatus.OUTPUT_EXCEEDED, SandboxStatus.TIMEOUT):
         return base_result(
             check_id=check_id,
             template_id=template_id,
@@ -288,11 +288,11 @@ def _catalog_tests_bytes(check: CodeCheck) -> dict[str, bytes] | None:
 
 
 def _tests_pass_launcher() -> bytes:
-    """Catalog launcher: import pytest first, then inject /inputs for agent code.
+    """Catalog launcher: import pytest first; preload allowlisted agent modules.
 
-    ``python -I`` ignores PYTHONPATH. Embed host site-packages (RO-bound), import
-    pytest/stdlib **before** placing ``/inputs`` on ``sys.path`` so agent
-    ``sitecustomize`` / shadows cannot hijack the harness.
+    ``python -I`` ignores PYTHONPATH. Never put ``/inputs`` on ``sys.path``
+    (no sitecustomize / ``.pth``). Register agent ``.py`` modules via
+    ``importlib`` so catalog tests can ``import solution`` safely.
     """
     import site
     from pathlib import Path as P
@@ -308,13 +308,26 @@ def _tests_pass_launcher() -> bytes:
         pass
     sites = [p for p in sites if p and P(p).is_dir()]
     return f"""
+import importlib.util
 import sys
+from pathlib import Path
 for p in {sites!r}:
     if p and p not in sys.path:
         sys.path.append(p)
 import pytest
-# Agent modules only after pytest/stdlib are loaded (catalog-controlled inject).
-sys.path.insert(0, "/inputs")
+# Preload agent modules by path — /inputs stays off sys.path.
+inputs = Path("/inputs")
+if inputs.is_dir():
+    for py in sorted(inputs.glob("*.py")):
+        name = py.stem
+        if not name.isidentifier() or name.startswith("_"):
+            continue
+        spec = importlib.util.spec_from_file_location(name, py)
+        if spec is None or spec.loader is None:
+            continue
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
 raise SystemExit(
     pytest.main(
         [
@@ -753,10 +766,12 @@ def evaluate_reproducible_rerun(
     attempt_id: str | None,
     prov_fields: dict[str, Any],
 ) -> CheckResult:
-    """Two verifier jails; compare core digests of result files — not stdout.
+    """Two verifier jails; compare digests — observation only in M1 (not countable).
 
     Agent argv runs under ``python3 -I``; ``/inputs`` is never on ``sys.path``.
+    A constant reward/digest match must not contribute ``est`` toward ``k_sup``.
     """
+    _ = prov_fields  # unused: never copy agent-derived est into a countable effect
     argv = _ensure_python_isolated(_argv_for(check))
     if not argv:
         raise SandboxInfraError("sandbox_unavailable:missing_command")
@@ -769,6 +784,7 @@ def evaluate_reproducible_rerun(
 
     from coscientist.checks.sandbox import FsIsolation, NetIsolation
 
+    _RERUN_NOTE = "reproducible_rerun is observation-only in M1; not counted"
     blobs: list[bytes] = []
     digests: list[str] = []
     logs: list[bytes] = []
@@ -792,7 +808,9 @@ def evaluate_reproducible_rerun(
         )
         net_i = cast(NetIsolation, str(result.net_isolation))
         fs_i = cast(FsIsolation, str(result.fs_isolation))
-        note = result.note or soft_note(net_i, fs_i)
+        note = merge_detail(
+            result.note or soft_note(net_i, fs_i), _RERUN_NOTE
+        )
         logs.append(
             b"run="
             + str(i).encode()
@@ -802,7 +820,7 @@ def evaluate_reproducible_rerun(
             + result.stderr
         )
         if result.status is not SandboxStatus.OK:
-            art_id, digest, trusted = store_log(
+            art_id, digest, _trusted = store_log(
                 artifacts,
                 attempt_id=attempt_id,
                 check_id=check_id,
@@ -821,17 +839,18 @@ def evaluate_reproducible_rerun(
                     attempt_id=attempt_id,
                     check_id=check_id,
                     art_id=art_id,
-                    trusted=trusted,
+                    trusted=False,
                     net_isolation=net_i,
                     fs_isolation=fs_i,
                     note=note,
+                    observation_only=True,
                 ),
             )
         blob = result.result_files.get(DIGEST_NAME) or result.result_files.get(
             REWARD_NAME
         )
         if blob is None:
-            art_id, digest, trusted = store_log(
+            art_id, digest, _trusted = store_log(
                 artifacts,
                 attempt_id=attempt_id,
                 check_id=check_id,
@@ -850,10 +869,11 @@ def evaluate_reproducible_rerun(
                     attempt_id=attempt_id,
                     check_id=check_id,
                     art_id=art_id,
-                    trusted=trusted,
+                    trusted=False,
                     net_isolation=net_i,
                     fs_isolation=fs_i,
                     note=note,
+                    observation_only=True,
                 ),
             )
         blobs.append(blob)
@@ -861,12 +881,10 @@ def evaluate_reproducible_rerun(
 
     ok = digests[0] == digests[1]
     delta = 0.0
-    est = 0.0
     try:
         v0 = parse_reward(blobs[0])
         v1 = parse_reward(blobs[1])
         delta = abs(v0 - v1)
-        est = v0
         ok = delta <= tol
     except ValueError:
         ok = digests[0] == digests[1]
@@ -878,9 +896,10 @@ def evaluate_reproducible_rerun(
             "ok": ok,
             "net_isolation": net_i,
             "fs_isolation": fs_i,
+            "observation_only": True,
         }
     )
-    art_id, digest, trusted = store_log(
+    art_id, digest, _trusted = store_log(
         artifacts,
         attempt_id=attempt_id,
         check_id=check_id,
@@ -888,15 +907,16 @@ def evaluate_reproducible_rerun(
         net_isolation=net_i,
         fs_isolation=fs_i,
     )
+    # No est — agent-chosen constant reward must not enter a countable effect.
     effect = sandbox_effect(
         attempt_id=attempt_id,
         check_id=check_id,
         art_id=art_id,
-        trusted=trusted,
+        trusted=False,
         net_isolation=net_i,
         fs_isolation=fs_i,
         note=note,
-        extra=merge_numeric_extra(prov_fields, est=float(est)),
+        observation_only=True,
     )
     return base_result(
         check_id=check_id,

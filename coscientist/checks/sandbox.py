@@ -12,9 +12,11 @@ agent code). ``tests_pass`` imports agent modules → ``trusted=False``,
 
 Fail-closed: without verified hard FS isolation (real bwrap probe), do **not**
 execute guest code — return ``sandbox_unavailable``. ``trusted`` requires both
-net and fs hard. Infra: wrapper private-channel rlimit, wall-clock timeout
-(``wall_timeout``), delegated cgroup OOM, blocked/unavailable. Scientific:
-``cpu_limit`` (RLIMIT_CPU), exit codes, output overflow. Seccomp → M2.
+net and fs hard. Infra **only** via the private FD channel (wrapper rlimit
+failure, cgroup attach failure, bwrap/launcher host errors) plus blocked /
+unavailable / verified cgroup OOM. Guest wall or CPU budget exhaustion is
+**scientific** ``timeout`` (counts). Cgroup ``cpu.max`` + ``cpu.stat`` bound the
+whole tree; CPU budget always strictly below wall. Seccomp → M2.
 """
 
 from __future__ import annotations
@@ -50,6 +52,7 @@ FsIsolation = Isolation
 # Wrapper private-channel magic (FD, not exit code). Guest exit 75 is scientific.
 _INFRA_MAGIC = b"COS_SBX_INFRA_v1:"
 _INFRA_RLIMIT = b"COS_SBX_INFRA_v1:rlimit\n"
+_INFRA_CGROUP_ATTACH = b"COS_SBX_INFRA_v1:cgroup_attach\n"
 # Exit after writing private channel (ignored for classification if magic present).
 _WRAPPER_ABORT_EXIT = 75
 
@@ -66,12 +69,10 @@ class SandboxStatus(StrEnum):
     MALFORMED = "malformed"
 
 
-# Infra: wrapper private-channel rlimit / wall-clock timeout / delegated cgroup
-# OOM / blocked / unavailable. RLIMIT_CPU (cpu_limit) and OUTPUT_EXCEEDED are
-# scientific.
+# Infra: private-FD channel / blocked / unavailable / verified cgroup OOM.
+# Guest wall or CPU-budget kill → scientific TIMEOUT (reason ``timeout``).
 INFRA_STATUSES = frozenset(
     {
-        SandboxStatus.TIMEOUT,
         SandboxStatus.OOM,
         SandboxStatus.UNAVAILABLE,
         SandboxStatus.BLOCKED,
@@ -257,13 +258,25 @@ def _collect_results(results_dir: Path, names: Sequence[str] | None) -> dict[str
     return out
 
 
-def _cpu_limit_seconds(timeout_s: float) -> int:
-    """RLIMIT_CPU strictly below wall when wall ≥ 2s so busy loops hit cpu_limit first."""
+def _cpu_budget_seconds(timeout_s: float) -> float:
+    """CPU budget for the whole cgroup tree — always strictly below wall."""
     wall = float(timeout_s)
-    if wall >= 2.0:
-        return max(1, int(wall) - 1)
-    # Short wall tests: keep CPU above wall so sleep hits wall_timeout.
-    return max(1, int(wall) + 5)
+    if wall <= 0:
+        return 0.05
+    # 80% of wall, but at least 50ms less than wall when wall is short.
+    budget = min(wall * 0.8, wall - 0.05)
+    return max(0.05, budget)
+
+
+def _rlimit_cpu_seconds(timeout_s: float) -> int | None:
+    """Per-process RLIMIT_CPU in whole seconds, only when still < wall."""
+    wall = float(timeout_s)
+    budget = _cpu_budget_seconds(wall)
+    # RLIMIT_CPU is integer seconds; only set when we can stay strictly < wall.
+    whole = int(budget)
+    if whole >= 1 and whole < wall:
+        return whole
+    return None
 
 
 def _wrapper_script(*, memory_mb: int, timeout_s: float) -> str:
@@ -271,10 +284,16 @@ def _wrapper_script(*, memory_mb: int, timeout_s: float) -> str:
 
     Host starts bwrap already inside the cgroup leaf (launcher). Rlimit failure
     writes magic to ``COSCIENTIST_INFRA_FD`` then aborts. Infra FD closed before
-    exec so agent/test code never inherits it. CPU soft limit is strictly below
-    wall when wall ≥ 2s.
+    exec so agent/test code never inherits it. Per-process RLIMIT_CPU is set
+    only when it can stay strictly below wall; cgroup ``cpu.stat`` is the
+    tree-wide backstop.
     """
-    cpu = _cpu_limit_seconds(timeout_s)
+    rlimit = _rlimit_cpu_seconds(timeout_s)
+    rlimit_block = (
+        f"resource.setrlimit(resource.RLIMIT_CPU, ({rlimit}, {rlimit + 1}))"
+        if rlimit is not None
+        else "pass  # cgroup cpu.stat enforces tree-wide budget"
+    )
     return f"""
 import os, sys
 infra_fd = os.environ.get("COSCIENTIST_INFRA_FD")
@@ -290,8 +309,7 @@ except ImportError:
 as_bytes = {int(memory_mb)} * 1024 * 1024
 try:
     resource.setrlimit(resource.RLIMIT_AS, (as_bytes, as_bytes))
-    cpu = {int(cpu)}
-    resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
+    {rlimit_block}
 except (ValueError, OSError):
     if infra_fd is not None:
         try:
@@ -321,17 +339,32 @@ except OSError as e:
 
 
 def _cgroup_bwrap_launcher(leaf: Path) -> str:
-    """Host-side: join ``leaf`` then exec bwrap (starts jail already in cgroup)."""
+    """Host-side: join ``leaf`` then exec bwrap (starts jail already in cgroup).
+
+    Attach failure signals infra via the private FD (never a bare scientific exit).
+    """
     return f"""
 import os, sys
 leaf = {str(leaf)!r}
+infra_fd = os.environ.get("COSCIENTIST_INFRA_FD")
+
+def _infra(kind: bytes) -> None:
+    if infra_fd is None:
+        return
+    try:
+        os.write(int(infra_fd), kind)
+    except OSError:
+        pass
+
 try:
     with open(os.path.join(leaf, "cgroup.procs"), "w", encoding="utf-8") as f:
         f.write(str(os.getpid()))
 except OSError as e:
     sys.stderr.write(f"cgroup_attach:{{e.__class__.__name__}}\\n")
+    _infra({_INFRA_CGROUP_ATTACH!r})
     sys.exit(70)
 if len(sys.argv) < 2:
+    _infra(b"COS_SBX_INFRA_v1:bad_argv\\n")
     sys.exit(64)
 os.execvp(sys.argv[1], sys.argv[1:])
 """
@@ -378,8 +411,8 @@ def _cgroup_delegation_available() -> bool:
             pass
 
 
-def _cgroup_prepare_leaf(memory_mb: int) -> Path | None:
-    """Create a memory-limited leaf under a delegated cgroup v2 subtree."""
+def _cgroup_prepare_leaf(memory_mb: int, timeout_s: float = DEFAULT_TIMEOUT_S) -> Path | None:
+    """Create a memory+cpu-limited leaf under a delegated cgroup v2 subtree."""
     if not _cgroup_delegation_available():
         return None
     cur = _current_cgroup_path()
@@ -389,12 +422,24 @@ def _cgroup_prepare_leaf(memory_mb: int) -> Path | None:
     try:
         leaf.mkdir(exist_ok=False)
         controllers = (cur / "cgroup.controllers").read_text()
+        enable: list[str] = []
         if "memory" in controllers:
+            enable.append("+memory")
+        if "cpu" in controllers:
+            enable.append("+cpu")
+        if enable:
             try:
-                (cur / "cgroup.subtree_control").write_text("+memory")
+                (cur / "cgroup.subtree_control").write_text(" ".join(enable))
             except OSError:
                 pass
         (leaf / "memory.max").write_text(str(max(1, int(memory_mb)) * 1024 * 1024))
+        # Bound the whole tree to ~1 CPU of bandwidth; tree-wide time budget is
+        # enforced via cpu.stat in the host watcher (always < wall).
+        if "cpu" in controllers and (leaf / "cpu.max").exists():
+            try:
+                (leaf / "cpu.max").write_text("100000 100000")
+            except OSError:
+                pass
         return leaf
     except OSError:
         try:
@@ -416,6 +461,19 @@ def _cgroup_oom_killed(leaf: Path | None) -> bool:
     except (OSError, ValueError):
         return False
     return False
+
+
+def _cgroup_cpu_usage_usec(leaf: Path | None) -> int | None:
+    """Total CPU time used by the leaf tree (microseconds), or None."""
+    if leaf is None:
+        return None
+    try:
+        for line in (leaf / "cpu.stat").read_text().splitlines():
+            if line.startswith("usage_usec"):
+                return int(line.split()[-1])
+    except (OSError, ValueError):
+        return None
+    return None
 
 
 def _cgroup_remove_leaf(leaf: Path | None) -> None:
@@ -442,8 +500,13 @@ def _watch_process(
     proc: subprocess.Popen[bytes],
     *,
     lim: SandboxLimits,
+    cgroup_leaf: Path | None = None,
 ) -> tuple[bool, bool, bytes, bytes]:
-    """Return (timed_out, overflow, stdout, stderr)."""
+    """Return (timed_out, overflow, stdout, stderr).
+
+    ``timed_out`` covers wall-clock **or** tree-wide CPU budget (cpu.stat).
+    Both are scientific guest timeouts.
+    """
     out_sink: list[bytes] = []
     err_sink: list[bytes] = []
     overflow = [False]
@@ -460,11 +523,17 @@ def _watch_process(
     timed_out = False
     started = time.monotonic()
     deadline = started + float(lim.timeout_s)
+    cpu_budget_usec = int(_cpu_budget_seconds(lim.timeout_s) * 1_000_000)
     while proc.poll() is None:
         if overflow[0]:
             _kill_group_term_then_kill(proc)
             break
         if time.monotonic() >= deadline:
+            timed_out = True
+            _kill_group_term_then_kill(proc)
+            break
+        usage = _cgroup_cpu_usage_usec(cgroup_leaf)
+        if usage is not None and usage >= cpu_budget_usec:
             timed_out = True
             _kill_group_term_then_kill(proc)
             break
@@ -531,11 +600,11 @@ def _classify(
             reason="output_exceeded",
         )
     if timed_out:
-        # Host wall-clock kill — infra (non-counting).
+        # Guest wall or tree-wide CPU budget — scientific not_met (counts).
         return fin(
             status=SandboxStatus.TIMEOUT,
             exit_code=-1,
-            reason="wall_timeout",
+            reason="timeout",
         )
     if _cgroup_oom_killed(cgroup_leaf):
         return fin(
@@ -544,12 +613,12 @@ def _classify(
             reason="sandbox_oom",
         )
     code = proc.returncode if proc.returncode is not None else -1
-    # RLIMIT_CPU → scientific cpu_limit (CPU soft limit < wall).
+    # Per-process RLIMIT_CPU / SIGXCPU — scientific timeout (same as wall).
     if code in (-int(signal.SIGXCPU), 128 + int(signal.SIGXCPU)):
         return fin(
-            status=SandboxStatus.NONZERO,
+            status=SandboxStatus.TIMEOUT,
             exit_code=code,
-            reason="cpu_limit",
+            reason="timeout",
         )
     # Guest signals / nonzero exits (including forged 75) are scientific.
     if code == 0:
@@ -622,7 +691,7 @@ def _run_jailed(
 ) -> SandboxResult:
     """Spawn bwrap already inside a cgroup leaf + wrapper private infra FD."""
     note = soft_isolation_note(net_i, fs_i)
-    leaf = _cgroup_prepare_leaf(lim.memory_mb)
+    leaf = _cgroup_prepare_leaf(lim.memory_mb, lim.timeout_s)
 
     r_fd, w_fd = os.pipe()
     os.set_inheritable(w_fd, True)
@@ -653,11 +722,14 @@ def _run_jailed(
 
     # Start bwrap already inside the leaf via a tiny host launcher.
     launcher_path: Path | None = None
+    popen_env: dict[str, str] | None = None
     if leaf is not None:
         td = Path(tempfile.mkdtemp(prefix="cos_cg_"))
         launcher_path = td / "cgroup_launch.py"
         launcher_path.write_text(_cgroup_bwrap_launcher(leaf), encoding="utf-8")
         popen_cmd = ["python3", str(launcher_path), *bwrap_cmd]
+        # Launcher (host) needs the infra FD env to signal attach failure.
+        popen_env = {**os.environ, "COSCIENTIST_INFRA_FD": str(w_fd)}
     else:
         popen_cmd = bwrap_cmd
         note = f"{note}; OOM not detectable" if note else "OOM not detectable"
@@ -670,7 +742,7 @@ def _run_jailed(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=None,
-                env=None if leaf is not None else None,
+                env=popen_env,
                 start_new_session=True,
                 pass_fds=(w_fd,),
             )
@@ -696,7 +768,9 @@ def _run_jailed(
         if oom_frag:
             note = f"{note}; {oom_frag}" if note else oom_frag
 
-        timed_out, overflow, out_b, err_b = _watch_process(proc, lim=lim)
+        timed_out, overflow, out_b, err_b = _watch_process(
+            proc, lim=lim, cgroup_leaf=leaf if oom_det else None
+        )
         infra_msg = b""
         try:
             import select

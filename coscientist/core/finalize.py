@@ -23,6 +23,24 @@ log = logging.getLogger(__name__)
 
 FinalizeTrigger = Literal["cancel", "budget", "deadline", "all_done", "intake"]
 
+def _escape_report_text(value: object) -> str:
+    """Escape agent/host detail so it cannot inject markdown/HTML structure.
+
+    Keeps alphanumeric reason codes readable (e.g. ``sandbox_unavailable``) while
+    neutralizing fence/link/HTML injection and collapsing newlines.
+    """
+    text = " ".join(str(value).split())[:2000]
+    return (
+        text.replace("\\", "\\\\")
+        .replace("`", "'")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("[", "&#91;")
+        .replace("]", "&#93;")
+        .replace("http://", "hxxp://")
+        .replace("https://", "hxxps://")
+    )
+
 # Bound rich StudyFinalized payload (JCS); oversized → last-resort.
 MAX_FINALIZED_PAYLOAD_BYTES = 65_536
 
@@ -465,6 +483,8 @@ async def _primary_report_path(
         refusal=refusal,
     )
     # Surface infra details (sandbox reason + soft-isolation note) in report text.
+    # Escape agent/host-provided strings so markdown/HTML injection cannot reshape
+    # the report structure.
     results = getattr(runtime, "results", None) or {}
     detail_lines: list[str] = []
     for rid in sorted(results):
@@ -473,10 +493,14 @@ async def _primary_report_path(
             continue
         detail = res.get("detail")
         if detail:
-            detail_lines.append(f"- result `{rid}` detail: {detail}")
+            detail_lines.append(
+                f"- result `{rid}` detail: {_escape_report_text(detail)}"
+            )
         reason = res.get("reason")
         if reason:
-            detail_lines.append(f"- result `{rid}` reason: {reason}")
+            detail_lines.append(
+                f"- result `{rid}` reason: {_escape_report_text(reason)}"
+            )
     if detail_lines:
         md = md + "\n## Infra / result details\n" + "\n".join(detail_lines) + "\n"
     arts = _artifact_store(runtime)

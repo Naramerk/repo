@@ -8,7 +8,7 @@
 - **bwrap hard isolation (B2):** `--clearenv`, system `--ro-bind`, `--tmpfs /tmp`, `--unshare-net`/`--unshare-pid`/`--unshare-ipc`/`uts`/`cgroup-try`, `--disable-userns`, `--cap-drop ALL`, `--new-session`, `--die-with-parent`; journal/CAS never mounted. Hard only after a real probe. Cgroup: start bwrap inside leaf; `oom_detectable` only after guest host pid verified.
 - **Fail-closed:** without verified hard FS isolation → `sandbox_unavailable` (no guest exec). CI installs `bubblewrap` and lifts Ubuntu 24.04 AppArmor userns restrict.
 - **`trusted=true` only when both net and fs are hard** (never fake hard). Isolation + `core_evaluated` for replay from journal effect, not artifact meta.
-- Infra: wrapper private channel / **wall_timeout** (TERM→KILL) / delegated cgroup OOM only; scientific: **cpu_limit** (`RLIMIT_CPU`), guest exit codes, output overflow. `CoreBugError` → `result_class=core_bug` (not infra; never counts).
+- Infra **only** via private FD (wrapper rlimit / cgroup attach / host errors) + blocked/unavailable/verified cgroup OOM. Guest wall or tree-wide CPU budget → scientific **`timeout`** (counts toward `k_ref`). Cgroup `cpu.max` + `cpu.stat`; CPU budget always &lt; wall. `tests_pass` + `reproducible_rerun` are observation-only (no `est` / no `k_sup`).
 - Docs: host requirements (bwrap, userns/AppArmor sysctl, cgroup delegation) in `DESIGN_HYP_DELTA` / `DESIGN_M1`.
 
 ### M1 PR10

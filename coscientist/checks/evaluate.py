@@ -528,6 +528,20 @@ def evaluate_code_check(
     )
 
 
+def agent_facing_template_view(tmpl: RequirementTemplate) -> dict[str, Any]:
+    """Fields safe to show an agent — never the full CodeCheck (holdout/scorer/tests)."""
+    return {
+        "template_id": tmpl.id,
+        "text_ru": tmpl.text_ru,
+        "version": tmpl.version,
+        "required": tmpl.required,
+        "role": tmpl.role,
+        "is_code": isinstance(tmpl.check, CodeCheck),
+        "check_kind": getattr(tmpl.check, "kind", None)
+        or getattr(tmpl.check, "reviewer_role", None),
+    }
+
+
 def template_to_requirement(
     tmpl: RequirementTemplate,
     node_id: str,

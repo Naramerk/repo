@@ -481,7 +481,17 @@ def claim_nodes_from_attempt(
         if core.get("artifact_id"):
             attrs["artifact_id"] = core["artifact_id"]
         if isinstance(core.get("effect"), dict):
-            attrs["effect"] = dict(core["effect"])
+            effect = dict(core["effect"])
+            # Core authorship for this attempt: if the evaluator stamped
+            # core_evaluated without a call_id, bind one here — never invent a
+            # call_id later in runtime_claim_from_node from a bare attempt id.
+            if (
+                effect.get("core_evaluated")
+                and not effect.get("produced_by_call_id")
+                and attempt_id
+            ):
+                effect["produced_by_call_id"] = f"{attempt_id}:derived"
+            attrs["effect"] = effect
 
         node = GraphNode(
             node_id=cid,

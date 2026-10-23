@@ -207,27 +207,53 @@ def test_sandbox_allow_network_runs_but_not_trusted(tmp_path):
     assert cr.effect.get("trusted") is False
 
 
-def test_sandbox_wall_timeout_is_infra():
-    """Host wall-clock kill (sleep past short wall) → infra wall_timeout."""
+def test_sandbox_sleep_bypass_is_scientific_timeout():
+    """Guest sleep past wall → scientific timeout (counts; not infra escape)."""
     _require_hard()
     r = run_sandbox(
-        ["python3", "-c", "import time; time.sleep(30)"],
+        ["python3", "-c", "import time; time.sleep(1e9)"],
         limits=SandboxLimits(timeout_s=0.3, memory_mb=64, max_output_bytes=10_000),
     )
     assert r.status is SandboxStatus.TIMEOUT
-    assert r.reason == "wall_timeout"
-    assert r.status in INFRA_STATUSES
+    assert r.reason == "timeout"
+    assert r.status not in INFRA_STATUSES
 
 
-def test_sandbox_cpu_limit_is_scientific():
-    """Busy loop hits RLIMIT_CPU before wall → scientific cpu_limit."""
+def test_sandbox_busy_loop_is_scientific_timeout():
+    """Busy loop hits CPU budget / RLIMIT → scientific timeout."""
     _require_hard()
     r = run_sandbox(
         ["python3", "-c", "while True: pass"],
         limits=SandboxLimits(timeout_s=3.0, memory_mb=64, max_output_bytes=10_000),
     )
-    assert r.status is SandboxStatus.NONZERO
-    assert r.reason == "cpu_limit"
+    assert r.status is SandboxStatus.TIMEOUT
+    assert r.reason == "timeout"
+    assert r.status not in INFRA_STATUSES
+
+
+def test_sandbox_fork_cpu_spread_is_scientific_timeout():
+    """CPU spread across child processes still bounded (cgroup tree) → timeout."""
+    _require_hard()
+    # Fork several busy children so per-process RLIMIT alone would not catch them
+    # before wall; tree-wide cpu.stat / wall must still yield scientific timeout.
+    attack = r"""
+import os, sys
+kids = []
+for _ in range(4):
+    pid = os.fork()
+    if pid == 0:
+        while True:
+            pass
+    kids.append(pid)
+while True:
+    pass
+"""
+    r = run_sandbox(
+        ["python3", "-c", attack],
+        limits=SandboxLimits(timeout_s=2.0, memory_mb=64, max_output_bytes=10_000),
+    )
+    assert r.status is SandboxStatus.TIMEOUT
+    assert r.reason == "timeout"
     assert r.status not in INFRA_STATUSES
 
 
@@ -560,7 +586,11 @@ def test_reproducible_rerun_compares_result_digests(tmp_path):
     )
     assert cr.status is ReqStatus.MET
     assert cr.effect is not None
-    assert cr.effect.get("countable") is True
+    # Constant agent reward must not be countable / must not carry est → k_sup.
+    assert cr.effect.get("countable") is False
+    assert cr.effect.get("observation_only") is True
+    assert "est" not in cr.effect
+    assert cr.effect.get("trusted") is False
 
 
 def test_countable_requires_attempt_binding(tmp_path):
@@ -581,13 +611,14 @@ def test_countable_requires_attempt_binding(tmp_path):
     assert cr.effect.get("produced_by_call_id", "").startswith("noattempt:")
 
 
-def test_exec_runs_cpu_limit_is_scientific_failed(tmp_path):
+def test_exec_runs_timeout_is_scientific_failed_countable(tmp_path):
+    """Sleep-bypass → FAILED with countable effect (toward k_ref), not infra."""
     _require_hard()
     arts = LocalArtifactStore(tmp_path)
     check = CodeCheck(
         kind="exec_runs",
-        argv=["python3", "-c", "while True: pass"],
-        timeout_s=3.0,
+        argv=["python3", "-c", "import time; time.sleep(1e9)"],
+        timeout_s=0.3,
         memory_mb=64,
     )
     cr = evaluate_code_check(
@@ -597,33 +628,14 @@ def test_exec_runs_cpu_limit_is_scientific_failed(tmp_path):
         out=AgentTaskOutput(outputs={}),
         artifacts=arts,
         values={},
-        role="validity",
+        role="prediction",
         attempt_id="st/E1#1",
     )
     assert cr.status is ReqStatus.FAILED
-    assert "cpu_limit" in (cr.detail or "")
-
-
-def test_exec_runs_wall_timeout_raises_infra(tmp_path):
-    _require_hard()
-    arts = LocalArtifactStore(tmp_path)
-    check = CodeCheck(
-        kind="exec_runs",
-        argv=["python3", "-c", "import time; time.sleep(30)"],
-        timeout_s=0.3,
-        memory_mb=64,
-    )
-    with pytest.raises(SandboxInfraError, match="wall_timeout"):
-        evaluate_code_check(
-            check,
-            template_id="exec",
-            check_id="exec#wall",
-            out=AgentTaskOutput(outputs={}),
-            artifacts=arts,
-            values={},
-            role="validity",
-            attempt_id="st/E1#1",
-        )
+    assert "timeout" in (cr.detail or "")
+    assert cr.effect is not None
+    assert cr.effect.get("countable") is True
+    assert cr.effect.get("observation_only") is not True
 
 
 @pytest.mark.asyncio
@@ -1177,3 +1189,120 @@ sys.exit(0)
     )
     assert r.status is SandboxStatus.OK, r.stderr.decode(errors="replace")
     assert parse_reward(r.result_files["reward.txt"]) == 1.0
+
+
+def test_cgroup_attach_failure_is_infra(monkeypatch):
+    """Launcher attach failure must signal via private FD → UNAVAILABLE infra."""
+    _require_hard()
+    import coscientist.checks.sandbox as sb
+
+    # Force a leaf so the launcher path is used, then break attach.
+    real_prepare = sb._cgroup_prepare_leaf
+
+    def fake_prepare(memory_mb, timeout_s=30.0):
+        leaf = real_prepare(memory_mb, timeout_s)
+        if leaf is None:
+            pytest.skip("cgroup delegation unavailable")
+        # Replace launcher writer with one that always fails attach + signals infra.
+        return leaf
+
+    monkeypatch.setattr(sb, "_cgroup_prepare_leaf", fake_prepare)
+
+    broken = '''
+import os, sys
+infra_fd = os.environ.get("COSCIENTIST_INFRA_FD")
+if infra_fd is not None:
+    try:
+        os.write(int(infra_fd), b"COS_SBX_INFRA_v1:cgroup_attach\\n")
+    except OSError:
+        pass
+sys.stderr.write("cgroup_attach:forced\\n")
+sys.exit(70)
+'''
+    monkeypatch.setattr(sb, "_cgroup_bwrap_launcher", lambda leaf: broken)
+    r = run_sandbox(
+        ["/bin/true"],
+        limits=SandboxLimits(timeout_s=5, memory_mb=64),
+    )
+    if r.note and "OOM not detectable" in r.note and r.status is SandboxStatus.OK:
+        pytest.skip("cgroup leaf not created on this host")
+    assert r.status is SandboxStatus.UNAVAILABLE
+    assert "cgroup_attach" in r.reason
+    assert r.status in INFRA_STATUSES
+
+
+def test_cgroup_oom_detectable_or_skip():
+    """Real cgroup OOM when delegation works; otherwise skip."""
+    _require_hard()
+    import coscientist.checks.sandbox as sb
+
+    if not sb._cgroup_delegation_available():
+        pytest.skip("cgroup memory delegation unavailable")
+    # Allocate far beyond memory.max — expect OOM infra when detectable.
+    r = run_sandbox(
+        [
+            "python3",
+            "-c",
+            "x = bytearray(200 * 1024 * 1024); x[0] = 1; "
+            "import time; time.sleep(30)",
+        ],
+        limits=SandboxLimits(timeout_s=5, memory_mb=8, max_output_bytes=10_000),
+    )
+    if not r.oom_detectable:
+        pytest.skip("guest cgroup membership not verified (oom_detectable=False)")
+    # May be OOM or timeout if allocator fails soft — OOM is the success path.
+    if r.status is SandboxStatus.OOM:
+        assert r.reason == "sandbox_oom"
+        assert r.status in INFRA_STATUSES
+    else:
+        # Soft MemoryError / kill without oom_kill counter — still must not be OK.
+        assert r.status is not SandboxStatus.OK
+
+
+def test_agent_facing_view_never_includes_holdout_or_scorer():
+    """Prompt/agent serialization must not expose CodeCheck secrets."""
+    from coscientist.checks.evaluate import (
+        agent_facing_template_view,
+        template_to_requirement,
+    )
+    from coscientist.core.domain import RequirementTemplate
+    from coscientist.core.digest import canonical_json, sha256_hex
+
+    holdout = {"y": [0, 1], "secret": "LABELS"}
+    tmpl = RequirementTemplate(
+        id="metric_secret",
+        title="metric secret",
+        text_ru="Метрика на удержанной выборке",
+        version="1",
+        required=True,
+        role="prediction",
+        method_sources=["test"],
+        applies_to=["experiment"],
+        check=CodeCheck(
+            kind="metric_on_holdout",
+            argv=["catalog:metric"],
+            holdout=holdout,
+            holdout_digest=sha256_hex(canonical_json(holdout)),
+            output="predictions",
+            op=">=",
+            target=0.5,
+            tests={"test_x.py": "def test_x():\n    assert False\n"},
+        ),
+    )
+    view = agent_facing_template_view(tmpl)
+    blob = json.dumps(view, default=str)
+    # Kind name may contain the substring; secrets / payloads must not.
+    assert "holdout" not in view
+    assert "LABELS" not in blob
+    assert '"y"' not in blob
+    assert "catalog:metric" not in blob
+    assert "test_x" not in blob
+    assert "assert False" not in blob
+    assert view["text_ru"] == tmpl.text_ru
+    assert view["check_kind"] == "metric_on_holdout"
+    # NodeRequirement path also omits the check body.
+    req = template_to_requirement(tmpl, "n1")
+    req_dump = req.model_dump()
+    assert "holdout" not in req_dump
+    assert "check" not in req_dump
+    assert "LABELS" not in json.dumps(req_dump)

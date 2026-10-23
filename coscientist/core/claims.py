@@ -513,9 +513,8 @@ def runtime_claim_from_node(
                 except Exception:  # noqa: BLE001 — totality
                     meta = None
             stamped = dict(effect_raw)
-            # Bind missing call_id to this claim's attempt (never invent across attempts).
-            if aid and not stamped.get("produced_by_call_id"):
-                stamped["produced_by_call_id"] = aid
+            # Never invent produced_by_call_id from the attempt id alone — a bare
+            # aid is not a call_id; missing call_id stays missing (not countable).
             effect = recompute_effect_provenance(
                 stamped,
                 attempt_id=aid or None,

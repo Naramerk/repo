@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import random
 import statistics
 from datetime import timedelta
@@ -17,11 +16,7 @@ from coscientist.core.projections import fold_events
 from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success
 
 
-@pytest.mark.slow
-@pytest.mark.serial
-@pytest.mark.asyncio
-async def test_twenty_parallel_attempts_fsync(tmp_path: Path, runtime_cls: type):
-    """Correctness always asserted; p99 budget scales with median (CI-tolerant)."""
+async def _run_load(tmp_path: Path, runtime_cls: type):
     clock = SystemClock()
     rt = await open_runtime(tmp_path, "st_load", clock=clock, runtime_cls=runtime_cls)
     await rt.create_study(
@@ -59,27 +54,39 @@ async def test_twenty_parallel_attempts_fsync(tmp_path: Path, runtime_cls: type)
 
     await asyncio.gather(*(one(i) for i in range(1, 21)))
     await rt.cancel_task("REPORT", reason="budget")
+    return rt
 
+
+@pytest.mark.slow
+@pytest.mark.serial
+@pytest.mark.asyncio
+async def test_twenty_parallel_attempts_fsync(tmp_path: Path, runtime_cls: type):
+    """Deterministic correctness under fsync load (no flaky latency budget)."""
+    rt = await _run_load(tmp_path, runtime_cls)
     events = await rt.store.read_all()
     assert len(events) >= 100
+    assert rt.writer.depth_high_water <= 100
+    assert fold_events(events).get("tasks")
+    lat = rt.writer.latency_samples_ms()
+    assert lat, "no write latencies recorded"
+    print(
+        f"load writes n={len(lat)} mean={statistics.mean(lat):.2f}ms "
+        f"events={len(events)} (latency SLO asserted in perf job)"
+    )
+    await close_runtime(rt)
+
+
+@pytest.mark.perf
+@pytest.mark.serial
+@pytest.mark.asyncio
+async def test_twenty_parallel_attempts_fsync_p99_slo(
+    tmp_path: Path, runtime_cls: type
+):
+    """Absolute DESIGN §3.5a SLO: p99 write ≤ 50ms (separate perf job, not main CI)."""
+    rt = await _run_load(tmp_path, runtime_cls)
     lat = rt.writer.latency_samples_ms()
     assert lat, "no write latencies recorded"
     lat_sorted = sorted(lat)
     p99 = lat_sorted[max(0, int(len(lat_sorted) * 0.99) - 1)]
-    median = statistics.median(lat)
-    # Absolute floor for quiet hosts; on shared CI allow up to max(50, 8×median)
-    # so a slow disk does not flake without weakening depth/event correctness.
-    on_ci = bool(os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"))
-    budget = max(50.0, 8.0 * median) if on_ci else 50.0
-    assert p99 <= budget, (
-        f"p99 write {p99:.2f}ms > {budget:.2f}ms "
-        f"(median={median:.2f}ms n={len(lat)} ci={on_ci})"
-    )
-    assert rt.writer.depth_high_water <= 100
-    assert fold_events(events).get("tasks")
-    print(
-        f"load writes n={len(lat)} mean={statistics.mean(lat):.2f}ms "
-        f"median={median:.2f}ms p99={p99:.2f}ms budget={budget:.2f}ms "
-        f"events={len(events)}"
-    )
+    assert p99 <= 50.0, f"p99 write {p99:.2f}ms > 50ms (n={len(lat)})"
     await close_runtime(rt)
