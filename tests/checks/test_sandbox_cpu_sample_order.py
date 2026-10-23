@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 from unittest.mock import MagicMock
 
 import coscientist.checks.sandbox as sb
