@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -621,6 +621,411 @@ def test_rollup_iteration_cap_parent_clamped():
         assert rolled["Q"].get("rollup_would_have") == Disposition.ANSWERED.value, rule
 
 
+def test_loop_cap_skips_decomposes_parent_so_rollup_wins():
+    """Parent with *no own tasks* under loop_capped stays rollup-eligible → answered."""
+    from coscientist.core.dispositions import apply_loop_cap_dispositions, dispositions
+    from coscientist.core.rollup import apply_rollup
+
+    plans = _tree_plans("all")
+    capped = {
+        "Q": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+        "Q.a": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+        "Q.b": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+    }
+    # Cap-every-id-before-rollup (old bug for no-own-task roots): stamped + clamped.
+    buggy = {
+        "Q": {
+            "disposition": Disposition.NOT_ATTEMPTED.value,
+            "reason": "no_task",
+            "formulation": "root",
+        },
+        "Q.a": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "a"},
+        "Q.b": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "b"},
+    }
+    apply_loop_cap_dispositions(buggy, capped)
+    assert buggy["Q"]["disposition"] == Disposition.INCONCLUSIVE.value
+    buggy_rolled = apply_rollup(buggy, plans=plans)
+    assert buggy_rolled["Q"]["disposition"] == Disposition.INCONCLUSIVE.value
+    assert buggy_rolled["Q"]["reason"] == TaskReason.ITERATION_CAP.value
+
+    def _rub(*, task_keys, **_kw):
+        return "met" if task_keys else None
+
+    import coscientist.core.dispositions as disp_mod
+
+    # No task addresses Q — parent has no own covering tasks.
+    plans_ft = {
+        "p1": {
+            "plan_id": "p1",
+            "revision": 1,
+            "rollup": "all",
+            "questions": [
+                {"id": "Q", "text": "root"},
+                {"id": "Q.a", "text": "a", "parent_id": "Q", "final_type": "artifact"},
+                {"id": "Q.b", "text": "b", "parent_id": "Q", "final_type": "artifact"},
+            ],
+            "subquestions": [
+                {"id": "Q.a", "text": "a", "parent_id": "Q"},
+                {"id": "Q.b", "text": "b", "parent_id": "Q"},
+            ],
+            "tasks": [
+                {"task_key": "E0", "addresses": ["Q.a"]},
+                {"task_key": "E1", "addresses": ["Q.b"]},
+            ],
+        }
+    }
+    tasks = {
+        "tid:E0": _task("E0", outcome=TaskOutcome.SUCCESS, addresses=["Q.a"]),
+        "tid:E1": _task("E1", outcome=TaskOutcome.SUCCESS, addresses=["Q.b"]),
+    }
+    orig = disp_mod.task_rubric_status
+    disp_mod.task_rubric_status = _rub  # type: ignore[assignment]
+    try:
+        out = dispositions(tasks=tasks, plans=plans_ft, loop_capped_questions=capped)
+    finally:
+        disp_mod.task_rubric_status = orig  # type: ignore[assignment]
+    assert out["Q.a"]["disposition"] == Disposition.ANSWERED.value
+    assert out["Q.b"]["disposition"] == Disposition.ANSWERED.value
+    assert out["Q"]["disposition"] == Disposition.ANSWERED.value
+    assert out["Q"]["reason"] == "rollup_all"
+
+
+def test_loop_cap_keeps_parent_with_own_task_despite_answered_children():
+    """Parent with own covering task under cap must not be raised by answered kids."""
+    import coscientist.core.dispositions as disp_mod
+    from coscientist.core.dispositions import dispositions
+
+    capped = {
+        "Q": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+        "Q.a": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+        "Q.b": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+    }
+    plans_ft = {
+        "p1": {
+            "plan_id": "p1",
+            "revision": 1,
+            "rollup": "all",
+            "questions": [
+                {"id": "Q", "text": "root"},
+                {"id": "Q.a", "text": "a", "parent_id": "Q", "final_type": "artifact"},
+                {"id": "Q.b", "text": "b", "parent_id": "Q", "final_type": "artifact"},
+            ],
+            "subquestions": [
+                {"id": "Q.a", "text": "a", "parent_id": "Q"},
+                {"id": "Q.b", "text": "b", "parent_id": "Q"},
+            ],
+            "tasks": [
+                {"task_key": "E_ROOT", "addresses": ["Q"]},
+                {"task_key": "E0", "addresses": ["Q.a"]},
+                {"task_key": "E1", "addresses": ["Q.b"]},
+            ],
+        }
+    }
+    # Parent's own loop task never produced an answer (not_attempted / no claims);
+    # children succeed via artifact rubric.
+    tasks = {
+        "tid:E_ROOT": _task("E_ROOT", outcome=TaskOutcome.SUCCESS, addresses=["Q"]),
+        "tid:E0": _task("E0", outcome=TaskOutcome.SUCCESS, addresses=["Q.a"]),
+        "tid:E1": _task("E1", outcome=TaskOutcome.SUCCESS, addresses=["Q.b"]),
+    }
+
+    def _rub(*, task_keys, **_kw):
+        # Only child artifact questions get rubric_met; parent stays not_attempted
+        # (final_type verdict → no rubric path) then capped.
+        return "met" if task_keys and "E_ROOT" not in task_keys else None
+
+    orig = disp_mod.task_rubric_status
+    disp_mod.task_rubric_status = _rub  # type: ignore[assignment]
+    try:
+        out = dispositions(tasks=tasks, plans=plans_ft, loop_capped_questions=capped)
+    finally:
+        disp_mod.task_rubric_status = orig  # type: ignore[assignment]
+    assert out["Q.a"]["disposition"] == Disposition.ANSWERED.value
+    assert out["Q.b"]["disposition"] == Disposition.ANSWERED.value
+    # Cap on parent with own tasks → inconclusive; clamp blocks answered children.
+    assert out["Q"]["disposition"] == Disposition.INCONCLUSIVE.value
+    assert out["Q"]["reason"] == TaskReason.ITERATION_CAP.value
+    assert out["Q"].get("rollup_clamped") is True
+
+
+def test_loop_cap_preserves_iteration_cap_when_children_incomplete_or_rubric():
+    """Parent with own task under cap keeps iteration_cap if kids incomplete / rubric."""
+    import coscientist.core.dispositions as disp_mod
+    from coscientist.core.dispositions import dispositions
+    from coscientist.core.domain import TaskKind, TaskSpec
+
+    capped = {
+        "Q": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+        "Q.a": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+    }
+
+    def _pending(key: str, *, addresses: list[str]) -> Task:
+        return Task(
+            task_id=f"tid:{key}",
+            kind=TaskKind.EXPERIMENT,
+            spec=TaskSpec(
+                task_key=key,
+                title=key,
+                goal="g",
+                route="experiment",
+                addresses=addresses,
+            ),
+            state=TaskState.PENDING,
+            outcome=None,
+            reason=None,
+            deadline=datetime.now(timezone.utc),
+        )
+
+    def _rub(*, task_keys, **_kw):
+        return None
+
+    orig = disp_mod.task_rubric_status
+    disp_mod.task_rubric_status = _rub  # type: ignore[assignment]
+    try:
+        # (1) incomplete children + rollup=all → parent must keep iteration_cap
+        plans_inc = {
+            "p1": {
+                "plan_id": "p1",
+                "revision": 1,
+                "rollup": "all",
+                "questions": [
+                    {"id": "Q", "text": "root"},
+                    {"id": "Q.a", "text": "a", "parent_id": "Q"},
+                ],
+                "subquestions": [{"id": "Q.a", "text": "a", "parent_id": "Q"}],
+                "tasks": [
+                    {"task_key": "E_ROOT", "addresses": ["Q"]},
+                    {"task_key": "E0", "addresses": ["Q.a"]},
+                ],
+            }
+        }
+        tasks_inc = {
+            "tid:E_ROOT": _pending("E_ROOT", addresses=["Q"]),
+            "tid:E0": _pending("E0", addresses=["Q.a"]),
+        }
+        out_inc = dispositions(
+            tasks=tasks_inc, plans=plans_inc, loop_capped_questions=capped
+        )
+        assert out_inc["Q"]["disposition"] == Disposition.INCONCLUSIVE.value
+        assert out_inc["Q"]["reason"] == TaskReason.ITERATION_CAP.value
+
+        # (2) rollup=rubric must not wipe iteration_cap from a capped parent
+        plans_rub = {
+            "p1": {
+                "plan_id": "p1",
+                "revision": 1,
+                "rollup": "rubric",
+                "questions": [
+                    {"id": "Q", "text": "root"},
+                    {"id": "Q.a", "text": "a", "parent_id": "Q", "final_type": "artifact"},
+                ],
+                "subquestions": [{"id": "Q.a", "text": "a", "parent_id": "Q"}],
+                "tasks": [
+                    {"task_key": "E_ROOT", "addresses": ["Q"]},
+                    {"task_key": "E0", "addresses": ["Q.a"]},
+                ],
+            }
+        }
+        tasks_rub = {
+            "tid:E_ROOT": _pending("E_ROOT", addresses=["Q"]),
+            "tid:E0": _task(
+                "E0", outcome=TaskOutcome.SUCCESS, addresses=["Q.a"]
+            ),
+        }
+        out_rub = dispositions(
+            tasks=tasks_rub, plans=plans_rub, loop_capped_questions=capped
+        )
+        assert out_rub["Q"]["disposition"] == Disposition.INCONCLUSIVE.value
+        assert out_rub["Q"]["reason"] == TaskReason.ITERATION_CAP.value
+        assert out_rub["Q"].get("rollup") == "rubric"
+    finally:
+        disp_mod.task_rubric_status = orig  # type: ignore[assignment]
+
+
+def test_rollup_equal_rank_keeps_own_without_false_clamp():
+    """rolled_rank == own_rank: keep own reason; no fake rollup_clamped."""
+    from coscientist.core.rollup import apply_rollup
+
+    leaves = {
+        "Q": {
+            "disposition": Disposition.INCONCLUSIVE.value,
+            "reason": TaskReason.ITERATION_CAP.value,
+            "reason_detail": [TaskReason.ITERATION_CAP.value],
+            "formulation": "root",
+        },
+        "Q.a": {
+            "disposition": Disposition.INCONCLUSIVE.value,
+            "reason": TaskReason.ITERATION_CAP.value,
+            "formulation": "a",
+        },
+        "Q.b": {
+            "disposition": Disposition.INCONCLUSIVE.value,
+            "reason": TaskReason.ITERATION_CAP.value,
+            "formulation": "b",
+        },
+    }
+    rolled = apply_rollup(leaves, plans=_tree_plans("all"))
+    assert rolled["Q"]["disposition"] == Disposition.INCONCLUSIVE.value
+    assert rolled["Q"]["reason"] == TaskReason.ITERATION_CAP.value
+    assert rolled["Q"].get("rollup_clamped") is not True
+    assert rolled["Q"].get("reason") != "rollup_clamped_to_own"
+
+
+def test_rollup_lower_preserves_iteration_cap_in_detail():
+    """Children may lower disposition; iteration_cap must remain in reason_detail."""
+    from coscientist.core.rollup import apply_rollup
+
+    leaves = {
+        "Q": {
+            "disposition": Disposition.INCONCLUSIVE.value,
+            "reason": TaskReason.ITERATION_CAP.value,
+            "reason_detail": [TaskReason.ITERATION_CAP.value],
+            "formulation": "root",
+        },
+        "Q.a": {"disposition": Disposition.REFUTED.value, "reason": None, "formulation": "a"},
+        "Q.b": {"disposition": Disposition.REFUTED.value, "reason": None, "formulation": "b"},
+    }
+    rolled = apply_rollup(leaves, plans=_tree_plans("all"))
+    assert rolled["Q"]["disposition"] == Disposition.REFUTED.value
+    assert rolled["Q"]["reason"] == "rollup_all"
+    assert TaskReason.ITERATION_CAP.value in (rolled["Q"].get("reason_detail") or [])
+    assert rolled["Q"].get("rollup_clamped") is not True
+
+
+@pytest.mark.asyncio
+async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
+    """Parent task from PlanExpanded must keep cap even if plans[*].tasks omit it.
+
+    ``question_tasks`` only reads plans blobs; expand writes TaskCreated into
+    ``runtime.tasks``. dispositions must union those addresses into cover /
+    skip_cap so answered children cannot bypass the limit.
+    """
+    import coscientist.core.dispositions as disp_mod
+    from coscientist.core.dispositions import dispositions
+    from coscientist.core.question_tasks import question_tasks
+
+    sid = "pr16-expand-cap"
+    rt = await _boot(tmp_path, clock, sid)
+    rub = _decomp_rubric()
+    await rt.accept_plan(
+        [
+            _exp("E0", addresses=["Q.a"], rubric=rub),
+            _exp("E1", addresses=["Q.a"], rubric=rub),
+        ],
+        questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
+        subquestions=[_q("Q.a", "child", parent="Q", origin="explicit")],
+        rollup="all",
+    )
+    attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("E0")
+    assert aid
+    await rt.cancel_task("E0", reason="cancelled")
+
+    # Agent expand (no HITL): adds a task addressing the parent into runtime.tasks.
+    new_pid = await rt.expand_plan(
+        after_task="E0",
+        added_tasks=[
+            TaskSpec(
+                task_key="E_ROOT",
+                title="E_ROOT",
+                goal="g",
+                route="experiment",
+                depends_on=["E0"],
+                addresses=["Q"],
+                expected_outputs=[
+                    OutputSpec(
+                        name="main",
+                        media_type="text/markdown",
+                        role="report",
+                        rubric=rub,
+                    )
+                ],
+                criteria=[RequirementRef(template_id="rubric_check")],
+            )
+        ],
+        added_questions=[],
+        superseded_tasks=["E1"],
+        origin="emergent",
+        reason="parent own work via expand",
+    )
+    assert new_pid, "expand_plan refused"
+    assert any(
+        "Q" in (t.spec.addresses or []) and t.spec.task_key == "E_ROOT"
+        for t in rt.tasks.values()
+    )
+    # Accepted-only plans: no E_ROOT addresses (simulates plans[*].tasks gap).
+    plans_accepted = {
+        k: v
+        for k, v in rt.plans.items()
+        if not (v.get("added_tasks") or v.get("foreach") or v.get("loop"))
+    }
+    assert not question_tasks(plans_accepted).get("Q"), (
+        "precondition: accepted plans must not list parent-covering tasks"
+    )
+
+    capped = {
+        "Q": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+        "Q.a": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+    }
+
+    def _rub(*, task_keys, **_kw):
+        # Child artifact-met; parent stays not_attempted then capped.
+        return "met" if task_keys and "E_ROOT" not in task_keys else None
+
+    # Force Q.a to artifact so children answer via rubric_met.
+    plans_ft = {
+        k: {
+            **v,
+            "rollup": "all",
+            "questions": [
+                (
+                    {**q, "final_type": "artifact"}
+                    if isinstance(q, dict) and q.get("id") == "Q.a"
+                    else q
+                )
+                for q in (v.get("questions") or [])
+            ],
+        }
+        for k, v in plans_accepted.items()
+    }
+    # Ensure Q.a final_type artifact is present even if questions list was empty shape.
+    for _pid, blob in plans_ft.items():
+        qs = list(blob.get("questions") or [])
+        by_id = {str(q.get("id")): dict(q) for q in qs if isinstance(q, dict)}
+        by_id.setdefault("Q", {"id": "Q", "text": "root"})
+        by_id["Q.a"] = {
+            **by_id.get("Q.a", {"id": "Q.a", "text": "child", "parent_id": "Q"}),
+            "final_type": "artifact",
+            "parent_id": "Q",
+        }
+        blob["questions"] = list(by_id.values())
+        blob["subquestions"] = [
+            {"id": "Q.a", "text": "child", "parent_id": "Q"},
+        ]
+        # Strip any parent-covering tasks from the plan blob (keep only Q.a).
+        blob["tasks"] = [
+            t
+            for t in (blob.get("tasks") or [])
+            if isinstance(t, dict) and "Q" not in (t.get("addresses") or [])
+        ]
+
+    orig = disp_mod.task_rubric_status
+    disp_mod.task_rubric_status = _rub  # type: ignore[assignment]
+    try:
+        out = dispositions(
+            tasks=rt.tasks,
+            plans=plans_ft,
+            loop_capped_questions=capped,
+        )
+    finally:
+        disp_mod.task_rubric_status = orig  # type: ignore[assignment]
+
+    assert out["Q.a"]["disposition"] == Disposition.ANSWERED.value
+    assert out["Q"]["disposition"] == Disposition.INCONCLUSIVE.value
+    assert out["Q"]["reason"] == TaskReason.ITERATION_CAP.value
+    await close_runtime(rt)
+
+
 def test_question_origin_implicit_vs_explicit():
     from coscientist.core.decomposes import question_origin_from_plans
 
@@ -1211,12 +1616,7 @@ async def test_expand_trigger_reraise_lease_lost(tmp_path, clock, monkeypatch):
 
 
 
-@pytest.mark.asyncio
-async def test_finalize_reraise_lease_lost(tmp_path, clock, monkeypatch):
-    """finalize.py — LeaseLost from rich payload must not fall to last-resort."""
-    import coscientist.core.finalize as fin_mod
-
-    sid = "pr16-fin-lease"
+async def _finalize_lease_fixture(tmp_path, clock, sid: str):
     rt = await _boot(tmp_path, clock, sid)
     rub = _decomp_rubric()
     await rt.accept_plan(
@@ -1228,6 +1628,15 @@ async def test_finalize_reraise_lease_lost(tmp_path, clock, monkeypatch):
         t = rt.tasks[key]
         if t.state != TaskState.DONE:
             await rt.cancel_task(t.spec.task_key, reason="cancelled")
+    return rt
+
+
+@pytest.mark.asyncio
+async def test_finalize_reraise_lease_lost(tmp_path, clock, monkeypatch):
+    """finalize.py — LeaseLost from rich payload must not fall to last-resort."""
+    import coscientist.core.finalize as fin_mod
+
+    rt = await _finalize_lease_fixture(tmp_path, clock, "pr16-fin-lease")
 
     async def _boom(*_a, **_k):
         raise LeaseLost("mocked lease loss in finalize rich payload")
@@ -1235,6 +1644,70 @@ async def test_finalize_reraise_lease_lost(tmp_path, clock, monkeypatch):
     monkeypatch.setattr(fin_mod, "_build_rich_payload", _boom)
     before = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
     with pytest.raises(LeaseLost, match="finalize rich payload"):
+        await rt.finalize(trigger="all_done")
+    after = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    assert len(after) == len(before), "LeaseLost must not write StudyFinalized"
+    assert not getattr(rt, "_finalized", False)
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_finalize_primary_report_path_lease_lost(tmp_path, clock, monkeypatch):
+    """finalize.py:675/:695 — LeaseLost from _primary_report_path must reraise (no StudyFinalized)."""
+    import coscientist.core.finalize as fin_mod
+
+    rt = await _finalize_lease_fixture(tmp_path, clock, "pr16-fin-primary-ll")
+
+    async def _boom(*_a, **_k):
+        raise LeaseLost("mocked lease loss in _primary_report_path")
+
+    monkeypatch.setattr(fin_mod, "_primary_report_path", _boom)
+    before = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    with pytest.raises(LeaseLost, match="_primary_report_path"):
+        await rt.finalize(trigger="all_done")
+    after = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    assert len(after) == len(before), "LeaseLost must not write StudyFinalized"
+    assert not getattr(rt, "_finalized", False)
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_finalize_render_markdown_report_lease_lost(tmp_path, clock, monkeypatch):
+    """finalize.py:675/:695 — LeaseLost from render_markdown_report must reraise; no StudyFinalized."""
+    import coscientist.core.finalize as fin_mod
+
+    rt = await _finalize_lease_fixture(tmp_path, clock, "pr16-fin-render-ll")
+
+    def _boom(*_a, **_k):
+        raise LeaseLost("mocked lease loss in render_markdown_report")
+
+    monkeypatch.setattr(fin_mod, "render_markdown_report", _boom)
+    before = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    with pytest.raises(LeaseLost, match="render_markdown_report"):
+        await rt.finalize(trigger="all_done")
+    after = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    assert len(after) == len(before), "LeaseLost must not write StudyFinalized"
+    assert not getattr(rt, "_finalized", False)
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_finalize_minimal_report_lease_lost(tmp_path, clock, monkeypatch):
+    """finalize.py:675/:695 — LeaseLost from build_minimal_report after primary failure."""
+    import coscientist.core.finalize as fin_mod
+
+    rt = await _finalize_lease_fixture(tmp_path, clock, "pr16-fin-minimal-ll")
+
+    async def _fail_primary(*_a, **_k):
+        raise RuntimeError("primary path boom → enter minimal fallback")
+
+    def _boom_minimal(**_k):
+        raise LeaseLost("mocked lease loss in build_minimal_report")
+
+    monkeypatch.setattr(fin_mod, "_primary_report_path", _fail_primary)
+    monkeypatch.setattr(fin_mod, "build_minimal_report", _boom_minimal)
+    before = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    with pytest.raises(LeaseLost, match="build_minimal_report"):
         await rt.finalize(trigger="all_done")
     after = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
     assert len(after) == len(before), "LeaseLost must not write StudyFinalized"

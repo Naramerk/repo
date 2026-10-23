@@ -173,6 +173,15 @@ def _dispositions_inner(
 ) -> dict[str, dict[str, Any]]:
     qmap = known_questions(plans)
     cover = question_tasks(plans)
+    # Foreach / expand / loop-iter tasks live in runtime.tasks and may be absent
+    # from plans[*].tasks that ``question_tasks`` reads — union their addresses
+    # so skip_cap and covering both see the parent's own work.
+    for t in tasks.values():
+        spec = getattr(t, "spec", None)
+        addrs = getattr(spec, "addresses", None) or []
+        key = str(getattr(spec, "task_key", "") or "")
+        for qid in addrs:
+            cover.setdefault(str(qid), set()).add(key or str(getattr(t, "task_id", "")))
     by_key = _task_by_key(tasks)
     by_target: dict[str, list] = {}
     if graph is not None and study is not None:
@@ -449,13 +458,21 @@ def _dispositions_inner(
             row_na["excluded_claims"] = excluded
         result[qid] = row_na
 
-    # PR11: iteration_cap on unresolved loop-scoped questions (before rollup).
-    apply_loop_cap_dispositions(result, loop_capped_questions)
-    # Stamp honest terminals before rollup so clamp sees verdict.
-    _stamp_honest_terminals(result)
-    # PR16: parent disposition from frozen Plan.rollup (DESIGN_M1 §10).
+    # Order (#32 then #28): skip_cap/scoped_capped → loop-cap → honest
+    # terminals → rollup. Skip cap only for decomposes parents with *no own
+    # covering tasks* (plans[*].tasks AND runtime.tasks addresses).
+    from coscientist.core.decomposes import children_map, parent_map_from_plans
     from coscientist.core.rollup import apply_rollup
 
+    parent_ids = set(children_map(parent_map_from_plans(plans)))
+    skip_cap = {qid for qid in parent_ids if not cover.get(qid)}
+    scoped_capped = {
+        qid: meta
+        for qid, meta in (loop_capped_questions or {}).items()
+        if qid not in skip_cap
+    }
+    apply_loop_cap_dispositions(result, scoped_capped)
+    _stamp_honest_terminals(result)
     return apply_rollup(result, plans=plans)
 
 

@@ -7,11 +7,17 @@
 - Same-batch guard: `append_many([SF, …])` probes finalized **after** `_fence()` and treats the batch as closed after the first `StudyFinalized` (in-batch flag + never cache a False finalized probe). `BEGIN IMMEDIATE` on append is **defensive**; peer writers are serialized by the lease `UPDATE` inside `_fence`.
 - **Legacy journals** with two `StudyFinalized` rows: fold/`apply_event` / local project are **first-wins** for `studies.finalized_payload` / graph; the second SF taints `meta` (`duplicate_study_finalized` + `tainted`) and local `_duplicate_study_finalized`. That taint does **not** enter the StudyFinalized report/`contributing_reasons` (`finalize()` returns early when already finalized; wiring it through `view()`/report re-render was out of scope). New writes still refuse another SF.
 
+### M1 PR16 follow-up
+- Finalize LeaseLost reraise coverage for `_primary_report_path` / `render_markdown_report` / `build_minimal_report`.
+- `dispositions()` order on main `7217a95` (#28+#31+#33): skip_cap/scoped_capped → `apply_loop_cap_dispositions` → `_stamp_honest_terminals` → `apply_rollup`. Skip cap only for decomposes parents with **no own covering tasks** (plans + ``runtime.tasks`` addresses — foreach/expand/loop). Combined cover **excludes** ``superseded`` / ``cancelled`` (fold ``TaskDone.reason``) so dead tasks cannot falsely keep a parent under loop-cap.
+- Combined cover (plans ∪ runtime) can change ``not_attempted`` reason for questions that previously had ``no_task`` (e.g. runtime-only covering → ``tasks_skipped`` / ``tasks_failed``; cancelled-only covering → empty cover → ``no_task`` again).
+- Equal-rank rollup keeps own without false ``rollup_clamped``; lowering preserves ``iteration_cap`` in ``reason_detail``. Clamp predicate includes ``terminal=True`` (#28).
+
 ### M1 PR15
 - `needs_more_data` + required `artifact(role=report, kind=experiment_design)` with rubric ids `hypothesis` / `variables` / `sample_size` / `success_criterion` (DESIGN_M1 §6.4). Event `QuestionDisposed` (v1; **first-wins**); rejected disposals → journaled `QuestionDisposeRejected` (`_note_reject` only after successful append; fold + `contributing_reasons`).
 - Explicit `OutputSpec.kind` + `OutputSpec.evidence_kind` (PlanValidator; rubric ids never imply evidence_kind). Writers: TaskCreated **v13** / PlanAccepted **v11** / PlanExpanded **v5** continuous after #29 PA10/PE4 (`bd413e0`). StudyCreated **v10**. No duplicate `register_upcaster`.
 - Fold-only `apply_kind_stamp` (`_stamp_kind` private); missing meta on replay → `_stamp_meta_missing` tainted/internal_error (study still opens → StudyFinalized). `design_artifact_ok` never trusts `meta.kind` alone.
-- Honest terminals (`needs_more_data` / `infeasible` / `ill_posed`) stamp `verdict` for PR16 rollup clamp.
+- Honest terminals (`needs_more_data` / `infeasible` / `ill_posed`) stamp ``terminal=True`` for PR16 rollup clamp (no claim-style ``verdict``).
 - Projections: dirty-key `_put` for `question_disposals` / `disposal_rejects`; equivalence seed covers decomposes + dispose tables.
 - Derivation: review-only never counts; only claim-bound executable CodeCheck MET lifts. `by_theory`. Import-linter: agents ↛ dispose / artifact_stamp.
 - **PR8 debt:** `terminal_reason=infeasible` still needs PR8 ill_posed wiring.
@@ -19,9 +25,9 @@
 ### M1 PR16
 - `decomposes` acyclicity (self-loop + cycle) on accept/expand writes; `Plan.rollup` (`all|any|majority|rubric`) + `Plan.subquestions` / `QuestionSpec.origin` (`explicit` = PlanOut.subquestions; `implicit` = parent_id without subquestions listing; `emergent` = PlanExpanded origin=emergent).
 - PlanValidator: named subquestions; leaf coverage (task or disposition hook); frozen rubric item `decomposition_covers`; depth ≤ `max_depth`; question count ≤ `max_tasks`.
-- Parent disposition via `apply_rollup` in `dispositions()` (after PR11 loop-cap tagging). Strict majority `n//2+1` (1:1 / 2:2 → no majority). Rollup never **raises** a parent above its PR 8b claims-based verdict (may lower/keep); `expand_graph` cycle check uses the full existing decomposes tree. Report section «Дерево подзадач».
+- Parent disposition via `apply_rollup` in `dispositions()` (after PR11 loop-cap; skip only no-own-task decomposes parents). Strict majority `n//2+1` (1:1 / 2:2 → no majority). Rollup never **raises** a parent above its PR 8b claims-based verdict (may lower/keep); `expand_graph` cycle check uses the full existing decomposes tree. Report section «Дерево подзадач».
 - Upcasters: PlanAccepted **v10** (after loops v9); PlanExpanded **v4** (after loop fields v3). StudyCreated unchanged (v10; #23 takes v11). `#28` stacks PlanAccepted **v11** / PlanExpanded **v5**. `GraphEdgeAdded` → `graph_edges` in `_affected_tables` for #27 dirty-key projection; load-writes seed covers decomposes edges. No duplicate `register_upcaster`.
-- Rollup clamp: terminal own = ``disposition != not_attempted`` or ``verdict is not None`` (covers PR11 ``iteration_cap`` without ``verdict``); incomplete/no-majority/cycle never wipe own terminal; cyclic decomposes localized to subtree (not study-wide wipe).
+- Rollup clamp: terminal own = ``terminal is True`` or ``disposition != not_attempted`` or ``verdict is not None``; incomplete/no-majority/cycle never wipe own terminal; cyclic decomposes localized to subtree (not study-wide wipe).
 
 
 ### M1 PR14 follow-up

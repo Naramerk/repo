@@ -12,7 +12,7 @@ from coscientist.core.decomposes import (
     parent_map_from_plans,
     plan_rollup,
 )
-from coscientist.core.reasons import Disposition
+from coscientist.core.reasons import Disposition, TaskReason
 
 # Honest terminal dispositions that count as "resolved" for all/any/majority.
 _RESOLVED: frozenset[str] = frozenset(
@@ -214,9 +214,21 @@ def _combine_with_own_verdict(
     # Incomplete / no-majority → not_attempted must not overwrite a terminal own.
     if rolled_d == Disposition.NOT_ATTEMPTED.value:
         return _clamp_keep(own, rolled_d)
-    if _DISP_RANK.get(rolled_d, 0) > _DISP_RANK.get(own_d, 0):
+    own_rank = _DISP_RANK.get(own_d, 0)
+    rolled_rank = _DISP_RANK.get(rolled_d, 0)
+    if rolled_rank > own_rank:
         return _clamp_keep(own, rolled_d)
-    return rolled
+    if rolled_rank < own_rank:
+        # Children may lower disposition; keep iteration_cap visible in detail.
+        out = dict(rolled)
+        if str(own.get("reason") or "") == TaskReason.ITERATION_CAP.value:
+            detail = list(out.get("reason_detail") or [])
+            if TaskReason.ITERATION_CAP.value not in detail:
+                detail.append(TaskReason.ITERATION_CAP.value)
+            out["reason_detail"] = detail
+        return out
+    # Equal rank: keep own (reason intact) — do not invent rollup_clamped.
+    return dict(own)
 
 
 def _rollup_children(child_rows: list[dict[str, Any]], *, rule: str) -> dict[str, Any]:
