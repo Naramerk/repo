@@ -87,8 +87,6 @@ DEFAULT_TIMEOUT_S = 30.0
 DEFAULT_MEMORY_MB = 256
 DEFAULT_MAX_OUTPUT_BYTES = 1_000_000
 _TERM_GRACE_S = 0.5
-# Shared budget to join both stdout/stderr drain threads after wait.
-_OUTPUT_DRAIN_JOIN_S = 5.0
 # Host-side idle detection: cpu_usage/wall below this → idle_timeout (sabotage).
 IDLE_CPU_WALL_RATIO = 0.05
 TIMEOUT_KINDS = frozenset({"idle_timeout", "cpu_timeout", "wall_timeout"})
@@ -138,6 +136,9 @@ class SandboxLimits:
     memory_mb: int = DEFAULT_MEMORY_MB
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
     allow_network: bool = False
+    # Shared budget to join both stdout/stderr drain threads after wait.
+    # ``None`` → same as ``timeout_s`` (no separate magic constant).
+    output_drain_join_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -191,7 +192,11 @@ def _blocked(command_text: str, *, allow_network: bool) -> str | None:
     return None
 
 
-def _kill_group_term_then_kill(proc: subprocess.Popen[bytes]) -> None:
+def _kill_group_term_then_kill(
+    proc: subprocess.Popen[bytes],
+    *,
+    reap_timeout_s: float,
+) -> None:
     try:
         os.killpg(proc.pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError, OSError):
@@ -212,9 +217,16 @@ def _kill_group_term_then_kill(proc: subprocess.Popen[bytes]) -> None:
         except Exception:  # noqa: BLE001
             pass
     try:
-        proc.wait(timeout=5)
+        proc.wait(timeout=float(reap_timeout_s))
     except Exception:  # noqa: BLE001
         pass
+
+
+def _drain_join_budget_s(lim: SandboxLimits) -> float:
+    """Join budget for both drain threads; defaults to the guest wall limit."""
+    if lim.output_drain_join_s is not None:
+        return float(lim.output_drain_join_s)
+    return float(lim.timeout_s)
 
 
 def _read_capped(
@@ -656,12 +668,12 @@ def _watch_process(
         if proc.poll() is not None:
             break
         if overflow[0]:
-            _kill_group_term_then_kill(proc)
+            _kill_group_term_then_kill(proc, reap_timeout_s=float(lim.timeout_s))
             break
         if time.monotonic() >= deadline:
             timed_out = True
             kill_cause = "wall"
-            _kill_group_term_then_kill(proc)
+            _kill_group_term_then_kill(proc, reap_timeout_s=float(lim.timeout_s))
             break
         usage = _cgroup_cpu_usage_usec(cgroup_leaf)
         if usage is not None:
@@ -669,16 +681,16 @@ def _watch_process(
             if usage >= cpu_budget_usec:
                 timed_out = True
                 kill_cause = "cpu"
-                _kill_group_term_then_kill(proc)
+                _kill_group_term_then_kill(proc, reap_timeout_s=float(lim.timeout_s))
                 break
         time.sleep(0.02)
     try:
-        proc.wait(timeout=5)
+        proc.wait(timeout=float(lim.timeout_s))
     except Exception:  # noqa: BLE001
         pass
     # Process exit alone does not mean readers have appended — join first.
-    # One shared deadline for both threads (not 5s + 5s sequential).
-    join_deadline = time.monotonic() + float(_OUTPUT_DRAIN_JOIN_S)
+    # One shared deadline for both threads (from limits, not sequential doubles).
+    join_deadline = time.monotonic() + _drain_join_budget_s(lim)
     for t in (out_t, err_t):
         remaining = join_deadline - time.monotonic()
         if remaining > 0:
@@ -788,16 +800,8 @@ def _classify(
             exit_code=proc.returncode,
             reason=f"sandbox_unavailable:{kind or 'wrapper'}",
         )
-    # Drain still blocked (grandchild holding the pipe) — incomplete sinks.
-    if output_drain_failed:
-        return fin(
-            status=SandboxStatus.UNAVAILABLE,
-            exit_code=proc.returncode,
-            reason="sandbox_unavailable:output_drain",
-            output_drain_failed=True,
-        )
     if overflow:
-        # Guest-caused output flood — scientific, not infra.
+        # Guest-caused output flood — scientific, not infra (even if drain stuck).
         return fin(
             status=SandboxStatus.OUTPUT_EXCEEDED,
             exit_code=proc.returncode,
@@ -808,6 +812,7 @@ def _classify(
     if timed_out:
         # Guest timeout is NOT countable evidence — classified host-side only.
         # Role-aware idle elevation (refute / no cpu.stat) happens in evaluate.
+        # Keep TIMEOUT (attempt consumed) even when a drain thread is still alive.
         kind = classify_guest_timeout(
             kill_cause=kill_cause,
             duration_s=duration,
@@ -819,6 +824,14 @@ def _classify(
             exit_code=-1 if kill_cause == "wall" else code,
             reason=kind,
             timeout_kill=kill_cause or ("cpu" if kind == "cpu_timeout" else "wall"),
+        )
+    # Drain still blocked with no guest timeout/overflow — incomplete sinks.
+    if output_drain_failed:
+        return fin(
+            status=SandboxStatus.UNAVAILABLE,
+            exit_code=proc.returncode,
+            reason="sandbox_unavailable:output_drain",
+            output_drain_failed=True,
         )
     if _cgroup_oom_killed(cgroup_leaf):
         return fin(

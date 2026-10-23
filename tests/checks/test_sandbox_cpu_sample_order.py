@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import os
 import signal
+import subprocess
+import sys
+import threading
 from unittest.mock import MagicMock
 
 import coscientist.checks.sandbox as sb
+from coscientist.checks.kinds._util import raise_if_infra
 from coscientist.checks.sandbox import (
+    _TERM_GRACE_S,
+    INFRA_STATUSES,
     SandboxLimits,
     SandboxStatus,
     _classify,
@@ -69,10 +76,11 @@ def test_watch_process_samples_host_cpu_before_poll(monkeypatch):
 
 def test_watch_process_joins_readers_before_returning_stdout(monkeypatch):
     """Regression: empty stdout when sinks sampled before reader threads finish."""
-    import threading
-    import time as time_mod
-
     released = threading.Event()
+    thread_errors: list[BaseException] = []
+    lim = SandboxLimits(
+        timeout_s=sb.DEFAULT_TIMEOUT_S, memory_mb=64, max_output_bytes=1024
+    )
 
     def slow_read(
         pipe: object,
@@ -81,8 +89,11 @@ def test_watch_process_joins_readers_before_returning_stdout(monkeypatch):
         overflow: list[bool],
     ) -> None:
         del pipe, limit, overflow
-        assert released.wait(timeout=2.0)
-        time_mod.sleep(0.05)
+        if not released.wait(timeout=float(lim.timeout_s)):
+            thread_errors.append(
+                TimeoutError("release not signaled before drain wait budget")
+            )
+            return
         sink.append(b"999\n")
 
     class FakeProc:
@@ -101,12 +112,12 @@ def test_watch_process_joins_readers_before_returning_stdout(monkeypatch):
     monkeypatch.setattr(sb, "_read_capped", slow_read)
     monkeypatch.setattr(sb, "_cgroup_cpu_usage_usec", lambda leaf: None)
 
-    lim = SandboxLimits(timeout_s=5.0, memory_mb=64, max_output_bytes=1024)
     _to, _ov, out, err, _kc, _cpu, _tree, drain_failed = _watch_process(
         FakeProc(),  # type: ignore[arg-type]
         lim=lim,
         cgroup_leaf=None,
     )
+    assert not thread_errors, thread_errors
     assert out == b"999\n"
     assert err == b"999\n"
     assert drain_failed is False
@@ -114,8 +125,6 @@ def test_watch_process_joins_readers_before_returning_stdout(monkeypatch):
 
 def test_watch_process_stuck_reader_sets_output_drain_failed(monkeypatch):
     """Grandchild holding the pipe → reader stays alive; flag, do not silent b''."""
-    import threading
-
     block = threading.Event()
 
     def stuck_read(
@@ -125,7 +134,7 @@ def test_watch_process_stuck_reader_sets_output_drain_failed(monkeypatch):
         overflow: list[bool],
     ) -> None:
         del pipe, limit, sink, overflow
-        block.wait(timeout=30.0)
+        block.wait()
 
     class FakeProc:
         pid = 4242
@@ -138,12 +147,16 @@ def test_watch_process_stuck_reader_sets_output_drain_failed(monkeypatch):
         def wait(self, timeout=None):
             return 0
 
-    monkeypatch.setattr(sb, "_OUTPUT_DRAIN_JOIN_S", 0.05)
     monkeypatch.setattr(sb, "_host_tree_cpu_s", lambda _pid: None)
     monkeypatch.setattr(sb, "_read_capped", stuck_read)
     monkeypatch.setattr(sb, "_cgroup_cpu_usage_usec", lambda leaf: None)
 
-    lim = SandboxLimits(timeout_s=5.0, memory_mb=64, max_output_bytes=1024)
+    lim = SandboxLimits(
+        timeout_s=sb.DEFAULT_TIMEOUT_S,
+        memory_mb=64,
+        max_output_bytes=1024,
+        output_drain_join_s=_TERM_GRACE_S,
+    )
     _to, _ov, out, err, _kc, _cpu, _tree, drain_failed = _watch_process(
         FakeProc(),  # type: ignore[arg-type]
         lim=lim,
@@ -175,7 +188,132 @@ def test_watch_process_stuck_reader_sets_output_drain_failed(monkeypatch):
     assert result.status is SandboxStatus.UNAVAILABLE
     assert result.reason == "sandbox_unavailable:output_drain"
     assert result.output_drain_failed is True
-    assert result.status in sb.INFRA_STATUSES
+    assert result.status in INFRA_STATUSES
+
+
+def test_classify_timeout_with_stuck_drain_stays_timeout_consumed():
+    """Timeout + stuck drain must stay TIMEOUT (consumed), not UNAVAILABLE infra."""
+    proc = MagicMock()
+    proc.returncode = -1
+    result = _classify(
+        timed_out=True,
+        overflow=False,
+        proc=proc,
+        cgroup_leaf=None,
+        oom_detectable=False,
+        infra_msg=b"",
+        out_b=b"",
+        err_b=b"",
+        duration=1.0,
+        net_i="hard",
+        fs_i="hard",
+        work_dir=None,
+        result_files={},
+        kill_cause="wall",
+        cpu_usage_s=0.0,
+        timeout_s=1.0,
+        output_drain_failed=True,
+    )
+    assert result.status is SandboxStatus.TIMEOUT
+    assert result.output_drain_failed is True
+    assert result.status not in INFRA_STATUSES
+    raise_if_infra(
+        result.status,
+        result.reason,
+        net_isolation=result.net_isolation,
+        fs_isolation=result.fs_isolation,
+        note=result.note,
+    )
+
+
+def test_classify_overflow_with_stuck_drain_stays_output_exceeded_consumed():
+    """Overflow + stuck drain must stay OUTPUT_EXCEEDED (consumed), not infra."""
+    proc = MagicMock()
+    proc.returncode = -9
+    result = _classify(
+        timed_out=False,
+        overflow=True,
+        proc=proc,
+        cgroup_leaf=None,
+        oom_detectable=False,
+        infra_msg=b"",
+        out_b=b"x" * 100,
+        err_b=b"",
+        duration=0.2,
+        net_i="hard",
+        fs_i="hard",
+        work_dir=None,
+        result_files={},
+        output_drain_failed=True,
+    )
+    assert result.status is SandboxStatus.OUTPUT_EXCEEDED
+    assert result.reason == "output_exceeded"
+    assert result.output_drain_failed is True
+    assert result.status not in INFRA_STATUSES
+    raise_if_infra(
+        result.status,
+        result.reason,
+        net_isolation=result.net_isolation,
+        fs_isolation=result.fs_isolation,
+        note=result.note,
+    )
+
+
+def test_real_subprocess_grandchild_holds_stdout_sets_drain_failed():
+    """No mocks: parent exits after fork; grandchild keeps stdout open."""
+    script = (
+        "import os, sys, time\n"
+        "if os.fork() == 0:\n"
+        "    time.sleep(3600)\n"
+        "    os._exit(0)\n"
+        "sys.stdout.write('hi\\n')\n"
+        "sys.stdout.flush()\n"
+        "os._exit(0)\n"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    pgid = os.getpgid(proc.pid)
+    lim = SandboxLimits(
+        timeout_s=_TERM_GRACE_S,
+        memory_mb=64,
+        max_output_bytes=1024,
+        output_drain_join_s=_TERM_GRACE_S,
+    )
+    try:
+        timed_out, overflow, _out, _err, _kc, _cpu, _tree, drain_failed = (
+            _watch_process(proc, lim=lim, cgroup_leaf=None)
+        )
+        assert timed_out is False
+        assert overflow is False
+        assert drain_failed is True
+        result = _classify(
+            timed_out=timed_out,
+            overflow=overflow,
+            proc=proc,
+            cgroup_leaf=None,
+            oom_detectable=False,
+            infra_msg=b"",
+            out_b=_out,
+            err_b=_err,
+            duration=_TERM_GRACE_S,
+            net_i="hard",
+            fs_i="hard",
+            work_dir=None,
+            result_files={},
+            output_drain_failed=drain_failed,
+        )
+        assert result.status is SandboxStatus.UNAVAILABLE
+        assert result.reason == "sandbox_unavailable:output_drain"
+        assert result.output_drain_failed is True
+    finally:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def test_watch_process_keeps_max_sample_across_zero_and_none(monkeypatch):

@@ -62,8 +62,8 @@
 - Removed store commit-only / shm / wal-autocheckpoint / GC test knobs (those hollowed the SLO).
 
 ### Sandbox stdout drain race
-- `_watch_process` joins stdout/stderr reader threads after `wait` before sampling sinks (shared join deadline). Previously a fast-exit guest could return empty `stdout`/`stderr` while readers had not yet appended (flake in `test_verifier_reads_reward_not_stdout`).
-- If a drain thread is still alive after the join budget (pipe held open), result is `UNAVAILABLE` / `sandbox_unavailable:output_drain` with `output_drain_failed=True` — never a silent empty sink.
+- `_watch_process` joins stdout/stderr reader threads after `wait` before sampling sinks (shared join budget from `SandboxLimits.output_drain_join_s` or `timeout_s`). Previously a fast-exit guest could return empty `stdout`/`stderr` while readers had not yet appended (flake in `test_verifier_reads_reward_not_stdout`).
+- Drain still alive after the join budget sets `output_drain_failed=True`. Alone → `UNAVAILABLE` / `sandbox_unavailable:output_drain`. Guest `TIMEOUT` / `OUTPUT_EXCEEDED` keep their scientific status (attempt consumed) and only record the flag — never reclassified as infra.
 
 ### Sandbox (host CPU sample order)
 - `_watch_process`: sample host-tree CPU via `/proc` **before** `poll()` (poll reaps the child and `/proc` vanishes). Keeps no-cgroup SIGXCPU classification accurate; retains the max sample while the guest is alive. Split out of PR14 so quote work stays focused.
