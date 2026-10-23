@@ -1213,7 +1213,6 @@ def test_contextvar_taint_isolated_across_tasks_and_threads():
 @pytest.mark.asyncio
 async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_registry):
     """AttemptTainted in journal → reopen → write still taint_deny."""
-    from coscientist.tools.contract import ToolError
     from coscientist.tools.effects import _tainted_from_journal
 
     catalog = _catalog_quote()
