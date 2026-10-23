@@ -6,6 +6,11 @@ from datetime import timedelta
 
 import pytest
 
+from coscientist.core.claims.graph import GraphNode
+from coscientist.core.claims.reasons import CloseReason, TaskReason
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.ids import hypothesis_node_id, task_id
+from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -18,13 +23,8 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.events.events import EventEnvelope, make_idem
-from coscientist.core.claims.graph import GraphNode
-from coscientist.core.events.ids import hypothesis_node_id, task_id
 from coscientist.core.execution.inputs import InputUnavailable
-from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.execution.recover import recover
-from coscientist.core.events.upcasters import upcast
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
 
@@ -77,8 +77,8 @@ def test_foreach_selected_ignores_verdict():
     """
     from pathlib import Path
 
-    from coscientist.core.plan.foreach import select_foreach_items
     from coscientist.core.claims.graph import GraphStore, default_execution_registry
+    from coscientist.core.plan.foreach import select_foreach_items
 
     # Static guarantee: no production write of selected from verdict/planner.
     root = Path(__file__).resolve().parents[1] / "coscientist"

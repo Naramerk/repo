@@ -7,6 +7,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from coscientist.checks.evaluate import evaluate_code_check
+from coscientist.core.claims.graph import GraphEdge, GraphNode
+from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.claims.verdict import recompute_effect_provenance
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.ids import experiment_node_id, hypothesis_node_id, question_node_id
+from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -20,15 +26,9 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.plan.expand import apply_pending_expansion
 from coscientist.core.plan.expand_trigger import maybe_expand_after_task_done, refuse_expansion
-from coscientist.core.claims.graph import GraphEdge, GraphNode
-from coscientist.core.events.ids import experiment_node_id, hypothesis_node_id, question_node_id
-from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.plan.supersede import question_is_superseded
-from coscientist.core.events.upcasters import upcast
-from coscientist.core.claims.verdict import recompute_effect_provenance
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
 

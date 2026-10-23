@@ -18,8 +18,10 @@ from typing import Any, Literal
 
 from pydantic import Field, field_validator
 
-from coscientist.core.execution.archive_limits import inspect_archive
+from coscientist.core.claims.reasons import RefusalKind
 from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.schema_versions import INPUTS_DIGEST_VERSION
+from coscientist.core.execution.archive_limits import inspect_archive
 from coscientist.core.execution.domain import (
     Frozen,
     InputBinding,
@@ -27,8 +29,6 @@ from coscientist.core.execution.domain import (
     Provenance,
     worst_provenance,
 )
-from coscientist.core.claims.reasons import RefusalKind
-from coscientist.core.events.schema_versions import INPUTS_DIGEST_VERSION
 
 InputLimitViolation = tuple[RefusalKind, str]
 

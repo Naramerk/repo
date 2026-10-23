@@ -8,8 +8,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskSpec
 from coscientist.core.events.ids import task_id
+from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskSpec
 from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
 
 if TYPE_CHECKING:

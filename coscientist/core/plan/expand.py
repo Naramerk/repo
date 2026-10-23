@@ -9,6 +9,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.events import (
+    PLAN_EXPANDED_SCHEMA_VERSION,
+    TASK_CREATED_SCHEMA_VERSION,
+    EventEnvelope,
+    make_idem,
+)
+from coscientist.core.events.ids import plan_id, task_id
 from coscientist.core.execution.domain import (
     ExpansionRequest,
     Plan,
@@ -18,13 +26,6 @@ from coscientist.core.execution.domain import (
     TaskKind,
     TaskSpec,
     TaskState,
-)
-from coscientist.core.events.errors import LeaseLost
-from coscientist.core.events.events import (
-    PLAN_EXPANDED_SCHEMA_VERSION,
-    TASK_CREATED_SCHEMA_VERSION,
-    EventEnvelope,
-    make_idem,
 )
 from coscientist.core.plan.expand_critic import critic_gate, prepare_request_for_apply
 from coscientist.core.plan.expand_graph import (
@@ -39,7 +40,6 @@ from coscientist.core.plan.expand_validate import (
     task_produced_countable_claims,
     validate_expansion,
 )
-from coscientist.core.events.ids import plan_id, task_id
 from coscientist.core.plan.supersede import (
     should_skip_for_question_supersede,
     target_blocks_agent_supersede,
@@ -479,8 +479,8 @@ def _resolve_plan_n_request(
     Uses ``_final_attempt_id`` only (no seed fallback). Attempt/result
     mismatch → ``invalid`` / ``ExpansionRefused``.
     """
-    from coscientist.core.plan.expand_trigger import _final_attempt_id, parse_plan_n_expansion
     from coscientist.core.events.ids import task_id as make_task_id
+    from coscientist.core.plan.expand_trigger import _final_attempt_id, parse_plan_n_expansion
 
     _ = meta  # seed pending is advisory for the planner only — never applied here
     sid = runtime.study.study_id if runtime.study is not None else ""

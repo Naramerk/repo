@@ -20,13 +20,8 @@ from hypothesis.stateful import (
     run_state_machine_as_test,
 )
 
+from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.clock import FakeClock
-from coscientist.core.execution.domain import (
-    QuestionSpec,
-    QuestionSupersede,
-    TaskSpec,
-    TaskState,
-)
 from coscientist.core.events.errors import (
     AttemptClosedError,
     HitlUnsupported,
@@ -34,12 +29,17 @@ from coscientist.core.events.errors import (
     StudyClosedError,
 )
 from coscientist.core.events.events import EventEnvelope, make_idem
-from coscientist.core.finalize.finalize_nodes import conclusion_id_for_question
-from coscientist.core.execution.inputs import InputUnavailable
 from coscientist.core.events.projections import fold_events
-from coscientist.core.plan.question_tasks import known_questions
-from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.execution.domain import (
+    QuestionSpec,
+    QuestionSupersede,
+    TaskSpec,
+    TaskState,
+)
+from coscientist.core.execution.inputs import InputUnavailable
 from coscientist.core.execution.recover import recover
+from coscientist.core.finalize.finalize_nodes import conclusion_id_for_question
+from coscientist.core.plan.question_tasks import known_questions
 from tests.helpers import close_runtime, open_runtime
 
 _RULE_ERR = (

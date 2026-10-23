@@ -9,14 +9,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from coscientist.core.events.digest import canonical_json, sha256_hex
-from coscientist.core.execution.domain import ReqStatus
 from coscientist.core.claims.rubric_types import (
     VALID_FINAL_TYPES,
     FinalType,
     Rubric,
     RubricItem,
 )
+from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.execution.domain import ReqStatus
 
 # Digest schema version — bump when canonical fields change.
 RUBRIC_DIGEST_VERSION = 1

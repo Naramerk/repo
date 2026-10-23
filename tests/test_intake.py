@@ -11,11 +11,11 @@ from pathlib import Path
 import jsonschema
 import pytest
 
+from coscientist.core.claims.reasons import RefusalKind
 from coscientist.core.execution.domain import Budget
 from coscientist.core.finalize.finalize_nodes import conclusion_id_for_study
-from coscientist.core.plan.intake import REASON_MAX, IntakeAccept, IntakeRefuse, intake
-from coscientist.core.claims.reasons import RefusalKind
 from coscientist.core.finalize.study_view import study_phase, study_view
+from coscientist.core.plan.intake import REASON_MAX, IntakeAccept, IntakeRefuse, intake
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
 

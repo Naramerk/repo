@@ -13,6 +13,10 @@ from coscientist.core.claims.claims import (
     runtime_claim_from_node,
 )
 from coscientist.core.claims.dispositions import dispositions
+from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore, default_execution_registry
+from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.ids import claim_node_id, question_node_id
 from coscientist.core.execution.domain import (
     HitlPolicy,
     InputSpec,
@@ -25,9 +29,6 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.events.events import EventEnvelope, make_idem
-from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore, default_execution_registry
-from coscientist.core.events.ids import claim_node_id, question_node_id
 from coscientist.core.execution.inputs import (
     InputUnavailable,
     bind_inputs,
@@ -35,7 +36,6 @@ from coscientist.core.execution.inputs import (
     collect_bindable_claims,
     verdict_binding_digest,
 )
-from coscientist.core.claims.reasons import TaskReason
 from tests.helpers import attach_executor, close_runtime, open_runtime
 from tests.test_inputs import _task
 
@@ -334,10 +334,10 @@ def test_no_h_star_heuristic_auto_create():
 async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
     from unittest.mock import patch
 
-    from coscientist.core.execution.artifacts import make_tool_ref
-    from coscientist.core.execution.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
     from coscientist.core.events.errors import CatalogError
     from coscientist.core.events.ids import claim_node_id as cid_fn
+    from coscientist.core.execution.artifacts import make_tool_ref
+    from coscientist.core.execution.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
 
     sid = "st_cfail"
     rt = await open_runtime(
@@ -931,9 +931,9 @@ def test_criterion_status_not_met_from_failed_check():
 
 def test_frozen_normalizes_check_id_to_template_id():
     """checked_against=check_id maps to criterion node keyed by template_id."""
+    from coscientist.core.events.ids import criterion_node_id
     from coscientist.core.execution.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
     from coscientist.core.execution.executor import _derive_claim_core_attrs
-    from coscientist.core.events.ids import criterion_node_id
 
     sid = "st_frz"
     g = GraphStore(default_execution_registry())
@@ -1383,8 +1383,8 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
         compute_verdict_snapshots,
         excluded_claims_report,
     )
-    from coscientist.core.execution.domain import Study
     from coscientist.core.claims.rules import verdict
+    from coscientist.core.execution.domain import Study
 
     valid = [
         RuntimeClaim(

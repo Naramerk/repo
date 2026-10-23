@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 
 from coscientist.checks.catalog import load_catalog, minimal_test_catalog
-from coscientist.core.events.errors import CatalogError
 from coscientist.core.claims.graph import default_execution_registry
+from coscientist.core.events.errors import CatalogError
 
 
 def test_minimal_catalog_loads():

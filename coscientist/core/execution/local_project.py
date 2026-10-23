@@ -7,11 +7,11 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from coscientist.core.execution.domain import Study, Task, TaskOutcome, TaskState
-from coscientist.core.events.events import EventEnvelope
 from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore
-from coscientist.core.plan.intake import IntakeRefuse
 from coscientist.core.claims.reasons import RefusalKind, TaskReason
+from coscientist.core.events.events import EventEnvelope
+from coscientist.core.execution.domain import Study, Task, TaskOutcome, TaskState
+from coscientist.core.plan.intake import IntakeRefuse
 
 log = logging.getLogger(__name__)
 
@@ -63,8 +63,8 @@ class LocalProjectMixin:
         arts = getattr(self, "artifacts", None)
         if arts is None:
             return False
-        from coscientist.core.execution.artifact_stamp import apply_kind_stamp
         from coscientist.core.events.errors import ArtifactRejected
+        from coscientist.core.execution.artifact_stamp import apply_kind_stamp
 
         try:
             apply_kind_stamp(arts, artifact_id, kind)

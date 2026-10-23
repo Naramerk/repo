@@ -8,8 +8,6 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from coscientist.core.execution.artifact_stamp import apply_kind_stamp
-from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.claims.claims import RuntimeClaim
 from coscientist.core.claims.contradicts import (
     contradiction_pairs,
@@ -25,21 +23,6 @@ from coscientist.core.claims.derivation import (
 )
 from coscientist.core.claims.dispose import DisposeRejected, QuestionDisposal, validate_disposal
 from coscientist.core.claims.dispositions import dispositions
-from coscientist.core.execution.domain import (
-    AgentTaskOutput,
-    ArtifactHandle,
-    OutputSpec,
-    QuestionSpec,
-    ReqStatus,
-    RequirementRef,
-    TaskSpec,
-)
-from coscientist.core.events.errors import ArtifactRejected
-from coscientist.core.events.events import (
-    PLAN_ACCEPTED_SCHEMA_VERSION,
-    PLAN_EXPANDED_SCHEMA_VERSION,
-    TASK_CREATED_SCHEMA_VERSION,
-)
 from coscientist.core.claims.experiment_design import (
     ARTIFACT_KIND_EXPERIMENT_DESIGN,
     EXPERIMENT_DESIGN_ITEM_IDS,
@@ -49,9 +32,15 @@ from coscientist.core.claims.experiment_design import (
     is_experiment_design_rubric,
 )
 from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore, registry_from_schema
-from coscientist.core.plan.plan_validate import validate_evidence_kinds, validate_output_kinds
 from coscientist.core.claims.reasons import Disposition
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
+from coscientist.core.claims.verdict import hypothesis_verdict
+from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.events.events import (
+    PLAN_ACCEPTED_SCHEMA_VERSION,
+    PLAN_EXPANDED_SCHEMA_VERSION,
+    TASK_CREATED_SCHEMA_VERSION,
+)
 from coscientist.core.events.upcasters import (
     UPCASTERS,
     assert_upcaster_chain_continuous,
@@ -59,7 +48,18 @@ from coscientist.core.events.upcasters import (
     upcast,
     writer_schema_version,
 )
-from coscientist.core.claims.verdict import hypothesis_verdict
+from coscientist.core.execution.artifact_stamp import apply_kind_stamp
+from coscientist.core.execution.artifacts import make_tool_ref
+from coscientist.core.execution.domain import (
+    AgentTaskOutput,
+    ArtifactHandle,
+    OutputSpec,
+    QuestionSpec,
+    ReqStatus,
+    RequirementRef,
+    TaskSpec,
+)
+from coscientist.core.plan.plan_validate import validate_evidence_kinds, validate_output_kinds
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
 

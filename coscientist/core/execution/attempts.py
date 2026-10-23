@@ -7,6 +7,9 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from coscientist.core.claims.claims import compute_verdict_snapshots
+from coscientist.core.claims.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.ids import attempt_id, task_id
 from coscientist.core.execution.domain import (
     VALID_PROVENANCE,
     Provenance,
@@ -16,8 +19,6 @@ from coscientist.core.execution.domain import (
     TaskState,
     worst_provenance,
 )
-from coscientist.core.events.events import EventEnvelope, make_idem
-from coscientist.core.events.ids import attempt_id, task_id
 from coscientist.core.execution.inputs import (
     InputUnavailable,
     bind_inputs,
@@ -25,7 +26,6 @@ from coscientist.core.execution.inputs import (
     uses_claim_graph_events,
 )
 from coscientist.core.execution.quorum import bind_input_groups
-from coscientist.core.claims.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
 
 # Persisted on AttemptClosed.retry_at; fired by StudyRuntime.tick vs injected Clock.
 RETRY_BACKOFF_S = 0.05
@@ -342,6 +342,7 @@ class AttemptsMixin:
         now = self.clock.now()
         assert self.study is not None
         sid = self.study.study_id
+        from coscientist.core.events.schema_versions import ATTEMPT_STARTED_SCHEMA_VERSION
         from coscientist.core.execution.domain import Limitation as _Limitation
         from coscientist.core.execution.input_limits import (
             apply_input_drift,
@@ -350,7 +351,6 @@ class AttemptsMixin:
             snapshot_bindings_at_p2,
             study_user_input_bindings,
         )
-        from coscientist.core.events.schema_versions import ATTEMPT_STARTED_SCHEMA_VERSION
         from coscientist.core.plan.shares import attempt_share_fields_or_refuse
 
         # PR19: bind Study.user_input_ids so DAG tasks consume them + drift covers.

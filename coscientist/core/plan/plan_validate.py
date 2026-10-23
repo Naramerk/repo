@@ -24,6 +24,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from coscientist.core.claims.derivation import EVIDENCE_KIND_DERIVATION, VALID_EVIDENCE_KINDS
+from coscientist.core.claims.experiment_design import (
+    ARTIFACT_KIND_CONTRADICTION_MAP,
+    ARTIFACT_KIND_EXPERIMENT_DESIGN,
+    is_contradiction_map_rubric,
+    is_experiment_design_rubric,
+)
+from coscientist.core.claims.rubric import freeze_rubric, freeze_task_rubrics
+from coscientist.core.claims.rubric_types import VALID_FINAL_TYPES, Rubric
+from coscientist.core.execution.domain import QuestionSpec, TaskSpec
 from coscientist.core.plan.decomposes import (
     DECOMPOSITION_COVERS_ITEM_ID,
     VALID_DECOMPOSE_ORIGINS,
@@ -33,16 +43,6 @@ from coscientist.core.plan.decomposes import (
     max_decomposes_depth,
     parent_map_from_questions,
 )
-from coscientist.core.claims.derivation import EVIDENCE_KIND_DERIVATION, VALID_EVIDENCE_KINDS
-from coscientist.core.execution.domain import QuestionSpec, TaskSpec
-from coscientist.core.claims.experiment_design import (
-    ARTIFACT_KIND_CONTRADICTION_MAP,
-    ARTIFACT_KIND_EXPERIMENT_DESIGN,
-    is_contradiction_map_rubric,
-    is_experiment_design_rubric,
-)
-from coscientist.core.claims.rubric import freeze_rubric, freeze_task_rubrics
-from coscientist.core.claims.rubric_types import VALID_FINAL_TYPES, Rubric
 
 __all__ = [
     "PLAN_REFUSED_LINE",
@@ -217,10 +217,10 @@ async def apply_plan_refused(
     ``finalize(trigger=\"intake\")`` → ``terminal_reason=REFUSED``. Returns ``\"\"``.
     """
     import coscientist.core.finalize.finalize as finalize_mod
-    from coscientist.core.execution.domain import TaskOutcome, TaskState
-    from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.claims.reasons import TaskReason
     from coscientist.core.claims.reviews import plan_refused_idem
+    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.execution.domain import TaskOutcome, TaskState
 
     study = getattr(runtime, "study", None)
     if study is None:

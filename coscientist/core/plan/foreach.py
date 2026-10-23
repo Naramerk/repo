@@ -5,6 +5,15 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
+from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.events import (
+    PLAN_EXPANDED_SCHEMA_VERSION,
+    TASK_CREATED_SCHEMA_VERSION,
+    EventEnvelope,
+    make_idem,
+)
+from coscientist.core.events.ids import task_id
 from coscientist.core.execution.domain import (
     ForEachSpec,
     InputSpec,
@@ -16,13 +25,6 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.events.errors import LeaseLost
-from coscientist.core.events.events import (
-    PLAN_EXPANDED_SCHEMA_VERSION,
-    TASK_CREATED_SCHEMA_VERSION,
-    EventEnvelope,
-    make_idem,
-)
 from coscientist.core.plan.expand_graph import (
     plan_graph_events,
     question_graph_events,
@@ -30,8 +32,6 @@ from coscientist.core.plan.expand_graph import (
 )
 from coscientist.core.plan.expand_trigger import refuse_expansion
 from coscientist.core.plan.expand_validate import active_plan_blob, assign_core_keys
-from coscientist.core.events.ids import task_id
-from coscientist.core.claims.reasons import TaskReason
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime

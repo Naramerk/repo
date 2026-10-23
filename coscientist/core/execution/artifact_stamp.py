@@ -13,9 +13,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from coscientist.core.execution.domain import Artifact, ArtifactKind
 from coscientist.core.events.errors import ArtifactRejected
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.execution.domain import Artifact, ArtifactKind
 
 VALID_ARTIFACT_KINDS: frozenset[str] = frozenset({"experiment_design", "contradiction_map"})
 

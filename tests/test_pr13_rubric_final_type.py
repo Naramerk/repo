@@ -7,8 +7,14 @@ from datetime import timedelta
 import pytest
 
 from coscientist.checks.kinds.rubric import evaluate_rubric
-from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.claims.claims import RuntimeClaim
+from coscientist.core.claims.reasons import NotAttemptedReason
+from coscientist.core.claims.reviews import review_key
+from coscientist.core.claims.rubric import freeze_rubric, rubric_digest
+from coscientist.core.claims.rubric_types import Rubric, RubricItem
+from coscientist.core.claims.stance import claim_stance
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
@@ -20,17 +26,11 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskSpec,
 )
-from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.plan.plan_validate import (
     freeze_plan_rubrics,
     validate_final_types,
     validate_rubric_immutable,
 )
-from coscientist.core.claims.reasons import NotAttemptedReason
-from coscientist.core.claims.reviews import review_key
-from coscientist.core.claims.rubric import freeze_rubric, rubric_digest
-from coscientist.core.claims.rubric_types import Rubric, RubricItem
-from coscientist.core.claims.stance import claim_stance
 from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
 _SCOPE = dict(task_id="t1", attempt_id="a1", output_digest="deadbeef")
@@ -812,8 +812,8 @@ async def test_unknown_final_type_refused(tmp_path, clock):
 def test_final_type_both_requires_verdict_and_rubric(clock):
     """§6.1 both: failed rubric → RUBRIC_NOT_MET + RU line."""
     from coscientist.core.claims.dispositions import dispositions
-    from coscientist.core.execution.domain import Task, TaskKind, TaskState
     from coscientist.core.claims.rubric import RUBRIC_REJECTED_LINE, task_rubric_status
+    from coscientist.core.execution.domain import Task, TaskKind, TaskState
 
     rub = _judge_only_rubric()
     spec = _exp(
@@ -1095,10 +1095,10 @@ def test_review_key_empty_fields_fail_closed():
 
 
 def test_plan_refused_idem_hashes_full_detail():
+    from coscientist.core.claims.reviews import plan_refused_idem
     from coscientist.core.events.digest import sha256_hex
     from coscientist.core.events.events import make_idem
     from coscientist.core.plan.plan_validate import refuse_detail
-    from coscientist.core.claims.reviews import plan_refused_idem
 
     long = "x" * 500
     full = refuse_detail(long)
@@ -1621,8 +1621,8 @@ async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
 
 def test_met_one_task_never_covers_another(clock):
     """Documented invariant: MET on E0 does not satisfy E1's rubric."""
-    from coscientist.core.execution.domain import Task, TaskKind, TaskState
     from coscientist.core.claims.rubric import task_rubric_status
+    from coscientist.core.execution.domain import Task, TaskKind, TaskState
 
     rub = _judge_only_rubric()
     t0 = Task(

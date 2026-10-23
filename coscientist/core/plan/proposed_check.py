@@ -30,7 +30,13 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Any, AsyncIterator, Literal, Mapping
 
+from coscientist.core.claims.reasons import CloseReason, TaskReason
+from coscientist.core.claims.rubric import freeze_rubric
+from coscientist.core.claims.rubric_types import Rubric
 from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.errors import AttemptClosedError, StudyClosedError
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.ids import hitl_request_id, proposal_id
 from coscientist.core.execution.domain import (
     PROPOSED_CHECK_TEMPLATE_ID,
     CheckProposal,
@@ -40,12 +46,6 @@ from coscientist.core.execution.domain import (
     RequirementRef,
     TaskOutcome,
 )
-from coscientist.core.events.errors import AttemptClosedError, StudyClosedError
-from coscientist.core.events.events import EventEnvelope, make_idem
-from coscientist.core.events.ids import hitl_request_id, proposal_id
-from coscientist.core.claims.reasons import CloseReason, TaskReason
-from coscientist.core.claims.rubric import freeze_rubric
-from coscientist.core.claims.rubric_types import Rubric
 
 ProposalStatus = Literal["proposed", "approved", "rejected"]
 ApprovalSource = Literal["hitl", "api", "reviewer"]

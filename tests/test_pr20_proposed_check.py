@@ -14,9 +14,21 @@ import pytest
 
 from coscientist.checks.catalog import minimal_test_catalog
 from coscientist.checks.evaluate import evaluate_task_checks
-from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.claims.claims import RuntimeClaim
+from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.claims.rubric_types import Rubric, RubricItem
+from coscientist.core.claims.verdict import claim_is_severe, exclusion_reason, hypothesis_verdict
 from coscientist.core.events.clock import FakeClock
+from coscientist.core.events.errors import AttemptClosedError, Conflict, StudyClosedError
+from coscientist.core.events.events import (
+    STUDY_CREATED_SCHEMA_VERSION,
+    STUDY_FINALIZED_SCHEMA_VERSION,
+    EventEnvelope,
+    make_idem,
+)
+from coscientist.core.events.ids import hitl_request_id
+from coscientist.core.events.upcasters import UPCASTERS, register_upcaster, upcast
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     PROPOSED_CHECK_TEMPLATE_ID,
     AgentTaskOutput,
@@ -30,15 +42,9 @@ from coscientist.core.execution.domain import (
     RequirementRef,
     TaskSpec,
 )
-from coscientist.core.events.errors import AttemptClosedError, Conflict, StudyClosedError
-from coscientist.core.events.events import (
-    STUDY_CREATED_SCHEMA_VERSION,
-    STUDY_FINALIZED_SCHEMA_VERSION,
-    EventEnvelope,
-    make_idem,
-)
+from coscientist.core.execution.tool_loader import ensure_core_tools_ready
+from coscientist.core.execution.tool_registry import get_registered
 from coscientist.core.finalize.finalize import finalize
-from coscientist.core.events.ids import hitl_request_id
 from coscientist.core.plan.proposed_check import (
     approve_check,
     assert_proposal_preregistered_for_eval,
@@ -53,12 +59,6 @@ from coscientist.core.plan.proposed_check import (
     schedule_proposed_check_review,
     validate_proposal_content,
 )
-from coscientist.core.claims.reasons import TaskReason
-from coscientist.core.claims.rubric_types import Rubric, RubricItem
-from coscientist.core.execution.tool_loader import ensure_core_tools_ready
-from coscientist.core.execution.tool_registry import get_registered
-from coscientist.core.events.upcasters import UPCASTERS, register_upcaster, upcast
-from coscientist.core.claims.verdict import claim_is_severe, exclusion_reason, hypothesis_verdict
 from coscientist.tools.contract import CallCtx
 from coscientist.tools.propose_check_tool import ProposeCheckTool
 from tests.helpers import (

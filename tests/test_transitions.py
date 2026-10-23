@@ -8,8 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.events.clock import FakeClock
+from coscientist.core.events.errors import AttemptClosedError
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
@@ -17,8 +19,6 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskState,
 )
-from coscientist.core.events.errors import AttemptClosedError
-from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.execution.recover import recover
 from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success
 

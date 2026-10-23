@@ -6,12 +6,12 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from coscientist.core.execution.domain import AgentTaskOutput, TaskState
-from coscientist.core.events.errors import ArtifactCorrupt, LeaseLost
-from coscientist.core.execution.hitl_guard import reject_open_hitl_if_unsupported
-from coscientist.core.events.ids import result_id
-from coscientist.core.execution.machine import StudyRuntime
 from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.events.errors import ArtifactCorrupt, LeaseLost
+from coscientist.core.events.ids import result_id
+from coscientist.core.execution.domain import AgentTaskOutput, TaskState
+from coscientist.core.execution.hitl_guard import reject_open_hitl_if_unsupported
+from coscientist.core.execution.machine import StudyRuntime
 
 
 async def recover(runtime: StudyRuntime) -> dict[str, Any]:

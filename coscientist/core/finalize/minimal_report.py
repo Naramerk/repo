@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.digest import canonical_json
 from coscientist.core.execution.domain import Task, TaskOutcome, TaskState
-from coscientist.core.claims.reasons import TaskReason
 
 MAX_BYTES = 10_240
 

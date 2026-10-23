@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
 
-from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskOutcome, TaskState
-from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.claims.graph import GraphEdge, GraphNode
-from coscientist.core.events.ids import question_node_id, task_id
 from coscientist.core.claims.reasons import CloseReason, TaskReason
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.ids import question_node_id, task_id
+from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskOutcome, TaskState
 from coscientist.core.plan.supersede import plan_node_id
 
 if TYPE_CHECKING:

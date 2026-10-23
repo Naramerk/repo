@@ -9,9 +9,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from coscientist.core.plan.decomposes import DecomposeOrigin, RollupRule
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.claims.rubric_types import FinalType, Rubric
+from coscientist.core.plan.decomposes import DecomposeOrigin, RollupRule
 
 
 class Frozen(BaseModel):

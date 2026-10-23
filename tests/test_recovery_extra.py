@@ -6,8 +6,8 @@ from datetime import timedelta
 
 import pytest
 
-from coscientist.core.execution.domain import TaskState
 from coscientist.core.events.ids import result_id
+from coscientist.core.execution.domain import TaskState
 from coscientist.core.execution.recover import recover
 from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 

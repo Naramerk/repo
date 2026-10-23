@@ -12,7 +12,10 @@ from coscientist.core.claims.claims import (
     resolve_existing_target,
     whitelist_claim_attrs,
 )
+from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.ids import experiment_node_id
 from coscientist.core.execution.domain import (
     VALID_PROVENANCE,
     InputBinding,
@@ -24,9 +27,6 @@ from coscientist.core.execution.domain import (
     TaskState,
     worst_provenance,
 )
-from coscientist.core.events.events import EventEnvelope, make_idem
-from coscientist.core.claims.graph import GraphEdge, GraphNode
-from coscientist.core.events.ids import experiment_node_id
 
 # Re-export for callers/tests that imported from inputs.
 __all__ = [

@@ -11,9 +11,7 @@ from coscientist.core.claims.claims import (
     filtered_claims_by_target,
     hypothesis_verdicts,
 )
-from coscientist.core.execution.domain import Study, Task, TaskOutcome, TaskState
 from coscientist.core.claims.graph import GraphStore
-from coscientist.core.plan.question_tasks import known_questions, question_tasks
 from coscientist.core.claims.reasons import Disposition, NotAttemptedReason, TaskReason
 from coscientist.core.claims.rubric import (
     RUBRIC_REJECTED_LINE,
@@ -23,6 +21,8 @@ from coscientist.core.claims.rubric import (
 )
 from coscientist.core.claims.rules import priority_refuted_support_note
 from coscientist.core.claims.verdict import NO_EFFECT_EXCLUSION_REASONS
+from coscientist.core.execution.domain import Study, Task, TaskOutcome, TaskState
+from coscientist.core.plan.question_tasks import known_questions, question_tasks
 
 
 def _task_by_key(tasks: Mapping[str, Task]) -> dict[str, Task]:
@@ -515,8 +515,8 @@ def _dispositions_inner(
     # Order (#32 then #28): skip_cap/scoped_capped → loop-cap → honest
     # terminals → rollup. Skip cap only for decomposes parents with *no own
     # covering tasks* (plans[*].tasks AND runtime.tasks addresses).
-    from coscientist.core.plan.decomposes import children_map, parent_map_from_plans
     from coscientist.core.claims.rollup import apply_rollup
+    from coscientist.core.plan.decomposes import children_map, parent_map_from_plans
 
     parent_ids = set(children_map(parent_map_from_plans(plans)))
     skip_cap = {qid for qid in parent_ids if not cover.get(qid)}

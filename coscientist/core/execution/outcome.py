@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from coscientist.core.events.errors import CatalogError
 from coscientist.core.execution.domain import (
     OUTCOME_RANK,
     CheckResult,
@@ -13,7 +14,6 @@ from coscientist.core.execution.domain import (
     Provenance,
     ReqStatus,
 )
-from coscientist.core.events.errors import CatalogError
 
 OK = {ReqStatus.MET, ReqStatus.WAIVED, ReqStatus.NOT_APPLICABLE}
 

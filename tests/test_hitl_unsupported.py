@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from coscientist.core.execution.domain import GateConfig, HitlPolicy
 from coscientist.core.events.errors import HitlUnsupported
+from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.execution.domain import GateConfig, HitlPolicy
 from coscientist.core.execution.machine import StudyRuntime as CoreStudyRuntime
 from coscientist.core.execution.recover import recover
-from coscientist.core.events.store import SqliteEventStore
 from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
 from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
@@ -166,9 +166,9 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
     opener's acquire_lease. Core must raise HitlUnsupported and release; the
     experimental path must project both new events.
     """
-    from coscientist.core.execution.domain import TaskOutcome, TaskState
     from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.events.ids import hitl_request_id
+    from coscientist.core.execution.domain import TaskOutcome, TaskState
 
     root, rt = await _boot_exp(tmp_path, clock, sid="st_race")
     n_before = len(await rt.store.read_all())

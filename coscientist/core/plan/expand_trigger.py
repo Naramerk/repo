@@ -10,6 +10,9 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
+from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.events import TASK_CREATED_SCHEMA_VERSION, EventEnvelope, make_idem
+from coscientist.core.events.ids import task_id
 from coscientist.core.execution.domain import (
     ExpansionRequest,
     Task,
@@ -18,10 +21,7 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.events.errors import LeaseLost
-from coscientist.core.events.events import TASK_CREATED_SCHEMA_VERSION, EventEnvelope, make_idem
 from coscientist.core.plan.expand_critic import PLAN_N_CRITIC_CRITERIA
-from coscientist.core.events.ids import task_id
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime

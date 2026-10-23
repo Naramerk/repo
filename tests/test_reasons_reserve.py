@@ -7,13 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from coscientist.core.execution.domain import (
-    Task,
-    TaskKind,
-    TaskOutcome,
-    TaskSpec,
-    TaskState,
-)
 from coscientist.core.claims.reasons import (
     CloseReason,
     Disposition,
@@ -23,8 +16,15 @@ from coscientist.core.claims.reasons import (
     TerminalReason,
     intake,
 )
-from coscientist.core.finalize.study_view import study_view
 from coscientist.core.events.upcasters import upcast
+from coscientist.core.execution.domain import (
+    Task,
+    TaskKind,
+    TaskOutcome,
+    TaskSpec,
+    TaskState,
+)
+from coscientist.core.finalize.study_view import study_view
 from tests.helpers import close_runtime, open_runtime
 
 # Legacy reason strings from §0.1 that map to TaskReason / CloseReason.
@@ -364,9 +364,9 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
     tmp_path: Path, clock, runtime_cls
 ):
     """StudyCreated v1 without finalize_reserve_s → reserve=0; deadlines unchanged; tick works."""
-    from coscientist.core.execution.domain import HitlPolicy, TaskKind, TaskSpec, TaskState
     from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.events.store import SqliteEventStore
+    from coscientist.core.execution.domain import HitlPolicy, TaskKind, TaskSpec, TaskState
 
     sid = "st_legacy"
     root = tmp_path / sid

@@ -7,10 +7,10 @@ from datetime import timedelta
 from typing import Any, Self
 
 from coscientist.core.events.digest import canonical_json, sha256_hex
-from coscientist.core.execution.domain import Clarification, HitlRequest, Task
 from coscientist.core.events.errors import Conflict
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hitl_request_id, study_id
+from coscientist.core.execution.domain import Clarification, HitlRequest, Task
 from coscientist.experimental.hitl_costly import CostlyHitlMixin
 
 

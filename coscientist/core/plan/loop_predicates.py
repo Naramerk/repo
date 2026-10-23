@@ -12,12 +12,12 @@ from collections.abc import Mapping
 from typing import Any, Protocol
 
 from coscientist.core.claims.claims import claims_for_ref, filtered_claims_by_target
-from coscientist.core.events.digest import canonical_json, sha256_hex
-from coscientist.core.execution.domain import LoopPredicate, LoopSpec, ReqStatus, Study
 from coscientist.core.claims.reasons import Disposition
 from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.claims.rules import verdict as verdict_fn
 from coscientist.core.claims.verdict import disposition_for_question
+from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.execution.domain import LoopPredicate, LoopSpec, ReqStatus, Study
 
 # survivors_le n is a count threshold — keep well below pathological ints.
 SURVIVORS_LE_N_MAX = 10_000

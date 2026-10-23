@@ -6,11 +6,17 @@ import json
 from collections.abc import Collection, Mapping
 from typing import Any
 
+from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.errors import (
+    ArtifactCorrupt,
+    CatalogError,
+    CoreBugError,
+    SandboxInfraError,
+)
 from coscientist.core.execution.artifacts import (
     LocalArtifactStore,
     artifact_producer_trusted,
 )
-from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.execution.domain import (
     PROPOSED_CHECK_TEMPLATE_ID,
     AgentTaskOutput,
@@ -25,12 +31,6 @@ from coscientist.core.execution.domain import (
     RequirementTemplate,
     ReviewCheck,
     TaskSpec,
-)
-from coscientist.core.events.errors import (
-    ArtifactCorrupt,
-    CatalogError,
-    CoreBugError,
-    SandboxInfraError,
 )
 
 

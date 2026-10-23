@@ -38,8 +38,9 @@ from coscientist.checks.sandbox import (
     run_sandbox,
     run_verifier,
 )
-from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.errors import CatalogError, SandboxInfraError
+from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     CheckResult,
@@ -47,7 +48,6 @@ from coscientist.core.execution.domain import (
     CodeCheck,
     EvidenceRef,
 )
-from coscientist.core.events.errors import CatalogError, SandboxInfraError
 
 EXECUTABLE_KINDS = frozenset(
     {"exec_runs", "tests_pass", "metric_on_holdout", "reproducible_rerun"}

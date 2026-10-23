@@ -19,9 +19,9 @@ import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal, Protocol
 
-from coscientist.core.events.digest import canonical_json
 from coscientist.core.claims.r17 import claim_counts_under_r17
 from coscientist.core.claims.stance import DEFAULT_TESTS_INTENT, TestsIntent, claim_stance
+from coscientist.core.events.digest import canonical_json
 
 ClaimOutcome = Literal["consistent", "inconsistent", "indeterminate"]
 ClaimValidity = Literal["valid", "invalid"]

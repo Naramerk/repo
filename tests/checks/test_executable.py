@@ -22,8 +22,10 @@ from coscientist.checks.sandbox import (
     run_verifier,
 )
 from coscientist.checks.sandbox_probe import bwrap_available, probe_bwrap_hard
-from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.errors import SandboxInfraError
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
@@ -33,8 +35,6 @@ from coscientist.core.execution.domain import (
     RequirementRef,
     TaskSpec,
 )
-from coscientist.core.events.errors import SandboxInfraError
-from coscientist.core.claims.reasons import TaskReason
 from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
 
@@ -2008,12 +2008,12 @@ def test_agent_facing_catalog_view_is_sole_template_export():
 
 
 def test_sandbox_timeout_report_line_by_reason_only():
+    from coscientist.core.claims.reasons import TaskReason
     from coscientist.core.finalize.finalize import (
         IDLE_TIMEOUT_RU,
         TIMEOUT_BUDGET_RU,
         sandbox_timeout_report_line,
     )
-    from coscientist.core.claims.reasons import TaskReason
 
     assert (
         sandbox_timeout_report_line(TaskReason.IDLE_TIMEOUT.value, "anything")
@@ -2102,10 +2102,7 @@ def test_freeze_shared_helper_used_by_all_task_create_paths():
     import inspect
 
     from coscientist.checks import sandbox_limits as sl
-    from coscientist.core.plan import expand
-    from coscientist.core.plan import expand_trigger
-    from coscientist.core.plan import foreach
-    from coscientist.core.plan import lifecycle
+    from coscientist.core.plan import expand, expand_trigger, foreach, lifecycle
 
     assert "freeze_task_sandbox_limits" in inspect.getsource(
         lifecycle.LifecycleMixin.accept_plan

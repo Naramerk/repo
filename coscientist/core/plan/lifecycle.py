@@ -7,7 +7,18 @@ from decimal import Decimal
 from typing import Any
 
 import coscientist.core.finalize.finalize as finalize_mod
+from coscientist.core.claims.graph import GraphNode
 from coscientist.core.events.clock import Clock
+from coscientist.core.events.errors import CASUnavailable, Conflict, LeaseLost, SandboxInfraError
+from coscientist.core.events.events import (
+    PLAN_ACCEPTED_SCHEMA_VERSION,
+    STUDY_CREATED_SCHEMA_VERSION,
+    TASK_CREATED_SCHEMA_VERSION,
+    EventEnvelope,
+    make_idem,
+)
+from coscientist.core.events.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
+from coscientist.core.events.ports import EventStore
 from coscientist.core.execution.domain import (
     Budget,
     HitlPolicy,
@@ -21,19 +32,8 @@ from coscientist.core.execution.domain import (
     TaskState,
     validate_budget_for_create,
 )
-from coscientist.core.events.errors import CASUnavailable, Conflict, LeaseLost, SandboxInfraError
-from coscientist.core.events.events import (
-    PLAN_ACCEPTED_SCHEMA_VERSION,
-    STUDY_CREATED_SCHEMA_VERSION,
-    TASK_CREATED_SCHEMA_VERSION,
-    EventEnvelope,
-    make_idem,
-)
-from coscientist.core.claims.graph import GraphNode
-from coscientist.core.events.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
 from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
 from coscientist.core.plan.intake import IntakeAccept, IntakeRefuse, SafetyPort, intake
-from coscientist.core.events.ports import EventStore
 from coscientist.core.plan.question_tasks import questions_from_spec_output
 
 # Infra / fencing — must not be swallowed by intake fail-closed refuse.
@@ -138,6 +138,7 @@ class LifecycleMixin:
             raise ValueError(f"max_proposals must be >= 0, got {max_proposals}")
         validate_budget_for_create(budget)  # delegated_costly ≤ max_cost_rub
         duration_s = (dl - now).total_seconds()
+        from coscientist.core.claims.reasons import RefusalKind
         from coscientist.core.execution._ingest_gate import (
             UserInputRegistrationError,
             register_user_input_artifacts,
@@ -146,7 +147,6 @@ class LifecycleMixin:
             default_input_limits,
             merge_input_limits,
         )
-        from coscientist.core.claims.reasons import RefusalKind
 
         # Profile owns caps; optional client_input_limits may only LOWER.
         profile_limits = (
@@ -361,9 +361,10 @@ class LifecycleMixin:
         now = self.clock.now()
         from pydantic import ValidationError
 
+        from coscientist.core.claims.graph import GraphEdge
+        from coscientist.core.claims.rules import PlanInvalid
         from coscientist.core.plan.decomposes import assert_decomposes_acyclic, parent_map_from_questions
         from coscientist.core.plan.foreach import validate_foreach_specs
-        from coscientist.core.claims.graph import GraphEdge
         from coscientist.core.plan.loop import is_loop_dep, normalize_loop_id, validate_loop_specs
         from coscientist.core.plan.plan_validate import (
             PLAN_REFUSED_LINE,
@@ -372,7 +373,6 @@ class LifecycleMixin:
             merge_plan_questions,
             refuse_detail,
         )
-        from coscientist.core.claims.rules import PlanInvalid
         from coscientist.core.plan.shares import critic_plan_shares
 
         LOOP_PLAN_REFUSED_LINE = "не выполнено: план отклонён (LoopSpec)"

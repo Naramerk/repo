@@ -6,16 +6,16 @@ from datetime import timedelta
 
 import pytest
 
-from coscientist.core.execution.domain import InputSpec, TaskSpec
-from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.claims.graph import GraphEdge, GraphNode
+from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id
+from coscientist.core.events.upcasters import upcast
+from coscientist.core.execution.domain import InputSpec, TaskSpec
 from coscientist.core.execution.inputs import (
     InputUnavailable,
     bind_inputs,
     input_binding_digest,
 )
-from coscientist.core.events.upcasters import upcast
 from tests.helpers import close_runtime, open_runtime
 from tests.test_inputs import _task
 
@@ -327,9 +327,9 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
 @pytest.mark.asyncio
 async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls):
     """Production path: Executor.record writes claim provenance; no manual attrs."""
+    from coscientist.core.events.ids import claim_node_id
     from coscientist.core.execution.artifacts import make_tool_ref
     from coscientist.core.execution.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
-    from coscientist.core.events.ids import claim_node_id
     from tests.helpers import attach_executor
 
     sid = "st_stub_cl"

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from coscientist.core.finalize import finalize as finalize_mod
-from coscientist.core.execution.domain import TaskOutcome, TaskState
-from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.claims.reasons import CloseReason, TaskReason
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.execution.domain import TaskOutcome, TaskState
+from coscientist.core.finalize import finalize as finalize_mod
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime

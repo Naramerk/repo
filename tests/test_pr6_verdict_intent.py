@@ -6,7 +6,6 @@ from datetime import timedelta
 
 import pytest
 
-from coscientist.core.execution.domain import TaskSpec
 from coscientist.core.claims.graph import load_schema
 from coscientist.core.claims.r17 import (
     claim_counts_under_r17,
@@ -15,6 +14,7 @@ from coscientist.core.claims.r17 import (
 )
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.upcasters import upcast
+from coscientist.core.execution.domain import TaskSpec
 from tests.helpers import close_runtime, open_runtime
 
 
@@ -353,8 +353,8 @@ async def test_cancel_study_tick_closes_remaining(
 ):
     """cancel_study then tick: _close_remaining(CANCELLED) when close was skipped."""
     import coscientist.core.plan.cancel as cancel_mod
-    from coscientist.core.finalize import finalize as finalize_mod
     from coscientist.core.execution.domain import TaskState
+    from coscientist.core.finalize import finalize as finalize_mod
 
     sid = "st_cx_tick"
     rt = await open_runtime(

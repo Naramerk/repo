@@ -7,6 +7,16 @@ from typing import Any
 
 import pytest
 
+from coscientist.core.claims.graph import GraphNode
+from coscientist.core.claims.reasons import Disposition, TaskReason, TerminalReason
+from coscientist.core.events.ids import hypothesis_node_id
+from coscientist.core.events.upcasters import (
+    UPCASTERS,
+    assert_upcaster_chain_continuous,
+    register_upcaster,
+    upcast,
+    writer_schema_version,
+)
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -20,8 +30,7 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.claims.graph import GraphNode
-from coscientist.core.events.ids import hypothesis_node_id
+from coscientist.core.execution.recover import recover
 from coscientist.core.plan.loop import loop_is_complete, loop_status
 from coscientist.core.plan.loop_predicates import (
     _claims_for_loop_scope,
@@ -30,15 +39,6 @@ from coscientist.core.plan.loop_predicates import (
     register_loop_predicate,
     scope_fingerprint,
     validate_loop_predicate,
-)
-from coscientist.core.claims.reasons import Disposition, TaskReason, TerminalReason
-from coscientist.core.execution.recover import recover
-from coscientist.core.events.upcasters import (
-    UPCASTERS,
-    assert_upcaster_chain_continuous,
-    register_upcaster,
-    upcast,
-    writer_schema_version,
 )
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
@@ -939,8 +939,8 @@ def test_survivors_le_real_graph_scope_filter():
     """survivors_le via real GraphStore claims; outside-loop claims ignored."""
     from datetime import datetime, timezone
 
-    from coscientist.core.execution.domain import HitlPolicy, Study
     from coscientist.core.claims.graph import GraphStore, default_execution_registry
+    from coscientist.core.execution.domain import HitlPolicy, Study
 
     now = datetime.now(timezone.utc)
     loop_key = "EXP-LOOP"
@@ -1260,8 +1260,8 @@ def test_upcaster_duplicate_and_continuous_chains():
 
 
 def test_validate_loop_predicate_builtins():
-    from coscientist.core.plan.loop_predicates import SURVIVORS_LE_N_MAX
     from coscientist.core.claims.rules import PlanInvalid
+    from coscientist.core.plan.loop_predicates import SURVIVORS_LE_N_MAX
 
     validate_loop_predicate(LoopPredicate(name="survivors_le", params={"n": 1}))
     validate_loop_predicate(
@@ -1345,8 +1345,8 @@ def test_plugin_loop_predicate_registration():
 
 
 def test_normalize_loop_id_nfkc_and_invisible():
-    from coscientist.core.plan.loop import normalize_loop_id, parse_loop_dep
     from coscientist.core.claims.rules import PlanInvalid
+    from coscientist.core.plan.loop import normalize_loop_id, parse_loop_dep
 
     assert normalize_loop_id("Ｌ１") == "L1"  # fullwidth → NFKC ASCII
     assert normalize_loop_id("Loop_1") == "Loop_1"
@@ -1614,8 +1614,8 @@ async def test_loop_unexpected_error_finalizes_on_recover(
 
 def test_count_survivors_and_validate_loop_specs_plan_invalid():
     """Unit: count_survivors + validate_loop_specs → PlanInvalid (no runtime)."""
-    from coscientist.core.plan.loop import validate_loop_specs
     from coscientist.core.claims.rules import PlanInvalid
+    from coscientist.core.plan.loop import validate_loop_specs
 
     class RT:
         tasks = {}
@@ -1696,12 +1696,12 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
 ):
     """Corrupt plan loops → real pydantic ValidationError → internal_error finalize."""
     import coscientist.core.plan.loop_predicates as lp
+    from coscientist.core.claims.reasons import TerminalReason
     from coscientist.core.events.events import (
         PLAN_ACCEPTED_SCHEMA_VERSION,
         EventEnvelope,
         make_idem,
     )
-    from coscientist.core.claims.reasons import TerminalReason
 
     name = f"test_plugin_keep_running_{runtime_cls.__name__}"
     lp._REGISTRY.pop(name, None)
@@ -1841,9 +1841,9 @@ async def test_internal_error_closes_running_tasks_and_attempts(
 ):
     """RUNNING task + open attempt are closed (CORE_BUG / CRASHED) on internal_error."""
     import coscientist.core.plan.loop_predicates as lp
-    from coscientist.core.execution.domain import TaskState
-    from coscientist.core.events.errors import AttemptClosedError, Conflict, StudyClosedError
     from coscientist.core.claims.reasons import CloseReason, TaskReason
+    from coscientist.core.events.errors import AttemptClosedError, Conflict, StudyClosedError
+    from coscientist.core.execution.domain import TaskState
 
     name = f"test_plugin_boom_running_{runtime_cls.__name__}"
     lp._REGISTRY.pop(name, None)

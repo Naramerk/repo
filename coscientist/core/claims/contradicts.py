@@ -12,11 +12,11 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from coscientist.core.events.digest import sha256_hex
-from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.claims.experiment_design import ARTIFACT_KIND_CONTRADICTION_MAP
 from coscientist.core.claims.graph import GraphEdge, GraphStore
 from coscientist.core.claims.stance import claim_stance
+from coscientist.core.events.digest import sha256_hex
+from coscientist.core.events.events import EventEnvelope, make_idem
 
 __all__ = [
     "contradicts_edge_id",

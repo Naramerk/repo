@@ -11,6 +11,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from coscientist.core.claims.reasons import RefusalKind, TerminalReason
+from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution._ingest_gate import (
     mint_user_put_capability,
     put_user,
@@ -20,7 +23,6 @@ from coscientist.core.execution.domain import (
     Limitation,
     TaskSpec,
 )
-from coscientist.core.events.errors import ArtifactRejected
 from coscientist.core.execution.input_limits import (
     InputLimits,
     UserInput,
@@ -36,8 +38,6 @@ from coscientist.core.execution.input_limits import (
     merge_input_limits,
     snapshot_bindings_at_p2,
 )
-from coscientist.core.claims.reasons import RefusalKind, TerminalReason
-from coscientist.core.events.upcasters import upcast
 from tests.helpers import close_runtime, open_runtime
 
 
@@ -1426,8 +1426,8 @@ async def test_api_corrupt_deflate_study_finalized_not_500(tmp_path, catalog):
 @pytest.mark.asyncio
 async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls):
     """Persist AttemptStarted schema_version=7, reopen (upcast), next attempt unknown."""
-    from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.claims.reasons import CloseReason
+    from coscientist.core.events.events import EventEnvelope, make_idem
 
     sid = "st_v7_replay"
     rt = await open_runtime(
@@ -1523,9 +1523,9 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
 
 def test_study_created_writer_is_v11_after_loopspec():
     """#24 owns max_loop_iter (v10); #23 writer was v11; PR20 stacks v12."""
-    from coscientist.core.execution.domain import Study
     from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION
     from coscientist.core.events.upcasters import writer_schema_version
+    from coscientist.core.execution.domain import Study
 
     assert "max_loop_iter" in Study.model_fields
     assert "max_proposals" in Study.model_fields
@@ -1646,8 +1646,8 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
 
     Absent digest_version → input_drift_unknown without partial (not empty digest).
     """
-    from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.claims.reasons import CloseReason
+    from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.events.schema_versions import STUDY_CREATED_SCHEMA_VERSION
 
     sid = "st_v9_digest"
@@ -2863,9 +2863,9 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
     tmp_path, clock, runtime_cls
 ):
     """PR19 intake refuse → one StudyFinalized; #31 store guard blocks later writes."""
-    from coscientist.core.execution.archive_limits import MAX_TAR_META_CHAIN
     from coscientist.core.events.errors import StudyClosedError
     from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.execution.archive_limits import MAX_TAR_META_CHAIN
 
     sid = "st_b5_meta_closed"
     rt = await open_runtime(

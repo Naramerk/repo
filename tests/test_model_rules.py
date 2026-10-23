@@ -138,8 +138,8 @@ async def test_recovery_stage_task_not_rerun(tmp_path, clock, runtime_cls):
     """Task with ResultRecorded inside a stage: recover adds 0 attempts and 0 nodes."""
     from datetime import timedelta
 
-    from coscientist.core.execution.domain import TaskState
     from coscientist.core.events.ids import result_id
+    from coscientist.core.execution.domain import TaskState
     from coscientist.core.execution.recover import recover
     from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 

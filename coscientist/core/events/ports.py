@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Protocol
 
-from coscientist.core.execution.domain import Artifact, StudyView
 from coscientist.core.events.events import EventEnvelope
+from coscientist.core.execution.domain import Artifact, StudyView
 
 
 class EventStore(Protocol):

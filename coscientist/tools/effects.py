@@ -19,17 +19,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import ArtifactRejected
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.writer import StudyWriter
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.source_fetch import (
     FetchCapability,
     register_fetch_capability_verifier,
 )
 from coscientist.core.execution.taint import mark_attempt_tainted
 from coscientist.core.execution.tool_registry import resolve_effect, resolve_spec
-from coscientist.core.events.writer import StudyWriter
 from coscientist.tools.contract import CallCtx, Tool, ToolError, ToolOutput
 from coscientist.tools.gate import side_effect_allowed
 

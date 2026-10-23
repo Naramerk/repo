@@ -6,8 +6,8 @@ import logging
 from contextvars import ContextVar
 from typing import Any
 
-from coscientist.core.events.events import EventEnvelope
 from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.events.events import EventEnvelope
 
 log = logging.getLogger(__name__)
 

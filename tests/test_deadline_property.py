@@ -25,11 +25,11 @@ from hypothesis.stateful import (
 )
 
 from coscientist.core.events.clock import FakeClock
-from coscientist.core.execution.domain import Clarification, TaskSpec, TaskState
 from coscientist.core.events.errors import HitlUnsupported, LeaseLost, StudyClosedError
+from coscientist.core.events.projections import fold_events
+from coscientist.core.execution.domain import Clarification, TaskSpec, TaskState
 from coscientist.core.execution.hitl_guard import supports_hitl
 from coscientist.core.execution.inputs import InputUnavailable
-from coscientist.core.events.projections import fold_events
 from coscientist.core.execution.recover import recover
 from tests.helpers import close_runtime, open_runtime
 

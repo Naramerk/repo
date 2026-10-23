@@ -22,11 +22,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from coscientist.core.claims.reasons import RefusalKind
+from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.events.schema_versions import ARTIFACT_REGISTERED_SCHEMA_VERSION
 from coscientist.core.execution._attempt_frame import attempt_active
 from coscientist.core.execution.domain import Artifact
-from coscientist.core.events.errors import ArtifactRejected
-from coscientist.core.claims.reasons import RefusalKind
-from coscientist.core.events.schema_versions import ARTIFACT_REGISTERED_SCHEMA_VERSION
 
 
 def _make_issued_registry() -> tuple[
@@ -147,8 +147,8 @@ def register_user_input_artifacts(
     Requires ``capability`` from ``mint_user_put_capability``. Empty inputs →
     ``([], [])``. Missing store / decode/put failure → refuse INPUT_INVALID.
     """
-    from coscientist.core.execution.artifacts import make_tool_ref
     from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.execution.artifacts import make_tool_ref
     from coscientist.core.execution.input_limits import coerce_user_input, decode_user_content
 
     if not inputs:

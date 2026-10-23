@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from coscientist.core.events.digest import sha256_hex
+from coscientist.core.events.errors import ArtifactCorrupt, ArtifactRejected
 from coscientist.core.execution.domain import (
     Artifact,
     ArtifactKind,
@@ -17,7 +18,6 @@ from coscientist.core.execution.domain import (
     NetIsolation,
     ToolCallRef,
 )
-from coscientist.core.events.errors import ArtifactCorrupt, ArtifactRejected
 from coscientist.core.execution.taint import derived_tainted
 
 

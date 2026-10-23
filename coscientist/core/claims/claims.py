@@ -7,21 +7,21 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from coscientist.core.execution.domain import (
-    VALID_PROVENANCE,
-    Provenance,
-    Study,
-    worst_provenance,
-)
 from coscientist.core.claims.graph import GraphStore
+from coscientist.core.claims.rules import priority_refuted_support_note
+from coscientist.core.claims.stance import DEFAULT_TESTS_INTENT, TestsIntent, claim_stance
 from coscientist.core.events.ids import (
     claim_node_id,
     experiment_node_id,
     hypothesis_node_id,
     question_node_id,
 )
-from coscientist.core.claims.rules import priority_refuted_support_note
-from coscientist.core.claims.stance import DEFAULT_TESTS_INTENT, TestsIntent, claim_stance
+from coscientist.core.execution.domain import (
+    VALID_PROVENANCE,
+    Provenance,
+    Study,
+    worst_provenance,
+)
 
 # Agent-supplied fields only. Counting controls (criterion_status, frozen,
 # evidence_kind, lit_own_criterion, intent, R17, accepted) are core-derived.

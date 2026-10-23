@@ -6,13 +6,13 @@ from collections import Counter
 from collections.abc import Mapping
 from typing import Any
 
+from coscientist.core.claims.reasons import Disposition, TaskReason
 from coscientist.core.plan.decomposes import (
     children_map,
     majority_threshold,
     parent_map_from_plans,
     plan_rollup,
 )
-from coscientist.core.claims.reasons import Disposition, TaskReason
 
 # Honest terminal dispositions that count as "resolved" for all/any/majority.
 _RESOLVED: frozenset[str] = frozenset(

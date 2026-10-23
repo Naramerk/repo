@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Protocol
 
-from coscientist.core.execution.domain import Budget
 from coscientist.core.claims.reasons import RefusalKind
+from coscientist.core.execution.domain import Budget
 
 REASON_MAX = 200
 

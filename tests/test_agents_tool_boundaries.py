@@ -12,8 +12,8 @@ TESTS = ROOT / "tests"
 
 # Production modules allowed to *call* register_tool / define it.
 _REGISTER_ALLOWED = {
-    COSI / "core" / "tool_registry.py",
-    COSI / "core" / "tool_loader.py",
+    COSI / "core" / "execution" / "tool_registry.py",
+    COSI / "core" / "execution" / "tool_loader.py",
 }
 
 # Test-only APIs — must not appear under coscientist/ (except their defining module).
@@ -23,8 +23,8 @@ _TEST_ONLY_NAMES = (
     "_mint_fetch_capability_for_tests",
 )
 _TEST_ONLY_DEF_MODULES = {
-    "_reset_registry_for_tests": COSI / "core" / "tool_registry.py",
-    "_register_tool_for_tests": COSI / "core" / "tool_registry.py",
+    "_reset_registry_for_tests": COSI / "core" / "execution" / "tool_registry.py",
+    "_register_tool_for_tests": COSI / "core" / "execution" / "tool_registry.py",
     "_mint_fetch_capability_for_tests": COSI / "tools" / "effects.py",
 }
 

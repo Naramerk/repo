@@ -14,8 +14,8 @@ import json
 from typing import Any, Literal
 
 from coscientist.core.events.digest import sha256_hex
-from coscientist.core.execution.domain import AgentTaskOutput, ReqStatus
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.execution.domain import AgentTaskOutput, ReqStatus
 
 JudgeFailureKind = Literal["timeout", "invalid_json", "refusal"]
 # Keep in sync with checks.kinds.rubric.JUDGE_FAILURE_KINDS (no circular import).

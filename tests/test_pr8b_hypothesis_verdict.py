@@ -15,17 +15,7 @@ from hypothesis.stateful import (
 )
 
 from coscientist.core.claims.claims import RuntimeClaim, filtered_claims_by_target
-from coscientist.core.execution.domain import (
-    AgentTaskOutput,
-    ArtifactHandle,
-    InputSpec,
-    OutputSpec,
-    QuestionSpec,
-    RequirementRef,
-    TaskSpec,
-)
 from coscientist.core.claims.rules import verdict
-from coscientist.core.events.upcasters import upcast
 from coscientist.core.claims.verdict import (
     claim_is_severe,
     data_digests_from_bindings,
@@ -37,6 +27,16 @@ from coscientist.core.claims.verdict import (
     refute_intent_counts,
     root_data_digests_from_bindings,
     tost_holds,
+)
+from coscientist.core.events.upcasters import upcast
+from coscientist.core.execution.domain import (
+    AgentTaskOutput,
+    ArtifactHandle,
+    InputSpec,
+    OutputSpec,
+    QuestionSpec,
+    RequirementRef,
+    TaskSpec,
 )
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
@@ -1305,8 +1305,8 @@ def test_verdict_property_record_claim_v1_v5():
 @pytest.mark.asyncio
 async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
     """Catalog without uses_sesoi → not severe → survived at most, never supported."""
-    from coscientist.core.execution.artifacts import make_tool_ref
     from coscientist.core.claims.dispositions import dispositions
+    from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_nose"
     rt = await open_runtime(
@@ -1607,8 +1607,8 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
     """Production path: agent put + core catalog eval → countable not_met refutes."""
-    from coscientist.core.execution.artifacts import make_tool_ref
     from coscientist.core.claims.dispositions import dispositions
+    from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_agent_ref"
     rt = await open_runtime(
@@ -1815,10 +1815,10 @@ async def test_e2e_agent_put_two_independent_mets_supported(
     """Live supported: agent put + core SESOI eval, two independent mets."""
     from datetime import UTC, datetime
 
-    from coscientist.core.execution.artifacts import make_tool_ref
     from coscientist.core.claims.graph import GraphEdge, GraphNode
-    from coscientist.core.events.ids import experiment_node_id, hypothesis_node_id
     from coscientist.core.claims.verdict import hypothesis_verdict
+    from coscientist.core.events.ids import experiment_node_id, hypothesis_node_id
+    from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_agent_sup"
     rt = await open_runtime(
@@ -1990,11 +1990,11 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
     """Sandbox put stamps trusted=True; still countable for verdicts (PR17 path)."""
     from datetime import UTC, datetime
 
-    from coscientist.core.execution.artifacts import make_tool_ref
     from coscientist.core.claims.dispositions import dispositions
     from coscientist.core.claims.graph import GraphEdge, GraphNode
-    from coscientist.core.events.ids import experiment_node_id, hypothesis_node_id
     from coscientist.core.claims.verdict import hypothesis_verdict
+    from coscientist.core.events.ids import experiment_node_id, hypothesis_node_id
+    from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_sandbox"
     rt = await open_runtime(
@@ -2322,8 +2322,8 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
     tmp_path, clock, runtime_cls
 ):
     """Legacy/forged severe=True / refute_capable=True must not survive read/replay."""
-    from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.claims.graph import GraphEdge, GraphNode
+    from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.events.ids import claim_node_id, question_node_id
 
     sid = "st_forge"

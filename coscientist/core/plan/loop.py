@@ -12,6 +12,16 @@ import unicodedata
 from typing import TYPE_CHECKING, Any
 
 from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
+from coscientist.core.claims.reasons import CloseReason, TaskReason
+from coscientist.core.claims.rules import PlanInvalid
+from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.events import (
+    PLAN_EXPANDED_SCHEMA_VERSION,
+    TASK_CREATED_SCHEMA_VERSION,
+    EventEnvelope,
+    make_idem,
+)
+from coscientist.core.events.ids import task_id
 from coscientist.core.execution.domain import (
     LoopSpec,
     Plan,
@@ -21,16 +31,8 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.events.errors import LeaseLost
-from coscientist.core.events.events import (
-    PLAN_EXPANDED_SCHEMA_VERSION,
-    TASK_CREATED_SCHEMA_VERSION,
-    EventEnvelope,
-    make_idem,
-)
 from coscientist.core.plan.expand_graph import plan_graph_events, question_graph_events
 from coscientist.core.plan.expand_validate import active_plan_blob, assign_core_keys
-from coscientist.core.events.ids import task_id
 from coscientist.core.plan.loop_predicates import (
     LoopPredicateEvalError,
     UnknownLoopPredicateError,
@@ -38,8 +40,6 @@ from coscientist.core.plan.loop_predicates import (
     eval_loop_predicate,
     validate_loop_predicate,
 )
-from coscientist.core.claims.reasons import CloseReason, TaskReason
-from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.plan.shares import critic_plan_shares
 
 log = logging.getLogger(__name__)

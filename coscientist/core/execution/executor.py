@@ -10,9 +10,19 @@ from decimal import Decimal
 from typing import Any
 
 from coscientist.checks.evaluate import evaluate_task_checks, role_from_catalog
+from coscientist.core.claims.reasons import CloseReason, TaskReason
+from coscientist.core.events.digest import canonical_json, payload_digest, sha256_hex
+from coscientist.core.events.errors import (
+    AttemptClosedError,
+    CatalogError,
+    CoreBugError,
+    SandboxInfraError,
+)
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.ids import criterion_node_id, result_id
+from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.attempts import RETRY_BACKOFF_S
-from coscientist.core.events.digest import canonical_json, payload_digest, sha256_hex
 from coscientist.core.execution.domain import (
     VALID_PROVENANCE,
     AgentTaskOutput,
@@ -24,18 +34,8 @@ from coscientist.core.execution.domain import (
     Result,
     TaskOutcome,
 )
-from coscientist.core.events.errors import (
-    AttemptClosedError,
-    CatalogError,
-    CoreBugError,
-    SandboxInfraError,
-)
-from coscientist.core.events.events import EventEnvelope, make_idem
-from coscientist.core.events.ids import criterion_node_id, result_id
 from coscientist.core.execution.inputs import claim_nodes_from_attempt
 from coscientist.core.execution.outcome import compute_outcome
-from coscientist.core.claims.reasons import CloseReason, TaskReason
-from coscientist.core.events.writer import StudyWriter
 
 log = logging.getLogger(__name__)
 
@@ -1076,7 +1076,6 @@ class Executor:
         # Meta.kind is applied only in fold after a successful append (never pre-commit).
         from pydantic import ValidationError
 
-        from coscientist.core.execution.artifact_stamp import kind_stamped_event
         from coscientist.core.claims.dispose import (
             DisposeRejected,
             QuestionDisposal,
@@ -1084,8 +1083,9 @@ class Executor:
             question_disposed_event,
             validate_disposal,
         )
-        from coscientist.core.events.errors import ArtifactRejected
         from coscientist.core.claims.experiment_design import artifact_kind_from_output_spec
+        from coscientist.core.events.errors import ArtifactRejected
+        from coscientist.core.execution.artifact_stamp import kind_stamped_event
 
         out_map = dict(out.outputs or {})
         extra_events: list[EventEnvelope] = []

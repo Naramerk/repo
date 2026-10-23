@@ -7,6 +7,12 @@ from decimal import Decimal
 
 import pytest
 
+from coscientist.core.claims.graph import GraphNode
+from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.events.errors import CoreBugError, SandboxInfraError
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.ids import hypothesis_node_id, task_id
+from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -21,13 +27,8 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.events.errors import CoreBugError, SandboxInfraError
-from coscientist.core.events.events import EventEnvelope, make_idem
-from coscientist.core.plan.expand_critic import critic_gate
-from coscientist.core.claims.graph import GraphNode
-from coscientist.core.events.ids import hypothesis_node_id, task_id
-from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.execution.recover import recover
+from coscientist.core.plan.expand_critic import critic_gate
 from coscientist.core.plan.shares import (
     BUDGET_EXHAUSTED_LINE,
     BUDGET_SHARES_REFUSED_LINE,
@@ -42,7 +43,6 @@ from coscientist.core.plan.shares import (
     validate_deadline_shares,
     validate_plan_shares,
 )
-from coscientist.core.events.upcasters import upcast
 from tests.helpers import attach_executor, close_runtime, open_runtime, open_runtime_experimental
 
 
@@ -828,8 +828,8 @@ async def _plan_one(rt, *, share: float = 0.5):
 async def test_debit_cost_rub_on_every_result_path(tmp_path, clock, monkeypatch, path):
     """B1: cost_rub debits on scientific/timeout/same_digest/core_bug/catalog/infra."""
     from coscientist.core.events.digest import canonical_json, sha256_hex
-    from coscientist.core.execution.domain import CheckResult, ReqStatus
     from coscientist.core.events.errors import CatalogError
+    from coscientist.core.execution.domain import CheckResult, ReqStatus
 
     rt = await _boot(
         tmp_path,

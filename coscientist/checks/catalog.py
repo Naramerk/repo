@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from coscientist.core.claims.graph import KindRegistry
+from coscientist.core.events.errors import CatalogError
 from coscientist.core.execution.domain import (
     Catalog,
     CodeCheck,
@@ -13,8 +15,6 @@ from coscientist.core.execution.domain import (
     ReviewCheck,
     RuleRef,
 )
-from coscientist.core.events.errors import CatalogError
-from coscientist.core.claims.graph import KindRegistry
 
 KNOWN_CODE_KINDS = frozenset(
     {

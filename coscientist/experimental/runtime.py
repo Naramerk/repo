@@ -7,8 +7,8 @@ from decimal import Decimal
 from typing import Any
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
-from coscientist.core.execution.domain import HitlRequest
 from coscientist.core.events.events import EventEnvelope
+from coscientist.core.execution.domain import HitlRequest
 from coscientist.core.finalize.study_view import study_view
 from coscientist.experimental.costly import DelegatedBudget
 from coscientist.experimental.hitl import HitlForkMixin

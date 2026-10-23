@@ -25,11 +25,10 @@ from coscientist.api.studies import (
     study_id_from_idempotency_key,
 )
 from coscientist.checks.catalog import minimal_test_catalog
-from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
-from coscientist.core.execution.domain import Artifact, HitlPolicy
 from coscientist.core.events.errors import Conflict
 from coscientist.core.events.events import EventEnvelope, make_idem
-from coscientist.core.finalize.finalize import contributing_reasons_ordered
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.execution.domain import Artifact, HitlPolicy
 from coscientist.core.execution.taint import (
     current_attempt_taint,
     derived_tainted,
@@ -48,6 +47,7 @@ from coscientist.core.execution.tool_registry import (
     register_tool,
     resolve_effect,
 )
+from coscientist.core.finalize.finalize import contributing_reasons_ordered
 from coscientist.tools.contract import CallCtx, ToolError, ToolOutput, ToolSpec
 from coscientist.tools.effects import (
     args_digest,

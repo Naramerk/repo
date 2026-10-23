@@ -6,16 +6,16 @@ from datetime import timedelta
 
 import pytest
 
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.domain import HitlPolicy, QuestionSpec, TaskKind, TaskState
-from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.finalize.finalize import last_resort_payload
 from coscientist.core.finalize.finalize_nodes import (
     conclusion_id_for_question,
     conclusion_id_for_study,
     conclusion_ids_for,
 )
-from coscientist.core.events.store import SqliteEventStore
 from tests.helpers import close_runtime, open_runtime
 from tests.test_finalize import _boot, _fin, _skip_all, _spec
 
@@ -372,13 +372,13 @@ def test_timeout_budget_ru_survives_contributing_reasons_truncation():
 
 def test_conclusion_not_tested_marker_for_refute_unresolved():
     """rule=refute_unresolved → conclusion attrs.not_tested (not just inconclusive)."""
+    from coscientist.core.claims.verdict import hypothesis_report_row
     from coscientist.core.finalize.finalize_nodes import (
         conclusion_id_for_question,
         conclusion_id_for_study,
         conclusion_ids_for,
         graph_rows_from_finalized,
     )
-    from coscientist.core.claims.verdict import hypothesis_report_row
 
     row = hypothesis_report_row(
         hypothesis_id="H1",
@@ -573,6 +573,7 @@ def test_pick_finalize_trigger(impl):
 def test_terminal_reason_for(impl):
     from datetime import UTC, datetime
 
+    from coscientist.core.claims.reasons import TaskReason
     from coscientist.core.execution.domain import (
         Task,
         TaskKind,
@@ -580,7 +581,6 @@ def test_terminal_reason_for(impl):
         TaskSpec,
         TaskState,
     )
-    from coscientist.core.claims.reasons import TaskReason
 
     now = datetime(2026, 1, 1, tzinfo=UTC)
     t = Task(

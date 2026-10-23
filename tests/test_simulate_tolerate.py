@@ -6,6 +6,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.domain import (
     ExperimentMethod,
     InputSpec,
@@ -17,8 +19,6 @@ from coscientist.core.execution.domain import (
     TaskState,
 )
 from coscientist.core.execution.inputs import InputUnavailable, bind_inputs
-from coscientist.core.claims.reasons import TaskReason
-from coscientist.core.events.upcasters import upcast
 from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
 

@@ -17,9 +17,9 @@ import refmodel
 def make_core_impl() -> Any:
     """Build an impl surface: core rule functions + experimental costly + refmodel Graph/Claim."""
     import coscientist.core.claims.dispositions as dispositions
+    import coscientist.core.claims.rules as core
     import coscientist.core.events.errors as errors
     import coscientist.core.finalize.finalize as finalize
-    import coscientist.core.claims.rules as core
     import coscientist.core.finalize.study_view as study_view
     import coscientist.experimental.costly as costly
 

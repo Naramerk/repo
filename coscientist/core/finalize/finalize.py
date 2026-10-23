@@ -6,9 +6,9 @@ import logging
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
-from coscientist.core.events.digest import canonical_json
 from coscientist.core.claims.dispositions import dispositions, report_hypothesis_verdicts
-from coscientist.core.execution.domain import Task, TaskOutcome, TaskState
+from coscientist.core.claims.reasons import TaskReason, TerminalReason
+from coscientist.core.events.digest import canonical_json
 from coscientist.core.events.errors import (
     CASUnavailable,
     Conflict,
@@ -16,9 +16,9 @@ from coscientist.core.events.errors import (
     StudyClosedError,
 )
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.execution.domain import Task, TaskOutcome, TaskState
 from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
 from coscientist.core.finalize.minimal_report import build_minimal_report, render_markdown_report
-from coscientist.core.claims.reasons import TaskReason, TerminalReason
 from coscientist.core.finalize.study_view import study_view
 
 if TYPE_CHECKING:

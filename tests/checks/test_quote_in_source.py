@@ -25,6 +25,7 @@ from coscientist.checks.kinds.quote_norm import (
     quote_in_normalized_source,
     token_boundary_match,
 )
+from coscientist.core.events.errors import ArtifactRejected
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -37,7 +38,6 @@ from coscientist.core.execution.domain import (
     SourceQuote,
     TaskSpec,
 )
-from coscientist.core.events.errors import ArtifactRejected
 from coscientist.core.execution.source_fetch import store_fetched_source
 from coscientist.core.execution.tool_registry import (
     RegisteredToolSpec,

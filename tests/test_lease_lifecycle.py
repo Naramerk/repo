@@ -11,9 +11,9 @@ import pytest
 
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.errors import LeaseLost
-from coscientist.core.execution.machine import StudyRuntime
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.writer import StudyWriter
+from coscientist.core.execution.machine import StudyRuntime
 from tests.helpers import close_runtime, open_runtime
 
 

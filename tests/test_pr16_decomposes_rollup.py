@@ -6,13 +6,21 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from coscientist.core.execution.artifacts import make_tool_ref
-from coscientist.core.plan.decomposes import (
-    DECOMPOSITION_COVERS_ITEM_ID,
-    assert_decomposes_acyclic,
-    leaf_ids,
-)
 from coscientist.core.claims.dispositions import dispositions
+from coscientist.core.claims.graph import GraphNode
+from coscientist.core.claims.reasons import Disposition, NotAttemptedReason, TaskReason, TerminalReason
+from coscientist.core.claims.rubric import freeze_rubric
+from coscientist.core.claims.rubric_types import Rubric, RubricItem
+from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.events import (
+    PLAN_ACCEPTED_SCHEMA_VERSION,
+    PLAN_EXPANDED_SCHEMA_VERSION,
+    EventEnvelope,
+    make_idem,
+)
+from coscientist.core.events.ids import hypothesis_node_id, task_id
+from coscientist.core.events.upcasters import upcast
+from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
@@ -28,23 +36,15 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.events.errors import LeaseLost
-from coscientist.core.events.events import (
-    PLAN_ACCEPTED_SCHEMA_VERSION,
-    PLAN_EXPANDED_SCHEMA_VERSION,
-    EventEnvelope,
-    make_idem,
-)
-from coscientist.core.claims.graph import GraphNode
-from coscientist.core.events.ids import hypothesis_node_id, task_id
-from coscientist.core.plan.loop import capped_scope_questions, loop_status
-from coscientist.core.finalize.minimal_report import render_markdown_report
-from coscientist.core.plan.plan_validate import validate_decomposes
-from coscientist.core.claims.reasons import Disposition, NotAttemptedReason, TaskReason, TerminalReason
 from coscientist.core.execution.recover import recover
-from coscientist.core.claims.rubric import freeze_rubric
-from coscientist.core.claims.rubric_types import Rubric, RubricItem
-from coscientist.core.events.upcasters import upcast
+from coscientist.core.finalize.minimal_report import render_markdown_report
+from coscientist.core.plan.decomposes import (
+    DECOMPOSITION_COVERS_ITEM_ID,
+    assert_decomposes_acyclic,
+    leaf_ids,
+)
+from coscientist.core.plan.loop import capped_scope_questions, loop_status
+from coscientist.core.plan.plan_validate import validate_decomposes
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
 # --- helpers -----------------------------------------------------------------
@@ -271,8 +271,8 @@ async def test_accept_plan_writes_decomposes_edge(tmp_path, clock):
 
 def test_rollup_rule():
     """all / any / majority / rubric parent disposition from children."""
-    from coscientist.core.plan.decomposes import majority_threshold
     from coscientist.core.claims.rollup import apply_rollup
+    from coscientist.core.plan.decomposes import majority_threshold
 
     assert majority_threshold(2) == 2
     assert majority_threshold(4) == 3
@@ -1574,7 +1574,6 @@ def test_validate_decomposes_pure_cycle():
 
 def test_expand_graph_rejects_cycle_via_existing_edges():
     """expand_graph must see the full decomposes tree, not only the new self-pair."""
-    from coscientist.core.plan.expand_graph import _decomposes_parent_map, question_graph_events
     from coscientist.core.claims.graph import (
         GraphEdge,
         GraphNode,
@@ -1582,6 +1581,7 @@ def test_expand_graph_rejects_cycle_via_existing_edges():
         default_execution_registry,
     )
     from coscientist.core.events.ids import question_node_id
+    from coscientist.core.plan.expand_graph import _decomposes_parent_map, question_graph_events
 
     class _RT:
         def __init__(self) -> None:
@@ -1874,10 +1874,10 @@ def test_graph_edge_decomposes_in_affected_tables():
 @pytest.mark.asyncio
 async def test_foreach_after_task_done_reraise_lease_lost(tmp_path, clock, monkeypatch):
     """foreach.py:453 — LeaseLost from _materialize_one must not become refuse."""
-    from coscientist.core.plan import foreach as foreach_mod
-    from coscientist.core.execution.domain import ForEachSpec
-    from coscientist.core.plan.foreach import maybe_foreach_after_task_done
     from coscientist.core.events.ids import task_id
+    from coscientist.core.execution.domain import ForEachSpec
+    from coscientist.core.plan import foreach as foreach_mod
+    from coscientist.core.plan.foreach import maybe_foreach_after_task_done
 
     sid = "pr16-fe-lease-after"
     rt = await _boot(tmp_path, clock, sid)
@@ -1923,8 +1923,8 @@ async def test_foreach_after_task_done_reraise_lease_lost(tmp_path, clock, monke
 @pytest.mark.asyncio
 async def test_materialize_ready_foreach_reraise_lease_lost(tmp_path, clock, monkeypatch):
     """foreach.py:479 — LeaseLost from _materialize_one must not become refuse."""
-    from coscientist.core.plan import foreach as foreach_mod
     from coscientist.core.execution.domain import ForEachSpec
+    from coscientist.core.plan import foreach as foreach_mod
     from coscientist.core.plan.foreach import materialize_ready_foreach
 
     sid = "pr16-fe-lease-ready"
@@ -1971,8 +1971,8 @@ async def test_materialize_ready_foreach_reraise_lease_lost(tmp_path, clock, mon
 @pytest.mark.asyncio
 async def test_expand_trigger_reraise_lease_lost(tmp_path, clock, monkeypatch):
     """expand_trigger.py:266 — LeaseLost must not become ExpansionRefused."""
-    from coscientist.core.plan.expand_trigger import maybe_expand_after_task_done
     from coscientist.core.events.ids import task_id
+    from coscientist.core.plan.expand_trigger import maybe_expand_after_task_done
 
     sid = "pr16-exp-trig-lease"
     rt = await _boot(tmp_path, clock, sid)

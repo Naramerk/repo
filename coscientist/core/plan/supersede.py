@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from coscientist.core.execution.domain import TaskState
 from coscientist.core.events.ids import (
     criterion_node_id,
     experiment_node_id,
     hypothesis_node_id,
     question_node_id,
 )
+from coscientist.core.execution.domain import TaskState
 
 TestsIntent = Literal["confirm", "refute"]
 
