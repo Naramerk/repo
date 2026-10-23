@@ -248,64 +248,81 @@ class HitlForkMixin(CostlyHitlMixin):
                 pid = str(row.get("proposal_id") or row.get("payload_ref") or "")
         if not h.open:
             return
+        # Fail-closed before journaling: empty / foreign pid must not mint HitlDecided.
+        if not str(pid).strip():
+            raise ValueError(
+                f"proposed_check HITL {request_id!r} missing proposal_id/payload_ref"
+            )
+        bound = str(getattr(h, "payload_ref", "") or "")
+        if bound and bound != str(pid):
+            raise ValueError(
+                f"proposed_check HITL {request_id!r} payload_ref={bound!r} "
+                f"!= proposal_id={pid!r}"
+            )
+        # First decision wins — accept/reject/delegate share one idem_key (no :delegate suffix).
+        existing = getattr(self, "_hitl_decisions", None) or {}
+        if isinstance(existing, dict) and request_id in existing:
+            return
         now = self.clock.now()
-        if decision in ("accept", "approve"):
-            # Journal human decision first; approve_check requires HitlDecided(by=human).
+        decided_idem = make_idem("HitlDecided", request_id)
+
+        async def _journal_decision(payload: dict[str, Any]) -> None:
             await self._append(
                 [
                     EventEnvelope(
                         study_id=h.study_id,
                         type="HitlDecided",
                         entity_key=request_id,
-                        idem_key=make_idem("HitlDecided", request_id),
-                        payload={
-                            "request_id": request_id,
-                            "decision": "accept",
-                            "by": "human",
-                            "approved_by": "human",
-                            "delegated_by": None,
-                            "reason": "proposed_check_approved",
-                            "proposal_id": pid,
-                            "spent_rub": 0.0,
-                        },
+                        idem_key=decided_idem,
+                        payload=payload,
                         ts=now,
                     )
                 ]
             )
-            await approve_check(
-                self,
-                pid,
-                source="hitl",
-                hitl_request_id_s=request_id,
+
+        if decision in ("accept", "approve"):
+            # Journal human decision first; approve_check requires HitlDecided(by=human).
+            await _journal_decision(
+                {
+                    "request_id": request_id,
+                    "decision": "accept",
+                    "by": "human",
+                    "approved_by": "human",
+                    "delegated_by": None,
+                    "reason": "proposed_check_approved",
+                    "proposal_id": pid,
+                    "spent_rub": 0.0,
+                }
             )
+            try:
+                await approve_check(
+                    self,
+                    pid,
+                    source="hitl",
+                    hitl_request_id_s=request_id,
+                )
+            except Exception:
+                # Orphaned accept: HitlDecided stands; caller may retry approve_check.
+                raise
             return
         if decision == "delegate":
             # Mark HITL answered as delegated; reviewer agent decides later.
             # Timeout≡reject still applies via ReviewScheduled.deadline.
             from coscientist.core.proposed_check import schedule_proposed_check_review
 
-            await self._append(
-                [
-                    EventEnvelope(
-                        study_id=h.study_id,
-                        type="HitlDecided",
-                        entity_key=request_id,
-                        idem_key=make_idem("HitlDecided", request_id, "delegate"),
-                        payload={
-                            "request_id": request_id,
-                            "decision": "delegate",
-                            "by": "human",
-                            "delegated_by": "human",
-                            "reason": "delegate→reviewer",
-                            "proposal_id": pid,
-                            "spent_rub": 0.0,
-                            # Keep proposal pending until reviewer CheckApproved.
-                            "keep_open": False,
-                            "effect": "WAIT_REVIEWER",
-                        },
-                        ts=now,
-                    ),
-                ]
+            await _journal_decision(
+                {
+                    "request_id": request_id,
+                    "decision": "delegate",
+                    "by": "human",
+                    "delegated_by": "human",
+                    "reason": "delegate→reviewer",
+                    "proposal_id": pid,
+                    "spent_rub": 0.0,
+                    # Keep proposal pending until reviewer CheckApproved.
+                    "keep_open": False,
+                    "effect": "WAIT_REVIEWER",
+                }
             )
             # reviewer_task_id from expansion (required before bind); timeout≡reject
             # still applies even when unset (reject_stale does not need bind).
@@ -319,24 +336,15 @@ class HitlForkMixin(CostlyHitlMixin):
                 reviewer_task_id=str(rev_tid) if rev_tid else None,
             )
             return
-        await self._append(
-            [
-                EventEnvelope(
-                    study_id=h.study_id,
-                    type="HitlDecided",
-                    entity_key=request_id,
-                    idem_key=make_idem("HitlDecided", request_id),
-                    payload={
-                        "request_id": request_id,
-                        "decision": "reject",
-                        "by": "human",
-                        "reason": "rejected",
-                        "proposal_id": pid,
-                        "spent_rub": 0.0,
-                    },
-                    ts=now,
-                )
-            ]
+        await _journal_decision(
+            {
+                "request_id": request_id,
+                "decision": "reject",
+                "by": "human",
+                "reason": "rejected",
+                "proposal_id": pid,
+                "spent_rub": 0.0,
+            }
         )
         await reject_check(
             self,

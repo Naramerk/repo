@@ -724,7 +724,8 @@ def _verify_human_principal(
             f"HitlDecided for {rid!r} decision={decision!r} not in {sorted(expect_decisions)}"
         )
     dec_pid = str(dec.get("proposal_id") or "").strip()
-    if dec_pid and dec_pid != str(proposal_id_s):
+    # Strict: missing/empty proposal_id on HitlDecided is not a free pass.
+    if dec_pid != str(proposal_id_s):
         raise ValueError(
             f"HitlDecided for {rid!r} bound to proposal {dec_pid!r}, not {proposal_id_s!r}"
         )
@@ -924,6 +925,15 @@ async def reject_check(
         return
     if row.get("status") == "approved":
         raise ValueError(f"proposal already approved: {proposal_id_s!r}")
+    # Race: HitlDecided(accept) already journaled but CheckApproved not yet —
+    # timeout must not clobber the in-flight human accept.
+    if source == "timeout" and hitl_request_id_s:
+        dec = _lookup_hitl_decision(runtime, str(hitl_request_id_s))
+        if isinstance(dec, dict):
+            d = str(dec.get("decision") or "").strip()
+            by = str(dec.get("by") or dec.get("decided_by") or "").strip()
+            if by == "human" and d in ("accept", "approve"):
+                return
     principal: str | None = None
     if source == "reviewer":
         _validate_reviewer_attempt(

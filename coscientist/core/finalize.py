@@ -703,8 +703,6 @@ async def _build_finalized_payload(
         fallback = type(e).__name__
         log.warning("finalize primary path failed: %s", e, exc_info=True)
         try:
-            from coscientist.core.proposed_check import custom_checks_report as _ccr
-
             minimal = build_minimal_report(
                 study_id=sid,
                 terminal_reason=term.value,
@@ -718,16 +716,14 @@ async def _build_finalized_payload(
                 refusal=refusal,
                 hypotheses=hypothesis_verdicts or {},
                 hypotheses_unavailable=hypotheses_unavailable,
-                custom_checks=_ccr(runtime),
+                custom_checks=_safe_custom_checks(runtime),
                 observations=list(getattr(runtime, "_observations", None) or []),
             )
         except LeaseLost:
             raise
         except Exception as e2:  # noqa: BLE001
             raise RuntimeError(f"minimal_report:{type(e2).__name__}") from e2
-    from coscientist.core.proposed_check import custom_checks_report
-
-    custom_checks = custom_checks_report(runtime)
+    custom_checks = _safe_custom_checks(runtime)
     # Findings outside the plan stay unverified observations (DESIGN_M1 §16).
     observations = list(getattr(runtime, "_observations", None) or [])
     if minimal is not None and isinstance(minimal, dict):
@@ -755,6 +751,17 @@ async def _build_finalized_payload(
     }
 
 
+def _safe_custom_checks(runtime: Any) -> list[dict[str, Any]]:
+    """Isolate custom_checks_report — never block StudyFinalized on report bugs."""
+    try:
+        from coscientist.core.proposed_check import custom_checks_report
+
+        return list(custom_checks_report(runtime))
+    except Exception as e:  # noqa: BLE001 — degrade to []
+        log.warning("custom_checks_report failed: %s", e, exc_info=True)
+        return []
+
+
 async def _primary_report_path(
     runtime: StudyRuntime,
     *,
@@ -771,8 +778,6 @@ async def _primary_report_path(
     as_of_s = None
     if as_of_raw is not None:
         as_of_s = as_of_raw.isoformat() if hasattr(as_of_raw, "isoformat") else str(as_of_raw)
-    from coscientist.core.proposed_check import custom_checks_report
-
     plans_local = getattr(runtime, "plans", None)
     md = render_markdown_report(
         study_id=sid,
@@ -785,7 +790,7 @@ async def _primary_report_path(
         refusal=refusal,
         as_of=as_of_s,
         plans=plans_local if isinstance(plans_local, dict) else None,
-        custom_checks=list(custom_checks_report(runtime)),
+        custom_checks=_safe_custom_checks(runtime),
         observations=list(getattr(runtime, "_observations", None) or []),
     )
     # Surface infra details (sandbox reason + soft-isolation note) in report text.

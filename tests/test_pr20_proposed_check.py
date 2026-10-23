@@ -352,11 +352,14 @@ async def test_unapproved_check_excluded_from_verdict(tmp_path: Path) -> None:
                 claims=[{"target": "q1", "target_kind": "question"}],
             ),
         )
-        assert any(c.status == ReqStatus.PENDING for c in result.check_results)
-        assert any(
-            (c.effect or {}).get("exclusion_reason") == "unapproved_check"
+        proposed = [
+            c
             for c in result.check_results
-        )
+            if c.template_id == PROPOSED_CHECK_TEMPLATE_ID
+        ]
+        assert len(proposed) == 1
+        assert proposed[0].status == ReqStatus.PENDING
+        assert (proposed[0].effect or {}).get("exclusion_reason") == "unapproved_check"
     finally:
         await close_runtime(rt)
 
@@ -690,7 +693,8 @@ async def test_quota_close_late_record_attempt_closed(tmp_path: Path) -> None:
                 ),
             )
         events = await rt.store.read_all()
-        assert any(e.type == "LateWriteRejected" for e in events)
+        late = [e for e in events if e.type == "LateWriteRejected"]
+        assert len(late) == 1
         dones = [
             e
             for e in events
@@ -868,7 +872,7 @@ async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
             await bind_proposed_check_reviewer(rt, pid, proposer_aid)
         events_after = await rt.store.read_all()
         assert len(events_after) == n_before
-        assert len([e for e in events_after if e.type == "StudyFinalized"]) == 1
+        _assert_one_finalized(events_after)
     finally:
         await close_runtime(rt)
 
@@ -943,10 +947,12 @@ async def test_restart_open_hitl_and_delegated_review_live_eq_replay(
         live_review = dict(rt._proposed_check_reviews[pid])
         assert live_status == "proposed"
         assert live_review.get("status") == "pending"
-        assert any(
-            e.type == "HitlOpened" and e.payload.get("payload_ref") == pid
+        opened = [
+            e
             for e in await rt.store.read_all()
-        )
+            if e.type == "HitlOpened" and e.payload.get("payload_ref") == pid
+        ]
+        assert len(opened) == 1
     finally:
         await close_runtime(rt)
 
@@ -1660,7 +1666,8 @@ def test_nfkc_digest_composed_decomposed_same() -> None:
     """Same logical text (NFC vs NFD / fullwidth / ligatures) → same NFKC digest."""
     nfc = "café"
     nfd = "cafe\u0301"
-    assert unicodedata.normalize("NFC", nfc) != nfd or nfc != nfd
+    assert nfc != nfd
+    assert unicodedata.normalize("NFC", nfd) == nfc
     assert unicodedata.normalize("NFKC", nfc) == unicodedata.normalize("NFKC", nfd)
     base = dict(
         proposal_id="p",
@@ -2050,9 +2057,10 @@ async def test_propose_open_hitl_api_approve_author_rid_fail_closed(
         await rt.answer_hitl(rid, "accept")
         assert rt._check_proposals[pid]["status"] == "approved"
         # HITL gate closed after human decision.
-        h = rt.hitl.get(rid) if hasattr(rt, "hitl") else None
-        if h is not None:
-            assert h.open is False
+        assert hasattr(rt, "hitl")
+        h = rt.hitl.get(rid)
+        assert h is not None
+        assert h.open is False
     finally:
         await close_runtime(rt)
 
@@ -2188,7 +2196,7 @@ async def test_approval_cannot_satisfy_other_target_same_task(tmp_path: Path) ->
         assert proposed
         assert proposed[0]["status"] == ReqStatus.FAILED.value
         detail = proposed[0].get("detail") or ""
-        assert "target_mismatch" in detail or "unapproved_check" in detail
+        assert "target_mismatch" in detail
     finally:
         await close_runtime(rt)
 
@@ -2356,3 +2364,229 @@ def test_upcasters_byte_identical_to_pr23_bridges() -> None:
     assert "digest_version=None" in src_att
     assert "Owned by #23" not in src_study
     assert "Owned by #23" not in src_att
+
+
+@pytest.mark.asyncio
+async def test_hitl_accept_delegate_reject_first_wins(tmp_path: Path) -> None:
+    """Race: accept/delegate/reject share HitlDecided idem — first decision wins."""
+    rt = await open_runtime_experimental(tmp_path, "st_pr20_hitl_race")
+    try:
+        await _create(rt, "hitl race")
+        proposer_aid = await _boot_plan(
+            rt,
+            [_exp_spec(task_key="EXP"), _exp_spec(task_key="REV", title="rev")],
+        )
+        exp_tid = _task_id(rt, "EXP")
+        rev_tid = _task_id(rt, "REV")
+        pid = await propose_check(
+            rt,
+            target="study",
+            role="prediction",
+            measures="m",
+            justification="j",
+            rejected_templates=_rejected(),
+            check=_value_check(target=1),
+            task_id=exp_tid,
+            attempt_id=proposer_aid,
+            open_hitl=True,
+        )
+        assert pid
+        rid = next(
+            r
+            for r, h in rt.hitl.items()
+            if getattr(h, "payload_ref", None) == pid
+        )
+        await rt.answer_hitl(rid, "accept")
+        assert rt._check_proposals[pid]["status"] == "approved"
+        # Second answer is a no-op (gate closed / decision already folded).
+        await rt.answer_hitl(
+            rid, "delegate", expansion={"reviewer_task_id": rev_tid}
+        )
+        await rt.answer_hitl(rid, "reject")
+        assert rt._check_proposals[pid]["status"] == "approved"
+        decided = [
+            e
+            for e in await rt.store.read_all()
+            if e.type == "HitlDecided" and e.entity_key == rid
+        ]
+        assert len(decided) == 1
+        assert decided[0].payload.get("decision") == "accept"
+        assert decided[0].idem_key == make_idem("HitlDecided", rid)
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_timeout_between_hitl_decided_and_approve_fail_closed(
+    tmp_path: Path,
+) -> None:
+    """Timeout after HitlDecided(accept) must not reject; approve can complete."""
+    from coscientist.core.proposed_check import reject_check as _reject
+
+    rt = await open_runtime(tmp_path, "st_pr20_timeout_race")
+    try:
+        await _create(rt, "timeout race")
+        proposer_aid = await _boot_plan(rt, [_exp_spec()])
+        exp_tid = _task_id(rt, "EXP")
+        pid = await propose_check(
+            rt,
+            target="study",
+            role="prediction",
+            measures="m",
+            justification="j",
+            rejected_templates=_rejected(),
+            check=_value_check(target=1),
+            task_id=exp_tid,
+            attempt_id=proposer_aid,
+            open_hitl=False,
+        )
+        assert pid
+        rid = await _plant_human_hitl_decision(rt, pid, exp_tid, decision="accept")
+        assert rt._check_proposals[pid]["status"] == "proposed"
+        # Simulate timeout racing before approve_check.
+        await _reject(
+            rt, pid, source="timeout", reason="human_timeout", hitl_request_id_s=rid
+        )
+        assert rt._check_proposals[pid]["status"] == "proposed"
+        await approve_check(rt, pid, source="api", hitl_request_id_s=rid)
+        assert rt._check_proposals[pid]["status"] == "approved"
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_hitl_decided_empty_and_foreign_proposal_id_fail_closed(
+    tmp_path: Path,
+) -> None:
+    """Strict dec_pid==pid: empty / foreign proposal_id on HitlDecided → reject."""
+    rt = await open_runtime(tmp_path, "st_pr20_dec_pid")
+    try:
+        await _create(rt, "dec pid")
+        proposer_aid = await _boot_plan(rt, [_exp_spec()])
+        exp_tid = _task_id(rt, "EXP")
+        pid = await propose_check(
+            rt,
+            target="study",
+            role="prediction",
+            measures="m",
+            justification="j",
+            rejected_templates=_rejected(),
+            check=_value_check(target=1),
+            task_id=exp_tid,
+            attempt_id=proposer_aid,
+            open_hitl=False,
+        )
+        assert pid
+        study = rt.study
+        assert study is not None
+        now = rt.clock.now()
+
+        async def _open_and_decide(*, proposal_id: str) -> str:
+            rid = await _plant_proposed_hitl(rt, pid, exp_tid)
+            await rt._append(
+                [
+                    EventEnvelope(
+                        study_id=study.study_id,
+                        type="HitlDecided",
+                        entity_key=rid,
+                        idem_key=make_idem("HitlDecided", rid),
+                        payload={
+                            "request_id": rid,
+                            "decision": "accept",
+                            "by": "human",
+                            "proposal_id": proposal_id,
+                            "spent_rub": 0.0,
+                        },
+                        ts=now,
+                    )
+                ]
+            )
+            return rid
+
+        rid_empty = await _open_and_decide(proposal_id="")
+        with pytest.raises(ValueError, match="bound to proposal"):
+            await approve_check(rt, pid, source="api", hitl_request_id_s=rid_empty)
+        rid_foreign = await _open_and_decide(proposal_id="prop_not_this_one")
+        with pytest.raises(ValueError, match="bound to proposal"):
+            await approve_check(rt, pid, source="api", hitl_request_id_s=rid_foreign)
+        assert rt._check_proposals[pid]["status"] == "proposed"
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_finalize_survives_broken_proposals_map(tmp_path: Path) -> None:
+    """custom_checks_report isolation: broken _proposals_map → still one StudyFinalized."""
+    rt = await open_runtime(tmp_path, "st_pr20_cc_isolate")
+    try:
+        await _create(rt, "cc isolate")
+        await _boot_plan(rt, [_exp_spec()])
+        exp_tid = _task_id(rt, "EXP")
+        aid = await rt.start_attempt("EXP")
+        assert aid
+        ex, arts = attach_executor(rt, tmp_path)
+        art = arts.put(
+            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
+        )
+        await ex.record(
+            aid,
+            AgentTaskOutput(
+                summary="ok",
+                outputs={
+                    "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
+                },
+            ),
+        )
+
+        class _Boom(dict):
+            def items(self):  # type: ignore[no-untyped-def]
+                raise RuntimeError("proposals_map_boom")
+
+            def __iter__(self):  # type: ignore[no-untyped-def]
+                raise RuntimeError("proposals_map_boom")
+
+        rt._check_proposals = _Boom()  # type: ignore[assignment]
+        await _finish_report(rt, tmp_path)
+        await rt.ensure_lease(ttl_s=10_000)
+        await rt.tick()
+        if not getattr(rt, "_finalized", False):
+            await finalize(rt, trigger="all_done")
+        assert rt._finalized
+        events = await rt.store.read_all()
+        fin = _assert_one_finalized(events)
+        assert fin.payload.get("custom_checks") == []
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_orphaned_hitl_accept_retry_approve(tmp_path: Path) -> None:
+    """Minor: HitlDecided(accept) without CheckApproved — retry approve succeeds."""
+    rt = await open_runtime(tmp_path, "st_pr20_orphan_accept")
+    try:
+        await _create(rt, "orphan accept")
+        proposer_aid = await _boot_plan(rt, [_exp_spec()])
+        exp_tid = _task_id(rt, "EXP")
+        pid = await propose_check(
+            rt,
+            target="study",
+            role="prediction",
+            measures="m",
+            justification="j",
+            rejected_templates=_rejected(),
+            check=_value_check(target=1),
+            task_id=exp_tid,
+            attempt_id=proposer_aid,
+            open_hitl=False,
+        )
+        assert pid
+        rid = await _plant_human_hitl_decision(rt, pid, exp_tid, decision="accept")
+        assert rt._check_proposals[pid]["status"] == "proposed"
+        # Decision folded; request closed without merging decision fields into open row.
+        opened = (getattr(rt, "_hitl_requests", None) or {}).get(rid) or {}
+        assert opened.get("open") is False
+        assert "decision" not in opened
+        await approve_check(rt, pid, source="api", hitl_request_id_s=rid)
+        assert rt._check_proposals[pid]["status"] == "approved"
+    finally:
+        await close_runtime(rt)
