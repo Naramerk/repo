@@ -327,8 +327,9 @@ def test_upcast_study_created_sets_reserve_zero():
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     )
-    # v1→v2 reserve → … → v7 expansion quotas.
-    assert v == 7
+    # v1→v2 reserve → … → v8 max_foreach_children.
+    assert v == 8
+    assert p["max_foreach_children"] == 32
     assert p["finalize_reserve_s"] == 0
     assert p["refutations_needed"] == 1
     assert p["refutation_priority"] is False

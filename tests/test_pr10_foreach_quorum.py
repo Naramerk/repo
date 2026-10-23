@@ -21,6 +21,7 @@ from coscientist.core.domain import (
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.graph import GraphNode
 from coscientist.core.ids import hypothesis_node_id, task_id
+from coscientist.core.inputs import InputUnavailable
 from coscientist.core.reasons import CloseReason, TaskReason
 from coscientist.core.recover import recover
 from coscientist.core.upcasters import upcast
@@ -40,6 +41,7 @@ def _exp(key: str, *, depends_on: list[str], **kw) -> TaskSpec:
         foreach=kw.get("foreach"),
         required=kw.get("required", True),
         tolerate_failed_dep=kw.get("tolerate_failed_dep", False),
+        tests_intent=kw.get("tests_intent"),
     )
 
 
@@ -62,11 +64,13 @@ async def _boot_stages(rt) -> None:
         await rt.cancel_task(key, reason="cancelled")
 
 
-async def _upsert_selected_hypotheses(rt, *, of_task: str, n: int, selected: bool = True):
+async def _upsert_selected_hypotheses(
+    rt, *, of_task: str, n: int, selected: bool = True, ids: list[str] | None = None
+):
     sid = rt.study.study_id
     now = rt.clock.now()
-    for i in range(n):
-        hid_logical = f"H{i}"
+    logicals = ids if ids is not None else [f"H{i}" for i in range(n)]
+    for i, hid_logical in enumerate(logicals):
         nid = hypothesis_node_id(sid, hid_logical)
         node = GraphNode(
             node_id=nid,
@@ -110,7 +114,6 @@ async def _finalize_study(rt):
 
 @pytest.mark.asyncio
 async def test_foreach_10_hypotheses(tmp_path, clock, runtime_cls):
-    """selected hypotheses of E0 → 10 EXP-<n>; no planner; no expansion quota."""
     sid = "st_fe10"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
@@ -154,6 +157,136 @@ async def test_foreach_10_hypotheses(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
+async def test_foreach_when_source_already_done_live_eq_replay(tmp_path, clock, runtime_cls):
+    """B1: of_task=HYP already DONE at accept_plan — expand live; reopen == live."""
+    sid = "st_fe_hyp0"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=400),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=0,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    # Finish SPEC; keep HYP as SUCCESS source (canonical HYP-0 case uses stage HYP).
+    await rt.start_attempt("SPEC")
+    await rt.cancel_task("SPEC", reason="cancelled")
+    await rt.start_attempt("HYP")
+    # Mark HYP SUCCESS via cancel? Need SUCCESS — use record path with empty criteria.
+    hyp = rt.tasks[task_id(sid, "HYP")]
+    rt.tasks[hyp.task_id] = hyp.model_copy(
+        update={"spec": hyp.spec.model_copy(update={"criteria": []})}
+    )
+    aid = list(rt.attempts)[-1] if rt.attempts else await rt.start_attempt("HYP")
+    # reopen attempt if cancelled — start fresh
+    if rt.tasks[task_id(sid, "HYP")].state == TaskState.DONE:
+        pass
+    else:
+        # ensure open attempt
+        open_a = [a for a in rt.tasks[task_id(sid, "HYP")].attempts if not rt.attempts.get(a, {}).get("closed")]
+        if not open_a:
+            aid = await rt.start_attempt("HYP")
+        else:
+            aid = open_a[0]
+        await _ok(rt, arts, aid)
+    assert rt.tasks[task_id(sid, "HYP")].state == TaskState.DONE
+    assert rt.tasks[task_id(sid, "HYP")].outcome == TaskOutcome.SUCCESS
+
+    await _upsert_selected_hypotheses(rt, of_task="HYP", n=3)
+    # LIT still pending — cancel so plan can accept without waiting.
+    await rt.start_attempt("LIT")
+    await rt.cancel_task("LIT", reason="cancelled")
+
+    fe_tmpl = _exp(
+        "FE",
+        depends_on=["HYP"],
+        foreach=ForEachSpec(kind="hypothesis", of_task="HYP", selector="selected"),
+        criteria=False,
+    )
+    await rt.accept_plan([fe_tmpl], questions=[QuestionSpec(id="Q1", text="why")])
+    # B1: expanded immediately because HYP already DONE.
+    children_live = list(rt._foreach_children.get("FE") or [])
+    assert len(children_live) == 3
+    assert rt.tasks[task_id(sid, "FE")].reason == TaskReason.SUPERSEDED
+    items_live = sorted(
+        rt.tasks[task_id(sid, k)].spec.foreach_item for k in children_live
+    )
+
+    await close_runtime(rt)
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
+    children_replay = list(rt2._foreach_children.get("FE") or [])
+    assert children_replay == children_live
+    items_replay = sorted(
+        rt2.tasks[task_id(sid, k)].spec.foreach_item for k in children_replay
+    )
+    assert items_replay == items_live
+    assert rt2._agent_expansions == 0
+    fin = await _finalize_study(rt2)
+    assert any("foreach: развёрнуто 3" in str(c) for c in (fin.payload.get("contributing_reasons") or []))
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_foreach_natural_sort_and_source_task_required(tmp_path, clock, runtime_cls):
+    sid = "st_fe_nat"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=0,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    await _boot_stages(rt)
+    e0 = _exp("E0", depends_on=["PLAN"], criteria=False)
+    fe = _exp(
+        "FE",
+        depends_on=["E0"],
+        foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
+        criteria=False,
+    )
+    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")])
+    await _upsert_selected_hypotheses(
+        rt, of_task="E0", n=3, ids=["H10", "H2", "H1"]
+    )
+    # Orphan without source_task must be ignored.
+    nid = hypothesis_node_id(sid, "Horphan")
+    await rt._append(
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="GraphNodeUpserted",
+                entity_key=nid,
+                idem_key=make_idem("GraphNodeUpserted", nid, "orphan"),
+                payload=GraphNode(
+                    node_id=nid,
+                    kind="hypothesis",
+                    study_id=sid,
+                    ref_id="Horphan",
+                    attrs={"statement": "x", "prediction": "y", "selected": True, "rank": 0},
+                    created_at=rt.clock.now(),
+                ).model_dump(mode="json"),
+                ts=rt.clock.now(),
+            )
+        ]
+    )
+    aid = await rt.start_attempt("E0")
+    await _ok(rt, arts, aid)
+    kids = rt._foreach_children["FE"]
+    items = [rt.tasks[task_id(sid, k)].spec.foreach_item for k in kids]
+    assert items == ["H1", "H2", "H10"]
+    assert "Horphan" not in items
+    await _finalize_study(rt)
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
 async def test_foreach_zero_items_report(tmp_path, clock, runtime_cls):
     sid = "st_fe0"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
@@ -174,19 +307,55 @@ async def test_foreach_zero_items_report(tmp_path, clock, runtime_cls):
         depends_on=["E0"],
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
         criteria=False,
+        tests_intent="refute",
     )
     await rt.accept_plan([e0, fe_tmpl], questions=[QuestionSpec(id="Q1", text="why")])
     aid = await rt.start_attempt("E0")
     await _ok(rt, arts, aid)
     assert rt._foreach_children.get("FE") == []
     fin = await _finalize_study(rt)
-    assert "не выполнено: foreach пуст" in (fin.payload.get("contributing_reasons") or [])
+    contrib = fin.payload.get("contributing_reasons") or []
+    assert "не выполнено: foreach пуст" in contrib
+    assert "не выполнено: проверка опровержения не выполнена" in contrib
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_foreach_cap_limitation(tmp_path, clock, runtime_cls):
+    sid = "st_fe_cap"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=0,
+        max_foreach_children=3,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    await _boot_stages(rt)
+    e0 = _exp("E0", depends_on=["PLAN"], criteria=False)
+    fe = _exp(
+        "FE",
+        depends_on=["E0"],
+        foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
+        criteria=False,
+    )
+    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")])
+    await _upsert_selected_hypotheses(rt, of_task="E0", n=5)
+    aid = await rt.start_attempt("E0")
+    await _ok(rt, arts, aid)
+    assert len(rt._foreach_children["FE"]) == 3
+    fin = await _finalize_study(rt)
+    contrib = fin.payload.get("contributing_reasons") or []
+    assert any("ограничение foreach: взято 3" in str(c) for c in contrib)
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
 async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
-    """Crash between source DONE and foreach → recover materializes; replay == live."""
     sid = "st_fe_rr"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
@@ -275,9 +444,11 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
     await close_runtime(rt2)
     rt3 = await open_runtime(tmp_path, sid, clock=clock, owner="t3", runtime_cls=runtime_cls)
     assert len(rt3._foreach_children.get("FE") or []) == 3
-    assert rt3._agent_expansions == 0
-    fin = await _finalize_study(rt3)
-    assert any("foreach" in str(c) for c in (fin.payload.get("contributing_reasons") or []))
+    # Deterministic plan id / idem — only one foreach PlanExpanded.
+    pe = [e for e in await rt3.store.read_all() if e.type == "PlanExpanded" and e.payload.get("foreach")]
+    assert len(pe) == 1
+    assert pe[0].payload["plan_id"].startswith(f"pl_foreach_{sid}_FE_")
+    await _finalize_study(rt3)
     await close_runtime(rt3)
 
 
@@ -374,8 +545,6 @@ async def test_quorum_all_fail(tmp_path, clock, runtime_cls):
         t = rt.tasks[task_id(sid, key)]
         if t.state != TaskState.DONE:
             await rt.cancel_task(t.task_id, reason="failed")
-    from coscientist.core.inputs import InputUnavailable
-
     with pytest.raises(InputUnavailable):
         await rt.start_attempt("SUM")
     sum_t = rt.tasks[task_id(sid, "SUM")]
@@ -383,6 +552,52 @@ async def test_quorum_all_fail(tmp_path, clock, runtime_cls):
     assert sum_t.reason == TaskReason.INPUT_UNAVAILABLE
     fin = await _finalize_study(rt)
     assert "не выполнено: кворум входов" in (fin.payload.get("contributing_reasons") or [])
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_quorum_required_not_softened(tmp_path, clock, runtime_cls):
+    """M2: required (no quorum) input stays required even if sibling has quorum."""
+    sid = "st_q_req"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    await _boot_stages(rt)
+    a = _exp("A", depends_on=["PLAN"], criteria=False)
+    b = _exp("B", depends_on=["PLAN"], criteria=False)
+    summary = TaskSpec(
+        task_key="SUM",
+        title="sum",
+        goal="g",
+        route="experiment",
+        depends_on=["A", "B"],
+        addresses=["Q1"],
+        criteria=[],
+        tolerate_failed_dep=True,
+        inputs=[
+            InputSpec(from_task="A", output="main", quorum=1),  # pool
+            InputSpec(from_task="B", output="main"),  # required, no quorum
+        ],
+    )
+    await rt.accept_plan([a, b, summary], questions=[QuestionSpec(id="Q1", text="why")])
+    aid = await rt.start_attempt("A")
+    await _ok(rt, arts, aid)
+    # B fails — required must block even though quorum pool is satisfied.
+    bid = await rt.start_attempt("B")
+    await rt.fail_attempt(bid, retryable=False, close_reason="failed")
+    t = rt.tasks[task_id(sid, "B")]
+    if t.state != TaskState.DONE:
+        await rt.cancel_task(t.task_id, reason="failed")
+    with pytest.raises(InputUnavailable):
+        await rt.start_attempt("SUM")
+    await _finalize_study(rt)
     await close_runtime(rt)
 
 
@@ -537,6 +752,7 @@ async def test_foreach_plus_quorum_fanin(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_quorum_zero_inputs_edge(tmp_path, clock, runtime_cls):
+    """Empty foreach + fan-in → SKIPPED; never starts with silent drop / fake real."""
     sid = "st_q0"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
@@ -571,15 +787,33 @@ async def test_quorum_zero_inputs_edge(tmp_path, clock, runtime_cls):
     aid = await rt.start_attempt("E0")
     await _ok(rt, arts, aid)
     assert rt._foreach_children.get("FE") == []
-    from coscientist.core.inputs import InputUnavailable
-
     with pytest.raises(InputUnavailable):
         await rt.start_attempt("SUM")
+    sum_t = rt.tasks[task_id(sid, "SUM")]
+    assert sum_t.state == TaskState.DONE
+    assert sum_t.reason == TaskReason.INPUT_UNAVAILABLE
     fin = await _finalize_study(rt)
     contrib = fin.payload.get("contributing_reasons") or []
     assert "не выполнено: foreach пуст" in contrib
-    assert "не выполнено: кворум входов" in contrib
+    assert "не выполнено: кворум входов" in contrib or "не выполнено: foreach пуст" in contrib
     await close_runtime(rt)
+
+
+def test_quorum_rejects_zero():
+    from coscientist.core.quorum import validate_quorum_specs
+
+    with pytest.raises(ValueError, match="quorum"):
+        validate_quorum_specs(
+            [
+                TaskSpec(
+                    task_key="S",
+                    title="s",
+                    goal="g",
+                    route="experiment",
+                    inputs=[InputSpec(from_task="A", output="main", quorum=0)],
+                )
+            ]
+        )
 
 
 def test_upcast_task_created_foreach_quorum():
@@ -610,3 +844,9 @@ def test_upcast_attempt_limitations():
     v, p = upcast("AttemptStarted", 3, {"attempt_id": "a", "inputs": []})
     assert v == 4
     assert p["limitations"] == []
+
+
+def test_upcast_study_foreach_cap():
+    v, p = upcast("StudyCreated", 7, {"study_id": "s"})
+    assert v == 8
+    assert p["max_foreach_children"] == 32

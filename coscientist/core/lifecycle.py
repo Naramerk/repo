@@ -74,6 +74,7 @@ class LifecycleMixin:
         max_tasks: int = 64,
         max_depth: int = 8,
         plan_timeout_s: int = 600,
+        max_foreach_children: int = 32,
         inputs: list[Any] | None = None,
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,
@@ -109,6 +110,10 @@ class LifecycleMixin:
             raise ValueError(f"max_depth must be >= 1, got {max_depth}")
         if plan_timeout_s < 1:
             raise ValueError(f"plan_timeout_s must be >= 1, got {plan_timeout_s}")
+        if max_foreach_children < 1:
+            raise ValueError(
+                f"max_foreach_children must be >= 1, got {max_foreach_children}"
+            )
         validate_budget_for_create(budget)
         duration_s = (dl - now).total_seconds()
         decision = await intake(
@@ -144,6 +149,7 @@ class LifecycleMixin:
             max_tasks=max_tasks,
             max_depth=max_depth,
             plan_timeout_s=plan_timeout_s,
+            max_foreach_children=max_foreach_children,
         )
         effective = study.effective_deadline()
         events: list[EventEnvelope] = [
@@ -154,7 +160,7 @@ class LifecycleMixin:
                 idem_key=make_idem("StudyCreated", sid),
                 payload=study.model_dump(mode="json"),
                 ts=now,
-                schema_version=7,
+                schema_version=8,
             ),
             EventEnvelope(
                 study_id=sid,
@@ -409,6 +415,10 @@ class LifecycleMixin:
                 )
             )
         await self._append(events)
+        # B1: foreach templates whose of_task is already DONE (e.g. HYP-0).
+        from coscientist.core.foreach import materialize_ready_foreach
+
+        await materialize_ready_foreach(self)  # type: ignore[arg-type]
         return pid
 
     async def _known_question_texts(self) -> dict[str, str]:

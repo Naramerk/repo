@@ -23,7 +23,7 @@ from coscientist.core.inputs import (
     collect_bindable_claims,
     uses_claim_graph_events,
 )
-from coscientist.core.quorum import bind_with_quorum, has_quorum_spec
+from coscientist.core.quorum import bind_input_groups
 from coscientist.core.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
 
 # Persisted on AttemptClosed.retry_at; fired by StudyRuntime.tick vs injected Clock.
@@ -204,40 +204,19 @@ class AttemptsMixin:
                 verdict_snapshots.update(computed)
             except Exception:  # noqa: BLE001 — start_attempt must not crash
                 verdict_snapshots = {**verdict_snapshots}
-        from coscientist.core.foreach import expand_input_specs_foreach
-        from coscientist.core.quorum import task_quorum_needed
+        from coscientist.core.foreach import expand_input_groups
 
-        # PR10: fan-in inputs that name a foreach template → one InputSpec per child.
-        # ``self`` is StudyRuntime at runtime (AttemptsMixin).
-        orig_inputs = list(task.spec.inputs)
-        expanded_inputs = expand_input_specs_foreach(self, orig_inputs)  # type: ignore[arg-type]
-        bind_task = (
-            task
-            if expanded_inputs == orig_inputs
-            else task.model_copy(update={"spec": task.spec.model_copy(update={"inputs": expanded_inputs})})
+        # PR10: per-input groups (foreach children keep the original quorum).
+        groups = expand_input_groups(self, list(task.spec.inputs))
+        children_map = getattr(self, "_foreach_children", None) or {}
+        use_groups = any(
+            inp.from_task in children_map or inp.quorum is not None for inp, _ in groups
         )
         limitations: list[Any] = []
         try:
-            use_quorum = has_quorum_spec(orig_inputs) or has_quorum_spec(bind_task.spec.inputs)
-            if use_quorum:
-                # Preserve quorum from the template InputSpec when children expand.
-                orig_needed = task_quorum_needed(orig_inputs)
-                if has_quorum_spec(orig_inputs) and bind_task.spec.inputs:
-                    q = next(i.quorum for i in orig_inputs if i.quorum is not None)
-                    bind_task = bind_task.model_copy(
-                        update={
-                            "spec": bind_task.spec.model_copy(
-                                update={
-                                    "inputs": [inp.model_copy(update={"quorum": q}) for inp in bind_task.spec.inputs]
-                                }
-                            )
-                        }
-                    )
-                # Foreach → 0 children but quorum > 0 → honest miss.
-                if not bind_task.spec.inputs and orig_needed > 0:
-                    raise InputUnavailable("quorum")
-                bindings, derived, limitations = bind_with_quorum(
-                    bind_task,
+            if use_groups:
+                bindings, derived, limitations = bind_input_groups(
+                    groups,
                     dep_tasks=self._dep_map(),
                     dep_outputs=self.dep_outputs,
                     dep_provenance=self.dep_provenance,
@@ -247,7 +226,7 @@ class AttemptsMixin:
                 )
             else:
                 bindings, derived = bind_inputs(
-                    bind_task,
+                    task,
                     dep_tasks=self._dep_map(),
                     dep_outputs=self.dep_outputs,
                     dep_provenance=self.dep_provenance,
@@ -256,7 +235,13 @@ class AttemptsMixin:
                     verdict_snapshots=verdict_snapshots,
                 )
         except InputUnavailable as e:
-            detail = "quorum" if str(e.reason) == "quorum" else None
+            kids = children_map
+            if any(i.from_task in kids and not kids[i.from_task] for i in task.spec.inputs):
+                detail = "foreach_empty"
+            elif str(e.reason) == "quorum" or any(i.quorum is not None for i in task.spec.inputs):
+                detail = "quorum"
+            else:
+                detail = None
             await self.cancel_task(
                 task.task_id,
                 reason=TaskReason.INPUT_UNAVAILABLE,

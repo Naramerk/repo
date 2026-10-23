@@ -94,6 +94,10 @@ def expansion_not_done_line(reason: str, detail: str) -> str:
     """Report line for ExpansionRefused (DESIGN_M1 §4 — Russian wording)."""
     r = str(reason or "")
     d = str(detail or "")
+    if d.startswith("foreach_"):
+        if "assign_keys" in d or "exception" in d:
+            return "не выполнено: ошибка foreach"
+        return "не выполнено: невалидный запрос"
     if r in ("invalid", "invalid_hitl") or d.startswith("invalid"):
         return "не выполнено: невалидный запрос"
     if r == "has_refutation":
@@ -117,12 +121,11 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
                 except ValueError:
                     continue
                 seen.append(str(reason))
-            # PR10: quorum miss → honest Russian line alongside TaskReason.
-            if (
-                ev.payload.get("detail") == "quorum"
-                and "не выполнено: кворум входов" not in seen
-            ):
+            detail = ev.payload.get("detail")
+            if detail == "quorum" and "не выполнено: кворум входов" not in seen:
                 seen.append("не выполнено: кворум входов")
+            if detail == "foreach_empty" and "не выполнено: foreach пуст" not in seen:
+                seen.append("не выполнено: foreach пуст")
         elif ev.type == "ExpansionRefused":
             line = expansion_not_done_line(
                 str(ev.payload.get("reason") or ""),
@@ -135,10 +138,23 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
             added = ev.payload.get("added_tasks") or []
             if len(items) == 0 and len(added) == 0:
                 line = "не выполнено: foreach пуст"
+                if line not in seen:
+                    seen.append(line)
+                if ev.payload.get("foreach_refute"):
+                    refute_line = "не выполнено: проверка опровержения не выполнена"
+                    if refute_line not in seen:
+                        seen.append(refute_line)
             else:
                 line = f"foreach: развёрнуто {len(added)}"
-            if line not in seen:
-                seen.append(line)
+                if line not in seen:
+                    seen.append(line)
+                if ev.payload.get("foreach_capped"):
+                    cap_line = (
+                        f"ограничение foreach: взято {len(added)} "
+                        f"из лимита {ev.payload.get('foreach_cap')}"
+                    )
+                    if cap_line not in seen:
+                        seen.append(cap_line)
     return seen
 
 

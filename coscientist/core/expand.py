@@ -428,6 +428,10 @@ async def _expand_plan(
         )
     )
     await runtime._append(events)  # noqa: SLF001
+    # B1: newly added foreach templates whose of_task is already DONE.
+    from coscientist.core.foreach import materialize_ready_foreach
+
+    await materialize_ready_foreach(runtime)
     return pid
 
 

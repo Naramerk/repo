@@ -320,6 +320,8 @@ class Study(Frozen):
     max_tasks: int = Field(default=64, ge=1)
     max_depth: int = Field(default=8, ge=1)  # decomposes depth (DESIGN_M1 §4 / §10)
     plan_timeout_s: int = Field(default=600, ge=1)
+    # PR10: cap foreach children; excess → report limitation (sorted order kept).
+    max_foreach_children: int = Field(default=32, ge=1)
 
     def effective_deadline(self) -> datetime:
         """Last instant usable by tasks/attempts/HITL (deadline − finalize reserve)."""

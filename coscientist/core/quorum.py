@@ -1,7 +1,13 @@
-"""Fan-in quorum binding (M1 PR10 / S9).
+"""Fan-in quorum binding (M1 PR10 / S9) — per-input, never silent.
 
-A summary task starts when ≥ quorum inputs resolve to real/partial; the rest
-become ``Limitation`` rows (Russian text) on the attempt / experiment node.
+Each ``InputSpec`` is its own group (after foreach expansion of ``from_task``):
+- ``quorum is None`` → every member must bind real/partial (required).
+- ``quorum == "all"`` → same.
+- ``quorum: int`` (≥1) → need ≥ that many real/partial members; rest → limitations.
+
+Inputs with a quorum set form independent groups; a required input is never
+softened by another input's quorum. Zero counted bindings never yield
+provenance ``real``.
 """
 
 from __future__ import annotations
@@ -30,39 +36,28 @@ from coscientist.core.inputs import (
 )
 
 
-def task_quorum_needed(inputs: list[InputSpec]) -> int:
-    """How many real/partial bindings are required to start.
-
-    No ``quorum`` set → all inputs (legacy). Any ``"all"`` → all.
-    Otherwise the minimum positive int declared (easier threshold wins when
-    several inputs disagree — typically they share one value).
-    """
-    n = len(inputs)
-    if n == 0:
-        return 0
-    explicit = [i.quorum for i in inputs if i.quorum is not None]
-    if not explicit:
-        return n
-    if any(q == "all" for q in explicit):
-        return n
-    ints = [int(q) for q in explicit if q != "all"]
-    if not ints:
-        return n
-    return max(0, min(ints))
-
-
-def has_quorum_spec(inputs: list[InputSpec]) -> bool:
-    return any(i.quorum is not None for i in inputs)
-
-
 def validate_quorum_specs(tasks: list[TaskSpec]) -> None:
     for t in tasks:
         for inp in t.inputs:
             q = inp.quorum
             if q is None or q == "all":
                 continue
-            if not isinstance(q, int) or q < 0:
-                raise ValueError(f"InputSpec.quorum must be >=0 or 'all' (task {t.task_key!r})")
+            if not isinstance(q, int) or q < 1:
+                raise ValueError(
+                    f"InputSpec.quorum must be >=1 or 'all' (task {t.task_key!r})"
+                )
+
+
+def has_quorum_spec(inputs: list[InputSpec]) -> bool:
+    return any(i.quorum is not None for i in inputs)
+
+
+def group_needed(orig: InputSpec, n_members: int) -> int:
+    """How many real/partial members this InputSpec group requires."""
+    q = orig.quorum
+    if q is None or q == "all":
+        return n_members
+    return max(1, int(q))
 
 
 def _try_bind_one(
@@ -85,7 +80,9 @@ def _try_bind_one(
             if snap is None:
                 raise InputUnavailable("verdict_unavailable")
             source_raw = snap.get("provenance", "real")
-            source: Provenance = source_raw if source_raw in VALID_PROVENANCE else "stub"  # type: ignore[assignment]
+            source: Provenance = (
+                source_raw if source_raw in VALID_PROVENANCE else "stub"
+            )  # type: ignore[assignment]
             digest = verdict_binding_digest(ref=spec.ref, snapshot=snap)
             binding = InputBinding(
                 input=spec.ref,
@@ -119,7 +116,6 @@ def _try_bind_one(
             )
             return binding, source, None
 
-        # artifact
         if not spec.from_task or not spec.output:
             raise InputUnavailable("artifact_spec_incomplete")
         mode = normalize_input_mode(spec)
@@ -203,8 +199,58 @@ def _try_bind_one(
         )
 
 
-def bind_with_quorum(
-    task: Task,
+def _bind_members(
+    members: list[InputSpec],
+    *,
+    needed: int,
+    miss_reason: str,
+    dep_tasks: dict[str, Task],
+    dep_outputs: dict[str, dict[str, str]],
+    dep_provenance: dict[str, Provenance],
+    known_claim_ids: set[str],
+    claim_provenance: dict[str, Provenance],
+    verdict_snapshots: dict[str, dict[str, Any]],
+) -> tuple[list[InputBinding], list[Provenance], list[Limitation]]:
+    bindings: list[InputBinding] = []
+    provs: list[Provenance] = []
+    limitations: list[Limitation] = []
+    ok: list[tuple[InputBinding, Provenance]] = []
+    for spec in members:
+        binding, source, lim = _try_bind_one(
+            spec,
+            dep_tasks=dep_tasks,
+            dep_outputs=dep_outputs,
+            dep_provenance=dep_provenance,
+            known_claim_ids=known_claim_ids,
+            claim_provenance=claim_provenance,
+            verdict_snapshots=verdict_snapshots,
+        )
+        if lim is not None:
+            limitations.append(lim)
+            continue
+        assert binding is not None and source is not None
+        if source in ("real", "partial"):
+            ok.append((binding, source))
+        else:
+            limitations.append(
+                Limitation(
+                    text=(
+                        f"вход {binding.input} не засчитывается в кворум "
+                        f"(provenance={source})"
+                    ),
+                    ref=spec.from_task or spec.ref,
+                )
+            )
+    if len(ok) < needed:
+        raise InputUnavailable(miss_reason)
+    for b, s in ok:
+        bindings.append(b)
+        provs.append(s)
+    return bindings, provs, limitations
+
+
+def bind_input_groups(
+    groups: list[tuple[InputSpec, list[InputSpec]]],
     *,
     dep_tasks: dict[str, Task],
     dep_outputs: dict[str, dict[str, str]],
@@ -213,13 +259,17 @@ def bind_with_quorum(
     claim_provenance: dict[str, Provenance] | None = None,
     verdict_snapshots: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[InputBinding], Provenance, list[Limitation]]:
-    """Resolve inputs under quorum: ≥ needed real/partial, rest → limitations.
+    """Bind groups with per-input quorum semantics.
 
-    Raises ``InputUnavailable`` when fewer than needed succeed (caller skips).
-    Stub-only bindings do **not** count toward quorum (DESIGN: real/partial).
+    - ``quorum is None``: that input's members are all required (never softened
+      by another input's quorum).
+    - Explicit ``quorum``: inputs sharing the **same** quorum value form one
+      fan-in pool needing that many real/partial members (static A+B+C or
+      foreach children of one template).
+
+    Empty member list (foreach → 0 children) is always a miss.
+    Zero counted bindings never return provenance ``real``.
     """
-    specs = list(task.spec.inputs)
-    needed = task_quorum_needed(specs)
     claims = known_claim_ids or set()
     claim_prov = claim_provenance or {}
     snapshots = verdict_snapshots or {}
@@ -227,11 +277,31 @@ def bind_with_quorum(
     bindings: list[InputBinding] = []
     provs: list[Provenance] = []
     limitations: list[Limitation] = []
-    counted = 0
 
-    for spec in specs:
-        binding, source, lim = _try_bind_one(
-            spec,
+    required: list[tuple[InputSpec, list[InputSpec]]] = []
+    pools: dict[Any, list[tuple[InputSpec, list[InputSpec]]]] = {}
+    for orig, members in groups:
+        if orig.quorum is None:
+            required.append((orig, members))
+        else:
+            pools.setdefault(orig.quorum, []).append((orig, members))
+
+    for orig, members in required:
+        if not members:
+            limitations.append(
+                Limitation(
+                    text=(
+                        f"вход {orig.from_task or orig.ref or '?'} "
+                        f"недоступен (foreach пуст)"
+                    ),
+                    ref=orig.from_task or orig.ref,
+                )
+            )
+            raise InputUnavailable("input_unavailable")
+        b, p, lims = _bind_members(
+            members,
+            needed=len(members),
+            miss_reason="input_unavailable",
             dep_tasks=dep_tasks,
             dep_outputs=dep_outputs,
             dep_provenance=dep_provenance,
@@ -239,25 +309,41 @@ def bind_with_quorum(
             claim_provenance=claim_prov,
             verdict_snapshots=snapshots,
         )
-        if lim is not None:
-            limitations.append(lim)
-            continue
-        assert binding is not None and source is not None
-        if source in ("real", "partial"):
-            counted += 1
-            bindings.append(binding)
-            provs.append(source)
-        else:
-            # stub does not satisfy quorum — record as limitation, do not bind.
-            limitations.append(
-                Limitation(
-                    text=(f"вход {binding.input} не засчитывается в кворум (provenance={source})"),
-                    ref=spec.from_task or spec.ref,
-                )
-            )
+        bindings.extend(b)
+        provs.extend(p)
+        limitations.extend(lims)
 
-    if counted < needed:
-        raise InputUnavailable("quorum")
+    for qval, entries in pools.items():
+        flat: list[InputSpec] = []
+        for orig, members in entries:
+            if not members:
+                limitations.append(
+                    Limitation(
+                        text=(
+                            f"вход {orig.from_task or orig.ref or '?'} "
+                            f"недоступен (foreach пуст)"
+                        ),
+                        ref=orig.from_task or orig.ref,
+                    )
+                )
+                raise InputUnavailable("quorum")
+            flat.extend(members)
+        needed = len(flat) if qval == "all" else max(1, int(qval))
+        b, p, lims = _bind_members(
+            flat,
+            needed=needed,
+            miss_reason="quorum",
+            dep_tasks=dep_tasks,
+            dep_outputs=dep_outputs,
+            dep_provenance=dep_provenance,
+            known_claim_ids=claims,
+            claim_provenance=claim_prov,
+            verdict_snapshots=snapshots,
+        )
+        bindings.extend(b)
+        provs.extend(p)
+        limitations.extend(lims)
+
     if not provs:
-        return bindings, "real", limitations
+        raise InputUnavailable("quorum")
     return bindings, worst_provenance(*provs), limitations

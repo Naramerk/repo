@@ -158,6 +158,12 @@ def _validate(
             if qid not in texts and qid not in active_q_ids:
                 return f"unknown question id in addresses: {qid!r}"
     validate_input_specs(merged)
+    from coscientist.core.foreach import validate_foreach_specs
+
+    try:
+        validate_foreach_specs(merged, known_keys=keys)
+    except ValueError as e:
+        return str(e) or "invalid_foreach"
     catalog = getattr(runtime, "catalog", None) or getattr(
         getattr(runtime, "executor", None), "catalog", None
     )
