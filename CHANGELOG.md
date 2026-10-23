@@ -9,11 +9,7 @@
 
 ### M1 PR16 follow-up
 - Finalize LeaseLost reraise coverage for `_primary_report_path` / `render_markdown_report` / `build_minimal_report`.
-<<<<<<< HEAD
 - `dispositions()` order on main `7217a95` (#28+#31+#33): skip_cap/scoped_capped → `apply_loop_cap_dispositions` → `_stamp_honest_terminals` → `apply_rollup`. Skip cap only for decomposes parents with **no own covering tasks** (plans + ``runtime.tasks`` addresses — foreach/expand/loop). Combined cover **excludes** ``superseded`` / ``cancelled`` (fold ``TaskDone.reason``) so dead tasks cannot falsely keep a parent under loop-cap.
-=======
-- `dispositions()` order on main `9494350` (#28+#31+#33+#32): skip_cap/scoped_capped → `apply_loop_cap_dispositions` → `_stamp_honest_terminals` → `apply_rollup`. Skip cap only for decomposes parents with **no own covering tasks** (plans + ``runtime.tasks`` addresses — foreach/expand/loop). Combined cover **excludes** ``superseded`` / ``cancelled`` (fold ``TaskDone.reason``) so dead tasks cannot falsely keep a parent under loop-cap.
->>>>>>> 6b6d286 (fix(pr20): macaque #30 — rebase main, fail-closed prereg, journal reviewer)
 - Combined cover (plans ∪ runtime) can change ``not_attempted`` reason for questions that previously had ``no_task`` (e.g. runtime-only covering → ``tasks_skipped`` / ``tasks_failed``; cancelled-only covering → empty cover → ``no_task`` again).
 - Equal-rank rollup keeps own without false ``rollup_clamped``; lowering preserves ``iteration_cap`` in ``reason_detail``. Clamp predicate includes ``terminal=True`` (#28).
 
