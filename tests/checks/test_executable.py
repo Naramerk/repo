@@ -207,17 +207,21 @@ def test_sandbox_allow_network_runs_but_not_trusted(tmp_path):
     assert cr.effect.get("trusted") is False
 
 
-def test_sandbox_sleep_bypass_is_idle_timeout():
-    """Guest sleep past wall → idle_timeout (low cpu/wall; not infra escape)."""
+def test_sandbox_sleep_bypass_is_idle_or_wall_timeout():
+    """Guest sleep past wall → idle when cpu.stat measured; else wall (not infra)."""
     _require_hard()
     r = run_sandbox(
         ["python3", "-c", "import time; time.sleep(1e9)"],
         limits=SandboxLimits(timeout_s=0.3, memory_mb=64, max_output_bytes=10_000),
     )
     assert r.status is SandboxStatus.TIMEOUT
-    assert r.reason == "idle_timeout"
     assert r.is_guest_timeout
     assert r.status not in INFRA_STATUSES
+    if r.cpu_usage_s is not None:
+        assert r.reason == "idle_timeout"
+    else:
+        # Without cpu.stat we refuse to guess sabotage.
+        assert r.reason == "wall_timeout"
 
 
 def test_sandbox_busy_loop_is_cpu_or_wall_timeout():
@@ -1331,6 +1335,13 @@ def test_classify_guest_timeout_idle_vs_busy():
     assert (
         classify_guest_timeout(
             kill_cause="wall", duration_s=1.0, cpu_usage_s=0.5
+        )
+        == "wall_timeout"
+    )
+    # Missing cpu.stat → never idle (cannot prove sabotage).
+    assert (
+        classify_guest_timeout(
+            kill_cause="wall", duration_s=1.0, cpu_usage_s=None
         )
         == "wall_timeout"
     )

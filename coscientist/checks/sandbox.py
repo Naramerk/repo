@@ -581,11 +581,17 @@ def classify_guest_timeout(
     cpu_usage_s: float | None,
     idle_ratio: float = IDLE_CPU_WALL_RATIO,
 ) -> str:
-    """Host-only classification: idle_timeout | cpu_timeout | wall_timeout."""
+    """Host-only classification: idle_timeout | cpu_timeout | wall_timeout.
+
+    Idle detection requires a measured ``cpu_usage_s`` from cgroup ``cpu.stat``.
+    When usage is unavailable, never guess sabotage — report ``wall_timeout``.
+    """
     if kill_cause == "cpu":
         return "cpu_timeout"
+    if cpu_usage_s is None:
+        return "wall_timeout"
     wall = max(float(duration_s), 1e-6)
-    cpu = float(cpu_usage_s) if cpu_usage_s is not None else 0.0
+    cpu = float(cpu_usage_s)
     if (cpu / wall) < float(idle_ratio):
         return "idle_timeout"
     return "wall_timeout"
