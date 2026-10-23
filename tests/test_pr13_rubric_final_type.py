@@ -392,19 +392,20 @@ async def test_final_type_artifact_fulfilled_by_rubric(tmp_path, clock):
         ),
     )
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E0")
-    assert task.outcome in (TaskOutcome.SUCCESS, TaskOutcome.PARTIAL)
+    assert task.outcome == TaskOutcome.SUCCESS
     await _complete_report_and_finalize(rt, tmp_path)
     fin = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
     assert len(fin) == 1
     payload = fin[-1].payload
-    assert payload.get("report_artifact_id") is not None or payload.get("minimal_report") is not None
+    assert payload.get("report_artifact_id") is not None
     qdisp = payload.get("question_dispositions") or {}
     assert qdisp.get("Q1", {}).get("disposition") == "answered"
     assert qdisp.get("Q1", {}).get("reason") == "rubric_met"
     view = rt.view()
     assert view.phase == "closed"
     assert view.verdict == payload.get("verdict")
-    assert view.verdict in ("fulfilled", "partial")
+    # Bootstrap cancels SPEC/HYP/LIT → not all required SUCCESS → partial (not raise).
+    assert view.verdict == "partial"
 
 
 @pytest.mark.asyncio
@@ -452,7 +453,7 @@ async def test_rubric_change_only_via_expansion(tmp_path, clock):
         superseded_tasks=[],
         reason="edit rubric",
     )
-    assert refused is None or refused is False
+    assert refused is None
     events = await rt.store.read_all()
     assert any(e.type == "ExpansionRefused" for e in events)
     # With supersede → accepted.
@@ -505,7 +506,7 @@ async def test_impossible_task_still_closes_with_report(tmp_path, clock):
     await _complete_report_and_finalize(rt, tmp_path)
     fin = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
     assert len(fin) == 1
-    assert fin[0].payload.get("report_artifact_id") is not None or fin[0].payload.get("minimal_report") is not None
+    assert fin[0].payload.get("report_artifact_id") is not None
     # Failed rubric → distinct RUBRIC_NOT_MET + RU report line.
     qdisp = fin[0].payload.get("question_dispositions") or {}
     assert "Q1" in qdisp
@@ -978,6 +979,14 @@ def test_study_fulfilled_wires_final_types():
         True,
         question_final_types={"Q1": "both"},
     )
+    # Decision: these block fulfilled for every final_type (incl. verdict).
+    for ft in ("verdict", "artifact", "both"):
+        for bad in ("not_attempted", "inconclusive", "rubric_not_met", "rubric_pending", "untested"):
+            assert not study_fulfilled(
+                {"Q1": bad},
+                True,
+                question_final_types={"Q1": ft},
+            ), (ft, bad)
 
 
 def test_review_key_scoped_no_cross_attempt():
@@ -1217,49 +1226,69 @@ async def test_corrupt_judge_cas_finalizes_internal_error(tmp_path, clock):
 
 @pytest.mark.asyncio
 async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
-    """final_type=both: failed rubric must not set claim validity_failed (PR 8b)."""
-    from coscientist.core.domain import CheckResult, Task, TaskKind, TaskState
-    from coscientist.core.executor import _derive_claim_core_attrs, _is_rubric_check
-
+    """final_type=both via executor: failed rubric ≠ claim validity_failed (PR 8b)."""
+    rt = await _boot(tmp_path, clock, "st_pr13_validity_ok")
     rub = _judge_only_rubric()
-    cr = CheckResult(
-        check_id=f"rubric:{rub.digest}#out",
-        template_id=f"rubric:{rub.digest}",
-        status=ReqStatus.FAILED,
-        is_code=False,
-        required=True,
-        role="validity",
-        effect={"rubric_kind": "rubric", "rubric_digest": rub.digest, "affects_stance": False},
+    await rt.accept_plan(
+        [
+            _exp(
+                "E0",
+                addresses=["Q1"],
+                rubric=rub,
+                criteria=[RequirementRef(template_id="artifact_present")],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="both?", final_type="both")],
     )
-    assert _is_rubric_check(cr)
-    spec = _exp(
-        "E0",
-        addresses=["Q1"],
-        rubric=rub,
-        criteria=[RequirementRef(template_id="value_match")],
+    ex, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("E0")
+    assert aid is not None
+    art = arts.put(
+        b"body",
+        make_tool_ref(f"{aid}:main"),
+        name="main",
+        media_type="text/markdown",
     )
-    task = Task(
-        task_id="s/E0",
-        kind=TaskKind.EXPERIMENT,
-        spec=spec,
-        state=TaskState.DONE,
-        deadline=clock.now() + timedelta(hours=1),
-        outcome=TaskOutcome.FAILED,
-        attempts=["a1"],
+    out_check = f"rubric:{rub.digest}#out"
+    pending = await ex.record(
+        aid,
+        AgentTaskOutput(
+            summary="claim",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            claims=[
+                {
+                    "text": "c1",
+                    "polarity": "supports",
+                    "target": "Q1",
+                    "about": "Q1",
+                }
+            ],
+        ),
     )
-    attrs = _derive_claim_core_attrs(
-        task,
-        TaskOutcome.FAILED,
-        raw={"text": "c", "polarity": "supports"},
-        checks=[cr],
-        validated=True,
-        catalog=None,
-        graph=None,
-        study_id="s",
-        attempt_id="a1",
+    assert pending.reason == "required_checks_pending"
+    # Judge not-met → rubric FAILED; compute_outcome is PARTIAL (artifact MET + rubric FAILED).
+    final = await ex.record_review(aid, out_check, item_id="adequate", status=ReqStatus.FAILED)
+    assert final.outcome.value == "PARTIAL"
+    recorded = next(e for e in await rt.store.read_all() if e.type == "ResultRecorded")
+    rub_cr = next(
+        c
+        for c in (recorded.payload.get("check_results") or [])
+        if str(c.get("check_id") or "").startswith("rubric:")
     )
-    assert attrs.get("validity_ok") is True
-    assert attrs.get("exclusion_reason") != "validity_failed"
+    assert rub_cr.get("status") == "FAILED"
+    assert rub_cr.get("role") == "validity"
+    # Claims land as GraphNodeUpserted — failed rubric must not mark validity_failed.
+    claim_nodes = [
+        e
+        for e in await rt.store.read_all()
+        if e.type == "GraphNodeUpserted" and ":claim:" in str(e.payload.get("node_id") or "")
+    ]
+    assert claim_nodes, "executor must upsert claim nodes"
+    for e in claim_nodes:
+        attrs = e.payload.get("attrs") or {}
+        assert attrs.get("validity_ok") is True
+        assert attrs.get("exclusion_reason") != "validity_failed"
+    await close_runtime(rt)
 
 
 def test_met_one_task_never_covers_another(clock):

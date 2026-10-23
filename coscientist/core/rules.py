@@ -160,14 +160,23 @@ def priority_refuted_support_note(
     return excluded_confirmations_note(claims, verdict_value=v)
 
 
-_BLOCKING_VERDICTS = frozenset({"untested", "not_attempted", "rubric_not_met"})
+# Caps fulfilled for every final_type (aligns with study_view._disposition_blocks_fulfilled).
+_FULFILLMENT_BLOCKING = frozenset(
+    {
+        "untested",
+        "not_attempted",
+        "inconclusive",
+        "rubric_not_met",
+        "rubric_pending",
+    }
+)
 # Disposition values that settle a question (not raw claim "supported").
+# ``inconclusive`` is intentionally excluded — it blocks fulfilled (PR13).
 _SETTLED_DISPOSITIONS = frozenset(
     {
         "answered",
         "refuted",
         "survived",
-        "inconclusive",
         "needs_more_data",
         "infeasible",
         "ill_posed",
@@ -183,25 +192,29 @@ def study_fulfilled(
 ) -> bool:
     """Fulfilled when required tasks succeed and every question is settled.
 
+    Always blocked by not_attempted / inconclusive / rubric_not_met /
+    rubric_pending / untested (never raise study_view past partial).
+
     ``final_type=artifact``: settled ⇔ disposition is answered (rubric MET).
-    ``final_type=both``: settled ⇔ disposition answered/refuted/… (verdict + rubric).
-    ``final_type=verdict``: untested blocks (DESIGN_M1 §6.1).
+    ``final_type=both``: settled ⇔ disposition in answered/refuted/survived/….
+    ``final_type=verdict``: blocking set above; other settled values ok.
     """
     if not all_required_success:
         return False
     ftypes = question_final_types or {}
     for qid, v in question_verdicts.items():
+        if v in _FULFILLMENT_BLOCKING:
+            return False
         ft = ftypes.get(qid, "verdict")
         if ft == "artifact":
             if v != "answered":
                 return False
             continue
         if ft == "both":
-            if v in _BLOCKING_VERDICTS or v not in _SETTLED_DISPOSITIONS:
+            if v not in _SETTLED_DISPOSITIONS:
                 return False
             continue
-        if v == "untested":
-            return False
+        # verdict: blocking already applied; remaining values may fulfill
     return True
 
 
