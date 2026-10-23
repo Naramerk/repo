@@ -114,8 +114,9 @@ def _require_int_n(params: dict[str, Any]) -> int:
     if n < 0:
         raise PlanInvalid("survivors_le params.n must be >= 0")
     if n > SURVIVORS_LE_N_MAX:
+        # Do not interpolate ``n`` — huge ints blow f-string formatting.
         raise PlanInvalid(
-            f"survivors_le params.n must be <= {SURVIVORS_LE_N_MAX} (got {n})"
+            f"survivors_le params.n must be <= {SURVIVORS_LE_N_MAX}"
         )
     return n
 

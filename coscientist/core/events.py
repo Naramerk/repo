@@ -27,7 +27,9 @@ class EventEnvelope(BaseModel):
 
 # Writer constants (bump + upcaster on rebase after #21/#23 → TaskCreated v11 etc.).
 PLAN_EXPANDED_SCHEMA_VERSION = 1
-TASK_CREATED_SCHEMA_VERSION = 10
+STUDY_CREATED_SCHEMA_VERSION = 10
+PLAN_ACCEPTED_SCHEMA_VERSION = 9
+TASK_CREATED_SCHEMA_VERSION = 11
 
 EventType = Literal[
     "StudyCreated",

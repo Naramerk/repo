@@ -204,10 +204,14 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
             if TASK_BUDGET_OVERRUN_LINE not in seen:
                 seen.append(TASK_BUDGET_OVERRUN_LINE)
         elif ev.type == "ExpansionRefused":
-            line = expansion_not_done_line(
-                str(ev.payload.get("reason") or ""),
-                str(ev.payload.get("detail") or ""),
-            )
+            custom = (ev.payload or {}).get("report_line")
+            if custom:
+                line = str(custom)
+            else:
+                line = expansion_not_done_line(
+                    str(ev.payload.get("reason") or ""),
+                    str(ev.payload.get("detail") or ""),
+                )
             if line not in seen:
                 seen.append(line)
         elif ev.type == "PlanExpanded" and ev.payload.get("foreach"):

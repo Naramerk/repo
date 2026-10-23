@@ -185,9 +185,9 @@ def validate_loop_specs(
         if int(ls.max_iter) < 1:
             raise PlanInvalid(f"LoopSpec.max_iter must be >= 1 (loop {lid!r})")
         if int(ls.max_iter) > int(max_loop_iter):
+            # Do not interpolate max_iter values — huge ints blow f-strings.
             raise PlanInvalid(
-                f"LoopSpec.max_iter {ls.max_iter} > study.max_loop_iter "
-                f"{max_loop_iter} (loop {lid!r})"
+                f"LoopSpec.max_iter > study.max_loop_iter (loop {lid!r})"
             )
         if not ls.body:
             raise PlanInvalid(f"LoopSpec.body empty (loop {lid!r})")
@@ -561,69 +561,86 @@ async def _emit_loop_refused(
     detail: str,
     reason: str = LOOP_REASON_ERROR,
 ) -> None:
-    """Journal LoopRefused + LoopCapped(reason=error|refused) without re-eval."""
+    """Journal LoopRefused + LoopCapped + ExpansionRefused in one append batch.
+
+    Single batch avoids mid-emit ``status=refused`` early-outs that would skip
+    LoopCapped (live ≡ replay needs ``_loop_capped`` populated).
+    """
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return
     if loop_is_complete(runtime, loop.loop_id):
+        return
+    capped = getattr(runtime, "_loop_capped", None) or {}
+    if isinstance(capped, dict) and loop.loop_id in capped:
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
     detail_s = detail[:200]
     after = loop.depends_on[0] if loop.depends_on else loop.loop_id
-    # LoopRefused first (distinct from iteration_cap); then LoopCapped for barrier.
-    await runtime._append(  # noqa: SLF001
-        [
-            EventEnvelope(
-                study_id=sid,
-                type="LoopRefused",
-                entity_key=f"{sid}:loop:{loop.loop_id}",
-                idem_key=make_idem("LoopRefused", sid, loop.loop_id, reason),
-                payload={
-                    "loop_id": loop.loop_id,
-                    "iter": iter_n,
-                    "max_iter": int(loop.max_iter),
-                    "reason": reason,
-                    "detail": detail_s,
-                    "scope_hypotheses": list(loop.scope_hypotheses),
-                    "scope_questions": list(loop.scope_questions),
-                    "until": loop.until.model_dump(mode="json"),
-                },
-                ts=now,
-                schema_version=1,
-            )
-        ]
-    )
-    await _emit_loop_capped(
-        runtime,
-        loop,
-        iter_n=iter_n,
-        reason=reason,
-        detail=detail_s,
-        survivors=None,  # never recompute — predicate may be what failed
-    )
-    await runtime._append(  # noqa: SLF001
-        [
-            EventEnvelope(
-                study_id=sid,
-                type="ExpansionRefused",
-                entity_key=f"{sid}:loop:{loop.loop_id}:{reason}",
-                idem_key=make_idem(
-                    "ExpansionRefused", sid, f"loop:{loop.loop_id}", reason, detail_s
-                ),
-                payload={
-                    "after_task": after,
-                    "reason": "invalid",
-                    "detail": detail_s,
-                    "plan_key": None,
-                    "loop_id": loop.loop_id,
-                    "loop": True,
-                    "loop_reason": reason,
-                },
-                ts=now,
-                schema_version=1,
-            )
-        ]
-    )
+    until = loop.until.model_dump(mode="json")
+    scope_h = list(loop.scope_hypotheses)
+    scope_q = list(loop.scope_questions)
+    max_i = int(loop.max_iter)
+    events = [
+        EventEnvelope(
+            study_id=sid,
+            type="LoopRefused",
+            entity_key=f"{sid}:loop:{loop.loop_id}",
+            idem_key=make_idem("LoopRefused", sid, loop.loop_id, reason),
+            payload={
+                "loop_id": loop.loop_id,
+                "iter": iter_n,
+                "max_iter": max_i,
+                "reason": reason,
+                "detail": detail_s,
+                "scope_hypotheses": scope_h,
+                "scope_questions": scope_q,
+                "until": until,
+            },
+            ts=now,
+            schema_version=1,
+        ),
+        EventEnvelope(
+            study_id=sid,
+            type="LoopCapped",
+            entity_key=f"{sid}:loop:{loop.loop_id}",
+            idem_key=make_idem("LoopCapped", sid, loop.loop_id, reason),
+            payload={
+                "loop_id": loop.loop_id,
+                "iter": iter_n,
+                "max_iter": max_i,
+                "survivors": None,  # never recompute — predicate may be what failed
+                "scope_hypotheses": scope_h,
+                "scope_questions": scope_q,
+                "until": until,
+                "reason": reason,
+                "detail": detail_s,
+                "refuse_detail": detail_s,
+            },
+            ts=now,
+            schema_version=1,
+        ),
+        EventEnvelope(
+            study_id=sid,
+            type="ExpansionRefused",
+            entity_key=f"{sid}:loop:{loop.loop_id}:{reason}",
+            idem_key=make_idem(
+                "ExpansionRefused", sid, f"loop:{loop.loop_id}", reason, detail_s
+            ),
+            payload={
+                "after_task": after,
+                "reason": "invalid",
+                "detail": detail_s,
+                "plan_key": None,
+                "loop_id": loop.loop_id,
+                "loop": True,
+                "loop_reason": reason,
+            },
+            ts=now,
+            schema_version=1,
+        ),
+    ]
+    await runtime._append(events)  # noqa: SLF001
 
 
 async def _emit_loop_completed(
@@ -674,6 +691,70 @@ async def _refuse_loop(
     await _emit_loop_refused(
         runtime, loop, iter_n=cur, detail=detail, reason=reason
     )
+
+
+async def _emit_loop_advance_failed(
+    runtime: StudyRuntime, *, detail: str
+) -> None:
+    """Journal ExpansionRefused when no LoopSpec context is available."""
+    if runtime.study is None or getattr(runtime, "_finalized", False):
+        return
+    sid = runtime.study.study_id
+    now = runtime.clock.now()
+    detail_s = detail[:200]
+    await runtime._append(  # noqa: SLF001
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="ExpansionRefused",
+                entity_key=f"{sid}:loop_advance:error",
+                idem_key=make_idem("ExpansionRefused", sid, "loop_advance", detail_s),
+                payload={
+                    "after_task": None,
+                    "reason": "invalid",
+                    "detail": detail_s,
+                    "plan_key": None,
+                    "loop": True,
+                    "loop_reason": LOOP_REASON_ERROR,
+                    "report_line": "не выполнено: внутренняя ошибка (loop)",
+                },
+                ts=now,
+                schema_version=1,
+            )
+        ]
+    )
+
+
+async def finalize_loop_internal_error(
+    runtime: StudyRuntime,
+    *,
+    exc: BaseException,
+    loop: LoopSpec | None = None,
+) -> None:
+    """Journal the unexpected loop error (never silent) and finalize study.
+
+    Terminal reason is ``internal_error`` (public ``TerminalReason.INTERNAL_ERROR``,
+    same as #21). Expected predicate failures use ``_refuse_loop`` instead.
+    """
+    if runtime.study is None or getattr(runtime, "_finalized", False):
+        return
+    detail = f"loop_advance:{type(exc).__name__}:{exc}"[:200]
+    try:
+        if loop is not None:
+            await _emit_loop_refused(
+                runtime,
+                loop,
+                iter_n=current_iter(runtime, loop.loop_id) or 0,
+                detail=detail,
+                reason=LOOP_REASON_ERROR,
+            )
+        else:
+            await _emit_loop_advance_failed(runtime, detail=detail)
+    except Exception:  # noqa: BLE001 — still must finalize
+        pass
+    import coscientist.core.finalize as finalize_mod
+
+    await finalize_mod.finalize(runtime, trigger="internal_error")
 
 
 async def refuse_orphaned_loop_barriers(runtime: StudyRuntime) -> int:
@@ -743,18 +824,23 @@ async def _advance_one(runtime: StudyRuntime, loop: LoopSpec) -> str | None:
 async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
     """Advance all loops that can take a step (start / next iter / cap / complete).
 
-    Expected eval failures (unknown predicate) → LoopRefused + LoopCapped(reason=error).
-    Real bugs propagate (never disguised as iteration_cap). Post-#21 rebase:
-    callers/finalize may map those to ``TerminalReason.INTERNAL_ERROR``.
+    Expected eval failures (unknown predicate) → LoopRefused + LoopCapped(reason=error)
+    without finalizing the study. Any other exception → journal + finalize
+    ``internal_error`` (never leave TaskDone without StudyFinalized; never
+    disguise as iteration_cap). Does not re-raise after finalize.
     """
     done: list[str] = []
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return done
-    # Orphan scan / plan parse bugs propagate (honest failure → INTERNAL_ERROR
-    # after #21). Expected predicate eval failures are caught per-loop below.
-    await refuse_orphaned_loop_barriers(runtime)
-    loops = _loops_from_plans(runtime)
+    try:
+        await refuse_orphaned_loop_barriers(runtime)
+        loops = _loops_from_plans(runtime)
+    except Exception as e:  # noqa: BLE001 — journal + finalize, never hang
+        await finalize_loop_internal_error(runtime, exc=e, loop=None)
+        return done
     for loop in loops:
+        if getattr(runtime, "_finalized", False):
+            break
         try:
             pid = await _advance_one(runtime, loop)
             if pid:
@@ -766,7 +852,9 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
                 detail=f"loop_predicate:{type(e).__name__}:{e}"[:200],
                 reason=LOOP_REASON_ERROR,
             )
-        # All other exceptions propagate — honest study failure, not iteration_cap.
+        except Exception as e:  # noqa: BLE001 — unexpected: finalize study
+            await finalize_loop_internal_error(runtime, exc=e, loop=loop)
+            break
     return done
 
 
@@ -780,11 +868,19 @@ async def maybe_loop_after_task_done(
 
 
 async def resume_pending_loops(runtime: StudyRuntime) -> int:
-    """Recover: re-advance loops so live == replay."""
+    """Recover: re-advance loops so live == replay.
+
+    Unexpected errors are journaled + finalized inside ``maybe_advance_loops``;
+    this wrapper also catch-finalizes so recover never aborts before ``tick()``.
+    """
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return 0
-    got = await maybe_advance_loops(runtime)
-    return len(got)
+    try:
+        got = await maybe_advance_loops(runtime)
+        return len(got)
+    except Exception as e:  # noqa: BLE001 — belt-and-suspenders for recover
+        await finalize_loop_internal_error(runtime, exc=e, loop=None)
+        return 0
 
 
 def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:

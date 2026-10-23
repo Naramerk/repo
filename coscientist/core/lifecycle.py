@@ -21,7 +21,13 @@ from coscientist.core.domain import (
     TaskState,
     validate_budget_for_create,
 )
-from coscientist.core.events import EventEnvelope, make_idem
+from coscientist.core.events import (
+    PLAN_ACCEPTED_SCHEMA_VERSION,
+    STUDY_CREATED_SCHEMA_VERSION,
+    TASK_CREATED_SCHEMA_VERSION,
+    EventEnvelope,
+    make_idem,
+)
 from coscientist.core.graph import GraphNode
 from coscientist.core.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
 from coscientist.core.inputs import validate_input_specs, validate_plan_criteria
@@ -166,7 +172,7 @@ class LifecycleMixin:
                 idem_key=make_idem("StudyCreated", sid),
                 payload=study.model_dump(mode="json"),
                 ts=now,
-                schema_version=10,
+                schema_version=STUDY_CREATED_SCHEMA_VERSION,
             ),
             EventEnvelope(
                 study_id=sid,
@@ -239,7 +245,7 @@ class LifecycleMixin:
                     idem_key=make_idem("TaskCreated", tid),
                     payload=task.model_dump(mode="json"),
                     ts=now,
-                    schema_version=11,
+                    schema_version=TASK_CREATED_SCHEMA_VERSION,
                 )
             )
             # Graph nodes for stages: only schema kinds. SPEC/HYP/LIT are DAG
@@ -401,7 +407,7 @@ class LifecycleMixin:
                 idem_key=make_idem("PlanAccepted", pid),
                 payload=plan.model_dump(mode="json"),
                 ts=now,
-                schema_version=9,
+                schema_version=PLAN_ACCEPTED_SCHEMA_VERSION,
             )
         ]
         # Question nodes so claim ``about`` can bind without auto-creating targets.
@@ -557,7 +563,7 @@ class LifecycleMixin:
                     idem_key=make_idem("TaskCreated", tid),
                     payload=task.model_dump(mode="json"),
                     ts=now,
-                    schema_version=11,
+                    schema_version=TASK_CREATED_SCHEMA_VERSION,
                 )
             )
         await self._append(events)

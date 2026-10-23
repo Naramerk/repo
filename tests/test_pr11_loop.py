@@ -191,6 +191,8 @@ async def _drive_to_finalized(rt, arts) -> Any:
 
 
 async def _assert_plan_refused(rt, *, match: str) -> None:
+    from coscientist.core.reasons import TerminalReason
+
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
     assert len(refused) == 1, "invalid LoopSpec must emit PlanRefused"
@@ -198,6 +200,14 @@ async def _assert_plan_refused(rt, *, match: str) -> None:
     fins = [e for e in events if e.type == "StudyFinalized"]
     assert len(fins) == 1, "PlanRefused must finalize immediately"
     assert rt._finalized is True
+    fin = fins[0]
+    assert fin.payload.get("terminal_reason") == TerminalReason.REFUSED.value
+    report_line = str(refused[0].payload.get("report_line") or "")
+    contrib = list(fin.payload.get("contributing_reasons") or [])
+    assert report_line, "PlanRefused must carry report_line"
+    assert report_line in contrib or any(
+        "план отклонён" in str(c) for c in contrib
+    ), f"report_line missing from contributing_reasons: {contrib!r}"
 
 
 @pytest.mark.asyncio
@@ -1184,18 +1194,28 @@ def test_upcast_task_created_loop_fields():
 
 
 def test_upcaster_duplicate_and_continuous_chains():
+    from coscientist.core.events import (
+        PLAN_ACCEPTED_SCHEMA_VERSION,
+        STUDY_CREATED_SCHEMA_VERSION,
+        TASK_CREATED_SCHEMA_VERSION,
+    )
+
     with pytest.raises(ValueError, match="duplicate upcaster"):
         register_upcaster("TaskCreated", 1, lambda p: p)
     for etype, writer in (
-        ("StudyCreated", 10),
-        ("PlanAccepted", 8),
-        ("TaskCreated", 10),
+        ("StudyCreated", STUDY_CREATED_SCHEMA_VERSION),
+        ("PlanAccepted", PLAN_ACCEPTED_SCHEMA_VERSION),
+        ("TaskCreated", TASK_CREATED_SCHEMA_VERSION),
         ("AttemptStarted", writer_schema_version("AttemptStarted")),
         ("ResultRecorded", writer_schema_version("ResultRecorded")),
         ("StudyFinalized", writer_schema_version("StudyFinalized")),
     ):
         assert_upcaster_chain_continuous(etype, writer)
         assert writer_schema_version(etype) == writer
+    # Writer constants must match the end of each upcaster chain.
+    assert writer_schema_version("StudyCreated") == STUDY_CREATED_SCHEMA_VERSION
+    assert writer_schema_version("PlanAccepted") == PLAN_ACCEPTED_SCHEMA_VERSION
+    assert writer_schema_version("TaskCreated") == TASK_CREATED_SCHEMA_VERSION
     # Every registered chain is continuous 1..N-1 for its max.
     for etype, bucket in UPCASTERS.items():
         n = writer_schema_version(etype)
@@ -1443,3 +1463,112 @@ async def test_plan_expanded_uses_writer_constant(tmp_path, clock, runtime_cls):
         await _ok(rt, arts, aid)
     await _drive_to_finalized(rt, arts)
     await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_loop_unexpected_error_finalizes_live(tmp_path, clock, runtime_cls):
+    """Predicate body RuntimeError → journal + StudyFinalized(internal_error)."""
+    import coscientist.core.loop_predicates as lp
+    from coscientist.core.reasons import TerminalReason
+
+    name = f"test_plugin_boom_live_{runtime_cls.__name__}"
+
+    def boom(*_a, **_k):
+        raise RuntimeError("predicate body boom")
+
+    lp._REGISTRY.pop(name, None)
+    register_loop_predicate(name, boom)
+    try:
+        rt, arts = await _open_study(
+            tmp_path, clock, "st_loop_boom_live", runtime_cls=runtime_cls
+        )
+        await rt.accept_plan(
+            [],
+            questions=[QuestionSpec(id="Q1", text="q")],
+            loops=[
+                _loop(
+                    max_iter=5,
+                    until=LoopPredicate(name=name, params={}),
+                    scope_hypotheses=[],
+                )
+            ],
+        )
+        for t in current_loop_iter_tasks(rt, "L1", 1):
+            aid = await rt.start_attempt(t.spec.task_key)
+            await _ok(rt, arts, aid)
+        assert rt._finalized is True
+        events = await rt.store.read_all()
+        fins = [e for e in events if e.type == "StudyFinalized"]
+        assert len(fins) == 1
+        assert fins[0].payload["terminal_reason"] == TerminalReason.INTERNAL_ERROR.value
+        assert any(e.type == "LoopRefused" for e in events)
+        assert any(
+            e.type == "LoopCapped" and e.payload.get("reason") == "error" for e in events
+        )
+        contrib = list(fins[0].payload.get("contributing_reasons") or [])
+        assert "iteration_cap" not in contrib
+        assert any("ошибкой" in str(c) or c == "error" for c in contrib)
+        await close_runtime(rt)
+    finally:
+        lp._REGISTRY.pop(name, None)
+
+
+@pytest.mark.asyncio
+async def test_loop_unexpected_error_finalizes_on_recover(
+    tmp_path, clock, runtime_cls, monkeypatch
+):
+    """recover() must finalize internal_error, not hang before tick()."""
+    import coscientist.core.loop as loop_mod
+    import coscientist.core.loop_predicates as lp
+    from coscientist.core.reasons import TerminalReason
+
+    name = f"test_plugin_ok_then_boom_{runtime_cls.__name__}"
+    lp._REGISTRY.pop(name, None)
+    register_loop_predicate(name, lambda *_a, **_k: False)
+    try:
+        rt, arts = await _open_study(
+            tmp_path, clock, "st_loop_boom_rec", runtime_cls=runtime_cls
+        )
+        await rt.accept_plan(
+            [],
+            questions=[QuestionSpec(id="Q1", text="q")],
+            loops=[
+                _loop(
+                    max_iter=5,
+                    until=LoopPredicate(name=name, params={}),
+                    scope_hypotheses=[],
+                )
+            ],
+        )
+        for t in current_loop_iter_tasks(rt, "L1", 1):
+            aid = await rt.start_attempt(t.spec.task_key)
+            await _ok(rt, arts, aid)
+        assert loop_status(rt, "L1") == "running"
+        assert rt._finalized is False
+        await close_runtime(rt)
+
+        rt2 = await open_runtime(
+            tmp_path,
+            "st_loop_boom_rec",
+            clock=clock,
+            owner="t2",
+            runtime_cls=runtime_cls,
+        )
+        attach_executor(rt2, tmp_path)
+
+        def _boom_loops(_runtime):
+            raise ValueError("corrupt LoopSpec journal")
+
+        monkeypatch.setattr(loop_mod, "_loops_from_plans", _boom_loops)
+        await recover(rt2)
+        assert rt2._finalized is True
+        events = await rt2.store.read_all()
+        fins = [e for e in events if e.type == "StudyFinalized"]
+        assert len(fins) == 1
+        assert fins[0].payload["terminal_reason"] == TerminalReason.INTERNAL_ERROR.value
+        # Second recover must not hang / raise.
+        await recover(rt2)
+        assert rt2._finalized is True
+        await close_runtime(rt2)
+    finally:
+        lp._REGISTRY.pop(name, None)
