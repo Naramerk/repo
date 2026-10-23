@@ -32,9 +32,9 @@ from coscientist.core.errors import SandboxInfraError
 from coscientist.core.reasons import TaskReason
 from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
-_REWARD_JSON = (
-    lambda v: json.dumps({"schema": REWARD_SCHEMA, "value": float(v)}).encode()
-)
+
+def _REWARD_JSON(v: float) -> bytes:
+    return json.dumps({"schema": REWARD_SCHEMA, "value": float(v)}).encode()
 
 _RERUN_SCORER = f"""
 import json, os, pathlib
