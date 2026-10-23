@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-### M1 PR15
+### Store (StudyFinalized once)
+- After a study is finalized, a second distinct `StudyFinalized` (different idem_key) is rejected with `StudyClosedError` (I3 / exactly one finalize). Identical idem_key+payload retry still returns the original (idempotency checked before closed rejection).
+
 ### M1 PR15
 - `needs_more_data` + required `artifact(role=report, kind=experiment_design)` with rubric ids `hypothesis` / `variables` / `sample_size` / `success_criterion` (DESIGN_M1 §6.4). Event `QuestionDisposed` (v1; **first-wins**); rejected disposals → journaled `QuestionDisposeRejected` (`_note_reject` only after successful append; fold + `contributing_reasons`).
 - Explicit `OutputSpec.kind` + `OutputSpec.evidence_kind` (PlanValidator; rubric ids never imply evidence_kind). Writers: TaskCreated **v13** / PlanAccepted **v11** / PlanExpanded **v5** continuous after #29 PA10/PE4 (`bd413e0`). StudyCreated **v10**. No duplicate `register_upcaster`.
