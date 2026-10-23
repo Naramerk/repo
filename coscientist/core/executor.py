@@ -230,15 +230,52 @@ def _derive_claim_core_attrs(
         validity_ok = False
         status = "unassessed"
         exclusion_reason = "validity_failed"
+    from coscientist.core.verdict import (
+        independence_key_for,
+        outcome_to_status,
+        status_to_outcome,
+    )
+
+    frozen = _criterion_is_frozen(graph, study_id, key)
+    # PR8b classification: map prediction status → outcome; validity → invalid.
+    if not validity_ok:
+        claim_outcome = None
+        severe = False
+        if exclusion_reason is None:
+            exclusion_reason = "validity_failed"
+    else:
+        claim_outcome = status_to_outcome(status)
+        # Transitional severe: frozen consistent without SESOI still counts.
+        severe = claim_outcome == "consistent" and frozen
+        if claim_outcome == "indeterminate" and exclusion_reason is None:
+            exclusion_reason = "indeterminate"
+    # Keep criterion_status in sync with outcome for stance / legacy readers.
+    if claim_outcome is not None or not validity_ok:
+        status = outcome_to_status(
+            claim_outcome, validity="valid" if validity_ok else "invalid"
+        )
+    exp_id = None
+    try:
+        exp_id = str(getattr(task, "task_id", None) or "")
+    except Exception:  # noqa: BLE001
+        exp_id = ""
+    method = str(method) if method is not None else None
+    indep = independence_key_for(method=method, experiment_id=exp_id or None)
     out = {
         "criterion_status": status,
         "evidence_kind": "literature" if lit else "computational",
-        "frozen": _criterion_is_frozen(graph, study_id, key),
+        "frozen": frozen,
         "lit_own_criterion": bool(lit and criteria),
         "accepted": bool(validated),
         "validity_ok": validity_ok,
         "check_role": role,
+        "claim_outcome": claim_outcome,
+        "severe": severe,
+        "independence_key": indep,
+        "min_power": 0.0,  # transitional default so severe gate can pass
     }
+    if lit and exclusion_reason is None:
+        exclusion_reason = "lit"
     if exclusion_reason is not None:
         out["exclusion_reason"] = exclusion_reason
     return out

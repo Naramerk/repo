@@ -269,11 +269,13 @@ def test_upcast_study_finalized_v1_adds_counts_and_refusal():
             "fallback_reason": None,
         },
     )
-    assert v == 2
+    # v1→v2 (refusal/counts) → v2→v3 (hypotheses[])
+    assert v == 3
     assert p["refusal"] is None
     assert p["minimal_report"]["question_count"] == 1
     assert p["minimal_report"]["not_attempted_count"] == 1
     assert p["minimal_report"]["refusal"] is None
+    assert p["minimal_report"]["hypotheses"] == []
 
 
 def test_minimal_report_le_10kb():

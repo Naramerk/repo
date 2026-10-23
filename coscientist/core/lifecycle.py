@@ -65,6 +65,9 @@ class LifecycleMixin:
         confirmations_needed: int = 1,
         refutations_needed: int = 1,
         refutation_priority: bool = False,
+        min_independent_support: int = 2,
+        aggregate: str = "count",
+        evalue_alpha: float = 0.05,
         inputs: list[Any] | None = None,
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,
@@ -82,6 +85,14 @@ class LifecycleMixin:
             raise ValueError(
                 f"refutations_needed must be >= 1, got {refutations_needed}"
             )
+        if min_independent_support < 1:
+            raise ValueError(
+                f"min_independent_support must be >= 1, got {min_independent_support}"
+            )
+        if aggregate not in ("count", "evalue"):
+            raise ValueError(f"aggregate must be count|evalue, got {aggregate!r}")
+        if not (0.0 < float(evalue_alpha) <= 1.0):
+            raise ValueError(f"evalue_alpha out of range: {evalue_alpha}")
         validate_budget_for_create(budget)
         duration_s = (dl - now).total_seconds()
         decision = await intake(
@@ -108,6 +119,9 @@ class LifecycleMixin:
             confirmations_needed=confirmations_needed,
             refutations_needed=refutations_needed,
             refutation_priority=refutation_priority,
+            min_independent_support=min_independent_support,
+            aggregate=aggregate,  # type: ignore[arg-type]
+            evalue_alpha=float(evalue_alpha),
         )
         effective = study.effective_deadline()
         events: list[EventEnvelope] = [
@@ -118,7 +132,7 @@ class LifecycleMixin:
                 idem_key=make_idem("StudyCreated", sid),
                 payload=study.model_dump(mode="json"),
                 ts=now,
-                schema_version=4,
+                schema_version=5,
             ),
             EventEnvelope(
                 study_id=sid,

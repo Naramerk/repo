@@ -122,7 +122,8 @@ def test_question_disposition_computed_from_verdict():
         study=study,
         results={aid: {"outcome": "SUCCESS"}},
     )
-    assert d["Q1"]["disposition"] == "answered"
+    # PR8b: single severe confirm → survived (answered needs supported).
+    assert d["Q1"]["disposition"] == "survived"
 
 
 @pytest.mark.xfail(

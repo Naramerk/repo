@@ -54,6 +54,13 @@ _CORE_CLAIM_ATTRS: frozenset[str] = frozenset(
         "validity_ok",
         "check_role",
         "exclusion_reason",
+        "claim_outcome",
+        "severe",
+        "independence_key",
+        "p_value",
+        "power",
+        "sesoi",
+        "min_power",
     }
 )
 
@@ -90,6 +97,14 @@ class RuntimeClaim:
     validity_ok: bool = True
     check_role: str = "unknown"
     exclusion_reason: str | None = None
+    # PR8b claim classification (DESIGN_HYP_DELTA).
+    claim_outcome: str | None = None  # consistent|inconsistent|indeterminate|None
+    severe: bool | None = None
+    independence_key: str = ""
+    p_value: float | None = None
+    power: float | None = None
+    sesoi: float | None = None
+    min_power: float | None = None
 
     def __post_init__(self) -> None:
         if self.intent not in ("confirm", "refute"):
@@ -112,16 +127,20 @@ class RuntimeClaim:
         return self.evidence_kind == "literature"
 
     def counts(self) -> bool:
-        """Counting set q (RM §4.1 + PR8): accepted scientific result.
+        """PR8b counting filter: real ∧ valid ∧ consistent|inconsistent ∧ not lit.
 
-        Attempt outcome may be SUCCESS / PARTIAL / FAILED when failure is
-        prediction not_met (scientific). Validity failures set ``validity_ok``
-        False so the claim never counts. Infra failures never set ``accepted``.
+        Stubs/partials are excluded **before** counting (no provenance ceiling).
+        Literature never counts. Validity failures never count.
         """
-        ok = self.evidence_kind in ("computational", "experimental") or (
-            self.is_lit and self.lit_own_criterion
-        )
-        return self.accepted and self.validity_ok and ok and self.frozen
+        if not (self.accepted and self.validity_ok and self.frozen):
+            return False
+        if self.provenance != "real":
+            return False
+        if self.is_lit or self.evidence_kind not in ("computational", "experimental"):
+            return False
+        from coscientist.core.verdict import effective_outcome
+
+        return effective_outcome(self) in ("consistent", "inconsistent")
 
 
 def whitelist_claim_attrs(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -372,9 +391,54 @@ def runtime_claim_from_node(
         if check_role not in ("prediction", "validity", "unknown"):
             check_role = "unknown"
         excl_raw = _coerce_str(attrs.get("exclusion_reason"), allow_empty=True)
-        exclusion_reason = (
-            excl_raw if excl_raw in ("validity_failed", "unknown_role") else None
+        _EXCL = (
+            "validity_failed",
+            "unknown_role",
+            "stub",
+            "partial",
+            "invalid",
+            "indeterminate",
+            "lit",
+            "r17",
+            "superseded",
         )
+        exclusion_reason = excl_raw if excl_raw in _EXCL else None
+        claim_outcome_raw = _coerce_str(attrs.get("claim_outcome"), allow_empty=True) or (
+            _coerce_str(attrs.get("outcome"), allow_empty=True)
+        )
+        claim_outcome = (
+            claim_outcome_raw
+            if claim_outcome_raw in ("consistent", "inconsistent", "indeterminate")
+            else None
+        )
+        severe_coerced = _coerce_bool(attrs.get("severe"))
+        independence_key = (
+            _coerce_str(attrs.get("independence_key"), allow_empty=True) or ""
+        )
+        p_value = attrs.get("p_value")
+        if p_value is not None:
+            try:
+                p_value = float(p_value)
+            except (TypeError, ValueError):
+                p_value = None
+        power = attrs.get("power")
+        if power is not None:
+            try:
+                power = float(power)
+            except (TypeError, ValueError):
+                power = None
+        sesoi = attrs.get("sesoi")
+        if sesoi is not None:
+            try:
+                sesoi = float(sesoi)
+            except (TypeError, ValueError):
+                sesoi = None
+        min_power = attrs.get("min_power")
+        if min_power is not None:
+            try:
+                min_power = float(min_power)
+            except (TypeError, ValueError):
+                min_power = None
         frozen = _coerce_bool(attrs.get("frozen"))
         if frozen is None:
             return None, "bad_frozen"
@@ -453,6 +517,13 @@ def runtime_claim_from_node(
                 validity_ok=bool(validity_ok),
                 check_role=check_role,
                 exclusion_reason=exclusion_reason,
+                claim_outcome=claim_outcome,
+                severe=severe_coerced,
+                independence_key=independence_key,
+                p_value=p_value if isinstance(p_value, float) else None,
+                power=power if isinstance(power, float) else None,
+                sesoi=sesoi if isinstance(sesoi, float) else None,
+                min_power=min_power if isinstance(min_power, float) else None,
             ),
             None,
         )
@@ -568,6 +639,9 @@ def compute_verdict_snapshots(
         if k is not None
         else (study.confirmations_needed if study is not None else 1)
     )
+    min_sup = study.min_independent_support if study is not None else 2
+    aggregate = study.aggregate if study is not None else "count"
+    e_alpha = study.evalue_alpha if study is not None else 0.05
     by_target = filtered_claims_by_target(
         graph, study_id=study_id, results=results
     )
@@ -593,6 +667,9 @@ def compute_verdict_snapshots(
             conf_k,
             refutations_needed=k_ref,
             refutation_priority=priority,
+            min_independent_support=min_sup,
+            aggregate=aggregate,  # type: ignore[arg-type]
+            evalue_alpha=e_alpha,
         )
         validity_excl = [e for e in excluded if e["reason"] == "validity_failed"]
         # Only when no valid claims remain: inconclusive + validity_failed.
@@ -616,6 +693,7 @@ def compute_verdict_snapshots(
             "refutations_needed": k_ref,
             "refutation_priority": priority,
             "k": conf_k,
+            "min_independent_support": min_sup,
         }
         if excluded:
             snap["excluded_claims"] = excluded
@@ -627,6 +705,9 @@ def compute_verdict_snapshots(
             conf_k,
             refutations_needed=k_ref,
             refutation_priority=priority,
+            min_independent_support=min_sup,
+            aggregate=aggregate,  # type: ignore[arg-type]
+            evalue_alpha=e_alpha,
         )
         if note is not None:
             snap["note"] = note
@@ -640,21 +721,16 @@ def compute_verdict_snapshots(
 
 
 def exclusion_reason_for_claim(claim: RuntimeClaim) -> str | None:
-    """Per-experiment exclusion: ``validity_failed`` or ``unknown_role``."""
-    if claim.counts() or getattr(claim, "validity_ok", True) is not False:
-        return None
-    stored = getattr(claim, "exclusion_reason", None)
-    if stored in ("validity_failed", "unknown_role"):
-        return stored
-    if getattr(claim, "check_role", "unknown") == "unknown":
-        return "unknown_role"
-    return "validity_failed"
+    """Why a claim is out of the counting set (PR8b + PR8 roles)."""
+    from coscientist.core.verdict import exclusion_reason as _excl
+
+    return _excl(claim)
 
 
 def excluded_claims_report(
     claims: Sequence[RuntimeClaim],
 ) -> list[dict[str, Any]]:
-    """List non-counting invalid claims for the report payload."""
+    """List non-counting claims for the report payload."""
     out: list[dict[str, Any]] = []
     for c in claims:
         reason = exclusion_reason_for_claim(c)

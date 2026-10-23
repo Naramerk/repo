@@ -77,10 +77,33 @@ class Claim:
     first_cited_evidence_seq: int | None = None
     confirming_evidence_ids: frozenset | None = None
     threshold_source_evidence_ids: frozenset | None = None
+    validity_ok: bool = True
+    claim_outcome: str | None = None
+    severe: bool | None = None
+    independence_key: str = ""
+    p_value: float | None = None
+    power: float | None = None
+    sesoi: float | None = None
+    min_power: float | None = 0.0
 
     def __post_init__(self):
         if self.intent not in ("confirm", "refute"):
             raise ValueError(f"invalid tests.intent: {self.intent!r}")
+        if not self.independence_key:
+            self.independence_key = self.attempt_id
+        if self.claim_outcome is None and self.validity_ok:
+            self.claim_outcome = {
+                "met": "consistent",
+                "not_met": "inconsistent",
+                "unassessed": "indeterminate",
+            }.get(self.criterion_status)
+        if self.severe is None:
+            self.severe = (
+                self.claim_outcome == "consistent"
+                and self.frozen
+                and self.validity_ok
+                and self.provenance == "real"
+            )
 
     @property
     def stance(self):
@@ -89,8 +112,14 @@ class Claim:
     def is_lit(self):
         return self.evidence_kind == "literature"
     def counts(self):
-        ok = self.evidence_kind in ("computational", "experimental") or (self.is_lit and self.lit_own_criterion)
-        return self.accepted and ok and self.frozen and self.attempt_outcome == "SUCCESS"
+        # PR8b: real ∧ valid ∧ consistent|inconsistent ∧ not lit; stubs excluded.
+        if not (self.accepted and self.validity_ok and self.frozen):
+            return False
+        if self.provenance != "real":
+            return False
+        if self.is_lit or self.evidence_kind not in ("computational", "experimental"):
+            return False
+        return self.claim_outcome in ("consistent", "inconsistent")
 
     def counts_under_r17(self):
         """Base counts() plus R17 when freeze/evidence metadata is present.
@@ -116,6 +145,17 @@ class Claim:
         )
         return bool(usable)
 
+def _distinct_by_key(claims):
+    seen = set()
+    out = []
+    for c in claims:
+        key = c.independence_key or c.attempt_id
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(c)
+    return out
+
 def verdict(
     claims,
     any_experiment_done,
@@ -123,38 +163,42 @@ def verdict(
     *,
     refutations_needed=1,
     refutation_priority=False,
+    min_independent_support=2,
+    aggregate="count",
+    evalue_alpha=0.05,
 ):
-    acc = [c for c in claims if c.accepted]
-    if not acc and not any_experiment_done:
+    del k  # support uses min_independent_support (PR8b)
+    about = list(claims)
+    if not about and not any_experiment_done:
         return "untested", False
-    q = [c for c in acc if c.counts_under_r17()]
-    confirm_sup = [c for c in q if c.stance == "supports" and c.intent != "refute"]
-    survived_sup = [c for c in q if c.stance == "supports" and c.intent == "refute"]
-    ref = [c for c in q if c.stance == "refutes"]
-    all_sup = confirm_sup + survived_sup
-    dist = lambda cs: min(len({c.attempt_id for c in cs}), len({c.artifact_id for c in cs})) if cs else 0
-    pref = [c for c in ref if c.provenance == "real" and not c.is_lit]
-    priority_win = refutation_priority and dist(pref) >= refutations_needed
-    if priority_win:
-        v = "refuted"
-    elif all_sup and ref:
-        v = "inconclusive"
-    elif dist(confirm_sup) >= k:
-        v = "supported"
-    elif dist(survived_sup) >= k:
-        v = "survived"
-    elif dist(ref) >= k:
-        v = "refuted"
-    else:
-        v = "inconclusive"
-    # Provenance ceiling. Exception: ≥ k_ref real priority refs stay refuted —
-    # stub/partial supports must not cap a refutation.
-    if v in ("supported", "survived") and any(c.provenance != "real" for c in q):
-        v = "inconclusive"
-    elif v == "refuted" and not priority_win and any(c.provenance != "real" for c in q):
-        v = "inconclusive"
-    d = all_sup + ref
-    return v, bool(d) and all(c.is_lit for c in d)
+    if not about:
+        return "untested", False
+    counted = [c for c in about if c.counts_under_r17()]
+    if aggregate == "evalue":
+        # Minimal e-value path for oracle parity with core.
+        return "inconclusive", False
+    inconsistent = _distinct_by_key(
+        [c for c in counted if c.claim_outcome == "inconsistent"]
+    )
+    consistent_severe = _distinct_by_key(
+        [c for c in counted if c.claim_outcome == "consistent" and c.severe]
+    )
+    k_ref = max(1, int(refutations_needed))
+    n_inc = len(inconsistent)
+    n_con = len(consistent_severe)
+    if n_inc >= k_ref and refutation_priority:
+        return "refuted", False
+    if n_inc >= k_ref and not refutation_priority:
+        return ("inconclusive" if consistent_severe else "refuted"), False
+    if n_inc > 0:
+        return "inconclusive", False
+    if n_con >= max(1, int(min_independent_support)) and any(
+        c.intent == "refute" for c in consistent_severe
+    ):
+        return "supported", False
+    if n_con >= 1:
+        return "survived", False
+    return "inconclusive", False
 
 def study_fulfilled(question_verdicts, all_required_success):
     return all_required_success and all(v != "untested" for v in question_verdicts.values())

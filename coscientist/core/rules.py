@@ -126,70 +126,28 @@ def verdict(
     *,
     refutations_needed: int = 1,
     refutation_priority: bool = False,
+    min_independent_support: int = 2,
+    aggregate: Literal["count", "evalue"] = "count",
+    evalue_alpha: float = 0.05,
 ):
-    """Hypothesis/question verdict (RM §4.1 + DESIGN_M1 PR 6).
+    """Hypothesis/question verdict (PR8b / DESIGN_HYP_DELTA).
 
-    Pure rule function. Runtime finalize/report calls this via
-    ``dispositions()`` (M1 PR 8) with Study ``refutations_needed`` /
-    ``refutation_priority``. ``tests.intent=refute`` + met → stance supports,
-    verdict ``survived``. With ``refutation_priority``, distinct real non-lit
-    refs ≥ k_ref → ``refuted`` even with supports; that outcome is **not** capped
-    by stub/partial supports. Lit/non-real refs never override real supports.
+    Stubs/partial/lit/invalid are excluded **before** counting (no provenance
+    ceiling). ``supported`` needs ≥ ``min_independent_support`` severe consistent
+    claims with ≥1 ``intent=refute``. Runtime calls via ``dispositions()``.
     """
-    acc = [c for c in claims if c.accepted]
-    if not acc and not any_experiment_done:
-        return "untested", False
-    q = [c for c in acc if _claim_counts(c)]
-    confirm_sup = [
-        c for c in q if c.stance == "supports" and _tests_intent(c) != "refute"
-    ]
-    survived_sup = [
-        c for c in q if c.stance == "supports" and _tests_intent(c) == "refute"
-    ]
-    ref = [c for c in q if c.stance == "refutes"]
-    all_sup = confirm_sup + survived_sup
+    from coscientist.core.verdict import verdict as _hyp_verdict
 
-    def distinct(cs: list[_ClaimLike]) -> int:
-        return (
-            min(len({c.attempt_id for c in cs}), len({c.artifact_id for c in cs}))
-            if cs
-            else 0
-        )
-
-    def priority_refs(cs: list[_ClaimLike]) -> list[_ClaimLike]:
-        # Real computational/experimental only; literature must not flip priority.
-        return [c for c in cs if c.provenance == "real" and not c.is_lit]
-
-    priority_win = (
-        refutation_priority and distinct(priority_refs(ref)) >= refutations_needed
+    return _hyp_verdict(
+        claims,
+        any_experiment_done,
+        k,
+        refutations_needed=refutations_needed,
+        refutation_priority=refutation_priority,
+        min_independent_support=min_independent_support,
+        aggregate=aggregate,
+        evalue_alpha=evalue_alpha,
     )
-    v: str
-    if priority_win:
-        v = "refuted"
-    elif all_sup and ref:
-        # Lit / non-real refs with supports → inconclusive (no priority win).
-        v = "inconclusive"
-    elif distinct(confirm_sup) >= k:
-        v = "supported"
-    elif distinct(survived_sup) >= k:
-        v = "survived"
-    elif distinct(ref) >= k:
-        v = "refuted"
-    else:
-        v = "inconclusive"
-
-    # Provenance ceiling over counted claims. Exception: ≥ k_ref real priority
-    # refs stay ``refuted`` — stub/partial supports must not cap a refutation.
-    if v in ("supported", "survived") and any(c.provenance != "real" for c in q):
-        v = "inconclusive"
-    elif (
-        v == "refuted"
-        and not priority_win
-        and any(c.provenance != "real" for c in q)
-    ):
-        v = "inconclusive"
-    decisive = all_sup + ref
-    return v, bool(decisive) and all(c.is_lit for c in decisive)
 
 
 def priority_refuted_support_note(
@@ -199,24 +157,33 @@ def priority_refuted_support_note(
     *,
     refutations_needed: int = 1,
     refutation_priority: bool = False,
+    min_independent_support: int = 2,
+    aggregate: Literal["count", "evalue"] = "count",
+    evalue_alpha: float = 0.05,
 ) -> str | None:
-    """Report note when priority-win keeps ``refuted`` despite stub/partial supports.
+    """Report note when refuted and stub/partial confirmations were excluded.
 
-    Returns e.g. ``\"refuted; 2 supporting results were stub/partial\"``, or
-    ``None`` when the exception does not apply (no priority-win, or no
-    stub/partial counting supports).
+    PR8b: stubs never count; note lists excluded supporting stubs/partials
+    (merges the old PR8 priority-win stub note).
     """
-    if not refutation_priority:
-        return None
+    from coscientist.core.verdict import excluded_confirmations_note
+
     v, _ = verdict(
         claims,
         any_experiment_done,
         k,
         refutations_needed=refutations_needed,
         refutation_priority=refutation_priority,
+        min_independent_support=min_independent_support,
+        aggregate=aggregate,
+        evalue_alpha=evalue_alpha,
     )
     if v != "refuted":
         return None
+    note = excluded_confirmations_note(claims, verdict_value=v)
+    if note is not None:
+        return note
+    # Fall through to legacy distinct stub/partial supports among non-counting.
     acc = [c for c in claims if c.accepted]
     q = [c for c in acc if _claim_counts(c)]
     supports = [c for c in q if c.stance == "supports"]

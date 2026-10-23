@@ -225,7 +225,7 @@ async def _append_finalized(
                 idem_key=make_idem("StudyFinalized", sid),
                 payload=payload,
                 ts=now,
-                schema_version=2,
+                schema_version=3,
             )
         ]
     )
@@ -361,6 +361,7 @@ async def _build_finalized_payload(
                 question_dispositions=qdisp,
                 fallback_reason=fallback,
                 refusal=refusal,
+                hypotheses=hypothesis_verdicts or {},
             )
         except Exception as e2:  # noqa: BLE001
             raise RuntimeError(f"minimal_report:{type(e2).__name__}") from e2

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### M1 PR8b
+- Hypothesis verdict model (`docs/DESIGN_HYP_DELTA.md`): claim `claim_outcome` / `severe` / `independence_key`; stub|partial|lit|invalid excluded **before** counting (provenance ceiling removed).
+- Study: `min_independent_support` (default 2), `aggregate` (`count`|`evalue`), `evalue_alpha`; StudyCreated schema_version=5 + v4→v5 upcaster.
+- `supported` needs ≥ min_independent_support severe consistent with ≥1 `intent=refute`; single severe → `survived`; ≥ k_ref inconsistent → `refuted` (priority) or conflict inconclusive.
+- Report: `minimal_report.hypotheses[]` + StudyFinalized v3; excluded stub/partial confirmations noted on refuted.
+- Keeps PR8 mechanics: check roles, per-experiment `validity_failed` / `unknown_role`, `VerdictSnapshotsRecorded` (not projection-only).
+
 ### M1 PR8
 - Runtime `verdict()` wired into `dispositions()` / finalize (Study `confirmations_needed` / `refutations_needed` / `refutation_priority`); supported → answered; hypothesis verdicts in StudyFinalized.
 - `InputSpec.kind=verdict` enabled; `VerdictSnapshotsRecorded` persists full snapshots (not digest-only); invalidated on claim/`about` changes (scoped to affected target).

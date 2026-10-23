@@ -175,6 +175,27 @@ def _study_created_v3_to_v4(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _study_created_v4_to_v5(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR8b: min_independent_support / aggregate / evalue_alpha."""
+    out = dict(payload)
+    out.setdefault("min_independent_support", 2)
+    out.setdefault("aggregate", "count")
+    out.setdefault("evalue_alpha", 0.05)
+    return out
+
+
+def _study_finalized_v2_to_v3(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR8b: minimal_report.hypotheses[] (empty for legacy)."""
+    out = dict(payload)
+    mr = out.get("minimal_report")
+    if isinstance(mr, dict):
+        mr = dict(mr)
+        mr.setdefault("hypotheses", [])
+        out["minimal_report"] = mr
+    out.setdefault("hypothesis_report", out.get("hypothesis_report") or [])
+    return out
+
+
 def _coerce_task_reason_field(payload: dict[str, Any]) -> dict[str, Any]:
     out = dict(payload)
     reason = out.get("reason")
@@ -257,9 +278,11 @@ register_upcaster("PlanAccepted", 2, _plan_accepted_v2_to_v3_check_role)
 register_upcaster("StudyCreated", 1, _study_created_v1_to_v2)
 register_upcaster("StudyCreated", 2, _study_created_v2_to_v3)
 register_upcaster("StudyCreated", 3, _study_created_v3_to_v4)
+register_upcaster("StudyCreated", 4, _study_created_v4_to_v5)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)
 register_upcaster("AttemptStarted", 2, _attempt_started_v2_to_v3_inputs)
 register_upcaster("ResultRecorded", 1, _rename_simulated_provenance)
 register_upcaster("StudyFinalized", 1, _study_finalized_v1_to_v2)
+register_upcaster("StudyFinalized", 2, _study_finalized_v2_to_v3)

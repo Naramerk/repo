@@ -379,8 +379,31 @@ def claim_nodes_from_attempt(
             role if role in ("prediction", "validity", "unknown") else "unknown"
         )
         excl = core.get("exclusion_reason")
-        if excl in ("validity_failed", "unknown_role"):
+        if excl in (
+            "validity_failed",
+            "unknown_role",
+            "stub",
+            "partial",
+            "invalid",
+            "indeterminate",
+            "lit",
+            "r17",
+            "superseded",
+        ):
             attrs["exclusion_reason"] = excl
+        oc = core.get("claim_outcome")
+        if oc in ("consistent", "inconsistent", "indeterminate"):
+            attrs["claim_outcome"] = oc
+        if "severe" in core:
+            attrs["severe"] = bool(core.get("severe"))
+        if core.get("independence_key"):
+            attrs["independence_key"] = str(core["independence_key"])
+        for num_key in ("p_value", "power", "sesoi", "min_power"):
+            if core.get(num_key) is not None:
+                try:
+                    attrs[num_key] = float(core[num_key])
+                except (TypeError, ValueError):
+                    pass
         if core.get("artifact_id"):
             attrs["artifact_id"] = core["artifact_id"]
 

@@ -12,6 +12,7 @@
     "verdict",
     "tasks",
     "questions",
+    "hypotheses",
     "sections",
     "truncated"
   ],
@@ -79,6 +80,36 @@
             ]
           },
           "reason": {"type": "string", "maxLength": 200}
+        }
+      }
+    },
+    "hypotheses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["hypothesis_id", "verdict"],
+        "properties": {
+          "hypothesis_id": {"type": "string"},
+          "question_id": {"type": "string"},
+          "verdict": {
+            "enum": [
+              "supported",
+              "survived",
+              "refuted",
+              "inconclusive",
+              "untested"
+            ]
+          },
+          "rule": {"type": ["string", "null"]},
+          "counted": {"type": "array"},
+          "excluded": {"type": "array"},
+          "conflict": {"type": ["object", "null"]},
+          "severity_note": {"type": ["string", "null"]},
+          "auxiliary_assumptions": {"type": "array"},
+          "legacy_claims": {"type": "integer"},
+          "e_values": {"type": ["object", "null"]},
+          "note": {"type": ["string", "null"]}
         }
       }
     },

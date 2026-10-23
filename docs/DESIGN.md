@@ -55,6 +55,8 @@ class Hypothesis(BaseModel):
     rationale: str | None = None
     addresses: list[str]       # question_id, ≥1, умолчания нет
     approved_by: Literal["human","critic"] | None = None; delegated_by: Literal["human","timeout"] | None = None
+    # PR8b: projection (+ VerdictSnapshotsRecorded); not an agent-writable field
+    verdict: Literal["supported","survived","refuted","inconclusive","untested"] | None = None
 
 class Need(BaseModel):
     needed: bool; reason: str

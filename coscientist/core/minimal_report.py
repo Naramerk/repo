@@ -70,6 +70,7 @@ def build_minimal_report(
     question_dispositions: Mapping[str, Mapping[str, Any]],
     fallback_reason: str | None,
     refusal: str | None = None,
+    hypotheses: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     task_list = sorted(tasks.values(), key=lambda t: t.spec.task_key)
     q_rows = [
@@ -81,6 +82,13 @@ def build_minimal_report(
         }
         for qid, d in sorted(question_dispositions.items())
     ]
+    if isinstance(hypotheses, Mapping):
+        h_rows: list[dict[str, Any]] = [
+            dict(v) if isinstance(v, Mapping) else {"hypothesis_id": hid, "verdict": v}
+            for hid, v in sorted(hypotheses.items())
+        ]
+    else:
+        h_rows = [dict(h) for h in (hypotheses or [])]
     t_rows = [
         {
             "task_key": t.spec.task_key,
@@ -111,6 +119,7 @@ def build_minimal_report(
         "verdict": verdict,
         "tasks": t_rows,
         "questions": q_rows,
+        "hypotheses": h_rows,
         "sections": _sections(task_list, attempts),
         "truncated": False,
     }
@@ -134,6 +143,9 @@ def truncate_minimal_report(report: dict[str, Any]) -> dict[str, Any]:
         out["tasks"] = out["tasks"][:-1]
     while len(canonical_json(out)) > MAX_BYTES and out.get("questions"):
         out["questions"] = out["questions"][:-1]
+    # SPEC: truncate hypotheses after questions.
+    while len(canonical_json(out)) > MAX_BYTES and out.get("hypotheses"):
+        out["hypotheses"] = out["hypotheses"][:-1]
     secs = dict(out.get("sections") or {})
     for key in ("human", "stub", "real"):
         while len(canonical_json(out)) > MAX_BYTES and secs.get(key):
