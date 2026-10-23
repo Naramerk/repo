@@ -88,7 +88,7 @@ class SourceQuote(BaseModel):    # literature
 | `measured_by` | study → criterion, constraint → criterion, experiment → criterion | 1..n (experiment: 0..n) / 1..1 | spec/plan | experiment: ≥1 если required |
 | `addresses` | hypothesis → question, experiment → question | 0..n (hypothesis: 1..n) / 0..n | HYP-n/plan (TaskSpec.addresses) | hypothesis ≥1; ref обязателен, умолчания нет |
 | `plans` | plan → experiment | 1..n / 1..1 | PLAN-n |  |
-| `tests` | experiment → hypothesis | 0..n / 0..n | plan | у experiment ≥1 из tests/addresses; attrs.intent: confirm\|refute (default confirm); refute+met → survived |
+| `tests` | experiment → hypothesis | 0..n / 0..n | plan | у experiment ≥1 из tests/addresses; refute+met → survived |
 | `depends_on` | experiment → experiment | 0..n / 0..n | plan | ацикл. |
 | `uses_input` | experiment → artifact | 0..n / 0..n | ядро (P2) | provenance на ребре |
 | `produced` | experiment → artifact | 0..n / 1..1 | слой инструментов | attempt_n на ребре; повторно найденная paper — то же ребро |

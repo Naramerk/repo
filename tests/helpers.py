@@ -58,10 +58,7 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
 
     ex.get_attempt = get_attempt
     rt.executor = ex
-    # Production path: finalize/_artifact_store reads executor.artifacts first;
-    # also mirror on runtime so report_artifact_id works without a manual assign.
-    if hasattr(rt, "artifacts"):
-        rt.artifacts = arts
+    # finalize/_artifact_store prefers executor.artifacts; no runtime.artifacts assign.
     return ex, arts
 
 

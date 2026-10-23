@@ -206,11 +206,12 @@ class Disposition(StrEnum):
 ## 3. Передача научного состояния, intent опровержения, k_ref (S1–S3, H-c)
 
 - `InputSpec.kind: artifact | claim | verdict` (+ `ref`). Для claim ядро добавляет ребро `uses_claim: experiment → claim` (новое, 17-е ребро); для verdict — снимок вердикта на момент P2 в `InputBinding.digest`. PLAN-n и report читают проекцию напрямую, им это не нужно (поправка ревью принята).
-- `tests` получает атрибут `intent: confirm | refute` (по умолчанию confirm).
+- `tests` получает атрибут `intent: confirm | refute` (по умолчанию confirm) — объявлен в `graph_schema.yaml` как `edges.tests.attrs.intent`, не только в note.
 - Атрибут ребра `tests.intent` — изменение схемы рёбер (атрибут, не новое ребро; учтён в подсчёте §10).
 - Stance остаётся вычисляемым (RM §2), меняется только интерпретация в вердикте: при `intent=refute` met → claim.stance `supports`, а вердикт гипотезы — **`survived`** (одно имя везде: вердикт `survived` = disposition `survived`; имя `corroborated` не используется). not_met → refutes.
 - `Study.refutations_needed: int = 1` (k_ref) и `Study.refutation_priority: bool` — **фиксируются на Study при создании из профиля** (как catalog_version), в событии `StudyCreated`; позже не меняются (смена — только fork).
-- Новое правило в `verdict()` при `refutation_priority=True`: если distinct(ref) ≥ k_ref → `refuted`, даже при наличии sup (асимметрия Поппера). **Потолок провенанса действует:** в ref для приоритета идут только claims с provenance=real и evidence computational/experimental; литературное опровержение (`is_lit`) или не-real не перевешивает real supports — тогда sup+ref → inconclusive, как в RM §4.1. При `refutation_priority=False` правило RM §4.1 без изменений.
+- Новое правило в `verdict()` при `refutation_priority=True`: если distinct(real non-lit ref) ≥ k_ref → `refuted`, даже при наличии supports (асимметрия Поппера). **Потолок провенанса:** в ref для приоритета идут только claims с provenance=real и evidence computational/experimental; литературное опровержение (`is_lit`) или не-real не перевешивает real supports — тогда без priority-win sup+ref → inconclusive, как в RM §4.1. **Исключение:** если priority-win уже дал `refuted` (≥ k_ref real refs), stub/partial **supports** не опускают вердикт в inconclusive — provenance ceiling не капает опровержение. При `refutation_priority=False` правило RM §4.1 без изменений.
+- **PR 6 vs PR 8:** в PR 6 `verdict()` / `counts()` (в т.ч. R17) и поля Study/`tests.intent` живут как чистые правила и доменная модель. **`k_ref`, `refutation_priority` и `tests.intent` начинают влиять на runtime finalize/report только когда PR 8 вшьёт вызов `verdict()` в ядро** (как и «verdict-into-core» в §1: отложено в PR 6/8). До PR 8 тесты вызывают `verdict(...)` напрямую, передавая `Study.refutations_needed` / `refutation_priority`.
 - Ревью предлагало только отдельный k_ref; без приоритета k_ref ничего не меняет (sup+ref → inconclusive). Приоритет принят с условиями ревью выше.
 - H-c: `depends_on` без InputSpec на FAILED/SKIPPED родителе → SKIPPED(input_unavailable), кроме `TaskSpec.tolerate_failed_dep = True`. Stage-задачи SPEC…REPORT **не** каскадируются H-c (D §7.5: FAILED SPEC → plan с сырого запроса).
 - `InputSpec.mode` по умолчанию `forbid` (было `use_partial` / schema_stub, D §2). Заглушки — только явным флагом; upcaster TaskCreated v3→v4 сохраняет `use_partial` для старых журналов.
@@ -336,7 +337,9 @@ CodeCheck kinds: `exec_runs` (команда в sandbox, exit 0, лимиты в
 
 Формулировка: `criterion.frozen_at_seq < seq первой evidence, на которую ссылается claim с checked_against = этот criterion` (не любой evidence study). Критерий воспроизведения статьи, созданный в PLAN-1 после LIT-0, корректен. Плюс: evidence, использованная для **выбора** порога (например, число статьи), не может засчитываться как подтверждение того же criterion. Иначе получается цикл.
 
-**Тест.** `test_r17_criterion_after_lit_valid`, `test_r17_threshold_source_not_counted`.
+В PR 6 правило входит в путь `counts()` / `verdict()` через `claim_counts_under_r17` (и зеркало `Claim.counts_under_r17` в refmodel): без freeze/evidence metadata — базовый RM §4.1 `counts()`; при metadata — claim не идёт в k, если R17 не выполнен.
+
+**Тест.** `test_r17_criterion_after_lit_valid`, `test_r17_threshold_source_not_counted`, `test_r17_claim_excluded_from_verdict`.
 
 ## 13. Property-тест (п.7 ревью)
 
@@ -353,9 +356,9 @@ CodeCheck kinds: `exec_runs` (команда в sandbox, exit 0, лимиты в
 | 3 | Property-тест §13; инварианты, которые ещё не реализованы (дальние PR), помечены `xfail(strict=True)` по одному | И | 2 |
 | 4 | Intake + refuse (budget=0, пустой, duration ≤ reserve, safety/scope за портом) | X3, K3, K12 | 2 |
 | 5 | `simulate=forbid` по умолчанию; H-c (`tolerate_failed_dep`); `method=simulation` | S5, H-c | 1 |
-| 6 | R17; `tests.intent`, `survived`, k_ref + refutation_priority на Study с потолком провенанса | S2, S3, H-e | 1 |
+| 6 | R17 в `counts()`/`verdict()`; `tests.intent`, `survived`, k_ref + refutation_priority на Study (правила + модель; **runtime wiring → PR 8**) | S2, S3, H-e | 1 |
 | 7 | `InputSpec.kind` + ребро `uses_claim` | S1 | 6 |
-| 8 | `QuestionDisposed` (needs_more_data/infeasible), premises + premise_idx (ill_posed вычисляемый), конфликт в отчёте, PlanValidator с частичным покрытием | K8, H-f | 2 |
+| 8 | Вшивка `verdict()` в runtime finalize/report (k_ref / intent / survived начинают действовать в проде); `QuestionDisposed` (needs_more_data/infeasible), premises + premise_idx (ill_posed вычисляемый), конфликт в отчёте, PlanValidator с частичным покрытием | K8, H-f, S2/S3 runtime | 2, 6 |
 | 9 | `PlanExpanded` + триггер + квоты агента/человека + replan_reserve + question add/supersede + фильтр k | S6, H-d, H-g, C10 | 8 |
 | 10 | foreach + quorum fan-in | S9 | 9 |
 | 11 | LoopSpec (scope, 3 предиката, обязательный max_iter, LoopCapped) | S10 | 9 |
@@ -375,7 +378,7 @@ PR 1–3 — блокер M1. PR 14, 17, 18 независимы. PR 10, 12, 13 
 ## 15. Расхождения с ревью и их разрешение
 
 1. **Disposition** — принято условие ревью: ill_posed только вычисляемый; явные — только needs_more_data/infeasible и действуют до первого засчитываемого claim; конфликт — в отчёт; payload StudyFinalized считается той же функцией (replay-тест).
-2. **refutation_priority** — принято: фиксируется на Study; потолок провенанса и is_lit не дают литературе перевесить real supports.
+2. **refutation_priority** — принято: фиксируется на Study; потолок провенанса и is_lit не дают литературе перевесить real supports; ≥ k_ref real refs → `refuted` не капается stub/partial supports.
 3. **LoopSpec** — принято: scope цикла, точный no_change, обязательный max_iter с потолком профиля, лимит — LoopCapped + reason вопросов, не terminal_reason. Остаётся оговорка: LoopSpec может оказаться избыточным для M1. Я бы выпустил его последним из 9–12 и только если сценарий «пока не останется одна» нужен в приёмке M1.
 4. **Provenance** — принято: upcaster `simulated→stub`/`stubbed`, вариант с четвёртым значением вычеркнут, перенос в PR 1.
 5. **H-a** — по сути согласен; уточнение: «fulfilled без отчёта» возможен только при report.required=False (по умолчанию True), «closed без отчёта» — всегда.

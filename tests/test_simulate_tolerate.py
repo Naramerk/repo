@@ -339,7 +339,7 @@ async def test_failed_spec_plan_still_runs_and_report(tmp_path, clock, runtime_c
     await record_success(rt, await rt.start_attempt("REPORT"), arts)
     assert rt.tasks[f"{sid}/REPORT"].state == TaskState.DONE
     assert rt.tasks[f"{sid}/REPORT"].outcome == TaskOutcome.SUCCESS
-    # artifacts attached by attach_executor (executor + runtime.artifacts).
+    # finalize reads artifacts via executor.artifacts (attach_executor).
     await rt.tick()
     fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
     assert len(fins) == 1

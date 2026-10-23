@@ -3,9 +3,11 @@
 ## Unreleased
 
 ### M1 PR6
-- `tests.intent` (confirm|refute): refute+met → verdict `survived`; `Study.refutations_needed` / `refutation_priority` at create; provenance ceiling on priority refs.
-- R17 helpers: criterion frozen before cited evidence; threshold-source evidence excluded from counts.
-- Leftovers: `attach_executor` sets `runtime.artifacts`; H-c+cancel test; H-c+budget via `record_budget_debit`.
+- `tests.intent` (confirm|refute, edge attr in graph_schema): refute+met → verdict `survived`; `Study.refutations_needed` / `refutation_priority` at create.
+- Pure rules only: `k_ref` / `refutation_priority` / `intent` take effect in production once **PR 8** wires `verdict()` into runtime finalize.
+- Provenance ceiling: ≥ k_ref real priority refs stay `refuted` (stub/partial supports do not cap a refutation).
+- R17 wired into `counts()`/`verdict()` via `claim_counts_under_r17` (criterion before cited evidence; threshold-source excluded).
+- Leftovers: H-c+cancel test; H-c+budget via `record_budget_debit` (`_artifact_store` already uses `executor.artifacts`).
 
 ### M1 follow-up (post PR5)
 - Confirm `delegated_costly ≤ max_cost_rub` is create_study-only; replay test pins `Study.model_validate` / local_project reopen.
