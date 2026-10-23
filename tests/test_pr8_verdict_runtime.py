@@ -1121,6 +1121,7 @@ async def test_validity_failed_claim_invalid_inconclusive(
     assert claim.attrs["validity_ok"] is False
     assert claim.attrs["criterion_status"] == "unassessed"
     assert claim.attrs["check_role"] == "validity"
+    assert claim.attrs.get("exclusion_reason") == "validity_failed"
     assert rt.results[aid0].get("result_class") == "scientific"
     d = dispositions(
         tasks=rt.tasks,
@@ -1276,10 +1277,12 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
     assert parent.state == TaskState.DONE
     assert parent.outcome == TaskOutcome.FAILED
     assert rt.results[aid].get("result_class") == "scientific"
-    assert getattr(rt, "_retry_at", {}) == {} or f"{sid}/E_ref" not in rt._retry_at
-    assert len(parent.attempts) == 1  # no retry attempt
+    assert len(parent.attempts) == 1
 
     await rt.tick()
+    # After tick: still no retry attempt / retry_at for the scientific FAILED task.
+    assert len(parent.attempts) == 1
+    assert f"{sid}/E_ref" not in getattr(rt, "_retry_at", {})
     child = rt.tasks[f"{sid}/E_child"]
     # Scientific FAILED must not H-c cascade-cancel the dependent.
     assert child.state != TaskState.DONE or child.outcome != TaskOutcome.SKIPPED
@@ -1292,15 +1295,256 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
     await rt.cancel_task("REPORT", reason="cancelled")
     await rt.tick()
     assert rt._finalized
-    d = dispositions(
-        tasks=rt.tasks,
-        plans=rt.plans,
-        graph=rt.graph,
-        study=rt.study,
-        results=rt.results,
-    )
-    assert d["Q1"]["verdict"] == "refuted"
+    events = await rt.store.read_all()
+    debits = [e for e in events if e.type == "BudgetDebited"]
+    assert len(debits) == 1
+    assert Decimal(str(debits[0].payload["spent_rub"])) == Decimal("1.00")
+    assert debits[0].payload["request_id"] == "debit-1"
+    fin = next(e for e in events if e.type == "StudyFinalized")
+    assert fin.payload["question_dispositions"]["Q1"]["verdict"] == "refuted"
     await close_runtime(rt)
+
+
+def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
+    """3 valid real confirmations + 1 validity-failed → normal supported, not capped."""
+    from coscientist.core.claims import (
+        RuntimeClaim,
+        compute_verdict_snapshots,
+        excluded_claims_report,
+    )
+    from coscientist.core.domain import Study
+    from coscientist.core.rules import verdict
+
+    valid = [
+        RuntimeClaim(
+            criterion_status="met",
+            accepted=True,
+            provenance="real",
+            frozen=True,
+            attempt_id=f"S{i}",
+            artifact_id=f"A{i}",
+            validity_ok=True,
+            check_role="prediction",
+            target="Q1",
+        )
+        for i in range(3)
+    ]
+    bad = RuntimeClaim(
+        criterion_status="unassessed",
+        accepted=True,
+        provenance="real",
+        frozen=True,
+        attempt_id="V0",
+        artifact_id="AV",
+        validity_ok=False,
+        check_role="validity",
+        exclusion_reason="validity_failed",
+        target="Q1",
+    )
+    claims = [*valid, bad]
+    assert verdict(claims, True, k=3)[0] == "supported"
+    excl = excluded_claims_report(claims)
+    assert len(excl) == 1 and excl[0]["reason"] == "validity_failed"
+    # Snapshot path: same rule — no force to inconclusive.
+    g = GraphStore(default_execution_registry())
+    sid = "st_mix"
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    _seed_question(g, sid, "Q1")
+    for i in range(len(valid)):
+        aid = f"{sid}/E{i}#1"
+        evs, drops = claim_nodes_from_attempt(
+            study_id=sid,
+            attempt_id=aid,
+            provenance="real",
+            claims=[{"id": f"c{i}", "target": "Q1"}],
+            now=now,
+            graph=g,
+            derived={
+                **_DERIVED_OK,
+                "criterion_status": "met",
+                "validity_ok": True,
+                "check_role": "prediction",
+                "artifact_id": f"A{i}",
+            },
+        )
+        assert drops == []
+        _apply_events(g, evs)
+    aid_b = f"{sid}/Ev#1"
+    evs_b, drops_b = claim_nodes_from_attempt(
+        study_id=sid,
+        attempt_id=aid_b,
+        provenance="real",
+        claims=[{"id": "bad", "target": "Q1"}],
+        now=now,
+        graph=g,
+        derived={
+            **_DERIVED_OK,
+            "criterion_status": "unassessed",
+            "validity_ok": False,
+            "check_role": "validity",
+            "exclusion_reason": "validity_failed",
+            "artifact_id": "AV",
+        },
+    )
+    assert drops_b == []
+    _apply_events(g, evs_b)
+    study = Study(
+        study_id=sid,
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        hitl_policy=HitlPolicy(),
+        deadline=now + timedelta(seconds=60),
+        created_at=now,
+        confirmations_needed=3,
+    )
+    snaps = compute_verdict_snapshots(
+        g,
+        study_id=sid,
+        study=study,
+        any_experiment_done=True,
+        refs=["Q1"],
+    )
+    assert snaps["Q1"]["verdict"] == "supported"
+    assert snaps["Q1"]["excluded_claims"][0]["reason"] == "validity_failed"
+    assert snaps["Q1"].get("reason") != "validity_failed"
+
+
+def test_unknown_role_exclusion_never_forces_verdict():
+    """unknown_role is listed but does not force inconclusive by itself."""
+    from coscientist.core.claims import (
+        RuntimeClaim,
+        compute_verdict_snapshots,
+        excluded_claims_report,
+    )
+    from coscientist.core.domain import Study
+
+    bad = RuntimeClaim(
+        criterion_status="unassessed",
+        accepted=True,
+        provenance="real",
+        frozen=True,
+        attempt_id="U0",
+        artifact_id="AU",
+        validity_ok=False,
+        check_role="unknown",
+        exclusion_reason="unknown_role",
+        target="Q1",
+        node_id="n1",
+    )
+    excl = excluded_claims_report([bad])
+    assert excl == [
+        {"attempt_id": "U0", "node_id": "n1", "reason": "unknown_role"}
+    ]
+
+    # Snapshot: unknown_role alone → untested (never forces inconclusive).
+    g = GraphStore(default_execution_registry())
+    sid = "st_unk"
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    _seed_question(g, sid, "Q1")
+    aid = f"{sid}/E0#1"
+    evs, drops = claim_nodes_from_attempt(
+        study_id=sid,
+        attempt_id=aid,
+        provenance="real",
+        claims=[{"id": "u", "target": "Q1"}],
+        now=now,
+        graph=g,
+        derived={
+            **_DERIVED_OK,
+            "criterion_status": "unassessed",
+            "validity_ok": False,
+            "check_role": "unknown",
+            "exclusion_reason": "unknown_role",
+            "artifact_id": "AU",
+        },
+    )
+    assert drops == []
+    _apply_events(g, evs)
+    study = Study(
+        study_id=sid,
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        hitl_policy=HitlPolicy(),
+        deadline=now + timedelta(seconds=60),
+        created_at=now,
+        confirmations_needed=1,
+    )
+    snaps = compute_verdict_snapshots(
+        g,
+        study_id=sid,
+        study=study,
+        any_experiment_done=True,
+        refs=["Q1"],
+    )
+    assert snaps["Q1"]["verdict"] == "untested"
+    assert snaps["Q1"]["excluded_claims"][0]["reason"] == "unknown_role"
+    assert snaps["Q1"].get("reason") != "validity_failed"
+
+
+def test_validity_only_evidence_inconclusive():
+    """A validity failure as the only evidence → inconclusive (validity_failed)."""
+    from coscientist.core.claims import RuntimeClaim, compute_verdict_snapshots
+    from coscientist.core.domain import Study
+
+    g = GraphStore(default_execution_registry())
+    sid = "st_val_only"
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    _seed_question(g, sid, "Q1")
+    aid = f"{sid}/E0#1"
+    evs, drops = claim_nodes_from_attempt(
+        study_id=sid,
+        attempt_id=aid,
+        provenance="real",
+        claims=[{"id": "bad", "target": "Q1"}],
+        now=now,
+        graph=g,
+        derived={
+            **_DERIVED_OK,
+            "criterion_status": "unassessed",
+            "validity_ok": False,
+            "check_role": "validity",
+            "exclusion_reason": "validity_failed",
+            "artifact_id": "AV",
+        },
+    )
+    assert drops == []
+    _apply_events(g, evs)
+    study = Study(
+        study_id=sid,
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        hitl_policy=HitlPolicy(),
+        deadline=now + timedelta(seconds=60),
+        created_at=now,
+        confirmations_needed=1,
+    )
+    snaps = compute_verdict_snapshots(
+        g,
+        study_id=sid,
+        study=study,
+        any_experiment_done=True,
+        refs=["Q1"],
+    )
+    assert snaps["Q1"]["verdict"] == "inconclusive"
+    assert snaps["Q1"]["reason"] == "validity_failed"
+    assert snaps["Q1"]["excluded_claims"][0]["reason"] == "validity_failed"
+    # Sanity: RuntimeClaim path agrees.
+    only = RuntimeClaim(
+        criterion_status="unassessed",
+        accepted=True,
+        provenance="real",
+        frozen=True,
+        attempt_id="V0",
+        artifact_id="AV",
+        validity_ok=False,
+        check_role="validity",
+        exclusion_reason="validity_failed",
+        target="Q1",
+    )
+    assert not only.counts()
 
 
 @pytest.mark.asyncio

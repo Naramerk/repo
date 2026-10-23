@@ -378,6 +378,9 @@ def claim_nodes_from_attempt(
         attrs["check_role"] = (
             role if role in ("prediction", "validity", "unknown") else "unknown"
         )
+        excl = core.get("exclusion_reason")
+        if excl in ("validity_failed", "unknown_role"):
+            attrs["exclusion_reason"] = excl
         if core.get("artifact_id"):
             attrs["artifact_id"] = core["artifact_id"]
 

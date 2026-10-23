@@ -8,6 +8,7 @@ from typing import Any
 from coscientist.core.claims import (
     claims_for_ref,
     disposition_from_verdict,
+    excluded_claims_report,
     filtered_claims_by_target,
     hypothesis_verdicts,
 )
@@ -137,17 +138,11 @@ def _dispositions_inner(
         covering = [by_key[kk] for kk in sorted(keys) if kk in by_key]
         claims = claims_for_ref(by_target, qid, prefer="question")  # explicit kind
         counting = [c for c in claims if c.counts()]
-        excluded = [
-            {
-                "attempt_id": c.attempt_id,
-                "node_id": c.node_id,
-                "reason": "validity_failed",
-            }
-            for c in claims
-            if not c.counts() and getattr(c, "validity_ok", True) is False
-        ]
+        excluded = excluded_claims_report(claims)
+        validity_excl = [e for e in excluded if e["reason"] == "validity_failed"]
         any_exp = any(t.state == TaskState.DONE for t in covering)
         if counting:
+            # Per-experiment exclusion: verdict from valid claims only.
             v, _by_lit = verdict(
                 claims,
                 any_exp,
@@ -155,24 +150,11 @@ def _dispositions_inner(
                 refutations_needed=k_ref,
                 refutation_priority=priority,
             )
-            # Validity-failed claims force inconclusive unless other valid
-            # claims already refute.
-            if excluded and v != "refuted":
-                row_cap: dict[str, Any] = {
-                    "disposition": Disposition.INCONCLUSIVE.value,
-                    "reason": "validity_failed",
-                    "reason_detail": ["validity_failed"],
-                    "formulation": text,
-                    "verdict": "inconclusive",
-                    "excluded_claims": excluded,
-                }
-                result[qid] = row_cap
-                continue
             disp = disposition_from_verdict(v)
             if disp is not None:
-                row = {
+                row: dict[str, Any] = {
                     "disposition": disp,
-                    "reason": None,  # type: ignore[dict-item]
+                    "reason": None,
                     "reason_detail": [],
                     "formulation": text,
                     "verdict": v,
@@ -190,7 +172,9 @@ def _dispositions_inner(
                     row["excluded_claims"] = excluded
                 result[qid] = row
                 continue
-        if excluded:
+        # No valid claims: validity_failed → inconclusive; unknown_role alone
+        # never forces a verdict (falls through to not_attempted).
+        if validity_excl:
             result[qid] = {
                 "disposition": Disposition.INCONCLUSIVE.value,
                 "reason": "validity_failed",
@@ -201,12 +185,15 @@ def _dispositions_inner(
             }
             continue
         reason, detail = _not_attempted_for_covering(covering)
-        result[qid] = {
+        row_na: dict[str, Any] = {
             "disposition": Disposition.NOT_ATTEMPTED.value,
             "reason": reason.value,
             "reason_detail": [r.value for r in detail],
             "formulation": text,
         }
+        if excluded:
+            row_na["excluded_claims"] = excluded
+        result[qid] = row_na
     return result
 
 

@@ -200,8 +200,9 @@ def _derive_claim_core_attrs(
     Check ``role`` (catalog only, Duhem–Quine):
     - ``prediction`` FAILED → ``criterion_status=not_met`` → counting refute.
     - required ``validity`` FAILED → claim not counted (``validity_ok=False``);
-      criterion_status stays ``unassessed`` (never refuted from that experiment).
-    - ``unknown`` → never refutes, never validates (``validity_ok=False``).
+      excluded as ``validity_failed`` (per experiment; other valid claims still count).
+    - ``unknown`` → ``validity_ok=False``, excluded as ``unknown_role``; never
+      refutes, never validates, never forces a question/hypothesis verdict.
     """
     del task_outcome  # outcome is scientific whenever we derive; criteria ≠ accepted
     spec = getattr(task, "spec", None)
@@ -214,18 +215,22 @@ def _derive_claim_core_attrs(
     role = _role_for_claim_key(raw, checks, criteria, catalog=catalog)
     status = _criterion_status_for_claim(raw, checks, criteria)
     validity_ok = True
-    # Any required validity failure caps this experiment: no counting refutation.
+    exclusion_reason: str | None = None
+    # Required validity failure invalidates this experiment's claims only.
     if _required_validity_failed(checks):
         validity_ok = False
         status = "unassessed"
+        exclusion_reason = "validity_failed"
     elif role == "unknown":
-        # Unknown role never refutes and never validates.
+        # Unknown role never refutes and never validates (own exclusion reason).
         validity_ok = False
         status = "unassessed"
+        exclusion_reason = "unknown_role"
     elif role == "validity" and status == "not_met":
         validity_ok = False
         status = "unassessed"
-    return {
+        exclusion_reason = "validity_failed"
+    out = {
         "criterion_status": status,
         "evidence_kind": "literature" if lit else "computational",
         "frozen": _criterion_is_frozen(graph, study_id, key),
@@ -234,6 +239,9 @@ def _derive_claim_core_attrs(
         "validity_ok": validity_ok,
         "check_role": role,
     }
+    if exclusion_reason is not None:
+        out["exclusion_reason"] = exclusion_reason
+    return out
 
 
 class Executor:

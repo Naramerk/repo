@@ -53,6 +53,7 @@ _CORE_CLAIM_ATTRS: frozenset[str] = frozenset(
         "artifact_id",
         "validity_ok",
         "check_role",
+        "exclusion_reason",
     }
 )
 
@@ -85,9 +86,10 @@ class RuntimeClaim:
     target: str = ""
     target_kind: Literal["question", "hypothesis"] = "question"
     node_id: str = ""
-    # Duhem–Quine: False when a required validity check failed on this attempt.
+    # Duhem–Quine: False when validity failed or role is unknown on this attempt.
     validity_ok: bool = True
-    check_role: str = "prediction"
+    check_role: str = "unknown"
+    exclusion_reason: str | None = None
 
     def __post_init__(self) -> None:
         if self.intent not in ("confirm", "refute"):
@@ -366,9 +368,13 @@ def runtime_claim_from_node(
             if coerced_vok is None:
                 return None, "bad_validity_ok"
             validity_ok = coerced_vok
-        check_role = _coerce_str(attrs.get("check_role"), allow_empty=True) or "prediction"
-        if check_role not in ("prediction", "validity"):
-            check_role = "prediction"
+        check_role = _coerce_str(attrs.get("check_role"), allow_empty=True) or "unknown"
+        if check_role not in ("prediction", "validity", "unknown"):
+            check_role = "unknown"
+        excl_raw = _coerce_str(attrs.get("exclusion_reason"), allow_empty=True)
+        exclusion_reason = (
+            excl_raw if excl_raw in ("validity_failed", "unknown_role") else None
+        )
         frozen = _coerce_bool(attrs.get("frozen"))
         if frozen is None:
             return None, "bad_frozen"
@@ -446,6 +452,7 @@ def runtime_claim_from_node(
                 node_id=node.node_id,
                 validity_ok=bool(validity_ok),
                 check_role=check_role,
+                exclusion_reason=exclusion_reason,
             ),
             None,
         )
@@ -576,6 +583,10 @@ def compute_verdict_snapshots(
         claims = claims_for_ref(by_target, ref, prefer=kind)
         if not claims and refs is None:
             continue
+        # Verdict from counting (valid) claims only; invalid experiments are
+        # listed in excluded_claims and do not rewrite a normal verdict.
+        counting = [c for c in claims if c.counts()]
+        excluded = excluded_claims_report(claims)
         v, by_lit = verdict(
             claims,
             any_experiment_done,
@@ -583,25 +594,17 @@ def compute_verdict_snapshots(
             refutations_needed=k_ref,
             refutation_priority=priority,
         )
-        excluded = [
-            {
-                "attempt_id": c.attempt_id,
-                "node_id": c.node_id,
-                "reason": "validity_failed",
-            }
-            for c in claims
-            if not c.counts() and getattr(c, "validity_ok", True) is False
-        ]
-        # Cap at inconclusive when validity failed, unless other valid claims refute.
-        if excluded and v != "refuted":
+        validity_excl = [e for e in excluded if e["reason"] == "validity_failed"]
+        # Only when no valid claims remain: inconclusive + validity_failed.
+        # unknown_role alone never forces a verdict (align with dispositions).
+        if not counting and validity_excl:
             v = "inconclusive"
-        counting = [c for c in claims if c.counts()]
-        if excluded and not counting:
-            v = "inconclusive"
+        elif not counting and excluded:
+            v = "untested"
         provs: list[Provenance] = [
             c.provenance  # type: ignore[misc]
-            for c in claims
-            if c.counts() and c.provenance in VALID_PROVENANCE
+            for c in counting
+            if c.provenance in VALID_PROVENANCE
         ]
         source = worst_provenance(*provs) if provs else "stub"
         snap: dict[str, Any] = {
@@ -614,11 +617,10 @@ def compute_verdict_snapshots(
             "refutation_priority": priority,
             "k": conf_k,
         }
-        if excluded and v == "inconclusive":
+        if excluded:
+            snap["excluded_claims"] = excluded
+        if not counting and validity_excl:
             snap["reason"] = "validity_failed"
-            snap["excluded_claims"] = excluded
-        elif excluded:
-            snap["excluded_claims"] = excluded
         note = priority_refuted_support_note(
             claims,
             any_experiment_done,
@@ -634,6 +636,37 @@ def compute_verdict_snapshots(
             out[f"{kind}:{logical}"] = snap
         else:
             out[logical] = snap
+    return out
+
+
+def exclusion_reason_for_claim(claim: RuntimeClaim) -> str | None:
+    """Per-experiment exclusion: ``validity_failed`` or ``unknown_role``."""
+    if claim.counts() or getattr(claim, "validity_ok", True) is not False:
+        return None
+    stored = getattr(claim, "exclusion_reason", None)
+    if stored in ("validity_failed", "unknown_role"):
+        return stored
+    if getattr(claim, "check_role", "unknown") == "unknown":
+        return "unknown_role"
+    return "validity_failed"
+
+
+def excluded_claims_report(
+    claims: Sequence[RuntimeClaim],
+) -> list[dict[str, Any]]:
+    """List non-counting invalid claims for the report payload."""
+    out: list[dict[str, Any]] = []
+    for c in claims:
+        reason = exclusion_reason_for_claim(c)
+        if reason is None:
+            continue
+        out.append(
+            {
+                "attempt_id": c.attempt_id,
+                "node_id": c.node_id,
+                "reason": reason,
+            }
+        )
     return out
 
 
