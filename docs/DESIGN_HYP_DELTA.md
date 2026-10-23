@@ -26,7 +26,7 @@ Scope: claim classification, the hypothesis verdict, question disposition mappin
 | claim | `validity` | `valid \| invalid` | from validity checks (PR 8) |
 | claim | `outcome` | `consistent \| inconsistent \| indeterminate \| null` | null iff invalid |
 | claim | `severe` | bool | §3; **recomputed on read** — never trust stored `True` |
-| claim | `independence_key` | str | base `sha256(JCS({experiment_id}))`; count-time merge by root-data overlap / structural key |
+| claim | `independence_key` | str | base `sha256(JCS({experiment_id}))`; count-time merge by root-data overlap / shared templates |
 | claim | `data_digests` | list(str) | **root** data content digests (§5) |
 | claim | `criterion_template_ids` | list(str) | structural independence (§5); no goal/title/plan_id |
 | claim | `effect{est,ci_low?,ci_high?,kind,trusted}` | nullable | from **CheckResult.effect** (core evaluation), never agent claim attrs |
@@ -55,18 +55,18 @@ Legacy claims are never severe → never `supported` (V5). On replay/read, **`se
 1. Validity FAILED or R17 violated → invalid, outcome null, severe false.
 2. Prediction checks: any FAILED → inconsistent; all PASSED (≥1) → consistent; else indeterminate.
 3. Null prediction (`predicts_null` from **catalog template**, frozen on criterion) is consistent only if **numerical TOST** holds: real CI (`ci_low < ci_high`) from the metric artifact strictly inside (−sesoi, +sesoi). **Never invent CI from a point estimate** (`ci_low = ci_high = est` is not TOST).
-4. `severe` = consistent ∧ frozen ∧ catalog `uses_sesoi` ∧ check `used_sesoi` ∧ (null → **trusted** TOST; else point effect exceeds sesoi in `predicted_direction`). **No `min_power` path.**
+4. `severe` = consistent ∧ frozen ∧ catalog `uses_sesoi` ∧ check `used_sesoi` ∧ **trusted metric producer** ∧ (null → TOST interval; else point exceeds sesoi in `predicted_direction`). **No `min_power` path.** Untrusted effects are never severe and never refute-capable (null or non-null).
 5. Exact equality (`value_matches`) is a point check: never sets `used_sesoi`, never TOST.
 
-### TOST trust (metric artifact producers)
+### Metric trust (known M1 limitation)
 
-| Writer | Path | `effect.trusted` | Severe / refute-capable (null) |
+| Writer | Path | `effect.trusted` | Severe / refute-capable |
 |---|---|---|---|
-| Agent | `LocalArtifactStore.put` via `AgentTaskOutput.outputs` (Executor.record) | **false** | **no** — even with a real CI |
+| Agent | `LocalArtifactStore.put` via `AgentTaskOutput.outputs` (Executor.record) | **false** | **no** |
 | Core CAS | `put_cas` for route digests / reports | n/a (not metric checks) | — |
-| Sandbox / core metric (future) | not in M1 | would be **true** | yes, when CI present |
+| Sandbox / core execution of catalog check code | **not wired in M1** | would be **true** | yes |
 
-**Finding:** today every metric document evaluated by `evaluate_code_check` comes from an agent-written artifact (`artifacts.put` / agent outputs). Core therefore stamps `trusted=False`. Equivalence may be **numerically consistent** when the agent supplies a CI, but it is **not severe** and **not refute-capable** until a trusted producer exists.
+**Decision for this PR:** keep `trusted=False` on all check-evaluated metrics. M1 has no provenance bit that marks an artifact as produced by core/sandbox catalog-check execution (vs agent `put`). Follow-up: stamp `trusted=True` only when that producer path exists. Until then, **no claim can be severe or refute-capable from live Executor.record**, so `supported` / `survived` from severity cannot be reached end-to-end; unit tests may still construct `effect.trusted=True` to exercise the gates.
 
 ## 4. Counting filter
 
@@ -84,15 +84,15 @@ Only-excluded bags → `inconclusive` (not `untested`).
 ## 5. Independence sources
 
 - Base key: `sha256(JCS({experiment_id}))` (task id; never attempt id). **Method is not in the key.**
-- **Code vs data:** decided by the **core catalog**, not the planner. An input artifact is DATA unless its binding input name is listed in `Catalog.code_output_names`. **Ignore** planner `OutputSpec.role` / `media_type` for this decision.
-- **Root digests:** walk `InputBinding` → producer `ResultRecorded.inputs` transitively. Roots are artifacts with no upstream producer (or a producer with no artifact inputs). Code hops (catalog names) are skipped. Two experiments are one source if their **root-data digest sets overlap** (a dataset through an intermediate step therefore merges with the raw one).
-- **Structural merge (no distinct root data):** same target hypothesis/question ∧ same sorted `criterion_template_ids` ∧ both have empty root-data sets → one source. **Do not** hash whole TaskSpec; **never** use goal, title, or plan_id.
+- **Code vs data:** decided from the **artifact** recorded by the core (`Artifact.role`, with code|data owned at `put` via media_type — planner `role=` for those two ignored). **Never** use `InputBinding.input` / slot names (renaming a bind to `script` must not hide roots). Unknown meta → **DATA**.
+- **Root digests:** iterative walk `InputBinding` → producer `ResultRecorded.inputs` (cycle + depth guards; `get_meta` failures → conservative data-root + error note, never raise). Roots are artifacts with no upstream producer, **or** whose upstream inputs are all code (generation/simulation — the intermediate is itself a root). Two experiments are one source if their **root-data digest sets overlap**.
+- **Structural merge (no distinct root data):** same target ∧ **any shared** criterion template id ∧ both empty root-data sets → one source. Exact template-set equality is rejected (adding an auxiliary template must not mint a new source). **Do not** hash whole TaskSpec; **never** use goal, title, or plan_id.
 
 ### Residual risk
 
-- Catalog `code_output_names` mis-declaration (labeling data names as code) can hide shared roots; treat catalog edits as trusted config.
-- Intermediate producers that omit `ResultRecorded.inputs` / `output_map` break the provenance walk (roots stop early) — journal shape is a core invariant.
-- Structural merge collapses all no-input experiments that share the same criterion templates against one target; authors who need distinct sources without data must use distinct criterion template ids (or bind distinct root data).
+- Agent spoofing `media_type` to look like code can hide a data root (core owns code|data via media_type heuristics). Prefer distinct root data when independence matters.
+- Intermediate producers that omit `ResultRecorded.inputs` / `output_map` break the provenance walk — journal shape is a core invariant.
+- Empty-root experiments that share **no** criterion template remain distinct sources (bind distinct root data to force a merge across template families).
 
 ## 6. `verdict(h)`
 
@@ -103,7 +103,7 @@ Only-excluded bags → `inconclusive` (not `untested`).
 - `|con| ≥ 1` → `survived`.
 - Else inconclusive; `validity_failed` when only invalid remain.
 
-**Capable refute intent:** intent=refute ∧ frozen ∧ catalog `uses_sesoi` ∧ prediction-role check that `used_sesoi` ∧ (null → trusted CI). Planner label alone is not enough. Stored `refute_capable=True` is never trusted on read.
+**Capable refute intent:** intent=refute ∧ frozen ∧ catalog `uses_sesoi` ∧ prediction-role check that `used_sesoi` ∧ **trusted** metric producer (null → trusted CI). Planner label alone is not enough. Stored `refute_capable=True` is never trusted on read.
 
 ## 7. E-value — deferred
 
@@ -135,9 +135,9 @@ PR8 priority-refuted note wording restored: `refuted; n supporting results were 
 
 Unit + property (`record_claim` V1–V5) + executor e2e:
 
-- Independence bypasses: planner **role swap**, **goal/title reword** (plan revision), **intermediate step** provenance.
-- Root-data overlap merge; structural merge (empty roots + same templates); method ignored.
-- TOST: real CI required; agent-written metrics → `trusted=false` → not severe / not refute-capable.
+- Independence: **slot-rename** (bind data as `script`), role/media planner labels, goal reword, intermediate step, all-code-input intermediate as root.
+- Structural: shared-template merge (extra template does not split).
+- TOST / non-null: real CI; untrusted agent metrics → not severe / not refute-capable.
 - `value_matches` never sets `used_sesoi`.
 - Forged old journal `severe=True` / `refute_capable=True` recomputed on replay.
-- No-sesoi never supported; one severe → survived on defaults; snapshot replay; evalue rejected; planner sesoi params rejected.
+- Provenance walk: no crash on `get_meta` failure / cycles.

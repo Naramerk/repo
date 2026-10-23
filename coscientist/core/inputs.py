@@ -421,6 +421,8 @@ def claim_nodes_from_attempt(
             attrs["criterion_template_ids"] = [
                 str(x) for x in core["criterion_template_ids"] if x
             ]
+        if isinstance(core.get("independence_notes"), list) and core["independence_notes"]:
+            attrs["independence_notes"] = [str(x) for x in core["independence_notes"]]
         if core.get("study_id"):
             attrs["study_id"] = str(core["study_id"])
         if core.get("experiment_id"):

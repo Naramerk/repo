@@ -82,7 +82,12 @@ def test_question_disposition_computed_from_verdict():
             "uses_sesoi": True,
             "used_sesoi": True,
             "predicted_direction": "positive",
-            "effect": {"est": 1.5, "ci_low": 1.5, "ci_high": 1.5},
+            "effect": {
+                "est": 1.5,
+                "ci_low": 1.5,
+                "ci_high": 1.5,
+                "trusted": True,
+            },
             "claim_outcome": "consistent",
             "severe": True,
             "check_role": "prediction",

@@ -79,7 +79,13 @@ class LocalArtifactStore:
         digest = self.put_cas(content, tmp_name=produced_by.call_id)
         call_part = sha256_hex(produced_by.call_id)[:8]
         artifact_id = f"art_{digest[:16]}_{call_part}"
-        inferred = role or _infer_artifact_role(media_type)
+        # code|data are core-owned via media_type (planner role= ignored for those).
+        # Explicit paper/figure/table/log/report roles remain caller-set.
+        media_role = _infer_artifact_role(media_type)
+        if role in ("paper", "figure", "table", "log", "report"):
+            inferred = role
+        else:
+            inferred = media_role
         art = Artifact(
             artifact_id=artifact_id,
             name=name,

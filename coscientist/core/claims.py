@@ -547,7 +547,11 @@ def runtime_claim_from_node(
         art = _coerce_str(attrs.get("artifact_id"), allow_empty=True) or node.node_id
         # Never trust stored severe/refute_capable=True (forged journals).
         # Absent or explicit False ⇒ never-severe (V5); True is ignored and recomputed.
-        from coscientist.core.verdict import claim_is_severe, effect_is_trusted
+        from coscientist.core.verdict import (
+            claim_is_severe,
+            effect_is_trusted,
+            effect_producer_trusted,
+        )
 
         sesoi_f = sesoi if isinstance(sesoi, float) else None
         stored_severe = attrs.get("severe")
@@ -601,14 +605,18 @@ def runtime_claim_from_node(
         if stored_refute is False:
             refute_capable = False
         else:
-            # Recompute capability from catalog + check fields (ignore stored True).
+            # Recompute — ignore stored True; require trusted producer (null → CI too).
             refute_capable = bool(
                 frozen
                 and check_role == "prediction"
                 and uses_sesoi is True
                 and sesoi_f is not None
                 and used_sesoi is True
-                and (effect_is_trusted(effect) if predicts_null else True)
+                and (
+                    effect_is_trusted(effect)
+                    if predicts_null
+                    else effect_producer_trusted(effect)
+                )
             )
         probe.severe = severe_coerced
         probe.refute_capable = refute_capable

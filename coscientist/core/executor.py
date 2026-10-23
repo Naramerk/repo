@@ -293,10 +293,11 @@ def _derive_claim_core_attrs(
     from coscientist.core.verdict import (
         claim_is_severe,
         classify_outcome,
-        data_digests_from_bindings,
         effect_is_trusted,
+        effect_producer_trusted,
         independence_key_for,
         outcome_to_status,
+        root_data_digests_from_bindings,
     )
 
     frozen = _criterion_is_frozen(graph, study_id, key)
@@ -345,20 +346,19 @@ def _derive_claim_core_attrs(
     arts = artifact_store
     if arts is not None and hasattr(arts, "get_meta"):
         lookup = arts.get_meta
-    code_names = list(getattr(catalog, "code_output_names", None) or [])
-    data_digests = data_digests_from_bindings(
+    data_digests, indep_notes = root_data_digests_from_bindings(
         bindings,
         artifact_lookup=lookup,
-        code_output_names=code_names,
         results=results_map,
     )
-    criterion_template_ids = sorted(
-        {
-            str(getattr(r, "template_id", None) or r)
-            for r in criteria
-            if getattr(r, "template_id", None) or r
-        }
-    )
+    # Plan order (deduped); shared-any structural merge uses the set.
+    criterion_template_ids: list[str] = []
+    seen_tmpl: set[str] = set()
+    for r in criteria:
+        tid = str(getattr(r, "template_id", None) or r or "")
+        if tid and tid not in seen_tmpl:
+            seen_tmpl.add(tid)
+            criterion_template_ids.append(tid)
     # Base key is experiment_id; overlap / structural merge happens at count time.
     indep = independence_key_for(experiment_id=exp_id or None)
     probe = type(
@@ -384,13 +384,18 @@ def _derive_claim_core_attrs(
     )()
     severe = claim_is_severe(probe)
     # Capable refute: recompute — never trust a stored True later on replay.
+    # Trusted metric producer required for both null and non-null (M1: agent → false).
     refute_capable = bool(
         frozen
         and has_prediction_check
         and uses_sesoi
         and isinstance(sesoi, float)
         and used_sesoi
-        and (effect_is_trusted(effect) if predicts_null else True)
+        and (
+            effect_is_trusted(effect)
+            if predicts_null
+            else effect_producer_trusted(effect)
+        )
     )
     out: dict[str, Any] = {
         "criterion_status": status,
@@ -415,6 +420,8 @@ def _derive_claim_core_attrs(
         "criterion_template_ids": criterion_template_ids,
         "study_id": study_id,
     }
+    if indep_notes:
+        out["independence_notes"] = list(indep_notes)
     if isinstance(sesoi, float):
         out["sesoi"] = sesoi
     if isinstance(crit.get("alpha"), float):

@@ -141,9 +141,9 @@ nodes:
       - {name: validity_ok, type: bool, required: false, computed: true, note: "PR8/PR8b; false → invalid"}
       - {name: claim_outcome, type: enum(consistent|inconsistent|indeterminate), required: false, computed: true, note: "PR8b; null when invalid"}
       - {name: severe, type: bool, required: false, computed: true, note: "PR8b Mayo severe gate"}
-      - {name: independence_key, type: str, required: false, computed: true, note: "PR8b sha256(experiment_id); merge by root-data overlap / structural templates"}
-      - {name: data_digests, type: list(str), required: false, computed: true, note: "PR8b root data content digests (catalog code_output_names; transitive walk)"}
-      - {name: criterion_template_ids, type: list(str), required: false, computed: true, note: "PR8b structural independence (no goal/title/plan_id)"}
+      - {name: independence_key, type: str, required: false, computed: true, note: "PR8b sha256(experiment_id); merge by root-data overlap / shared templates"}
+      - {name: data_digests, type: list(str), required: false, computed: true, note: "PR8b root data content digests (artifact meta; transitive walk)"}
+      - {name: criterion_template_ids, type: list(str), required: false, computed: true, note: "PR8b structural independence share-any (no goal/title/plan_id)"}
       - {name: p_value, type: float, required: false}
       - {name: power, type: float, required: false}
       - {name: sesoi, type: float, required: false, note: "from catalog template uses_sesoi"}

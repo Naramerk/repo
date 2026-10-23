@@ -87,7 +87,6 @@ def build_minimal_report(
         h_rows: list[dict[str, Any]] = [
             dict(v) if isinstance(v, Mapping) else {"hypothesis_id": hid, "verdict": v}
             for hid, v in sorted(hypotheses.items())
-            if hid != "_error"
         ]
     else:
         h_rows = [dict(h) for h in (hypotheses or [])]

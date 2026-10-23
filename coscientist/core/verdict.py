@@ -78,27 +78,85 @@ def outcome_to_status(outcome: ClaimOutcome | None, *, validity: ClaimValidity) 
     return "unassessed"
 
 
-def binding_is_code(input_name: str, *, code_output_names: Sequence[str] | None) -> bool:
-    """True only when the catalog explicitly declares this output name as code.
+_MAX_PROVENANCE_DEPTH = 64
 
-    Planner ``OutputSpec.role`` / ``media_type`` are ignored. Default: DATA.
+
+def _media_type_is_code(media_type: str | None) -> bool:
+    mt = (media_type or "").lower()
+    if any(
+        tok in mt
+        for tok in (
+            "python",
+            "javascript",
+            "typescript",
+            "x-sh",
+            "x-shellscript",
+            "x-script",
+            "x-bytecode",
+        )
+    ):
+        return True
+    return mt.startswith("text/x-")
+
+
+def artifact_is_code(meta: Any | None) -> bool:
+    """True when the **artifact** is core-recorded as code. Unknown → DATA.
+
+    Uses ``Artifact.role`` from the store (code|data owned by core via media_type
+    at ``put`` time). Never uses InputBinding slot names. Planner OutputSpec ignored.
     """
-    names = {str(x) for x in (code_output_names or ())}
-    return str(input_name or "") in names
+    if meta is None:
+        return False
+    role = getattr(meta, "role", None)
+    if role == "code":
+        return True
+    if role in ("data", "paper", "figure", "table", "log", "report"):
+        return False
+    return _media_type_is_code(getattr(meta, "media_type", None))
 
 
-def _binding_fields(b: Any) -> tuple[str, str, str | None]:
+# Back-compat name used by older imports/tests.
+def binding_is_code(
+    input_name: str | None = None,
+    *,
+    code_output_names: Sequence[str] | None = None,
+    meta: Any | None = None,
+) -> bool:
+    """Deprecated: use ``artifact_is_code(meta)``. Slot names are ignored."""
+    del input_name, code_output_names
+    return artifact_is_code(meta)
+
+
+def _binding_fields(b: Any) -> tuple[str, str, str | None, str | None]:
+    """kind, input_name, artifact_id, binding digest (optional fallback)."""
     if isinstance(b, Mapping):
         return (
             str(b.get("kind", "artifact")),
             str(b.get("input") or ""),
             str(b.get("artifact_id") or "") or None,
+            str(b.get("digest") or "") or None,
         )
     return (
         str(getattr(b, "kind", "artifact")),
         str(getattr(b, "input", "") or ""),
         str(getattr(b, "artifact_id", "") or "") or None,
+        str(getattr(b, "digest", "") or "") or None,
     )
+
+
+def _safe_get_meta(
+    artifact_id: str,
+    *,
+    artifact_lookup: Callable[[str], Any] | None,
+    notes: list[str],
+) -> Any | None:
+    if not artifact_id or artifact_lookup is None:
+        return None
+    try:
+        return artifact_lookup(artifact_id)
+    except Exception as exc:  # noqa: BLE001 — never crash StudyFinalized path
+        notes.append(f"get_meta:{artifact_id}:{type(exc).__name__}")
+        return None
 
 
 def _content_digest(
@@ -106,13 +164,16 @@ def _content_digest(
     *,
     artifact_lookup: Callable[[str], Any] | None,
     fallback: str | None = None,
+    notes: list[str] | None = None,
 ) -> str | None:
-    if artifact_id and artifact_lookup is not None:
-        meta = artifact_lookup(artifact_id)
-        if meta is not None:
-            d = getattr(meta, "sha256", None) or getattr(meta, "digest", None)
-            if d:
-                return str(d)
+    note_buf = notes if notes is not None else []
+    meta = _safe_get_meta(
+        artifact_id, artifact_lookup=artifact_lookup, notes=note_buf
+    )
+    if meta is not None:
+        d = getattr(meta, "sha256", None) or getattr(meta, "digest", None)
+        if d:
+            return str(d)
     return str(fallback) if fallback else None
 
 
@@ -147,59 +208,115 @@ def root_data_digests_from_bindings(
     results: Mapping[str, Mapping[str, Any]] | None = None,
     artifact_lookup: Callable[[str], Any] | None = None,
     code_output_names: Sequence[str] | None = None,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     """Content digests of **root** data artifacts reachable from bindings.
 
-    Walks InputBinding → producer ResultRecorded.inputs transitively. An artifact
-    with no upstream producer (or a producer with no artifact inputs) is a root.
-    Code hops (catalog ``code_output_names``) are skipped. Planner role/media_type
-    ignored — every non-code binding is DATA.
+    Walks InputBinding → producer ResultRecorded.inputs iteratively (depth/cycle
+    guarded). Code vs data from **artifact** metadata (never slot names). An
+    artifact with no upstream producer, or whose upstream inputs are all code
+    (generation/simulation), is itself a root. Unknown meta → DATA.
+
+    Returns ``(sorted_root_digests, error_notes)``. Never raises.
     """
+    del code_output_names  # slot-name catalog lists are not used for this decision
     producers = _producer_index(results)
     roots: set[str] = set()
+    notes: list[str] = []
 
-    def _walk(artifact_id: str, *, via_code: bool, seen: set[str]) -> None:
-        if not artifact_id or artifact_id in seen:
-            return
-        seen.add(artifact_id)
-        if via_code:
-            return
-        producer = producers.get(artifact_id)
-        if producer is None:
-            d = _content_digest(artifact_id, artifact_lookup=artifact_lookup)
+    # Stack entries: (artifact_id, fallback_digest, depth)
+    stack: list[tuple[str, str | None, int]] = []
+    for b in bindings or ():
+        kind, _iname, aid, bdig = _binding_fields(b)
+        if kind != "artifact" or not aid:
+            continue
+        stack.append((aid, bdig, 0))
+
+    seen: set[str] = set()
+    while stack:
+        artifact_id, fallback, depth = stack.pop()
+        if not artifact_id:
+            continue
+        if artifact_id in seen:
+            notes.append(f"cycle:{artifact_id}")
+            continue
+        if depth > _MAX_PROVENANCE_DEPTH:
+            notes.append(f"depth:{artifact_id}")
+            # Conservative: treat as data root using best-available digest.
+            d = _content_digest(
+                artifact_id,
+                artifact_lookup=artifact_lookup,
+                fallback=fallback,
+                notes=notes,
+            )
             if d:
                 roots.add(d)
-            return
+            continue
+        seen.add(artifact_id)
+
+        meta = _safe_get_meta(
+            artifact_id, artifact_lookup=artifact_lookup, notes=notes
+        )
+        if artifact_is_code(meta):
+            # Code hop — skip (not a data root, do not walk through).
+            continue
+
+        producer = producers.get(artifact_id)
+        if producer is None:
+            d = _content_digest(
+                artifact_id,
+                artifact_lookup=artifact_lookup,
+                fallback=fallback,
+                notes=notes,
+            )
+            if d:
+                roots.add(d)
+            continue
+
         upstream = [
             b
             for b in (producer.get("inputs") or ())
             if _binding_fields(b)[0] == "artifact" and _binding_fields(b)[2]
         ]
         if not upstream:
-            d = _content_digest(artifact_id, artifact_lookup=artifact_lookup)
+            d = _content_digest(
+                artifact_id,
+                artifact_lookup=artifact_lookup,
+                fallback=fallback,
+                notes=notes,
+            )
             if d:
                 roots.add(d)
-            return
+            continue
+
+        # Partition upstream into data vs code via artifact meta (not slot names).
+        data_children: list[tuple[str, str | None]] = []
         for b in upstream:
-            _kind, iname, child = _binding_fields(b)
+            _k, _n, child, cdig = _binding_fields(b)
             if not child:
                 continue
-            _walk(
-                child,
-                via_code=binding_is_code(iname, code_output_names=code_output_names),
-                seen=seen,
+            child_meta = _safe_get_meta(
+                child, artifact_lookup=artifact_lookup, notes=notes
             )
+            if artifact_is_code(child_meta):
+                continue
+            data_children.append((child, cdig))
 
-    for b in bindings or ():
-        kind, iname, aid = _binding_fields(b)
-        if kind != "artifact" or not aid:
+        if not data_children:
+            # All upstream inputs are code (generation/simulation) → this is a root.
+            d = _content_digest(
+                artifact_id,
+                artifact_lookup=artifact_lookup,
+                fallback=fallback,
+                notes=notes,
+            )
+            if d:
+                roots.add(d)
             continue
-        _walk(
-            aid,
-            via_code=binding_is_code(iname, code_output_names=code_output_names),
-            seen=set(),
-        )
-    return sorted(roots)
+
+        for child, cdig in data_children:
+            stack.append((child, cdig, depth + 1))
+
+    return sorted(roots), notes
 
 
 def data_digests_from_bindings(
@@ -209,13 +326,14 @@ def data_digests_from_bindings(
     code_output_names: Sequence[str] | None = None,
     results: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[str]:
-    """Root data digests for independence (catalog code names; transitive walk)."""
-    return root_data_digests_from_bindings(
+    """Root data digests for independence (artifact meta; transitive walk)."""
+    digs, _notes = root_data_digests_from_bindings(
         bindings,
         results=results,
         artifact_lookup=artifact_lookup,
         code_output_names=code_output_names,
     )
+    return digs
 
 
 # Back-compat alias used by older tests/imports.
@@ -241,13 +359,22 @@ def digests_from_bindings(
 
 
 def structural_source_key(claim: Any) -> tuple[str, tuple[str, ...]] | None:
-    """(target, sorted criterion template ids) — no goal/title/plan_id."""
+    """(target, sorted criterion templates) — diagnostic only; merge uses share-any."""
     target = str(getattr(claim, "target", "") or "")
     raw = getattr(claim, "criterion_template_ids", None) or ()
     templates = tuple(sorted({str(x) for x in raw if x}))
     if not target and not templates:
         return None
     return (target, templates)
+
+
+def _claim_templates(claim: Any) -> frozenset[str]:
+    raw = getattr(claim, "criterion_template_ids", None) or ()
+    return frozenset(str(x) for x in raw if x)
+
+
+def _claim_target(claim: Any) -> str:
+    return str(getattr(claim, "target", "") or "")
 
 
 def independence_key_for(*, experiment_id: str | None = None) -> str:
@@ -292,8 +419,8 @@ def distinct_by_key(claims: Sequence[Any]) -> list[Any]:
 
     Merge when:
     1. root-data digest sets overlap (transitive provenance), or
-    2. same structural key (target + criterion templates) and neither has
-       distinct root data (both empty roots).
+    2. same target, empty roots, and **any shared** criterion template id
+       (adding an auxiliary template must not mint a new source).
     """
     items = list(claims)
     if not items:
@@ -312,23 +439,27 @@ def distinct_by_key(claims: Sequence[Any]) -> list[Any]:
         for other in owners[1:]:
             _union_find_merge(parent, owners[0], other)
 
-    # (2) Structural: same hypothesis/target + same criterion templates, no root data.
-    struct_owners: dict[tuple[str, tuple[str, ...]], list[str]] = {}
+    # (2) Structural: same target + any shared criterion template, no root data.
+    tmpl_owners: dict[tuple[str, str], list[str]] = {}
     for cid, c in zip(ids, items, strict=True):
         if _claim_data_digests(c):
             continue
-        sk = structural_source_key(c)
-        if sk is None:
+        target = _claim_target(c)
+        tmpls = _claim_templates(c)
+        if not target or not tmpls:
             continue
-        struct_owners.setdefault(sk, []).append(cid)
-    for owners in struct_owners.values():
+        for tid in tmpls:
+            tmpl_owners.setdefault((target, tid), []).append(cid)
+    for owners in tmpl_owners.values():
         for other in owners[1:]:
             _union_find_merge(parent, owners[0], other)
 
     # Singletons by independence_key when neither rule applied a group.
     key_owners: dict[str, list[str]] = {}
     for cid, c in zip(ids, items, strict=True):
-        if _claim_data_digests(c) or structural_source_key(c) is not None:
+        if _claim_data_digests(c):
+            continue
+        if _claim_target(c) and _claim_templates(c):
             continue
         key_owners.setdefault(source_id_for_claim(c), []).append(cid)
     for owners in key_owners.values():
@@ -377,11 +508,16 @@ def effect_has_interval(effect: Mapping[str, Any] | None) -> bool:
     return lo < hi
 
 
-def effect_is_trusted(effect: Mapping[str, Any] | None) -> bool:
-    """TOST severity requires a trusted (core/sandbox) metric producer."""
+def effect_producer_trusted(effect: Mapping[str, Any] | None) -> bool:
+    """True when effect.trusted is core/sandbox (not agent-written)."""
     if not isinstance(effect, Mapping):
         return False
-    return effect.get("trusted") is True and effect_has_interval(effect)
+    return effect.get("trusted") is True
+
+
+def effect_is_trusted(effect: Mapping[str, Any] | None) -> bool:
+    """TOST severity: trusted producer **and** a real CI interval."""
+    return effect_producer_trusted(effect) and effect_has_interval(effect)
 
 
 def tost_holds_numerically(
@@ -413,9 +549,10 @@ def effect_exceeds_sesoi(
     effect: Mapping[str, Any] | None,
     direction: PredictedDirection | str | None = "two_sided",
 ) -> bool:
-    """Non-null prediction: core point-estimate effect exceeds sesoi (not TOST)."""
-    if sesoi is None or effect is None:
+    """Non-null: trusted point-estimate exceeds sesoi (not TOST)."""
+    if sesoi is None or not effect_producer_trusted(effect):
         return False
+    assert effect is not None
     try:
         est = float(effect["est"])  # type: ignore[index]
         s = float(sesoi)
@@ -433,6 +570,7 @@ def claim_is_severe(claim: Any) -> bool:
     """Severe from catalog + check results — never trust stored ``severe=True``.
 
     Explicit ``severe=False`` remains definitive (V5 legacy never supported).
+    Both null (TOST) and non-null paths require a trusted metric producer.
     """
     if effective_outcome(claim) != "consistent":
         return False
@@ -460,9 +598,11 @@ def claim_is_severe(claim: Any) -> bool:
     if used is not True:
         return False
     effect = getattr(claim, "effect", None)
+    # Agent-written metrics are never severe (trusted=false in M1).
+    if not effect_producer_trusted(effect):
+        return False
     predicts_null = bool(getattr(claim, "predicts_null", False))
     if predicts_null:
-        # TOST: trusted interval only; point estimates are never severe.
         return tost_holds(sesoi=float(sesoi), effect=effect)
     direction = getattr(claim, "predicted_direction", None) or "two_sided"
     return effect_exceeds_sesoi(
@@ -474,6 +614,7 @@ def refute_intent_counts(claim: Any) -> bool:
     """Refute intent counts toward supported only if the prediction could fail.
 
     Never trusts stored ``refute_capable=True``. Recomputes from catalog + check.
+    Requires a trusted metric producer (same rule as severe).
     """
     if _intent(claim) != "refute":
         return False
@@ -491,10 +632,10 @@ def refute_intent_counts(claim: Any) -> bool:
         return False
     if getattr(claim, "used_sesoi", None) is not True:
         return False
-    # Null/TOST claims need a trusted CI to be refute-capable.
+    effect = getattr(claim, "effect", None)
     if bool(getattr(claim, "predicts_null", False)):
-        return effect_is_trusted(getattr(claim, "effect", None))
-    return True
+        return effect_is_trusted(effect)
+    return effect_producer_trusted(effect)
 
 
 def classify_outcome(

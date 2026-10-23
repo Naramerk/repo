@@ -51,9 +51,10 @@ _DERIVED_OK = {
     "uses_sesoi": True,
     "used_sesoi": True,
     "predicted_direction": "positive",
-    "effect": {"est": 1.5, "ci_low": 1.5, "ci_high": 1.5},
+    "effect": {"est": 1.5, "ci_low": 1.5, "ci_high": 1.5, "trusted": True},
     "check_role": "prediction",
     "refute_capable": True,
+    "severe": True,
 }
 
 
@@ -770,9 +771,12 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
         study=rt.study,
         results=rt.results,
     )
-    # PR8b: single severe confirm → survived (supported_needed=2).
-    assert d["Q1"]["disposition"] == "survived"
-    assert d["Q1"]["verdict"] == "survived"
+    # M1 limitation: agent metrics are untrusted → not severe → inconclusive.
+    assert d["Q1"]["verdict"] == "inconclusive"
+    by = filtered_claims_by_target(
+        rt.graph, study_id=sid, results=rt.results
+    )
+    assert by["question:Q1"][0].severe is False
     await close_runtime(rt)
 
 
@@ -1341,7 +1345,7 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
             uses_sesoi=True,
             used_sesoi=True,
             predicted_direction="positive",
-            effect={"est": 1.5, "ci_low": 1.5, "ci_high": 1.5},
+            effect={"est": 1.5, "ci_low": 1.5, "ci_high": 1.5, "trusted": True},
             claim_outcome="consistent",
             severe=True,
         )

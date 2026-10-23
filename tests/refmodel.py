@@ -116,13 +116,24 @@ class Claim:
         if self.used_sesoi is None:
             self.used_sesoi = bool(self.uses_sesoi)
         if self.effect is None and self.sesoi is not None:
-            # Default effect exceeds sesoi in the positive direction.
+            # Default effect exceeds sesoi; trusted=True so oracle unit tests
+            # can exercise severe gates (live Executor keeps trusted=False).
             est = float(self.sesoi) + 1.0
-            self.effect = {"est": est, "ci_low": est, "ci_high": est}
+            self.effect = {
+                "est": est,
+                "ci_low": est,
+                "ci_high": est,
+                "trusted": True,
+            }
+        elif isinstance(self.effect, dict) and "trusted" not in self.effect:
+            self.effect = {**self.effect, "trusted": True}
+        trusted = bool(
+            isinstance(self.effect, dict) and self.effect.get("trusted") is True
+        )
         if self.severe is None:
             has_thr = bool(self.uses_sesoi) and self.sesoi is not None and self.used_sesoi
             exceeds = False
-            if has_thr and self.effect is not None:
+            if has_thr and self.effect is not None and trusted:
                 try:
                     exceeds = float(self.effect["est"]) > float(self.sesoi)
                 except (KeyError, TypeError, ValueError):
@@ -133,6 +144,7 @@ class Claim:
                 and self.validity_ok
                 and self.provenance == "real"
                 and has_thr
+                and trusted
                 and (self.predicts_null or exceeds)
             )
         if self.refute_capable is None:
@@ -142,6 +154,7 @@ class Claim:
                 and self.uses_sesoi
                 and self.sesoi is not None
                 and self.used_sesoi
+                and trusted
             )
 
     @property

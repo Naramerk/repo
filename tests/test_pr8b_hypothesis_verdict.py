@@ -36,7 +36,6 @@ from coscientist.core.verdict import (
     independence_key_for,
     refute_intent_counts,
     root_data_digests_from_bindings,
-    structural_source_key,
     tost_holds,
 )
 from tests.helpers import attach_executor, close_runtime, open_runtime
@@ -64,7 +63,8 @@ def _c(**kw) -> RuntimeClaim:
         used_sesoi=True,
         predicts_null=False,
         predicted_direction="positive",
-        effect={"est": 1.5, "ci_low": 1.5, "ci_high": 1.5},
+        # Unit tests stamp trusted=True to exercise gates; live Executor keeps False.
+        effect={"est": 1.5, "ci_low": 1.5, "ci_high": 1.5, "trusted": True},
         refute_capable=True,
     )
     base.update(kw)
@@ -318,7 +318,7 @@ def test_underpowered_is_indeterminate_exclusion():
 
 
 def test_severe_requires_catalog_sesoi_and_effect():
-    """Severe needs uses_sesoi + used_sesoi + effect exceeding sesoi (no min_power)."""
+    """Severe needs uses_sesoi + used_sesoi + trusted effect exceeding sesoi."""
     bare = _c(
         severe=None,
         sesoi=None,
@@ -337,12 +337,22 @@ def test_severe_requires_catalog_sesoi_and_effect():
         frozen=True,
     )
     assert claim_is_severe(no_effect) is False
+    untrusted = _c(
+        severe=None,
+        sesoi=0.5,
+        uses_sesoi=True,
+        used_sesoi=True,
+        effect={"est": 999.0, "kind": "point", "trusted": False},
+        predicted_direction="positive",
+        frozen=True,
+    )
+    assert claim_is_severe(untrusted) is False
     below = _c(
         severe=None,
         sesoi=0.5,
         uses_sesoi=True,
         used_sesoi=True,
-        effect={"est": 0.1, "ci_low": 0.1, "ci_high": 0.1},
+        effect={"est": 0.1, "ci_low": 0.1, "ci_high": 0.1, "trusted": True},
         predicted_direction="positive",
         frozen=True,
     )
@@ -352,7 +362,7 @@ def test_severe_requires_catalog_sesoi_and_effect():
         sesoi=0.5,
         uses_sesoi=True,
         used_sesoi=True,
-        effect={"est": 1.0, "ci_low": 1.0, "ci_high": 1.0},
+        effect={"est": 1.0, "ci_low": 1.0, "ci_high": 1.0, "trusted": True},
         predicted_direction="positive",
         frozen=True,
     )
@@ -408,8 +418,8 @@ def test_data_digest_overlap_merges_sources():
     assert len(distinct_by_key([a, b, c])) == 2
 
 
-def test_structural_empty_roots_same_templates_one_source():
-    """Same target + criterion templates + empty roots → one source (ignore goal)."""
+def test_structural_shared_template_merges():
+    """Same target + any shared template + empty roots → one source."""
     a = _c(
         experiment_id="E1",
         independence_key=independence_key_for(experiment_id="E1"),
@@ -423,7 +433,8 @@ def test_structural_empty_roots_same_templates_one_source():
         independence_key=independence_key_for(experiment_id="E2"),
         data_digests=[],
         target="H1",
-        criterion_template_ids=["value_match"],
+        # Extra template must not mint a new source (share-any).
+        criterion_template_ids=["value_match", "artifact_present"],
         attempt_id="E2#1",
         artifact_id="Art2",
     )
@@ -432,12 +443,10 @@ def test_structural_empty_roots_same_templates_one_source():
         independence_key=independence_key_for(experiment_id="E3"),
         data_digests=[],
         target="H1",
-        criterion_template_ids=["artifact_present"],
+        criterion_template_ids=["tost_equivalence"],
         attempt_id="E3#1",
         artifact_id="Art3",
     )
-    assert structural_source_key(a) == structural_source_key(b)
-    assert structural_source_key(a) != structural_source_key(c)
     assert len(distinct_by_key([a, b])) == 1
     assert len(distinct_by_key([a, b, c])) == 2
 
@@ -469,8 +478,10 @@ def test_root_data_walk_through_intermediate():
     raw_id = "art_raw"
 
     class _Meta:
-        def __init__(self, sha: str) -> None:
+        def __init__(self, sha: str, role: str = "data") -> None:
             self.sha256 = sha
+            self.role = role
+            self.media_type = "application/json"
 
     def lookup(aid: str):
         if aid == raw_id:
@@ -488,44 +499,92 @@ def test_root_data_walk_through_intermediate():
             ],
         }
     }
-    via_mid = root_data_digests_from_bindings(
+    via_mid, _n = root_data_digests_from_bindings(
         [{"kind": "artifact", "input": "mid", "artifact_id": mid_id}],
         results=results,
         artifact_lookup=lookup,
-        code_output_names=["code"],
     )
-    direct = root_data_digests_from_bindings(
+    direct, _n2 = root_data_digests_from_bindings(
         [{"kind": "artifact", "input": "data", "artifact_id": raw_id}],
         results=results,
         artifact_lookup=lookup,
-        code_output_names=["code"],
     )
     assert via_mid == [raw_sha]
     assert direct == [raw_sha]
 
 
-def test_planner_role_ignored_for_code_vs_data():
-    """Only catalog code_output_names mark code; OutputSpec.role is ignored."""
+def test_slot_rename_cannot_hide_data_roots():
+    """Binding slot name (e.g. 'script') must not classify data as code."""
     sha = "cc" * 32
 
     class _Meta:
         sha256 = sha
-        role = "code"  # planner/artifact role must not matter
+        role = "data"
+        media_type = "application/json"
+
+    digs = data_digests_from_bindings(
+        [{"kind": "artifact", "input": "script", "artifact_id": "art1"}],
+        artifact_lookup=lambda _a: _Meta(),
+        code_output_names=["code", "script", "program"],
+    )
+    assert digs == [sha]
+
+
+def test_artifact_role_code_skipped():
+    """Core-recorded Artifact.role=code is skipped (not a data root)."""
+    sha = "dd" * 32
+
+    class _Meta:
+        sha256 = sha
+        role = "code"
         media_type = "text/x-python"
 
     digs = data_digests_from_bindings(
-        [{"kind": "artifact", "input": "data_a", "artifact_id": "art1"}],
+        [{"kind": "artifact", "input": "anything", "artifact_id": "art1"}],
         artifact_lookup=lambda _a: _Meta(),
-        code_output_names=["code", "script"],
     )
-    assert digs == [sha]
-    # Same bytes bound under a catalog code name → skipped.
-    digs_code = data_digests_from_bindings(
-        [{"kind": "artifact", "input": "code", "artifact_id": "art1"}],
-        artifact_lookup=lambda _a: _Meta(),
-        code_output_names=["code", "script"],
+    assert digs == []
+
+
+def test_all_code_upstream_intermediate_is_root():
+    """Generation/simulation whose inputs are all code keeps the intermediate as root."""
+    code_sha = "ee" * 32
+    mid_sha = "ff" * 32
+    code_id = "art_code"
+    mid_id = "art_mid"
+
+    class _Meta:
+        def __init__(self, sha: str, role: str) -> None:
+            self.sha256 = sha
+            self.role = role
+            self.media_type = (
+                "text/x-python" if role == "code" else "application/json"
+            )
+
+    def lookup(aid: str):
+        if aid == code_id:
+            return _Meta(code_sha, "code")
+        if aid == mid_id:
+            return _Meta(mid_sha, "data")
+        return None
+
+    results = {
+        "GEN#1": {
+            "artifacts": [mid_id],
+            "output_map": {"out": mid_id},
+            "inputs": [
+                {"kind": "artifact", "input": "script", "artifact_id": code_id},
+            ],
+        }
+    }
+    digs, notes = root_data_digests_from_bindings(
+        [{"kind": "artifact", "input": "out", "artifact_id": mid_id}],
+        results=results,
+        artifact_lookup=lookup,
     )
-    assert digs_code == []
+    assert digs == [mid_sha]
+    assert code_sha not in digs
+    assert isinstance(notes, list)
 
 
 def test_tost_requires_real_ci_and_trusted():
@@ -836,7 +895,7 @@ class VerdictPropertyMachine(RuleBasedStateMachine):
         # Without artifact metas, both bindings classify as data — use data only.
         digests = [data]
         effect = (
-            {"est": 1.5, "ci_low": 1.5, "ci_high": 1.5}
+            {"est": 1.5, "ci_low": 1.5, "ci_high": 1.5, "trusted": True}
             if with_threshold and not legacy
             else None
         )
@@ -1052,9 +1111,9 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 expected_outputs=[
-                    # Planner labels data as code — core must ignore role.
+                    # Slot-rename attack: planner names data output "script".
                     OutputSpec(
-                        name="data_a", media_type="text/x-python", role="code"
+                        name="script", media_type="application/json", role="code"
                     ),
                     OutputSpec(
                         name="data_b", media_type="application/json", role="data"
@@ -1072,7 +1131,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 goal="pass-through",
                 route="experiment",
                 depends_on=["P_RAW"],
-                inputs=[InputSpec(from_task="P_RAW", output="data_a")],
+                inputs=[InputSpec(from_task="P_RAW", output="script")],
                 expected_outputs=[
                     OutputSpec(name="mid", media_type="application/json", role="data"),
                 ],
@@ -1101,7 +1160,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 depends_on=["P_RAW"],
                 method=ExperimentMethod.STATISTICAL,
                 inputs=[
-                    InputSpec(from_task="P_RAW", output="data_a"),
+                    InputSpec(from_task="P_RAW", output="script"),
                     InputSpec(from_task="P_RAW", output="code"),
                 ],
                 criteria=[RequirementRef(template_id="value_match")],
@@ -1160,9 +1219,9 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
     da = arts.put(
         b'{"count": 1}',
         make_tool_ref(f"{aid_p}:da"),
-        name="data_a",
+        name="script",
         media_type="application/json",
-        role="code",  # forged planner role
+        role="code",  # planner role ignored for code|data; media_type → data
     )
     db = arts.put(
         b'{"count": 2}',
@@ -1178,13 +1237,14 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
         media_type="text/x-python",
         role="code",
     )
+    assert da.role == "data"  # core owns code|data via media_type
     await rt.executor.record(
         aid_p,
         AgentTaskOutput(
             summary="data",
             outputs={
                 "main": ArtifactHandle(artifact_id=da.artifact_id, name="main"),
-                "data_a": ArtifactHandle(artifact_id=da.artifact_id, name="data_a"),
+                "script": ArtifactHandle(artifact_id=da.artifact_id, name="script"),
                 "data_b": ArtifactHandle(artifact_id=db.artifact_id, name="data_b"),
                 "code": ArtifactHandle(artifact_id=code.artifact_id, name="code"),
             },
@@ -1243,20 +1303,19 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
     assert da.sha256 in (e2.data_digests or [])
     assert len(distinct_by_key([e1, e2])) == 1
     assert len(distinct_by_key([e1, e2, e3])) == 2
-    # Catalog code name ignored as data; planner role=code on data_a did not hide it.
+    # Slot rename to "script" did not hide the JSON data root; real code skipped.
     assert code.sha256 not in (e1.data_digests or [])
 
     n1, n2, n3 = claims_by_tk["N1"], claims_by_tk["N2"], claims_by_tk["N3"]
-    assert n1.criterion_template_ids == n2.criterion_template_ids
-    assert n1.criterion_template_ids != n3.criterion_template_ids
+    # Share-any: N1/N2 same templates; N3 different family → separate source.
     assert len(distinct_by_key([n1, n2])) == 1
     assert len(distinct_by_key([n1, n2, n3])) == 2
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
-async def test_e2e_one_severe_defaults_survived(tmp_path, clock, runtime_cls):
-    """supported_needed default 2: one severe claim → survived."""
+async def test_e2e_agent_metric_not_severe_m1_limitation(tmp_path, clock, runtime_cls):
+    """M1: agent-written metrics are untrusted → never severe (even if est >> sesoi)."""
     from coscientist.core.artifacts import make_tool_ref
     from coscientist.core.dispositions import dispositions
 
@@ -1293,9 +1352,8 @@ async def test_e2e_one_severe_defaults_survived(tmp_path, clock, runtime_cls):
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid0 = await rt.start_attempt("E0")
-    # effect 2.0 > sesoi 0.5 → severe
     art = arts.put(
-        b'{"effect": 2.0}',
+        b'{"effect": 999.0}',
         make_tool_ref(f"{aid0}:1"),
         name="main",
         media_type="application/json",
@@ -1305,16 +1363,19 @@ async def test_e2e_one_severe_defaults_survived(tmp_path, clock, runtime_cls):
         AgentTaskOutput(
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
-            values={"effect": 2.0},
+            values={"effect": 999.0},
             claims=[{"id": "c1", "target": "Q1"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
-    assert by["question:Q1"][0].severe is True
+    c = by["question:Q1"][0]
+    assert (c.effect or {}).get("trusted") is False
+    assert c.severe is False
+    assert c.refute_capable is False
     d = dispositions(
         tasks=rt.tasks, plans=rt.plans, graph=rt.graph, study=rt.study, results=rt.results
     )
-    assert d["Q1"]["verdict"] == "survived"
+    assert d["Q1"]["verdict"] == "inconclusive"
     await close_runtime(rt)
 
 
@@ -1384,7 +1445,8 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
     # Bind E1 → records VerdictSnapshotsRecorded for Q1.
     await rt.start_attempt("E1")
     snap1 = dict(rt.verdict_snapshots.get("Q1") or {})
-    assert snap1.get("verdict") == "survived"
+    # M1: agent metrics untrusted → not severe → inconclusive (still journaled).
+    assert snap1.get("verdict") == "inconclusive"
     await close_runtime(rt)
 
     # Reopen: journaled snapshot preferred.
