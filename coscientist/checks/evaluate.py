@@ -24,7 +24,12 @@ from coscientist.core.domain import (
     ReviewCheck,
     TaskSpec,
 )
-from coscientist.core.errors import ArtifactCorrupt, CoreBugError, SandboxInfraError
+from coscientist.core.errors import (
+    ArtifactCorrupt,
+    CatalogError,
+    CoreBugError,
+    SandboxInfraError,
+)
 
 
 def role_from_template(tmpl: RequirementTemplate | None) -> CheckRole:
@@ -469,6 +474,9 @@ def evaluate_code_check(
     except SandboxInfraError:
         raise
     except CoreBugError:
+        raise
+    except CatalogError:
+        # Catalog integrity (e.g. holdout_digest mismatch) — not a core bug.
         raise
     except OSError as e:
         # Host I/O outside Popen on executable kinds → infra (B3).
