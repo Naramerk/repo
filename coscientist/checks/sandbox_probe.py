@@ -34,7 +34,7 @@ _ENV_ALLOWLIST = (
     "COSCIENTIST_SCORER",
     "COSCIENTIST_TESTS",
     "COSCIENTIST_INFRA_FD",
-    "COSCIENTIST_CGROUP",
+    "COSCIENTIST_CGROUP_GATE",
 )
 
 
@@ -276,8 +276,8 @@ def build_verifier_bwrap(
     bwrap = _bwrap_bin()
     if bwrap is None:
         raise OSError("bwrap_missing")
+    # Never put /inputs on PYTHONPATH (agent files are data / allowlisted modules).
     _binds, site_path = _python_site_ro_binds()
-    py_path = "/inputs" + (f":{site_path}" if site_path else "")
     argv = [
         bwrap,
         *_common_jail_flags(allow_network=allow_network),
@@ -310,10 +310,9 @@ def build_verifier_bwrap(
         "--setenv",
         "COSCIENTIST_RESULTS",
         "/results",
-        "--setenv",
-        "PYTHONPATH",
-        py_path,
     ]
+    if site_path:
+        argv.extend(["--setenv", "PYTHONPATH", site_path])
     if scorer is not None:
         argv.extend(["--ro-bind", str(scorer), "/scorer"])
         argv.extend(["--setenv", "COSCIENTIST_SCORER", "/scorer"])

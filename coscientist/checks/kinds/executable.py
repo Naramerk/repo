@@ -1,14 +1,17 @@
 """Executable CodeCheck kinds (DESIGN_M1 §7).
 
 B1 pattern: collect agent declared outputs (sha256); run catalog scorer / task
-tests in a second fresh verifier jail (agent outputs/scorer/holdout/tests RO;
-results RW only); read reward/result files — never guest stdout. No agent code
-during verify. Fail-closed without hard isolation.
+tests in a second fresh verifier jail (agent data/scorer/holdout/tests RO;
+results RW only); read reward/result files — never guest stdout.
+``metric_on_holdout`` never executes agent code (predictions are data).
+``tests_pass`` imports agent modules → always ``trusted=False``.
+Fail-closed without hard isolation. Holdout labels come from the catalog only.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from coscientist.checks.kinds._util import (
@@ -52,6 +55,46 @@ REWARD_SCHEMA = "coscientist.reward.v1"
 JUNIT_NAME = "junit.xml"
 DIGEST_NAME = "out.digest"
 
+_TESTS_PASS_NOTE = (
+    "agent code runs in the test process; result is tamper-able"
+)
+
+# Agent-mounted filenames: reject import-hooks / stdlib shadows / pytest plugs.
+_BLOCKED_AGENT_NAMES = frozenset(
+    {
+        "sitecustomize.py",
+        "usercustomize.py",
+        "conftest.py",
+        "os.py",
+        "sys.py",
+        "builtins.py",
+        "importlib.py",
+        "pytest.py",
+        "py.py",
+        "pathlib.py",
+        "json.py",
+        "typing.py",
+        "asyncio.py",
+        "subprocess.py",
+        "ctypes.py",
+        "resource.py",
+        "signal.py",
+    }
+)
+_SAFE_AGENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_+-]+)?$")
+
+
+def agent_filename_allowed(name: str) -> bool:
+    """True when ``name`` may be mounted as agent data/code under /inputs."""
+    base = name.rsplit("/", 1)[-1]
+    if not base or base.startswith("."):
+        return False
+    if base.endswith(".pth") or base in _BLOCKED_AGENT_NAMES:
+        return False
+    if ".." in name or name.startswith("/"):
+        return False
+    return bool(_SAFE_AGENT_NAME.match(base))
+
 
 def _argv_for(check: CodeCheck) -> list[str]:
     if check.argv:
@@ -90,6 +133,8 @@ def _collect_declared_outputs(
     out: AgentTaskOutput,
     artifacts: LocalArtifactStore,
     slots: list[str] | None = None,
+    *,
+    allowlist: bool = True,
 ) -> tuple[dict[str, bytes], list[EvidenceRef]]:
     """Collect agent declared outputs with digests (B1 step 1)."""
     inputs: dict[str, bytes] = {}
@@ -100,11 +145,14 @@ def _collect_declared_outputs(
         else out.outputs.items()
     )
     for slot, handle in items:
+        fname = slot_filename(slot)
+        if allowlist and not agent_filename_allowed(fname):
+            continue
         meta = artifacts.get_meta(handle.artifact_id)
         if meta is None:
             continue
         data = artifacts.read(handle.artifact_id)
-        inputs[slot_filename(slot)] = data
+        inputs[fname] = data
         evidence.append(
             EvidenceRef(artifact_id=handle.artifact_id, digest=meta.sha256)
         )
@@ -156,15 +204,18 @@ def evaluate_exec_runs(
         fs_isolation=result.fs_isolation,
     )
     note = result.note or soft_note(result.net_isolation, result.fs_isolation)
-    # OUTPUT_EXCEEDED is scientific (guest fault); not infra.
-    if result.status is SandboxStatus.OUTPUT_EXCEEDED:
+    # Guest-caused statuses are scientific (not infra).
+    if result.status in (
+        SandboxStatus.OUTPUT_EXCEEDED,
+        SandboxStatus.TIMEOUT,
+    ):
         return base_result(
             check_id=check_id,
             template_id=template_id,
             role=role,
             ok=False,
             evidence=[EvidenceRef(artifact_id=art_id, digest=digest)],
-            detail=merge_detail("output_exceeded", note),
+            detail=merge_detail(result.reason, note),
             effect=sandbox_effect(
                 attempt_id=attempt_id,
                 check_id=check_id,
@@ -207,6 +258,50 @@ def _catalog_tests_bytes(check: CodeCheck) -> dict[str, bytes] | None:
     return {rel: src.encode("utf-8") for rel, src in check.tests.items()}
 
 
+def _tests_pass_launcher() -> bytes:
+    """Catalog launcher: -I isolated; inject host site-packages + /inputs.
+
+    ``python -I`` ignores PYTHONPATH (so /inputs is never auto-imported) and
+    remaps user-site under HOME. Embed the host site-packages paths that the
+    verifier already RO-binds, then inject /inputs for agent modules.
+    """
+    import site
+    from pathlib import Path as P
+
+    sites: list[str] = []
+    try:
+        sites.extend(site.getsitepackages())
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        sites.append(site.getusersitepackages())
+    except Exception:  # noqa: BLE001
+        pass
+    sites = [p for p in sites if p and P(p).is_dir()]
+    return f"""
+import sys
+for p in {sites!r}:
+    if p and p not in sys.path:
+        sys.path.append(p)
+# Catalog-controlled inject for agent modules under test (not via PYTHONPATH).
+sys.path.insert(0, "/inputs")
+import pytest
+raise SystemExit(
+    pytest.main(
+        [
+            "--noconftest",
+            "-p",
+            "no:cacheprovider",
+            "-o",
+            "addopts=",
+            "--junitxml=/results/{JUNIT_NAME}",
+            "/tests",
+        ]
+    )
+)
+""".encode()
+
+
 def evaluate_tests_pass(
     check: CodeCheck,
     *,
@@ -217,7 +312,7 @@ def evaluate_tests_pass(
     role: CheckRole,
     attempt_id: str | None,
 ) -> CheckResult:
-    """Verifier runs catalog/task tests (RO) against agent code; junit in results."""
+    """Catalog/task tests vs agent code; always trusted=False (tamper-able)."""
     argv = _argv_for(check)
     catalog_tests = _catalog_tests_bytes(check)
     use_catalog_pytest = (
@@ -242,47 +337,26 @@ def evaluate_tests_pass(
             },
         )
 
-    # Agent supplies code under test as declared outputs (RO at /inputs).
-    # Catalog/task tests are separate (RO at /tests) — never agent tests.
-    code_inputs, ev = _collect_declared_outputs(out, artifacts)
-    collect = [JUNIT_NAME, REWARD_NAME]
+    # Agent code under /inputs (allowlisted names only); catalog tests under /tests.
+    code_inputs, ev = _collect_declared_outputs(out, artifacts, allowlist=True)
+    collect = [JUNIT_NAME]
+    scorer_bytes = None
 
     if use_catalog_pytest:
-        # Catalog-controlled pytest: task tests only; agent conftest/plugins off.
-        guest_argv = [
-            "python3",
-            "-m",
-            "pytest",
-            "--noconftest",
-            "-p",
-            "no:cacheprovider",
-            "-o",
-            "addopts=",
-            f"--junitxml=/results/{JUNIT_NAME}",
-            "/tests",
-        ]
+        scorer_bytes = _tests_pass_launcher()
+        guest_argv = ["python3", "-I", "/scorer"]
     else:
         guest_argv = list(argv)
         if guest_argv and _path_name(guest_argv[0]) in {"pytest", "py.test"}:
-            if guest_argv[0] in {"pytest", "py.test"}:
-                guest_argv = ["python3", "-m", "pytest", *guest_argv[1:]]
-            guest_argv = [
-                *guest_argv,
-                "--noconftest",
-                "-p",
-                "no:cacheprovider",
-                "-o",
-                "addopts=",
-                f"--junitxml=/results/{JUNIT_NAME}",
-            ]
-            if catalog_tests is not None and "/tests" not in guest_argv:
-                guest_argv.append("/tests")
+            scorer_bytes = _tests_pass_launcher()
+            guest_argv = ["python3", "-I", "/scorer"]
 
     result = run_verifier(
         guest_argv,
         inputs=code_inputs,
         limits=_limits(check),
         tests=catalog_tests,
+        scorer_bytes=scorer_bytes,
         collect=collect,
     )
     raise_if_infra(
@@ -292,10 +366,13 @@ def evaluate_tests_pass(
         fs_isolation=result.fs_isolation,
         note=result.note,
     )
-    note = result.note or soft_note(result.net_isolation, result.fs_isolation)
+    note = merge_detail(
+        result.note or soft_note(result.net_isolation, result.fs_isolation),
+        _TESTS_PASS_NOTE,
+    )
     raw = result.result_files.get(JUNIT_NAME)
     if raw is None:
-        art_id, digest, trusted = store_log(
+        art_id, digest, _t = store_log(
             artifacts,
             attempt_id=attempt_id,
             check_id=check_id,
@@ -315,7 +392,7 @@ def evaluate_tests_pass(
                 attempt_id=attempt_id,
                 check_id=check_id,
                 art_id=art_id,
-                trusted=trusted,
+                trusted=False,
                 net_isolation=result.net_isolation,
                 fs_isolation=result.fs_isolation,
                 note=note,
@@ -324,7 +401,7 @@ def evaluate_tests_pass(
     try:
         failures, tests = parse_junit(raw)
     except ValueError:
-        art_id, digest, trusted = store_log(
+        art_id, digest, _t = store_log(
             artifacts,
             attempt_id=attempt_id,
             check_id=check_id,
@@ -344,7 +421,7 @@ def evaluate_tests_pass(
                 attempt_id=attempt_id,
                 check_id=check_id,
                 art_id=art_id,
-                trusted=trusted,
+                trusted=False,
                 net_isolation=result.net_isolation,
                 fs_isolation=result.fs_isolation,
                 note=note,
@@ -356,7 +433,7 @@ def evaluate_tests_pass(
         f"tests={tests} failures={failures} min_tests={min_tests} ok={ok} "
         f"net={result.net_isolation} fs={result.fs_isolation}\n"
     ).encode()
-    art_id, digest, trusted = store_log(
+    art_id, digest, _t = store_log(
         artifacts,
         attempt_id=attempt_id,
         check_id=check_id,
@@ -378,12 +455,26 @@ def evaluate_tests_pass(
             attempt_id=attempt_id,
             check_id=check_id,
             art_id=art_id,
-            trusted=trusted,
+            trusted=False,
             net_isolation=result.net_isolation,
             fs_isolation=result.fs_isolation,
             note=note,
         ),
     )
+
+
+def _validate_predictions(pred_bytes: bytes) -> dict[str, Any]:
+    """Schema-validate agent predictions as data (never executed)."""
+    try:
+        doc = json.loads(pred_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise ValueError(f"predictions_not_json:{e.__class__.__name__}") from e
+    if not isinstance(doc, dict):
+        raise ValueError("predictions_not_object")
+    y_hat = doc.get("y_hat")
+    if not isinstance(y_hat, list) or not y_hat:
+        raise ValueError("predictions_missing_y_hat")
+    return doc
 
 
 def evaluate_metric_on_holdout(
@@ -397,12 +488,23 @@ def evaluate_metric_on_holdout(
     attempt_id: str | None,
     prov_fields: dict[str, Any],
 ) -> CheckResult:
-    """metric = catalog scorer(agent predictions, holdout labels) in verifier."""
-    holdout_slot = check.holdout_output or "holdout"
+    """metric = catalog scorer(predictions data, catalog holdout) — no agent code."""
     pred_slot = check.output or "predictions"
-    holdout = out.outputs.get(holdout_slot)
     predictions = out.outputs.get(pred_slot)
-    if holdout is None or predictions is None:
+    # Agent-supplied holdout slots are ignored — labels come from the catalog only.
+    if check.holdout is None:
+        raise SandboxInfraError("sandbox_unavailable:holdout_missing")
+    frozen = check.holdout_digest
+    if not frozen:
+        raise SandboxInfraError("sandbox_unavailable:holdout_digest_missing")
+    holdout_bytes = canonical_json(check.holdout)
+    holdout_digest = sha256_hex(holdout_bytes)
+    if holdout_digest != frozen:
+        raise SandboxInfraError(
+            f"sandbox_unavailable:holdout_digest_mismatch:{holdout_digest}"
+        )
+
+    if predictions is None:
         return base_result(
             check_id=check_id,
             template_id=template_id,
@@ -412,9 +514,8 @@ def evaluate_metric_on_holdout(
             detail="output_not_submitted",
         )
     try:
-        h_meta = artifacts.get_meta(holdout.artifact_id)
         p_meta = artifacts.get_meta(predictions.artifact_id)
-        if h_meta is None or p_meta is None:
+        if p_meta is None:
             return base_result(
                 check_id=check_id,
                 template_id=template_id,
@@ -423,35 +524,24 @@ def evaluate_metric_on_holdout(
                 evidence=[],
                 detail="artifact_missing",
             )
-        holdout_bytes = artifacts.read(holdout.artifact_id)
         pred_bytes = artifacts.read(predictions.artifact_id)
     except OSError as e:
         raise SandboxInfraError(
             f"sandbox_unavailable:host_io:{e.__class__.__name__}"
         ) from e
 
-    frozen = check.holdout_digest
-    if not frozen:
-        raise SandboxInfraError("sandbox_unavailable:holdout_digest_missing")
-    if h_meta.sha256 != frozen:
-        art_id, digest, _t = store_log(
-            artifacts,
-            attempt_id=attempt_id,
-            check_id=check_id,
-            body=f"holdout_digest_mismatch frozen={frozen} actual={h_meta.sha256}\n".encode(),
-            net_isolation="none",
-            fs_isolation="none",
-        )
+    try:
+        _validate_predictions(pred_bytes)
+    except ValueError as e:
         return base_result(
             check_id=check_id,
             template_id=template_id,
             role=role,
             ok=False,
             evidence=[
-                EvidenceRef(artifact_id=holdout.artifact_id, digest=h_meta.sha256),
-                EvidenceRef(artifact_id=art_id, digest=digest),
+                EvidenceRef(artifact_id=predictions.artifact_id, digest=p_meta.sha256),
             ],
-            detail="holdout_digest_mismatch",
+            detail=f"malformed_output:predictions:{e}",
         )
 
     argv = _argv_for(check)
@@ -462,7 +552,6 @@ def evaluate_metric_on_holdout(
             role=role,
             ok=False,
             evidence=[
-                EvidenceRef(artifact_id=holdout.artifact_id, digest=h_meta.sha256),
                 EvidenceRef(artifact_id=predictions.artifact_id, digest=p_meta.sha256),
             ],
             detail="sandbox_unavailable:missing_command",
@@ -477,21 +566,23 @@ def evaluate_metric_on_holdout(
             },
         )
 
+    # Catalog scorer only — python -I; predictions are JSON data under /inputs.
     scorer_bytes = None
     if argv == ["catalog:metric"] or argv[0] == "catalog:metric":
         scorer_bytes = _default_metric_scorer().encode()
-        guest_argv = ["python3", "/scorer"]
+        guest_argv = ["python3", "-I", "/scorer"]
     else:
-        guest_argv = argv
+        guest_argv = list(argv)
+        if guest_argv[:1] == ["python3"] and "-I" not in guest_argv:
+            guest_argv = ["python3", "-I", *guest_argv[1:]]
 
     result = run_verifier(
         guest_argv,
-        inputs={"predictions": pred_bytes},
+        inputs={"predictions.json": pred_bytes},
         holdout=holdout_bytes,
         scorer_bytes=scorer_bytes,
         limits=_limits(check),
         collect=[REWARD_NAME],
-        extra_ro_files={"predictions.json": pred_bytes},
     )
     raise_if_infra(
         result.status,
@@ -524,7 +615,6 @@ def evaluate_metric_on_holdout(
             role=role,
             ok=False,
             evidence=[
-                EvidenceRef(artifact_id=holdout.artifact_id, digest=h_meta.sha256),
                 EvidenceRef(artifact_id=predictions.artifact_id, digest=p_meta.sha256),
                 EvidenceRef(artifact_id=art_id, digest=digest),
             ],
@@ -580,7 +670,6 @@ def evaluate_metric_on_holdout(
         role=role,
         ok=ok,
         evidence=[
-            EvidenceRef(artifact_id=holdout.artifact_id, digest=h_meta.sha256),
             EvidenceRef(artifact_id=predictions.artifact_id, digest=p_meta.sha256),
             EvidenceRef(
                 artifact_id=art_id,
@@ -593,15 +682,13 @@ def evaluate_metric_on_holdout(
 
 
 def _default_metric_scorer() -> str:
-    """Compute accuracy(y_hat, holdout.y); ignore any agent-claimed score."""
+    """Compute accuracy(y_hat, catalog holdout.y); never exec agent code."""
     return f"""
 import json, os, pathlib
 results = pathlib.Path(os.environ["COSCIENTIST_RESULTS"])
 inputs = pathlib.Path(os.environ["COSCIENTIST_INPUTS"])
 holdout_path = os.environ["COSCIENTIST_HOLDOUT"]
 pred_path = inputs / "predictions.json"
-if not pred_path.exists():
-    pred_path = inputs / "predictions"
 pred = json.loads(pred_path.read_bytes())
 hold = json.loads(pathlib.Path(holdout_path).read_bytes())
 y = hold["y"]

@@ -95,6 +95,8 @@ Executable catalog CodeCheck kinds (`exec_runs`, `tests_pass`, `metric_on_holdou
 - **trusted** remains a severity **tag** for reporting only — it does **not** gate `refuted` / `supported` (countable does).
 - Sandbox infra (host timeout, delegated cgroup OOM, wrapper private-channel rlimit, blocked, unavailable) → `result_class=infra`. Guest output overflow → scientific `output_exceeded`. Guest exit codes never map to infra. Unexpected core bugs → `result_class=core_bug` (reported, never counts). `StudyFinalized` still holds.
 - **Host requirements:** `bubblewrap`; unprivileged user namespaces (on Ubuntu 24.04 runners set `kernel.apparmor_restrict_unprivileged_userns=0`); cgroup v2 memory delegation for OOM detection (else note `OOM not detectable`, `MemoryError` stays scientific).
+- Holdout labels come from the **catalog** (`CodeCheck.holdout` + `holdout_digest`); agent holdout slots are ignored. Metric verifier treats predictions as JSON data (`python -I`; no `/inputs` on `PYTHONPATH`). `tests_pass` is countable but always `trusted=false` (agent code runs in the test process).
+- Guest timeout / output overflow / exit codes are **scientific**. Infra is wrapper private-channel rlimit, blocked, unavailable, or verified delegated cgroup OOM. **Seccomp filters: deferred to M2.**
 - Enforced limits: time, memory (`RLIMIT_AS` + optional cgroup), output size, network policy as above.
 - `reward.txt` is strict JSON `{"schema":"coscientist.reward.v1","value": <number>}` — never `pass`/`fail` strings.
 

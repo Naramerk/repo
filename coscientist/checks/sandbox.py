@@ -4,15 +4,17 @@ Agent jail (``run_sandbox``): bwrap --clearenv, system RO, only work RW,
 --unshare-net/--unshare-pid/--unshare-ipc/uts/cgroup-try, --disable-userns,
 --cap-drop ALL, --new-session, --die-with-parent.
 
-Verifier jail (``run_verifier``): fresh bwrap; agent outputs/scorer/holdout/tests
-RO; only results RW; read reward/result files — never trust stdout. No agent
-code runs during verification.
+Verifier jail (``run_verifier``): fresh bwrap; agent *data*/scorer/holdout/tests
+RO; only results RW; read reward/result files — never trust stdout.
+``metric_on_holdout`` runs only the catalog scorer (predictions are data; no
+agent code). ``tests_pass`` runs catalog tests that import agent modules — still
+core-evaluated/countable but always ``trusted=False`` (tamper-able).
 
 Fail-closed: without verified hard FS isolation (real bwrap probe), do **not**
 execute guest code — return ``sandbox_unavailable``. ``trusted`` requires both
-net and fs hard. Infra only from the wrapper private channel (rlimit), host
-timeout kill, or delegated cgroup OOM; guest exit codes never map to infra.
-Guest output overflow is scientific (``output_exceeded``).
+net and fs hard. Infra only from the wrapper private channel (rlimit) or
+delegated cgroup OOM; guest timeout / exit codes / output overflow are
+scientific. Seccomp filters are deferred to M2.
 """
 
 from __future__ import annotations
@@ -64,11 +66,10 @@ class SandboxStatus(StrEnum):
     MALFORMED = "malformed"
 
 
-# Infra: host timeout / delegated cgroup OOM / private-channel rlimit /
-# blocked / unavailable. OUTPUT_EXCEEDED is scientific (guest's fault).
+# Infra: wrapper private-channel rlimit / delegated cgroup OOM / blocked /
+# unavailable. Guest timeout, OUTPUT_EXCEEDED, and exit codes are scientific.
 INFRA_STATUSES = frozenset(
     {
-        SandboxStatus.TIMEOUT,
         SandboxStatus.OOM,
         SandboxStatus.UNAVAILABLE,
         SandboxStatus.BLOCKED,
@@ -90,6 +91,38 @@ _BLOCKED_PATTERNS = (
     "poweroff",
 )
 _NET_TOOLS = frozenset({"curl", "wget", "nc", "ncat", "fetch"})
+
+# Agent-mounted filenames under /inputs (shared with executable kinds).
+_BLOCKED_AGENT_NAMES = frozenset(
+    {
+        "sitecustomize.py",
+        "usercustomize.py",
+        "conftest.py",
+        "os.py",
+        "sys.py",
+        "builtins.py",
+        "importlib.py",
+        "pytest.py",
+        "py.py",
+        "pathlib.py",
+        "json.py",
+        "typing.py",
+        "asyncio.py",
+        "subprocess.py",
+        "ctypes.py",
+        "resource.py",
+        "signal.py",
+    }
+)
+
+
+def agent_input_name_allowed(name: str) -> bool:
+    base = Path(name).name
+    if not base or base.startswith(".") or ".." in Path(name).parts:
+        return False
+    if base.endswith(".pth") or base in _BLOCKED_AGENT_NAMES:
+        return False
+    return bool(base.replace("_", "a").replace("-", "a").replace(".", "a").isalnum())
 
 
 def soft_isolation_note(net: Isolation, fs: Isolation) -> str | None:
@@ -246,21 +279,28 @@ def _collect_results(results_dir: Path, names: Sequence[str] | None) -> dict[str
 
 
 def _wrapper_script(*, memory_mb: int, timeout_s: float) -> str:
-    """setrlimit / join cgroup via private channel, then exec.
+    """Wait for host cgroup attach, setrlimit, close infra FD, then exec.
 
+    Host writes pid into the cgroup leaf, then releases ``COSCIENTIST_CGROUP_GATE``.
     Rlimit failure writes magic to ``COSCIENTIST_INFRA_FD`` then aborts.
-    Guest exit codes alone never classify as infra.
+    Guest exit codes alone never classify as infra. Infra/gate FDs are closed
+    before exec so agent/test code never inherits them.
     """
     return f"""
 import os, sys
 infra_fd = os.environ.get("COSCIENTIST_INFRA_FD")
-cg = os.environ.get("COSCIENTIST_CGROUP")
-if cg:
+gate_fd = os.environ.get("COSCIENTIST_CGROUP_GATE")
+# Block until host attaches us to the cgroup leaf (or signals no cgroup).
+if gate_fd is not None:
     try:
-        with open(os.path.join(cg, "cgroup.procs"), "w", encoding="utf-8") as f:
-            f.write(str(os.getpid()))
+        os.read(int(gate_fd), 1)
     except OSError:
         pass
+    try:
+        os.close(int(gate_fd))
+    except OSError:
+        pass
+    os.environ.pop("COSCIENTIST_CGROUP_GATE", None)
 try:
     import resource
 except ImportError:
@@ -285,13 +325,13 @@ except (ValueError, OSError):
 argv = sys.argv[1:]
 if not argv:
     sys.exit(64)
+# Never pass the infra FD to guest/agent code.
 if infra_fd is not None:
     try:
         os.close(int(infra_fd))
     except OSError:
         pass
     os.environ.pop("COSCIENTIST_INFRA_FD", None)
-os.environ.pop("COSCIENTIST_CGROUP", None)
 try:
     os.execvp(argv[0], argv)
 except MemoryError:
@@ -497,10 +537,11 @@ def _classify(
             reason="output_exceeded",
         )
     if timed_out:
+        # Guest infinite loop / slow work — scientific, not infra.
         return fin(
             status=SandboxStatus.TIMEOUT,
             exit_code=-1,
-            reason="sandbox_timeout",
+            reason="timeout",
         )
     if _cgroup_oom_killed(cgroup_leaf):
         return fin(
@@ -540,6 +581,27 @@ def _unavailable(
     )
 
 
+def _cgroup_attach_and_verify(leaf: Path | None, pid: int) -> tuple[bool, str | None]:
+    """Host places ``pid`` into leaf before guest exec; verify membership + max.
+
+    Returns ``(oom_detectable, note_fragment)``. Any failure → detectable False
+    with an explicit note (never silent).
+    """
+    if leaf is None:
+        return False, "OOM not detectable"
+    try:
+        mem_raw = (leaf / "memory.max").read_text().strip()
+        if not mem_raw or mem_raw == "max":
+            return False, "OOM not detectable: memory.max not applied"
+        (leaf / "cgroup.procs").write_text(str(pid))
+        procs = (leaf / "cgroup.procs").read_text().split()
+        if str(pid) not in procs:
+            return False, "OOM not detectable: cgroup membership unverified"
+        return True, None
+    except OSError as e:
+        return False, f"OOM not detectable: {e.__class__.__name__}"
+
+
 def _run_jailed(
     *,
     cmd: list[str],
@@ -551,20 +613,22 @@ def _run_jailed(
     collect: Sequence[str] | None,
     extra_env: Mapping[str, str] | None = None,
 ) -> SandboxResult:
-    """Spawn bwrap+wrapper with private infra FD and optional cgroup leaf."""
+    """Spawn bwrap+wrapper with private infra FD; host attaches cgroup before exec."""
     note = soft_isolation_note(net_i, fs_i)
     leaf = _cgroup_prepare_leaf(lim.memory_mb)
-    oom_det = leaf is not None
-    if not oom_det:
-        note = f"{note}; OOM not detectable" if note else "OOM not detectable"
 
     r_fd, w_fd = os.pipe()
+    gate_r, gate_w = os.pipe()
     os.set_inheritable(w_fd, True)
     os.set_inheritable(r_fd, False)
+    os.set_inheritable(gate_r, True)
+    os.set_inheritable(gate_w, False)
 
-    env_pairs: list[tuple[str, str]] = [("COSCIENTIST_INFRA_FD", str(w_fd))]
-    if leaf is not None:
-        env_pairs.append(("COSCIENTIST_CGROUP", str(leaf)))
+    # Infra + cgroup gate FDs only — never pass cgroup path to guest.
+    env_pairs: list[tuple[str, str]] = [
+        ("COSCIENTIST_INFRA_FD", str(w_fd)),
+        ("COSCIENTIST_CGROUP_GATE", str(gate_r)),
+    ]
     if extra_env:
         env_pairs.extend((str(k), str(v)) for k, v in extra_env.items())
 
@@ -576,6 +640,11 @@ def _run_jailed(
             injected.extend(["--setenv", k, v])
         cmd = [*cmd[:idx], *injected, *cmd[idx:]]
     else:
+        for fd in (r_fd, w_fd, gate_r, gate_w):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         return _unavailable(
             reason="sandbox_unavailable:bad_argv",
             net_i=net_i,
@@ -593,9 +662,14 @@ def _run_jailed(
                 cwd=None,
                 env=None,  # clearenv inside bwrap; host env not passed
                 start_new_session=True,
-                pass_fds=(w_fd,),
+                pass_fds=(w_fd, gate_r),
             )
         except OSError as e:
+            for fd in (w_fd, gate_r, gate_w):
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
             return _unavailable(
                 reason=f"sandbox_unavailable:{e.__class__.__name__}",
                 net_i=net_i,
@@ -608,6 +682,23 @@ def _run_jailed(
                 os.close(w_fd)
             except OSError:
                 pass
+            try:
+                os.close(gate_r)
+            except OSError:
+                pass
+
+        # Place wrapper into cgroup *before* releasing the gate (then exec).
+        oom_det, oom_frag = _cgroup_attach_and_verify(leaf, proc.pid)
+        if oom_frag:
+            note = f"{note}; {oom_frag}" if note else oom_frag
+        try:
+            os.write(gate_w, b"1")
+        except OSError:
+            pass
+        try:
+            os.close(gate_w)
+        except OSError:
+            pass
 
         timed_out, overflow, out_b, err_b = _watch_process(proc, lim=lim)
         infra_msg = b""
@@ -632,7 +723,7 @@ def _run_jailed(
             timed_out=timed_out,
             overflow=overflow,
             proc=proc,
-            cgroup_leaf=leaf,
+            cgroup_leaf=leaf if oom_det else None,
             oom_detectable=oom_det,
             infra_msg=infra_msg,
             out_b=out_b,
@@ -790,11 +881,19 @@ def run_verifier(
         results_dir.mkdir()
         tests_dir.mkdir()
         for name, data in inputs.items():
-            p = inputs_dir / Path(name).name
+            base = Path(name).name
+            if not agent_input_name_allowed(base):
+                log.warning("sandbox: rejecting agent input name %r", base)
+                continue
+            p = inputs_dir / base
             p.write_bytes(data)
             p.chmod(0o444)
         for name, data in (extra_ro_files or {}).items():
-            p = inputs_dir / Path(name).name
+            base = Path(name).name
+            if not agent_input_name_allowed(base):
+                log.warning("sandbox: rejecting extra input name %r", base)
+                continue
+            p = inputs_dir / base
             p.write_bytes(data)
             p.chmod(0o444)
 

@@ -9,7 +9,11 @@ import pytest
 
 from coscientist.checks.catalog import load_catalog
 from coscientist.checks.evaluate import evaluate_code_check
-from coscientist.checks.kinds.executable import REWARD_SCHEMA, parse_reward
+from coscientist.checks.kinds.executable import (
+    REWARD_SCHEMA,
+    agent_filename_allowed,
+    parse_reward,
+)
 from coscientist.checks.sandbox import (
     INFRA_STATUSES,
     SandboxLimits,
@@ -19,6 +23,7 @@ from coscientist.checks.sandbox import (
 )
 from coscientist.checks.sandbox_probe import bwrap_available, probe_bwrap_hard
 from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import (
     AgentTaskOutput,
     ArtifactHandle,
@@ -202,15 +207,17 @@ def test_sandbox_allow_network_runs_but_not_trusted(tmp_path):
     assert cr.effect.get("trusted") is False
 
 
-def test_sandbox_timeout_is_infra_status():
+def test_sandbox_timeout_is_scientific_not_infra():
+    """Guest infinite loop / sleep → scientific timeout (not infra)."""
     _require_hard()
     r = run_sandbox(
         ["python3", "-c", "import time; time.sleep(30)"],
         limits=SandboxLimits(timeout_s=0.3, memory_mb=64, max_output_bytes=10_000),
     )
     assert r.status is SandboxStatus.TIMEOUT
-    assert r.reason == "sandbox_timeout"
-    assert r.status in INFRA_STATUSES
+    assert r.reason == "timeout"
+    assert r.status not in INFRA_STATUSES
+    assert "OOM not detectable" in (r.note or "")
 
 
 def test_sandbox_positive_exit_137_is_scientific_not_oom():
@@ -414,16 +421,19 @@ def test_tests_pass_runs_catalog_tests_not_agent(tmp_path):
     )
     assert cr.status is ReqStatus.MET, cr.detail
     assert cr.effect and cr.effect.get("producer") == "sandbox"
+    assert cr.effect.get("trusted") is False
+    assert "tamper-able" in (cr.effect.get("note") or "")
 
 
-def test_holdout_digest_computes_score_ignores_agent_claim(tmp_path):
-    """Agent claims 0.9; true accuracy vs holdout labels differs (B1)."""
+def test_holdout_from_catalog_ignores_agent_slot_and_claimed_score(tmp_path):
+    """Catalog holdout labels; agent holdout slot + claimed score ignored."""
     _require_hard()
     arts = LocalArtifactStore(tmp_path)
-    # Holdout labels: [0,1,1,0]; predictions y_hat: [0,1,0,0] → accuracy 0.75
-    # Agent still claims score=0.9 (must be ignored).
-    holdout = arts.put(
-        json.dumps({"y": [0, 1, 1, 0]}).encode(),
+    catalog_holdout = {"y": [0, 1, 1, 0]}
+    holdout_digest = sha256_hex(canonical_json(catalog_holdout))
+    # Agent tries to supply matching labels + claimed 0.9 — must not win.
+    agent_holdout = arts.put(
+        json.dumps({"y": [0, 1, 0, 0]}).encode(),  # would make accuracy 1.0 if used
         make_tool_ref("st/E1#1:holdout"),
         name="holdout.json",
         media_type="application/json",
@@ -436,7 +446,9 @@ def test_holdout_digest_computes_score_ignores_agent_claim(tmp_path):
     )
     out = AgentTaskOutput(
         outputs={
-            "holdout": ArtifactHandle(artifact_id=holdout.artifact_id, name="holdout"),
+            "holdout": ArtifactHandle(
+                artifact_id=agent_holdout.artifact_id, name="holdout"
+            ),
             "predictions": ArtifactHandle(
                 artifact_id=predictions.artifact_id, name="predictions"
             ),
@@ -445,9 +457,9 @@ def test_holdout_digest_computes_score_ignores_agent_claim(tmp_path):
     check = CodeCheck(
         kind="metric_on_holdout",
         argv=["catalog:metric"],
-        holdout_output="holdout",
+        holdout=catalog_holdout,
+        holdout_digest=holdout_digest,
         output="predictions",
-        holdout_digest=holdout.sha256,
         op=">=",
         target=0.4,
         timeout_s=10,
@@ -465,17 +477,18 @@ def test_holdout_digest_computes_score_ignores_agent_claim(tmp_path):
     )
     assert cr.status is ReqStatus.MET, cr.detail
     assert cr.effect is not None
+    # True accuracy vs catalog y: 3/4 = 0.75 — not 1.0 (agent labels) or 0.9 (claim).
     assert cr.effect.get("est") == 0.75
     assert cr.effect.get("est") != 0.9
     assert cr.effect.get("countable") is True
 
-    # Agent claims 0.9 but true score 0.75 fails a high target.
+    # y_hat copied from agent-supplied labels cannot force a perfect score.
     check_hi = CodeCheck(
         kind="metric_on_holdout",
         argv=["catalog:metric"],
-        holdout_output="holdout",
+        holdout=catalog_holdout,
+        holdout_digest=holdout_digest,
         output="predictions",
-        holdout_digest=holdout.sha256,
         op=">=",
         target=0.9,
         timeout_s=10,
@@ -494,33 +507,6 @@ def test_holdout_digest_computes_score_ignores_agent_claim(tmp_path):
     assert cr_hi.status is ReqStatus.FAILED
     assert cr_hi.effect is not None
     assert cr_hi.effect.get("est") == 0.75
-
-    other = arts.put(
-        json.dumps({"y": [1, 1, 1, 1]}).encode(),
-        make_tool_ref("st/E1#1:holdout2"),
-        name="holdout2.json",
-        media_type="application/json",
-    )
-    out_bad = AgentTaskOutput(
-        outputs={
-            "holdout": ArtifactHandle(artifact_id=other.artifact_id, name="holdout"),
-            "predictions": ArtifactHandle(
-                artifact_id=predictions.artifact_id, name="predictions"
-            ),
-        }
-    )
-    cr2 = evaluate_code_check(
-        check,
-        template_id="ho",
-        check_id="ho#1",
-        out=out_bad,
-        artifacts=arts,
-        values={},
-        role="prediction",
-        attempt_id="st/E1#1",
-    )
-    assert cr2.status is ReqStatus.FAILED
-    assert cr2.detail == "holdout_digest_mismatch"
 
 
 def test_parse_reward_rejects_pass_strings():
@@ -580,7 +566,7 @@ def test_countable_requires_attempt_binding(tmp_path):
     assert cr.effect.get("produced_by_call_id", "").startswith("noattempt:")
 
 
-def test_exec_runs_timeout_raises_infra(tmp_path):
+def test_exec_runs_timeout_is_scientific_failed(tmp_path):
     _require_hard()
     arts = LocalArtifactStore(tmp_path)
     check = CodeCheck(
@@ -589,17 +575,18 @@ def test_exec_runs_timeout_raises_infra(tmp_path):
         timeout_s=0.3,
         memory_mb=64,
     )
-    with pytest.raises(SandboxInfraError, match="sandbox_timeout"):
-        evaluate_code_check(
-            check,
-            template_id="exec",
-            check_id="exec#t",
-            out=AgentTaskOutput(outputs={}),
-            artifacts=arts,
-            values={},
-            role="validity",
-            attempt_id="st/E1#1",
-        )
+    cr = evaluate_code_check(
+        check,
+        template_id="exec",
+        check_id="exec#t",
+        out=AgentTaskOutput(outputs={}),
+        artifacts=arts,
+        values={},
+        role="validity",
+        attempt_id="st/E1#1",
+    )
+    assert cr.status is ReqStatus.FAILED
+    assert "timeout" in (cr.detail or "")
 
 
 @pytest.mark.asyncio
@@ -756,6 +743,7 @@ def test_verifier_reads_reward_not_stdout():
     r = run_verifier(
         [
             "python3",
+            "-I",
             "-c",
             "import os,pathlib; print('999'); "
             "pathlib.Path(os.environ['COSCIENTIST_RESULTS'])"
@@ -768,3 +756,211 @@ def test_verifier_reads_reward_not_stdout():
     assert r.status is SandboxStatus.OK
     assert parse_reward(r.result_files["reward.txt"]) == 0.5
     assert b"999" in r.stdout  # stdout must not be the metric source
+
+
+def test_agent_filename_allowlist_rejects_hooks_and_pth():
+    assert not agent_filename_allowed("sitecustomize.py")
+    assert not agent_filename_allowed("usercustomize.py")
+    assert not agent_filename_allowed("foo.pth")
+    assert not agent_filename_allowed("os.py")
+    assert not agent_filename_allowed("pytest.py")
+    assert agent_filename_allowed("solution.py")
+    assert agent_filename_allowed("predictions.json")
+
+
+def test_y_hat_equals_catalog_labels_still_uses_catalog_holdout(tmp_path):
+    """Copying catalog labels into y_hat scores honestly; agent holdout unused."""
+    _require_hard()
+    arts = LocalArtifactStore(tmp_path)
+    catalog_holdout = {"y": [1, 0, 1, 0]}
+    digest = sha256_hex(canonical_json(catalog_holdout))
+    # Perfect y_hat (= catalog y) → 1.0; agent also ships fake holdout with other y.
+    predictions = arts.put(
+        json.dumps({"y_hat": [1, 0, 1, 0], "score": 0.0}).encode(),
+        make_tool_ref("st/E1#1:pred"),
+        name="predictions.json",
+        media_type="application/json",
+    )
+    fake_hold = arts.put(
+        json.dumps({"y": [0, 0, 0, 0]}).encode(),
+        make_tool_ref("st/E1#1:holdout"),
+        name="holdout.json",
+        media_type="application/json",
+    )
+    out = AgentTaskOutput(
+        outputs={
+            "predictions": ArtifactHandle(
+                artifact_id=predictions.artifact_id, name="predictions"
+            ),
+            "holdout": ArtifactHandle(
+                artifact_id=fake_hold.artifact_id, name="holdout"
+            ),
+        }
+    )
+    cr = evaluate_code_check(
+        CodeCheck(
+            kind="metric_on_holdout",
+            argv=["catalog:metric"],
+            holdout=catalog_holdout,
+            holdout_digest=digest,
+            output="predictions",
+            op=">=",
+            target=0.99,
+            timeout_s=10,
+            memory_mb=64,
+        ),
+        template_id="ho",
+        check_id="ho#eq",
+        out=out,
+        artifacts=arts,
+        values={},
+        role="prediction",
+        attempt_id="st/E1#1",
+    )
+    assert cr.status is ReqStatus.MET
+    assert cr.effect and cr.effect.get("est") == 1.0
+
+
+def test_sitecustomize_slot_rejected_from_inputs(tmp_path):
+    _require_hard()
+    arts = LocalArtifactStore(tmp_path)
+    evil = arts.put(
+        b"open('/results/pwned','w').write('x')\n",
+        make_tool_ref("st/E1#1:evil"),
+        name="sitecustomize.py",
+        media_type="text/x-python",
+    )
+    good = arts.put(
+        b"def add(a,b): return a+b\n",
+        make_tool_ref("st/E1#1:code"),
+        name="solution.py",
+        media_type="text/x-python",
+    )
+    out = AgentTaskOutput(
+        outputs={
+            "sitecustomize.py": ArtifactHandle(
+                artifact_id=evil.artifact_id, name="sitecustomize.py"
+            ),
+            "solution.py": ArtifactHandle(
+                artifact_id=good.artifact_id, name="solution.py"
+            ),
+        }
+    )
+    cr = evaluate_code_check(
+        CodeCheck(
+            kind="tests_pass",
+            argv=["catalog:pytest"],
+            tests={
+                "test_add.py": (
+                    "import solution\n"
+                    "def test_add():\n"
+                    "    assert solution.add(1,2)==3\n"
+                )
+            },
+            min_tests=1,
+            timeout_s=30,
+            memory_mb=128,
+        ),
+        template_id="tp",
+        check_id="tp#site",
+        out=out,
+        artifacts=arts,
+        values={},
+        role="validity",
+        attempt_id="st/E1#1",
+    )
+    assert cr.effect is not None
+    assert cr.effect.get("trusted") is False
+    assert cr.status is ReqStatus.MET, cr.detail
+
+
+def test_forged_junit_os_exit_still_untrusted(tmp_path):
+    """Agent code can forge junit + os._exit — countable but trusted=False."""
+    _require_hard()
+    arts = LocalArtifactStore(tmp_path)
+    # Malicious module imported by catalog test: forge junit then exit 0.
+    evil = arts.put(
+        b"import os, pathlib\n"
+        b"pathlib.Path('/results/junit.xml').write_text("
+        b"'<testsuite tests=\"9\" failures=\"0\" errors=\"0\"/>')\n"
+        b"os._exit(0)\n",
+        make_tool_ref("st/E1#1:evil"),
+        name="solution.py",
+        media_type="text/x-python",
+    )
+    out = AgentTaskOutput(
+        outputs={
+            "solution.py": ArtifactHandle(
+                artifact_id=evil.artifact_id, name="solution.py"
+            )
+        }
+    )
+    cr = evaluate_code_check(
+        CodeCheck(
+            kind="tests_pass",
+            argv=["catalog:pytest"],
+            tests={"test_import.py": "import solution\ndef test_noop():\n    assert True\n"},
+            min_tests=1,
+            timeout_s=30,
+            memory_mb=128,
+        ),
+        template_id="tp",
+        check_id="tp#forge",
+        out=out,
+        artifacts=arts,
+        values={},
+        role="validity",
+        attempt_id="st/E1#1",
+    )
+    # May MET if forged junit wins, or FAILED — either way never trusted.
+    assert cr.effect is not None
+    assert cr.effect.get("trusted") is False
+    assert cr.effect.get("countable") is True
+    assert "tamper-able" in (cr.effect.get("note") or "")
+
+
+def test_verifier_jail_hardening_attacks():
+    _require_hard()
+    attack = r"""
+import os, sys, ctypes
+errs = []
+try:
+    libc = ctypes.CDLL('libc.so.6', use_errno=True)
+    if libc.umount2(b'/inputs', 0) == 0:
+        errs.append('umount')
+except Exception:
+    pass
+try:
+    libc = ctypes.CDLL('libc.so.6', use_errno=True)
+    if libc.mount(b'none', b'/usr', None, 32 | 4096, None) == 0:
+        errs.append('remount')
+except Exception:
+    pass
+try:
+    libc = ctypes.CDLL('libc.so.6', use_errno=True)
+    if hasattr(libc, 'unshare') and libc.unshare(0x10000000) == 0:
+        errs.append('userns')
+except Exception:
+    pass
+try:
+    open('/inputs/pwned', 'w').write('x')
+    errs.append('ro_write')
+except OSError:
+    pass
+import json, pathlib
+pathlib.Path(os.environ['COSCIENTIST_RESULTS']).joinpath('reward.txt').write_text(
+    json.dumps({'schema': 'coscientist.reward.v1', 'value': 1.0})
+)
+if errs:
+    sys.stderr.write('HARDENING_FAIL:' + ','.join(errs) + '\n')
+    sys.exit(2)
+sys.exit(0)
+"""
+    r = run_verifier(
+        ["python3", "-I", "-c", attack],
+        inputs={"predictions.json": b'{"y_hat":[0]}'},
+        limits=SandboxLimits(timeout_s=10, memory_mb=64),
+        collect=["reward.txt"],
+    )
+    assert r.status is SandboxStatus.OK, r.stderr.decode(errors="replace")
+    assert parse_reward(r.result_files["reward.txt"]) == 1.0
