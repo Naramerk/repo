@@ -284,7 +284,7 @@ def _derive_claim_core_attrs(
                            "criterion_frozen_at_seq": None,
                            "first_cited_evidence_seq": None})()
     severe = claim_is_severe(probe)
-    out = {
+    out: dict[str, Any] = {
         "criterion_status": status,
         "evidence_kind": "literature" if lit else "computational",
         "frozen": frozen,
