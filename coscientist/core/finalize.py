@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from coscientist.core.dispositions import dispositions
 from coscientist.core.domain import Task, TaskOutcome, TaskState
+from coscientist.core.errors import CASUnavailable
 from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.graph import GraphEdge, GraphNode
-from coscientist.core.ids import conclusion_id, report_node_id
+from coscientist.core.finalize_nodes import conclusion_ids_for
 from coscientist.core.minimal_report import build_minimal_report, render_markdown_report
 from coscientist.core.reasons import TaskReason, TerminalReason
 from coscientist.core.study_view import study_view
@@ -21,6 +21,14 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 FinalizeTrigger = Literal["cancel", "budget", "deadline", "all_done", "intake"]
+
+_TRIGGER_TERMINAL: dict[str, str] = {
+    "cancel": TerminalReason.CANCELLED.value,
+    "budget": TerminalReason.BUDGET.value,
+    "deadline": TerminalReason.DEADLINE.value,
+    "intake": TerminalReason.REFUSED.value,
+    "all_done": TerminalReason.COMPLETED.value,
+}
 
 
 def is_finalized(runtime: StudyRuntime) -> bool:
@@ -61,21 +69,17 @@ def terminal_reason_for(
         return TerminalReason.DEADLINE
     if trigger == "intake":
         return TerminalReason.REFUSED
-    # all_done
     req = [t for t in tasks.values() if t.spec.required and t.state == TaskState.DONE]
     if any(
         t.outcome == TaskOutcome.FAILED and t.reason == TaskReason.HUMAN_TIMEOUT
         for t in req
     ):
         return TerminalReason.HUMAN_TIMEOUT
-    # infeasible requires disposition ∈ {infeasible, ill_posed} — not reachable in PR 2
     _ = question_dispositions
     return TerminalReason.COMPLETED
 
 
-def contributing_reasons_ordered(
-    events: list[EventEnvelope],
-) -> list[str]:
+def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
     """TaskReason values from TaskDone payloads, first-seen order by seq."""
     seen: list[str] = []
     for ev in sorted(events, key=lambda e: e.seq or 0):
@@ -91,37 +95,54 @@ def contributing_reasons_ordered(
     return seen
 
 
+def last_resort_payload(
+    *,
+    study_id: str,
+    trigger: FinalizeTrigger,
+    fallback_reason: str,
+) -> dict[str, Any]:
+    """Constant-only StudyFinalized payload (no tasks/plans/store access)."""
+    term = _TRIGGER_TERMINAL.get(trigger, TerminalReason.COMPLETED.value)
+    minimal: dict[str, Any] = {
+        "study_id": study_id,
+        "terminal_reason": term,
+        "trigger": trigger,
+        "contributing_reasons": [],
+        "summary": f"Study закрыто: {term}; задач 0 (SUCCESS 0, PARTIAL 0, "
+        f"FAILED 0, SKIPPED 0); вопросов 0, not_attempted 0",
+        "fallback_reason": fallback_reason[:200],
+        "refusal": None,
+        "verdict": "failed",
+        "tasks": [],
+        "questions": [],
+        "sections": {"real": [], "stub": [], "human": []},
+        "truncated": False,
+    }
+    return {
+        "trigger": trigger,
+        "terminal_reason": term,
+        "contributing_reasons": [],
+        "verdict": "failed",
+        "question_dispositions": {},
+        "report_artifact_id": None,
+        "conclusion_ids": [f"cn_study_{study_id}"],
+        "minimal_report": minimal,
+        "fallback_reason": fallback_reason,
+    }
+
+
 async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
-    """Write StudyFinalized (idempotent). Never raises past minimal_report fallback."""
+    """Write StudyFinalized (idempotent). Always writes; never raises to caller."""
     if runtime.study is None or is_finalized(runtime):
         return
     sid = runtime.study.study_id
-    plans = await _load_plans(runtime)
-    qdisp = dispositions(tasks=runtime.tasks, plans=plans)
-    term = terminal_reason_for(
-        trigger, tasks=runtime.tasks, question_dispositions=qdisp
-    )
-    events = await runtime.store.read_all()
-    contrib = contributing_reasons_ordered(events)
-    view = study_view(
-        runtime.tasks.values(),
-        open_hitl=0,
-        attempts=runtime.attempts,
-        finalized=False,
-        now=runtime.clock.now(),
-        effective_deadline=runtime.study.effective_deadline(),
-        question_dispositions=qdisp,
-    )
-    verdict = view.verdict or "partial"
-    payload = await _build_finalized_payload(
-        runtime,
-        sid=sid,
-        trigger=trigger,
-        term=term,
-        contrib=contrib,
-        verdict=verdict,
-        qdisp=qdisp,
-    )
+    try:
+        payload = await _build_rich_payload(runtime, sid=sid, trigger=trigger)
+    except Exception as e:  # noqa: BLE001 — last-resort totality
+        log.warning("finalize rich path failed: %s", e, exc_info=True)
+        payload = last_resort_payload(
+            study_id=sid, trigger=trigger, fallback_reason=type(e).__name__
+        )
     now = runtime.clock.now()
     await runtime._append(  # noqa: SLF001
         [
@@ -137,6 +158,39 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
         ]
     )
     runtime._finalized = True  # noqa: SLF001
+
+
+async def _build_rich_payload(
+    runtime: StudyRuntime, *, sid: str, trigger: FinalizeTrigger
+) -> dict[str, Any]:
+    plans = await _load_plans(runtime)
+    qdisp = dispositions(tasks=runtime.tasks, plans=plans)
+    term = terminal_reason_for(
+        trigger, tasks=runtime.tasks, question_dispositions=qdisp
+    )
+    events = await runtime.store.read_all()
+    contrib = contributing_reasons_ordered(events)
+    study = runtime.study
+    assert study is not None
+    view = study_view(
+        runtime.tasks.values(),
+        open_hitl=0,
+        attempts=runtime.attempts,
+        finalized=False,
+        now=runtime.clock.now(),
+        effective_deadline=study.effective_deadline(),
+        question_dispositions=qdisp,
+    )
+    verdict = view.verdict or "partial"
+    return await _build_finalized_payload(
+        runtime,
+        sid=sid,
+        trigger=trigger,
+        term=term,
+        contrib=contrib,
+        verdict=verdict,
+        qdisp=qdisp,
+    )
 
 
 async def _load_plans(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
@@ -159,26 +213,35 @@ async def _build_finalized_payload(
 ) -> dict[str, Any]:
     fallback: str | None = None
     report_artifact_id: str | None = None
-    conclusion_ids: list[str] = []
+    conclusion_ids = conclusion_ids_for(sid, qdisp)
     minimal: dict[str, Any] | None = None
     try:
-        report_artifact_id, conclusion_ids = await _primary_report_path(
-            runtime, sid=sid, trigger=trigger, term=term, verdict=verdict, qdisp=qdisp
+        report_artifact_id = await _primary_report_path(
+            runtime,
+            sid=sid,
+            trigger=trigger,
+            term=term,
+            verdict=verdict,
+            contrib=contrib,
+            qdisp=qdisp,
         )
-    except Exception as e:  # noqa: BLE001 — totality: any failure → minimal_report
+    except Exception as e:  # noqa: BLE001 — primary failure → minimal_report
         fallback = type(e).__name__
         log.warning("finalize primary path failed: %s", e, exc_info=True)
-        minimal = build_minimal_report(
-            study_id=sid,
-            terminal_reason=term.value,
-            trigger=trigger,
-            contributing_reasons=contrib,
-            verdict=verdict,
-            tasks=runtime.tasks,
-            attempts=runtime.attempts,
-            question_dispositions=qdisp,
-            fallback_reason=fallback,
-        )
+        try:
+            minimal = build_minimal_report(
+                study_id=sid,
+                terminal_reason=term.value,
+                trigger=trigger,
+                contributing_reasons=contrib,
+                verdict=verdict,
+                tasks=runtime.tasks,
+                attempts=runtime.attempts,
+                question_dispositions=qdisp,
+                fallback_reason=fallback,
+            )
+        except Exception as e2:  # noqa: BLE001
+            raise RuntimeError(f"minimal_report:{type(e2).__name__}") from e2
     return {
         "trigger": trigger,
         "terminal_reason": term.value,
@@ -199,20 +262,21 @@ async def _primary_report_path(
     trigger: str,
     term: TerminalReason,
     verdict: str,
+    contrib: list[str],
     qdisp: dict[str, dict[str, Any]],
-) -> tuple[str, list[str]]:
+) -> str:
     md = render_markdown_report(
         study_id=sid,
         terminal_reason=term.value,
         trigger=trigger,
         verdict=verdict,
-        contributing_reasons=[],
+        contributing_reasons=contrib,
         question_dispositions=qdisp,
         tasks=runtime.tasks,
     )
     arts = _artifact_store(runtime)
     if arts is None:
-        raise RuntimeError("CASUnavailable")
+        raise CASUnavailable("no artifact store on runtime")
     from coscientist.core.artifacts import make_tool_ref
 
     art = arts.put(
@@ -221,9 +285,7 @@ async def _primary_report_path(
         name="report.md",
         media_type="text/markdown",
     )
-    conclusion_ids = _emit_conclusion_nodes(runtime, sid=sid, qdisp=qdisp, term=term)
-    _emit_report_node(runtime, sid=sid, artifact_id=art.artifact_id)
-    return art.artifact_id, conclusion_ids
+    return art.artifact_id
 
 
 def _artifact_store(runtime: StudyRuntime) -> Any:
@@ -231,95 +293,3 @@ def _artifact_store(runtime: StudyRuntime) -> Any:
     if ex is not None and getattr(ex, "artifacts", None) is not None:
         return ex.artifacts
     return getattr(runtime, "artifacts", None)
-
-
-def _emit_conclusion_nodes(
-    runtime: StudyRuntime,
-    *,
-    sid: str,
-    qdisp: dict[str, dict[str, Any]],
-    term: TerminalReason,
-) -> list[str]:
-    """Upsert conclusion nodes + answers edges into the in-memory graph."""
-    now = runtime.clock.now()
-    ids: list[str] = []
-    for qid, d in sorted(qdisp.items()):
-        cid = conclusion_id()
-        ids.append(cid)
-        runtime.graph.upsert_node(
-            GraphNode(
-                node_id=cid,
-                kind="conclusion",
-                study_id=sid,
-                ref_id=cid,
-                attrs={
-                    "synthesis": f"not_attempted:{d.get('reason')}",
-                    "validity_bounds": "core PR2: no counting claims",
-                    "question_id": qid,
-                },
-                created_at=now,
-            )
-        )
-        q_node = f"{sid}:question:{qid}"
-        if runtime.graph.get_node(q_node) is None:
-            runtime.graph.upsert_node(
-                GraphNode(
-                    node_id=q_node,
-                    kind="question",
-                    study_id=sid,
-                    ref_id=qid,
-                    attrs={"formulation": d.get("formulation", "")},
-                    created_at=now,
-                )
-            )
-        runtime.graph.add_edge(
-            GraphEdge(
-                edge_id=f"answers:{cid}:{qid}",
-                kind="answers",
-                study_id=sid,
-                src_id=cid,
-                dst_id=q_node,
-                created_at=now,
-            )
-        )
-    # study-level conclusion
-    scid = conclusion_id()
-    ids.append(scid)
-    runtime.graph.upsert_node(
-        GraphNode(
-            node_id=scid,
-            kind="conclusion",
-            study_id=sid,
-            ref_id=scid,
-            attrs={"synthesis": f"terminal:{term.value}", "validity_bounds": "study"},
-            created_at=now,
-        )
-    )
-    study_node = f"{sid}:study"
-    if runtime.graph.get_node(study_node) is not None:
-        runtime.graph.add_edge(
-            GraphEdge(
-                edge_id=f"answers:{scid}:study",
-                kind="answers",
-                study_id=sid,
-                src_id=scid,
-                dst_id=study_node,
-                created_at=now,
-            )
-        )
-    return ids
-
-
-def _emit_report_node(runtime: StudyRuntime, *, sid: str, artifact_id: str) -> None:
-    now = runtime.clock.now()
-    rid = report_node_id()
-    runtime.graph.upsert_node(
-        GraphNode(
-            node_id=rid,
-            kind="report",
-            study_id=sid,
-            ref_id=rid,
-            attrs={"artifact_id": artifact_id, "format": "text/markdown"},
-            created_at=now,
-        )
-    )

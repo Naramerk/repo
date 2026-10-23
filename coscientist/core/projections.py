@@ -45,6 +45,15 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
             event.study_id,
             {"study_id": event.study_id, "finalized": True},
         )
+        from coscientist.core.finalize_nodes import graph_rows_from_finalized
+
+        nodes, edges = graph_rows_from_finalized(
+            event.study_id, p, created_at=event.ts
+        )
+        for key, row in nodes.items():
+            _put(proj, "graph_nodes", key, row)
+        for key, row in edges.items():
+            _put(proj, "graph_edges", key, row)
     elif t == "AttemptStarted":
         _put(proj, "attempts", event.entity_key, dict(p))
         task = _get(proj, "tasks", p["task_id"])
@@ -189,7 +198,7 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         "TaskInherited": ("tasks",),
         "PlanAccepted": ("plans",),
         "StudyCancelled": ("studies",),
-        "StudyFinalized": ("studies", "meta"),
+        "StudyFinalized": ("studies", "meta", "graph_nodes", "graph_edges"),
         "AttemptStarted": ("attempts", "tasks"),
         "AttemptClosed": ("attempts", "tasks"),
         "RouteReturned": ("attempts",),

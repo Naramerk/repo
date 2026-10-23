@@ -145,23 +145,49 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
     async def finalize(self, *, trigger: FinalizeTrigger) -> None:
         await _finalize(self, trigger=trigger)
 
+    def _budget_trigger_active(self) -> bool:
+        """In-memory flag or derived from DONE(SKIPPED/FAILED, budget) tasks."""
+        if self._budget_exceeded:
+            return True
+        for t in self.tasks.values():
+            if t.state != TaskState.DONE or t.reason is None:
+                continue
+            reason = (
+                t.reason.value if isinstance(t.reason, TaskReason) else str(t.reason)
+            )
+            if reason == TaskReason.BUDGET.value:
+                return True
+        return False
+
     async def tick(self) -> None:
-        """Finalize triggers (deadline before P5), then P5, then all_done, retries."""
-        if self.study is None or self._lease_lost or self._finalized:
+        """Fence lease, P5 for deadline<ed, then finalize triggers, retries.
+
+        ``ensure_lease`` runs even after StudyFinalized so stale epochs still
+        raise LeaseLost. P5 (task.deadline < effective_deadline) runs before
+        study-deadline close (б) on the same tick.
+        """
+        if self.study is None or self._lease_lost:
             return
         await self.ensure_lease()
+        if self._finalized:
+            return
         now = self.clock.now()
         ed = self.study.effective_deadline()
+
+        # P5 first: tasks with deadline < ed and now > deadline → FAILED(deadline)
+        await self._apply_p5(now, ed)
+        if self._finalized:
+            return
+
         all_done = bool(self.tasks) and all(
             t.state == TaskState.DONE for t in self.tasks.values()
         )
         trigger = pick_finalize_trigger(
             cancelled=self._study_cancelled,
-            budget=self._budget_exceeded,
+            budget=self._budget_trigger_active(),
             deadline=now >= ed,
             all_done=all_done,
         )
-        # (б) study deadline / cancel / budget — BEFORE P5 when past effective
         if trigger in ("cancel", "budget", "deadline"):
             if trigger == "deadline":
                 await self._close_remaining(
@@ -170,11 +196,6 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             elif trigger == "budget" and not all_done:
                 await self._close_remaining(TaskReason.BUDGET, CloseReason.BUDGET)
             await _finalize(self, trigger=trigger)
-            return
-
-        # P5: task.deadline strictly before effective_deadline
-        await self._apply_p5(now, ed)
-        if self._finalized:
             return
 
         if self.tasks and all(t.state == TaskState.DONE for t in self.tasks.values()):

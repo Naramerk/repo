@@ -172,10 +172,10 @@ class LifecycleMixin:
             ]
         questions = list(questions or [])
         self._validate_dag(tasks)
-        known = await self._known_question_ids()
-        self._validate_questions(questions, known)
-        known |= {q.id for q in questions}
-        self._validate_addresses(tasks, known)
+        known_texts = await self._known_question_texts()
+        self._validate_questions(questions, known_texts)
+        known_texts = {**known_texts, **{q.id: q.text for q in questions}}
+        self._validate_addresses(tasks, set(known_texts))
         pid = plan_id()
         plan = Plan(
             plan_id=pid,
@@ -237,37 +237,37 @@ class LifecycleMixin:
         await self._append(events)
         return pid
 
-    async def _known_question_ids(self) -> set[str]:
-        known: set[str] = set()
+    async def _known_question_texts(self) -> dict[str, str]:
+        texts: dict[str, str] = {}
         local = getattr(self, "plans", None)
         plans = list(local.values()) if isinstance(local, dict) else []
         if not plans:
             store = getattr(self, "store", None)
             if store is not None:
                 plans = await store.get_projection("plans")
-        texts: dict[str, str] = {}
         for plan in plans:
             for q in plan.get("questions") or []:
                 if not isinstance(q, dict):
                     continue
                 qid = str(q.get("id", ""))
                 text = str(q.get("text", ""))
+                if not qid:
+                    continue
                 if qid in texts and texts[qid] != text:
                     raise ValueError(f"question id {qid!r} text conflict")
-                if qid:
-                    texts[qid] = text
-                    known.add(qid)
-        return known
+                texts[qid] = text
+        return texts
 
     @staticmethod
-    def _validate_questions(questions: list[QuestionSpec], known: set[str]) -> None:
+    def _validate_questions(
+        questions: list[QuestionSpec], known_texts: dict[str, str]
+    ) -> None:
         seen: dict[str, str] = {}
         for q in questions:
             if q.id in seen and seen[q.id] != q.text:
                 raise ValueError(f"question id {q.id!r} text conflict")
-            if q.id in known:
-                # same id across revisions must keep text; checked via known texts in caller
-                pass
+            if q.id in known_texts and known_texts[q.id] != q.text:
+                raise ValueError(f"question id {q.id!r} text conflict")
             seen[q.id] = q.text
 
     @staticmethod

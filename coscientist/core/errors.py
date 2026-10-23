@@ -40,6 +40,10 @@ class StudyClosedError(CoreError):
         )
 
 
+class CASUnavailable(CoreError):
+    """Content-addressed artifact store is not attached / unreachable."""
+
+
 class ArtifactCorrupt(CoreError):
     """Stored blob sha256 does not match the Artifact record."""
 

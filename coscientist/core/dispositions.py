@@ -19,7 +19,13 @@ def _reasons_for(tasks: list[Task]) -> list[TaskReason]:
     for t in tasks:
         if t.reason is None:
             continue
-        r = t.reason if isinstance(t.reason, TaskReason) else TaskReason(str(t.reason))
+        if isinstance(t.reason, TaskReason):
+            r = t.reason
+        else:
+            try:
+                r = TaskReason(str(t.reason))
+            except ValueError:
+                continue
         if r not in out:
             out.append(r)
     return out

@@ -278,8 +278,32 @@ async def test_finalize_budget_trigger(tmp_path, clock):
     rt.note_budget_exceeded()
     await rt.tick()
     assert _fin(await rt.store.read_all()).payload["trigger"] == "budget"
-    assert any(t.reason == TaskReason.BUDGET and t.outcome == TaskOutcome.SKIPPED for t in rt.tasks.values())
+    assert any(
+        t.reason == TaskReason.BUDGET and t.outcome == TaskOutcome.SKIPPED
+        for t in rt.tasks.values()
+    )
     await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_finalize_budget_from_taskdone_after_reopen(tmp_path, clock):
+    """Budget trigger derived from TaskDone(SKIPPED, budget) after crash/reopen."""
+    from coscientist.core.cancel import _close_open_work
+    from coscientist.core.reasons import CloseReason
+
+    sid = "st_bg2"
+    rt = await _boot(tmp_path, clock, sid)
+    events = _close_open_work(
+        rt, reason=TaskReason.BUDGET, close=CloseReason.BUDGET
+    )
+    if events:
+        await rt._append(events)
+    assert not rt._finalized
+    await close_runtime(rt)
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    await rt2.tick()
+    assert _fin(await rt2.store.read_all()).payload["trigger"] == "budget"
+    await close_runtime(rt2)
 
 
 @pytest.mark.asyncio
@@ -355,8 +379,7 @@ async def test_finalize_total_on_cas_failure(tmp_path, clock):
     await rt.finalize(trigger="all_done")
     ev = _fin(await rt.store.read_all())
     assert ev.payload["minimal_report"] and ev.payload["report_artifact_id"] is None
-    # primary raises RuntimeError("CASUnavailable"); fallback stores exception type name
-    assert ev.payload["fallback_reason"] == "RuntimeError"
+    assert ev.payload["fallback_reason"] == "CASUnavailable"
     await close_runtime(rt)
 
 
@@ -408,15 +431,41 @@ async def test_write_after_finalized_rejected_no_event(tmp_path, clock):
 
 @pytest.mark.asyncio
 async def test_p5_vs_study_deadline_same_tick(tmp_path, clock):
+    """P5 (deadline < ed) runs before study-deadline close on the same tick."""
     rt = await _boot(tmp_path, clock, "st_p5", reserve=30, seconds=7200)
-    assert rt.tasks[f"{rt.study.study_id}/SPEC"].deadline < rt.study.effective_deadline()
+    sid = rt.study.study_id
+    ed = rt.study.effective_deadline()
+    assert rt.tasks[f"{sid}/SPEC"].deadline < ed
+    assert rt.tasks[f"{sid}/REPORT"].deadline == ed
     await rt.ensure_lease(ttl_s=10_000)
     clock.advance(timedelta(seconds=7200))
     await rt.tick()
-    for t in rt.tasks.values():
-        assert t.state == TaskState.DONE and t.reason == TaskReason.STUDY_DEADLINE
-        assert t.outcome == TaskOutcome.SKIPPED
+    for key in ("SPEC", "HYP", "LIT", "PLAN"):
+        t = rt.tasks[f"{sid}/{key}"]
+        assert t.state == TaskState.DONE
+        assert t.outcome == TaskOutcome.FAILED
+        assert t.reason == TaskReason.DEADLINE
+    report = rt.tasks[f"{sid}/REPORT"]
+    assert report.outcome == TaskOutcome.SKIPPED
+    assert report.reason == TaskReason.STUDY_DEADLINE
     assert _fin(await rt.store.read_all()).payload["trigger"] == "deadline"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_p5_after_long_downtime_uses_task_deadline(tmp_path, clock):
+    """After downtime past ed, tasks with own deadline < ed are FAILED(deadline)."""
+    sid = "st_p5d"
+    rt = await _boot(tmp_path, clock, sid, reserve=30, seconds=7200)
+    await close_runtime(rt)
+    clock.advance(timedelta(hours=48))
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    await rt.tick()
+    spec = rt.tasks[f"{sid}/SPEC"]
+    assert spec.outcome == TaskOutcome.FAILED and spec.reason == TaskReason.DEADLINE
+    report = rt.tasks[f"{sid}/REPORT"]
+    assert report.outcome == TaskOutcome.SKIPPED
+    assert report.reason == TaskReason.STUDY_DEADLINE
     await close_runtime(rt)
 
 
@@ -424,5 +473,18 @@ async def test_p5_vs_study_deadline_same_tick(tmp_path, clock):
 async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_ua")
     with pytest.raises(ValueError, match="unknown question"):
-        await rt.accept_plan([_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")])
+        await rt.accept_plan(
+            [_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")]
+        )
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_accept_plan_rejects_question_text_conflict(tmp_path, clock):
+    rt = await _boot(tmp_path, clock, "st_qc")
+    await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="one")], revision=1)
+    with pytest.raises(ValueError, match="text conflict"):
+        await rt.accept_plan(
+            [], questions=[QuestionSpec(id="Q1", text="other")], revision=2
+        )
     await close_runtime(rt)

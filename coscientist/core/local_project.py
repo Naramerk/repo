@@ -7,7 +7,7 @@ from typing import Any
 
 from coscientist.core.domain import Study, Task, TaskOutcome, TaskState
 from coscientist.core.events import EventEnvelope
-from coscientist.core.graph import GraphNode, GraphStore
+from coscientist.core.graph import GraphEdge, GraphNode, GraphStore
 from coscientist.core.reasons import TaskReason
 
 
@@ -35,6 +35,7 @@ class LocalProjectMixin:
             self._study_cancelled = True
         elif ev.type == "StudyFinalized":
             self._finalized = True
+            self._fold_finalized_graph(ev.study_id, p, created_at=ev.ts)
         elif ev.type in ("TaskCreated", "TaskInherited"):
             self.tasks[p["task_id"]] = Task.model_validate(p)
         elif ev.type == "AttemptStarted":
@@ -80,13 +81,33 @@ class LocalProjectMixin:
             self.results[p["attempt_id"]] = dict(p)
         elif ev.type == "TaskDone":
             t = self.tasks[p["task_id"]]
+            reason = p.get("reason")
             self.tasks[p["task_id"]] = t.model_copy(
                 update={
                     "state": TaskState.DONE,
                     "outcome": TaskOutcome(p["outcome"]),
-                    "reason": p.get("reason"),
+                    "reason": reason,
                 }
             )
             self._retry_at.pop(p["task_id"], None)
+            if reason == TaskReason.BUDGET.value or reason == TaskReason.BUDGET:
+                self._budget_exceeded = True
         elif ev.type == "GraphNodeUpserted":
             self.graph.upsert_node(GraphNode.model_validate(p))
+
+    def _fold_finalized_graph(
+        self, study_id: str, payload: dict[str, Any], *, created_at: datetime
+    ) -> None:
+        from coscientist.core.finalize_nodes import graph_rows_from_finalized
+
+        nodes, edges = graph_rows_from_finalized(
+            study_id, payload, created_at=created_at
+        )
+        for row in nodes.values():
+            self.graph.upsert_node(GraphNode.model_validate(row))
+        for row in edges.values():
+            try:
+                self.graph.add_edge(GraphEdge.model_validate(row))
+            except (KeyError, ValueError):
+                # study/question node may be missing in sparse journals
+                pass
