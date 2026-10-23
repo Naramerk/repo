@@ -73,6 +73,9 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         self.hypothesis_verdicts: dict[str, dict[str, Any]] = {}
         self._retry_at: dict[str, datetime] = {}
         self._finalized = False
+        # True while closing open work for internal_error / cancel-style finalize —
+        # nested _append(TaskDone) must not re-enter expand/foreach/loop hooks.
+        self._finalizing = False
         self._study_cancelled = False
         self._budget_exceeded = False
         self._intake_refusal: IntakeRefuse | None = None
@@ -164,7 +167,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             require_open_attempt: str | None = None,
         ) -> None:
             await orig_append(events, require_open_attempt=require_open_attempt)
-            if self._finalized or self._lease_lost:
+            if self._finalized or self._lease_lost or self._finalizing:
                 return
             from coscientist.core.expand import maybe_expand_after_task_done
             from coscientist.core.foreach import maybe_foreach_after_task_done
@@ -204,7 +207,12 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             if ev.type == "TaskDone":
                 done_ids.append(ev.entity_key)
         # PR10 foreach → PR11 loops → H-g expand (expansion_request / expand_after).
-        if done_ids and not self._finalized and not self._lease_lost:
+        if (
+            done_ids
+            and not self._finalized
+            and not self._lease_lost
+            and not self._finalizing
+        ):
             from coscientist.core.expand import maybe_expand_after_task_done
             from coscientist.core.foreach import maybe_foreach_after_task_done
             from coscientist.core.loop import maybe_loop_after_task_done

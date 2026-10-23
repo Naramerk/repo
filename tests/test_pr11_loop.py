@@ -130,7 +130,13 @@ async def _complete_stages(rt, arts) -> None:
 
 
 async def _open_study(
-    tmp_path, clock, sid: str, *, max_loop_iter: int = 8, runtime_cls=None
+    tmp_path,
+    clock,
+    sid: str,
+    *,
+    max_loop_iter: int = 8,
+    max_expansions: int = 0,
+    runtime_cls=None,
 ):
     kw: dict[str, Any] = {"clock": clock, "owner": "t1"}
     if runtime_cls is not None:
@@ -143,7 +149,7 @@ async def _open_study(
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
-        max_expansions=0,
+        max_expansions=max_expansions,
         max_loop_iter=max_loop_iter,
     )
     arts = attach_executor(rt, tmp_path)[1]
@@ -1809,6 +1815,7 @@ async def test_internal_error_closes_running_tasks_and_attempts(
     """RUNNING task + open attempt are closed (CORE_BUG / CRASHED) on internal_error."""
     import coscientist.core.loop_predicates as lp
     from coscientist.core.domain import TaskState
+    from coscientist.core.errors import AttemptClosedError, Conflict, StudyClosedError
     from coscientist.core.reasons import CloseReason, TaskReason, TerminalReason
 
     name = f"test_plugin_boom_running_{runtime_cls.__name__}"
@@ -1863,6 +1870,7 @@ async def test_internal_error_closes_running_tasks_and_attempts(
         ]
         assert out_done
         assert out_done[-1].payload.get("reason") == TaskReason.CORE_BUG.value
+        n_out_done = len(out_done)
         closed = [
             e
             for e in events
@@ -1874,6 +1882,243 @@ async def test_internal_error_closes_running_tasks_and_attempts(
         has_art = fins[0].payload.get("report_artifact_id") is not None
         has_min = fins[0].payload.get("minimal_report") is not None
         assert has_art ^ has_min
+        # Late write on the closed attempt must not add another TaskDone.
+        with pytest.raises((AttemptClosedError, StudyClosedError, Conflict)):
+            await _ok(rt, arts, out_aid)
+        events_late = await rt.store.read_all()
+        assert (
+            len(
+                [
+                    e
+                    for e in events_late
+                    if e.type == "TaskDone" and e.entity_key == out.task_id
+                ]
+            )
+            == n_out_done
+        )
         await close_runtime(rt)
     finally:
         lp._REGISTRY.pop(name, None)
+
+
+@pytest.mark.asyncio
+async def test_internal_error_close_does_not_reenter_hooks(
+    tmp_path, clock, runtime_cls
+):
+    """Nested _append(TaskDone CORE_BUG) under _finalizing must not create PLAN-n."""
+    import coscientist.core.loop_predicates as lp
+    from coscientist.core.reasons import TerminalReason
+
+    name = f"test_plugin_boom_reentry_{runtime_cls.__name__}"
+    lp._REGISTRY.pop(name, None)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("predicate body boom")
+
+    register_loop_predicate(name, boom)
+    try:
+        rt, arts = await _open_study(
+            tmp_path,
+            clock,
+            "st_loop_reentry",
+            max_expansions=2,
+            runtime_cls=runtime_cls,
+        )
+        await rt.accept_plan(
+            [
+                TaskSpec(
+                    task_key="OUT",
+                    title="outside",
+                    goal="g",
+                    route="experiment",
+                    addresses=["Q1"],
+                    criteria=[RequirementRef(template_id="value_match")],
+                    required=False,
+                )
+            ],
+            questions=[QuestionSpec(id="Q1", text="q")],
+            expand_after=["OUT"],
+            loops=[
+                _loop(
+                    max_iter=5,
+                    until=LoopPredicate(name=name, params={}),
+                    scope_hypotheses=[],
+                )
+            ],
+        )
+        out_aid = await rt.start_attempt("OUT")
+        assert out_aid
+        created_before = {
+            e.entity_key
+            for e in await rt.store.read_all()
+            if e.type == "TaskCreated"
+        }
+        for t in current_loop_iter_tasks(rt, "L1", 1):
+            aid = await rt.start_attempt(t.spec.task_key)
+            await _ok(rt, arts, aid)
+        assert rt._finalized is True
+        events = await rt.store.read_all()
+        fins = [e for e in events if e.type == "StudyFinalized"]
+        assert len(fins) == 1
+        assert fins[0].payload["terminal_reason"] == TerminalReason.INTERNAL_ERROR.value
+        created_after = {e.entity_key for e in events if e.type == "TaskCreated"}
+        # No PLAN-n / new materialization from expand_after on CORE_BUG close.
+        assert created_after == created_before
+        assert not any(
+            t.spec.task_key.startswith("PLAN-") for t in rt.tasks.values()
+        )
+        await close_runtime(rt)
+    finally:
+        lp._REGISTRY.pop(name, None)
+
+
+@pytest.mark.asyncio
+async def test_count_survivors_failure_finalizes_internal_error(
+    tmp_path, clock, runtime_cls, monkeypatch
+):
+    """Exception inside count_survivors during advance → internal_error."""
+    import coscientist.core.loop_predicates as lp
+    from coscientist.core.reasons import TerminalReason
+
+    def boom_survivors(*_a, **_k):
+        raise RuntimeError("count_survivors boom")
+
+    monkeypatch.setattr(lp, "count_survivors", boom_survivors)
+    rt, arts = await _open_study(
+        tmp_path, clock, "st_loop_surv_boom", runtime_cls=runtime_cls
+    )
+    await rt.accept_plan(
+        [],
+        questions=[QuestionSpec(id="Q1", text="q")],
+        loops=[
+            _loop(
+                max_iter=5,
+                until=LoopPredicate(name="survivors_le", params={"n": 0}),
+                scope_hypotheses=[],
+            )
+        ],
+    )
+    for t in current_loop_iter_tasks(rt, "L1", 1):
+        aid = await rt.start_attempt(t.spec.task_key)
+        await _ok(rt, arts, aid)
+    assert rt._finalized is True
+    fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    assert len(fins) == 1
+    assert fins[0].payload["terminal_reason"] == TerminalReason.INTERNAL_ERROR.value
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_materialize_loop_iter_failure_finalizes_internal_error(
+    tmp_path, clock, runtime_cls, monkeypatch
+):
+    """Exception inside materialize_loop_iter during advance → internal_error."""
+    import coscientist.core.loop as loop_mod
+    import coscientist.core.loop_predicates as lp
+    from coscientist.core.reasons import TerminalReason
+
+    name = f"test_plugin_keep_mat_{runtime_cls.__name__}"
+    lp._REGISTRY.pop(name, None)
+    register_loop_predicate(name, lambda *_a, **_k: False)
+    try:
+        rt, arts = await _open_study(
+            tmp_path, clock, "st_loop_mat_boom", runtime_cls=runtime_cls
+        )
+        await rt.accept_plan(
+            [],
+            questions=[QuestionSpec(id="Q1", text="q")],
+            loops=[
+                _loop(
+                    max_iter=5,
+                    until=LoopPredicate(name=name, params={}),
+                    scope_hypotheses=[],
+                )
+            ],
+        )
+
+        async def boom_mat(*_a, **_k):
+            raise RuntimeError("materialize_loop_iter boom")
+
+        monkeypatch.setattr(loop_mod, "materialize_loop_iter", boom_mat)
+        for t in current_loop_iter_tasks(rt, "L1", 1):
+            aid = await rt.start_attempt(t.spec.task_key)
+            await _ok(rt, arts, aid)
+        assert rt._finalized is True
+        fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+        assert len(fins) == 1
+        assert fins[0].payload["terminal_reason"] == TerminalReason.INTERNAL_ERROR.value
+        await close_runtime(rt)
+    finally:
+        lp._REGISTRY.pop(name, None)
+
+
+@pytest.mark.asyncio
+async def test_plan_invalid_from_predicate_body_finalizes(
+    tmp_path, clock, runtime_cls
+):
+    """PlanInvalid raised from a predicate body during advance → internal_error."""
+    import coscientist.core.loop_predicates as lp
+    from coscientist.core.reasons import TerminalReason
+    from coscientist.core.rules import PlanInvalid
+
+    name = f"test_plugin_plan_invalid_{runtime_cls.__name__}"
+    lp._REGISTRY.pop(name, None)
+
+    def raise_plan_invalid(*_a, **_k):
+        raise PlanInvalid("predicate body PlanInvalid")
+
+    register_loop_predicate(name, raise_plan_invalid)
+    try:
+        rt, arts = await _open_study(
+            tmp_path, clock, "st_loop_pi_body", runtime_cls=runtime_cls
+        )
+        await rt.accept_plan(
+            [],
+            questions=[QuestionSpec(id="Q1", text="q")],
+            loops=[
+                _loop(
+                    max_iter=5,
+                    until=LoopPredicate(name=name, params={}),
+                    scope_hypotheses=[],
+                )
+            ],
+        )
+        for t in current_loop_iter_tasks(rt, "L1", 1):
+            aid = await rt.start_attempt(t.spec.task_key)
+            await _ok(rt, arts, aid)
+        assert rt._finalized is True
+        events = await rt.store.read_all()
+        fins = [e for e in events if e.type == "StudyFinalized"]
+        assert len(fins) == 1
+        assert fins[0].payload["terminal_reason"] == TerminalReason.INTERNAL_ERROR.value
+        await close_runtime(rt)
+    finally:
+        lp._REGISTRY.pop(name, None)
+
+
+def test_upcast_plan_expanded_v2_loop_field_defaults():
+    """Old PlanExpanded v2 without loop fields → TaskSpec defaults on replay."""
+    v, p = upcast(
+        "PlanExpanded",
+        2,
+        {
+            "plan_id": "pl_old",
+            "added_tasks": [
+                {
+                    "task_key": "EXP-0",
+                    "title": "t",
+                    "goal": "g",
+                    "route": "experiment",
+                    "expected_outputs": [
+                        {"name": "main", "media_type": "application/json"}
+                    ],
+                }
+            ],
+            "added_questions": [],
+        },
+    )
+    assert v == 3
+    spec = p["added_tasks"][0]
+    assert spec["loop_id"] is None
+    assert spec["loop_iter"] is None
+    assert spec["loop_template_key"] is None

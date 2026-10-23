@@ -943,8 +943,9 @@ def test_upcast_taskcreated_v10_and_plan_expanded_v2():
             "added_questions": [{"id": "Q1", "text": "q"}],
         },
     )
-    assert v2 == 2
+    assert v2 == 3
     assert p2["added_tasks"][0]["expected_outputs"][0]["rubric"] is None
+    assert p2["added_tasks"][0]["loop_id"] is None
     assert p2["added_questions"][0]["final_type"] == "verdict"
     # Legacy unknown final_type coerced to verdict (current unknown → PlanRefused).
     v3, p3 = upcast(

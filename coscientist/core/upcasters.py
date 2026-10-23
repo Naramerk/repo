@@ -274,6 +274,21 @@ def _plan_expanded_v1_to_v2_rubric(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _plan_expanded_v2_to_v3_loop(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR11: loop_id / loop_iter / loop_template_key defaults on PlanExpanded.added_tasks."""
+    out = dict(payload)
+    added = out.get("added_tasks")
+    if isinstance(added, list):
+        rewritten: list[Any] = []
+        for t in added:
+            if isinstance(t, dict):
+                rewritten.append(_ensure_loop_fields(dict(t)))
+            else:
+                rewritten.append(t)
+        out["added_tasks"] = rewritten
+    return out
+
+
 def _plan_accepted_v4_to_v5_foreach_quorum(payload: dict[str, Any]) -> dict[str, Any]:
     out = dict(payload)
     tasks = out.get("tasks")
@@ -662,6 +677,7 @@ register_upcaster("PlanAccepted", 6, _plan_accepted_v6_to_v7_shares)
 register_upcaster("PlanAccepted", 7, _plan_accepted_v7_to_v8_rubric)
 register_upcaster("PlanAccepted", 8, _plan_accepted_v8_to_v9_loops)
 register_upcaster("PlanExpanded", 1, _plan_expanded_v1_to_v2_rubric)
+register_upcaster("PlanExpanded", 2, _plan_expanded_v2_to_v3_loop)
 register_upcaster("StudyCreated", 1, _study_created_v1_to_v2)
 register_upcaster("StudyCreated", 2, _study_created_v2_to_v3)
 register_upcaster("StudyCreated", 3, _study_created_v3_to_v4)

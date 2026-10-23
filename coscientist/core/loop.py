@@ -744,45 +744,50 @@ async def finalize_loop_internal_error(
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return
     detail = f"loop_advance:{type(exc).__name__}:{exc}"[:200]
+    # Suppress expand/foreach/loop hooks on nested _append(TaskDone) while closing.
+    runtime._finalizing = True  # noqa: SLF001
     try:
-        if loop is not None:
-            await _emit_loop_refused(
-                runtime,
-                loop,
-                iter_n=current_iter(runtime, loop.loop_id) or 0,
-                detail=detail,
-                reason=LOOP_REASON_ERROR,
+        try:
+            if loop is not None:
+                await _emit_loop_refused(
+                    runtime,
+                    loop,
+                    iter_n=current_iter(runtime, loop.loop_id) or 0,
+                    detail=detail,
+                    reason=LOOP_REASON_ERROR,
+                )
+            else:
+                await _emit_loop_advance_failed(runtime, detail=detail)
+        except LeaseLost:
+            raise
+        except Exception as journal_exc:  # noqa: BLE001 — still must finalize
+            log.warning(
+                "finalize_loop_internal_error journal failed: %s",
+                journal_exc,
+                exc_info=True,
             )
-        else:
-            await _emit_loop_advance_failed(runtime, detail=detail)
-    except LeaseLost:
-        raise
-    except Exception as journal_exc:  # noqa: BLE001 — still must finalize
-        log.warning(
-            "finalize_loop_internal_error journal failed: %s",
-            journal_exc,
-            exc_info=True,
-        )
-    # Close open work so RUNNING tasks/attempts do not survive StudyFinalized.
-    try:
-        from coscientist.core.cancel import _close_open_work
+        # Close open work so RUNNING tasks/attempts do not survive StudyFinalized.
+        try:
+            from coscientist.core.cancel import _close_open_work
 
-        close_events = _close_open_work(
-            runtime, reason=TaskReason.CORE_BUG, close=CloseReason.CRASHED
-        )
-        if close_events:
-            await runtime._append(close_events)  # noqa: SLF001
-    except LeaseLost:
-        raise
-    except Exception as close_exc:  # noqa: BLE001 — still must finalize
-        log.warning(
-            "finalize_loop_internal_error close_open_work failed: %s",
-            close_exc,
-            exc_info=True,
-        )
-    import coscientist.core.finalize as finalize_mod
+            close_events = _close_open_work(
+                runtime, reason=TaskReason.CORE_BUG, close=CloseReason.CRASHED
+            )
+            if close_events:
+                await runtime._append(close_events)  # noqa: SLF001
+        except LeaseLost:
+            raise
+        except Exception as close_exc:  # noqa: BLE001 — still must finalize
+            log.warning(
+                "finalize_loop_internal_error close_open_work failed: %s",
+                close_exc,
+                exc_info=True,
+            )
+        import coscientist.core.finalize as finalize_mod
 
-    await finalize_mod.finalize(runtime, trigger="internal_error")
+        await finalize_mod.finalize(runtime, trigger="internal_error")
+    finally:
+        runtime._finalizing = False  # noqa: SLF001
 
 
 async def refuse_orphaned_loop_barriers(runtime: StudyRuntime) -> int:
