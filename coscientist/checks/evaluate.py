@@ -623,7 +623,6 @@ def evaluate_task_checks(
     Joint with PR14: ``fetched_digests`` forwarded to executable kinds.
     PR13: ``judge_retry`` / ``failure_kinds`` / ``task_id`` / ``output_digest``.
     """
-    del fetched_digests  # reserved for PR14 quote_in_source; keep kwarg for merge
     by_id = {t.id: t for t in catalog.templates}
     review_statuses = review_statuses or {}
     judge_retry = judge_retry or {}
