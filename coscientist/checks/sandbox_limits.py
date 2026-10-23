@@ -35,6 +35,10 @@ def _catalog_limits_for_criteria(
             entry["memory_mb"] = int(tmpl.check.memory_mb)
         if tmpl.check.max_output_bytes is not None:
             entry["max_output_bytes"] = int(tmpl.check.max_output_bytes)
+        if tmpl.check.reap_timeout_s is not None:
+            entry["reap_timeout_s"] = float(tmpl.check.reap_timeout_s)
+        if tmpl.check.output_drain_join_s is not None:
+            entry["output_drain_join_s"] = float(tmpl.check.output_drain_join_s)
         entry["allow_network"] = bool(tmpl.check.allow_network)
         out[tid] = entry
     return out
@@ -82,6 +86,10 @@ def apply_frozen_limits(
         updates["memory_mb"] = int(frozen["memory_mb"])
     if "max_output_bytes" in frozen and frozen["max_output_bytes"] is not None:
         updates["max_output_bytes"] = int(frozen["max_output_bytes"])
+    if "reap_timeout_s" in frozen and frozen["reap_timeout_s"] is not None:
+        updates["reap_timeout_s"] = float(frozen["reap_timeout_s"])
+    if "output_drain_join_s" in frozen and frozen["output_drain_join_s"] is not None:
+        updates["output_drain_join_s"] = float(frozen["output_drain_join_s"])
     if "allow_network" in frozen:
         updates["allow_network"] = bool(frozen["allow_network"])
     if not updates:

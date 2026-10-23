@@ -16,7 +16,6 @@ import pytest
 import coscientist.checks.sandbox as sb
 from coscientist.checks.kinds._util import raise_if_infra
 from coscientist.checks.sandbox import (
-    _TERM_GRACE_S,
     DEFAULT_OUTPUT_DRAIN_JOIN_S,
     DEFAULT_REAP_TIMEOUT_S,
     INFRA_STATUSES,
@@ -27,6 +26,13 @@ from coscientist.checks.sandbox import (
     _rlimit_cpu_seconds,
     _watch_process,
 )
+
+# Explicit test budgets — not reused from production grace/drain defaults.
+TEST_WALL_TIMEOUT_S = 2.0
+TEST_REAP_TIMEOUT_S = 0.25
+TEST_DRAIN_JOIN_S = 0.25
+TEST_LARGE_WALL_TIMEOUT_S = 30.0
+TEST_STUCK_HOLD_S = 1.0  # Event.wait bound; must exceed TEST_DRAIN_JOIN_S
 
 
 def test_watch_process_samples_host_cpu_before_poll(monkeypatch):
@@ -85,7 +91,11 @@ def test_watch_process_joins_readers_before_returning_stdout(monkeypatch):
     released = threading.Event()
     thread_errors: list[BaseException] = []
     lim = SandboxLimits(
-        timeout_s=sb.DEFAULT_TIMEOUT_S, memory_mb=64, max_output_bytes=1024
+        timeout_s=TEST_LARGE_WALL_TIMEOUT_S,
+        memory_mb=64,
+        max_output_bytes=1024,
+        reap_timeout_s=TEST_REAP_TIMEOUT_S,
+        output_drain_join_s=TEST_DRAIN_JOIN_S,
     )
 
     def slow_read(
@@ -131,6 +141,7 @@ def test_watch_process_joins_readers_before_returning_stdout(monkeypatch):
 
 def test_watch_process_stuck_reader_sets_output_drain_failed(monkeypatch):
     """Grandchild holding the pipe → reader stays alive; flag, do not silent b''."""
+    hold = threading.Event()
 
     def stuck_read(
         pipe: object,
@@ -139,8 +150,8 @@ def test_watch_process_stuck_reader_sets_output_drain_failed(monkeypatch):
         overflow: list[bool],
     ) -> None:
         del pipe, limit, sink, overflow
-        # Outlive the join budget, then exit (no Event — no dangling waiters).
-        time.sleep(float(lim.output_drain_join_s) + float(lim.reap_timeout_s))
+        # Bound wait (no sleep); outlives drain join, then exits cleanly.
+        hold.wait(timeout=TEST_STUCK_HOLD_S)
 
     class FakeProc:
         pid = 4242
@@ -158,17 +169,19 @@ def test_watch_process_stuck_reader_sets_output_drain_failed(monkeypatch):
     monkeypatch.setattr(sb, "_cgroup_cpu_usage_usec", lambda leaf: None)
 
     lim = SandboxLimits(
-        timeout_s=sb.DEFAULT_TIMEOUT_S,
+        timeout_s=TEST_LARGE_WALL_TIMEOUT_S,
         memory_mb=64,
         max_output_bytes=1024,
-        reap_timeout_s=_TERM_GRACE_S,
-        output_drain_join_s=_TERM_GRACE_S,
+        reap_timeout_s=TEST_REAP_TIMEOUT_S,
+        output_drain_join_s=TEST_DRAIN_JOIN_S,
     )
+    assert TEST_STUCK_HOLD_S > float(lim.output_drain_join_s)
     _to, _ov, out, err, _kc, _cpu, _tree, drain_failed = _watch_process(
         FakeProc(),  # type: ignore[arg-type]
         lim=lim,
         cgroup_leaf=None,
     )
+    hold.set()
     assert drain_failed is True
     assert out == b""
     assert err == b""
@@ -216,13 +229,13 @@ def test_classify_timeout_with_stuck_drain_stays_timeout_consumed():
         work_dir=None,
         result_files={},
         kill_cause="wall",
-        cpu_usage_s=0.0,
+        cpu_usage_s=None,
         timeout_s=1.0,
         output_drain_failed=True,
     )
     assert result.status is SandboxStatus.TIMEOUT
+    assert result.reason == "wall_timeout"
     assert result.output_drain_failed is True
-    assert result.status not in INFRA_STATUSES
     raise_if_infra(
         result.status,
         result.reason,
@@ -255,7 +268,6 @@ def test_classify_overflow_with_stuck_drain_stays_output_exceeded_consumed():
     assert result.status is SandboxStatus.OUTPUT_EXCEEDED
     assert result.reason == "output_exceeded"
     assert result.output_drain_failed is True
-    assert result.status not in INFRA_STATUSES
     raise_if_infra(
         result.status,
         result.reason,
@@ -267,11 +279,16 @@ def test_classify_overflow_with_stuck_drain_stays_output_exceeded_consumed():
 
 def test_real_subprocess_grandchild_holds_stdout_sets_drain_failed():
     """No mocks: parent exits after fork; grandchild keeps stdout open."""
+    ready_r, ready_w = os.pipe()
     script = (
         "import os, sys, time\n"
+        f"ready_w = {ready_w}\n"
         "if os.fork() == 0:\n"
+        "    os.write(ready_w, b'R')\n"
+        "    os.close(ready_w)\n"
         "    time.sleep(3600)\n"
         "    os._exit(0)\n"
+        "os.close(ready_w)\n"
         "sys.stdout.write('hi\\n')\n"
         "sys.stdout.flush()\n"
         "os._exit(0)\n"
@@ -281,16 +298,21 @@ def test_real_subprocess_grandchild_holds_stdout_sets_drain_failed():
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=True,
+        pass_fds=(ready_w,),
     )
+    os.close(ready_w)
     pgid = os.getpgid(proc.pid)
     lim = SandboxLimits(
-        timeout_s=sb.DEFAULT_TIMEOUT_S,
+        timeout_s=TEST_LARGE_WALL_TIMEOUT_S,
         memory_mb=64,
         max_output_bytes=1024,
-        reap_timeout_s=_TERM_GRACE_S,
-        output_drain_join_s=_TERM_GRACE_S,
+        reap_timeout_s=TEST_REAP_TIMEOUT_S,
+        output_drain_join_s=TEST_DRAIN_JOIN_S,
     )
     try:
+        assert os.read(ready_r, 1) == b"R"
+        os.close(ready_r)
+        ready_r = -1
         # Synchronize on parent exit (not on wall timing) before drain join path.
         proc.wait(timeout=float(lim.timeout_s))
         timed_out, overflow, _out, _err, _kc, _cpu, _tree, drain_failed = (
@@ -321,28 +343,36 @@ def test_real_subprocess_grandchild_holds_stdout_sets_drain_failed():
         assert result.reason == "sandbox_unavailable:output_drain"
         assert result.output_drain_failed is True
     finally:
+        if ready_r >= 0:
+            try:
+                os.close(ready_r)
+            except OSError:
+                pass
         try:
             os.killpg(pgid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        try:
-            proc.wait(timeout=float(lim.reap_timeout_s))
-        except Exception:  # noqa: BLE001
-            pass
+        proc.wait(timeout=float(lim.reap_timeout_s))
 
 
-def test_timeout_with_stuck_drain_consumes_attempt_runtime(tmp_path):
-    """Wall timeout + detached pipe-holder: TIMEOUT + flag; raise_if_infra no-op."""
-    # setsid grandchild survives killpg of the parent session → drain stays stuck.
-    holder_pid = tmp_path / "holder.pid"
+def test_watch_timeout_with_stuck_drain_ready_pipe():
+    """Ready pipe before watch; wall timeout + detached holder → wall_timeout."""
+    ready_r, ready_w = os.pipe()
+    holder_r, holder_w = os.pipe()
     script = (
-        "import os, time, pathlib\n"
-        f"holder = pathlib.Path({str(holder_pid)!r})\n"
+        "import os, time\n"
+        f"ready_w = {ready_w}\n"
+        f"holder_w = {holder_w}\n"
         "if os.fork() == 0:\n"
         "    os.setsid()\n"
-        "    holder.write_text(str(os.getpid()))\n"
+        "    os.write(holder_w, str(os.getpid()).encode())\n"
+        "    os.close(holder_w)\n"
+        "    os.write(ready_w, b'R')\n"
+        "    os.close(ready_w)\n"
         "    time.sleep(3600)\n"
         "    os._exit(0)\n"
+        "os.close(ready_w)\n"
+        "os.close(holder_w)\n"
         "time.sleep(3600)\n"
     )
     proc = subprocess.Popen(
@@ -350,16 +380,28 @@ def test_timeout_with_stuck_drain_consumes_attempt_runtime(tmp_path):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=True,
+        pass_fds=(ready_w, holder_w),
     )
+    os.close(ready_w)
+    os.close(holder_w)
     pgid = os.getpgid(proc.pid)
     lim = SandboxLimits(
-        timeout_s=_TERM_GRACE_S,
+        timeout_s=TEST_WALL_TIMEOUT_S,
         memory_mb=64,
         max_output_bytes=1024,
-        reap_timeout_s=_TERM_GRACE_S,
-        output_drain_join_s=_TERM_GRACE_S,
+        reap_timeout_s=TEST_REAP_TIMEOUT_S,
+        output_drain_join_s=TEST_DRAIN_JOIN_S,
     )
+    holder_pid: int | None = None
     try:
+        # Holder must signal ready before watch starts (no fork race).
+        assert os.read(ready_r, 1) == b"R"
+        os.close(ready_r)
+        ready_r = -1
+        raw_pid = os.read(holder_r, 64)
+        os.close(holder_r)
+        holder_r = -1
+        holder_pid = int(raw_pid.decode())
         timed_out, overflow, out, err, kill_cause, _cpu, _tree, drain_failed = (
             _watch_process(proc, lim=lim, cgroup_leaf=None)
         )
@@ -382,13 +424,13 @@ def test_timeout_with_stuck_drain_consumes_attempt_runtime(tmp_path):
             work_dir=None,
             result_files={},
             kill_cause=kill_cause,
-            cpu_usage_s=0.0,
+            cpu_usage_s=None,
             timeout_s=float(lim.timeout_s),
             output_drain_failed=drain_failed,
         )
         assert result.status is SandboxStatus.TIMEOUT
+        assert result.reason == "wall_timeout"
         assert result.output_drain_failed is True
-        assert result.status not in INFRA_STATUSES
         raise_if_infra(
             result.status,
             result.reason,
@@ -397,19 +439,30 @@ def test_timeout_with_stuck_drain_consumes_attempt_runtime(tmp_path):
             note=result.note,
         )
     finally:
-        if holder_pid.is_file():
+        for fd in (ready_r, holder_r):
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        if holder_pid is not None:
             try:
-                os.kill(int(holder_pid.read_text().strip()), signal.SIGKILL)
-            except (ProcessLookupError, ValueError, OSError):
+                os.kill(holder_pid, signal.SIGKILL)
+            except ProcessLookupError:
                 pass
+            else:
+                # Not our child after setsid — poll until gone.
+                deadline = time.monotonic() + float(lim.reap_timeout_s)
+                while time.monotonic() < deadline:
+                    try:
+                        os.kill(holder_pid, 0)
+                    except ProcessLookupError:
+                        break
         try:
             os.killpg(pgid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        try:
-            proc.wait(timeout=float(lim.reap_timeout_s))
-        except Exception:  # noqa: BLE001
-            pass
+        proc.wait(timeout=float(lim.reap_timeout_s))
 
 
 @pytest.mark.parametrize(
@@ -419,29 +472,31 @@ def test_timeout_with_stuck_drain_consumes_attempt_runtime(tmp_path):
         ("reap_timeout_s", -1.0),
         ("reap_timeout_s", math.inf),
         ("reap_timeout_s", math.nan),
+        ("reap_timeout_s", True),
+        ("reap_timeout_s", "5"),
         ("output_drain_join_s", 0.0),
         ("output_drain_join_s", -1.0),
         ("output_drain_join_s", math.inf),
         ("output_drain_join_s", math.nan),
+        ("output_drain_join_s", True),
+        ("output_drain_join_s", "5"),
     ],
 )
-def test_sandbox_limits_rejects_non_positive_or_non_finite_host_budgets(
-    field: str, value: float
-):
-    with pytest.raises(ValueError, match=field):
+def test_sandbox_limits_rejects_bad_host_budgets(field: str, value: object):
+    with pytest.raises((TypeError, ValueError)):
         SandboxLimits(**{field: value})  # type: ignore[arg-type]
 
 
-def test_limits_from_check_passes_host_budgets():
+def test_limits_from_check_passes_host_budgets_or_dataclass_default():
     lim = sb.limits_from_check(
         timeout_s=1.0,
         memory_mb=64,
         max_output_bytes=1000,
-        reap_timeout_s=_TERM_GRACE_S,
-        output_drain_join_s=_TERM_GRACE_S,
+        reap_timeout_s=TEST_REAP_TIMEOUT_S,
+        output_drain_join_s=TEST_DRAIN_JOIN_S,
     )
-    assert lim.reap_timeout_s == _TERM_GRACE_S
-    assert lim.output_drain_join_s == _TERM_GRACE_S
+    assert lim.reap_timeout_s == TEST_REAP_TIMEOUT_S
+    assert lim.output_drain_join_s == TEST_DRAIN_JOIN_S
     defaults = sb.limits_from_check(
         timeout_s=None, memory_mb=None, max_output_bytes=None
     )

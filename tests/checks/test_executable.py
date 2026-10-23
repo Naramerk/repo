@@ -1702,6 +1702,90 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
 
 
 @pytest.mark.asyncio
+async def test_timeout_with_stuck_drain_charges_attempt(
+    tmp_path, clock, runtime_cls
+):
+    """Wall/CPU timeout + pipe-holding grandchild still charges (not infra)."""
+    _require_hard()
+    # Busy parent (not idle sleep) + setsid holder on stdout; host budgets explicit.
+    guest = (
+        "import os, time\n"
+        "if os.fork() == 0:\n"
+        "    os.setsid()\n"
+        "    time.sleep(3600)\n"
+        "    os._exit(0)\n"
+        "while True:\n"
+        "    pass\n"
+    )
+    cat = _catalog_with(
+        {
+            "id": "exec_busy_hold",
+            "title": "busy+hold",
+            "check": {
+                "kind": "exec_runs",
+                "argv": ["python3", "-c", guest],
+                "timeout_s": 2.0,
+                "memory_mb": 64,
+                "reap_timeout_s": 0.25,
+                "output_drain_join_s": 0.25,
+            },
+            "role": "validity",
+        }
+    )
+    sid = "st_sbx_drain_charge"
+    rt = await open_runtime(
+        tmp_path,
+        sid,
+        clock=clock,
+        owner="t1",
+        runtime_cls=runtime_cls,
+        catalog=cat,
+    )
+    rt.max_attempts = 2
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0-pr17",
+        deadline=clock.now() + timedelta(seconds=120),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    ex, arts = attach_executor(rt, tmp_path)
+    ex.catalog = cat
+    ex.max_attempts = 2
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E1",
+                title="run",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="exec_busy_hold")],
+            )
+        ]
+    )
+    aid = await rt.start_attempt("E1")
+    result = await ex.record(
+        aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
+    )
+    assert result.reason == TaskReason.SANDBOX_TIMEOUT.value
+    row = rt.results.get(aid)
+    assert row and row.get("result_class") == "timeout"
+    assert row.get("charged") is True
+    att = rt.attempts.get(aid) or {}
+    assert att.get("charged") is True
+    # Charged → second attempt still allowed under max_attempts=2.
+    clock.advance(timedelta(seconds=1))
+    aid2 = await rt.start_attempt("E1")
+    assert aid2 != aid
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
 async def test_infra_failure_does_not_charge_attempt(
     tmp_path, clock, runtime_cls, monkeypatch
 ):

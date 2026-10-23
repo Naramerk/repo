@@ -148,11 +148,9 @@ class SandboxLimits:
 
     def __post_init__(self) -> None:
         for name in ("reap_timeout_s", "output_drain_join_s"):
-            v = float(getattr(self, name))
-            if not math.isfinite(v) or v <= 0.0:
-                raise ValueError(
-                    f"SandboxLimits.{name} must be finite and > 0, got {v!r}"
-                )
+            object.__setattr__(
+                self, name, _require_positive_finite_seconds(name, getattr(self, name))
+            )
 
 
 @dataclass(frozen=True)
@@ -204,6 +202,18 @@ def _blocked(command_text: str, *, allow_network: bool) -> str | None:
         if first in _NET_TOOLS:
             return first
     return None
+
+
+def _require_positive_finite_seconds(name: str, value: object) -> float:
+    """Reject bool/str coercion; require a finite float ``> 0``."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(
+            f"{name} must be a real number, got {type(value).__name__}"
+        )
+    v = float(value)
+    if not math.isfinite(v) or v <= 0.0:
+        raise ValueError(f"{name} must be finite and > 0, got {value!r}")
+    return v
 
 
 def _kill_group_term_then_kill(
@@ -1339,26 +1349,27 @@ def limits_from_check(
     reap_timeout_s: float | None = None,
     output_drain_join_s: float | None = None,
 ) -> SandboxLimits:
-    return SandboxLimits(
-        timeout_s=float(timeout_s) if timeout_s is not None else DEFAULT_TIMEOUT_S,
-        memory_mb=int(memory_mb) if memory_mb is not None else DEFAULT_MEMORY_MB,
-        max_output_bytes=(
+    """Build limits. Omitted host budgets use ``SandboxLimits`` dataclass defaults."""
+    kwargs: dict[str, object] = {
+        "timeout_s": float(timeout_s) if timeout_s is not None else DEFAULT_TIMEOUT_S,
+        "memory_mb": int(memory_mb) if memory_mb is not None else DEFAULT_MEMORY_MB,
+        "max_output_bytes": (
             int(max_output_bytes)
             if max_output_bytes is not None
             else DEFAULT_MAX_OUTPUT_BYTES
         ),
-        allow_network=bool(allow_network),
-        reap_timeout_s=(
-            float(reap_timeout_s)
-            if reap_timeout_s is not None
-            else DEFAULT_REAP_TIMEOUT_S
-        ),
-        output_drain_join_s=(
-            float(output_drain_join_s)
-            if output_drain_join_s is not None
-            else DEFAULT_OUTPUT_DRAIN_JOIN_S
-        ),
-    )
+        "allow_network": bool(allow_network),
+    }
+    # Do not substitute DEFAULT_* here — omit so the dataclass default applies.
+    if reap_timeout_s is not None:
+        kwargs["reap_timeout_s"] = _require_positive_finite_seconds(
+            "reap_timeout_s", reap_timeout_s
+        )
+    if output_drain_join_s is not None:
+        kwargs["output_drain_join_s"] = _require_positive_finite_seconds(
+            "output_drain_join_s", output_drain_join_s
+        )
+    return SandboxLimits(**kwargs)  # type: ignore[arg-type]
 
 
 def read_core_output(work_dir: str | None, name: str) -> bytes | None:
