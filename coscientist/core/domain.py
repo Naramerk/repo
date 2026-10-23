@@ -266,6 +266,9 @@ class TaskSpec(Frozen):
     foreach: ForEachSpec | None = None
     # Bound hypothesis/question id after foreach materialization (None on template).
     foreach_item: str | None = None
+    # Sandbox limits frozen at plan/TaskCreated (retries cannot raise without replan).
+    sandbox_timeout_s: float | None = None
+    sandbox_memory_mb: int | None = None
 
 
 class Budget(Frozen):

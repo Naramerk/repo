@@ -124,8 +124,24 @@ def expansion_not_done_line(reason: str, detail: str) -> str:
         return "не выполнено: отказ критика"
     return "не выполнено: лимит расширений"  # quota / reserve / expansion_limit
 
+# Guest sandbox timeout exhaustion (PR17) — Russian report lines.
+TIMEOUT_BUDGET_RU = "не проверено в пределах бюджета"
+IDLE_TIMEOUT_RU = "не проверено: простой агента (подозрение на саботаж)"
+
+
+def sandbox_timeout_report_line(reason: str | None, detail: str | None = None) -> str | None:
+    """Russian line when a task closes after guest timeouts."""
+    r = str(reason or "")
+    d = str(detail or "")
+    if r == TaskReason.IDLE_TIMEOUT.value or "idle_timeout" in d:
+        return IDLE_TIMEOUT_RU
+    if r == TaskReason.SANDBOX_TIMEOUT.value or "timeout" in d:
+        return TIMEOUT_BUDGET_RU
+    return None
+
+
 def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
-    """TaskReason values + ExpansionRefused / foreach / quorum report lines."""
+    """TaskReason + ExpansionRefused / foreach / quorum / timeout lines (by seq)."""
     seen: list[str] = []
     for ev in sorted(events, key=lambda e: e.seq or 0):
         if ev.type == "TaskDone":
@@ -136,6 +152,12 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
                 except ValueError:
                     continue
                 seen.append(str(reason))
+                line = sandbox_timeout_report_line(
+                    str(reason),
+                    str(ev.payload.get("detail") or ""),
+                )
+                if line and line not in seen:
+                    seen.append(line)
             line = _TASKDONE_DETAIL_LINES.get(str(ev.payload.get("detail") or ""))
             if line and line not in seen:
                 seen.append(line)

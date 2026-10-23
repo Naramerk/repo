@@ -46,6 +46,7 @@ EventType = Literal[
     "LateWriteRejected",
     "CatalogErrorRaised",
     "SandboxInfraRaised",
+    "SameDigestRetryRejected",
     "LeaseAcquired",
     "ReviewScheduled",
     "ForkCreated",

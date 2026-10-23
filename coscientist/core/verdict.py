@@ -668,6 +668,12 @@ def recompute_effect_provenance(
         out["fs_isolation"] = fs_isolation
     if observation_only:
         out["observation_only"] = True
+    if out.get("timeout_kind"):
+        out["timeout_kind"] = str(out["timeout_kind"])
+        observation_only = True
+        out["observation_only"] = True
+    if out.get("refute_unresolved"):
+        out["refute_unresolved"] = True
     if producer == "core":
         out["trusted"] = out.get("trusted") is not False
     elif producer == "sandbox":
@@ -679,8 +685,8 @@ def recompute_effect_provenance(
     # Never fall back to core_eval alone with a missing call_id (that was the
     # legacy path that let unbound evidence count). Without attempt context
     # (unit derive), honor an explicitly stamped countable ∧ core_eval.
-    # Observation-only sandbox checks (tests_pass) never count toward k_ref/k_sup.
-    if observation_only:
+    # Observation-only / guest timeout never count toward k_ref/k_sup.
+    if observation_only or out.get("timeout_kind"):
         out["countable"] = False
     elif attempt_id:
         out["countable"] = bool(
@@ -1012,6 +1018,24 @@ def hypothesis_verdict(
     n_inc = len(inconsistent)
     n_con = len(consistent_severe)
 
+    def _timeout_kind(c: Any) -> str | None:
+        tk = getattr(c, "timeout_kind", None)
+        if tk:
+            return str(tk)
+        eff = getattr(c, "effect", None)
+        if isinstance(eff, dict) and eff.get("timeout_kind"):
+            return str(eff["timeout_kind"])
+        return None
+
+    def _refute_unresolved(c: Any) -> bool:
+        if getattr(c, "refute_unresolved", False):
+            return True
+        eff = getattr(c, "effect", None)
+        return bool(isinstance(eff, dict) and eff.get("refute_unresolved"))
+
+    unresolved = [c for c in about if _refute_unresolved(c)]
+    idle_unresolved = any(_timeout_kind(c) == "idle_timeout" for c in unresolved)
+
     if n_inc >= k_ref and refutation_priority:
         return "refuted", False, "k_ref"
     if n_inc >= k_ref and not refutation_priority:
@@ -1020,10 +1044,21 @@ def hypothesis_verdict(
         return "refuted", False, "k_ref"
     if n_inc > 0:
         return "inconclusive", False, "inc_below_k_ref"
+    # Guest timeout on a refute-role check hard-blocks supported (never k_sup).
+    if unresolved and idle_unresolved:
+        return "untestable_by_agent", False, "idle_timeout"
     if n_con >= k_sup and any(refute_intent_counts(c) for c in consistent_severe):
+        if unresolved:
+            return "inconclusive", False, "refute_unresolved"
         return "supported", False, "support_min"
     if n_con >= 1:
+        if unresolved and idle_unresolved:
+            return "untestable_by_agent", False, "idle_timeout"
         return "survived", False, "single_severe"
+    if unresolved and idle_unresolved:
+        return "untestable_by_agent", False, "idle_timeout"
+    if unresolved:
+        return "inconclusive", False, "refute_unresolved"
     if counted:
         return "inconclusive", False, "no_counted"
     if any(effective_validity(c) == "invalid" for c in about):

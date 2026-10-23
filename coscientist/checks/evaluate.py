@@ -631,7 +631,13 @@ def evaluate_task_checks(
                 )
             )
             continue
-        if isinstance(tmpl.check, ReviewCheck):
+        if isinstance(tmpl.check, CodeCheck):
+            from coscientist.checks.sandbox_limits import apply_frozen_limits
+
+            check = apply_frozen_limits(tmpl.check, spec)
+        else:
+            check = tmpl.check
+        if isinstance(check, ReviewCheck):
             st = review_statuses.get(cid, ReqStatus.UNASSESSED)
             results.append(
                 CheckResult(
@@ -641,12 +647,12 @@ def evaluate_task_checks(
                     is_code=False,
                     required=ref.required and tmpl.required,
                     role=role,
-                    detail=tmpl.check.question,
+                    detail=check.question,
                 )
             )
         else:
             cr = evaluate_code_check(
-                tmpl.check,
+                check,  # type: ignore[arg-type]  # CodeCheck after ReviewCheck branch
                 template_id=tmpl.id,
                 check_id=cid,
                 out=out,

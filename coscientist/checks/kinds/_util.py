@@ -176,10 +176,16 @@ def sandbox_effect(
     extra: dict[str, Any] | None = None,
     countable: bool | None = None,
     observation_only: bool = False,
+    timeout_kind: str | None = None,
+    refute_unresolved: bool = False,
 ) -> dict[str, Any]:
-    """Stamp sandbox provenance. ``observation_only`` → never countable (tests_pass)."""
+    """Stamp sandbox provenance.
+
+    ``observation_only`` / guest ``timeout_kind`` → never countable.
+    ``refute_unresolved`` marks a refute-role check closed by timeout.
+    """
     call = f"{attempt_id or 'noattempt'}:sandbox:{check_id}"
-    if observation_only:
+    if observation_only or timeout_kind:
         countable_flag = False
     elif countable is None:
         countable_flag = bool(attempt_id)
@@ -195,8 +201,12 @@ def sandbox_effect(
         "produced_by_call_id": call,
         "artifact_id": art_id,
     }
-    if observation_only:
+    if observation_only or timeout_kind:
         effect["observation_only"] = True
+    if timeout_kind:
+        effect["timeout_kind"] = str(timeout_kind)
+    if refute_unresolved:
+        effect["refute_unresolved"] = True
     if note:
         effect["note"] = note
     if extra:
@@ -211,6 +221,8 @@ def sandbox_effect(
             "net_isolation",
             "fs_isolation",
             "observation_only",
+            "timeout_kind",
+            "refute_unresolved",
         }
         for k, v in extra.items():
             if k in blocked:
@@ -219,6 +231,67 @@ def sandbox_effect(
                 continue
             effect[k] = v
     return effect
+
+
+def check_is_guest_timeout(check: Any) -> bool:
+    """True when CheckResult.effect carries a host-classified guest timeout."""
+    from coscientist.checks.sandbox import TIMEOUT_KINDS
+
+    effect = getattr(check, "effect", None)
+    if not isinstance(effect, dict):
+        return False
+    kind = effect.get("timeout_kind") or effect.get("reason")
+    return kind in TIMEOUT_KINDS
+
+
+def guest_timeout_result(
+    *,
+    check_id: str,
+    template_id: str,
+    role: CheckRole,
+    attempt_id: str | None,
+    result: Any,
+    evidence: list[EvidenceRef] | None = None,
+) -> CheckResult | None:
+    """If ``result`` is a guest timeout, return a non-countable CheckResult."""
+    from coscientist.checks.sandbox import SandboxStatus
+
+    if getattr(result, "status", None) is not SandboxStatus.TIMEOUT:
+        return None
+    kind = str(getattr(result, "reason", "") or "wall_timeout")
+    note = merge_detail(
+        soft_note(
+            getattr(result, "net_isolation", "none"),
+            getattr(result, "fs_isolation", "none"),
+        ),
+        getattr(result, "note", None),
+    )
+    art_id = ""
+    digest = ""
+    # Caller may have already stored a log; keep evidence only.
+    return base_result(
+        check_id=check_id,
+        template_id=template_id,
+        role=role,
+        ok=False,
+        evidence=list(evidence or []),
+        detail=merge_detail(kind, note),
+        effect=sandbox_effect(
+            attempt_id=attempt_id,
+            check_id=check_id,
+            art_id=art_id or f"timeout:{check_id}",
+            trusted=False,
+            net_isolation=getattr(result, "net_isolation", "none"),
+            fs_isolation=getattr(result, "fs_isolation", "none"),
+            note=note,
+            timeout_kind=kind,
+            refute_unresolved=(role == "prediction"),
+            extra={
+                "cpu_usage_s": getattr(result, "cpu_usage_s", None),
+                "wall_s": getattr(result, "duration_s", None),
+            },
+        ),
+    )
 
 
 def merge_numeric_extra(

@@ -394,12 +394,15 @@ class LifecycleMixin:
                 )
             )
         effective = self.study.effective_deadline()
+        from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
+
         for spec in tasks:
-            tid = task_id(sid, spec.task_key)
+            frozen_spec = freeze_task_sandbox_limits(spec, catalog)
+            tid = task_id(sid, frozen_spec.task_key)
             task = Task(
                 task_id=tid,
                 kind=TaskKind.EXPERIMENT,
-                spec=spec,
+                spec=frozen_spec,
                 state=TaskState.PENDING,
                 deadline=effective,
             )

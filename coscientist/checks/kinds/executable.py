@@ -22,6 +22,7 @@ from coscientist.checks.kinds._util import (
     MALFORMED_REWARD,
     base_result,
     cmp,
+    guest_timeout_result,
     merge_detail,
     merge_numeric_extra,
     parse_junit,
@@ -236,8 +237,35 @@ def evaluate_exec_runs(
         fs_isolation=result.fs_isolation,
     )
     note = result.note or soft_note(result.net_isolation, result.fs_isolation)
-    # Guest-caused: output flood or timeout (wall / CPU budget) — scientific not_met.
-    if result.status in (SandboxStatus.OUTPUT_EXCEEDED, SandboxStatus.TIMEOUT):
+    # Guest timeout: never countable; classified host-side (idle/cpu/wall).
+    if result.status is SandboxStatus.TIMEOUT:
+        kind = result.reason if result.is_guest_timeout else "wall_timeout"
+        refute_unresolved = role == "prediction"
+        return base_result(
+            check_id=check_id,
+            template_id=template_id,
+            role=role,
+            ok=False,
+            evidence=[EvidenceRef(artifact_id=art_id, digest=digest)],
+            detail=merge_detail(kind, note),
+            effect=sandbox_effect(
+                attempt_id=attempt_id,
+                check_id=check_id,
+                art_id=art_id,
+                trusted=False,
+                net_isolation=result.net_isolation,
+                fs_isolation=result.fs_isolation,
+                note=note,
+                timeout_kind=kind,
+                refute_unresolved=refute_unresolved,
+                extra={
+                    "cpu_usage_s": result.cpu_usage_s,
+                    "wall_s": result.duration_s,
+                },
+            ),
+        )
+    # Guest-caused output flood — scientific not_met (still countable when bound).
+    if result.status is SandboxStatus.OUTPUT_EXCEEDED:
         return base_result(
             check_id=check_id,
             template_id=template_id,
@@ -413,6 +441,16 @@ def evaluate_tests_pass(
         fs_isolation=result.fs_isolation,
         note=result.note,
     )
+    timed = guest_timeout_result(
+        check_id=check_id,
+        template_id=template_id,
+        role=role,
+        attempt_id=attempt_id,
+        result=result,
+        evidence=ev,
+    )
+    if timed is not None:
+        return timed
     note = merge_detail(
         result.note or soft_note(result.net_isolation, result.fs_isolation),
         _TESTS_PASS_NOTE,
@@ -642,6 +680,18 @@ def evaluate_metric_on_holdout(
         fs_isolation=result.fs_isolation,
         note=result.note,
     )
+    timed = guest_timeout_result(
+        check_id=check_id,
+        template_id=template_id,
+        role=role,
+        attempt_id=attempt_id,
+        result=result,
+        evidence=[
+            EvidenceRef(artifact_id=predictions.artifact_id, digest=p_meta.sha256),
+        ],
+    )
+    if timed is not None:
+        return timed
     note = result.note or soft_note(result.net_isolation, result.fs_isolation)
 
     left: Any = None

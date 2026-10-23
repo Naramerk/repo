@@ -121,6 +121,9 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                     "task_id": d["task_id"],
                     "study_id": d["study_id"],
                     "inputs": list(d.get("inputs") or []),
+                    "agent_output_digest": d.get("agent_output_digest"),
+                    "charged": d.get("charged", True),
+                    "n": d.get("n"),
                 },
             )()
 
@@ -135,6 +138,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             review_statuses=review_statuses,
             get_graph=lambda: self.graph,
             get_results=lambda: self.results,
+            max_attempts=self.max_attempts,
         )
         self.artifacts = artifacts
         self.catalog = catalog

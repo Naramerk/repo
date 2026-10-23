@@ -8,7 +8,7 @@ from datetime import timedelta
 import pytest
 
 from coscientist.checks.catalog import load_catalog
-from coscientist.checks.evaluate import evaluate_code_check
+from coscientist.checks.evaluate import evaluate_code_check, evaluate_task_checks
 from coscientist.checks.kinds.executable import (
     REWARD_SCHEMA,
     agent_filename_allowed,
@@ -207,35 +207,38 @@ def test_sandbox_allow_network_runs_but_not_trusted(tmp_path):
     assert cr.effect.get("trusted") is False
 
 
-def test_sandbox_sleep_bypass_is_scientific_timeout():
-    """Guest sleep past wall → scientific timeout (counts; not infra escape)."""
+def test_sandbox_sleep_bypass_is_idle_timeout():
+    """Guest sleep past wall → idle_timeout (low cpu/wall; not infra escape)."""
     _require_hard()
     r = run_sandbox(
         ["python3", "-c", "import time; time.sleep(1e9)"],
         limits=SandboxLimits(timeout_s=0.3, memory_mb=64, max_output_bytes=10_000),
     )
     assert r.status is SandboxStatus.TIMEOUT
-    assert r.reason == "timeout"
+    assert r.reason == "idle_timeout"
+    assert r.is_guest_timeout
     assert r.status not in INFRA_STATUSES
 
 
-def test_sandbox_busy_loop_is_scientific_timeout():
-    """Busy loop hits CPU budget / RLIMIT → scientific timeout."""
+def test_sandbox_busy_loop_is_cpu_or_wall_timeout():
+    """Busy loop hits CPU budget / RLIMIT → cpu_timeout (or wall if cpu.stat thin)."""
     _require_hard()
     r = run_sandbox(
         ["python3", "-c", "while True: pass"],
         limits=SandboxLimits(timeout_s=3.0, memory_mb=64, max_output_bytes=10_000),
     )
     assert r.status is SandboxStatus.TIMEOUT
-    assert r.reason == "timeout"
+    assert r.reason in ("cpu_timeout", "wall_timeout")
+    assert r.reason != "idle_timeout"
+    assert r.is_guest_timeout
     assert r.status not in INFRA_STATUSES
 
 
-def test_sandbox_fork_cpu_spread_is_scientific_timeout():
-    """CPU spread across child processes still bounded (cgroup tree) → timeout."""
+def test_sandbox_fork_cpu_spread_is_busy_timeout():
+    """CPU spread across child processes still bounded (cgroup tree) → busy timeout."""
     _require_hard()
     # Fork several busy children so per-process RLIMIT alone would not catch them
-    # before wall; tree-wide cpu.stat / wall must still yield scientific timeout.
+    # before wall; tree-wide cpu.stat / wall must still yield a busy timeout.
     attack = r"""
 import os, sys
 kids = []
@@ -253,7 +256,8 @@ while True:
         limits=SandboxLimits(timeout_s=2.0, memory_mb=64, max_output_bytes=10_000),
     )
     assert r.status is SandboxStatus.TIMEOUT
-    assert r.reason == "timeout"
+    assert r.reason in ("cpu_timeout", "wall_timeout")
+    assert r.reason != "idle_timeout"
     assert r.status not in INFRA_STATUSES
 
 
@@ -1306,3 +1310,455 @@ def test_agent_facing_view_never_includes_holdout_or_scorer():
     assert "holdout" not in req_dump
     assert "check" not in req_dump
     assert "LABELS" not in json.dumps(req_dump)
+
+
+def test_classify_guest_timeout_idle_vs_busy():
+    from coscientist.checks.sandbox import classify_guest_timeout
+
+    assert (
+        classify_guest_timeout(
+            kill_cause="wall", duration_s=1.0, cpu_usage_s=0.01
+        )
+        == "idle_timeout"
+    )
+    assert (
+        classify_guest_timeout(
+            kill_cause="cpu", duration_s=1.0, cpu_usage_s=0.9
+        )
+        == "cpu_timeout"
+    )
+    assert (
+        classify_guest_timeout(
+            kill_cause="wall", duration_s=1.0, cpu_usage_s=0.5
+        )
+        == "wall_timeout"
+    )
+
+
+def test_refute_timeout_hard_blocks_supported():
+    """Sleep/idle refute-role timeout → supported unreachable (refute_unresolved)."""
+    from coscientist.core.claims import RuntimeClaim
+    from coscientist.core.verdict import hypothesis_verdict
+
+    def severe(**kw):
+        base = dict(
+            criterion_status="met",
+            accepted=True,
+            provenance="real",
+            frozen=True,
+            evidence_kind="computational",
+            attempt_id="A1#1",
+            artifact_id="Art1",
+            validity_ok=True,
+            check_role="prediction",
+            claim_outcome="consistent",
+            severe=True,
+            independence_key="k1",
+            experiment_id="A1",
+            intent="confirm",
+            sesoi=0.5,
+            uses_sesoi=True,
+            used_sesoi=True,
+            predicts_null=False,
+            predicted_direction="positive",
+            effect={
+                "est": 1.5,
+                "ci_low": 1.5,
+                "ci_high": 1.5,
+                "producer": "sandbox",
+                "trusted": False,
+                "core_evaluated": True,
+                "countable": True,
+                "produced_by_call_id": "A1#1:1",
+            },
+            refute_capable=True,
+        )
+        base.update(kw)
+        return RuntimeClaim(**base)  # type: ignore[arg-type]
+
+    a = severe(
+        independence_key="k1",
+        attempt_id="A1#1",
+        experiment_id="A1",
+        intent="refute",
+    )
+    b = severe(
+        independence_key="k2",
+        attempt_id="A2#1",
+        experiment_id="A2",
+        artifact_id="Art2",
+        intent="confirm",
+        effect={
+            "est": 1.5,
+            "ci_low": 1.5,
+            "ci_high": 1.5,
+            "producer": "sandbox",
+            "trusted": False,
+            "core_evaluated": True,
+            "countable": True,
+            "produced_by_call_id": "A2#1:1",
+        },
+    )
+    assert hypothesis_verdict([a, b], True, supported_needed=2)[0] == "supported"
+
+    timeout = severe(
+        independence_key="k3",
+        attempt_id="A3#1",
+        experiment_id="A3",
+        artifact_id="Art3",
+        claim_outcome="indeterminate",
+        severe=False,
+        refute_capable=False,
+        refute_unresolved=True,
+        timeout_kind="idle_timeout",
+        effect={
+            "est": None,
+            "producer": "sandbox",
+            "trusted": False,
+            "core_evaluated": True,
+            "countable": False,
+            "observation_only": True,
+            "timeout_kind": "idle_timeout",
+            "refute_unresolved": True,
+            "produced_by_call_id": "A3#1:sandbox:pred",
+        },
+    )
+    v, _, rule = hypothesis_verdict(
+        [a, b, timeout], True, supported_needed=2
+    )
+    assert v != "supported"
+    assert v == "untestable_by_agent"
+    assert rule == "idle_timeout"
+
+    wall = severe(
+        independence_key="k3",
+        attempt_id="A3#1",
+        experiment_id="A3",
+        artifact_id="Art3",
+        claim_outcome="indeterminate",
+        severe=False,
+        refute_capable=False,
+        refute_unresolved=True,
+        timeout_kind="wall_timeout",
+        effect={
+            "countable": False,
+            "observation_only": True,
+            "timeout_kind": "wall_timeout",
+            "refute_unresolved": True,
+            "core_evaluated": True,
+            "producer": "sandbox",
+            "produced_by_call_id": "A3#1:sandbox:pred",
+        },
+    )
+    v2, _, rule2 = hypothesis_verdict([a, b, wall], True, supported_needed=2)
+    assert v2 != "supported"
+    assert v2 == "inconclusive"
+    assert rule2 == "refute_unresolved"
+
+
+@pytest.mark.asyncio
+async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_cls):
+    """Exhausted guest timeouts → TaskDone + StudyFinalized with Russian line."""
+    _require_hard()
+    cat = _catalog_with(
+        {
+            "id": "exec_sleep",
+            "title": "sleep",
+            "check": {
+                "kind": "exec_runs",
+                "argv": ["python3", "-c", "import time; time.sleep(1e9)"],
+                "timeout_s": 0.25,
+                "memory_mb": 64,
+            },
+            "role": "validity",
+        }
+    )
+    sid = "st_sbx_to_budget"
+    rt = await open_runtime(
+        tmp_path,
+        sid,
+        clock=clock,
+        owner="t1",
+        runtime_cls=runtime_cls,
+        catalog=cat,
+    )
+    rt.max_attempts = 2
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0-pr17",
+        deadline=clock.now() + timedelta(seconds=120),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    ex, arts = attach_executor(rt, tmp_path)
+    ex.catalog = cat
+    ex.max_attempts = 2
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E1",
+                title="run",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="exec_sleep")],
+            )
+        ]
+    )
+    from coscientist.core.finalize import IDLE_TIMEOUT_RU, TIMEOUT_BUDGET_RU
+
+    for _ in range(2):
+        aid = await rt.start_attempt("E1")
+        result = await ex.record(
+            aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
+        )
+        assert result.reason in (
+            TaskReason.IDLE_TIMEOUT.value,
+            TaskReason.SANDBOX_TIMEOUT.value,
+        )
+        row = rt.results.get(aid)
+        assert row and row.get("result_class") == "timeout"
+        assert row.get("charged") is True
+        clock.advance(timedelta(seconds=1))
+        await rt.tick()
+
+    task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
+    assert task.state.value == "DONE" or str(task.state) == "DONE"
+    await record_success(rt, await rt.start_attempt("REPORT"), arts)
+    for _ in range(12):
+        if getattr(rt, "_finalized", False):
+            break
+        await rt.tick()
+        clock.advance(timedelta(seconds=5))
+    assert getattr(rt, "_finalized", False)
+    events = await rt.store.read_all()
+    fin = next(e for e in events if e.type == "StudyFinalized")
+    contrib = fin.payload.get("contributing_reasons") or []
+    assert any(
+        x in contrib
+        for x in (
+            TaskReason.IDLE_TIMEOUT.value,
+            TaskReason.SANDBOX_TIMEOUT.value,
+            IDLE_TIMEOUT_RU,
+            TIMEOUT_BUDGET_RU,
+        )
+    )
+    assert IDLE_TIMEOUT_RU in contrib or TIMEOUT_BUDGET_RU in contrib
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_infra_failure_does_not_charge_attempt(
+    tmp_path, clock, runtime_cls, monkeypatch
+):
+    """Transient attach infra → charged=False; next attempt still within budget."""
+    from coscientist.core.errors import SandboxInfraError
+
+    cat = _catalog_with(
+        {
+            "id": "exec_ok",
+            "title": "exec",
+            "check": {
+                "kind": "exec_runs",
+                "argv": ["/bin/true"],
+                "timeout_s": 5,
+                "memory_mb": 64,
+            },
+            "role": "validity",
+        }
+    )
+    sid = "st_sbx_infra_nchg"
+    rt = await open_runtime(
+        tmp_path,
+        sid,
+        clock=clock,
+        owner="t1",
+        runtime_cls=runtime_cls,
+        catalog=cat,
+    )
+    rt.max_attempts = 2
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0-pr17",
+        deadline=clock.now() + timedelta(seconds=120),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    ex, arts = attach_executor(rt, tmp_path)
+    ex.catalog = cat
+    ex.max_attempts = 2
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E1",
+                title="run",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="exec_ok")],
+            )
+        ]
+    )
+    aid = await rt.start_attempt("E1")
+    calls = {"n": 0}
+    real_eval = evaluate_task_checks
+
+    def boom(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise SandboxInfraError("sandbox_unavailable:cgroup_attach")
+        return real_eval(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "coscientist.core.executor.evaluate_task_checks", boom
+    )
+    result = await ex.record(
+        aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
+    )
+    assert result.reason == TaskReason.SANDBOX_INFRA.value
+    row = rt.results.get(aid)
+    assert row and row.get("result_class") == "infra"
+    assert row.get("charged") is False
+    att = rt.attempts.get(aid) or {}
+    assert att.get("charged") is False
+    # Uncharged → charged budget still allows a real attempt (max_attempts=2).
+    clock.advance(timedelta(seconds=1))
+    await rt.tick()
+    aid2 = await rt.start_attempt("E1")
+    assert aid2 != aid
+    # Second attempt can succeed (hard path) without the infra counting.
+    if bwrap_available() and probe_bwrap_hard(allow_network=False):
+        r2 = await ex.record(
+            aid2, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
+        )
+        assert r2.outcome is Outcome.SUCCESS
+        assert rt.results[aid2].get("charged") is True
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
+    """Retry with the same artifact digest as a timed-out attempt is rejected."""
+    _require_hard()
+    cat = _catalog_with(
+        {
+            "id": "exec_sleep",
+            "title": "sleep",
+            "check": {
+                "kind": "exec_runs",
+                "argv": ["python3", "-c", "import time; time.sleep(1e9)"],
+                "timeout_s": 0.25,
+                "memory_mb": 64,
+            },
+            "role": "validity",
+        }
+    )
+    sid = "st_sbx_same_dig"
+    rt = await open_runtime(
+        tmp_path,
+        sid,
+        clock=clock,
+        owner="t1",
+        runtime_cls=runtime_cls,
+        catalog=cat,
+    )
+    rt.max_attempts = 3
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0-pr17",
+        deadline=clock.now() + timedelta(seconds=120),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    ex, arts = attach_executor(rt, tmp_path)
+    ex.catalog = cat
+    ex.max_attempts = 3
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E1",
+                title="run",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="exec_sleep")],
+            )
+        ]
+    )
+    empty = AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
+    aid1 = await rt.start_attempt("E1")
+    r1 = await ex.record(aid1, empty)
+    assert r1.reason in (
+        TaskReason.IDLE_TIMEOUT.value,
+        TaskReason.SANDBOX_TIMEOUT.value,
+    )
+    clock.advance(timedelta(seconds=1))
+    await rt.tick()
+    aid2 = await rt.start_attempt("E1")
+    r2 = await ex.record(aid2, empty)
+    assert r2.reason == TaskReason.SAME_DIGEST_RETRY.value
+    row2 = rt.results.get(aid2)
+    assert row2 and row2.get("result_class") == "timeout"
+    assert row2.get("charged") is True
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls):
+    cat = _catalog_with(
+        {
+            "id": "exec_ok",
+            "title": "exec",
+            "check": {
+                "kind": "exec_runs",
+                "argv": ["/bin/true"],
+                "timeout_s": 7.5,
+                "memory_mb": 128,
+            },
+            "role": "validity",
+        }
+    )
+    sid = "st_sbx_freeze"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0-pr17",
+        deadline=clock.now() + timedelta(seconds=120),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    attach_executor(rt, tmp_path)
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E1",
+                title="run",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="exec_ok")],
+            )
+        ]
+    )
+    task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
+    assert task.spec.sandbox_timeout_s == 7.5
+    assert task.spec.sandbox_memory_mb == 128
+    await close_runtime(rt)

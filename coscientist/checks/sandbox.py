@@ -14,9 +14,12 @@ Fail-closed: without verified hard FS isolation (real bwrap probe), do **not**
 execute guest code — return ``sandbox_unavailable``. ``trusted`` requires both
 net and fs hard. Infra **only** via the private FD channel (wrapper rlimit
 failure, cgroup attach failure, bwrap/launcher host errors) plus blocked /
-unavailable / verified cgroup OOM. Guest wall or CPU budget exhaustion is
-**scientific** ``timeout`` (counts). Cgroup ``cpu.max`` + ``cpu.stat`` bound the
-whole tree; CPU budget always strictly below wall. Seccomp → M2.
+unavailable / verified cgroup OOM — does **not** charge the retry budget.
+Guest wall or CPU budget exhaustion is host-classified
+(``idle_timeout`` / ``cpu_timeout`` / ``wall_timeout``): never countable toward
+``k_ref``/``k_sup``; refute-role idle/timeout → ``refute_unresolved`` (hard-blocks
+``supported``); idle → ``untestable_by_agent``. Cgroup ``cpu.max`` + ``cpu.stat``
+bound the whole tree; CPU budget always strictly below wall. Seccomp → M2.
 """
 
 from __future__ import annotations
@@ -70,7 +73,7 @@ class SandboxStatus(StrEnum):
 
 
 # Infra: private-FD channel / blocked / unavailable / verified cgroup OOM.
-# Guest wall or CPU-budget kill → scientific TIMEOUT (reason ``timeout``).
+# Guest wall/CPU kill → TIMEOUT with host-classified reason (not countable).
 INFRA_STATUSES = frozenset(
     {
         SandboxStatus.OOM,
@@ -83,6 +86,9 @@ DEFAULT_TIMEOUT_S = 30.0
 DEFAULT_MEMORY_MB = 256
 DEFAULT_MAX_OUTPUT_BYTES = 1_000_000
 _TERM_GRACE_S = 0.5
+# Host-side idle detection: cpu_usage/wall below this → idle_timeout (sabotage).
+IDLE_CPU_WALL_RATIO = 0.05
+TIMEOUT_KINDS = frozenset({"idle_timeout", "cpu_timeout", "wall_timeout"})
 
 _BLOCKED_PATTERNS = (
     "rm --no-preserve-root",
@@ -145,10 +151,18 @@ class SandboxResult:
     result_files: dict[str, bytes] = field(default_factory=dict)
     oom_detectable: bool = False
     note: str | None = None
+    # Host-measured CPU seconds for the cgroup tree (None if unavailable).
+    cpu_usage_s: float | None = None
+    # wall | cpu — which host budget tripped (None if not a timeout).
+    timeout_kill: str | None = None
 
     @property
     def limits_fully_held(self) -> bool:
         return isolation_fully_hard(self.net_isolation, self.fs_isolation)
+
+    @property
+    def is_guest_timeout(self) -> bool:
+        return self.status is SandboxStatus.TIMEOUT and self.reason in TIMEOUT_KINDS
 
 
 def limits_fully_held(
@@ -501,11 +515,10 @@ def _watch_process(
     *,
     lim: SandboxLimits,
     cgroup_leaf: Path | None = None,
-) -> tuple[bool, bool, bytes, bytes]:
-    """Return (timed_out, overflow, stdout, stderr).
+) -> tuple[bool, bool, bytes, bytes, str | None, float | None]:
+    """Return (timed_out, overflow, stdout, stderr, kill_cause, cpu_usage_s).
 
-    ``timed_out`` covers wall-clock **or** tree-wide CPU budget (cpu.stat).
-    Both are scientific guest timeouts.
+    ``kill_cause`` is ``wall`` or ``cpu`` when the host budget tripped.
     """
     out_sink: list[bytes] = []
     err_sink: list[bytes] = []
@@ -521,33 +534,61 @@ def _watch_process(
         daemon=True,
     ).start()
     timed_out = False
+    kill_cause: str | None = None
     started = time.monotonic()
     deadline = started + float(lim.timeout_s)
     cpu_budget_usec = int(_cpu_budget_seconds(lim.timeout_s) * 1_000_000)
+    last_usage: int | None = None
     while proc.poll() is None:
         if overflow[0]:
             _kill_group_term_then_kill(proc)
             break
         if time.monotonic() >= deadline:
             timed_out = True
+            kill_cause = "wall"
             _kill_group_term_then_kill(proc)
             break
         usage = _cgroup_cpu_usage_usec(cgroup_leaf)
-        if usage is not None and usage >= cpu_budget_usec:
-            timed_out = True
-            _kill_group_term_then_kill(proc)
-            break
+        if usage is not None:
+            last_usage = usage
+            if usage >= cpu_budget_usec:
+                timed_out = True
+                kill_cause = "cpu"
+                _kill_group_term_then_kill(proc)
+                break
         time.sleep(0.02)
     try:
         proc.wait(timeout=5)
     except Exception:  # noqa: BLE001
         pass
+    if last_usage is None:
+        last_usage = _cgroup_cpu_usage_usec(cgroup_leaf)
+    cpu_s = (last_usage / 1_000_000.0) if last_usage is not None else None
     return (
         timed_out,
         overflow[0],
         out_sink[0] if out_sink else b"",
         err_sink[0] if err_sink else b"",
+        kill_cause,
+        cpu_s,
     )
+
+
+def classify_guest_timeout(
+    *,
+    kill_cause: str | None,
+    duration_s: float,
+    cpu_usage_s: float | None,
+    idle_ratio: float = IDLE_CPU_WALL_RATIO,
+) -> str:
+    """Host-only classification: idle_timeout | cpu_timeout | wall_timeout."""
+    if kill_cause == "cpu":
+        return "cpu_timeout"
+    wall = max(float(duration_s), 1e-6)
+    cpu = float(cpu_usage_s) if cpu_usage_s is not None else 0.0
+    if (cpu / wall) < float(idle_ratio):
+        return "idle_timeout"
+    return "wall_timeout"
 
 
 def _classify(
@@ -565,6 +606,8 @@ def _classify(
     fs_i: Isolation,
     work_dir: str | None,
     result_files: dict[str, bytes],
+    kill_cause: str | None = None,
+    cpu_usage_s: float | None = None,
 ) -> SandboxResult:
     note = soft_isolation_note(net_i, fs_i)
     if not oom_detectable:
@@ -581,6 +624,8 @@ def _classify(
             result_files=result_files,
             oom_detectable=oom_detectable,
             note=note,
+            cpu_usage_s=cpu_usage_s,
+            timeout_kill=kill_cause if timed_out else None,
             **extra,
         )
 
@@ -599,26 +644,29 @@ def _classify(
             exit_code=proc.returncode,
             reason="output_exceeded",
         )
+    code = proc.returncode if proc.returncode is not None else -1
+    # SIGXCPU from RLIMIT → cpu kill even if watcher missed the budget edge.
+    if code in (-int(signal.SIGXCPU), 128 + int(signal.SIGXCPU)):
+        timed_out = True
+        kill_cause = "cpu"
     if timed_out:
-        # Guest wall or tree-wide CPU budget — scientific not_met (counts).
+        # Guest timeout is NOT countable evidence — classified host-side only.
+        kind = classify_guest_timeout(
+            kill_cause=kill_cause,
+            duration_s=duration,
+            cpu_usage_s=cpu_usage_s,
+        )
         return fin(
             status=SandboxStatus.TIMEOUT,
-            exit_code=-1,
-            reason="timeout",
+            exit_code=-1 if kill_cause == "wall" else code,
+            reason=kind,
+            timeout_kill=kill_cause or ("cpu" if kind == "cpu_timeout" else "wall"),
         )
     if _cgroup_oom_killed(cgroup_leaf):
         return fin(
             status=SandboxStatus.OOM,
             exit_code=proc.returncode,
             reason="sandbox_oom",
-        )
-    code = proc.returncode if proc.returncode is not None else -1
-    # Per-process RLIMIT_CPU / SIGXCPU — scientific timeout (same as wall).
-    if code in (-int(signal.SIGXCPU), 128 + int(signal.SIGXCPU)):
-        return fin(
-            status=SandboxStatus.TIMEOUT,
-            exit_code=code,
-            reason="timeout",
         )
     # Guest signals / nonzero exits (including forged 75) are scientific.
     if code == 0:
@@ -768,7 +816,7 @@ def _run_jailed(
         if oom_frag:
             note = f"{note}; {oom_frag}" if note else oom_frag
 
-        timed_out, overflow, out_b, err_b = _watch_process(
+        timed_out, overflow, out_b, err_b, kill_cause, cpu_s = _watch_process(
             proc, lim=lim, cgroup_leaf=leaf if oom_det else None
         )
         infra_msg = b""
@@ -802,6 +850,8 @@ def _run_jailed(
             fs_i=fs_i,
             work_dir=work_dir,
             result_files=files,
+            kill_cause=kill_cause,
+            cpu_usage_s=cpu_s,
         )
     finally:
         _cgroup_remove_leaf(leaf)
