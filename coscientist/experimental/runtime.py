@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from coscientist.core.domain import HitlRequest, TaskState
+from coscientist.core.domain import HitlRequest
 from coscientist.core.events import EventEnvelope
 from coscientist.core.machine import StudyRuntime as CoreStudyRuntime
 from coscientist.core.study_view import study_view
@@ -70,25 +70,18 @@ class StudyRuntime(CoreStudyRuntime, HitlForkMixin):
 
     def view(self):
         open_hitl = sum(1 for h in self.hitl.values() if h.open)
-        sim = sum(
-            1
-            for t in self.tasks.values()
-            if t.state == TaskState.DONE
-            and any(
-                self.attempts.get(a, {}).get("provenance", "real") != "real"
-                for a in t.attempts
-            )
+        return study_view(
+            self.tasks.values(), open_hitl=open_hitl, attempts=self.attempts
         )
-        return study_view(self.tasks.values(), open_hitl=open_hitl, simulated_done=sim)
 
     def invariant_deadlines(self) -> bool:
         if not super().invariant_deadlines():
             return False
         if self.study is None:
             return True
-        sd = self.study.deadline
+        ed = self.study.effective_deadline()
         for h in self.hitl.values():
-            if h.deadline > sd:
+            if h.deadline > ed:
                 return False
         return True
 

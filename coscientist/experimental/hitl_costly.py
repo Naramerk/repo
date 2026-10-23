@@ -25,7 +25,9 @@ class CostlyHitlMixin:
     async def _append(self, events: list[EventEnvelope]) -> None:
         raise NotImplementedError
 
-    async def cancel_task(self, task_key_or_id: str, reason: str = "cancelled") -> None:
+    async def cancel_task(
+        self, task_key_or_id: str, reason: str = "cancelled"
+    ) -> None:
         raise NotImplementedError
 
     def _depends_transitively(self, task: Task, key: str) -> bool:
@@ -227,6 +229,7 @@ class CostlyHitlMixin:
                                 "reason": reason,
                             },
                             ts=now,
+                            schema_version=2,
                         )
                     ]
                 )
@@ -247,6 +250,7 @@ class CostlyHitlMixin:
                         "reason": "human_timeout",
                     },
                     ts=now,
+                    schema_version=2,
                 )
             ]
         )

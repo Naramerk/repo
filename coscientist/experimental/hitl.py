@@ -33,7 +33,11 @@ class HitlForkMixin(CostlyHitlMixin):
         now = self.clock.now()
         gate = self.study.hitl_policy.gate(kind)
         to = timeout_s if timeout_s is not None else gate.timeout_s
-        deadline = min(now + timedelta(seconds=to), task.deadline, self.study.deadline)
+        deadline = min(
+            now + timedelta(seconds=to),
+            task.deadline,
+            self.study.effective_deadline(),
+        )
         rid = hitl_request_id()
         req = HitlRequest(
             request_id=rid,
@@ -214,7 +218,7 @@ class HitlForkMixin(CostlyHitlMixin):
             new_dl = min(
                 max(h.deadline, now + timedelta(seconds=grace_s)),
                 task.deadline,
-                self.study.deadline,
+                self.study.effective_deadline(),
             )
             if new_dl == h.deadline:
                 continue
