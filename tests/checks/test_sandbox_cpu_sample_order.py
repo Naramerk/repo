@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -26,13 +27,40 @@ from coscientist.checks.sandbox import (
     _rlimit_cpu_seconds,
     _watch_process,
 )
+from coscientist.checks.sandbox_limits import apply_frozen_limits
+from coscientist.core.execution.domain import CodeCheck
 
 # Explicit test budgets — not reused from production grace/drain defaults.
 TEST_WALL_TIMEOUT_S = 2.0
 TEST_REAP_TIMEOUT_S = 0.25
 TEST_DRAIN_JOIN_S = 0.25
 TEST_LARGE_WALL_TIMEOUT_S = 30.0
-TEST_STUCK_HOLD_S = 1.0  # Event.wait bound; must exceed TEST_DRAIN_JOIN_S
+TEST_READY_TIMEOUT_S = 5.0
+
+
+def _read_ready(fd: int, *, timeout_s: float = TEST_READY_TIMEOUT_S) -> bytes:
+    ready, _, _ = select.select([fd], [], [], timeout_s)
+    assert ready, f"ready-pipe signal timed out after {timeout_s}s"
+    return os.read(fd, 1)
+
+
+def _force_reap_pid(pid: int, *, timeout_s: float) -> None:
+    """SIGKILL then waitpid (children) or wait until /proc vanishes (orphans)."""
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + float(timeout_s)
+    proc_path = f"/proc/{pid}"
+    while time.monotonic() < deadline:
+        try:
+            wpid, _st = os.waitpid(pid, os.WNOHANG)
+            if wpid == pid:
+                return
+        except ChildProcessError:
+            if not os.path.isdir(proc_path):
+                return
+        select.select([], [], [], min(0.05, max(0.0, deadline - time.monotonic())))
 
 
 def test_watch_process_samples_host_cpu_before_poll(monkeypatch):
@@ -141,7 +169,7 @@ def test_watch_process_joins_readers_before_returning_stdout(monkeypatch):
 
 def test_watch_process_stuck_reader_sets_output_drain_failed(monkeypatch):
     """Grandchild holding the pipe → reader stays alive; flag, do not silent b''."""
-    hold = threading.Event()
+    release_readers = threading.Event()
 
     def stuck_read(
         pipe: object,
@@ -150,8 +178,8 @@ def test_watch_process_stuck_reader_sets_output_drain_failed(monkeypatch):
         overflow: list[bool],
     ) -> None:
         del pipe, limit, sink, overflow
-        # Bound wait (no sleep); outlives drain join, then exits cleanly.
-        hold.wait(timeout=TEST_STUCK_HOLD_S)
+        # Block until main releases after drain_failed assert (no time margin).
+        release_readers.wait()
 
     class FakeProc:
         pid = 4242
@@ -175,16 +203,17 @@ def test_watch_process_stuck_reader_sets_output_drain_failed(monkeypatch):
         reap_timeout_s=TEST_REAP_TIMEOUT_S,
         output_drain_join_s=TEST_DRAIN_JOIN_S,
     )
-    assert TEST_STUCK_HOLD_S > float(lim.output_drain_join_s)
-    _to, _ov, out, err, _kc, _cpu, _tree, drain_failed = _watch_process(
-        FakeProc(),  # type: ignore[arg-type]
-        lim=lim,
-        cgroup_leaf=None,
-    )
-    hold.set()
-    assert drain_failed is True
-    assert out == b""
-    assert err == b""
+    try:
+        _to, _ov, out, err, _kc, _cpu, _tree, drain_failed = _watch_process(
+            FakeProc(),  # type: ignore[arg-type]
+            lim=lim,
+            cgroup_leaf=None,
+        )
+        assert drain_failed is True
+        assert out == b""
+        assert err == b""
+    finally:
+        release_readers.set()
 
     proc = MagicMock()
     proc.returncode = 0
@@ -310,7 +339,7 @@ def test_real_subprocess_grandchild_holds_stdout_sets_drain_failed():
         output_drain_join_s=TEST_DRAIN_JOIN_S,
     )
     try:
-        assert os.read(ready_r, 1) == b"R"
+        assert _read_ready(ready_r) == b"R"
         os.close(ready_r)
         ready_r = -1
         # Synchronize on parent exit (not on wall timing) before drain join path.
@@ -395,9 +424,11 @@ def test_watch_timeout_with_stuck_drain_ready_pipe():
     holder_pid: int | None = None
     try:
         # Holder must signal ready before watch starts (no fork race).
-        assert os.read(ready_r, 1) == b"R"
+        assert _read_ready(ready_r) == b"R"
         os.close(ready_r)
         ready_r = -1
+        ready_pid, _, _ = select.select([holder_r], [], [], TEST_READY_TIMEOUT_S)
+        assert ready_pid, "holder pid pipe timed out"
         raw_pid = os.read(holder_r, 64)
         os.close(holder_r)
         holder_r = -1
@@ -446,18 +477,7 @@ def test_watch_timeout_with_stuck_drain_ready_pipe():
                 except OSError:
                     pass
         if holder_pid is not None:
-            try:
-                os.kill(holder_pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            else:
-                # Not our child after setsid — poll until gone.
-                deadline = time.monotonic() + float(lim.reap_timeout_s)
-                while time.monotonic() < deadline:
-                    try:
-                        os.kill(holder_pid, 0)
-                    except ProcessLookupError:
-                        break
+            _force_reap_pid(holder_pid, timeout_s=float(lim.reap_timeout_s))
         try:
             os.killpg(pgid, signal.SIGKILL)
         except ProcessLookupError:
@@ -468,23 +488,56 @@ def test_watch_timeout_with_stuck_drain_ready_pipe():
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("reap_timeout_s", 0.0),
-        ("reap_timeout_s", -1.0),
-        ("reap_timeout_s", math.inf),
-        ("reap_timeout_s", math.nan),
         ("reap_timeout_s", True),
         ("reap_timeout_s", "5"),
-        ("output_drain_join_s", 0.0),
-        ("output_drain_join_s", -1.0),
-        ("output_drain_join_s", math.inf),
-        ("output_drain_join_s", math.nan),
         ("output_drain_join_s", True),
         ("output_drain_join_s", "5"),
     ],
 )
-def test_sandbox_limits_rejects_bad_host_budgets(field: str, value: object):
-    with pytest.raises((TypeError, ValueError)):
+def test_sandbox_limits_rejects_bool_str_host_budgets_typeerror(
+    field: str, value: object
+):
+    with pytest.raises(TypeError, match=field):
         SandboxLimits(**{field: value})  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("reap_timeout_s", 0.0),
+        ("reap_timeout_s", -1.0),
+        ("reap_timeout_s", math.inf),
+        ("reap_timeout_s", math.nan),
+        ("output_drain_join_s", 0.0),
+        ("output_drain_join_s", -1.0),
+        ("output_drain_join_s", math.inf),
+        ("output_drain_join_s", math.nan),
+    ],
+)
+def test_sandbox_limits_rejects_non_positive_host_budgets_valueerror(
+    field: str, value: float
+):
+    with pytest.raises(ValueError, match=field):
+        SandboxLimits(**{field: value})  # type: ignore[arg-type]
+
+
+def test_apply_frozen_limits_rejects_coercible_host_budget_strings():
+    from pydantic import ValidationError
+
+    from coscientist.core.execution.domain import TaskSpec
+
+    check = CodeCheck(kind="exec_runs", timeout_s=1.0, memory_mb=64)
+    spec = TaskSpec(
+        task_key="E1",
+        title="t",
+        goal="g",
+        route="experiment",
+        sandbox_check_limits={
+            "exec_busy": {"reap_timeout_s": "5", "output_drain_join_s": True}
+        },
+    )
+    with pytest.raises(ValidationError, match="host budget"):
+        apply_frozen_limits(check, spec, template_id="exec_busy")
 
 
 def test_limits_from_check_passes_host_budgets_or_dataclass_default():
