@@ -96,12 +96,12 @@ def expansion_not_done_line(reason: str, detail: str) -> str:
     d = str(detail or "")
     if r in ("invalid", "invalid_hitl") or d.startswith("invalid"):
         return "не выполнено: невалидный запрос"
-    if d == "replan_reserve" or r == "reserve":
-        return "не выполнено: резерв"
     if r == "has_refutation":
         return "не выполнено: есть опровержение"
     if r == "critic_rejected":
         return "не выполнено: отказ критика"
+    # expansion_limit / replan_reserve / agent_quota / human_quota → same wording
+    # (DESIGN_M1.md:236 «не выполнено: лимит расширений»).
     return "не выполнено: лимит расширений"
 
 

@@ -92,22 +92,31 @@ async def refuse_expansion(
     *,
     reason: str,
     detail: str,
+    plan_key: str | None = None,
 ) -> None:
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
+    # Deterministic idem per PLAN-n (same key on live path and recover).
+    if plan_key:
+        idem_key = make_idem("ExpansionRefused", sid, plan_key, reason)
+        entity_key = f"{sid}:{plan_key}:{reason}"
+    else:
+        idem_key = make_idem("ExpansionRefused", sid, after_task, reason, detail)
+        entity_key = f"{sid}:{after_task}:{reason}:{detail}"
     await runtime._append(  # noqa: SLF001
         [
             EventEnvelope(
                 study_id=sid,
                 type="ExpansionRefused",
-                entity_key=f"{sid}:{after_task}:{reason}:{detail}",
-                idem_key=make_idem("ExpansionRefused", sid, after_task, reason, detail),
+                entity_key=entity_key,
+                idem_key=idem_key,
                 payload={
                     "after_task": after_task,
                     "reason": reason,
                     "detail": detail,
+                    "plan_key": plan_key,
                 },
                 ts=now,
                 schema_version=1,
@@ -247,19 +256,24 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
         return None
     # PLAN-n completion → M1 deterministic critic, then apply (or refuse).
     if task.kind == TaskKind.PLAN and task.spec.task_key.startswith("PLAN-"):
+        plan_key = task.spec.task_key
+        if plan_n_already_closed(runtime, plan_key):
+            return None
         if task.outcome == TaskOutcome.SUCCESS:
             from coscientist.core.expand import apply_pending_expansion
 
-            return await apply_pending_expansion(runtime, task.spec.task_key)
+            return await apply_pending_expansion(runtime, plan_key)
         # MJ-c: non-SUCCESS PLAN-n must not vanish.
-        meta = (getattr(runtime, "_expand_requests", None) or {}).get(task.spec.task_key)
-        after = str((meta or {}).get("after_task") or task.spec.task_key)
+        meta = (getattr(runtime, "_expand_requests", None) or {}).get(plan_key)
+        after = str((meta or {}).get("after_task") or plan_key)
         oc = getattr(task.outcome, "value", task.outcome) or "unknown"
         await refuse_expansion(
-            runtime, after, reason="critic_rejected", detail=f"plan_n_{oc}"
+            runtime,
+            after,
+            reason="critic_rejected",
+            detail=f"plan_n_{oc}",
+            plan_key=plan_key,
         )
-        if isinstance(getattr(runtime, "_expand_requests", None), dict):
-            runtime._expand_requests.pop(task.spec.task_key, None)  # noqa: SLF001
         return None
     tkey = task.spec.task_key
     if expansion_already_handled(runtime, tkey):
@@ -319,8 +333,25 @@ async def _prevalidate_request(runtime: StudyRuntime, req: ExpansionRequest) -> 
     )
 
 
+def plan_n_already_closed(runtime: StudyRuntime, plan_key: str) -> bool:
+    """True when PlanExpanded / ExpansionRefused already closed this PLAN-n.
+
+    Pending meta in ``_expand_requests`` means still open (do not treat the
+    pending entry itself as «handled»).
+    """
+    for r in getattr(runtime, "_expansion_refusals", []) or []:
+        if str(r.get("plan_key") or "") == plan_key:
+            return True
+    for p in runtime.plans.values():
+        if str(p.get("plan_key") or "") == plan_key:
+            return True
+    meta = (getattr(runtime, "_expand_requests", None) or {}).get(plan_key)
+    # Fold clears meta on expand/refuse. Meta still present → still open.
+    return meta is None
+
+
 async def resume_pending_expansions(runtime: StudyRuntime) -> int:
-    """Re-run H-g after crash; PLAN-n states must not be lost silently (MJ-c)."""
+    """Re-run H-g after crash; skip PLAN-n already closed by expand/refuse."""
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return 0
     n = 0
@@ -329,23 +360,27 @@ async def resume_pending_expansions(runtime: StudyRuntime) -> int:
             continue
         # PLAN-n: resume critic/apply or refuse non-SUCCESS.
         if task.kind == TaskKind.PLAN and task.spec.task_key.startswith("PLAN-"):
-            meta = (getattr(runtime, "_expand_requests", None) or {}).get(task.spec.task_key)
-            after = str((meta or {}).get("after_task") or task.spec.task_key)
-            if expansion_already_handled(runtime, after) and task.outcome == TaskOutcome.SUCCESS:
-                # Already expanded or refused for after_task.
-                if not meta:
-                    continue
-            if task.outcome == TaskOutcome.SUCCESS and meta:
+            plan_key = task.spec.task_key
+            if plan_n_already_closed(runtime, plan_key):
+                continue
+            meta = (getattr(runtime, "_expand_requests", None) or {}).get(plan_key)
+            if not isinstance(meta, dict):
+                continue
+            after = str(meta.get("after_task") or plan_key)
+            if task.outcome == TaskOutcome.SUCCESS:
                 from coscientist.core.expand import apply_pending_expansion
 
-                await apply_pending_expansion(runtime, task.spec.task_key)
+                await apply_pending_expansion(runtime, plan_key)
                 n += 1
-            elif task.outcome != TaskOutcome.SUCCESS and meta:
+            else:
                 oc = getattr(task.outcome, "value", task.outcome) or "unknown"
                 await refuse_expansion(
-                    runtime, after, reason="critic_rejected", detail=f"plan_n_{oc}_recover"
+                    runtime,
+                    after,
+                    reason="critic_rejected",
+                    detail=f"plan_n_{oc}",
+                    plan_key=plan_key,
                 )
-                runtime._expand_requests.pop(task.spec.task_key, None)  # noqa: SLF001
                 n += 1
             continue
         reason = getattr(task, "reason", None)

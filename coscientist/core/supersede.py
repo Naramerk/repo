@@ -45,7 +45,7 @@ def criterion_is_superseded(graph: Any, study_id: str, criterion_key: str) -> bo
 def countable_refutation_n(runtime: Any, target_id: str) -> int:
     """Count claims that ``counts()`` and are inconsistent for this target.
 
-    Uses the same ``RuntimeClaim.counts()`` filter as the verdict path (MJ-b).
+    Uses ``RuntimeClaim.counts()`` directly (same filter as the verdict path).
     Threshold is ≥1 countable refutation — not ``k_ref``.
     """
     study = getattr(runtime, "study", None)
@@ -63,59 +63,66 @@ def countable_refutation_n(runtime: Any, target_id: str) -> int:
     ) + list(by.get(target_id) or [])
     n = 0
     for c in claims:
-        # counts() already applies C10 superseded exclusion; for escape check we
-        # need pre-supersede facts — temporarily ignore superseded exclusion.
-        excl = getattr(c, "exclusion_reason", None)
-        if excl == "superseded":
-            # Probe without the supersede flag via the same predicates as counts().
-            if not (
-                getattr(c, "accepted", False)
-                and getattr(c, "validity_ok", False)
-                and getattr(c, "frozen", False)
-                and getattr(c, "provenance", "") == "real"
-            ):
-                continue
-            if getattr(c, "is_lit", False):
-                continue
-            if getattr(c, "evidence_kind", "") not in ("computational", "experimental"):
-                continue
-            if effective_outcome(c) == "inconsistent":
-                n += 1
-            continue
         if c.counts() and effective_outcome(c) == "inconsistent":
             n += 1
     return n
 
 
+def task_has_refute_intent(runtime: Any, task: Any) -> bool:
+    """True when the task declares or carries tests.intent=refute.
+
+    Plan-side ``TaskSpec.tests_intent`` covers PENDING tasks before an experiment
+    node exists; graph ``tests`` edges cover materialized experiments.
+    """
+    spec = getattr(task, "spec", task)
+    if getattr(spec, "tests_intent", None) == "refute":
+        return True
+    study = getattr(runtime, "study", None)
+    graph = getattr(runtime, "graph", None)
+    if study is None or graph is None:
+        return False
+    key = getattr(spec, "task_key", None) or (
+        spec.get("task_key") if isinstance(spec, dict) else None
+    )
+    if not key:
+        return False
+    exp_id = experiment_node_id(study.study_id, str(key))
+    for e in graph.edges_from(exp_id):
+        if e.kind == "tests" and (e.attrs or {}).get("intent") == "refute":
+            return True
+    return False
+
+
 def has_open_refute_task(runtime: Any, target_id: str) -> bool:
     """True when a non-DONE task has tests.intent=refute toward this target.
 
-    ``tests`` edges are experiment→hypothesis. For a question target, any open
-    task that addresses it and carries a refute tests edge (to any hypothesis)
-    also blocks. For a hypothesis target, the edge must point at that hypothesis.
+    PENDING tasks without an experiment node are still protected via
+    ``TaskSpec.tests_intent`` (or a tests edge once the node exists).
     """
     study = getattr(runtime, "study", None)
     graph = getattr(runtime, "graph", None)
-    if study is None or graph is None or not target_id:
+    if study is None or not target_id:
         return False
     sid = study.study_id
     hid = hypothesis_node_id(sid, target_id)
     for task in runtime.tasks.values():
         if task.state == TaskState.DONE:
             continue
-        exp_id = experiment_node_id(sid, task.spec.task_key)
-        if graph.get_node(exp_id) is None:
+        if not task_has_refute_intent(runtime, task):
             continue
-        for e in graph.edges_from(exp_id):
-            if e.kind != "tests":
-                continue
-            if (e.attrs or {}).get("intent") != "refute":
-                continue
-            if e.dst_id == hid:
-                return True
-            # Question target: open refute task addressing this question.
-            if target_id in (task.spec.addresses or []):
-                return True
+        addrs = list(task.spec.addresses or [])
+        # Hypothesis target: tests edge to that hyp, or addresses the hyp id.
+        if graph is not None:
+            exp_id = experiment_node_id(sid, task.spec.task_key)
+            for e in graph.edges_from(exp_id):
+                if e.kind == "tests" and (e.attrs or {}).get("intent") == "refute":
+                    if e.dst_id == hid:
+                        return True
+        if target_id in addrs:
+            return True
+        # Empty addresses + refute intent: blocks any agent supersede of this task
+        # (checked in expand_critic); for target match, empty addrs still block
+        # hypothesis targets when the tests edge points at them (above).
     return False
 
 
@@ -132,7 +139,6 @@ def target_blocks_agent_supersede(runtime: Any, target_id: str) -> str | None:
     return None
 
 
-# Back-compat name used by expand.py / expand_critic.
 def question_has_countable_refutation(runtime: Any, question_id: str) -> bool:
     return target_blocks_agent_supersede(runtime, question_id) is not None
 
@@ -190,16 +196,19 @@ def should_skip_for_question_supersede(
     active_q_after: set[str],
     protected_keys: set[str],
     blocked_questions: set[str] | None = None,
+    refute_keys: set[str] | None = None,
 ) -> bool:
     """True when an open task solely addresses superseded questions and is not shared.
 
-    Agent path: never SKIP tasks that address a question blocked by MJ-b
-    (``blocked_questions``).
+    Agent path: never SKIP tasks that address a blocked question, or open refute
+    tasks (including those with empty addresses).
     """
     key = getattr(task, "task_key", None) or (
         task.get("task_key") if isinstance(task, dict) else None
     )
     if key and str(key) in protected_keys:
+        return False
+    if key and refute_keys and str(key) in refute_keys:
         return False
     raw = getattr(task, "addresses", None)
     if raw is None and isinstance(task, dict):

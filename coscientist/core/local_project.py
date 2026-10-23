@@ -37,6 +37,20 @@ class LocalProjectMixin:
     _expand_requests: dict[str, dict[str, Any]]
     _expansion_refusals: list[dict[str, Any]]
     _hitl_decisions: dict[str, dict[str, Any]]
+    _hitl_expand_used: set[str]
+
+    def _clear_expand_request(
+        self, *, after_task: str | None = None, plan_key: str | None = None
+    ) -> None:
+        """Drop PLAN-n pending entries once PlanExpanded / ExpansionRefused folds."""
+        reqs = getattr(self, "_expand_requests", None)
+        if not isinstance(reqs, dict) or not reqs:
+            return
+        if plan_key and plan_key in reqs:
+            reqs.pop(plan_key, None)
+        if after_task:
+            for k in [k for k, m in reqs.items() if str(m.get("after_task") or "") == after_task]:
+                reqs.pop(k, None)
 
     def _project_local(self, ev: EventEnvelope) -> None:
         p = ev.payload
@@ -58,6 +72,7 @@ class LocalProjectMixin:
         elif ev.type == "PlanExpanded":
             self.plans[ev.entity_key] = dict(p)
             # B3: expansion counts + replan_used from events (not live counters).
+            # timeout → agent quota (DESIGN_M1 §4); only human skips agent quota.
             if p.get("delegated_by") == "human":
                 self._human_expansions = int(getattr(self, "_human_expansions", 0)) + 1
             else:
@@ -69,12 +84,28 @@ class LocalProjectMixin:
             pending = getattr(self, "_expand_pending", None)
             if after and isinstance(pending, set):
                 pending.discard(str(after))
+            # Clear PLAN-n pending rebuilt from TaskCreated (MAJOR replay leak).
+            self._clear_expand_request(
+                after_task=str(after) if after else None,
+                plan_key=p.get("plan_key"),
+            )
+            rid = p.get("hitl_request_id")
+            if rid:
+                used = getattr(self, "_hitl_expand_used", None)
+                if not isinstance(used, set):
+                    self._hitl_expand_used = set()
+                    used = self._hitl_expand_used
+                used.add(str(rid))
         elif ev.type == "ExpansionRefused":
             refusals = getattr(self, "_expansion_refusals", None)
             if isinstance(refusals, list):
                 refusals.append(dict(p))
             else:
                 self._expansion_refusals = [dict(p)]
+            self._clear_expand_request(
+                after_task=str(p.get("after_task") or "") or None,
+                plan_key=p.get("plan_key"),
+            )
         elif ev.type == "HitlDecided":
             rid = str(p.get("request_id") or ev.entity_key)
             decisions = getattr(self, "_hitl_decisions", None)

@@ -73,12 +73,15 @@ def critic_gate(
     if int(getattr(runtime, "_agent_expansions", 0)) >= int(study.max_expansions):
         return "agent_quota"
     # No refutation escape (MJ-b).
+    from coscientist.core.supersede import task_has_refute_intent
+
     for s in req.superseded_questions:
         block = target_blocks_agent_supersede(runtime, s.old_id)
         if block:
             return f"refutation_escape:{s.old_id}:{block}"
     for tkey in req.superseded_tasks:
-        # Superseding away a task that addresses a blocked question.
+        # Superseding away a task that addresses a blocked question, or an open
+        # refute task (even with empty addresses — must not be SKIPpable).
         tid = None
         for t in runtime.tasks.values():
             if t.spec.task_key == tkey:
@@ -86,6 +89,10 @@ def critic_gate(
                 break
         if tid is None:
             continue
+        from coscientist.core.domain import TaskState
+
+        if task_has_refute_intent(runtime, tid) and tid.state != TaskState.DONE:
+            return f"refutation_escape:{tkey}:open_refute_task"
         for qid in tid.spec.addresses or []:
             block = target_blocks_agent_supersede(runtime, qid)
             if block:

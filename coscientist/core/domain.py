@@ -226,6 +226,8 @@ class TaskSpec(Frozen):
     depends_on: list[str] = Field(default_factory=list)
     inputs: list[InputSpec] = Field(default_factory=list)
     addresses: list[str] = Field(default_factory=list)
+    # Plan-side tests.intent (graph edge materializes later); PENDING refute protection.
+    tests_intent: Literal["confirm", "refute"] | None = None
     # H-c: allow start when a depends_on parent is FAILED/SKIPPED (no InputSpec).
     tolerate_failed_dep: bool = False
     # Scientific method; simulation does not upgrade stub/partial input provenance.
