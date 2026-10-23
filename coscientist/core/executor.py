@@ -637,56 +637,69 @@ class Executor:
             raise AttemptClosedError(attempt_id)
 
         task = self.get_task(task_id)
+        # PR18: propagate attempt taint onto sandbox/verifier puts (foreach/inputs too).
+        _tainted = False
+        if hasattr(attempt, "tainted_context"):
+            _tainted = bool(attempt.tainted_context)
+        elif isinstance(attempt, dict):
+            _tainted = bool(attempt.get("tainted_context"))
+        set_taint = getattr(self.artifacts, "set_context_tainted", None)
+        if callable(set_taint):
+            set_taint(_tainted)
         try:
-            # MJ2: no sync Popen on the event loop — evaluate (sandbox) off-thread.
-            checks = await asyncio.to_thread(
-                evaluate_task_checks,
-                self.catalog,
-                task.spec,
-                out,
-                self.artifacts,
-                review_statuses=self.review_statuses,
-                attempt_id=attempt_id,
-                task_kind=str(getattr(task.kind, "value", task.kind)),
-                task_key=task.spec.task_key,
-            )
-        except SandboxInfraError as e:
-            # Host/private-FD infra — does NOT charge the retry budget.
-            # Permanent unavailability closes the task (allow_retry=False); the
-            # attempt stays charged=False so a later reopen/retry budget is intact.
-            # Transient attach failures may retry without consuming charged slots.
-            detail = e.reason
-            transient = "cgroup_attach" in detail or detail.endswith(":attach")
-            provenance = _provenance(self.get_attempt(attempt_id))
-            return await self._commit_failure(
-                attempt_id,
-                study_id,
-                task_id,
-                out,
-                provenance,
-                out.claim,
-                reason=TaskReason.SANDBOX_INFRA.value,
-                detail=detail,
-                event_type="SandboxInfraRaised",
-                result_class="infra",
-                charge_attempt=False,
-                allow_retry=transient,
-            )
-        except CoreBugError as e:
-            # Own result_class (not infra); reported; never counts.
-            provenance = _provenance(self.get_attempt(attempt_id))
-            return await self._commit_failure(
-                attempt_id,
-                study_id,
-                task_id,
-                out,
-                provenance,
-                out.claim,
-                reason=TaskReason.CORE_BUG.value,
-                detail=e.reason,
-                event_type="CatalogErrorRaised",
-                result_class="core_bug",
-            )
+            try:
+                # MJ2: no sync Popen on the event loop — evaluate (sandbox) off-thread.
+                checks = await asyncio.to_thread(
+                    evaluate_task_checks,
+                    self.catalog,
+                    task.spec,
+                    out,
+                    self.artifacts,
+                    review_statuses=self.review_statuses,
+                    attempt_id=attempt_id,
+                    task_kind=str(getattr(task.kind, "value", task.kind)),
+                    task_key=task.spec.task_key,
+                )
+            except SandboxInfraError as e:
+                # Host/private-FD infra — does NOT charge the retry budget.
+                # Permanent unavailability closes the task (allow_retry=False); the
+                # attempt stays charged=False so a later reopen/retry budget is intact.
+                # Transient attach failures may retry without consuming charged slots.
+                detail = e.reason
+                transient = "cgroup_attach" in detail or detail.endswith(":attach")
+                provenance = _provenance(self.get_attempt(attempt_id))
+                return await self._commit_failure(
+                    attempt_id,
+                    study_id,
+                    task_id,
+                    out,
+                    provenance,
+                    out.claim,
+                    reason=TaskReason.SANDBOX_INFRA.value,
+                    detail=detail,
+                    event_type="SandboxInfraRaised",
+                    result_class="infra",
+                    charge_attempt=False,
+                    allow_retry=transient,
+                )
+            except CoreBugError as e:
+                # Own result_class (not infra); reported; never counts.
+                provenance = _provenance(self.get_attempt(attempt_id))
+                return await self._commit_failure(
+                    attempt_id,
+                    study_id,
+                    task_id,
+                    out,
+                    provenance,
+                    out.claim,
+                    reason=TaskReason.CORE_BUG.value,
+                    detail=e.reason,
+                    event_type="CatalogErrorRaised",
+                    result_class="core_bug",
+                )
+        finally:
+            if callable(set_taint):
+                set_taint(False)
         for c in checks:
             if not c.is_code and c.status == ReqStatus.UNASSESSED:
                 self._scheduled_reviews.append(c.check_id)

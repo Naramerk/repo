@@ -17,6 +17,7 @@ from coscientist.core.domain import (
     ToolCallRef,
 )
 from coscientist.core.errors import ArtifactCorrupt, ArtifactRejected
+from coscientist.core.taint import derived_tainted
 
 
 def _infer_artifact_role(media_type: str) -> ArtifactRole:
@@ -50,6 +51,15 @@ class LocalArtifactStore:
         self.meta.mkdir(parents=True, exist_ok=True)
         self.tmp.mkdir(parents=True, exist_ok=True)
         self._index: dict[str, Artifact] = {}
+        # Set by Executor for the active attempt so sandbox/verifier puts inherit taint.
+        self._context_tainted: bool = False
+
+    def set_context_tainted(self, value: bool) -> None:
+        self._context_tainted = bool(value)
+
+    @property
+    def context_tainted(self) -> bool:
+        return self._context_tainted
 
     def put_cas(self, content: bytes, *, tmp_name: str = "cas") -> str:
         """Write raw bytes to content-addressed storage; return sha256 hex digest."""
@@ -85,6 +95,7 @@ class LocalArtifactStore:
         net_isolation: NetIsolation | None = None,
         fs_isolation: FsIsolation | None = None,
         tainted: bool = False,
+        context_tainted: bool = False,
     ) -> Artifact:
         if attempt_closed:
             raise ArtifactRejected("attempt_closed")
@@ -113,7 +124,10 @@ class LocalArtifactStore:
             producer=producer,
             net_isolation=net_isolation if producer == "sandbox" else None,
             fs_isolation=fs_isolation if producer == "sandbox" else None,
-            tainted=bool(tainted),
+            tainted=derived_tainted(
+                context_tainted=bool(context_tainted or self._context_tainted),
+                explicit=tainted,
+            ),
         )
         self._index[artifact_id] = art
         (self.meta / f"{artifact_id}.json").write_text(
@@ -132,6 +146,7 @@ class LocalArtifactStore:
         role: str | None = None,
         attempt_closed: bool = False,
         tainted: bool = False,
+        context_tainted: bool = False,
     ) -> Artifact:
         """Agent-controlled path — always ``producer=agent`` (never trusted)."""
         return self._store(
@@ -144,6 +159,7 @@ class LocalArtifactStore:
             attempt_closed=attempt_closed,
             producer="agent",
             tainted=tainted,
+            context_tainted=context_tainted,
         )
 
     def put_tool(
@@ -156,6 +172,7 @@ class LocalArtifactStore:
         schema_ref: str | None = None,
         role: str | None = None,
         attempt_closed: bool = False,
+        context_tainted: bool = False,
     ) -> Artifact:
         """Web/tool output — always ``tainted=True`` (DESIGN_M1 §8)."""
         return self.put(
@@ -167,6 +184,7 @@ class LocalArtifactStore:
             role=role,
             attempt_closed=attempt_closed,
             tainted=True,
+            context_tainted=context_tainted,
         )
 
     def put_core(
@@ -179,6 +197,8 @@ class LocalArtifactStore:
         schema_ref: str | None = None,
         role: str | None = None,
         attempt_closed: bool = False,
+        context_tainted: bool = False,
+        tainted: bool = False,
     ) -> Artifact:
         """Core-owned write (trusted for verdict evidence)."""
         return self._store(
@@ -190,6 +210,8 @@ class LocalArtifactStore:
             role=role,
             attempt_closed=attempt_closed,
             producer="core",
+            tainted=tainted,
+            context_tainted=context_tainted,
         )
 
     def put_sandbox(
@@ -204,8 +226,10 @@ class LocalArtifactStore:
         attempt_closed: bool = False,
         net_isolation: NetIsolation = "none",
         fs_isolation: FsIsolation = "none",
+        context_tainted: bool = False,
+        tainted: bool = False,
     ) -> Artifact:
-        """Sandbox write. ``trusted`` only when both net and fs isolation are hard."""
+        """Sandbox / verifier write. Context taint propagates to the output."""
         return self._store(
             content,
             produced_by,
@@ -217,6 +241,8 @@ class LocalArtifactStore:
             producer="sandbox",
             net_isolation=net_isolation,
             fs_isolation=fs_isolation,
+            tainted=tainted,
+            context_tainted=context_tainted,
         )
 
     def get_meta(self, artifact_id: str) -> Artifact | None:

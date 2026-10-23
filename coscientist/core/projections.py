@@ -129,6 +129,13 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
             "done": True,
         }
         _put(proj, "effects", event.entity_key, row)
+    elif t == "SideEffectDenied":
+        _put(
+            proj,
+            "effects",
+            event.entity_key,
+            {**p, "key": p.get("key") or event.entity_key, "denied": True},
+        )
     elif t == "HitlOpened":
         _put(proj, "hitl_requests", event.entity_key, {**p, "open": True})
     elif t in ("HitlDecided", "HitlTimedOut"):
@@ -234,6 +241,7 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         "ArtifactRegistered": ("artifacts",),
         "EffectIntended": ("effects",),
         "EffectDone": ("effects",),
+        "SideEffectDenied": ("effects",),
         "HitlOpened": ("hitl_requests",),
         "HitlDecided": ("hitl_requests",),
         "HitlTimedOut": ("hitl_requests",),

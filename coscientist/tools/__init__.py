@@ -9,6 +9,7 @@ from coscientist.tools.contract import (
     ToolSpec,
 )
 from coscientist.tools.effects import (
+    EffectIndex,
     effect_idem_key,
     invoke_tool,
     load_effect_index,
@@ -21,6 +22,7 @@ from coscientist.tools.taint import (
 
 __all__ = [
     "CallCtx",
+    "EffectIndex",
     "Tool",
     "ToolEffect",
     "ToolError",

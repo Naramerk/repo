@@ -205,6 +205,31 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
                 seen.append(line)
         elif ev.type == "PlanExpanded" and ev.payload.get("foreach"):
             _append_foreach_report_lines(seen, ev.payload)
+        elif ev.type == "SideEffectDenied":
+            tool = str(ev.payload.get("tool") or "?")
+            line = f"отклонено: побочный эффект ({tool})"
+            if line not in seen:
+                seen.append(line)
+        elif ev.type == "EffectIntended":
+            # Track for unknown (Intended without Done) pass below.
+            pass
+    # PR18: EffectIntended without EffectDone → status unknown in the report.
+    intended_keys: set[str] = set()
+    done_keys: set[str] = set()
+    intended_meta: dict[str, dict[str, Any]] = {}
+    for ev in sorted(events, key=lambda e: e.seq or 0):
+        if ev.type == "EffectIntended":
+            k = str(ev.payload.get("key") or ev.entity_key)
+            intended_keys.add(k)
+            intended_meta[k] = dict(ev.payload)
+        elif ev.type == "EffectDone":
+            done_keys.add(str(ev.payload.get("key") or ev.entity_key))
+    for k in sorted(intended_keys - done_keys):
+        meta = intended_meta.get(k) or {}
+        tool = str(meta.get("tool") or "?")
+        line = f"эффект неизвестен: {tool}"
+        if line not in seen:
+            seen.append(line)
     return seen
 
 def _append_foreach_report_lines(seen: list[str], p: dict[str, Any]) -> None:

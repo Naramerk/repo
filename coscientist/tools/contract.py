@@ -1,4 +1,10 @@
-"""ToolSpec / ToolError / ToolOutput (DESIGN §6.1 + DESIGN_M1 §8 effect class)."""
+"""ToolSpec / ToolError / ToolOutput (DESIGN §6.1 + DESIGN_M1 §8 effect class).
+
+``ToolSpec.effect`` is advisory for catalog authors only. ``invoke_tool`` takes
+the authoritative effect from ``coscientist.core.tool_registry`` (unregistered
+→ ``external_effect``). Direct ``Tool.call`` bypasses gates — do not use it
+outside tests; agent wiring must go through ``invoke_tool``.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +21,7 @@ ToolProvider = Literal["mcp", "local", "coder", "alembic"]
 
 
 class ToolSpec(BaseModel):
-    """Catalog entry for a tool. ``effect`` replaces DESIGN ``read_only`` (PR18)."""
+    """Catalog draft. Runtime effect is resolved via the closed core registry."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -23,9 +29,9 @@ class ToolSpec(BaseModel):
     provider: ToolProvider = "local"
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] | None = None
+    # Advisory only — register the same name in core.tool_registry for gating.
     effect: ToolEffect = "read"
     idempotent: bool = False
-    # When True, recover may re-call after EffectIntended without EffectDone.
     supports_idem_key: bool = False
     timeout_s: float = 120
     max_retries: int = 2
@@ -44,8 +50,6 @@ class ToolError(Exception):
         self.kind = kind
         self.detail = detail
         if retryable is None:
-            # Default: only transport_unsent is retryable without further context.
-            # transport_sent retryability depends on effect/idempotent at call site.
             retryable = kind == "transport_unsent"
         self.retryable = bool(retryable)
         super().__init__(f"ToolError({kind}): {detail}")
@@ -66,9 +70,10 @@ class CallCtx:
     task_key: str
     attempt_id: str
     hitl_policy: HitlPolicy
-    # True when any input/context artifact is tainted (blocks write tools).
+    # Filled by invoke_tool from input artifacts (caller value is ignored).
     tainted_context: bool = False
-    # Optional seq for ToolCallRef call_id = f"{attempt_id}:{call_seq}".
+    input_artifact_ids: list[str] = field(default_factory=list)
+    input_bindings: list[Any] = field(default_factory=list)
     call_seq: int = 1
     extra: dict[str, Any] = field(default_factory=dict)
 

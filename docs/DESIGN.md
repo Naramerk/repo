@@ -501,9 +501,11 @@ class Tool(Protocol):
 class ToolOutput(BaseModel):
     data: Any; artifacts: list[Artifact]    # обёртка сама регистрирует артефакты и считает sha256
 ```
-- `write` / `external_effect` только через HITL-гейт `side_effect` (headless default `deny` → `ToolError(local)`).
-- `effect_idem_key = sha256(JCS({study_id, task_key, tool, args_digest}))`; события `EffectIntended` / `EffectDone`.
-- Артефакты web/tool-вывода: `tainted=true`; в tainted-контексте write/external_effect инструменты не выдаются.
+- **Единственный путь вызова:** `coscientist.tools.invoke_tool` (агентский wiring — позже). Прямой `Tool.call` обходит гейты — запрещён вне тестов.
+- Класс эффекта берётся из **закрытого реестра** `core.tool_registry` (name → ToolSpec); незарегистрированное имя → `external_effect` (fail-closed). `ToolSpec.effect` у вызывающего — advisory only.
+- `write` / `external_effect` только через HITL-гейт `side_effect` (headless default `deny` → событие `SideEffectDenied` + строка в отчёте + `ToolError(local)`).
+- `effect_idem_key = sha256(JCS({study_id, task_key, tool, args_digest, attempt_id}))` — только для write/external_effect; **read не индексируется** (повторы намеренны). События `EffectIntended` / `EffectDone`; Intended без Done → статус unknown в отчёте; `transport_unsent` → терминальный `EffectDone(failed)`.
+- Taint считается в **core** из input-артефактов попытки (`AttemptStarted.tainted_context`) и наследуется derived/sandbox put; web/tool-вывод → `tainted=true`. В tainted-контексте write/external_effect не выдаются.
 
 ### 6.2 Правила повтора
 

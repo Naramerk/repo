@@ -57,6 +57,7 @@ EventType = Literal[
     "GraphEdgeAdded",
     "EffectIntended",
     "EffectDone",
+    "SideEffectDenied",
 ]
 
 

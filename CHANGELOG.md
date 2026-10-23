@@ -3,11 +3,11 @@
 ## Unreleased
 
 ### M1 PR18
-- `ToolSpec.effect: read | write | external_effect` (default `read`; replaces `read_only`) in `coscientist.tools`.
-- HITL gate `side_effect` (headless default `deny` → `ToolError(local)`); allow via `HitlPolicy.defaults["side_effect"]="allow"`.
-- `effect_idem_key` + journal events `EffectIntended` / `EffectDone`; retry returns stored result; Intended-without-Done without `supports_idem_key` → `ToolError(opaque)`.
-- `Artifact.tainted`; `put_tool` marks web/tool output; tainted context filters out write/external_effect tools.
-- `POST /studies` Idempotency-Key via `coscientist.api.post_studies` (repeat → same `study_id`; body mismatch → `Conflict`).
+- Closed `core.tool_registry` is authoritative for effect (unregistered → `external_effect`); `invoke_tool` is the only call path; `ToolSpec.effect` is advisory.
+- HITL gate `side_effect` (headless default `deny` → `SideEffectDenied` + report line + `ToolError(local)`).
+- `effect_idem_key` includes `attempt_id`; **read is not indexed**; write journals `EffectIntended`/`EffectDone` loaded from the journal on every invoke; Intended-without-Done → unknown in report; `transport_unsent` → terminal `EffectDone(failed)`.
+- Taint computed in core from input artifact metas (`AttemptStarted.tainted_context`); propagates to derived/sandbox puts; filters write tools.
+- `POST /studies` Idempotency-Key: deterministic `study_id`, `O_EXCL` reserve, fsync+atomic rename; restart/concurrent safe.
 
 ### M1 PR12
 - `TaskSpec.budget_share` / `deadline_share` (None = equal remainder of undistributed pool).

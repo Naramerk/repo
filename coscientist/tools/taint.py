@@ -1,30 +1,21 @@
-"""Taint marking and tool filtering (DESIGN_M1 §8 / K5)."""
+"""Taint helpers + tool filtering using the closed core registry (DESIGN_M1 §8)."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from typing import Any
 
-from coscientist.tools.contract import Tool, ToolEffect, ToolSpec
-
-
-def context_is_tainted(
-    artifacts: Iterable[Any],
-) -> bool:
-    """True when any artifact in the attempt context carries ``tainted=True``."""
-    for art in artifacts:
-        if art is None:
-            continue
-        if getattr(art, "tainted", False):
-            return True
-        if isinstance(art, dict) and art.get("tainted"):
-            return True
-    return False
+from coscientist.core.taint import artifact_is_tainted
+from coscientist.core.tool_registry import resolve_effect
+from coscientist.tools.contract import Tool, ToolSpec
 
 
-def _effect_of(tool: Tool | ToolSpec) -> ToolEffect:
-    spec = tool if isinstance(tool, ToolSpec) else tool.spec
-    return spec.effect
+def context_is_tainted(artifacts: Iterable[object]) -> bool:
+    """True when any artifact meta carries ``tainted=True``."""
+    return any(artifact_is_tainted(a) for a in artifacts)
+
+
+def _tool_name(tool: Tool | ToolSpec) -> str:
+    return tool.name if isinstance(tool, ToolSpec) else tool.spec.name
 
 
 def filter_tools_for_context(
@@ -32,7 +23,7 @@ def filter_tools_for_context(
     *,
     tainted_context: bool,
 ) -> list[Tool | ToolSpec]:
-    """Drop write/external_effect tools when the attempt context is tainted."""
+    """Drop write/external_effect tools when context is tainted (registry effect)."""
     if not tainted_context:
         return list(tools)
-    return [t for t in tools if _effect_of(t) == "read"]
+    return [t for t in tools if resolve_effect(_tool_name(t)) == "read"]
