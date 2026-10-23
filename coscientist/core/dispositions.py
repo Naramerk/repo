@@ -29,6 +29,55 @@ def _task_by_key(tasks: Mapping[str, Task]) -> dict[str, Task]:
     return {t.spec.task_key: t for t in tasks.values()}
 
 
+# Dead covering tasks must not inflate skip_cap / loop-cap. Reasons come from
+# folded TaskDone.reason (projection / reopen rebuild) — not ephemeral status.
+_INACTIVE_COVER_REASONS: frozenset[str] = frozenset(
+    {
+        TaskReason.SUPERSEDED.value,
+        TaskReason.CANCELLED.value,
+    }
+)
+
+
+def _task_reason_value(t: Task) -> str | None:
+    r = getattr(t, "reason", None)
+    if r is None:
+        return None
+    if isinstance(r, TaskReason):
+        return r.value
+    try:
+        return TaskReason(str(r)).value
+    except ValueError:
+        return str(r)
+
+
+def _active_for_cover(t: Task) -> bool:
+    """True when the task still counts toward question cover / skip_cap."""
+    return _task_reason_value(t) not in _INACTIVE_COVER_REASONS
+
+
+def _prune_inactive_cover(
+    cover: dict[str, set[str]],
+    by_key: Mapping[str, Task],
+) -> dict[str, set[str]]:
+    """Drop superseded/cancelled keys; remove empty question sets.
+
+    Keys with no runtime Task yet stay (plan-only, not yet created). Fold
+    determinism: once TaskDone lands with SUPERSEDED/CANCELLED, reopen/replay
+    rebuilds the same Task.reason and the same pruned cover.
+    """
+    out: dict[str, set[str]] = {}
+    for qid, keys in cover.items():
+        live: set[str] = set()
+        for kk in keys:
+            t = by_key.get(kk)
+            if t is None or _active_for_cover(t):
+                live.add(kk)
+        if live:
+            out[str(qid)] = live
+    return out
+
+
 def _reasons_for(tasks: list[Task]) -> list[TaskReason]:
     out: list[TaskReason] = []
     for t in tasks:
@@ -175,14 +224,19 @@ def _dispositions_inner(
     cover = question_tasks(plans)
     # Foreach / expand / loop-iter tasks live in runtime.tasks and may be absent
     # from plans[*].tasks that ``question_tasks`` reads — union their addresses
-    # so skip_cap and covering both see the parent's own work.
+    # so skip_cap and covering both see the parent's own work. Superseded /
+    # cancelled (fold TaskDone.reason) are excluded so dead tasks cannot keep
+    # a decomposes parent under loop-cap (false cap).
     for t in tasks.values():
+        if not _active_for_cover(t):
+            continue
         spec = getattr(t, "spec", None)
         addrs = getattr(spec, "addresses", None) or []
         key = str(getattr(spec, "task_key", "") or "")
         for qid in addrs:
             cover.setdefault(str(qid), set()).add(key or str(getattr(t, "task_id", "")))
     by_key = _task_by_key(tasks)
+    cover = _prune_inactive_cover(cover, by_key)
     by_target: dict[str, list] = {}
     if graph is not None and study is not None:
         by_target = filtered_claims_by_target(

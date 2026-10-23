@@ -16,6 +16,9 @@ from coscientist.core.dispositions import dispositions
 from coscientist.core.domain import (
     AgentTaskOutput,
     ArtifactHandle,
+    ForEachSpec,
+    LoopPredicate,
+    LoopSpec,
     OutputSpec,
     QuestionSpec,
     RequirementRef,
@@ -29,10 +32,15 @@ from coscientist.core.errors import LeaseLost
 from coscientist.core.events import (
     PLAN_ACCEPTED_SCHEMA_VERSION,
     PLAN_EXPANDED_SCHEMA_VERSION,
+    EventEnvelope,
+    make_idem,
 )
+from coscientist.core.graph import GraphNode
+from coscientist.core.ids import hypothesis_node_id, task_id
+from coscientist.core.loop import capped_scope_questions, loop_status
 from coscientist.core.minimal_report import render_markdown_report
 from coscientist.core.plan_validate import validate_decomposes
-from coscientist.core.reasons import Disposition, TaskReason, TerminalReason
+from coscientist.core.reasons import Disposition, NotAttemptedReason, TaskReason, TerminalReason
 from coscientist.core.recover import recover
 from coscientist.core.rubric import freeze_rubric
 from coscientist.core.rubric_types import Rubric, RubricItem
@@ -916,10 +924,27 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
         subquestions=[_q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="all",
     )
-    attach_executor(rt, tmp_path)
+    ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("E0")
     assert aid
-    await rt.cancel_task("E0", reason="cancelled")
+    # Live SUCCESS cover for Q.a — cancelled/superseded keys are excluded from
+    # cover (E1 superseded below must not inflate child cover / false answers).
+    art = arts.put(
+        b"# leaf\n",
+        make_tool_ref(f"{aid}:main"),
+        name="main",
+        media_type="text/markdown",
+    )
+    await ex.record(
+        aid,
+        AgentTaskOutput(
+            summary="leaf done",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+        ),
+    )
+    e0 = next(t for t in rt.tasks.values() if t.spec.task_key == "E0")
+    # Judge rubric may leave E0 open; cover only needs a non-cancelled/superseded key.
+    assert e0.reason not in (TaskReason.CANCELLED, TaskReason.SUPERSEDED)
 
     # Agent expand (no HITL): adds a task addressing the parent into runtime.tasks.
     new_pid = await rt.expand_plan(
@@ -953,6 +978,8 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
         "Q" in (t.spec.addresses or []) and t.spec.task_key == "E_ROOT"
         for t in rt.tasks.values()
     )
+    e1 = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
+    assert e1.reason == TaskReason.SUPERSEDED
     # Accepted-only plans: no E_ROOT addresses (simulates plans[*].tasks gap).
     plans_accepted = {
         k: v
@@ -969,7 +996,8 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
     }
 
     def _rub(*, task_keys, **_kw):
-        # Child artifact-met; parent stays not_attempted then capped.
+        # Child artifact-met via live E0; parent stays not_attempted then capped.
+        # Superseded E1 must not be required for cover.
         return "met" if task_keys and "E_ROOT" not in task_keys else None
 
     # Force Q.a to artifact so children answer via rubric_met.
@@ -1024,6 +1052,362 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
     assert out["Q"]["disposition"] == Disposition.INCONCLUSIVE.value
     assert out["Q"]["reason"] == TaskReason.ITERATION_CAP.value
     await close_runtime(rt)
+
+
+def test_cover_excludes_cancelled_superseded_yields_no_task():
+    """Fold TaskDone.reason superseded/cancelled drops cover → no_task (not tasks_skipped).
+
+    Combined cover used to keep dead keys so cancelled-only covering became
+    ``tasks_skipped``; pruning restores empty cover / ``no_task``. Runtime-only
+    live covering can still change ``no_task`` → ``tasks_failed``.
+    """
+    from coscientist.core.dispositions import dispositions
+
+    plans = {
+        "p1": {
+            "plan_id": "p1",
+            "revision": 1,
+            "questions": [{"id": "Q", "text": "root"}],
+            "tasks": [{"task_key": "E_DEAD", "addresses": ["Q"]}],
+        }
+    }
+    dead = {
+        "tid:E_DEAD": _task(
+            "E_DEAD",
+            outcome=TaskOutcome.SKIPPED,
+            reason=TaskReason.CANCELLED,
+            addresses=["Q"],
+        )
+    }
+    out_dead = dispositions(tasks=dead, plans=plans)
+    assert out_dead["Q"]["disposition"] == Disposition.NOT_ATTEMPTED.value
+    assert out_dead["Q"]["reason"] == NotAttemptedReason.NO_TASK.value
+
+    supers = {
+        "tid:E_DEAD": _task(
+            "E_DEAD",
+            outcome=TaskOutcome.SKIPPED,
+            reason=TaskReason.SUPERSEDED,
+            addresses=["Q"],
+        )
+    }
+    out_sup = dispositions(tasks=supers, plans=plans)
+    assert out_sup["Q"]["reason"] == NotAttemptedReason.NO_TASK.value
+
+    # Runtime-only live cover (not in plans[*].tasks) changes no_task → tasks_failed.
+    plans_empty = {
+        "p1": {
+            "plan_id": "p1",
+            "revision": 1,
+            "questions": [{"id": "Q", "text": "root"}],
+            "tasks": [],
+        }
+    }
+    live_fail = {
+        "tid:E_RT": _task(
+            "E_RT",
+            outcome=TaskOutcome.FAILED,
+            reason=TaskReason.FAILED,
+            addresses=["Q"],
+        )
+    }
+    out_rt = dispositions(tasks=live_fail, plans=plans_empty)
+    assert out_rt["Q"]["reason"] == NotAttemptedReason.TASKS_FAILED.value
+
+
+def test_superseded_only_parent_cover_skips_loop_cap():
+    """Parent addressed only by superseded/cancelled tasks must not get false cap."""
+    from coscientist.core.dispositions import dispositions
+
+    capped = {
+        "Q": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+        "Q.a": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+        "Q.b": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+    }
+    plans = {
+        "p1": {
+            "plan_id": "p1",
+            "revision": 1,
+            "rollup": "all",
+            "questions": [
+                {"id": "Q", "text": "root"},
+                {"id": "Q.a", "text": "a", "parent_id": "Q"},
+                {"id": "Q.b", "text": "b", "parent_id": "Q"},
+            ],
+            "subquestions": [
+                {"id": "Q.a", "text": "a", "parent_id": "Q"},
+                {"id": "Q.b", "text": "b", "parent_id": "Q"},
+            ],
+            "tasks": [
+                {"task_key": "E_SUPER", "addresses": ["Q"]},
+                {"task_key": "E_CANCEL", "addresses": ["Q"]},
+                {"task_key": "E0", "addresses": ["Q.a"]},
+                {"task_key": "E1", "addresses": ["Q.b"]},
+            ],
+        }
+    }
+    tasks = {
+        "tid:E_SUPER": _task(
+            "E_SUPER",
+            outcome=TaskOutcome.SKIPPED,
+            reason=TaskReason.SUPERSEDED,
+            addresses=["Q"],
+        ),
+        "tid:E_CANCEL": _task(
+            "E_CANCEL",
+            outcome=TaskOutcome.SKIPPED,
+            reason=TaskReason.CANCELLED,
+            addresses=["Q"],
+        ),
+        "tid:E0": _task("E0", outcome=TaskOutcome.SUCCESS, addresses=["Q.a"]),
+        "tid:E1": _task("E1", outcome=TaskOutcome.SUCCESS, addresses=["Q.b"]),
+    }
+    out = dispositions(tasks=tasks, plans=plans, loop_capped_questions=capped)
+    # Dead parent cover → skip_cap (no false iteration_cap on Q).
+    assert out["Q"]["reason"] != TaskReason.ITERATION_CAP.value
+    assert out["Q"].get("rollup_clamped") is not True
+
+
+@pytest.mark.asyncio
+async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
+    """Real foreach: SUPERSEDED template drops from cover; children keep it."""
+    from coscientist.core.dispositions import dispositions
+
+    sid = "pr16-fe-cover"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
+    await rt.create_study(
+        profile="research",
+        request="foreach cover",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(hours=1),
+        finalize_reserve_s=30,
+        sid=sid,
+        max_expansions=0,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+
+    e0 = TaskSpec(
+        task_key="E0",
+        title="E0",
+        goal="g",
+        route="experiment",
+        depends_on=["PLAN"],
+        addresses=[],
+        criteria=[],
+        required=False,
+    )
+    fe = TaskSpec(
+        task_key="FE",
+        title="FE",
+        goal="g",
+        route="experiment",
+        depends_on=["E0"],
+        addresses=["Q1"],
+        criteria=[RequirementRef(template_id="value_match")],
+        foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
+    )
+    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")])
+    now = rt.clock.now()
+    for i, hid in enumerate(("H0", "H1")):
+        nid = hypothesis_node_id(sid, hid)
+        await rt._append(
+            [
+                EventEnvelope(
+                    study_id=sid,
+                    type="GraphNodeUpserted",
+                    entity_key=nid,
+                    idem_key=make_idem("GraphNodeUpserted", nid, "pr16-fe"),
+                    payload=GraphNode(
+                        node_id=nid,
+                        kind="hypothesis",
+                        study_id=sid,
+                        ref_id=hid,
+                        attrs={
+                            "statement": f"s{i}",
+                            "prediction": f"p{i}",
+                            "selected": True,
+                            "rank": i,
+                            "source_task": "E0",
+                        },
+                        created_at=now,
+                    ).model_dump(mode="json"),
+                    ts=now,
+                )
+            ]
+        )
+
+    aid = await rt.start_attempt("E0")
+    content = b'{"count": 1}'
+    art = arts.put(content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json")
+    await rt.executor.record(
+        aid,
+        AgentTaskOutput(
+            summary="ok",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            values={"count": 1},
+        ),
+    )
+    children = list(rt._foreach_children.get("FE") or [])
+    assert len(children) == 2
+    fe_t = rt.tasks[task_id(sid, "FE")]
+    assert fe_t.reason == TaskReason.SUPERSEDED
+
+    # Cancel children → only SUPERSEDED template would remain; cover must be empty.
+    for k in children:
+        await rt.cancel_task(k, reason="cancelled")
+    out = dispositions(tasks=rt.tasks, plans=rt.plans)
+    assert out["Q1"]["reason"] == NotAttemptedReason.NO_TASK.value, out["Q1"]
+
+    # Live foreach child restores cover (combined cover changes no_task).
+    # Re-open a fresh study path is heavy; instead assert SUCCESS child via synthetic
+    # overlay on the same folded tasks map.
+    live_child = children[0]
+    overlay = dict(rt.tasks)
+    ch = overlay[task_id(sid, live_child)]
+    overlay[task_id(sid, live_child)] = ch.model_copy(
+        update={"reason": None, "outcome": TaskOutcome.FAILED, "state": TaskState.DONE}
+    )
+    out_live = dispositions(tasks=overlay, plans=rt.plans)
+    assert out_live["Q1"]["reason"] == NotAttemptedReason.TASKS_FAILED.value
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, clock):
+    """Real loop iters → capped_scope_questions; reopen/replay dispositions match."""
+    from coscientist.core.dispositions import dispositions
+
+    sid = "pr16-loop-cover"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
+    await rt.create_study(
+        profile="research",
+        request="loop cover",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=400),
+        finalize_reserve_s=5,
+        sid=sid,
+        max_expansions=0,
+        max_loop_iter=8,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    for key in ("SPEC", "HYP", "LIT"):
+        aid = await rt.start_attempt(key)
+        content = b'{"count": 1}'
+        art = arts.put(
+            content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
+        )
+        await rt.executor.record(
+            aid,
+            AgentTaskOutput(
+                summary="ok",
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+                values={"count": 1},
+            ),
+        )
+
+    nid = hypothesis_node_id(sid, "H1")
+    rt.graph.upsert_node(
+        GraphNode(
+            node_id=nid,
+            kind="hypothesis",
+            study_id=sid,
+            ref_id="H1",
+            attrs={"text": "H1"},
+        )
+    )
+    body = [
+        TaskSpec(
+            task_key="BODY",
+            title="BODY",
+            goal="loop body",
+            route="experiment",
+            depends_on=[],
+            addresses=["Q1"],
+            criteria=[RequirementRef(template_id="value_match")],
+        )
+    ]
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="POST",
+                title="after",
+                goal="g",
+                route="experiment",
+                depends_on=["loop:L1"],
+                addresses=["Q1"],
+                criteria=[RequirementRef(template_id="value_match")],
+                required=False,
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="which hyp")],
+        loops=[
+            LoopSpec(
+                loop_id="L1",
+                body=body,
+                until=LoopPredicate(name="survivors_le", params={"n": 0}),
+                max_iter=2,
+                scope_hypotheses=["H1"],
+                scope_questions=["Q1"],
+                depends_on=[],
+            )
+        ],
+    )
+
+    def _iter_tasks(runtime, iter_n: int):
+        return [
+            t
+            for t in runtime.tasks.values()
+            if t.spec.loop_id == "L1" and t.spec.loop_iter == iter_n
+        ]
+
+    for it in (1, 2):
+        tasks = _iter_tasks(rt, it)
+        assert len(tasks) == 1, f"expected 1 body task in iter {it}"
+        for t in tasks:
+            aid = await rt.start_attempt(t.spec.task_key)
+            content = b'{"count": 1}'
+            art = arts.put(
+                content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
+            )
+            await rt.executor.record(
+                aid,
+                AgentTaskOutput(
+                    summary="ok",
+                    outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+                    values={"count": 1},
+                ),
+            )
+    assert loop_status(rt, "L1") == "capped"
+    capped = capped_scope_questions(rt)
+    assert "Q1" in capped
+    assert capped["Q1"].get("reason") == "iteration_cap"
+    assert int(capped["Q1"].get("iter") or 0) >= 1
+
+    live = dispositions(
+        tasks=rt.tasks,
+        plans=rt.plans,
+        loop_capped_questions=capped,
+    )
+    assert live["Q1"]["disposition"] == Disposition.INCONCLUSIVE.value
+    assert live["Q1"]["reason"] == TaskReason.ITERATION_CAP.value
+
+    await close_runtime(rt)
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    attach_executor(rt2, tmp_path)
+    await recover(rt2)
+    assert loop_status(rt2, "L1") == "capped"
+    capped2 = capped_scope_questions(rt2)
+    assert capped2["Q1"]["iter"] == capped["Q1"]["iter"]
+    again = dispositions(
+        tasks=rt2.tasks,
+        plans=rt2.plans,
+        loop_capped_questions=capped2,
+    )
+    assert again["Q1"] == live["Q1"]
+    await close_runtime(rt2)
 
 
 def test_question_origin_implicit_vs_explicit():
