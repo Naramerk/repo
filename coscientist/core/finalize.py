@@ -529,6 +529,7 @@ async def _build_rich_payload(
 ) -> dict[str, Any]:
     # Reclassified fetch tools: journal diagnostic so contrib includes internal_error;
     # paired SourceFetched stays uncounted (fold catches FetchToolReclassified).
+    from coscientist.core.projections import fold_events
     from coscientist.core.source_fetch import reconcile_fetch_integrity
 
     try:
@@ -559,6 +560,11 @@ async def _build_rich_payload(
     term = terminal_reason_for(trigger, tasks=runtime.tasks, question_dispositions=qdisp)
     events = await runtime.store.read_all()
     contrib = contributing_reasons_ordered(events)
+    # If journaling failed/skipped, fold still surfaces fetch_integrity → reason.
+    if "internal_error" not in contrib:
+        folded = fold_events(events)
+        if folded.get("fetch_integrity"):
+            contrib.append("internal_error")
     # PR13: disposition report_line (e.g. «не выполнено: рубрика не принята»).
     for d in qdisp.values():
         line = d.get("report_line") if isinstance(d, dict) else None

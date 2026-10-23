@@ -157,19 +157,24 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
                 p if isinstance(p, dict) else {}
             )
         except FetchToolReclassified as exc:
-            key = exc.call_id or exc.tool
-            _put(
-                proj,
-                "fetch_integrity",
-                key,
-                {
-                    "kind": "fetch_tool_reclassified",
-                    "tool": exc.tool,
-                    "call_id": exc.call_id,
-                    "attempt_id": aid,
-                    "internal_error": True,
-                },
-            )
+            key = str(exc.call_id or exc.tool or "")
+            if key:
+                _put(
+                    proj,
+                    "fetch_integrity",
+                    key,
+                    {
+                        "kind": "fetch_tool_reclassified",
+                        "tool": exc.tool,
+                        # Persist the projection key even when call_id was empty
+                        # so ``_row_key`` can reload the row after a store round-trip.
+                        "call_id": exc.call_id or key,
+                        "tool_name": exc.tool,
+                        "attempt_id": aid,
+                        "row_key": key,
+                        "internal_error": True,
+                    },
+                )
             marked = None
         if marked is not None:
             call_id, tool = marked
@@ -182,14 +187,23 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
     elif t == "FetchIntegrityRaised":
         payload = p if isinstance(p, dict) else {}
         key = str(
-            payload.get("call_id") or event.entity_key or payload.get("tool") or ""
+            payload.get("call_id")
+            or event.entity_key
+            or payload.get("tool")
+            or payload.get("row_key")
+            or ""
         )
         if key:
             _put(
                 proj,
                 "fetch_integrity",
                 key,
-                {**payload, "internal_error": True},
+                {
+                    **payload,
+                    "call_id": str(payload.get("call_id") or key),
+                    "row_key": key,
+                    "internal_error": True,
+                },
             )
     elif t == "SourceFetched":
         # Only fold when paired with a journaled fetch ToolCall (AttemptTainted).
@@ -285,13 +299,23 @@ def _row_key(table: str, row: dict[str, Any]) -> str | None:
         "effects": "key",
         "source_fetches": "digest",
         "fetch_calls": "call_id",
-        "fetch_integrity": "call_id",
         "requirements": "id",
         "hitl_requests": "request_id",
         "graph_nodes": "node_id",
         "graph_edges": "edge_id",
         "meta": "study_id",
     }
+    if table == "fetch_integrity":
+        # call_id may be absent on tool-only integrity rows — never drop them.
+        for cand in (
+            row.get("call_id"),
+            row.get("tool"),
+            row.get("tool_name"),
+            row.get("row_key"),
+        ):
+            if cand:
+                return str(cand)
+        return None
     field = mapping.get(table)
     if table == "meta":
         return str(row["study_id"]) if row.get("study_id") else row.get("row_key")

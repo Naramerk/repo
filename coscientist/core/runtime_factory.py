@@ -164,6 +164,13 @@ async def open_runtime(
             await finalize_mod.finalize(rt, trigger="internal_error")
         # PR18: seal tool registry after built-ins — no late register_tool at runtime.
         ensure_core_tools_ready()
+        # Open (and finalize) may journal FetchIntegrityRaised; executor reads must not.
+        try:
+            from coscientist.core.source_fetch import reconcile_fetch_integrity
+
+            await reconcile_fetch_integrity(writer)
+        except Exception:  # noqa: BLE001 — open must stay total
+            log.warning("reconcile_fetch_integrity on open failed", exc_info=True)
         return rt
     except BaseException:
         # Stop the writer first so in-flight appends cannot race release.

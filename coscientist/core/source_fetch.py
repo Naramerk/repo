@@ -392,14 +392,8 @@ async def load_source_fetch_index_from_writer(writer: StudyWriter) -> SourceFetc
             after = n
     writer.source_fetch_idx = idx
     writer.source_fetch_seq = after
-    if idx.reclassified:
-        study_id = str(getattr(store, "study_id", "") or "")
-        if study_id:
-            await journal_fetch_integrity_raised(
-                writer, idx.reclassified, study_id=study_id
-            )
-            # Avoid re-journaling the same issues on the next Δ fold.
-            idx.reclassified = []
+    # Read path only: never journal here (executor evaluate). Writes belong to
+    # ``reconcile_fetch_integrity`` on open/finalize.
     return idx
 
 
