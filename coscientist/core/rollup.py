@@ -67,13 +67,15 @@ def apply_rollup(
     Parents without children are unchanged.
 
     DESIGN_M1 §10+§14 / PR 8b: when the parent already has a **terminal own
-    verdict** (``verdict is not None`` — claims, rubric_not_met, needs_more_data,
+    disposition or verdict** (``disposition != not_attempted`` or
+    ``verdict is not None`` — claims, rubric_not_met, PR11 ``iteration_cap``,
     …), rollup may only **lower or keep** it — never raise, and never wipe it
-    with ``not_attempted`` from incomplete / no-majority children.
+    with ``not_attempted`` from incomplete / no-majority / cycle children.
 
     Cycle in the decomposes tree: only the cyclic subtree is tagged
-    ``rollup_cycle``; unrelated questions keep their leaf / rolled dispositions
-    (never a study-wide ``not_attempted`` wipe via dispositions' broad except).
+    ``rollup_cycle`` (or clamped when the node already has a terminal own);
+    unrelated questions keep their leaf / rolled dispositions (never a
+    study-wide ``not_attempted`` wipe via dispositions' broad except).
     """
     parent_of = parent_map_from_plans(plans)
     if not any(parent_of.values()):
@@ -124,14 +126,28 @@ def apply_rollup(
         if pid not in out:
             continue
         # Localize: only the cyclic parent row is degraded — leaves elsewhere intact.
-        out[pid] = {
-            **out[pid],
-            "disposition": Disposition.NOT_ATTEMPTED.value,
-            "reason": "rollup_cycle",
-            "reason_detail": ["rollup_cycle"],
-            "rollup": rule,
-            "rollup_children": list(kids[pid]),
-        }
+        # Like rollup_incomplete: keep own terminal disposition/verdict (clamp).
+        own = out[pid]
+        if _has_own_terminal_verdict(own):
+            kept = _clamp_keep(own, Disposition.NOT_ATTEMPTED.value)
+            detail = list(kept.get("reason_detail") or [])
+            if "rollup_cycle" not in detail:
+                detail.append("rollup_cycle")
+            out[pid] = {
+                **kept,
+                "reason_detail": detail,
+                "rollup": rule,
+                "rollup_children": list(kids[pid]),
+            }
+        else:
+            out[pid] = {
+                **own,
+                "disposition": Disposition.NOT_ATTEMPTED.value,
+                "reason": "rollup_cycle",
+                "reason_detail": ["rollup_cycle"],
+                "rollup": rule,
+                "rollup_children": list(kids[pid]),
+            }
 
     for pid in parents_ordered:
         if pid not in out:
@@ -157,12 +173,17 @@ def apply_rollup(
 
 
 def _has_own_terminal_verdict(row: Mapping[str, Any]) -> bool:
-    """True when the parent already carries a terminal own verdict.
+    """True when the parent already carries a terminal own disposition/verdict.
 
-    Covers PR 8b claims, ``rubric_not_met``, and future
-    ``needs_more_data`` / ``infeasible`` / ``ill_posed`` rows that stamp
-    ``verdict`` (not the not_attempted fallbacks that omit it).
+    ``disposition != not_attempted`` **or** ``verdict is not None``.
+
+    Covers PR 8b claims (``verdict``), ``rubric_not_met``, and PR11
+    ``iteration_cap`` rows that stamp ``disposition=inconclusive`` without a
+    ``verdict`` key (``dispositions.py`` ~383-388).
     """
+    disp = str(row.get("disposition") or Disposition.NOT_ATTEMPTED.value)
+    if disp != Disposition.NOT_ATTEMPTED.value:
+        return True
     return row.get("verdict") is not None
 
 

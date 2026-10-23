@@ -526,9 +526,18 @@ def test_rollup_cycle_localized_not_study_wide():
             "tasks": [],
         }
     }
+    # Non-terminal cycle nodes (not_attempted, no verdict) → rollup_cycle wipe.
     leaves = {
-        "A": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "a"},
-        "B": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "b"},
+        "A": {
+            "disposition": Disposition.NOT_ATTEMPTED.value,
+            "reason": "no_task",
+            "formulation": "a",
+        },
+        "B": {
+            "disposition": Disposition.NOT_ATTEMPTED.value,
+            "reason": "no_task",
+            "formulation": "b",
+        },
         "Q": {
             "disposition": Disposition.NOT_ATTEMPTED.value,
             "reason": "no_task",
@@ -538,12 +547,78 @@ def test_rollup_cycle_localized_not_study_wide():
     }
     rolled = apply_rollup(leaves, plans=plans)
     assert rolled["A"]["reason"] == "rollup_cycle"
+    assert rolled["A"]["disposition"] == Disposition.NOT_ATTEMPTED.value
     assert rolled["B"]["reason"] == "rollup_cycle"
+    assert rolled["B"]["disposition"] == Disposition.NOT_ATTEMPTED.value
     assert rolled["Q"]["disposition"] == Disposition.ANSWERED.value
     assert rolled["Q"]["reason"] == "rollup_all"
     assert rolled["Q.a"]["disposition"] == Disposition.ANSWERED.value
     # Must not raise into dispositions()' broad except (study-wide wipe).
     apply_rollup(leaves, plans=plans)  # idempotent, no ValueError
+
+
+def test_rollup_cycle_keeps_own_terminal_like_incomplete():
+    """Cycle node with own terminal disposition must clamp, not wipe (like incomplete)."""
+    from coscientist.core.rollup import apply_rollup
+
+    plans = {
+        "p1": {
+            "plan_id": "p1",
+            "revision": 1,
+            "rollup": "all",
+            "questions": [
+                {"id": "A", "text": "a", "parent_id": "B"},
+                {"id": "B", "text": "b", "parent_id": "A"},
+            ],
+            "tasks": [],
+        }
+    }
+    leaves = {
+        "A": {
+            "disposition": Disposition.REFUTED.value,
+            "reason": None,
+            "verdict": "refuted",
+            "formulation": "a",
+        },
+        "B": {
+            "disposition": Disposition.INCONCLUSIVE.value,
+            "reason": TaskReason.ITERATION_CAP.value,
+            "reason_detail": [TaskReason.ITERATION_CAP.value],
+            "formulation": "b",
+        },
+    }
+    rolled = apply_rollup(leaves, plans=plans)
+    assert rolled["A"]["disposition"] == Disposition.REFUTED.value
+    assert rolled["A"].get("rollup_clamped") is True
+    assert rolled["A"].get("rollup_would_have") == Disposition.NOT_ATTEMPTED.value
+    assert "rollup_cycle" in (rolled["A"].get("reason_detail") or [])
+    assert rolled["B"]["disposition"] == Disposition.INCONCLUSIVE.value
+    assert rolled["B"].get("rollup_clamped") is True
+    assert "rollup_cycle" in (rolled["B"].get("reason_detail") or [])
+
+
+def test_rollup_iteration_cap_parent_clamped():
+    """PR11 iteration_cap (inconclusive, no verdict) is terminal for clamp."""
+    from coscientist.core.rollup import apply_rollup
+
+    own = {
+        "disposition": Disposition.INCONCLUSIVE.value,
+        "reason": TaskReason.ITERATION_CAP.value,
+        "reason_detail": [TaskReason.ITERATION_CAP.value],
+        # dispositions.py ~383-388: no verdict key
+        "formulation": "root",
+    }
+    leaves = {
+        "Q": dict(own),
+        "Q.a": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "a"},
+        "Q.b": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "b"},
+    }
+    for rule in ("all", "any", "majority"):
+        rolled = apply_rollup(leaves, plans=_tree_plans(rule))
+        assert rolled["Q"]["disposition"] == Disposition.INCONCLUSIVE.value, rule
+        assert rolled["Q"]["reason"] == TaskReason.ITERATION_CAP.value, rule
+        assert rolled["Q"].get("rollup_clamped") is True, rule
+        assert rolled["Q"].get("rollup_would_have") == Disposition.ANSWERED.value, rule
 
 
 def test_question_origin_implicit_vs_explicit():
@@ -916,10 +991,14 @@ async def test_recover_then_finalize_single(tmp_path, clock):
 
     rt2 = await open_runtime(tmp_path, "pr16-recover", clock=clock, owner="t2")
     attach_executor(rt2, tmp_path)
-    await recover(rt2)
+    out = await recover(rt2)
+    assert out["closed"] >= 1
+    assert rt2.attempts[aid0].get("closed") is True
+    assert rt2.attempts[aid0].get("close_reason") == "crashed"
     ex, arts = attach_executor(rt2, tmp_path)
     aid = await rt2.start_attempt("E0")
     assert aid is not None
+    assert aid != aid0
     art = arts.put(
         b"# leaf\n",
         make_tool_ref(f"{aid}:main"),
@@ -1001,3 +1080,163 @@ def test_graph_edge_decomposes_in_affected_tables():
     proj = fold_events([ev])
     assert "graph_edges" in proj
     assert "decomposes:a:b" in proj["graph_edges"]
+
+
+@pytest.mark.asyncio
+async def test_foreach_after_task_done_reraise_lease_lost(tmp_path, clock, monkeypatch):
+    """foreach.py:453 — LeaseLost from _materialize_one must not become refuse."""
+    from coscientist.core import foreach as foreach_mod
+    from coscientist.core.domain import ForEachSpec
+    from coscientist.core.foreach import maybe_foreach_after_task_done
+    from coscientist.core.ids import task_id
+
+    sid = "pr16-fe-lease-after"
+    rt = await _boot(tmp_path, clock, sid)
+    e0 = _exp("E0", addresses=["Q.a"], rubric=_decomp_rubric())
+    fe = TaskSpec(
+        task_key="FE",
+        title="FE",
+        goal="g",
+        route="experiment",
+        depends_on=["E0"],
+        addresses=["Q.a"],
+        foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
+        criteria=[],
+    )
+    await rt.accept_plan(
+        [e0, fe],
+        questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
+        rollup="all",
+    )
+    attach_executor(rt, tmp_path)
+
+    async def _noop(_runtime, _tmpl):
+        return None
+
+    # Finish E0 without materializing (noop), then boom on the explicit call.
+    monkeypatch.setattr(foreach_mod, "_materialize_one", _noop)
+    aid = await rt.start_attempt("E0")
+    assert aid
+    await rt.cancel_task("E0", reason="cancelled")
+
+    async def _boom(_runtime, _tmpl):
+        raise LeaseLost("mocked lease loss in maybe_foreach_after_task_done")
+
+    monkeypatch.setattr(foreach_mod, "_materialize_one", _boom)
+    before = sum(1 for e in await rt.store.read_all() if e.type == "ExpansionRefused")
+    with pytest.raises(LeaseLost, match="maybe_foreach_after_task_done"):
+        await maybe_foreach_after_task_done(rt, task_id(sid, "E0"))
+    after = sum(1 for e in await rt.store.read_all() if e.type == "ExpansionRefused")
+    assert after == before
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_materialize_ready_foreach_reraise_lease_lost(tmp_path, clock, monkeypatch):
+    """foreach.py:479 — LeaseLost from _materialize_one must not become refuse."""
+    from coscientist.core import foreach as foreach_mod
+    from coscientist.core.domain import ForEachSpec
+    from coscientist.core.foreach import materialize_ready_foreach
+
+    sid = "pr16-fe-lease-ready"
+    rt = await _boot(tmp_path, clock, sid)
+    e0 = _exp("E0", addresses=["Q.a"], rubric=_decomp_rubric())
+    fe = TaskSpec(
+        task_key="FE",
+        title="FE",
+        goal="g",
+        route="experiment",
+        depends_on=["E0"],
+        addresses=["Q.a"],
+        foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
+        criteria=[],
+    )
+    await rt.accept_plan(
+        [e0, fe],
+        questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
+        rollup="all",
+    )
+    attach_executor(rt, tmp_path)
+
+    async def _noop(_runtime, _tmpl):
+        return None
+
+    monkeypatch.setattr(foreach_mod, "_materialize_one", _noop)
+    aid = await rt.start_attempt("E0")
+    assert aid
+    await rt.cancel_task("E0", reason="cancelled")
+
+    async def _boom(_runtime, _tmpl):
+        raise LeaseLost("mocked lease loss in materialize_ready_foreach")
+
+    monkeypatch.setattr(foreach_mod, "_materialize_one", _boom)
+    before = sum(1 for e in await rt.store.read_all() if e.type == "ExpansionRefused")
+    with pytest.raises(LeaseLost, match="materialize_ready_foreach"):
+        await materialize_ready_foreach(rt)
+    after = sum(1 for e in await rt.store.read_all() if e.type == "ExpansionRefused")
+    assert after == before
+    await close_runtime(rt)
+
+
+
+@pytest.mark.asyncio
+async def test_expand_trigger_reraise_lease_lost(tmp_path, clock, monkeypatch):
+    """expand_trigger.py:266 — LeaseLost must not become ExpansionRefused."""
+    from coscientist.core.expand_trigger import maybe_expand_after_task_done
+    from coscientist.core.ids import task_id
+
+    sid = "pr16-exp-trig-lease"
+    rt = await _boot(tmp_path, clock, sid)
+    rub = _decomp_rubric()
+    await rt.accept_plan(
+        [_exp("E0", addresses=["Q.a"], rubric=rub)],
+        questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
+        rollup="all",
+    )
+    attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("E0")
+    assert aid
+    await rt.cancel_task("E0", reason="cancelled")
+
+    async def _boom(_runtime, _tid):
+        raise LeaseLost("mocked lease loss in maybe_expand_after_task_done")
+
+    monkeypatch.setattr("coscientist.core.expand_trigger._maybe_expand", _boom)
+    before = sum(1 for e in await rt.store.read_all() if e.type == "ExpansionRefused")
+    with pytest.raises(LeaseLost, match="maybe_expand_after_task_done"):
+        await maybe_expand_after_task_done(rt, task_id(sid, "E0"))
+    after = sum(1 for e in await rt.store.read_all() if e.type == "ExpansionRefused")
+    assert after == before
+    await close_runtime(rt)
+
+
+
+@pytest.mark.asyncio
+async def test_finalize_reraise_lease_lost(tmp_path, clock, monkeypatch):
+    """finalize.py — LeaseLost from rich payload must not fall to last-resort."""
+    import coscientist.core.finalize as fin_mod
+
+    sid = "pr16-fin-lease"
+    rt = await _boot(tmp_path, clock, sid)
+    rub = _decomp_rubric()
+    await rt.accept_plan(
+        [_exp("E0", addresses=["Q.a"], rubric=rub)],
+        questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
+        rollup="all",
+    )
+    for key in list(rt.tasks):
+        t = rt.tasks[key]
+        if t.state != TaskState.DONE:
+            await rt.cancel_task(t.spec.task_key, reason="cancelled")
+
+    async def _boom(*_a, **_k):
+        raise LeaseLost("mocked lease loss in finalize rich payload")
+
+    monkeypatch.setattr(fin_mod, "_build_rich_payload", _boom)
+    before = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    with pytest.raises(LeaseLost, match="finalize rich payload"):
+        await rt.finalize(trigger="all_done")
+    after = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    assert len(after) == len(before), "LeaseLost must not write StudyFinalized"
+    assert not getattr(rt, "_finalized", False)
+    await close_runtime(rt)
