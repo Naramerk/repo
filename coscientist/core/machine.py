@@ -247,18 +247,16 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         if self._finalized:
             return
 
-<<<<<<< HEAD
+        # Budget before H-c so trigger priority budget > … > all_done holds.
         await self._emit_study_budget_if_exhausted()
         if self._finalized:
             return
-=======
+
         # H-c while still running: skip children of FAILED/SKIPPED parents
-        # without InputSpec. Past ed, deadline close owns remaining work.
+        # without InputSpec (stage chain excluded — see AttemptsMixin).
+        # H-c does not finalize; all_done / triggers run next.
         if now < ed:
             await self._skip_unavailable_dep_children()
-            if self._finalized:
-                return
->>>>>>> 31abbc2 (M1 PR5: simulate=forbid default, tolerate_failed_dep, method=simulation)
 
         all_done = bool(self.tasks) and all(
             t.state == TaskState.DONE for t in self.tasks.values()

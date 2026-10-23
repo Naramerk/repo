@@ -145,7 +145,7 @@ class InputSpec(Frozen):
     from_task: str
     output: str
     schema_ref: str | None = None
-    # M1 PR5: default forbid (DESIGN was schema_stub / use_partial).
+    # M1 PR5: default forbid (was use_partial). Old journals restored via upcaster.
     mode: Literal["use_partial", "simulate", "forbid"] = "forbid"
 
 
@@ -162,6 +162,17 @@ class QuestionSpec(Frozen):
     text: str
 
 
+class ExperimentMethod(StrEnum):
+    """Matches graph_schema experiment.method (simulation = scientific, not stub)."""
+
+    COMPUTATIONAL = "computational"
+    STATISTICAL = "statistical"
+    LABORATORY = "laboratory"
+    LITERATURE_SEARCH = "literature_search"
+    EXPERT = "expert"
+    SIMULATION = "simulation"
+
+
 class TaskSpec(Frozen):
     task_key: str
     title: str
@@ -176,8 +187,8 @@ class TaskSpec(Frozen):
     addresses: list[str] = Field(default_factory=list)
     # H-c: allow start when a depends_on parent is FAILED/SKIPPED (no InputSpec).
     tolerate_failed_dep: bool = False
-    # experiment.method; "simulation" is scientific (provenance=real), not a stub.
-    method: str | None = None
+    # Scientific method; simulation does not upgrade stub/partial input provenance.
+    method: ExperimentMethod | None = None
 
 
 class Budget(Frozen):

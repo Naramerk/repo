@@ -212,8 +212,9 @@ class Disposition(StrEnum):
 - `Study.refutations_needed: int = 1` (k_ref) и `Study.refutation_priority: bool` — **фиксируются на Study при создании из профиля** (как catalog_version), в событии `StudyCreated`; позже не меняются (смена — только fork).
 - Новое правило в `verdict()` при `refutation_priority=True`: если distinct(ref) ≥ k_ref → `refuted`, даже при наличии sup (асимметрия Поппера). **Потолок провенанса действует:** в ref для приоритета идут только claims с provenance=real и evidence computational/experimental; литературное опровержение (`is_lit`) или не-real не перевешивает real supports — тогда sup+ref → inconclusive, как в RM §4.1. При `refutation_priority=False` правило RM §4.1 без изменений.
 - Ревью предлагало только отдельный k_ref; без приоритета k_ref ничего не меняет (sup+ref → inconclusive). Приоритет принят с условиями ревью выше.
-- H-c: `depends_on` без InputSpec на FAILED/SKIPPED родителе → SKIPPED(input_unavailable), кроме `TaskSpec.tolerate_failed_dep = True`.
-- `InputSpec.simulate` по умолчанию `forbid` (было `schema_stub`, D §2). Заглушки — только явным флагом.
+- H-c: `depends_on` без InputSpec на FAILED/SKIPPED родителе → SKIPPED(input_unavailable), кроме `TaskSpec.tolerate_failed_dep = True`. Stage-задачи SPEC…REPORT **не** каскадируются H-c (D §7.5: FAILED SPEC → plan с сырого запроса).
+- `InputSpec.mode` по умолчанию `forbid` (было `use_partial` / schema_stub, D §2). Заглушки — только явным флагом; upcaster TaskCreated v3→v4 сохраняет `use_partial` для старых журналов.
+- `experiment.method=simulation` — научная симуляция (enum как в graph schema); provenance попытки всё равно capped входами (H-b / §6.7), simulation не повышает stub→real.
 
 **Тесты.** `test_uses_claim_edge`, `test_refute_intent_met_is_survived`, `test_refutation_priority_k_ref`, `test_depends_on_failed_parent_skipped`, `test_tolerate_failed_dep`, `test_default_forbid_no_stubs`; обновить refmodel.verdict.
 

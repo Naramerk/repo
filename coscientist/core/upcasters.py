@@ -48,6 +48,27 @@ def _ensure_spec_addresses(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _task_created_v3_to_v4_input_mode(payload: dict[str, Any]) -> dict[str, Any]:
+    """Pre-PR5 InputSpec.mode default was use_partial; keep that on replay."""
+    out = dict(payload)
+    spec = out.get("spec")
+    if isinstance(spec, dict):
+        spec = dict(spec)
+        inputs = spec.get("inputs")
+        if isinstance(inputs, list):
+            rewritten: list[Any] = []
+            for item in inputs:
+                if isinstance(item, dict):
+                    item = dict(item)
+                    item.setdefault("mode", "use_partial")
+                    rewritten.append(item)
+                else:
+                    rewritten.append(item)
+            spec["inputs"] = rewritten
+        out["spec"] = spec
+    return out
+
+
 def _plan_accepted_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
     out = dict(payload)
     out.setdefault("questions", [])
@@ -139,6 +160,7 @@ def _study_finalized_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
 
 register_upcaster("TaskCreated", 1, _task_created_v1_to_v2)
 register_upcaster("TaskCreated", 2, _ensure_spec_addresses)
+register_upcaster("TaskCreated", 3, _task_created_v3_to_v4_input_mode)
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)
 register_upcaster("StudyCreated", 1, _study_created_v1_to_v2)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)

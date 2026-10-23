@@ -172,7 +172,25 @@ def test_questions_from_spec_output_wired():
 
 def test_upcast_taskcreated_addresses_default():
     v, p = upcast("TaskCreated", 2, {"task_id": "t", "spec": {"task_key": "E1"}})
-    assert v == 3 and p["spec"]["addresses"] == []
+    # v2→v3 addresses, then v3→v4 input-mode default for old journals.
+    assert v == 4 and p["spec"]["addresses"] == []
+
+
+def test_upcast_taskcreated_input_mode_old_default():
+    v, p = upcast(
+        "TaskCreated",
+        3,
+        {
+            "task_id": "t",
+            "spec": {
+                "task_key": "E1",
+                "addresses": [],
+                "inputs": [{"from_task": "A", "output": "main"}],
+            },
+        },
+    )
+    assert v == 4
+    assert p["spec"]["inputs"][0]["mode"] == "use_partial"
 
 
 def test_upcast_planaccepted_questions_default():

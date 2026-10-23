@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 
-from coscientist.core.domain import Provenance, Task, TaskOutcome, TaskState
+from coscientist.core.domain import Provenance, Task, TaskKind, TaskOutcome, TaskState
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.ids import attempt_id, task_id
 from coscientist.core.inputs import InputUnavailable, bind_inputs
@@ -16,6 +16,18 @@ from coscientist.core.reasons import CloseReason, TaskReason, coerce_close_reaso
 RETRY_BACKOFF_S = 0.05
 
 _VALID_PROVENANCE = frozenset({"real", "partial", "stub"})
+
+# Stage DAG (SPEC→…→REPORT): H-c must not cascade — DESIGN §7.5: failed SPEC
+# → plan is built from the raw request; later stages still run.
+_STAGE_KINDS = frozenset(
+    {
+        TaskKind.SPEC,
+        TaskKind.HYPOTHESES,
+        TaskKind.LITERATURE,
+        TaskKind.PLAN,
+        TaskKind.REPORT,
+    }
+)
 
 
 class AttemptsMixin:
@@ -56,11 +68,14 @@ class AttemptsMixin:
     async def _skip_unavailable_dep_children(self) -> None:
         """H-c: FAILED/SKIPPED parent without InputSpec → SKIPPED(input_unavailable).
 
-        Skipped when ``tolerate_failed_dep`` is set. Parents covered by an
-        ``InputSpec`` are left to ``bind_inputs`` on start_attempt.
+        Stage tasks are excluded (failed SPEC must not wipe PLAN/REPORT). Skipped
+        when ``tolerate_failed_dep`` is set. Parents covered by an ``InputSpec``
+        are left to ``bind_inputs`` on start_attempt.
         """
         for task in list(self.tasks.values()):
             if task.state == TaskState.DONE:
+                continue
+            if task.kind in _STAGE_KINDS:
                 continue
             if task.spec.tolerate_failed_dep:
                 continue
@@ -116,13 +131,9 @@ class AttemptsMixin:
             await self.cancel_task(task.task_id, reason=TaskReason.INPUT_UNAVAILABLE)
             raise
 
-        # Scientific simulation (experiment.method=simulation) stays provenance=real.
-        if provenance is not None:
-            prov = provenance
-        elif (task.spec.method or "") == "simulation":
-            prov = "real"
-        else:
-            prov = derived
+        # method=simulation is scientific metadata (not a stub by itself); input
+        # provenance from bind_inputs still downgrades (H-b / DESIGN §6.7).
+        prov = provenance if provenance is not None else derived
         if prov not in _VALID_PROVENANCE:
             raise ValueError(f"invalid provenance: {prov}")
 
