@@ -103,6 +103,7 @@ async def test_core_opens_when_all_hitl_gates_closed(tmp_path, clock):
         "retried": 0,
         "expansions_resumed": 0,
         "foreach_resumed": 0,
+        "loops_resumed": 0,
     }
     assert core.tasks["st_hitl/SPEC"].state == TaskState.DONE
     await close_runtime(core)
