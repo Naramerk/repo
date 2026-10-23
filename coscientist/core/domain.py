@@ -545,6 +545,9 @@ class Artifact(Frozen):
     produced_by: ToolCallRef
     schema_ref: str | None = None
     role: ArtifactRole | None = None
+    # M1 PR15: subtype stamped by core from OutputSpec rubric
+    # (experiment_design | contradiction_map); not agent-settable.
+    kind: str | None = None
     # Core-stamped; agent ``put`` always ``agent``. Never settable by AgentTaskOutput.
     producer: ArtifactProducer = "agent"
     # Sandbox only: isolation actually achieved (PR17). trusted only if both hard.
@@ -736,6 +739,8 @@ class AgentTaskOutput(Frozen):
     expansion_request: ExpansionRequest | None = None
     # PR12: actual spend → BudgetDebited(task_id) from Executor.record.
     cost_rub: Decimal | None = None
+    # M1 PR15: explicit needs_more_data|infeasible (validated → QuestionDisposed).
+    question_disposals: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class StudyView(Frozen):

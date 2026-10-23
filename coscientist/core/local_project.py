@@ -43,6 +43,7 @@ class LocalProjectMixin:
     _loop_state: dict[str, dict[str, Any]]
     _loop_capped: dict[str, dict[str, Any]]
     _loop_done: set[str]
+    question_disposals: dict[str, dict[str, Any]]
 
     def _clear_expand_request(
         self, *, after_task: str | None = None, plan_key: str | None = None
@@ -181,6 +182,14 @@ class LocalProjectMixin:
             decisions[rid] = dict(p)
         elif ev.type == "StudyCancelled":
             self._study_cancelled = True
+        elif ev.type == "QuestionDisposed":
+            from coscientist.core.dispose import fold_question_disposed
+
+            store = getattr(self, "question_disposals", None)
+            if not isinstance(store, dict):
+                self.question_disposals = {}
+                store = self.question_disposals
+            fold_question_disposed(store, p if isinstance(p, dict) else {})
         elif ev.type == "StudyFinalized":
             self._finalized = True
             self._fold_finalized_graph(ev.study_id, p, created_at=ev.ts)

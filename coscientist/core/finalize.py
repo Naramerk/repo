@@ -551,6 +551,7 @@ async def _build_rich_payload(
         results=getattr(runtime, "results", None),
         artifact_lookup=lookup,
         loop_capped_questions=capped_scope_questions(runtime),
+        question_disposals=getattr(runtime, "question_disposals", None),
     )
     hyp_verdicts, hyp_unavail = report_hypothesis_verdicts(
         graph=getattr(runtime, "graph", None),

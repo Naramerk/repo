@@ -76,6 +76,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         # True while finalize_loop_internal_error closes open work —
         # nested _append(TaskDone) must not re-enter expand/foreach/loop hooks.
         self._finalizing = False
+        self.question_disposals: dict[str, dict] = {}
         self._study_cancelled = False
         self._budget_exceeded = False
         self._intake_refusal: IntakeRefuse | None = None
@@ -252,6 +253,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                 results=self.results,
                 artifact_lookup=lookup if callable(lookup) else None,
                 loop_capped_questions=capped_scope_questions(self),
+                question_disposals=getattr(self, "question_disposals", None),
             )
         ed = self.study.effective_deadline() if self.study else None
         ftypes = None

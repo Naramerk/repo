@@ -505,9 +505,22 @@ def _derive_claim_core_attrs(
         and effect_is_countable(effect)
         and (effect_has_interval(effect) if predicts_null else True)
     )
+    from coscientist.core.derivation import (
+        EVIDENCE_KIND_DERIVATION,
+        executable_check_met,
+        is_derivation_task_spec,
+    )
+
+    if lit:
+        ek = "literature"
+    elif is_derivation_task_spec(spec):
+        ek = EVIDENCE_KIND_DERIVATION
+    else:
+        ek = "computational"
+    der_exec = bool(ek == EVIDENCE_KIND_DERIVATION and executable_check_met(list(checks or [])))
     out: dict[str, Any] = {
         "criterion_status": status,
-        "evidence_kind": "literature" if lit else "computational",
+        "evidence_kind": ek,
         "frozen": frozen,
         "lit_own_criterion": bool(lit and criteria),
         "accepted": bool(validated),
@@ -527,6 +540,7 @@ def _derive_claim_core_attrs(
         "data_digests": data_digests,
         "criterion_template_ids": criterion_template_ids,
         "study_id": study_id,
+        "derivation_executable": der_exec,
     }
     if indep_notes:
         out["independence_notes"] = list(indep_notes)
@@ -1000,7 +1014,76 @@ class Executor:
         # Keep claims so not_met can refute (invariant 10); only infra drops them.
         payload["result_class"] = "scientific"
         payload["payload_digest"] = payload_digest(payload)
-        return await self._commit_result(
+        # PR15: stamp experiment_design / contradiction_map on output artifacts.
+        from coscientist.core.experiment_design import artifact_kind_from_output_spec
+
+        for ospec in getattr(task.spec, "expected_outputs", None) or ():
+            name = str(getattr(ospec, "name", "") or "")
+            handle = (out.outputs or {}).get(name)
+            if handle is None:
+                continue
+            kind = artifact_kind_from_output_spec(ospec)
+            if kind and hasattr(self.artifacts, "stamp_kind"):
+                try:
+                    self.artifacts.stamp_kind(handle.artifact_id, kind)
+                except Exception:  # noqa: BLE001 — never fail record on stamp
+                    pass
+        # PR15: validate QuestionDisposed payloads (append after result; fail-closed).
+        disposal_events: list[EventEnvelope] = []
+        for raw in list(out.question_disposals or []):
+            try:
+                from coscientist.core.dispose import (
+                    QuestionDisposal,
+                    question_disposed_event,
+                    validate_disposal,
+                )
+
+                disposal = (
+                    raw
+                    if isinstance(raw, QuestionDisposal)
+                    else QuestionDisposal.model_validate(raw)
+                )
+                if (
+                    disposal.disposition == "needs_more_data"
+                    and not disposal.design_artifact_id
+                    and out.outputs
+                ):
+                    for ospec in getattr(task.spec, "expected_outputs", None) or ():
+                        if artifact_kind_from_output_spec(ospec) == "experiment_design":
+                            h = (out.outputs or {}).get(str(ospec.name))
+                            if h is not None:
+                                disposal = disposal.model_copy(
+                                    update={"design_artifact_id": h.artifact_id}
+                                )
+                                break
+                # Prefer live graph question nodes when present.
+                g = self.get_graph() if self.get_graph is not None else None
+                known: set[str] = set()
+                if g is not None:
+                    for n in g.nodes_by_kind("question"):
+                        if n.study_id == study_id:
+                            known.add(n.ref_id or n.node_id.split(":")[-1])
+                if not known:
+                    known = {disposal.question_id}  # defer unknown to fold-time
+                validate_disposal(
+                    disposal,
+                    known_question_ids=known,
+                    artifact_lookup=getattr(self.artifacts, "get_meta", None),
+                    covering_task_keys={task.spec.task_key},
+                    tasks={task_id: task},
+                    results=None,
+                )
+                disposal_events.append(
+                    question_disposed_event(
+                        study_id=study_id,
+                        disposal=disposal,
+                        now=self.clock.now(),
+                    )
+                )
+            except Exception:  # noqa: BLE001 — reject silently; report via missing design
+                continue
+
+        result = await self._commit_result(
             attempt_id,
             study_id,
             task_id,
@@ -1012,6 +1095,12 @@ class Executor:
             infra_failure=False,
             cost_rub=out.cost_rub,
         )
+        if disposal_events:
+            try:
+                await self._append(disposal_events)
+            except Exception:  # noqa: BLE001 — study still closed by finalize
+                pass
+        return result
 
     async def record_review(
         self,
@@ -1327,6 +1416,22 @@ class Executor:
             payload = {**payload, "claims_dropped": drops}
             payload["payload_digest"] = payload_digest(payload)
 
+        # PR15: contradicts edges for opposite-stance accepted claims (same batch).
+        from coscientist.core.contradicts import contradicts_events_for_new_claims
+
+        new_claim_ids = {
+            str(ev.entity_key)
+            for ev in claim_events
+            if ev.type == "GraphNodeUpserted"
+        }
+        contradict_events = contradicts_events_for_new_claims(
+            study_id=study_id,
+            graph=graph,
+            now=now,
+            new_claim_ids=new_claim_ids or None,
+            pending_claim_events=claim_events,
+        )
+
         charged_after = self._charged_count_after(task, attempt_id, charge_attempt=charge_attempt)
         deadline = getattr(task, "deadline", None)
         within_deadline = deadline is None or now < deadline
@@ -1345,6 +1450,7 @@ class Executor:
 
         events = [
             *claim_events,
+            *contradict_events,
             EventEnvelope(
                 study_id=study_id,
                 type="ResultRecorded",

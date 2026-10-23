@@ -82,6 +82,7 @@ class LocalArtifactStore:
         producer: ArtifactProducer,
         schema_ref: str | None = None,
         role: str | None = None,
+        kind: str | None = None,
         attempt_closed: bool = False,
         net_isolation: NetIsolation | None = None,
         fs_isolation: FsIsolation | None = None,
@@ -102,6 +103,8 @@ class LocalArtifactStore:
             inferred = role
         else:
             inferred = media_role
+        # kind is core-stamped only (experiment_design / contradiction_map).
+        stamped_kind = kind if kind in ("experiment_design", "contradiction_map") else None
         art = Artifact(
             artifact_id=artifact_id,
             name=name,
@@ -112,6 +115,7 @@ class LocalArtifactStore:
             produced_by=produced_by,
             schema_ref=schema_ref,
             role=inferred,  # type: ignore[arg-type]
+            kind=stamped_kind,
             producer=producer,
             net_isolation=net_isolation if producer == "sandbox" else None,
             fs_isolation=fs_isolation if producer == "sandbox" else None,
@@ -133,11 +137,17 @@ class LocalArtifactStore:
         media_type: str,
         schema_ref: str | None = None,
         role: str | None = None,
+        kind: str | None = None,
         attempt_closed: bool = False,
         tainted: bool = False,
         context_tainted: bool = False,
     ) -> Artifact:
-        """Agent-controlled path — always ``producer=agent`` (never trusted)."""
+        """Agent-controlled path — always ``producer=agent`` (never trusted).
+
+        ``kind`` is ignored here (agent cannot stamp experiment_design); use
+        ``put_core`` / executor OutputSpec stamping.
+        """
+        del kind  # agent cannot forge artifact.kind
         return self._store(
             content,
             produced_by,
@@ -145,6 +155,7 @@ class LocalArtifactStore:
             media_type=media_type,
             schema_ref=schema_ref,
             role=role,
+            kind=None,
             attempt_closed=attempt_closed,
             producer="agent",
             tainted=tainted,
@@ -233,6 +244,7 @@ class LocalArtifactStore:
         media_type: str,
         schema_ref: str | None = None,
         role: str | None = None,
+        kind: str | None = None,
         attempt_closed: bool = False,
         context_tainted: bool = False,
         tainted: bool = False,
@@ -245,6 +257,7 @@ class LocalArtifactStore:
             media_type=media_type,
             schema_ref=schema_ref,
             role=role,
+            kind=kind,
             attempt_closed=attempt_closed,
             producer="core",
             tainted=tainted,
@@ -291,6 +304,22 @@ class LocalArtifactStore:
         art = Artifact.model_validate_json(path.read_text(encoding="utf-8"))
         self._index[artifact_id] = art
         return art
+
+    def stamp_kind(self, artifact_id: str, kind: str | None) -> Artifact | None:
+        """Core-only stamp of ``Artifact.kind`` (experiment_design / contradiction_map)."""
+        if kind not in ("experiment_design", "contradiction_map", None):
+            raise ArtifactRejected(f"invalid artifact kind: {kind!r}")
+        art = self.get_meta(artifact_id)
+        if art is None:
+            return None
+        if art.kind == kind:
+            return art
+        updated = art.model_copy(update={"kind": kind})
+        self._index[artifact_id] = updated
+        (self.meta / f"{artifact_id}.json").write_text(
+            updated.model_dump_json(), encoding="utf-8"
+        )
+        return updated
 
     def read(self, artifact_id: str) -> bytes:
         art = self.get_meta(artifact_id)

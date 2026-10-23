@@ -78,6 +78,7 @@ EventType = Literal[
     "SourceFetched",
     "AttemptTainted",
     "FetchIntegrityRaised",
+    "QuestionDisposed",
 ]
 
 

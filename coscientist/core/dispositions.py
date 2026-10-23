@@ -21,7 +21,7 @@ from coscientist.core.rubric import (
     question_final_types,
     task_rubric_status,
 )
-from coscientist.core.rules import priority_refuted_support_note, verdict
+from coscientist.core.rules import priority_refuted_support_note
 from coscientist.core.verdict import NO_EFFECT_EXCLUSION_REASONS
 
 
@@ -82,12 +82,14 @@ def dispositions(
     k: int | None = None,
     artifact_lookup: Any | None = None,
     loop_capped_questions: Mapping[str, Any] | None = None,
+    question_disposals: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-question disposition.
 
     With graph claims (PR 8): counting claims → ``verdict()`` → answered /
     refuted / survived / inconclusive (Study ``refutations_needed`` /
-    ``refutation_priority``). Otherwise not_attempted + NotAttemptedReason.
+    ``refutation_priority``). Else explicit ``QuestionDisposed``
+    (needs_more_data|infeasible; PR15). Otherwise not_attempted.
 
     PR11: questions in ``loop_capped_questions`` keep a verdict disposition
     when available and set ``reason=iteration_cap`` (not study terminal_reason).
@@ -105,6 +107,7 @@ def dispositions(
             k=k,
             artifact_lookup=artifact_lookup,
             loop_capped_questions=loop_capped_questions,
+            question_disposals=question_disposals,
         )
     except Exception:  # noqa: BLE001 — finalize/view must never crash
         qmap = known_questions(plans)
@@ -129,6 +132,7 @@ def _dispositions_inner(
     k: int | None,
     artifact_lookup: Any | None = None,
     loop_capped_questions: Mapping[str, Any] | None = None,
+    question_disposals: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     qmap = known_questions(plans)
     cover = question_tasks(plans)
@@ -186,6 +190,42 @@ def _dispositions_inner(
                     "report_line": RUBRIC_REJECTED_LINE,
                 }
                 continue
+            # PR15: needs_more_data is an honest artifact-path final (design report).
+            explicit_art = (question_disposals or {}).get(qid)
+            if explicit_art and str(explicit_art.get("disposition") or "") == (
+                Disposition.NEEDS_MORE_DATA.value
+            ):
+                from coscientist.core.experiment_design import (
+                    MISSING_DESIGN_REASON,
+                    design_artifact_ok,
+                )
+
+                if design_artifact_ok(
+                    artifact_id=explicit_art.get("design_artifact_id"),
+                    artifact_lookup=artifact_lookup,
+                    tasks=tasks,
+                    results=results,
+                    task_keys=keys,
+                ):
+                    result[qid] = {
+                        "disposition": Disposition.NEEDS_MORE_DATA.value,
+                        "reason": str(explicit_art.get("reason") or "needs_more_data"),
+                        "reason_detail": list(explicit_art.get("refs") or []),
+                        "formulation": text,
+                        "final_type": ft,
+                        "verdict": Disposition.NEEDS_MORE_DATA.value,
+                        "design_artifact_id": explicit_art.get("design_artifact_id"),
+                    }
+                    continue
+                reason, detail = _not_attempted_for_covering(covering)
+                result[qid] = {
+                    "disposition": Disposition.NOT_ATTEMPTED.value,
+                    "reason": MISSING_DESIGN_REASON,
+                    "reason_detail": [r.value for r in detail] + [MISSING_DESIGN_REASON],
+                    "formulation": text,
+                    "final_type": ft,
+                }
+                continue
             reason, detail = _not_attempted_for_covering(covering)
             result[qid] = {
                 "disposition": Disposition.NOT_ATTEMPTED.value,
@@ -197,16 +237,19 @@ def _dispositions_inner(
             continue
         if counting:
             # Per-experiment exclusion: verdict from valid claims only.
-            v, _by_lit = verdict(
+            from coscientist.core.derivation import by_theory_mark
+            from coscientist.core.verdict import disposition_for_question, hypothesis_verdict
+
+            v, _by_lit, by_theory, _rule = hypothesis_verdict(
                 claims,
                 any_exp,
-                conf_k,
                 refutations_needed=k_ref,
                 refutation_priority=priority,
                 supported_needed=supp_k,
+                confirmations_needed=conf_k,
             )
-            from coscientist.core.verdict import disposition_for_question
-
+            if not by_theory:
+                by_theory = by_theory_mark(claims)
             disp = disposition_for_question(
                 hypothesis_verdicts={},
                 question_verdict=v,
@@ -247,6 +290,7 @@ def _dispositions_inner(
                     "formulation": text,
                     "verdict": v,
                     "final_type": ft,
+                    "by_theory": by_theory,
                 }
                 note = priority_refuted_support_note(
                     claims,
@@ -310,6 +354,50 @@ def _dispositions_inner(
                 "verdict": "inconclusive",
                 "excluded_claims": excluded,
             }
+            continue
+        # PR15 / §2: explicit QuestionDisposed when no counting claims.
+        explicit = (question_disposals or {}).get(qid)
+        if explicit and str(explicit.get("disposition") or "") in (
+            Disposition.NEEDS_MORE_DATA.value,
+            Disposition.INFEASIBLE.value,
+        ):
+            disp = str(explicit["disposition"])
+            if disp == Disposition.NEEDS_MORE_DATA.value:
+                from coscientist.core.experiment_design import (
+                    MISSING_DESIGN_REASON,
+                    design_artifact_ok,
+                )
+
+                if not design_artifact_ok(
+                    artifact_id=explicit.get("design_artifact_id"),
+                    artifact_lookup=artifact_lookup,
+                    tasks=tasks,
+                    results=results,
+                    task_keys=keys,
+                ):
+                    # Honest: disposal without design does not stick.
+                    reason, detail = _not_attempted_for_covering(covering)
+                    result[qid] = {
+                        "disposition": Disposition.NOT_ATTEMPTED.value,
+                        "reason": MISSING_DESIGN_REASON,
+                        "reason_detail": [r.value for r in detail] + [MISSING_DESIGN_REASON],
+                        "formulation": text,
+                    }
+                    if excluded:
+                        result[qid]["excluded_claims"] = excluded
+                    continue
+            row_ex: dict[str, Any] = {
+                "disposition": disp,
+                "reason": str(explicit.get("reason") or disp),
+                "reason_detail": list(explicit.get("refs") or []),
+                "formulation": text,
+                "verdict": disp,
+            }
+            if disp == Disposition.NEEDS_MORE_DATA.value:
+                row_ex["design_artifact_id"] = explicit.get("design_artifact_id")
+            if excluded:
+                row_ex["excluded_claims"] = excluded
+            result[qid] = row_ex
             continue
         reason, detail = _not_attempted_for_covering(covering)
         row_na: dict[str, Any] = {
@@ -431,7 +519,7 @@ def report_hypothesis_verdicts(
         for hid, snap in snaps.items():
             claims = claims_for_ref(by_target, hid, prefer="hypothesis")
             v = str(snap.get("verdict") or "untested")
-            _v, _b, rule = hypothesis_verdict(
+            _v, _b, _by_th, rule = hypothesis_verdict(
                 claims,
                 any_exp,
                 refutations_needed=study.refutations_needed,
@@ -464,6 +552,7 @@ def report_hypothesis_verdicts(
                     "ref": snap.get("ref", hid),
                     "target_kind": "hypothesis",
                     "by_literature": snap.get("by_literature", False),
+                    "by_theory": snap.get("by_theory", False),
                     "provenance": snap.get("provenance", "real"),
                     "k": snap.get("k", study.confirmations_needed),
                     "supported_needed": study.supported_needed,
