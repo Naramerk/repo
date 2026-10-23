@@ -29,7 +29,7 @@ from coscientist.core.domain import (
     RequirementRef,
     TaskSpec,
 )
-from coscientist.core.errors import AttemptClosedError, StudyClosedError
+from coscientist.core.errors import AttemptClosedError, Conflict, StudyClosedError
 from coscientist.core.events import (
     STUDY_CREATED_SCHEMA_VERSION,
     STUDY_FINALIZED_SCHEMA_VERSION,
@@ -179,7 +179,7 @@ def _set_proposed_criteria(
 
 
 async def _plant_proposed_hitl(rt, pid: str, task_id: str) -> str:
-    """Journal HitlOpened(kind=proposed_check) so approve_check(source=api|hitl) can auth."""
+    """Journal HitlOpened(kind=proposed_check) only (not a human decision)."""
     from datetime import timedelta
 
     from coscientist.core.domain import HitlRequest
@@ -212,8 +212,39 @@ async def _plant_proposed_hitl(rt, pid: str, task_id: str) -> str:
     return rid
 
 
-async def _approve_human(rt, pid: str, task_id: str, *, source: str = "api") -> str:
+async def _plant_human_hitl_decision(
+    rt, pid: str, task_id: str, *, decision: str = "accept"
+) -> str:
+    """Journal HitlOpened + HitlDecided(by=human) — authentic answer_hitl path."""
     rid = await _plant_proposed_hitl(rt, pid, task_id)
+    now = rt.clock.now()
+    study = rt.study
+    assert study is not None
+    await rt._append(
+        [
+            EventEnvelope(
+                study_id=study.study_id,
+                type="HitlDecided",
+                entity_key=rid,
+                idem_key=make_idem("HitlDecided", rid),
+                payload={
+                    "request_id": rid,
+                    "decision": decision,
+                    "by": "human",
+                    "approved_by": "human" if decision in ("accept", "approve") else None,
+                    "reason": "proposed_check_test",
+                    "proposal_id": pid,
+                    "spent_rub": 0.0,
+                },
+                ts=now,
+            )
+        ]
+    )
+    return rid
+
+
+async def _approve_human(rt, pid: str, task_id: str, *, source: str = "api") -> str:
+    rid = await _plant_human_hitl_decision(rt, pid, task_id, decision="accept")
     await approve_check(rt, pid, source=source, hitl_request_id_s=rid)  # type: ignore[arg-type]
     return rid
 
@@ -756,12 +787,16 @@ async def test_post_delegate_timeout_equiv_reject(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
-    """CheckProposed / CheckApproved / CheckRejected rejected after StudyFinalized."""
+    """approve/reject/bind/schedule after StudyFinalized write nothing."""
     rt = await open_runtime(tmp_path, "st_pr20_closed")
     try:
         await _create(rt, "closed")
-        proposer_aid = await _boot_plan(rt, [_exp_spec()])
+        proposer_aid = await _boot_plan(
+            rt,
+            [_exp_spec(task_key="EXP"), _exp_spec(task_key="REV", title="rev")],
+        )
         exp_tid = _task_id(rt, "EXP")
+        rev_tid = _task_id(rt, "REV")
         pid = await propose_check(
             rt,
             target="study",
@@ -775,9 +810,11 @@ async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
             open_hitl=False,
         )
         assert pid
-        # Plant authentic HitlOpened before finalize so post-close approve auth can run
-        # and still fail closed at the journal (StudyClosedError), not at principal check.
-        closed_hitl_rid = await _plant_proposed_hitl(rt, pid, exp_tid)
+        # Authentic HitlDecided before finalize so approve auth reaches StudyClosedError.
+        closed_hitl_rid = await _plant_human_hitl_decision(rt, pid, exp_tid)
+        await schedule_proposed_check_review(
+            rt, pid, timeout_s=60, reviewer_task_id=rev_tid
+        )
         aid = await rt.start_attempt("EXP")
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
@@ -819,6 +856,16 @@ async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
             await approve_check(rt, pid, source="api", hitl_request_id_s=closed_hitl_rid)
         with pytest.raises(StudyClosedError):
             await reject_check(rt, pid, source="timeout", reason="too_late")
+        # schedule: idem Conflict / StudyClosedError / silent replay — no new rows.
+        try:
+            await schedule_proposed_check_review(
+                rt, pid, timeout_s=5, reviewer_task_id=rev_tid
+            )
+        except (StudyClosedError, Conflict):
+            pass
+        # Bind may fail closed on role before append; still must not write.
+        with pytest.raises((StudyClosedError, ValueError, AttemptClosedError)):
+            await bind_proposed_check_reviewer(rt, pid, proposer_aid)
         events_after = await rt.store.read_all()
         assert len(events_after) == n_before
         assert len([e for e in events_after if e.type == "StudyFinalized"]) == 1
@@ -1918,7 +1965,7 @@ def test_prereg_fail_closed_missing_attempts_seq() -> None:
 
 @pytest.mark.asyncio
 async def test_api_approve_without_principal_fail_closed(tmp_path: Path) -> None:
-    """B5: source=api free-form string / missing HitlOpened → fail-closed."""
+    """B5: source=api free-form string / missing HitlOpened|HitlDecided → fail-closed."""
     rt = await open_runtime(tmp_path, "st_pr20_no_principal")
     try:
         await _create(rt, "no principal")
@@ -1938,17 +1985,74 @@ async def test_api_approve_without_principal_fail_closed(tmp_path: Path) -> None
         )
         assert pid
         # Arbitrary non-empty string alone must never authenticate by=human.
-        with pytest.raises(ValueError, match="hitl_request_id|HitlOpened"):
+        with pytest.raises(ValueError, match="hitl_request_id|HitlOpened|HitlDecided"):
             await approve_check(
                 rt, pid, source="api", human_principal="attacker-free-form"
             )
-        with pytest.raises(ValueError, match="hitl_request_id|HitlOpened"):
+        with pytest.raises(ValueError, match="hitl_request_id|HitlOpened|HitlDecided"):
             await approve_check(rt, pid, source="api", human_principal="")
-        with pytest.raises(ValueError, match="hitl_request_id|HitlOpened"):
+        with pytest.raises(ValueError, match="hitl_request_id|HitlOpened|HitlDecided"):
             await approve_check(rt, pid, source="api", human_principal=None)
-        with pytest.raises(ValueError, match="hitl_request_id|verifiable|HitlOpened"):
+        with pytest.raises(ValueError, match="hitl_request_id|verifiable|HitlOpened|HitlDecided"):
             await approve_check(rt, pid, source="hitl", hitl_request_id_s="ghost")
+        # HitlOpened alone (no HitlDecided) is not a human decision.
+        opened_only = await _plant_proposed_hitl(rt, pid, exp_tid)
+        with pytest.raises(ValueError, match="HitlDecided"):
+            await approve_check(rt, pid, source="api", hitl_request_id_s=opened_only)
         assert rt._check_proposals[pid]["status"] == "proposed"
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_propose_open_hitl_api_approve_author_rid_fail_closed(
+    tmp_path: Path,
+) -> None:
+    """B5: default propose(open_hitl=True) then approve(api, author rid) → fail-closed."""
+    rt = await open_runtime_experimental(tmp_path, "st_pr20_open_hitl_api")
+    try:
+        await _create(rt, "open hitl api")
+        proposer_aid = await _boot_plan(rt, [_exp_spec()])
+        exp_tid = _task_id(rt, "EXP")
+        pid = await propose_check(
+            rt,
+            target="study",
+            role="prediction",
+            measures="m",
+            justification="j",
+            rejected_templates=_rejected(),
+            check=_value_check(target=1),
+            task_id=exp_tid,
+            attempt_id=proposer_aid,
+            open_hitl=True,
+        )
+        assert pid
+        # Author's HitlOpened from propose_check — no HitlDecided yet.
+        author_rids = [
+            rid
+            for rid, row in (getattr(rt, "hitl", None) or {}).items()
+            if getattr(row, "payload_ref", None) == pid
+            or (isinstance(row, dict) and row.get("payload_ref") == pid)
+        ]
+        if not author_rids:
+            opens = getattr(rt, "_hitl_requests", None) or {}
+            author_rids = [
+                rid
+                for rid, row in opens.items()
+                if isinstance(row, dict) and row.get("payload_ref") == pid
+            ]
+        assert author_rids, "propose_check(open_hitl=True) must journal HitlOpened"
+        rid = author_rids[0]
+        with pytest.raises(ValueError, match="HitlDecided"):
+            await approve_check(rt, pid, source="api", hitl_request_id_s=rid)
+        assert rt._check_proposals[pid]["status"] == "proposed"
+        # After authentic answer_hitl decision, approve may proceed.
+        await rt.answer_hitl(rid, "accept")
+        assert rt._check_proposals[pid]["status"] == "approved"
+        # HITL gate closed after human decision.
+        h = rt.hitl.get(rid) if hasattr(rt, "hitl") else None
+        if h is not None:
+            assert h.open is False
     finally:
         await close_runtime(rt)
 

@@ -691,6 +691,32 @@ def _evaluate_proposed_check(
             detail=prereg_err,
             effect={**base_effect, "exclusion_reason": "unapproved_check"},
         )
+    # Cheap bind: when the attempt recorded claims, params.target must name one.
+    claims = list(getattr(out, "claims", None) or [])
+    if claims and eval_target is not None and str(eval_target).strip():
+        import unicodedata
+
+        want = unicodedata.normalize("NFKC", str(eval_target)).strip()
+        claim_targets = {
+            unicodedata.normalize("NFKC", str(c.get("target") or "")).strip()
+            for c in claims
+            if isinstance(c, dict)
+        }
+        claim_targets.discard("")
+        if claim_targets and want not in claim_targets:
+            return CheckResult(
+                check_id=check_id,
+                template_id=PROPOSED_CHECK_TEMPLATE_ID,
+                status=ReqStatus.FAILED,
+                is_code=row.get("check") is not None,
+                required=ref.required,
+                role=role,
+                detail=(
+                    f"unapproved_check:claim_target_mismatch:{want!r}"
+                    f" not in {sorted(claim_targets)!r}"
+                ),
+                effect={**base_effect, "exclusion_reason": "unapproved_check"},
+            )
     if status == "rejected":
         return CheckResult(
             check_id=check_id,

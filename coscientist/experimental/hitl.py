@@ -246,7 +246,32 @@ class HitlForkMixin(CostlyHitlMixin):
             row = opens.get(request_id) if isinstance(opens, dict) else None
             if isinstance(row, dict):
                 pid = str(row.get("proposal_id") or row.get("payload_ref") or "")
+        if not h.open:
+            return
+        now = self.clock.now()
         if decision in ("accept", "approve"):
+            # Journal human decision first; approve_check requires HitlDecided(by=human).
+            await self._append(
+                [
+                    EventEnvelope(
+                        study_id=h.study_id,
+                        type="HitlDecided",
+                        entity_key=request_id,
+                        idem_key=make_idem("HitlDecided", request_id),
+                        payload={
+                            "request_id": request_id,
+                            "decision": "accept",
+                            "by": "human",
+                            "approved_by": "human",
+                            "delegated_by": None,
+                            "reason": "proposed_check_approved",
+                            "proposal_id": pid,
+                            "spent_rub": 0.0,
+                        },
+                        ts=now,
+                    )
+                ]
+            )
             await approve_check(
                 self,
                 pid,
@@ -259,7 +284,6 @@ class HitlForkMixin(CostlyHitlMixin):
             # Timeout≡reject still applies via ReviewScheduled.deadline.
             from coscientist.core.proposed_check import schedule_proposed_check_review
 
-            now = self.clock.now()
             await self._append(
                 [
                     EventEnvelope(
@@ -295,6 +319,25 @@ class HitlForkMixin(CostlyHitlMixin):
                 reviewer_task_id=str(rev_tid) if rev_tid else None,
             )
             return
+        await self._append(
+            [
+                EventEnvelope(
+                    study_id=h.study_id,
+                    type="HitlDecided",
+                    entity_key=request_id,
+                    idem_key=make_idem("HitlDecided", request_id),
+                    payload={
+                        "request_id": request_id,
+                        "decision": "reject",
+                        "by": "human",
+                        "reason": "rejected",
+                        "proposal_id": pid,
+                        "spent_rub": 0.0,
+                    },
+                    ts=now,
+                )
+            ]
+        )
         await reject_check(
             self,
             pid,

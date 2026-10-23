@@ -649,6 +649,14 @@ def _lookup_hitl_request(runtime: Any, request_id: str) -> Any | None:
     return hitl_map.get(request_id)
 
 
+def _lookup_hitl_decision(runtime: Any, request_id: str) -> Mapping[str, Any] | None:
+    decisions = getattr(runtime, "_hitl_decisions", None)
+    if not isinstance(decisions, dict):
+        return None
+    row = decisions.get(request_id)
+    return row if isinstance(row, dict) else None
+
+
 def _verify_human_principal(
     runtime: Any,
     *,
@@ -656,12 +664,18 @@ def _verify_human_principal(
     proposal_id_s: str,
     hitl_request_id_s: str | None,
     human_principal: str | None,
+    expect_decisions: frozenset[str] = frozenset({"accept", "approve"}),
 ) -> str:
     """Return auditable principal id, or raise (fail-closed — no anonymous human).
 
-    Both ``source=hitl`` and ``source=api`` require a journaled ``HitlOpened``
-    with ``kind=proposed_check`` and ``payload_ref`` bound to this proposal.
-    A free-form ``human_principal`` string alone never authenticates ``by=human``.
+    Both ``source=hitl`` and ``source=api`` require:
+    1. journaled ``HitlOpened`` with ``kind=proposed_check`` + matching ``payload_ref``;
+    2. journaled ``HitlDecided(by=human)`` for that rid (from ``answer_hitl``), with a
+       decision in ``expect_decisions``.
+
+    ``HitlOpened`` alone (including the one ``propose_check`` writes) never
+    authenticates ``by=human``. A free-form ``human_principal`` string alone never
+    authenticates either.
     """
     del human_principal  # audit-only callers may still pass it; never sufficient alone
     if source not in ("hitl", "api"):
@@ -691,6 +705,28 @@ def _verify_human_principal(
         raise ValueError(
             f"hitl request {rid!r} not bound to proposal {proposal_id_s!r} "
             f"(payload_ref={ref!r})"
+        )
+    # Propose-written HitlOpened is not enough — need answer_hitl's HitlDecided.
+    dec = _lookup_hitl_decision(runtime, rid)
+    if dec is None:
+        raise ValueError(
+            f"{source} approval requires journaled HitlDecided(by=human) for {rid!r} "
+            "(HitlOpened from propose_check alone is not a human decision)"
+        )
+    by = str(dec.get("by") or dec.get("decided_by") or "").strip()
+    if by != "human":
+        raise ValueError(
+            f"HitlDecided for {rid!r} must be by=human, got {by!r}"
+        )
+    decision = str(dec.get("decision") or "").strip()
+    if decision not in expect_decisions:
+        raise ValueError(
+            f"HitlDecided for {rid!r} decision={decision!r} not in {sorted(expect_decisions)}"
+        )
+    dec_pid = str(dec.get("proposal_id") or "").strip()
+    if dec_pid and dec_pid != str(proposal_id_s):
+        raise ValueError(
+            f"HitlDecided for {rid!r} bound to proposal {dec_pid!r}, not {proposal_id_s!r}"
         )
     return f"hitl:{rid}"
 
@@ -864,28 +900,9 @@ async def approve_check(
         ts=now,
         schema_version=1,
     )
-    events = [ev]
-    if hitl_request_id_s and source == "hitl":
-        events.append(
-            EventEnvelope(
-                study_id=study.study_id,
-                type="HitlDecided",
-                entity_key=hitl_request_id_s,
-                idem_key=make_idem("HitlDecided", hitl_request_id_s),
-                payload={
-                    "request_id": hitl_request_id_s,
-                    "decision": "accept",
-                    "by": "human",
-                    "approved_by": by,
-                    "delegated_by": None,
-                    "reason": "proposed_check_approved",
-                    "proposal_id": str(proposal_id_s),
-                    "spent_rub": 0.0,
-                },
-                ts=now,
-            )
-        )
-    await _append_events(runtime, events)
+    # HitlDecided(by=human) must already be journaled (answer_hitl); do not mint it
+    # here — that would let source=api|hitl approve from propose_check's HitlOpened alone.
+    await _append_events(runtime, [ev])
 
 
 async def reject_check(
@@ -919,6 +936,7 @@ async def reject_check(
             proposal_id_s=str(proposal_id_s),
             hitl_request_id_s=hitl_request_id_s,
             human_principal=human_principal,
+            expect_decisions=frozenset({"reject"}),
         )
     study = runtime.study
     assert study is not None
@@ -968,24 +986,8 @@ async def reject_check(
                 ts=now,
             )
         )
-    elif hitl_request_id_s and source == "hitl":
-        events.append(
-            EventEnvelope(
-                study_id=study.study_id,
-                type="HitlDecided",
-                entity_key=hitl_request_id_s,
-                idem_key=make_idem("HitlDecided", hitl_request_id_s),
-                payload={
-                    "request_id": hitl_request_id_s,
-                    "decision": "reject",
-                    "by": "human",
-                    "reason": str(reason),
-                    "proposal_id": str(proposal_id_s),
-                    "spent_rub": 0.0,
-                },
-                ts=now,
-            )
-        )
+    # Human reject: HitlDecided(by=human, decision=reject) must already be journaled
+    # (answer_hitl); do not mint a decision here.
     await _append_events(runtime, events)
 
 

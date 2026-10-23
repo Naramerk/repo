@@ -236,6 +236,11 @@ class LocalProjectMixin:
                 self._hitl_decisions = {}
                 decisions = self._hitl_decisions
             decisions[rid] = dict(p)
+            # Close the open gate unless keep_open / WAIT (same as projections fold).
+            opens = getattr(self, "_hitl_requests", None)
+            if isinstance(opens, dict) and rid in opens:
+                keep_open = bool(p.get("keep_open") or p.get("effect") == "WAIT")
+                opens[rid] = {**opens[rid], **p, "open": keep_open}
         elif ev.type in (
             "CheckProposed",
             "CheckApproved",
