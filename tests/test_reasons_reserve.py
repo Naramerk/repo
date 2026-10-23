@@ -228,16 +228,20 @@ def test_task_is_stub_uses_last_closed_attempt():
 
 @pytest.mark.asyncio
 async def test_create_study_rejects_duration_le_reserve(tmp_path: Path, clock, runtime_cls):
+    """duration ≤ reserve → intake Refuse (StudyRefused), not ValueError."""
     rt = await open_runtime(tmp_path, "st_rej", clock=clock, runtime_cls=runtime_cls)
-    with pytest.raises(ValueError, match="finalize_reserve_s"):
-        await rt.create_study(
-            profile="research",
-            request="q",
-            catalog_version="0.1.0",
-            deadline=clock.now() + timedelta(seconds=30),
-            sid="st_rej",
-            finalize_reserve_s=30,
-        )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=30),
+        sid="st_rej",
+        finalize_reserve_s=30,
+    )
+    events = await rt.store.read_all()
+    assert any(e.type == "StudyRefused" for e in events)
+    fins = [e for e in events if e.type == "StudyFinalized"]
+    assert fins and fins[0].payload["trigger"] == "intake"
     await close_runtime(rt)
 
 

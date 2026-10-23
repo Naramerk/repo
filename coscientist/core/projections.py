@@ -31,6 +31,17 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
     elif t == "StudyCancelled":
         study = _get(proj, "studies", event.study_id) or {}
         _put(proj, "studies", event.study_id, {**study, "cancelled": True, **p})
+    elif t == "StudyRefused":
+        study = _get(proj, "studies", event.study_id) or {}
+        _put(proj, "studies", event.study_id, {**study, "refused": True, **p})
+    elif t == "BudgetExceeded":
+        study = _get(proj, "studies", event.study_id) or {}
+        _put(
+            proj,
+            "studies",
+            event.study_id,
+            {**study, "budget_exceeded": True, **p},
+        )
     elif t == "StudyFinalized":
         study = _get(proj, "studies", event.study_id) or {}
         _put(
@@ -198,6 +209,8 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         "TaskInherited": ("tasks",),
         "PlanAccepted": ("plans",),
         "StudyCancelled": ("studies",),
+        "StudyRefused": ("studies",),
+        "BudgetExceeded": ("studies",),
         "StudyFinalized": ("studies", "meta", "graph_nodes", "graph_edges"),
         "AttemptStarted": ("attempts", "tasks"),
         "AttemptClosed": ("attempts", "tasks"),

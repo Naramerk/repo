@@ -456,6 +456,7 @@ def test_pick_finalize_trigger(impl):
         cancelled=True, budget=True, deadline=True
     ) == "cancel"
     assert impl.pick_finalize_trigger(budget=True, deadline=True) == "budget"
+    assert impl.pick_finalize_trigger(refused=True, deadline=True) == "intake"
     assert impl.pick_finalize_trigger(deadline=True, all_done=True) == "deadline"
     assert impl.pick_finalize_trigger(all_done=True) == "all_done"
     assert impl.pick_finalize_trigger() is None

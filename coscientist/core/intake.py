@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Protocol
@@ -19,6 +21,7 @@ class IntakeAccept:
 class IntakeRefuse:
     kind: RefusalKind
     reason: str
+    classifier_error: bool = False
 
 
 IntakeResult = IntakeAccept | IntakeRefuse
@@ -44,6 +47,38 @@ def _budget_too_low(budget: Budget | None, min_plan_cost: Decimal) -> bool:
     return False
 
 
+def _run_classifier(
+    safety: SafetyPort,
+    request: str,
+    inputs: list[Any],
+    *,
+    timeout_s: float,
+) -> IntakeRefuse | RefusalKind | None:
+    """Run sync classify under a wall-clock timeout; never raise to caller."""
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(safety.classify, request, list(inputs))
+            try:
+                return fut.result(timeout=timeout_s)
+            except FuturesTimeout:
+                fut.cancel()
+                return IntakeRefuse(
+                    RefusalKind.SAFETY,
+                    "classifier_timeout",
+                    classifier_error=True,
+                )
+    except TimeoutError:
+        return IntakeRefuse(
+            RefusalKind.SAFETY, "classifier_timeout", classifier_error=True
+        )
+    except Exception as e:  # noqa: BLE001 — port failure must not crash create
+        return IntakeRefuse(
+            RefusalKind.SAFETY,
+            f"classifier_error:{type(e).__name__}",
+            classifier_error=True,
+        )
+
+
 def intake(
     request: str,
     inputs: list[Any],
@@ -53,29 +88,36 @@ def intake(
     min_plan_cost: Decimal | float | int = 0,
     safety: SafetyPort | None = None,
     safety_timeout_s: float = 5.0,
+    duration_s: float | None = None,
+    finalize_reserve_s: float | None = None,
 ) -> IntakeResult:
     """Code checks + optional safety/scope port. Pure; no store I/O.
 
-    Duration ≤ finalize_reserve_s stays a ``ValueError`` in ``create_study``
-    (no ``RefusalKind`` for it). Profile is accepted for the port / future use.
+    ``duration_s <= finalize_reserve_s`` → ``DURATION_TOO_SHORT`` (DESIGN §0.5 /
+    intake). Profile is accepted for the port / future use.
     """
     _ = profile
     if not str(request or "").strip():
         return IntakeRefuse(RefusalKind.EMPTY_REQUEST, "empty request")
+    if (
+        duration_s is not None
+        and finalize_reserve_s is not None
+        and duration_s <= finalize_reserve_s
+    ):
+        return IntakeRefuse(
+            RefusalKind.DURATION_TOO_SHORT,
+            f"duration ({duration_s}s) must exceed finalize_reserve_s "
+            f"({finalize_reserve_s}s)",
+        )
     min_cost = Decimal(str(min_plan_cost))
     if _budget_too_low(budget, min_cost):
         return IntakeRefuse(RefusalKind.BUDGET_ZERO, "budget below minimum")
     if safety is not None:
-        try:
-            # Port owns its timeout; TimeoutError → treat as safety refuse.
-            kind = safety.classify(request, list(inputs or []))
-        except TimeoutError:
-            return IntakeRefuse(RefusalKind.SAFETY, "classifier_timeout")
-        except Exception as e:  # noqa: BLE001 — port failure must not crash create
-            return IntakeRefuse(RefusalKind.SAFETY, f"classifier_error:{type(e).__name__}")
-        if kind in (RefusalKind.SAFETY, RefusalKind.OUT_OF_SCOPE):
-            return IntakeRefuse(kind, f"classifier:{kind.value}")
-        if kind is not None:
-            return IntakeRefuse(kind, f"classifier:{kind.value}")
-    _ = safety_timeout_s
+        result = _run_classifier(
+            safety, request, list(inputs or []), timeout_s=safety_timeout_s
+        )
+        if isinstance(result, IntakeRefuse):
+            return result
+        if result is not None:
+            return IntakeRefuse(result, f"classifier:{result.value}")
     return IntakeAccept()

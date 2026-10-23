@@ -151,6 +151,7 @@ def render_markdown_report(
     contributing_reasons: list[str],
     question_dispositions: Mapping[str, Mapping[str, Any]],
     tasks: Mapping[str, Task],
+    refusal: str | None = None,
 ) -> str:
     """Deterministic MD report (no LLM)."""
     lines = [
@@ -160,9 +161,15 @@ def render_markdown_report(
         f"- terminal_reason: `{terminal_reason}`",
         f"- verdict: `{verdict}`",
         f"- contributing_reasons: {', '.join(contributing_reasons) or '(none)'}",
-        "",
-        "## Questions",
     ]
+    if refusal:
+        lines.append(f"- refusal: `{refusal}`")
+    lines.extend(
+        [
+            "",
+            "## Questions",
+        ]
+    )
     if not question_dispositions:
         lines.append("_No questions._")
     for qid, d in sorted(question_dispositions.items()):

@@ -140,15 +140,30 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
     async def cancel_study(self, by: str = "user") -> None:
         await _cancel_study(self, by=by)
 
-    def note_budget_exceeded(self) -> None:
-        """Mark study-level budget trigger for the next tick (no BudgetExceeded yet)."""
-        self._budget_exceeded = True
+    async def note_budget_exceeded(self) -> None:
+        """Persist study-level ``BudgetExceeded`` (folded → budget finalize trigger)."""
+        if self.study is None or self._budget_exceeded or self._finalized:
+            return
+        sid = self.study.study_id
+        await self._append(
+            [
+                EventEnvelope(
+                    study_id=sid,
+                    type="BudgetExceeded",
+                    entity_key=sid,
+                    idem_key=make_idem("BudgetExceeded", sid, "study"),
+                    payload={"scope": "study"},
+                    ts=self.clock.now(),
+                    schema_version=1,
+                )
+            ]
+        )
 
     async def finalize(self, *, trigger: FinalizeTrigger) -> None:
         await _finalize(self, trigger=trigger)
 
     def _budget_trigger_active(self) -> bool:
-        """Study-level budget only (``note_budget_exceeded`` / BudgetExceeded).
+        """Study-level budget only (``BudgetExceeded`` / folded flag).
 
         A single ``TaskDone(..., reason=budget)`` from a costly/HITL route does
         **not** close the study — that is a task-level skip only.
@@ -181,10 +196,11 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         trigger = pick_finalize_trigger(
             cancelled=self._study_cancelled,
             budget=self._budget_trigger_active(),
+            refused=self._intake_refusal is not None,
             deadline=now >= ed,
             all_done=all_done,
         )
-        if trigger in ("cancel", "budget", "deadline"):
+        if trigger in ("cancel", "budget", "deadline", "intake"):
             if trigger == "deadline":
                 await self._close_remaining(
                     TaskReason.STUDY_DEADLINE, CloseReason.STUDY_DEADLINE

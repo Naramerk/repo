@@ -68,12 +68,6 @@ class LifecycleMixin:
         if finalize_reserve_s < 0:
             raise ValueError(f"finalize_reserve_s must be >= 0, got {finalize_reserve_s}")
         duration_s = (dl - now).total_seconds()
-        # No RefusalKind for duration; keep hard ValueError (PR 4 note).
-        if duration_s <= finalize_reserve_s:
-            raise ValueError(
-                f"study duration ({duration_s}s) must exceed finalize_reserve_s "
-                f"({finalize_reserve_s}s)"
-            )
         decision = intake(
             request,
             list(inputs or []),
@@ -81,6 +75,8 @@ class LifecycleMixin:
             budget,
             min_plan_cost=min_plan_cost,
             safety=safety,
+            duration_s=duration_s,
+            finalize_reserve_s=float(finalize_reserve_s),
         )
         study = Study(
             study_id=sid,
@@ -121,9 +117,24 @@ class LifecycleMixin:
             ),
         ]
         if isinstance(decision, IntakeRefuse):
+            # Same transaction as StudyCreated so crash/reopen keeps refusal.
+            events.append(
+                EventEnvelope(
+                    study_id=sid,
+                    type="StudyRefused",
+                    entity_key=sid,
+                    idem_key=make_idem("StudyRefused", sid),
+                    payload={
+                        "kind": decision.kind.value,
+                        "reason": decision.reason,
+                        "classifier_error": decision.classifier_error,
+                    },
+                    ts=now,
+                    schema_version=1,
+                )
+            )
             await self._append(events)
             self.store.study_id = sid
-            self._intake_refusal = decision  # noqa: SLF001 — StudyRuntime
             from coscientist.core.finalize import finalize
 
             await finalize(self, trigger="intake")  # type: ignore[arg-type]
