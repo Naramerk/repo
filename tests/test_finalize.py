@@ -21,7 +21,7 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.errors import StudyClosedError
+from coscientist.core.errors import Conflict, Idempotent, StudyClosedError
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.finalize import (
     contributing_reasons_ordered,
@@ -802,6 +802,194 @@ async def test_finalize_idempotent(tmp_path, clock):
     await rt.finalize(trigger="cancel")
     fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
     assert len(fins) == 1 and fins[0].payload["trigger"] == "all_done"
+    await close_runtime(rt)
+
+
+def _study_finalized_envelope(sid: str, clock, *, idem_key: str, payload: dict) -> EventEnvelope:
+    return EventEnvelope(
+        study_id=sid,
+        type="StudyFinalized",
+        entity_key=sid,
+        idem_key=idem_key,
+        payload=payload,
+        ts=clock.now(),
+        schema_version=1,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("via", ["append", "append_many"])
+async def test_second_distinct_study_finalized_rejected(tmp_path, clock, via):
+    """Exactly one StudyFinalized: a different idem_key after finalize is StudyClosedError."""
+    sid = f"st_sf2_{via}"
+    rt = await _boot(tmp_path, clock, sid)
+    await _skip_all(rt)
+    await rt.finalize(trigger="all_done")
+    original = _fin(await rt.store.read_all())
+    n_before = len(await rt.store.read_all())
+    late_write_rejected_total.clear()
+    distinct = _study_finalized_envelope(
+        sid,
+        clock,
+        idem_key=f"StudyFinalized:{sid}:extra",
+        payload=_fin_payload(trigger="cancel"),
+    )
+    with pytest.raises(StudyClosedError):
+        if via == "append_many":
+            await rt.store.append_many([distinct])
+        else:
+            await rt.store.append(distinct)
+    assert late_write_rejected_total["StudyFinalized"] >= 1
+    events = await rt.store.read_all()
+    assert len(events) == n_before
+    fins = [e for e in events if e.type == "StudyFinalized"]
+    assert len(fins) == 1 and fins[0].seq == original.seq
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_second_distinct_study_finalized_rejected_after_restart(tmp_path, clock):
+    """Replay/reopen still enforces at-most-one StudyFinalized."""
+    sid = "st_sf2_restart"
+    rt = await _boot(tmp_path, clock, sid)
+    await _skip_all(rt)
+    await rt.finalize(trigger="all_done")
+    original = _fin(await rt.store.read_all())
+    await close_runtime(rt)
+
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    assert rt2._finalized
+    distinct = _study_finalized_envelope(
+        sid,
+        clock,
+        idem_key=f"StudyFinalized:{sid}:after-restart",
+        payload=_fin_payload(trigger="deadline"),
+    )
+    with pytest.raises(StudyClosedError):
+        await rt2.store.append_many([distinct])
+    fins = [e for e in await rt2.store.read_all() if e.type == "StudyFinalized"]
+    assert len(fins) == 1 and fins[0].seq == original.seq
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_identical_finalize_retry_returns_original(tmp_path, clock):
+    """Same idem_key+payload after finalize is idempotent (not StudyClosedError)."""
+    sid = "st_sf_retry"
+    rt = await _boot(tmp_path, clock, sid)
+    await _skip_all(rt)
+    payload = _fin_payload()
+    key = make_idem("StudyFinalized", sid)
+    first = _study_finalized_envelope(sid, clock, idem_key=key, payload=payload)
+    stored = (await rt.store.append_many([first]))[0]
+    assert rt.store._finalized_cached is True
+    # Writer path (append_many): returns existing envelope.
+    out = await rt.store.append_many(
+        [_study_finalized_envelope(sid, clock, idem_key=key, payload=payload)]
+    )
+    assert len(out) == 1 and out[0].seq == stored.seq
+    # Direct append: Idempotent with original seq (not StudyClosedError).
+    with pytest.raises(Idempotent) as ei:
+        await rt.store.append(
+            _study_finalized_envelope(sid, clock, idem_key=key, payload=payload)
+        )
+    assert ei.value.seq == stored.seq
+    # Same key, different payload → Conflict (genuinely different finalize).
+    with pytest.raises(Conflict):
+        await rt.store.append_many(
+            [
+                _study_finalized_envelope(
+                    sid,
+                    clock,
+                    idem_key=key,
+                    payload=_fin_payload(trigger="cancel"),
+                )
+            ]
+        )
+    fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    assert len(fins) == 1 and fins[0].seq == stored.seq
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_identical_finalize_retry_after_restart(tmp_path, clock):
+    sid = "st_sf_retry_restart"
+    rt = await _boot(tmp_path, clock, sid)
+    await _skip_all(rt)
+    payload = _fin_payload()
+    key = make_idem("StudyFinalized", sid)
+    stored = (
+        await rt.store.append_many(
+            [_study_finalized_envelope(sid, clock, idem_key=key, payload=payload)]
+        )
+    )[0]
+    await close_runtime(rt)
+
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    out = await rt2.store.append_many(
+        [_study_finalized_envelope(sid, clock, idem_key=key, payload=payload)]
+    )
+    assert out[0].seq == stored.seq
+    fins = [e for e in await rt2.store.read_all() if e.type == "StudyFinalized"]
+    assert len(fins) == 1
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_plan_refused_and_normal_finalize_exactly_one(tmp_path, clock):
+    """PlanRefused path and normal finalize each leave exactly one StudyFinalized."""
+    rt = await _boot(tmp_path, clock, "st_sf_plan")
+    await rt.accept_plan(
+        [_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")]
+    )
+    events = await rt.store.read_all()
+    assert any(e.type == "PlanRefused" for e in events)
+    assert len([e for e in events if e.type == "StudyFinalized"]) == 1
+    with pytest.raises(StudyClosedError):
+        await rt.store.append(
+            _study_finalized_envelope(
+                rt.study.study_id,
+                clock,
+                idem_key=f"StudyFinalized:{rt.study.study_id}:dup",
+                payload=_fin_payload(),
+            )
+        )
+    await close_runtime(rt)
+
+    rt2 = await _boot(tmp_path / "n", clock, "st_sf_norm")
+    await _skip_all(rt2)
+    await rt2.finalize(trigger="all_done")
+    assert len([e for e in await rt2.store.read_all() if e.type == "StudyFinalized"]) == 1
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_internal_error_finalize_exactly_one(tmp_path, clock, monkeypatch):
+    """Totality/fallback finalize still produces exactly one StudyFinalized."""
+    rt = await _boot(tmp_path, clock, "st_sf_ie")
+    rt.artifacts = LocalArtifactStore(tmp_path / "arts_ie")
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("coscientist.core.finalize.render_markdown_report", _boom)
+    await _skip_all(rt)
+    await rt.finalize(trigger="all_done")
+    fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    assert len(fins) == 1
+    assert fins[0].payload.get("fallback_reason") == "RuntimeError"
+    with pytest.raises(StudyClosedError):
+        await rt.store.append_many(
+            [
+                _study_finalized_envelope(
+                    rt.study.study_id,
+                    clock,
+                    idem_key=f"StudyFinalized:{rt.study.study_id}:dup",
+                    payload=_fin_payload(trigger="internal_error"),
+                )
+            ]
+        )
+    assert len([e for e in await rt.store.read_all() if e.type == "StudyFinalized"]) == 1
     await close_runtime(rt)
 
 

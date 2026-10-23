@@ -295,11 +295,38 @@ class SqliteEventStore:
             bump_late_write_rejected(event_type)
             raise StudyClosedError(self.study_id, event_type)
 
+    def _ensure_append_allowed(self, event: EventEnvelope) -> None:
+        """I3: after StudyFinalized, reject writes — except identical finalize retry.
+
+        A study has exactly one StudyFinalized. Idempotency is checked *before*
+        StudyClosedError so a crash/timeout retry with the same idem_key+payload
+        returns the recorded outcome instead of failing closed.
+        """
+        if event.type != "StudyFinalized":
+            self._reject_if_finalized(event.type)
+            return
+        if not self._study_is_finalized():
+            return
+        digest = event.payload_digest or payload_digest(event.payload)
+        existing = self._conn.execute(
+            "SELECT seq, payload_digest FROM events WHERE idem_key=?",
+            (event.idem_key,),
+        ).fetchone()
+        if existing is None:
+            # Distinct second finalize (different idem_key).
+            bump_late_write_rejected(event.type)
+            raise StudyClosedError(self.study_id, event.type)
+        if existing["payload_digest"] != digest:
+            raise Conflict(
+                f"idem_key={event.idem_key} payload mismatch "
+                f"(stored={existing['payload_digest']}, new={digest})"
+            )
+        # Identical retry: fall through to _insert_one → Idempotent / existing.
+
     def _append_locked(self, event: EventEnvelope) -> EventEnvelope:
         try:
             self._fence()
-            if event.type != "StudyFinalized":
-                self._reject_if_finalized(event.type)
+            self._ensure_append_allowed(event)
             stored, idem = self._insert_one(event)
             self._conn.commit()
         except Exception:
@@ -352,9 +379,8 @@ class SqliteEventStore:
                 if row is None or row.get("closed"):
                     raise AttemptClosedError(require_open_attempt)
             for ev in events:
-                # Allow the StudyFinalized write itself; reject anything after.
-                if ev.type != "StudyFinalized":
-                    self._reject_if_finalized(ev.type)
+                # First StudyFinalized is allowed; after that only identical retry.
+                self._ensure_append_allowed(ev)
                 if ev.type == "SourceFetched":
                     # Must present a capability id whose write permit was granted
                     # by effects.verify (consume). Bool bypass flags are gone.
