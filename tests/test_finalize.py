@@ -179,22 +179,27 @@ def test_task_without_address_belongs_to_study():
 
 def test_not_attempted_reason_from_task_statuses():
     plans = {"p": {
-        "questions": [{"id": f"Q{i}", "text": "t"} for i in (1, 2, 3)],
+        "questions": [{"id": f"Q{i}", "text": "t"} for i in (1, 2, 3, 4)],
         "tasks": [
             {"task_key": "A", "addresses": ["Q1"]},
             {"task_key": "B", "addresses": ["Q2"]},
             {"task_key": "C", "addresses": ["Q3"]},
+            {"task_key": "D", "addresses": ["Q4"]},
         ],
     }}
     tasks = {
         "st/A": _task("A", outcome=TaskOutcome.FAILED, reason=TaskReason.FAILED),
+        # cancelled/superseded are excluded from cover → no_task (PR16 follow-up).
         "st/B": _task("B", outcome=TaskOutcome.SKIPPED, reason=TaskReason.CANCELLED),
         "st/C": _task("C"),
+        # Non-cancelled skip still counts → tasks_skipped.
+        "st/D": _task("D", outcome=TaskOutcome.SKIPPED, reason=TaskReason.BUDGET),
     }
     d = dispositions(tasks=tasks, plans=plans)
     assert d["Q1"]["reason"] == NotAttemptedReason.TASKS_FAILED.value
-    assert d["Q2"]["reason"] == NotAttemptedReason.TASKS_SKIPPED.value
+    assert d["Q2"]["reason"] == NotAttemptedReason.NO_TASK.value
     assert d["Q3"]["reason"] == NotAttemptedReason.NO_COUNTING_CLAIMS.value
+    assert d["Q4"]["reason"] == NotAttemptedReason.TASKS_SKIPPED.value
 
 
 def test_questions_from_spec_output_wired():
