@@ -519,8 +519,10 @@ def _study_created_v9_to_v10(payload: dict[str, Any]) -> dict[str, Any]:
 def _study_created_v10_to_v11(payload: dict[str, Any]) -> dict[str, Any]:
     """PR19 (#23) bridge: as_of / user_input_ids on StudyCreated **v11**.
 
-    #23 owns writer v11; this PR keeps the bridge so journals from main v10
-    upcast continuously through v11 before PR20's v12 ``max_proposals``.
+    Identical to #23: ``setdefault`` only — never pop ``max_loop_iter`` (real
+    LoopSpec cap on main). Journals with ``max_loop_iter=2`` must replay as 2.
+    #23 owns writer v11; this PR keeps the bridge so main v10 upcasts through
+    v11 before PR20's v12 ``max_proposals``.
     """
     out = dict(payload)
     out.setdefault("as_of", None)

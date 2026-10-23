@@ -760,6 +760,74 @@ def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
     assert 10 in UPCASTERS["StudyCreated"] and 11 in UPCASTERS["StudyCreated"]
 
 
+def test_upcaster_studycreated_v10_preserves_max_loop_iter() -> None:
+    """v10→v11 bridge must not pop max_loop_iter (real cap on main / identical to #23)."""
+    mid = UPCASTERS["StudyCreated"][10]({"study_id": "s", "max_loop_iter": 2})
+    assert mid["max_loop_iter"] == 2
+    assert "max_loop_iter" in mid
+    assert mid.get("as_of") is None
+    assert mid.get("user_input_ids") == []
+    v, payload = upcast("StudyCreated", 10, {"study_id": "s", "max_loop_iter": 2})
+    assert v == 12
+    assert payload["max_loop_iter"] == 2
+    assert payload.get("max_proposals") == 3
+
+
+@pytest.mark.asyncio
+async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -> None:
+    """Seeded StudyCreated v10 with max_loop_iter=2 reopens as study.max_loop_iter==2."""
+    from datetime import datetime, timedelta, timezone
+
+    from coscientist.core.domain import HitlPolicy
+    from coscientist.core.events import EventEnvelope, make_idem
+    from coscientist.core.store import SqliteEventStore
+
+    sid = "st_pr20_v10_loop"
+    root = tmp_path / sid
+    root.mkdir(parents=True)
+    store = SqliteEventStore(sid, root / "events.db")
+    await store.acquire_lease("seeder")
+    now = datetime.now(timezone.utc)
+    dl = now + timedelta(seconds=120)
+    await store.append(
+        EventEnvelope(
+            study_id=sid,
+            type="StudyCreated",
+            entity_key=sid,
+            idem_key=make_idem("StudyCreated", sid),
+            payload={
+                "study_id": sid,
+                "profile": "research",
+                "request": "preserve loop cap",
+                "catalog_version": "0.1.0",
+                "hitl_policy": HitlPolicy().model_dump(mode="json"),
+                "deadline": dl.isoformat(),
+                "created_at": now.isoformat(),
+                "max_loop_iter": 2,
+            },
+            ts=now,
+            schema_version=10,
+        )
+    )
+    await store.release_lease("seeder", store.epoch)
+    await store.close()
+
+    rt = await open_runtime(tmp_path, sid)
+    try:
+        assert rt.study is not None
+        assert rt.study.max_loop_iter == 2
+        assert rt.study.max_proposals == 3
+        assert rt.study.as_of is None
+        assert rt.study.user_input_ids == []
+        # read_all returns upcast tip; max_loop_iter must survive the chain.
+        created = [e for e in await rt.store.read_all() if e.type == "StudyCreated"]
+        assert len(created) == 1
+        assert created[0].schema_version == STUDY_CREATED_SCHEMA_VERSION
+        assert created[0].payload["max_loop_iter"] == 2
+    finally:
+        await close_runtime(rt)
+
+
 def test_upcaster_studyfinalized_v3_to_v4_custom_checks() -> None:
     v, payload = upcast("StudyFinalized", 3, {"trigger": "all_done"})
     assert v == STUDY_FINALIZED_SCHEMA_VERSION == 4
