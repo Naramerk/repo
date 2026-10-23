@@ -323,6 +323,15 @@ def _host_tree_cpu_s(root_pid: int) -> float | None:
     Used when cgroup ``cpu.stat`` is unavailable: bwrap guests are not the
     direct ``wait4`` child, so ``RUSAGE_CHILDREN`` under-counts. Sampling the
     host-visible process tree is the accurate host-side CPU measurement.
+
+    **M2 fail-closed notes (inherited; do not treat as “unknown”):**
+    * On a readable but empty/idle ``/proc`` walk this returns ``0.0``, not
+      ``None``. Callers that do ``if sampled is not None`` therefore treat
+      “no ticks observed” as a real zero — forged SIGXCPU with ~0 CPU stays
+      NONZERO, but a true measurement gap is also indistinguishable from idle.
+    * Descendant discovery uses ``/proc/<pid>/task/*/children``. Kernels
+      without ``CONFIG_PROC_CHILDREN`` omit those files; the walk then
+      silently counts only ``root_pid`` (under-count, not an error).
     """
     try:
         clk = float(os.sysconf("SC_CLK_TCK"))
@@ -337,6 +346,7 @@ def _host_tree_cpu_s(root_pid: int) -> float | None:
             pid = queue.pop()
             try:
                 for name in os.listdir(f"/proc/{pid}/task"):
+                    # Absent when CONFIG_PROC_CHILDREN=n — descendants skipped.
                     children = Path(f"/proc/{pid}/task/{name}/children")
                     if not children.is_file():
                         continue
@@ -622,6 +632,8 @@ def _watch_process(
     tree_cpu_s: float | None = None
     while True:
         # Sample /proc *before* poll() — poll reaps the child and /proc vanishes.
+        # Keep the max while alive so a late 0.0 (see _host_tree_cpu_s) cannot
+        # erase an earlier high watermark used for SIGXCPU promotion.
         if cgroup_leaf is None and proc.pid:
             sampled = _host_tree_cpu_s(proc.pid)
             if sampled is not None:
@@ -684,6 +696,11 @@ def classify_guest_timeout(
     Idle (cpu/wall below ``idle_ratio``) requires measured ``cpu.stat``. Without
     a measurement, refute-role timeouts are treated as ``idle_timeout``
     (untestable / sabotage-suspected); other roles stay ``wall_timeout``.
+
+    **CI gap:** the cgroup ``cpu.stat`` idle path is not exercised on CI when
+    cgroup delegation / ``cpu.stat`` is unavailable (job often skips); unit
+    coverage is ``test_classify_guest_timeout_idle_vs_busy`` only. Do not
+    loosen the write p99 SLO to paper over runner noise.
     """
     if kill_cause == "cpu":
         return "cpu_timeout"
