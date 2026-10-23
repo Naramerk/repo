@@ -68,6 +68,8 @@ Legacy claims are never severe → never `supported` (V5). On replay/read, **`se
 
 Agent `LocalArtifactStore.put` + core `evaluate_code_check` → countable (production path). Foreign artifacts (other attempt's `call_id`) are rejected at eval (`foreign_artifact`) and never countable.
 
+**Foreign-artifact is a mistake guard, not anti-malice:** the agent adapter (DESIGN `agents/adapter.py` / `make_tool_ref`) sets `produced_by.call_id` on put. Agents do not choose call_id. The eval check catches wrong handles and cross-attempt references (wiring mistakes), not a malicious agent forging call_id.
+
 ### No numeric effect → indeterminate (safe weakening vs main)
 
 A prediction check that yields **no numeric effect** is **indeterminate** (never a counting refute). This is a deliberate safe weakening versus main, where a FAILED prediction always became `not_met` / refute. Covered cases and **specific** report reasons (never a generic `unclear`):
@@ -90,9 +92,9 @@ Study disposition / `StudyFinalized.question_dispositions[].reason` and `exclude
 
 ### M1 limits (call_id + catalog kinds)
 
-- **Attempt binding:** the executor/eval caller passes `attempt_id`; countable / foreign checks compare `Artifact.produced_by.call_id` to that id. There is no separate ambient “current attempt” resolver.
+- **Attempt binding:** the executor/eval caller passes `attempt_id`; countable / foreign checks compare `Artifact.produced_by.call_id` to that id. There is no separate ambient “current attempt” resolver. The **adapter** assigns `call_id` at put time (`f"{attempt_id}:{seq}"`); the foreign-artifact check therefore guards against mistaken cross-attempt handles, not a malicious agent.
 - **`code_output_names`:** independence `output_kinds` come from the catalog list. **No production catalog ships a non-empty list yet** (test catalog does). Empty list ⇒ every output name is **data** (conservative: more root digests, harder accidental independence splits).
-- **Replay countable:** when an artifact store is attached, replay recomputes `trusted`/`countable` from live `get_meta`. Journal-only replay (no store) uses effect-stamped provenance facts written at eval from that same meta — never journal `trusted`/`countable` bits.
+- **Replay countable:** when an artifact store is attached, replay recomputes `trusted`/`countable`/`core_evaluated` from live `get_meta` (prefer meta over journal effect bits). Journal-only replay (no store) uses effect-stamped provenance facts written at eval from that same meta — never journal `trusted`/`countable` bits.
 
 ## 4. Counting filter
 

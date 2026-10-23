@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### M1 PR9
+- `PlanExpanded` + H-g trigger (`expand_after` / `AgentTaskOutput.expansion_request` / HITL `delegated_by=human`).
+- Agent `max_expansions` vs human `max_human_expansions`; `replan_reserve` gates PLAN-n / expand time → `ExpansionRefused(expansion_limit)`.
+- Question add/supersede (`supersedes` question→question); old-only tasks → `SKIPPED(superseded)`; C10 k-filter excludes claims on superseded targets.
+- StudyCreated **v7** + PlanAccepted **v4** (`expand_after`).
+- StudyLifecycle property rules: `expand`, `question_supersede`.
+- #15 follow-ups: DESIGN notes adapter sets `call_id` (foreign-artifact = mistake guard); `core_evaluated` from artifact meta when present; `schema_valid` missing-artifact → `artifact_missing`.
+
 ### M1 PR8b
 - Hypothesis verdict model (`docs/DESIGN_HYP_DELTA.md`): claim `validity`/`outcome`/`severe`/`independence_key`; stub|partial|lit|invalid excluded **before** counting.
 - `independence_key` base = `experiment_id`; count-time merge by **transitive root-data** digest overlap (code vs data from **`ResultRecorded.output_kinds`** via catalog **`code_output_names`** — planner `OutputSpec.role` and agent `media_type` ignored; all-code upstream → intermediate is a root; diamond DFS uses on_stack vs done) or **structural** share-any criterion template (same target, empty roots; empty plan criteria → `catalog.defaults["experiment"]`). No TaskSpec/goal/title/plan_id hash. Method is not in the key.

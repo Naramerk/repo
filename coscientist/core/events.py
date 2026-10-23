@@ -35,6 +35,8 @@ EventType = Literal[
     "ResultRecorded",
     "TaskDone",
     "PlanAccepted",
+    "PlanExpanded",
+    "ExpansionRefused",
     "HitlOpened",
     "HitlDecided",
     "HitlTimedOut",

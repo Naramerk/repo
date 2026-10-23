@@ -68,6 +68,11 @@ class LifecycleMixin:
         supported_needed: int = 2,
         aggregate: str = "count",
         evalue_alpha: float = 0.05,
+        max_expansions: int = 2,
+        max_human_expansions: int = 10,
+        replan_reserve: float = 0.1,
+        max_tasks: int = 64,
+        plan_timeout_s: int = 600,
         inputs: list[Any] | None = None,
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,
@@ -78,26 +83,29 @@ class LifecycleMixin:
         if finalize_reserve_s < 0:
             raise ValueError(f"finalize_reserve_s must be >= 0, got {finalize_reserve_s}")
         if confirmations_needed < 1:
-            raise ValueError(
-                f"confirmations_needed must be >= 1, got {confirmations_needed}"
-            )
+            raise ValueError(f"confirmations_needed must be >= 1, got {confirmations_needed}")
         if refutations_needed < 1:
-            raise ValueError(
-                f"refutations_needed must be >= 1, got {refutations_needed}"
-            )
+            raise ValueError(f"refutations_needed must be >= 1, got {refutations_needed}")
         if supported_needed < 2:
-            raise ValueError(
-                f"supported_needed must be >= 2, got {supported_needed}"
-            )
+            raise ValueError(f"supported_needed must be >= 2, got {supported_needed}")
         if aggregate == "evalue":
             raise ValueError(
-                "aggregate='evalue' is deferred past M1 "
-                "(core does not yet compute p-values); use aggregate='count'"
+                "aggregate='evalue' is deferred past M1 (core does not yet compute p-values); use aggregate='count'"
             )
         if aggregate != "count":
             raise ValueError(f"aggregate must be 'count', got {aggregate!r}")
         if not (0.0 < float(evalue_alpha) <= 1.0):
             raise ValueError(f"evalue_alpha out of range: {evalue_alpha}")
+        if max_expansions < 0:
+            raise ValueError(f"max_expansions must be >= 0, got {max_expansions}")
+        if max_human_expansions < 0:
+            raise ValueError(f"max_human_expansions must be >= 0, got {max_human_expansions}")
+        if not (0.0 <= float(replan_reserve) <= 1.0):
+            raise ValueError(f"replan_reserve out of range: {replan_reserve}")
+        if max_tasks < 1:
+            raise ValueError(f"max_tasks must be >= 1, got {max_tasks}")
+        if plan_timeout_s < 1:
+            raise ValueError(f"plan_timeout_s must be >= 1, got {plan_timeout_s}")
         validate_budget_for_create(budget)
         duration_s = (dl - now).total_seconds()
         decision = await intake(
@@ -127,6 +135,11 @@ class LifecycleMixin:
             supported_needed=supported_needed,
             aggregate="count",
             evalue_alpha=float(evalue_alpha),
+            max_expansions=max_expansions,
+            max_human_expansions=max_human_expansions,
+            replan_reserve=float(replan_reserve),
+            max_tasks=max_tasks,
+            plan_timeout_s=plan_timeout_s,
         )
         effective = study.effective_deadline()
         events: list[EventEnvelope] = [
@@ -137,7 +150,7 @@ class LifecycleMixin:
                 idem_key=make_idem("StudyCreated", sid),
                 payload=study.model_dump(mode="json"),
                 ts=now,
-                schema_version=6,
+                schema_version=7,
             ),
             EventEnvelope(
                 study_id=sid,
@@ -227,29 +240,32 @@ class LifecycleMixin:
         questions: list[QuestionSpec] | None = None,
         revision: int = 1,
         spec_output: dict[str, Any] | None = None,
+        expand_after: list[str] | None = None,
     ) -> str:
         """Accept a plan revision.
 
         Pass ``questions`` from SPEC (``ResearchSpecOut.questions[]``), or pass
         ``spec_output`` and questions are extracted via ``questions_from_spec_output``.
+        ``expand_after`` lists task_keys that trigger planner after TaskDone (H-g).
         """
         assert self.study is not None
         sid = self.study.study_id
         now = self.clock.now()
         if questions is None and spec_output is not None:
-            questions = [
-                QuestionSpec(**q) for q in questions_from_spec_output(spec_output)
-            ]
+            questions = [QuestionSpec(**q) for q in questions_from_spec_output(spec_output)]
         questions = list(questions or [])
+        expand_after = list(expand_after or [])
         self._validate_dag(tasks)
         known_texts = await self._known_question_texts()
         self._validate_questions(questions, known_texts)
         known_texts = {**known_texts, **{q.id: q.text for q in questions}}
         self._validate_addresses(tasks, set(known_texts))
+        task_keys = {t.task_key for t in tasks}
+        for k in expand_after:
+            if k not in task_keys:
+                raise ValueError(f"expand_after unknown task_key: {k!r}")
         validate_input_specs(tasks)
-        catalog = getattr(self, "catalog", None) or getattr(
-            getattr(self, "executor", None), "catalog", None
-        )
+        catalog = getattr(self, "catalog", None) or getattr(getattr(self, "executor", None), "catalog", None)
         validate_plan_criteria(tasks, catalog)
         pid = plan_id()
         plan = Plan(
@@ -259,6 +275,7 @@ class LifecycleMixin:
             hypothesis_id=None,
             tasks=tasks,
             questions=questions,
+            expand_after=expand_after,
         )
         events: list[EventEnvelope] = [
             EventEnvelope(
@@ -268,7 +285,7 @@ class LifecycleMixin:
                 idem_key=make_idem("PlanAccepted", pid),
                 payload=plan.model_dump(mode="json"),
                 ts=now,
-                schema_version=3,
+                schema_version=4,
             )
         ]
         # Question nodes so claim ``about`` can bind without auto-creating targets.
@@ -315,22 +332,16 @@ class LifecycleMixin:
                 cattrs: dict[str, Any] = {"frozen": True, "template_id": key}
                 cattrs["alpha"] = 0.05
                 if catalog is not None:
-                    by_id = {
-                        t.id: t for t in getattr(catalog, "templates", []) or []
-                    }
+                    by_id = {t.id: t for t in getattr(catalog, "templates", []) or []}
                     tmpl = by_id.get(key)
                     if tmpl is not None:
                         if getattr(tmpl, "uses_sesoi", False) and tmpl.sesoi is not None:
                             cattrs["uses_sesoi"] = True
                             cattrs["sesoi"] = float(tmpl.sesoi)
-                            cattrs["predicted_direction"] = str(
-                                getattr(tmpl, "predicted_direction", "two_sided")
-                            )
+                            cattrs["predicted_direction"] = str(getattr(tmpl, "predicted_direction", "two_sided"))
                         else:
                             cattrs["uses_sesoi"] = False
-                        cattrs["predicts_null"] = bool(
-                            getattr(tmpl, "predicts_null", False)
-                        )
+                        cattrs["predicts_null"] = bool(getattr(tmpl, "predicts_null", False))
                 events.append(
                     EventEnvelope(
                         study_id=sid,
@@ -412,9 +423,7 @@ class LifecycleMixin:
         return texts
 
     @staticmethod
-    def _validate_questions(
-        questions: list[QuestionSpec], known_texts: dict[str, str]
-    ) -> None:
+    def _validate_questions(questions: list[QuestionSpec], known_texts: dict[str, str]) -> None:
         seen: dict[str, str] = {}
         for q in questions:
             if q.id in seen and seen[q.id] != q.text:
@@ -433,10 +442,15 @@ class LifecycleMixin:
     @staticmethod
     def _validate_dag(tasks: list[TaskSpec]) -> None:
         keys = {t.task_key for t in tasks}
+        stage = {"SPEC", "HYP", "LIT", "PLAN"}
         for t in tasks:
             for d in t.depends_on:
-                if d not in keys and d not in {"SPEC", "HYP", "LIT", "PLAN"}:
-                    raise ValueError(f"unknown dependency {d}")
+                # Allow stage keys, peers in this revision, and PLAN-n containers.
+                # Expand revisions may depend on keys that only exist as runtime
+                # tasks (already DONE) — callers pass those via merged still_kept.
+                if d in keys or d in stage or d.startswith("PLAN-"):
+                    continue
+                raise ValueError(f"unknown dependency {d}")
         by = {t.task_key: t.depends_on for t in tasks}
         seen: set[str] = set()
 
@@ -453,3 +467,9 @@ class LifecycleMixin:
 
         for k in by:
             visit(k, set())
+
+    async def expand_plan(self, **kwargs: Any) -> str | None:
+        """PR9: apply PlanExpanded (see ``coscientist.core.expand.expand_plan``)."""
+        from coscientist.core.expand import expand_plan as _expand
+
+        return await _expand(self, **kwargs)  # type: ignore[arg-type]

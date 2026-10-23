@@ -150,11 +150,7 @@ def output_kinds_from_catalog(
     Names listed in the catalog are code; everything else defaults to **data**.
     Planner ``OutputSpec.role`` / media_type are ignored for this decision.
     """
-    code_names = {
-        str(x)
-        for x in (getattr(catalog, "code_output_names", None) or ())
-        if x
-    }
+    code_names = {str(x) for x in (getattr(catalog, "code_output_names", None) or ()) if x}
     out: dict[str, str] = {}
     for name in output_names or ():
         n = str(name or "")
@@ -210,9 +206,7 @@ def _walk_artifact_is_code(
     kind = _kind_from_producer(artifact_id, producers.get(artifact_id))
     if kind is not None:
         return kind == "code"
-    meta = _safe_get_meta(
-        artifact_id, artifact_lookup=artifact_lookup, notes=notes
-    )
+    meta = _safe_get_meta(artifact_id, artifact_lookup=artifact_lookup, notes=notes)
     return artifact_is_code(meta)
 
 
@@ -256,9 +250,7 @@ def _content_digest(
     notes: list[str] | None = None,
 ) -> str | None:
     note_buf = notes if notes is not None else []
-    meta = _safe_get_meta(
-        artifact_id, artifact_lookup=artifact_lookup, notes=note_buf
-    )
+    meta = _safe_get_meta(artifact_id, artifact_lookup=artifact_lookup, notes=note_buf)
     if meta is not None:
         d = getattr(meta, "sha256", None) or getattr(meta, "digest", None)
         if d:
@@ -323,8 +315,7 @@ def root_data_digests_from_bindings(
     producers = _producer_index(results, notes=notes)
     roots: set[str] = set()
 
-    def _walk(artifact_id: str, fallback: str | None, depth: int,
-              on_stack: set[str], done: set[str]) -> None:
+    def _walk(artifact_id: str, fallback: str | None, depth: int, on_stack: set[str], done: set[str]) -> None:
         if not artifact_id:
             return
         if artifact_id in done:
@@ -485,9 +476,7 @@ def _claim_target(claim: Any) -> str:
 
 def independence_key_for(*, experiment_id: str | None = None) -> str:
     """Base independence key: sha256(JCS({experiment_id})). Method is not in the key."""
-    return hashlib.sha256(
-        canonical_json({"experiment_id": experiment_id or ""})
-    ).hexdigest()
+    return hashlib.sha256(canonical_json({"experiment_id": experiment_id or ""})).hexdigest()
 
 
 def _claim_data_digests(claim: Any) -> frozenset[str]:
@@ -513,9 +502,7 @@ def source_id_for_claim(claim: Any) -> str:
     return str(
         getattr(claim, "independence_key", None)
         or independence_key_for(
-            experiment_id=getattr(claim, "experiment_id", None)
-            or getattr(claim, "attempt_id", "")
-            or "x"
+            experiment_id=getattr(claim, "experiment_id", None) or getattr(claim, "attempt_id", "") or "x"
         )
     )
 
@@ -654,15 +641,21 @@ def recompute_effect_provenance(
         aid = getattr(artifact_meta, "artifact_id", None)
         if aid:
             out["artifact_id"] = str(aid)
+        # Prefer live meta over journal effect for core_evaluated (#15 follow-up).
+        # Artifact has no field; wrappers/tests may stamp it. When meta resolves
+        # without an explicit flag, catalog-eval effects are core-evaluated.
+        meta_ce = getattr(artifact_meta, "core_evaluated", None)
+        if meta_ce is not None:
+            out["core_evaluated"] = bool(meta_ce)
+        else:
+            out["core_evaluated"] = True
     if producer not in ("agent", "core", "sandbox"):
         producer = "agent"
     out["producer"] = producer
     out["trusted"] = producer in ("core", "sandbox")
     core_eval = bool(out.get("core_evaluated"))
     if attempt_id and call_id:
-        out["countable"] = core_eval and call_id_belongs_to_attempt(
-            call_id, attempt_id
-        )
+        out["countable"] = core_eval and call_id_belongs_to_attempt(call_id, attempt_id)
     else:
         # No binding facts (unit probe / legacy): core_evaluated is the fact.
         out["countable"] = core_eval
@@ -702,9 +695,7 @@ def effect_is_trusted(effect: Mapping[str, Any] | None) -> bool:
     return effect_producer_trusted(effect) and effect_has_interval(effect)
 
 
-def tost_holds_numerically(
-    *, sesoi: float | None, effect: Mapping[str, Any] | None
-) -> bool:
+def tost_holds_numerically(*, sesoi: float | None, effect: Mapping[str, Any] | None) -> bool:
     """CI strictly inside (−sesoi, +sesoi). Requires a real interval, not a point."""
     if sesoi is None or not effect_has_interval(effect):
         return False
@@ -720,9 +711,7 @@ def tost_holds_numerically(
 
 def tost_holds(*, sesoi: float | None, effect: Mapping[str, Any] | None) -> bool:
     """Severe-grade TOST: numerical hold + countable core-evaluated evidence."""
-    return effect_is_countable(effect) and tost_holds_numerically(
-        sesoi=sesoi, effect=effect
-    )
+    return effect_is_countable(effect) and tost_holds_numerically(sesoi=sesoi, effect=effect)
 
 
 def effect_exceeds_sesoi(
@@ -787,9 +776,7 @@ def claim_is_severe(claim: Any) -> bool:
     if predicts_null:
         return tost_holds(sesoi=float(sesoi), effect=effect)
     direction = getattr(claim, "predicted_direction", None) or "two_sided"
-    return effect_exceeds_sesoi(
-        sesoi=float(sesoi), effect=effect, direction=direction
-    )
+    return effect_exceeds_sesoi(sesoi=float(sesoi), effect=effect, direction=direction)
 
 
 def refute_intent_counts(claim: Any) -> bool:
@@ -875,9 +862,7 @@ def exclusion_reason(claim: Any) -> ExclusionReason | None:
         "pointer_empty",
     ):
         return stored  # type: ignore[return-value]
-    if getattr(claim, "check_role", "unknown") == "unknown" and not getattr(
-        claim, "validity_ok", True
-    ):
+    if getattr(claim, "check_role", "unknown") == "unknown" and not getattr(claim, "validity_ok", True):
         return "unknown_role"
     if effective_validity(claim) == "invalid":
         return "validity_failed"
@@ -961,19 +946,10 @@ def hypothesis_verdict(
 
     # Symmetric countability: non-countable inconsistent never counts toward k_ref.
     inconsistent = distinct_by_key(
-        [
-            c
-            for c in counted
-            if effective_outcome(c) == "inconsistent"
-            and evidence_countable_for_verdict(c)
-        ]
+        [c for c in counted if effective_outcome(c) == "inconsistent" and evidence_countable_for_verdict(c)]
     )
     consistent_severe = distinct_by_key(
-        [
-            c
-            for c in counted
-            if effective_outcome(c) == "consistent" and claim_is_severe(c)
-        ]
+        [c for c in counted if effective_outcome(c) == "consistent" and claim_is_severe(c)]
     )
     k_ref = max(1, int(refutations_needed))
     k_sup = max(2, int(supported_needed))
@@ -1046,10 +1022,7 @@ def excluded_confirmations_note(
             stub_partial.append(c)
     if not stub_partial:
         return None
-    keys = {
-        getattr(c, "attempt_id", "") or getattr(c, "artifact_id", "") or id(c)
-        for c in stub_partial
-    }
+    keys = {getattr(c, "attempt_id", "") or getattr(c, "artifact_id", "") or id(c) for c in stub_partial}
     keys.discard("")
     n = len(keys) if keys else len(stub_partial)
     if n <= 0:
@@ -1095,26 +1068,17 @@ def hypothesis_report_row(
                 if tid not in aux:
                     aux.append(str(tid))
         else:
-            excluded_rows.append(
-                {"claim_id": cid, "reason": exclusion_reason(c) or "invalid"}
-            )
+            excluded_rows.append({"claim_id": cid, "reason": exclusion_reason(c) or "invalid"})
     conflict = None
     if verdict_value == "refuted" and supporting and refuting:
         conflict = {"supporting": supporting, "refuting": refuting}
     severity_note = None
     if verdict_value in ("survived", "supported"):
-        severity_note = (
-            "survived != proven; tests that could have refuted: "
-            + ", ".join(
-                r["claim_id"]
-                for r in counted_rows
-                if r.get("intent") == "refute" or r.get("severe")
-            )
+        severity_note = "survived != proven; tests that could have refuted: " + ", ".join(
+            r["claim_id"] for r in counted_rows if r.get("intent") == "refute" or r.get("severe")
         )
     elif verdict_value == "refuted" and supporting:
-        severity_note = (
-            f"refuted despite {len(supporting)} supporting claims (conflict)"
-        )
+        severity_note = f"refuted despite {len(supporting)} supporting claims (conflict)"
     if excluded_rows:
         reasons: dict[str, int] = {}
         for row in excluded_rows:

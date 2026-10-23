@@ -326,14 +326,16 @@ def test_upcast_study_created_sets_reserve_zero():
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     )
-    # v1→v2 reserve → … → v6 supported_needed.
-    assert v == 6
+    # v1→v2 reserve → … → v7 expansion quotas.
+    assert v == 7
     assert p["finalize_reserve_s"] == 0
     assert p["refutations_needed"] == 1
     assert p["refutation_priority"] is False
     assert p["supported_needed"] == 2
     assert p["confirmations_needed"] == 1
     assert p["aggregate"] == "count"
+    assert p["max_expansions"] == 2
+    assert p["replan_reserve"] == 0.1
     # Explicit value must not be overwritten
     v2, p2 = upcast("StudyCreated", 1, {**p, "finalize_reserve_s": 30})
     assert p2["finalize_reserve_s"] == 30

@@ -189,6 +189,17 @@ def minimal_test_catalog() -> Catalog:
             ],
             "templates": [
                 {
+                    "id": "schema_ok",
+                    "title": "Schema valid",
+                    "text_ru": "Артефакт проходит schema_valid.",
+                    "rule_ids": ["R23"],
+                    "method_sources": ["test"],
+                    "applies_to": ["experiment"],
+                    "check": {"kind": "schema_valid", "output": "main"},
+                    "role": "validity",
+                    "required": True,
+                },
+                {
                     "id": "artifact_present",
                     "title": "Artifact exists",
                     "text_ru": "Требуемый артефакт должен существовать.",

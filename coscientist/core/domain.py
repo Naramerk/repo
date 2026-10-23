@@ -70,6 +70,8 @@ def worst_provenance(*values: Provenance) -> Provenance:
     if not values:
         return "stub"
     return max(values, key=lambda p: PROVENANCE_RANK[p])
+
+
 OnTimeout = Literal["delegate", "delegate_capped", "fail"]
 HitlGateKind = Literal[
     "spec_approval",
@@ -133,9 +135,7 @@ class HitlPolicy(Frozen):
         alias = {"plan": "plan_approval", "plan_approval": "plan"}.get(kind)
         if alias and alias in self.gates:
             return self.gates[alias]
-        default_ot: OnTimeout = (
-            "fail" if kind == "costly_or_nonreal" else self.on_timeout
-        )
+        default_ot: OnTimeout = "fail" if kind == "costly_or_nonreal" else self.on_timeout
         return GateConfig(
             enabled=True,
             timeout_s=self.timeout_s.get(kind, 1800),
@@ -278,10 +278,22 @@ class Study(Frozen):
     # M1: count only; e-value aggregation deferred (rejected at StudyCreated).
     aggregate: Literal["count"] = "count"
     evalue_alpha: float = Field(default=0.05, gt=0.0, le=1.0)
+    # PR9: plan expansion quotas + replan time reserve (DESIGN_M1 §4–5).
+    # max_expansions replaces profile max_replans (migration: value = max_replans).
+    max_expansions: int = Field(default=2, ge=0)
+    max_human_expansions: int = Field(default=10, ge=0)
+    replan_reserve: float = Field(default=0.1, ge=0.0, le=1.0)
+    max_tasks: int = Field(default=64, ge=1)
+    plan_timeout_s: int = Field(default=600, ge=1)
 
     def effective_deadline(self) -> datetime:
         """Last instant usable by tasks/attempts/HITL (deadline − finalize reserve)."""
         return self.deadline - timedelta(seconds=self.finalize_reserve_s)
+
+    def replan_budget_s(self) -> float:
+        """Total seconds reserved for PLAN-n / expansions (fixed at create)."""
+        span = (self.effective_deadline() - self.created_at).total_seconds()
+        return max(0.0, float(self.replan_reserve) * span)
 
 
 class Plan(Frozen):
@@ -291,6 +303,8 @@ class Plan(Frozen):
     hypothesis_id: str | None
     tasks: list[TaskSpec]
     questions: list[QuestionSpec] = Field(default_factory=list)
+    # H-g: task_keys that trigger planner after TaskDone (PlanOut.expand_after).
+    expand_after: list[str] = Field(default_factory=list)
 
 
 class Task(Frozen):
@@ -522,6 +536,24 @@ class ArtifactHandle(Frozen):
     name: str
 
 
+class QuestionSupersede(Frozen):
+    """New question formulation replaces an old one (PR9 / H-d / C10)."""
+
+    new_id: str
+    old_id: str
+
+
+class ExpansionRequest(Frozen):
+    """Typed agent request to expand the plan after this task (PR9 / H-g)."""
+
+    tasks: list[TaskSpec] = Field(default_factory=list)
+    questions: list[QuestionSpec] = Field(default_factory=list)
+    superseded_tasks: list[str] = Field(default_factory=list)
+    # Each new_id must appear in ``questions``; old_id is already known to the study.
+    superseded_questions: list[QuestionSupersede] = Field(default_factory=list)
+    reason: str = ""
+
+
 class AgentTaskOutput(Frozen):
     claim: Outcome | None = None
     summary: str = ""
@@ -529,6 +561,8 @@ class AgentTaskOutput(Frozen):
     values: dict[str, Any] = Field(default_factory=dict)
     claims: list[dict[str, Any]] = Field(default_factory=list)
     downgrade: DowngradeClaim | None = None
+    # PR9: when set, core applies PlanExpanded after TaskDone (origin=emergent).
+    expansion_request: ExpansionRequest | None = None
 
 
 class StudyView(Frozen):

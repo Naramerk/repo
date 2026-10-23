@@ -142,11 +142,14 @@ class RuntimeClaim:
         return self.evidence_kind == "literature"
 
     def counts(self) -> bool:
-        """PR8b counting filter: real ∧ valid ∧ consistent|inconsistent ∧ not lit.
+        """PR8b/PR9 counting filter: real ∧ valid ∧ consistent|inconsistent ∧ not lit.
 
         Stubs/partials are excluded **before** counting (no provenance ceiling).
         Literature never counts. Validity failures never count.
+        PR9/C10: claims whose target (or checked_against) is superseded are out.
         """
+        if self.exclusion_reason == "superseded":
+            return False
         if not (self.accepted and self.validity_ok and self.frozen):
             return False
         if self.provenance != "real":
@@ -432,18 +435,12 @@ def runtime_claim_from_node(
             _coerce_str(attrs.get("outcome"), allow_empty=True)
         )
         claim_outcome = (
-            claim_outcome_raw
-            if claim_outcome_raw in ("consistent", "inconsistent", "indeterminate")
-            else None
+            claim_outcome_raw if claim_outcome_raw in ("consistent", "inconsistent", "indeterminate") else None
         )
         # Never trust stored severe/refute_capable — recompute after attrs load.
         # Absent severe on legacy journals ⇒ treat as False until recomputed (V5).
-        independence_key = (
-            _coerce_str(attrs.get("independence_key"), allow_empty=True) or ""
-        )
-        experiment_id = (
-            _coerce_str(attrs.get("experiment_id"), allow_empty=True) or ""
-        )
+        independence_key = _coerce_str(attrs.get("independence_key"), allow_empty=True) or ""
+        experiment_id = _coerce_str(attrs.get("experiment_id"), allow_empty=True) or ""
         if not independence_key:
             from coscientist.core.verdict import independence_key_for
 
@@ -475,11 +472,7 @@ def runtime_claim_from_node(
         used_sesoi = _coerce_bool(attrs.get("used_sesoi"))
         predicts_null = bool(attrs.get("predicts_null", False))
         pd_raw = attrs.get("predicted_direction")
-        predicted_direction = (
-            str(pd_raw)
-            if pd_raw in ("positive", "negative", "two_sided")
-            else "two_sided"
-        )
+        predicted_direction = str(pd_raw) if pd_raw in ("positive", "negative", "two_sided") else "two_sided"
         raw_digests = attrs.get("data_digests")
         data_digests: list[str] | None
         if isinstance(raw_digests, list):
@@ -560,6 +553,20 @@ def runtime_claim_from_node(
                 target = _logical_id_from_node(dst, study_id, "hypothesis")
             else:
                 return None, "about_dst_kind"
+
+        # PR9/C10: superseded targets (and criteria) are excluded from k.
+        if graph is not None and exclusion_reason is None:
+            from coscientist.core.supersede import (
+                criterion_is_superseded,
+                question_is_superseded,
+            )
+
+            if target_kind == "question" and question_is_superseded(graph, study_id, target):
+                exclusion_reason = "superseded"
+            else:
+                checked = _coerce_str(attrs.get("checked_against"), allow_empty=True)
+                if checked and criterion_is_superseded(graph, study_id, checked):
+                    exclusion_reason = "superseded"
 
         intent = intent_from_producing_experiment(
             graph,
@@ -754,15 +761,9 @@ def compute_verdict_snapshots(
     """
     k_ref = study.refutations_needed if study is not None else 1
     priority = study.refutation_priority if study is not None else False
-    conf_k = (
-        k
-        if k is not None
-        else (study.confirmations_needed if study is not None else 1)
-    )
+    conf_k = k if k is not None else (study.confirmations_needed if study is not None else 1)
     supp_k = study.supported_needed if study is not None else 2
-    by_target = filtered_claims_by_target(
-        graph, study_id=study_id, results=results
-    )
+    by_target = filtered_claims_by_target(graph, study_id=study_id, results=results)
     if refs is not None:
         ref_list = list(refs)
     else:
@@ -875,14 +876,8 @@ def hypothesis_verdicts(
     any_experiment_done: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Verdicts for hypothesis targets (for report payload)."""
-    by_target = filtered_claims_by_target(
-        graph, study_id=study_id, results=results
-    )
-    hyp_refs = [
-        key.split(":", 1)[-1]
-        for key in by_target
-        if key.startswith("hypothesis:")
-    ]
+    by_target = filtered_claims_by_target(graph, study_id=study_id, results=results)
+    hyp_refs = [key.split(":", 1)[-1] for key in by_target if key.startswith("hypothesis:")]
     # Also include hypothesis nodes that may lack claims yet.
     for node in graph.nodes_by_kind("hypothesis"):
         logical = _logical_id_from_node(node.node_id, study_id, "hypothesis")

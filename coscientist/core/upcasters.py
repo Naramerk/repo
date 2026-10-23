@@ -17,9 +17,7 @@ def register_upcaster(event_type: str, from_version: int, fn: Upcaster) -> None:
     UPCASTERS.setdefault(event_type, {})[from_version] = fn
 
 
-def upcast(
-    event_type: str, schema_version: int, payload: dict[str, Any]
-) -> tuple[int, dict[str, Any]]:
+def upcast(event_type: str, schema_version: int, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     """Apply chained upcasters until no more are registered."""
     version = schema_version
     data = dict(payload)
@@ -198,6 +196,32 @@ def _study_created_v5_to_v6(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _study_created_v6_to_v7(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR9: expansion quotas + replan_reserve (max_expansions ← max_replans)."""
+    out = dict(payload)
+    if "max_expansions" not in out:
+        # Migration: max_expansions replaces max_replans when present.
+        if "max_replans" in out:
+            try:
+                out["max_expansions"] = int(out["max_replans"])
+            except (TypeError, ValueError):
+                out["max_expansions"] = 2
+        else:
+            out["max_expansions"] = 2
+    out.setdefault("max_human_expansions", 10)
+    out.setdefault("replan_reserve", 0.1)
+    out.setdefault("max_tasks", 64)
+    out.setdefault("plan_timeout_s", 600)
+    return out
+
+
+def _plan_accepted_v3_to_v4_expand_after(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR9: PlanAccepted.expand_after defaults to []."""
+    out = dict(payload)
+    out.setdefault("expand_after", [])
+    return out
+
+
 def _study_finalized_v2_to_v3(payload: dict[str, Any]) -> dict[str, Any]:
     """PR8b: minimal_report.hypotheses[] (empty for legacy)."""
     out = dict(payload)
@@ -269,9 +293,7 @@ def _study_finalized_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
         mr.setdefault("question_count", len(qs))
         if "not_attempted_count" not in mr:
             mr["not_attempted_count"] = sum(
-                1
-                for q in qs
-                if isinstance(q, dict) and q.get("disposition") == "not_attempted"
+                1 for q in qs if isinstance(q, dict) and q.get("disposition") == "not_attempted"
             )
         out["minimal_report"] = mr
     return out
@@ -291,15 +313,19 @@ register_upcaster("TaskCreated", 4, _task_created_v4_to_v5_input_kind)
 register_upcaster("TaskCreated", 5, _task_created_v5_to_v6_check_role)
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)
 register_upcaster("PlanAccepted", 2, _plan_accepted_v2_to_v3_check_role)
+register_upcaster("PlanAccepted", 3, _plan_accepted_v3_to_v4_expand_after)
 register_upcaster("StudyCreated", 1, _study_created_v1_to_v2)
 register_upcaster("StudyCreated", 2, _study_created_v2_to_v3)
 register_upcaster("StudyCreated", 3, _study_created_v3_to_v4)
 register_upcaster("StudyCreated", 4, _study_created_v4_to_v5)
 register_upcaster("StudyCreated", 5, _study_created_v5_to_v6)
+register_upcaster("StudyCreated", 6, _study_created_v6_to_v7)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)
 register_upcaster("AttemptStarted", 2, _attempt_started_v2_to_v3_inputs)
+
+
 def _result_recorded_v2_to_v3_output_kinds(payload: dict[str, Any]) -> dict[str, Any]:
     """PR8b: ``output_kinds`` (catalog code|data); absent → {}."""
     out = dict(payload)

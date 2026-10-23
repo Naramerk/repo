@@ -192,7 +192,7 @@ edges:
   - {name: answers, pairs: [[conclusion, question], [conclusion, study]], card: {out: "0..n", in: "0..n"}, by: finalize/report, note: "после финала: question in 1..1; study in 0..1; код enforce"}
   - {name: based_on, pairs: [[conclusion, claim], [conclusion, experiment]], card: {out: "0..n", in: "0..n"}, by: report, note: "≥1 based_on если disposition ∈ {answered,refuted,survived} — код; not_attempted → пусто"}
   - {name: renders, pairs: [[report, conclusion]], card: {out: "1..n", in: "0..1"}, by: report}
-  - {name: supersedes, pairs: [[plan, plan], [hypothesis, hypothesis], [criterion, criterion]], card: {out: "0..1", in: "0..1"}, by: ревизия (PLAN-n, HITL-правка)}
+  - {name: supersedes, pairs: [[plan, plan], [hypothesis, hypothesis], [criterion, criterion], [question, question]], card: {out: "0..1", in: "0..1"}, by: "ревизия (PLAN-n, PlanExpanded, HITL-правка); question→question = C10/H-d"}
 volume_b:
   - {num: 1, id: problem, nodes: [study, question, hypothesis, experiment], check_kinds: [graph_shape], check: "≥1 question; у каждого непустой gap и ≥1 входящее addresses; Review: проблема сформулирована"}
   - {num: 2, id: goals, nodes: [study, criterion], check_kinds: [graph_shape], check: "study.goal непуст; study −measured_by→ ≥1 criterion с metric/op/target"}

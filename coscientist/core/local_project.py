@@ -30,6 +30,11 @@ class LocalProjectMixin:
     _study_spent_rub: Decimal
     verdict_snapshots: dict[str, dict[str, Any]]
     hypothesis_verdicts: dict[str, dict[str, Any]]
+    _agent_expansions: int
+    _human_expansions: int
+    _replan_used_s: float
+    _expand_pending: set[str]
+    _expansion_refusals: list[dict[str, Any]]
 
     def _project_local(self, ev: EventEnvelope) -> None:
         p = ev.payload
@@ -48,6 +53,22 @@ class LocalProjectMixin:
                 self._budget_exceeded = True
         elif ev.type == "PlanAccepted":
             self.plans[ev.entity_key] = dict(p)
+        elif ev.type == "PlanExpanded":
+            self.plans[ev.entity_key] = dict(p)
+            if p.get("delegated_by") == "human":
+                self._human_expansions = int(getattr(self, "_human_expansions", 0)) + 1
+            else:
+                self._agent_expansions = int(getattr(self, "_agent_expansions", 0)) + 1
+            after = p.get("after_task")
+            pending = getattr(self, "_expand_pending", None)
+            if after and isinstance(pending, set):
+                pending.discard(str(after))
+        elif ev.type == "ExpansionRefused":
+            refusals = getattr(self, "_expansion_refusals", None)
+            if isinstance(refusals, list):
+                refusals.append(dict(p))
+            else:
+                self._expansion_refusals = [dict(p)]
         elif ev.type == "StudyCancelled":
             self._study_cancelled = True
         elif ev.type == "StudyFinalized":
@@ -102,27 +123,18 @@ class LocalProjectMixin:
             aid = p.get("attempt_id")
             att = self.attempts.get(aid or "", {})
             tid = att.get("task_id") or p.get("task_id")
-            if (
-                isinstance(dep_outputs, dict)
-                and tid
-                and tid in self.tasks
-            ):
+            if isinstance(dep_outputs, dict) and tid and tid in self.tasks:
                 tkey = self.tasks[tid].spec.task_key
                 omap = p.get("output_map")
                 if isinstance(omap, dict) and omap:
-                    dep_outputs[tkey] = {
-                        str(k): str(v) for k, v in omap.items() if v
-                    }
+                    dep_outputs[tkey] = {str(k): str(v) for k, v in omap.items() if v}
                 elif p.get("artifacts"):
                     arts = list(p.get("artifacts") or [])
                     if arts:
                         dep_outputs.setdefault(tkey, {})
                         dep_outputs[tkey].setdefault("main", str(arts[0]))
                 prov = p.get("provenance", "real")
-                if (
-                    isinstance(dep_provenance, dict)
-                    and prov in ("real", "partial", "stub")
-                ):
+                if isinstance(dep_provenance, dict) and prov in ("real", "partial", "stub"):
                     dep_provenance[tkey] = prov
         elif ev.type == "TaskDone":
             t = self.tasks[p["task_id"]]
@@ -167,9 +179,7 @@ class LocalProjectMixin:
                     )
                 self.graph.upsert_node(node)
             if node.kind == "claim":
-                self._invalidate_verdict_snapshots_for_target(
-                    (node.attrs or {}).get("target")
-                )
+                self._invalidate_verdict_snapshots_for_target((node.attrs or {}).get("target"))
         elif ev.type == "GraphEdgeAdded":
             # Fail loudly: missing endpoints / illegal pairs are journal bugs.
             edge = GraphEdge.model_validate(p)
@@ -181,17 +191,13 @@ class LocalProjectMixin:
                 if dst is not None:
                     prefix = f"{ev.study_id}:{dst.kind}:"
                     logical = (
-                        edge.dst_id[len(prefix) :]
-                        if edge.dst_id.startswith(prefix)
-                        else (dst.ref_id or edge.dst_id)
+                        edge.dst_id[len(prefix) :] if edge.dst_id.startswith(prefix) else (dst.ref_id or edge.dst_id)
                     )
                 self._invalidate_verdict_snapshots_for_target(logical)
         elif ev.type == "VerdictSnapshotsRecorded":
             snaps = p.get("snapshots") or {}
             if isinstance(snaps, dict):
-                self.verdict_snapshots.update(
-                    {str(k): dict(v) for k, v in snaps.items() if isinstance(v, dict)}
-                )
+                self.verdict_snapshots.update({str(k): dict(v) for k, v in snaps.items() if isinstance(v, dict)})
 
     def _invalidate_verdict_snapshots_for_target(self, target: Any) -> None:
         """Drop journaled snapshots for one target ref (DESIGN_M1 PR8)."""
@@ -204,14 +210,10 @@ class LocalProjectMixin:
             self.verdict_snapshots.pop(f"question:{key}", None)
             self.verdict_snapshots.pop(f"hypothesis:{key}", None)
 
-    def _fold_finalized_graph(
-        self, study_id: str, payload: dict[str, Any], *, created_at: datetime
-    ) -> None:
+    def _fold_finalized_graph(self, study_id: str, payload: dict[str, Any], *, created_at: datetime) -> None:
         from coscientist.core.finalize_nodes import graph_rows_from_finalized
 
-        nodes, edges = graph_rows_from_finalized(
-            study_id, payload, created_at=created_at
-        )
+        nodes, edges = graph_rows_from_finalized(study_id, payload, created_at=created_at)
         for row in nodes.values():
             incoming = GraphNode.model_validate(row)
             existing = self.graph.get_node(incoming.node_id)
@@ -222,9 +224,7 @@ class LocalProjectMixin:
                 and not (incoming.attrs or {}).get("formulation")
             ):
                 # Preserve formulation from accept_plan when finalize row is sparse.
-                merged = incoming.model_copy(
-                    update={"attrs": {**(existing.attrs or {}), **(incoming.attrs or {})}}
-                )
+                merged = incoming.model_copy(update={"attrs": {**(existing.attrs or {}), **(incoming.attrs or {})}})
                 self.graph.upsert_node(merged)
             else:
                 self.graph.upsert_node(incoming)
@@ -237,6 +237,4 @@ class LocalProjectMixin:
         # Keep hypothesis_verdicts separate from bind's verdict_snapshots cache.
         hv = payload.get("hypothesis_verdicts")
         if isinstance(hv, dict):
-            self.hypothesis_verdicts.update(
-                {str(k): dict(v) for k, v in hv.items() if isinstance(v, dict)}
-            )
+            self.hypothesis_verdicts.update({str(k): dict(v) for k, v in hv.items() if isinstance(v, dict)})

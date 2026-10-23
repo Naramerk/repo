@@ -353,7 +353,7 @@ CodeCheck kinds: `exec_runs` (команда в sandbox, exit 0, лимиты в
 
 ## 13. Property-тест (п.7 ревью)
 
-`hypothesis.stateful.RuleBasedStateMachine` `StudyLifecycle` (расширение `test_every_study_closes_by_deadline`). Правила: create_study (в т.ч. budget=0, пустой запрос, refuse), accept_plan(цепочка до 12, fan-out до 10), cancel_study, fail_random_attempt, hang, crash_and_recover, long_downtime, hitl_answer/timeout (experimental runtime), advance_clock. Правила expand/LoopSpec/question_supersede добавляют PR 9/11 в свои тесты; PR 3 их не содержит.
+`hypothesis.stateful.RuleBasedStateMachine` `StudyLifecycle` (расширение `test_every_study_closes_by_deadline`). Правила: create_study (в т.ч. budget=0, пустой запрос, refuse), accept_plan(цепочка до 12, fan-out до 10), cancel_study, fail_random_attempt, hang, crash_and_recover, long_downtime, hitl_answer/timeout (experimental runtime), advance_clock. **PR 9:** правила `expand` / `question_supersede` в `tests/test_finalize_property.py`. LoopSpec — PR 11.
 Инварианты после каждого шага: все текущие из D §3.3 + store отклоняет запись после StudyFinalized (I3) + все дедлайны ≤ effective_deadline.
 Финал (`now = study.deadline + tick`): `∃ StudyFinalized ∧ (report_artifact_id ∨ minimal_report) ∧ terminal_reason ∈ TerminalReason ∧ ∀ question disposition ≠ None ∧ I2 (conclusion ∨ покрытие minimal_report) ∧ ∀ task DONE с reason ∈ TaskReason`. Работает на refmodel и core (`impl=`).
 

@@ -54,9 +54,7 @@ def _check_field(c: Any, name: str) -> Any:
     return getattr(c, name, None)
 
 
-def _normalize_to_template_id(
-    key: str, checks: list[Any], criteria: list[Any]
-) -> str:
+def _normalize_to_template_id(key: str, checks: list[Any], criteria: list[Any]) -> str:
     """Map check_id (``value_match#0``) → template_id; leave template_id as-is."""
     for c in checks:
         tid = _check_field(c, "template_id")
@@ -72,9 +70,7 @@ def _normalize_to_template_id(
     return key
 
 
-def _criterion_key_for_claim(
-    raw: dict[str, Any], checks: list[Any], criteria: list[Any]
-) -> str | None:
+def _criterion_key_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any]) -> str | None:
     """Resolve checked_against → template_id, else sole check / sole plan criterion."""
     checked = raw.get("checked_against")
     if checked:
@@ -88,9 +84,7 @@ def _criterion_key_for_claim(
     return None
 
 
-def _criterion_status_for_claim(
-    raw: dict[str, Any], checks: list[Any], criteria: list[Any] | None = None
-) -> str:
+def _criterion_status_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any] | None = None) -> str:
     """Map claim.checked_against → ReqStatus of that criterion's check."""
     crit = list(criteria or [])
     key = _criterion_key_for_claim(raw, checks, crit)
@@ -100,9 +94,7 @@ def _criterion_status_for_claim(
             cid = _check_field(c, "check_id")
             st = _check_field(c, "status")
             # Exact match only (no endswith — avoids C11 matching ``1``).
-            if (tid is not None and str(tid) == key) or (
-                cid is not None and str(cid) == key
-            ):
+            if (tid is not None and str(tid) == key) or (cid is not None and str(cid) == key):
                 if isinstance(st, ReqStatus):
                     return _req_to_criterion_status(st)
                 try:
@@ -193,9 +185,7 @@ def _role_for_claim_key(
         for c in checks:
             tid = _check_field(c, "template_id")
             cid = _check_field(c, "check_id")
-            if (tid is not None and str(tid) == key) or (
-                cid is not None and str(cid) == key
-            ):
+            if (tid is not None and str(tid) == key) or (cid is not None and str(cid) == key):
                 return _check_role(c)
         # Fall back to catalog by template_id (never plan RequirementRef.role).
         return role_from_catalog(str(key), catalog)
@@ -225,9 +215,7 @@ def _criterion_is_frozen(graph: Any, study_id: str, template_id: Any) -> bool:
     return attrs.get("frozen_at_seq") is not None or bool(attrs.get("frozen"))
 
 
-def _criterion_freeze_attrs(
-    graph: Any, study_id: str, template_id: Any
-) -> dict[str, Any]:
+def _criterion_freeze_attrs(graph: Any, study_id: str, template_id: Any) -> dict[str, Any]:
     """sesoi / predicts_null / uses_sesoi from the frozen criterion (catalog)."""
     node = _criterion_node(graph, study_id, template_id)
     attrs = (node.attrs or {}) if node is not None else {}
@@ -317,9 +305,7 @@ def _derive_claim_core_attrs(
     del task_outcome  # outcome is scientific whenever we derive; criteria ≠ accepted
     spec = getattr(task, "spec", None)
     method = getattr(spec, "method", None) if spec is not None else None
-    lit = method == ExperimentMethod.LITERATURE_SEARCH or str(method or "") == (
-        "literature_search"
-    )
+    lit = method == ExperimentMethod.LITERATURE_SEARCH or str(method or "") == ("literature_search")
     criteria = list(getattr(spec, "criteria", None) or []) if spec is not None else []
     key = _criterion_key_for_claim(raw, checks, criteria)
     role = _role_for_claim_key(raw, checks, criteria, catalog=catalog)
@@ -363,13 +349,9 @@ def _derive_claim_core_attrs(
             st = getattr(getattr(c, "status", None), "value", getattr(c, "status", None))
             pred_statuses.append(str(st or ""))
     if not pred_statuses and status in ("met", "not_met", "unassessed"):
-        pred_statuses = [
-            "PASSED" if status == "met" else ("FAILED" if status == "not_met" else "")
-        ]
+        pred_statuses = ["PASSED" if status == "met" else ("FAILED" if status == "not_met" else "")]
     # Effect from CheckResult.effect only — never agent detail / claim attrs.
-    effect, used_sesoi = _effect_from_checks(
-        list(checks or []), attempt_id=attempt_id
-    )
+    effect, used_sesoi = _effect_from_checks(list(checks or []), attempt_id=attempt_id)
     validity_s, claim_outcome, _ = classify_outcome(
         validity_ok=validity_ok,
         prediction_statuses=pred_statuses,
@@ -384,9 +366,7 @@ def _derive_claim_core_attrs(
             exclusion_reason = "validity_failed"
     elif claim_outcome == "indeterminate" and exclusion_reason is None:
         # Prefer specific no-effect reason over generic indeterminate.
-        exclusion_reason = _no_effect_reason_from_checks(list(checks or [])) or (
-            "indeterminate"
-        )
+        exclusion_reason = _no_effect_reason_from_checks(list(checks or [])) or ("indeterminate")
     status = outcome_to_status(
         claim_outcome,  # type: ignore[arg-type]
         validity="valid" if validity_ok else "invalid",
@@ -564,9 +544,7 @@ class Executor:
                         study_id=study_id,
                         type="LateWriteRejected",
                         entity_key=attempt_id,
-                        idem_key=make_idem(
-                            "LateWriteRejected", attempt_id, str(self.clock.now())
-                        ),
+                        idem_key=make_idem("LateWriteRejected", attempt_id, str(self.clock.now())),
                         payload={"attempt_id": attempt_id, "reason": "attempt_closed"},
                         ts=self.clock.now(),
                     )
@@ -632,9 +610,7 @@ class Executor:
                         study_id=study_id,
                         type="ResultPending",
                         entity_key=attempt_id,
-                        idem_key=make_idem(
-                            "ResultPending", attempt_id, str(self.clock.now())
-                        ),
+                        idem_key=make_idem("ResultPending", attempt_id, str(self.clock.now())),
                         payload={
                             "attempt_id": attempt_id,
                             "reason": "required_checks_pending",
@@ -653,9 +629,7 @@ class Executor:
                             study_id=study_id,
                             type="ReviewScheduled",
                             entity_key=attempt_id,
-                            idem_key=make_idem(
-                                "ReviewScheduled", attempt_id, c.check_id
-                            ),
+                            idem_key=make_idem("ReviewScheduled", attempt_id, c.check_id),
                             payload={"check_id": c.check_id, "attempt_id": attempt_id},
                             ts=self.clock.now(),
                         )
@@ -673,12 +647,11 @@ class Executor:
             n = str(getattr(ospec, "name", "") or "")
             if n and n not in out_names:
                 out_names.append(n)
-        output_kinds = output_kinds_from_catalog(
-            output_names=out_names, catalog=self.catalog
-        )
+        output_kinds = output_kinds_from_catalog(output_names=out_names, catalog=self.catalog)
         payload = {
             "result_id": rid,
             "attempt_id": attempt_id,
+            "task_id": task_id,
             "outcome": final.value,
             "computed_outcome": computed.value,
             "reason": None,
@@ -687,15 +660,15 @@ class Executor:
             "unassessed": unassessed,
             "artifacts": [h.artifact_id for h in out.outputs.values()],
             # name → artifact_id for InputSpec.bind / independence_key digests.
-            "output_map": {
-                name: h.artifact_id for name, h in (out.outputs or {}).items()
-            },
+            "output_map": {name: h.artifact_id for name, h in (out.outputs or {}).items()},
             "output_kinds": output_kinds,
             "agent_claim": claim.value if claim else None,
-            "downgrade": (
-                downgrade.model_dump(mode="json", by_alias=True) if downgrade else None
-            ),
+            "downgrade": (downgrade.model_dump(mode="json", by_alias=True) if downgrade else None),
             "inputs": [],
+            # PR9 H-g: typed expansion request applied after TaskDone.
+            "expansion_request": (
+                out.expansion_request.model_dump(mode="json") if out.expansion_request is not None else None
+            ),
         }
         # Scientific result: criteria evaluated (SUCCESS / PARTIAL / FAILED).
         # Keep claims so not_met can refute (invariant 10); only infra drops them.
@@ -795,10 +768,7 @@ class Executor:
         if bindings and not payload.get("inputs"):
             payload = {
                 **payload,
-                "inputs": [
-                    b.model_dump(mode="json") if hasattr(b, "model_dump") else dict(b)
-                    for b in bindings
-                ],
+                "inputs": [b.model_dump(mode="json") if hasattr(b, "model_dump") else dict(b) for b in bindings],
             }
             payload["payload_digest"] = payload_digest(payload)
         # PR7/PR8: claim nodes carry producing-attempt provenance (H-b);
@@ -824,9 +794,7 @@ class Executor:
                 catalog=self.catalog,
                 bindings=bindings,
                 artifact_store=self.artifacts,
-                results_map=(
-                    self.get_results() if self.get_results is not None else None
-                ),
+                results_map=(self.get_results() if self.get_results is not None else None),
                 attempt_id=attempt_id,
             ),
         )
@@ -878,9 +846,7 @@ class Executor:
             attempt_id=attempt_id,
             outcome=Outcome(payload["outcome"]),
             provenance=payload["provenance"],
-            agent_claim=(
-                Outcome(payload["agent_claim"]) if payload.get("agent_claim") else None
-            ),
+            agent_claim=(Outcome(payload["agent_claim"]) if payload.get("agent_claim") else None),
             computed_outcome=Outcome(payload["computed_outcome"]),
             artifacts=list(payload.get("artifacts", [])),
             unassessed=list(payload.get("unassessed", [])),
@@ -894,9 +860,7 @@ class Executor:
         *,
         require_open_attempt: str | None = None,
     ) -> None:
-        stored = await self.writer.append_many(
-            events, require_open_attempt=require_open_attempt
-        )
+        stored = await self.writer.append_many(events, require_open_attempt=require_open_attempt)
         if self.on_events is not None:
             for ev in events:
                 self.on_events(ev)
