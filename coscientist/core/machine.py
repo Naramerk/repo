@@ -161,6 +161,44 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             ]
         )
 
+    async def record_budget_debit(
+        self,
+        *,
+        spent_rub: Decimal | float | int | str,
+        request_id: str,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        """Public writer for ``BudgetDebited`` (study spend fold).
+
+        Does not emit ``BudgetExceeded`` — call ``tick`` (or costly settle) so the
+        producer re-checks the cap.
+        """
+        if self.study is None:
+            raise RuntimeError("no study")
+        spent = Decimal(str(spent_rub))
+        payload: dict[str, Any] = {
+            "spent_rub": str(spent),
+            "request_id": request_id,
+            **(extra or {}),
+        }
+        await self._append(
+            [
+                EventEnvelope(
+                    study_id=self.study.study_id,
+                    type="BudgetDebited",
+                    entity_key=request_id,
+                    idem_key=make_idem(
+                        "BudgetDebited",
+                        request_id,
+                        str(spent),
+                        str(payload.get("actual_rub", spent)),
+                    ),
+                    payload=payload,
+                    ts=self.clock.now(),
+                )
+            ]
+        )
+
     def _study_budget_exhausted(self) -> bool:
         """True when folded ``BudgetDebited.spent_rub`` reaches ``Budget.max_cost_rub``.
 

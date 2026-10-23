@@ -7,7 +7,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from coscientist.core.reasons import CloseReason, TaskReason
 
@@ -184,15 +184,22 @@ class Budget(Frozen):
     # RUB cap for critic decisions on costly_or_nonreal (delegate_capped).
     delegated_costly: Decimal | None = None
 
-    @model_validator(mode="after")
-    def _delegated_within_study_cap(self) -> Budget:
-        if (
-            self.delegated_costly is not None
-            and self.max_cost_rub is not None
-            and self.delegated_costly > self.max_cost_rub
-        ):
-            raise ValueError("delegated_costly must be <= max_cost_rub")
-        return self
+
+def validate_budget_for_create(budget: Budget | None) -> None:
+    """Reject new studies where ``delegated_costly > max_cost_rub``.
+
+    Enforced at ``create_study`` only — not on ``Budget`` / ``Study.model_validate`` —
+    so replaying an old ``StudyCreated`` with a looser ratio cannot raise and block
+    ``StudyFinalized``.
+    """
+    if budget is None:
+        return
+    if (
+        budget.delegated_costly is not None
+        and budget.max_cost_rub is not None
+        and budget.delegated_costly > budget.max_cost_rub
+    ):
+        raise ValueError("delegated_costly must be <= max_cost_rub")
 
 
 class Study(Frozen):

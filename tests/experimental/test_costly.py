@@ -212,12 +212,11 @@ async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
 
 @pytest.mark.asyncio
 async def test_study_budget_exceeded_from_costly_spend(tmp_path, clock, runtime_cls):
-    """BudgetDebited against study max_cost_rub emits BudgetExceeded (core + exp)."""
+    """record_budget_debit → fold → tick emits BudgetExceeded (core + exp)."""
     from datetime import timedelta
     from decimal import Decimal
 
     from coscientist.core.domain import Budget
-    from coscientist.core.events import EventEnvelope, make_idem
     from coscientist.core.runtime_factory import close_runtime, open_runtime
 
     budget = Budget(
@@ -238,19 +237,7 @@ async def test_study_budget_exceeded_from_costly_spend(tmp_path, clock, runtime_
         budget=budget,
         finalize_reserve_s=5,
     )
-    # Producer path without note_budget_exceeded: fold spend → emit on tick.
-    await rt._append(
-        [
-            EventEnvelope(
-                study_id=sid,
-                type="BudgetDebited",
-                entity_key="debit-1",
-                idem_key=make_idem("BudgetDebited", sid, "debit-1"),
-                payload={"spent_rub": "100", "request_id": "debit-1"},
-                ts=clock.now(),
-            )
-        ]
-    )
+    await rt.record_budget_debit(spent_rub=Decimal("100"), request_id="debit-1")
     assert rt._study_spent_rub == Decimal("100")
     assert not rt._budget_exceeded
     await rt.tick()

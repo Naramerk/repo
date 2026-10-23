@@ -18,6 +18,7 @@ from coscientist.core.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
+    validate_budget_for_create,
 )
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.graph import GraphNode
@@ -67,6 +68,7 @@ class LifecycleMixin:
         dl = deadline or (now + timedelta(hours=2))
         if finalize_reserve_s < 0:
             raise ValueError(f"finalize_reserve_s must be >= 0, got {finalize_reserve_s}")
+        validate_budget_for_create(budget)
         duration_s = (dl - now).total_seconds()
         decision = await intake(
             request,
