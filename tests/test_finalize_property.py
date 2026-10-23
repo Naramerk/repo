@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import shutil
 import tempfile
 from datetime import timedelta
 from pathlib import Path
@@ -21,15 +23,29 @@ from hypothesis.stateful import (
 
 from coscientist.core.clock import FakeClock
 from coscientist.core.domain import QuestionSpec, TaskSpec, TaskState
-from coscientist.core.errors import HitlUnsupported, LeaseLost, StudyClosedError
+from coscientist.core.errors import (
+    AttemptClosedError,
+    HitlUnsupported,
+    LeaseLost,
+    StudyClosedError,
+)
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.finalize_nodes import conclusion_id_for_question
+from coscientist.core.inputs import InputUnavailable
 from coscientist.core.projections import fold_events
+from coscientist.core.question_tasks import known_questions
 from coscientist.core.reasons import TaskReason
 from coscientist.core.recover import recover
 from coscientist.core.runtime_factory import close_runtime, open_runtime
 
-_RULE_ERR = (RuntimeError, KeyError, ValueError, StudyClosedError)
+_RULE_ERR = (
+    KeyError,
+    ValueError,
+    StudyClosedError,
+    AttemptClosedError,
+    InputUnavailable,
+    HitlUnsupported,
+)
 _TRIGGER_TERM = {
     "cancel": "cancelled",
     "budget": "budget",
@@ -74,6 +90,13 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         except _RULE_ERR:
             return default
 
+    def _call_attempt(self, coro, default=None):
+        """Attempt API still raises RuntimeError for invalid transitions."""
+        try:
+            return self._call(coro, default=default)
+        except RuntimeError:
+            return default
+
     def _fin_ev(self):
         if self.rt is None:
             return None
@@ -105,6 +128,8 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
             except Exception:
                 pass
         self._loop.close()
+        if self.tmp.exists():
+            shutil.rmtree(self.tmp, ignore_errors=True)
 
     @rule(target=task_keys, data=st.data())
     def accept_plan(self, data):
@@ -113,26 +138,27 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         for key in ("SPEC", "HYP", "LIT"):
             t = self.rt.tasks.get(f"{self.sid}/{key}")
             if t and t.state == TaskState.PENDING:
-                self._call(self.rt.start_attempt(key))
+                self._call_attempt(self.rt.start_attempt(key))
                 self._call(self.rt.cancel_task(key, reason="cancelled"))
-        if any(k.startswith("EXP-") for k in (t.spec.task_key for t in self.rt.tasks.values())):
-            return "EXP-1"
+        self._plan_rev += 1
+        rev = self._plan_rev
         n = data.draw(st.integers(min_value=1, max_value=12))
         fan = data.draw(st.integers(min_value=1, max_value=min(10, n)))
-        qs = [QuestionSpec(id=f"Q{i}", text=f"q{i}") for i in range(max(1, fan // 2))]
+        n_q = data.draw(st.integers(min_value=1, max_value=3))
+        qs = [QuestionSpec(id=f"Q{rev}_{i}", text=f"q{rev}_{i}") for i in range(n_q)]
         specs = []
         for i in range(n):
-            deps = ["PLAN"] if i == 0 else [f"EXP-{max(1, i - fan + 1)}"]
-            addr = [qs[i % len(qs)].id] if qs else []
+            key = f"EXP-r{rev}-{i + 1}"
+            deps = ["PLAN"] if i == 0 else [f"EXP-r{rev}-{max(1, i - fan + 1)}"]
+            addr = [qs[i % len(qs)].id]
             specs.append(
                 TaskSpec(
-                    task_key=f"EXP-{i + 1}", title=f"e{i}", goal="g",
-                    route="experiment", depends_on=deps, addresses=addr,
+                    task_key=key, title=key, goal="g", route="experiment",
+                    depends_on=deps, addresses=addr,
                 )
             )
-        self._plan_rev += 1
-        self._call(self.rt.accept_plan(specs, questions=qs, revision=self._plan_rev))
-        return "EXP-1"
+        self._call(self.rt.accept_plan(specs, questions=qs, revision=rev))
+        return f"EXP-r{rev}-1"
 
     @rule()
     def cancel_study(self):
@@ -144,7 +170,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
     def start_attempt(self, key):
         if not self._writable():
             return "none"
-        return self._call(self.rt.start_attempt(key), default="none") or "none"
+        return self._call_attempt(self.rt.start_attempt(key), default="none") or "none"
 
     @rule(aid=attempt_ids)
     def finish_attempt(self, aid):
@@ -159,14 +185,14 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
     def fail_attempt(self, aid):
         if not self._writable() or aid == "none":
             return
-        self._call(self.rt.fail_attempt(aid, retryable=True))
+        self._call_attempt(self.rt.fail_attempt(aid, retryable=True))
 
-    @rule(aid=attempt_ids)
-    def hang_attempt(self, aid):
-        """Leave a running attempt open (no finish/fail)."""
-        if not self._writable() or aid == "none":
-            return
-        # intentional no-op hang
+    @rule(key=task_keys, target=attempt_ids)
+    def hang_attempt(self, key):
+        """Start an attempt and leave it open (no finish/fail in this rule)."""
+        if not self._writable():
+            return "none"
+        return self._call_attempt(self.rt.start_attempt(key), default="none") or "none"
 
     @rule(delta=st.integers(min_value=1, max_value=40))
     def advance_clock(self, delta):
@@ -191,14 +217,13 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
             self._run(recover(self.rt))
         except LeaseLost:
             self.lost_lease = True
-        except (HitlUnsupported, RuntimeError, StudyClosedError):
+        except _RULE_ERR:
             pass
 
     @rule()
     def lose_lease(self):
         if self.lost_lease or self.rt is None:
             return
-        # Past default TTL and any ensure_lease(300) from invariants.
         self.clock.advance(timedelta(seconds=400))
         other = self._run(
             open_runtime(
@@ -216,7 +241,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         self.clock.advance(timedelta(seconds=400))
         try:
             self._run(close_runtime(other))
-        except (LeaseLost, RuntimeError, OSError):
+        except (LeaseLost, OSError):
             self._run(other.store.close())
 
     @invariant()
@@ -232,7 +257,6 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
     def inv_store_rejects_after_finalized(self):
         if self.rt is None or self.lost_lease or not self._finalized():
             return
-        # Clock may advance past TTL after finalize without renewing.
         try:
             self._run(self.rt.ensure_lease(ttl_s=300))
         except LeaseLost:
@@ -297,18 +321,9 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                 self._run(old.store.close())
             except Exception:
                 pass
-        target = max(self.clock.now(), self.study_deadline) + timedelta(seconds=35)
+        # Expire any held lease by clock (no raw sqlite DELETE).
+        target = max(self.clock.now(), self.study_deadline) + timedelta(seconds=400)
         self.clock.set(target)
-        try:
-            import sqlite3
-
-            db = self.tmp / self.sid / "events.db"
-            conn = sqlite3.connect(str(db))
-            conn.execute("DELETE FROM lease")
-            conn.commit()
-            conn.close()
-        except Exception:
-            pass
         self.rt = self._run(
             open_runtime(
                 self.tmp, self.sid, owner="owner-final", clock=self.clock,
@@ -344,29 +359,30 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
 
     def final_every_question_has_disposition(self):
         p = self._fin_ev().payload
-        for _qid, d in (p.get("question_dispositions") or {}).items():
-            assert d.get("disposition")
-            assert d.get("reason") is not None
+        qdisp = p.get("question_dispositions") or {}
+        for qid in known_questions(self.rt.plans):
+            assert qid in qdisp, qid
+            assert qdisp[qid].get("disposition")
+            assert qdisp[qid].get("reason") is not None
 
     def final_i2_conclusion_or_minimal_coverage(self):
         p = self._fin_ev().payload
-        qdisp = p.get("question_dispositions") or {}
+        known = known_questions(self.rt.plans)
         minimal = p.get("minimal_report") or {}
-        mq = {q.get("question_id") for q in minimal.get("questions") or []}
+        mq = {q.get("question_id") for q in (minimal.get("questions") or [])}
         truncated = bool(minimal.get("truncated"))
         summary = str(minimal.get("summary") or "")
-        conclusions = {
-            n.node_id for n in self.rt.graph.nodes_by_kind("conclusion")
-        }
-        for qid in qdisp:
+        m = re.search(r"вопросов (\d+)", summary)
+        summary_n = int(m.group(1)) if m else -1
+        conclusions = {n.node_id for n in self.rt.graph.nodes_by_kind("conclusion")}
+        for qid in known:
             cid = conclusion_id_for_question(self.sid, qid)
-            covered = (
-                cid in conclusions
-                or qid in mq
-                or (truncated and qid in summary)
-                or (truncated and "not_attempted" in summary)
-            )
-            assert covered, qid
+            if cid in conclusions or qid in mq:
+                continue
+            # Truncated: structural count in summary covers all known questions.
+            if truncated and summary_n >= len(known):
+                continue
+            raise AssertionError(f"I2 uncovered question {qid}")
 
     def final_every_task_reason_in_enum(self):
         for t in self.rt.tasks.values():
@@ -400,36 +416,3 @@ async def test_finalize_property(runtime_cls):
         run_state_machine_as_test(M, settings=_HYP)
 
     await asyncio.get_event_loop().run_in_executor(None, run)
-
-
-@pytest.mark.xfail(strict=True, reason="PR 4: budget=0 study refused at intake")
-def test_budget_zero_study_refused():
-    raise AssertionError("intake budget=0 → refused not implemented")
-
-
-@pytest.mark.xfail(strict=True, reason="PR 5: failed parent without InputSpec skips child")
-def test_failed_parent_without_inputspec_skips_child():
-    raise AssertionError("InputSpec skip-on-failed-parent not implemented")
-
-
-@pytest.mark.xfail(strict=True, reason="PR 6/8: based_on required for counted dispositions")
-def test_based_on_required_for_counted_dispositions():
-    raise AssertionError("counted dispositions + based_on not in PR 2")
-
-
-@pytest.mark.xfail(strict=True, reason="PR 6/8: question disposition from verdict()")
-def test_question_disposition_computed_from_verdict():
-    raise AssertionError("verdict→disposition pipeline is PR 6/8")
-
-
-@pytest.mark.xfail(strict=True, reason="PR 8: explicit QuestionDisposed infeasible")
-def test_question_disposition_explicit_infeasible():
-    raise AssertionError("explicit infeasible disposition is PR 8")
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="PR 8: all_done→infeasible; PR2 only human_timeout|completed",
-)
-def test_terminal_reason_trigger_all_done_infeasible():
-    raise AssertionError("all_done infeasible terminal reason is PR 8")

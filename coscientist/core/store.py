@@ -23,6 +23,7 @@ from coscientist.core.errors import (
     Idempotent,
     LeaseLost,
     StudyClosedError,
+    reject_write_after_finalized,
 )
 from coscientist.core.events import EventEnvelope
 from coscientist.core.metrics import bump_late_write_rejected
@@ -60,8 +61,7 @@ class SqliteEventStore:
         self.epoch = epoch
         self.lease_ttl_s = lease_ttl_s
         self._closed = False
-        # None=unknown; True/False for this lease (cleared on acquire_lease).
-        # True only after a successful StudyFinalized commit.
+        # None=unknown; True only after StudyFinalized commit; clear on acquire.
         self._finalized_cached: bool | None = None
         self._db_lock = threading.RLock()
         self._read_lock = threading.RLock()
@@ -291,7 +291,7 @@ class SqliteEventStore:
         return found
 
     def _reject_if_finalized(self, event_type: str) -> None:
-        if self._study_is_finalized():
+        if reject_write_after_finalized(self._study_is_finalized(), event_type):
             bump_late_write_rejected(event_type)
             raise StudyClosedError(self.study_id, event_type)
 

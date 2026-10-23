@@ -144,8 +144,9 @@ def last_resort_payload(
 async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     """Write StudyFinalized (idempotent). Always attempts a write; LeaseLost propagates.
 
-    If the first append committed but a later step failed, a last-resort retry may
-    hit ``Conflict`` on the same idem key — treat that as success and sync fold.
+    Conflict on the StudyFinalized idem key is success only when that event is
+    already in the store (commit succeeded, fold/local project failed). Otherwise
+    the Conflict is re-raised — never mark finalized without the event.
     """
     if runtime.study is None or is_finalized(runtime):
         return
@@ -161,8 +162,8 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
         await _append_finalized(runtime, sid=sid, payload=payload)
     except LeaseLost:
         raise
-    except Conflict:
-        await _sync_finalized_from_store(runtime)
+    except Conflict as err:
+        await _sync_finalized_from_store(runtime, sid=sid, conflict=err)
     except Exception as e:  # noqa: BLE001 — retry once with last-resort
         log.warning("finalize append failed: %s; retrying last-resort", e, exc_info=True)
         try:
@@ -173,21 +174,24 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
                     study_id=sid, trigger=trigger, fallback_reason=type(e).__name__
                 ),
             )
-        except Conflict:
-            await _sync_finalized_from_store(runtime)
+        except Conflict as err:
+            await _sync_finalized_from_store(runtime, sid=sid, conflict=err)
         except LeaseLost:
             raise
     runtime._finalized = True  # noqa: SLF001
 
 
-async def _sync_finalized_from_store(runtime: StudyRuntime) -> None:
-    """Project a committed StudyFinalized if local fold missed it (Conflict path)."""
-    if is_finalized(runtime):
-        return
+async def _sync_finalized_from_store(
+    runtime: StudyRuntime, *, sid: str, conflict: Conflict
+) -> None:
+    """On Conflict: succeed only if StudyFinalized idem event exists; else re-raise."""
+    expected = make_idem("StudyFinalized", sid)
     for ev in await runtime.store.read_all():
-        if ev.type == "StudyFinalized":
-            runtime._project_local(ev)  # noqa: SLF001
+        if ev.idem_key == expected:
+            if not is_finalized(runtime):
+                runtime._project_local(ev)  # noqa: SLF001
             return
+    raise conflict
 
 
 async def _append_finalized(

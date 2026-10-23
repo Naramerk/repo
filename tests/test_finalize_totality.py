@@ -257,6 +257,27 @@ async def test_finalize_conflict_after_commit_is_success(tmp_path, clock, monkey
     await close_runtime(rt)
 
 
+@pytest.mark.asyncio
+async def test_finalize_conflict_without_event_reraises(tmp_path, clock, monkeypatch):
+    """Conflict with no StudyFinalized in store must not mark finalized."""
+    from coscientist.core.errors import Conflict
+
+    sid = "st_conf_neg"
+    rt = await _boot(tmp_path, clock, sid)
+    await _skip_all(rt)
+
+    async def boom_conflict(_events):
+        raise Conflict("idem mismatch without prior commit")
+
+    monkeypatch.setattr(rt, "_append", boom_conflict)
+    with pytest.raises(Conflict):
+        await rt.finalize(trigger="all_done")
+    assert not rt._finalized
+    assert not any(e.type == "StudyFinalized" for e in await rt.store.read_all())
+    assert rt.view().phase != "closed"
+    await close_runtime(rt)
+
+
 def test_rich_payload_bound_truncates_or_raises():
     from coscientist.core.digest import canonical_json
     from coscientist.core.finalize import (
