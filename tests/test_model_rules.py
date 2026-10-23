@@ -74,9 +74,9 @@ def test_k_confirmations_need_distinct_attempts_and_artifacts(impl):
 def test_conflict_and_caps(impl):
     conflict = [impl.Claim("met"), impl.Claim("not_met", attempt_id="X2#1", artifact_id="A2")]
     assert impl.verdict(conflict, True)[0] == "inconclusive"
-    assert impl.verdict([impl.Claim("met", provenance="simulated")], True)[0] == "inconclusive"
+    assert impl.verdict([impl.Claim("met", provenance="stub")], True)[0] == "inconclusive"
     # cap is over counted claims: an uncounted non-real claim does not cap
-    extra = impl.Claim("met", provenance="simulated", attempt_outcome="PARTIAL", attempt_id="X3#1", artifact_id="A3")
+    extra = impl.Claim("met", provenance="stub", attempt_outcome="PARTIAL", attempt_id="X3#1", artifact_id="A3")
     assert impl.verdict([impl.Claim("met"), extra], True)[0] == "supported"
 
 

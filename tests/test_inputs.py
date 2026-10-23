@@ -65,10 +65,10 @@ def test_simulate_when_missing():
         dep_outputs={"A": {}},
         dep_provenance={"A": "real"},
     )
-    assert bindings[0].source == "simulated"
-    assert prov == "simulated"
+    assert bindings[0].source == "stub"
+    assert prov == "stub"
 
 
 def test_worst_provenance_order():
     assert worst_provenance("real", "partial") == "partial"
-    assert worst_provenance("partial", "simulated") == "simulated"
+    assert worst_provenance("partial", "stub") == "stub"

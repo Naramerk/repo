@@ -209,9 +209,10 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
                         payload={
                             "task_id": "st_race/REPORT",
                             "outcome": TaskOutcome.SKIPPED.value,
-                            "reason": "race_inject",
+                            "reason": "cancelled",
                         },
                         ts=now,
+                        schema_version=2,
                     ),
                 ]
             )
@@ -238,9 +239,9 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
     assert len(events) == n_before + 2
     assert any(e.type == "HitlOpened" for e in events)
     assert any(
-        e.type == "TaskDone" and e.payload.get("reason") == "race_inject" for e in events
+        e.type == "TaskDone" and e.payload.get("reason") == "cancelled" for e in events
     )
     assert exp.tasks["st_race/REPORT"].state == TaskState.DONE
-    assert exp.tasks["st_race/REPORT"].reason == "race_inject"
+    assert exp.tasks["st_race/REPORT"].reason == "cancelled"
     assert any(h.open for h in exp.hitl.values())
     await close_runtime(exp)

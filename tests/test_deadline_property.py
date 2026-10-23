@@ -86,6 +86,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
                 catalog_version="0.1.0",
                 deadline=self.study_deadline,
                 sid=self.sid,
+                finalize_reserve_s=5,
             )
         )
 
@@ -106,7 +107,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
             if t and t.state == TaskState.PENDING:
                 try:
                     self._run(self.rt.start_attempt(key))
-                    self._run(self.rt.cancel_task(key, reason="prop_advance"))
+                    self._run(self.rt.cancel_task(key, reason="cancelled"))
                 except _RULE_ERR:
                     pass
         if not any(
@@ -151,7 +152,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
             att = self.rt.attempts.get(aid, {})
             tid = att.get("task_id")
             if tid:
-                self._run(self.rt.cancel_task(tid, reason="prop_finish"))
+                self._run(self.rt.cancel_task(tid, reason="cancelled"))
         except _RULE_ERR:
             pass
 
