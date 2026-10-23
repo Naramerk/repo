@@ -205,15 +205,15 @@ async def _expand_plan(
                 )
                 return None
             blocked_qs.add(s.old_id)
-        for t in runtime.tasks.values():
-            if t.state != TaskState.DONE and task_has_refute_intent(runtime, t):
-                refute_keys.add(t.spec.task_key)
-                if t.spec.task_key in superseded_tasks:
+        for rt in runtime.tasks.values():
+            if rt.state != TaskState.DONE and task_has_refute_intent(runtime, rt):
+                refute_keys.add(rt.spec.task_key)
+                if rt.spec.task_key in superseded_tasks:
                     await refuse_expansion(
                         runtime,
                         after_task,
                         reason="has_refutation",
-                        detail=f"{t.spec.task_key}:open_refute_task",
+                        detail=f"{rt.spec.task_key}:open_refute_task",
                     )
                     return None
 
