@@ -23,7 +23,6 @@ from coscientist.core.errors import (
     Idempotent,
     LeaseLost,
     StudyClosedError,
-    reject_write_after_finalized,
 )
 from coscientist.core.events import EventEnvelope
 from coscientist.core.metrics import bump_late_write_rejected
@@ -297,29 +296,20 @@ class SqliteEventStore:
             return True
         return False
 
-    def _reject_if_finalized(self, event_type: str) -> None:
-        if reject_write_after_finalized(self._study_is_finalized(), event_type):
-            bump_late_write_rejected(event_type)
-            raise StudyClosedError(self.study_id, event_type)
-
     def _ensure_append_allowed(
         self, event: EventEnvelope, *, batch_finalized: bool = False
     ) -> None:
-        """I3: after StudyFinalized, reject writes — except identical finalize retry.
+        """I3: after StudyFinalized, reject writes — except identical idempotent retry.
 
-        A study has exactly one StudyFinalized. Idempotency is checked *before*
-        StudyClosedError so a crash/timeout retry with the same idem_key+payload
-        returns the recorded outcome instead of failing closed.
+        Idempotency is checked *before* StudyClosedError for every event type so
+        an honest retry of an already-recorded row (same idem_key+payload) returns
+        the original instead of failing closed. A missing key, or same key with a
+        different payload, is rejected (StudyClosedError / Conflict).
 
         ``batch_finalized`` covers an earlier StudyFinalized in the same
         ``append_many`` transaction (projections may not be visible via cache yet).
         """
         finalized = batch_finalized or self._study_is_finalized()
-        if event.type != "StudyFinalized":
-            if finalized:
-                bump_late_write_rejected(event.type)
-                raise StudyClosedError(self.study_id, event.type)
-            return
         if not finalized:
             return
         digest = event.payload_digest or payload_digest(event.payload)
@@ -327,16 +317,16 @@ class SqliteEventStore:
             "SELECT seq, payload_digest FROM events WHERE idem_key=?",
             (event.idem_key,),
         ).fetchone()
-        if existing is None:
-            # Distinct second finalize (different idem_key).
-            bump_late_write_rejected(event.type)
-            raise StudyClosedError(self.study_id, event.type)
-        if existing["payload_digest"] != digest:
+        if existing is not None:
+            if existing["payload_digest"] == digest:
+                # Identical retry: fall through to _insert_one → Idempotent / existing.
+                return
             raise Conflict(
                 f"idem_key={event.idem_key} payload mismatch "
                 f"(stored={existing['payload_digest']}, new={digest})"
             )
-        # Identical retry: fall through to _insert_one → Idempotent / existing.
+        bump_late_write_rejected(event.type)
+        raise StudyClosedError(self.study_id, event.type)
 
     def _append_locked(self, event: EventEnvelope) -> EventEnvelope:
         mutated = False
@@ -391,12 +381,13 @@ class SqliteEventStore:
         source_fetched_cap_id: str | None = None,
     ) -> list[EventEnvelope]:
         out: list[EventEnvelope] = []
-        # In-batch closed flag: first StudyFinalized closes the rest of the batch
-        # even before commit / before _finalized_cached flips to True.
-        batch_finalized = self._study_is_finalized()
         mutated = False
         try:
             self._fence()
+            # Probe finalized only after fence so lease ownership is confirmed.
+            # In-batch flag: first StudyFinalized closes the rest of the batch
+            # even before commit / before _finalized_cached flips to True.
+            batch_finalized = self._study_is_finalized()
             if require_open_attempt is not None:
                 row = self._get_row_write("attempts", require_open_attempt)
                 if row is None or row.get("closed"):

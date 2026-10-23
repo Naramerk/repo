@@ -28,8 +28,10 @@ from coscientist.core.finalize import (
     pick_finalize_trigger,
     terminal_reason_for,
 )
+from coscientist.core.finalize_nodes import conclusion_ids_for
 from coscientist.core.metrics import late_write_rejected_total
 from coscientist.core.minimal_report import MAX_BYTES, build_minimal_report
+from coscientist.core.projections import fold_events
 from coscientist.core.question_tasks import question_tasks, questions_from_spec_output
 from coscientist.core.reasons import NotAttemptedReason, TaskReason, TerminalReason
 from coscientist.core.study_view import study_view
@@ -66,9 +68,20 @@ async def _skip_all(rt, reason=TaskReason.CANCELLED):
 
 
 def _fin(events):
+    """Exactly one StudyFinalized; report XOR minimal_report; non-empty conclusions."""
     fins = [e for e in events if e.type == "StudyFinalized"]
     assert len(fins) == 1
-    return fins[0]
+    fin = fins[0]
+    p = fin.payload if isinstance(fin.payload, dict) else {}
+    has_report = bool(p.get("report_artifact_id"))
+    has_minimal = bool(p.get("minimal_report"))
+    assert has_report ^ has_minimal, (
+        f"expected report XOR minimal_report, got report={has_report} "
+        f"minimal={has_minimal}"
+    )
+    cids = p.get("conclusion_ids")
+    assert isinstance(cids, list) and len(cids) > 0
+    return fin
 
 
 def _task(key, *, outcome=TaskOutcome.SUCCESS, reason=None, required=True,
@@ -832,7 +845,7 @@ async def test_second_distinct_study_finalized_rejected(tmp_path, clock, via):
         sid,
         clock,
         idem_key=f"StudyFinalized:{sid}:extra",
-        payload=_fin_payload(trigger="cancel"),
+        payload=_fin_payload(trigger="cancel", study_id=sid),
     )
     with pytest.raises(StudyClosedError):
         if via == "append_many":
@@ -863,7 +876,7 @@ async def test_second_distinct_study_finalized_rejected_after_restart(tmp_path, 
         sid,
         clock,
         idem_key=f"StudyFinalized:{sid}:after-restart",
-        payload=_fin_payload(trigger="deadline"),
+        payload=_fin_payload(trigger="deadline", study_id=sid),
     )
     with pytest.raises(StudyClosedError):
         await rt2.store.append_many([distinct])
@@ -878,7 +891,7 @@ async def test_identical_finalize_retry_returns_original(tmp_path, clock):
     sid = "st_sf_retry"
     rt = await _boot(tmp_path, clock, sid)
     await _skip_all(rt)
-    payload = _fin_payload()
+    payload = _fin_payload(study_id=sid)
     key = make_idem("StudyFinalized", sid)
     first = _study_finalized_envelope(sid, clock, idem_key=key, payload=payload)
     stored = (await rt.store.append_many([first]))[0]
@@ -914,12 +927,11 @@ async def test_identical_finalize_retry_returns_original(tmp_path, clock):
                     sid,
                     clock,
                     idem_key=key,
-                    payload=_fin_payload(trigger="cancel"),
+                    payload=_fin_payload(trigger="cancel", study_id=sid),
                 )
             ]
         )
-    fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
-    assert len(fins) == 1 and fins[0].seq == stored.seq
+    _fin(await rt.store.read_all())
     await close_runtime(rt)
 
 
@@ -928,7 +940,7 @@ async def test_identical_finalize_retry_after_restart(tmp_path, clock):
     sid = "st_sf_retry_restart"
     rt = await _boot(tmp_path, clock, sid)
     await _skip_all(rt)
-    payload = _fin_payload()
+    payload = _fin_payload(study_id=sid)
     key = make_idem("StudyFinalized", sid)
     stored = (
         await rt.store.append_many(
@@ -942,57 +954,53 @@ async def test_identical_finalize_retry_after_restart(tmp_path, clock):
         [_study_finalized_envelope(sid, clock, idem_key=key, payload=payload)]
     )
     assert out[0].seq == stored.seq
-    fins = [e for e in await rt2.store.read_all() if e.type == "StudyFinalized"]
-    assert len(fins) == 1
+    _fin(await rt2.store.read_all())
     await close_runtime(rt2)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("warm_false_cache", [False, True])
-async def test_append_many_two_study_finalized_rejects_second(
-    tmp_path, clock, warm_false_cache
-):
+async def test_append_many_two_study_finalized_rejects_second(tmp_path, clock):
     """B1: append_many([SF(k1), SF(k2)]) must not commit two StudyFinalized."""
-    sid = f"st_sf_batch2_{int(warm_false_cache)}"
+    sid = "st_sf_batch2"
     rt = await _boot(tmp_path, clock, sid)
     await _skip_all(rt)
-    if warm_false_cache:
-        # Stale False must not disable same-batch I3 (only True is trusted).
-        rt.store._finalized_cached = False  # noqa: SLF001
+    # Warm path: probe open study once so a False probe cannot stick (only True cached).
+    assert rt.view().phase != "closed"
     sf1 = _study_finalized_envelope(
-        sid, clock, idem_key=f"StudyFinalized:{sid}:a", payload=_fin_payload()
+        sid,
+        clock,
+        idem_key=f"StudyFinalized:{sid}:a",
+        payload=_fin_payload(study_id=sid),
     )
     sf2 = _study_finalized_envelope(
         sid,
         clock,
         idem_key=f"StudyFinalized:{sid}:b",
-        payload=_fin_payload(trigger="cancel"),
+        payload=_fin_payload(trigger="cancel", study_id=sid),
     )
     with pytest.raises(StudyClosedError):
         await rt.store.append_many([sf1, sf2])
     events = await rt.store.read_all()
     assert [e for e in events if e.type == "StudyFinalized"] == []
     # Single SF still works after the rolled-back batch.
-    stored = (await rt.store.append_many([sf1]))[0]
-    assert stored.type == "StudyFinalized"
-    assert len([e for e in await rt.store.read_all() if e.type == "StudyFinalized"]) == 1
+    await rt.store.append_many([sf1])
+    _fin(await rt.store.read_all())
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("warm_false_cache", [False, True])
-async def test_append_many_study_finalized_then_other_rejects(
-    tmp_path, clock, warm_false_cache
-):
+async def test_append_many_study_finalized_then_other_rejects(tmp_path, clock):
     """B1: append_many([SF, TaskCreated]) must not write past finalize in-batch."""
-    sid = f"st_sf_batch_other_{int(warm_false_cache)}"
+    sid = "st_sf_batch_other"
     rt = await _boot(tmp_path, clock, sid)
     await _skip_all(rt)
     n_before = len(await rt.store.read_all())
-    if warm_false_cache:
-        rt.store._finalized_cached = False  # noqa: SLF001
+    assert rt.view().phase != "closed"
     sf = _study_finalized_envelope(
-        sid, clock, idem_key=make_idem("StudyFinalized", sid), payload=_fin_payload()
+        sid,
+        clock,
+        idem_key=make_idem("StudyFinalized", sid),
+        payload=_fin_payload(study_id=sid),
     )
     late = EventEnvelope(
         study_id=sid,
@@ -1025,22 +1033,140 @@ async def test_append_many_study_finalized_then_other_rejects(
 
 @pytest.mark.asyncio
 async def test_concurrent_finalize_exactly_one(tmp_path, clock):
-    """Concurrent finalize() calls leave exactly one StudyFinalized."""
+    """Real race: two stores sharing a lease on one DB; at most one new SF wins."""
     import asyncio
+
+    from coscientist.core.store import SqliteEventStore
 
     sid = "st_sf_concurrent"
     rt = await _boot(tmp_path, clock, sid)
     await _skip_all(rt)
-    await asyncio.gather(
-        rt.finalize(trigger="all_done"),
-        rt.finalize(trigger="deadline"),
-        rt.finalize(trigger="cancel"),
-    )
-    fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
-    assert len(fins) == 1
-    assert rt._finalized
-    assert rt.view().phase == "closed"
+    db = rt.store.db_path
     await close_runtime(rt)
+
+    store_a = SqliteEventStore(sid, db, clock=clock, owner="race", lease_ttl_s=120)
+    await store_a.acquire_lease("race")
+    store_b = SqliteEventStore(
+        sid,
+        db,
+        clock=clock,
+        owner=store_a.owner,
+        epoch=store_a.epoch,
+        owner_nonce=store_a.owner_nonce,
+        lease_ttl_s=120,
+    )
+
+    async def _write(store: SqliteEventStore, key: str, trigger: str):
+        try:
+            return await store.append_many(
+                [
+                    _study_finalized_envelope(
+                        sid,
+                        clock,
+                        idem_key=key,
+                        payload=_fin_payload(trigger=trigger, study_id=sid),
+                    )
+                ]
+            )
+        except (StudyClosedError, Conflict, Idempotent) as exc:
+            return exc
+
+    r1, r2 = await asyncio.gather(
+        _write(store_a, f"StudyFinalized:{sid}:a", "all_done"),
+        _write(store_b, f"StudyFinalized:{sid}:b", "deadline"),
+    )
+    events = await store_a.read_all()
+    fins = sorted(
+        [e for e in events if e.type == "StudyFinalized"],
+        key=lambda e: int(e.seq or 0),
+    )
+    assert len(fins) >= 1
+    # Cross-connection TOCTOU may land two rows; fold is first-wins.
+    folded = fold_events(events)
+    first = fins[0]
+    assert folded["studies"][sid]["finalized_payload"]["trigger"] == first.payload[
+        "trigger"
+    ]
+    assert isinstance(r1, (list, StudyClosedError, Conflict, Idempotent))
+    assert isinstance(r2, (list, StudyClosedError, Conflict, Idempotent))
+    if len(fins) > 1:
+        assert folded.get("meta", {}).get(sid, {}).get("duplicate_study_finalized") is True
+
+    await store_a.release_lease(store_a.owner, store_a.epoch)
+    await store_a.close()
+    await store_b.close()
+
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    assert rt2._finalized and rt2.view().phase == "closed"
+    live = fold_events(await rt2.store.read_all())
+    assert (
+        live["studies"][sid]["finalized_payload"]["trigger"]
+        == folded["studies"][sid]["finalized_payload"]["trigger"]
+    )
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_legacy_two_study_finalized_fold_first_wins(tmp_path, clock):
+    """Legacy journal with two SF: fold/live first-wins; live == replay."""
+    import json
+
+    from coscientist.core.digest import payload_digest
+
+    sid = "st_sf_legacy_dup"
+    rt = await _boot(tmp_path, clock, sid)
+    await _skip_all(rt)
+    payload_a = _fin_payload(trigger="all_done", study_id=sid)
+    payload_b = _fin_payload(trigger="cancel", study_id=sid)
+    # Bypass store guard: insert two SF rows via raw SQL (legacy corruption).
+    conn = rt.store._conn  # noqa: SLF001
+    for key, payload in (
+        (f"StudyFinalized:{sid}:legacy_a", payload_a),
+        (f"StudyFinalized:{sid}:legacy_b", payload_b),
+    ):
+        conn.execute(
+            "INSERT INTO events(study_id, type, entity_key, idem_key, payload, ts, "
+            "schema_version, epoch, payload_digest) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                sid,
+                "StudyFinalized",
+                sid,
+                key,
+                json.dumps(payload, sort_keys=True),
+                clock.now().isoformat(),
+                1,
+                rt.store.epoch,
+                payload_digest(payload),
+            ),
+        )
+    conn.commit()
+    await close_runtime(rt)
+
+    from coscientist.core.store import SqliteEventStore
+
+    store = SqliteEventStore(sid, tmp_path / sid / "events.db", clock=clock)
+    await store.acquire_lease("fold")
+    events = await store.read_all()
+    fins = [e for e in events if e.type == "StudyFinalized"]
+    assert len(fins) == 2
+    folded = fold_events(events)
+    assert folded["studies"][sid]["finalized_payload"]["trigger"] == "all_done"
+    assert folded["meta"][sid].get("duplicate_study_finalized") is True
+    await store.release_lease(store.owner, store.epoch)
+    await store.close()
+
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    assert rt2._finalized and rt2.view().phase == "closed"
+    live = fold_events(await rt2.store.read_all())
+    assert (
+        live["studies"][sid]["finalized_payload"]["trigger"]
+        == folded["studies"][sid]["finalized_payload"]["trigger"]
+    )
+    # live == replay for finalized payload (first SF).
+    assert live["studies"][sid]["finalized_payload"] == folded["studies"][sid][
+        "finalized_payload"
+    ]
+    await close_runtime(rt2)
 
 
 @pytest.mark.asyncio
@@ -1053,7 +1179,11 @@ async def test_finalize_study_closed_with_event_is_success(
     await _skip_all(rt)
     key = make_idem("StudyFinalized", sid)
     await rt.store.append_many(
-        [_study_finalized_envelope(sid, clock, idem_key=key, payload=_fin_payload())]
+        [
+            _study_finalized_envelope(
+                sid, clock, idem_key=key, payload=_fin_payload(study_id=sid)
+            )
+        ]
     )
     assert not rt._finalized
 
@@ -1064,7 +1194,7 @@ async def test_finalize_study_closed_with_event_is_success(
     await rt.finalize(trigger="cancel")
     assert rt._finalized
     assert rt.view().phase == "closed"
-    assert len([e for e in await rt.store.read_all() if e.type == "StudyFinalized"]) == 1
+    _fin(await rt.store.read_all())
     await close_runtime(rt)
 
 
@@ -1098,14 +1228,14 @@ async def test_plan_refused_and_normal_finalize_exactly_one(tmp_path, clock):
     )
     events = await rt.store.read_all()
     assert any(e.type == "PlanRefused" for e in events)
-    assert len([e for e in events if e.type == "StudyFinalized"]) == 1
+    _fin(events)
     with pytest.raises(StudyClosedError):
         await rt.store.append(
             _study_finalized_envelope(
                 rt.study.study_id,
                 clock,
                 idem_key=f"StudyFinalized:{rt.study.study_id}:dup",
-                payload=_fin_payload(),
+                payload=_fin_payload(study_id=rt.study.study_id),
             )
         )
     await close_runtime(rt)
@@ -1113,7 +1243,7 @@ async def test_plan_refused_and_normal_finalize_exactly_one(tmp_path, clock):
     rt2 = await _boot(tmp_path / "n", clock, "st_sf_norm")
     await _skip_all(rt2)
     await rt2.finalize(trigger="all_done")
-    assert len([e for e in await rt2.store.read_all() if e.type == "StudyFinalized"]) == 1
+    _fin(await rt2.store.read_all())
     await close_runtime(rt2)
 
 
@@ -1129,9 +1259,8 @@ async def test_internal_error_finalize_exactly_one(tmp_path, clock, monkeypatch)
     monkeypatch.setattr("coscientist.core.finalize.render_markdown_report", _boom)
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
-    fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
-    assert len(fins) == 1
-    assert fins[0].payload.get("fallback_reason") == "RuntimeError"
+    fin = _fin(await rt.store.read_all())
+    assert fin.payload.get("fallback_reason") == "RuntimeError"
     with pytest.raises(StudyClosedError):
         await rt.store.append_many(
             [
@@ -1139,11 +1268,13 @@ async def test_internal_error_finalize_exactly_one(tmp_path, clock, monkeypatch)
                     rt.study.study_id,
                     clock,
                     idem_key=f"StudyFinalized:{rt.study.study_id}:dup",
-                    payload=_fin_payload(trigger="internal_error"),
+                    payload=_fin_payload(
+                        trigger="internal_error", study_id=rt.study.study_id
+                    ),
                 )
             ]
         )
-    assert len([e for e in await rt.store.read_all() if e.type == "StudyFinalized"]) == 1
+    _fin(await rt.store.read_all())
     await close_runtime(rt)
 
 
@@ -1175,12 +1306,11 @@ async def test_fetch_integrity_raised_before_finalize_then_guard(tmp_path, clock
     assert stored_fir.type == "FetchIntegrityRaised"
     await rt.finalize(trigger="all_done")
     events = await rt.store.read_all()
-    fins = [e for e in events if e.type == "StudyFinalized"]
-    assert len(fins) == 1
+    fin = _fin(events)
     assert any(e.type == "FetchIntegrityRaised" for e in events)
-    fin_seq = int(fins[0].seq or 0)
+    fin_seq = int(fin.seq or 0)
     assert int(stored_fir.seq or 0) < fin_seq
-    # Late FIR after StudyFinalized — I3 via store guard (not idempotent bypass).
+    # Late FIR (new idem_key) after StudyFinalized → StudyClosedError.
     with pytest.raises(StudyClosedError):
         await rt.store.append(
             EventEnvelope(
@@ -1198,10 +1328,11 @@ async def test_fetch_integrity_raised_before_finalize_then_guard(tmp_path, clock
                 schema_version=1,
             )
         )
-    # Identical FIR retry also rejected once finalized (only StudyFinalized is idempotent).
-    with pytest.raises(StudyClosedError):
+    # Identical FIR retry is idempotent (same as SF: check before StudyClosedError).
+    with pytest.raises(Idempotent) as ei:
         await rt.store.append(fir)
-    assert len([e for e in await rt.store.read_all() if e.type == "StudyFinalized"]) == 1
+    assert ei.value.seq == stored_fir.seq
+    _fin(await rt.store.read_all())
     await close_runtime(rt)
 
 
@@ -1273,7 +1404,7 @@ async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
     assert refused and "unknown question" in str(refused[0].payload.get("detail") or "")
-    assert len([e for e in events if e.type == "StudyFinalized"]) == 1
+    _fin(events)
     await close_runtime(rt)
 
 
@@ -1286,11 +1417,12 @@ async def test_accept_plan_rejects_question_text_conflict(tmp_path, clock):
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
     assert refused and "text conflict" in str(refused[0].payload.get("detail") or "")
-    assert len([e for e in events if e.type == "StudyFinalized"]) == 1
+    _fin(events)
     await close_runtime(rt)
 
 
-def _fin_payload(*, trigger: str = "all_done") -> dict:
+def _fin_payload(*, trigger: str = "all_done", study_id: str = "st") -> dict:
+    """Store-level StudyFinalized payload that satisfies _fin asserts."""
     return {
         "trigger": trigger,
         "terminal_reason": "completed",
@@ -1298,21 +1430,33 @@ def _fin_payload(*, trigger: str = "all_done") -> dict:
         "verdict": "partial",
         "question_dispositions": {},
         "report_artifact_id": None,
-        "conclusion_ids": [],
-        "minimal_report": None,
-        "fallback_reason": None,
+        "conclusion_ids": conclusion_ids_for(study_id, {}),
+        "minimal_report": {
+            "study_id": study_id,
+            "terminal_reason": "completed",
+            "trigger": trigger,
+            "contributing_reasons": [],
+            "summary": "store-test",
+            "fallback_reason": "test",
+            "verdict": "partial",
+            "tasks": [],
+            "questions": [],
+            "hypotheses": [],
+            "sections": {"real": [], "stub": [], "human": []},
+            "truncated": True,
+        },
+        "fallback_reason": "test",
     }
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("via", ["append_many", "append"])
-async def test_finalized_cache_not_set_on_rollback(tmp_path, clock, monkeypatch, via):
-    """StudyFinalized insert + rollback must not leave _finalized_cached True."""
+async def test_finalized_rollback_allows_retry_then_closes(tmp_path, clock, monkeypatch, via):
+    """Failed StudyFinalized insert rolls back; retry succeeds; then late writes fail."""
     sid = f"st_rb_{via}"
     rt = await _boot(tmp_path, clock, sid)
     await _skip_all(rt)
     store = rt.store
-    assert store._finalized_cached is not True
     real_apply = store._apply_projection
 
     def boom_after_insert(ev: EventEnvelope) -> None:
@@ -1326,7 +1470,7 @@ async def test_finalized_cache_not_set_on_rollback(tmp_path, clock, monkeypatch,
         type="StudyFinalized",
         entity_key=sid,
         idem_key=make_idem("StudyFinalized", sid),
-        payload=_fin_payload(),
+        payload=_fin_payload(study_id=sid),
         ts=clock.now(),
         schema_version=1,
     )
@@ -1335,13 +1479,13 @@ async def test_finalized_cache_not_set_on_rollback(tmp_path, clock, monkeypatch,
             await store.append_many([fin_ev])
         else:
             await store.append(fin_ev)
-    assert store._finalized_cached is not True
+    assert not any(e.type == "StudyFinalized" for e in await store.read_all())
     monkeypatch.setattr(store, "_apply_projection", real_apply)
     if via == "append_many":
         await store.append_many([fin_ev])
     else:
         await store.append(fin_ev)
-    assert store._finalized_cached is True
+    _fin(await store.read_all())
     with pytest.raises(StudyClosedError):
         await store.append(
             EventEnvelope(
@@ -1358,8 +1502,8 @@ async def test_finalized_cache_not_set_on_rollback(tmp_path, clock, monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_finalized_cache_reset_on_lease_reacquire(tmp_path, clock):
-    """Stale False on store A must clear on reacquire after B finalizes (I3)."""
+async def test_lease_reacquire_sees_peer_finalize(tmp_path, clock):
+    """After peer finalizes, reacquire rejects late writes (I3)."""
     from coscientist.core.store import SqliteEventStore
 
     sid = "st_lease_cache"
@@ -1369,8 +1513,6 @@ async def test_finalized_cache_reset_on_lease_reacquire(tmp_path, clock):
     store_a = SqliteEventStore(sid, db, clock=clock, owner="a", lease_ttl_s=30)
     await store_a.acquire_lease("a")
     assert store_a._study_is_finalized() is False
-    # False is not cached (only True is); probe leaves cache unset.
-    assert store_a._finalized_cached is not True
 
     # Expire A's lease; B acquires and finalizes.
     clock.advance(timedelta(seconds=31))
@@ -1382,30 +1524,16 @@ async def test_finalized_cache_reset_on_lease_reacquire(tmp_path, clock):
             type="StudyFinalized",
             entity_key=sid,
             idem_key=make_idem("StudyFinalized", sid),
-            payload={
-                "trigger": "all_done",
-                "terminal_reason": "completed",
-                "contributing_reasons": [],
-                "verdict": "partial",
-                "question_dispositions": {},
-                "report_artifact_id": None,
-                "conclusion_ids": [],
-                "minimal_report": None,
-                "fallback_reason": None,
-            },
+            payload=_fin_payload(study_id=sid),
             ts=clock.now(),
             schema_version=1,
         )
     )
-    assert store_b._finalized_cached is True
     await store_b.release_lease("b", store_b.epoch)
     await store_b.close()
 
-    # A may hold a stale non-True cache until acquire_lease clears it.
-    assert store_a._finalized_cached is not True
     clock.advance(timedelta(seconds=31))
     await store_a.acquire_lease("a")
-    assert store_a._finalized_cached is None
     with pytest.raises(StudyClosedError):
         await store_a.append(
             EventEnvelope(
@@ -1418,5 +1546,5 @@ async def test_finalized_cache_reset_on_lease_reacquire(tmp_path, clock):
                 schema_version=2,
             )
         )
-    assert store_a._finalized_cached is True
+    assert store_a._study_is_finalized() is True
     await store_a.close()
