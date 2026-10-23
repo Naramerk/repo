@@ -211,8 +211,61 @@ async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_study_budget_exceeded_from_costly_spend(tmp_path, clock):
-    """BudgetDebited against study max_cost_rub emits BudgetExceeded (no test hook)."""
+async def test_study_budget_exceeded_from_costly_spend(tmp_path, clock, runtime_cls):
+    """BudgetDebited against study max_cost_rub emits BudgetExceeded (core + exp)."""
+    from datetime import timedelta
+    from decimal import Decimal
+
+    from coscientist.core.domain import Budget
+    from coscientist.core.events import EventEnvelope, make_idem
+    from coscientist.core.runtime_factory import close_runtime, open_runtime
+
+    budget = Budget(
+        max_cost_rub=Decimal("100"),
+        delegated_costly=Decimal("100"),
+        deadline=clock.now() + timedelta(hours=1),
+    )
+    sid = "st_study_bud"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, runtime_cls=runtime_cls, owner="t1"
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(minutes=30),
+        sid=sid,
+        budget=budget,
+        finalize_reserve_s=5,
+    )
+    # Producer path without note_budget_exceeded: fold spend → emit on tick.
+    await rt._append(
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="BudgetDebited",
+                entity_key="debit-1",
+                idem_key=make_idem("BudgetDebited", sid, "debit-1"),
+                payload={"spent_rub": "100", "request_id": "debit-1"},
+                ts=clock.now(),
+            )
+        ]
+    )
+    assert rt._study_spent_rub == Decimal("100")
+    assert not rt._budget_exceeded
+    await rt.tick()
+    types = [e.type for e in await rt.store.read_all()]
+    assert "BudgetDebited" in types
+    assert "BudgetExceeded" in types
+    fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    assert len(fins) == 1
+    assert fins[0].payload["trigger"] == "budget"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_settle_delegated_spend_emits_study_budget(tmp_path, clock):
+    """Exp settle → BudgetDebited → BudgetExceeded (wired emit, not getattr)."""
     from datetime import timedelta
     from decimal import Decimal
 
@@ -229,13 +282,12 @@ async def test_study_budget_exceeded_from_costly_spend(tmp_path, clock):
             )
         },
     )
-    # Study cap 100 ₽; delegated pool larger so the gate allows the spend.
     budget = Budget(
         max_cost_rub=Decimal("100"),
-        delegated_costly=Decimal("1000"),
+        delegated_costly=Decimal("100"),
         deadline=clock.now() + timedelta(hours=1),
     )
-    sid = "st_study_bud"
+    sid = "st_settle_bud"
     rt = await open_runtime(
         tmp_path, sid, clock=clock, runtime_cls=ExpStudyRuntime, owner="t1"
     )
@@ -254,13 +306,8 @@ async def test_study_budget_exceeded_from_costly_spend(tmp_path, clock):
     rid = await rt.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=100)
     await rt.answer_hitl(rid, "delegate")
     await rt.settle_delegated_spend(rid, actual_rub=100)
-    # Producer path: settle → BudgetDebited → emit BudgetExceeded (not note_budget_exceeded).
     types = [e.type for e in await rt.store.read_all()]
     assert "BudgetDebited" in types
     assert "BudgetExceeded" in types
     assert rt._budget_exceeded
-    await rt.tick()
-    fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
-    assert len(fins) == 1
-    assert fins[0].payload["trigger"] == "budget"
     await close_runtime(rt)

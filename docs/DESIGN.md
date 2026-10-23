@@ -612,9 +612,9 @@ class Budget(BaseModel):
     max_llm_calls: int; max_tokens: int; max_cost_rub: Decimal | None
     max_tool_calls: int; deadline: datetime
 ```
-Бюджеты: на study, на попытку (из RouteConfig), на роль. Превышение → `BudgetExceeded(scope)`: попытка failure(retryable=False), при превышении бюджета study все не-DONE задачи → DONE(SKIPPED, budget) (P6), study закрывается с verdict partial/failed.
+Бюджеты: на study, на попытку (из RouteConfig), на роль. Исчерпание (достижение потолка, `spent ≥ max_cost_rub`) → `BudgetExceeded(scope)`: попытка failure(retryable=False), при исчерпании бюджета study все не-DONE задачи → DONE(SKIPPED, budget) (P6), study закрывается с verdict partial/failed. `Budget.delegated_costly` (если задан вместе с `max_cost_rub`) обязан быть `≤ max_cost_rub`.
 
-**M1 note.** Core persists and folds `BudgetExceeded(scope=study)`; tick finalizes with `trigger=budget`. Production producer: `BudgetDebited.spent_rub` (costly HITL settle) and optional `llm_calls` accumulate on the runtime; when `spent_rub ≥ Budget.max_cost_rub` or `llm_calls ≥ max_llm_calls`, core emits `BudgetExceeded(study)` (also re-checked on `tick` after reopen). Task-level `TaskDone(budget)` from the delegated_costly gate still does **not** close the study.
+**M1 note.** Core persists and folds `BudgetExceeded(scope=study)`; tick finalizes with `trigger=budget`. Production producer: `BudgetDebited.spent_rub` (costly HITL settle) accumulates as `Decimal` on the runtime; when `spent_rub ≥ Budget.max_cost_rub` (reaching the cap counts), core emits `BudgetExceeded(study)` (also re-checked on `tick` after reopen). Task-level `TaskDone(budget)` from the delegated_costly gate still does **not** close the study.
 
 ### 7.5 ТЗ исследования (#1)
 Роль `tz_spec`: вход — запрос, выход `ResearchSpec(object, goal, scope, constraints, success_metrics)`. Задача kind=spec — первая в DAG; `spec_approval` по политике HITL; FAILED → потомки работают по §3.4 (plan строится на запросе как есть).

@@ -7,7 +7,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from coscientist.core.reasons import CloseReason, TaskReason
 
@@ -183,6 +183,16 @@ class Budget(Frozen):
     deadline: datetime | None = None
     # RUB cap for critic decisions on costly_or_nonreal (delegate_capped).
     delegated_costly: Decimal | None = None
+
+    @model_validator(mode="after")
+    def _delegated_within_study_cap(self) -> Budget:
+        if (
+            self.delegated_costly is not None
+            and self.max_cost_rub is not None
+            and self.delegated_costly > self.max_cost_rub
+        ):
+            raise ValueError("delegated_costly must be <= max_cost_rub")
+        return self
 
 
 class Study(Frozen):

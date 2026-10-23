@@ -26,6 +26,10 @@ class CostlyHitlMixin:
     async def _append(self, events: list[EventEnvelope]) -> None:
         raise NotImplementedError
 
+    async def _emit_study_budget_if_exhausted(self) -> None:
+        """Core StudyRuntime implements: BudgetDebited → BudgetExceeded(study)."""
+        raise NotImplementedError
+
     async def cancel_task(
         self,
         task_key_or_id: str,
@@ -83,9 +87,7 @@ class CostlyHitlMixin:
         )
         self._pending_costly_events.pop(request_id, None)
         # Study-level Budget.max_cost_rub: costly spend counts toward the study.
-        emit = getattr(self, "_emit_study_budget_if_exhausted", None)
-        if emit is not None:
-            await emit()
+        await self._emit_study_budget_if_exhausted()
         return settled
 
     async def _apply_costly_or_nonreal(
