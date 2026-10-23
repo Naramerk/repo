@@ -58,8 +58,8 @@ def critic_gate(
         if not crits:
             return f"missing_criteria:{spec.task_key}"
         for ref in crits:
-            tid = str(getattr(ref, "template_id", "") or "")
-            if tid.startswith("plan_expansion_"):
+            tmpl_id = str(getattr(ref, "template_id", "") or "")
+            if tmpl_id.startswith("plan_expansion_"):
                 return f"forbidden_plan_expansion_marker:{spec.task_key}"
         if not any(str(getattr(r, "template_id", "") or "") in by_id for r in crits):
             return f"missing_catalog_criteria:{spec.task_key}"
