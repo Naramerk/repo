@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.claims.rubric_types import FinalType, Rubric
@@ -657,6 +658,9 @@ class CodeCheck(Frozen):
     memory_mb: int | None = None
     max_output_bytes: int | None = None
     allow_network: bool = False
+    # Host post-exit budgets (optional; SandboxLimits defaults when omitted).
+    reap_timeout_s: float | None = None
+    output_drain_join_s: float | None = None
     # tests_pass — catalog/task tests (not agent tests), mounted RO into verifier
     min_tests: int | None = None
     tests: dict[str, str] | None = None  # relative path → source text
@@ -670,6 +674,21 @@ class CodeCheck(Frozen):
     rerun_tol: float | None = None
     # kind=rubric: items frozen in catalog or filled from OutputSpec.rubric at eval
     rubric: Rubric | None = None
+
+    @field_validator("reap_timeout_s", "output_drain_join_s", mode="before")
+    @classmethod
+    def _host_budget_seconds(cls, v: object) -> float | None:
+        if v is None:
+            return None
+        # bool is a subclass of int — reject before numeric coercion.
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise ValueError(
+                f"host budget must be a real number, got {type(v).__name__}"
+            )
+        fv = float(v)
+        if not math.isfinite(fv) or fv <= 0.0:
+            raise ValueError(f"host budget must be finite and > 0, got {v!r}")
+        return fv
 
 
 class ReviewCheck(Frozen):

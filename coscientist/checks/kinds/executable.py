@@ -123,6 +123,8 @@ def _limits(check: CodeCheck):
         memory_mb=check.memory_mb,
         max_output_bytes=check.max_output_bytes,
         allow_network=bool(check.allow_network),
+        reap_timeout_s=check.reap_timeout_s,
+        output_drain_join_s=check.output_drain_join_s,
     )
 
 

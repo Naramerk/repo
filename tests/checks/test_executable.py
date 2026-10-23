@@ -50,6 +50,9 @@ results = pathlib.Path(os.environ["COSCIENTIST_RESULTS"])
 """.encode()
 
 
+CATALOG_VERSION = "0.1.0-pr17"
+
+
 def _catalog_with(*templates: dict) -> object:
     rules = [
         {
@@ -61,7 +64,7 @@ def _catalog_with(*templates: dict) -> object:
     ]
     return load_catalog(
         {
-            "catalog_version": "0.1.0-pr17",
+            "catalog_version": CATALOG_VERSION,
             "edition": "pr17",
             "rules": rules,
             "templates": [
@@ -1698,6 +1701,239 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
         )
     )
     assert IDLE_TIMEOUT_RU in contrib or TIMEOUT_BUDGET_RU in contrib
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_timeout_with_stuck_drain_charges_attempt(
+    tmp_path, clock, runtime_cls, monkeypatch
+):
+    """Timeout + stuck drain charges the attempt; catalog host budgets reach run_sandbox."""
+    import os
+    import select
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    import coscientist.checks.kinds.executable as exe_mod
+    import coscientist.checks.sandbox as sb_mod
+    from coscientist.checks.kinds.executable import _limits
+    from coscientist.checks.sandbox_limits import apply_frozen_limits
+
+    _require_hard()
+    host_reap_s = 0.25
+    host_drain_s = 0.25
+    wall_s = 2.0
+    guest = (
+        "import os, time\n"
+        "if os.fork() == 0:\n"
+        "    os.setsid()\n"
+        "    time.sleep(3600)\n"
+        "    os._exit(0)\n"
+        "while True:\n"
+        "    pass\n"
+    )
+    cat = _catalog_with(
+        {
+            "id": "exec_busy_hold",
+            "title": "busy+hold",
+            "check": {
+                "kind": "exec_runs",
+                "argv": ["python3", "-c", guest],
+                "timeout_s": wall_s,
+                "memory_mb": 64,
+                "reap_timeout_s": host_reap_s,
+                "output_drain_join_s": host_drain_s,
+            },
+            "role": "validity",
+        }
+    )
+    tmpl = next(t for t in cat.templates if t.id == "exec_busy_hold")
+    # Production _limits on catalog check must carry catalog 0.25 (not 5.0 defaults).
+    prod_lim = _limits(tmpl.check)
+    assert prod_lim.reap_timeout_s == host_reap_s
+    assert prod_lim.output_drain_join_s == host_drain_s
+    assert prod_lim.reap_timeout_s != sb_mod.DEFAULT_REAP_TIMEOUT_S
+    assert prod_lim.output_drain_join_s != sb_mod.DEFAULT_OUTPUT_DRAIN_JOIN_S
+
+    sid = "st_sbx_drain_charge"
+    rt = await open_runtime(
+        tmp_path,
+        sid,
+        clock=clock,
+        owner="t1",
+        runtime_cls=runtime_cls,
+        catalog=cat,
+    )
+    rt.max_attempts = 2
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version=cat.catalog_version,
+        deadline=clock.now() + timedelta(seconds=120),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    ex, arts = attach_executor(rt, tmp_path)
+    ex.catalog = cat
+    ex.max_attempts = 2
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E1",
+                title="run",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="exec_busy_hold")],
+            )
+        ]
+    )
+    task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
+    frozen_check = apply_frozen_limits(
+        tmpl.check, task.spec, template_id="exec_busy_hold"
+    )
+    frozen_lim = _limits(frozen_check)
+    assert frozen_lim.reap_timeout_s == host_reap_s
+    assert frozen_lim.output_drain_join_s == host_drain_s
+
+    captured: dict = {}
+
+    def run_sandbox_host_stuck_drain(argv, **kwargs):
+        """bwrap die-with-parent clears drain_failed; host watch keeps the flag real."""
+        del argv
+        lim = kwargs["limits"]
+        assert lim.reap_timeout_s == host_reap_s
+        assert lim.output_drain_join_s == host_drain_s
+        captured["limits"] = lim
+        ready_r, ready_w = os.pipe()
+        holder_r, holder_w = os.pipe()
+        script = (
+            "import os, time\n"
+            f"ready_w = {ready_w}\n"
+            f"holder_w = {holder_w}\n"
+            "if os.fork() == 0:\n"
+            "    os.setsid()\n"
+            "    os.write(holder_w, str(os.getpid()).encode())\n"
+            "    os.close(holder_w)\n"
+            "    os.write(ready_w, b'R')\n"
+            "    os.close(ready_w)\n"
+            "    time.sleep(3600)\n"
+            "    os._exit(0)\n"
+            "os.close(ready_w)\n"
+            "os.close(holder_w)\n"
+            "while True:\n"
+            "    pass\n"
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+            pass_fds=(ready_w, holder_w),
+        )
+        os.close(ready_w)
+        os.close(holder_w)
+        pgid = os.getpgid(proc.pid)
+        holder_pid: int | None = None
+        try:
+            ready, _, _ = select.select([ready_r], [], [], 5.0)
+            assert ready, "ready-pipe timed out"
+            assert os.read(ready_r, 1) == b"R"
+            os.close(ready_r)
+            ready_r = -1
+            hp_ready, _, _ = select.select([holder_r], [], [], 5.0)
+            assert hp_ready, "holder pid pipe timed out"
+            holder_pid = int(os.read(holder_r, 64).decode())
+            os.close(holder_r)
+            holder_r = -1
+            (
+                timed_out,
+                overflow,
+                out_b,
+                err_b,
+                kill_cause,
+                cpu_s,
+                _rusage,
+                drain_failed,
+            ) = sb_mod._watch_process(proc, lim=lim, cgroup_leaf=None)
+            result = sb_mod._classify(
+                timed_out=timed_out,
+                overflow=overflow,
+                proc=proc,
+                cgroup_leaf=None,
+                oom_detectable=False,
+                infra_msg=b"",
+                out_b=out_b,
+                err_b=err_b,
+                duration=float(lim.timeout_s),
+                net_i="hard",
+                fs_i="hard",
+                work_dir=None,
+                result_files={},
+                kill_cause=kill_cause,
+                cpu_usage_s=cpu_s,
+                timeout_s=float(lim.timeout_s),
+                output_drain_failed=drain_failed,
+            )
+            captured["result"] = result
+            return result
+        finally:
+            for fd in (ready_r, holder_r):
+                if isinstance(fd, int) and fd >= 0:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+            if holder_pid is not None:
+                try:
+                    os.kill(holder_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                else:
+                    deadline = time.monotonic() + float(lim.reap_timeout_s)
+                    while time.monotonic() < deadline:
+                        try:
+                            wpid, _ = os.waitpid(holder_pid, os.WNOHANG)
+                            if wpid == holder_pid:
+                                break
+                        except ChildProcessError:
+                            if not os.path.isdir(f"/proc/{holder_pid}"):
+                                break
+                        select.select([], [], [], 0.05)
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                proc.wait(timeout=float(lim.reap_timeout_s))
+            except Exception:  # noqa: BLE001
+                pass
+
+    monkeypatch.setattr(exe_mod, "run_sandbox", run_sandbox_host_stuck_drain)
+
+    aid = await rt.start_attempt("E1")
+    result = await ex.record(
+        aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
+    )
+    assert result.reason == TaskReason.SANDBOX_TIMEOUT.value
+    assert captured["limits"].reap_timeout_s == host_reap_s
+    assert captured["limits"].output_drain_join_s == host_drain_s
+    assert captured["result"].status is sb_mod.SandboxStatus.TIMEOUT
+    assert captured["result"].reason == "wall_timeout"
+    assert captured["result"].output_drain_failed is True
+    assert rt.results[aid]["result_class"] == "timeout"
+    assert rt.results[aid]["charged"] is True
+    assert rt.attempts[aid]["charged"] is True
+    task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
+    charged_used = sum(
+        1 for a in task.attempts if rt.attempts[a]["charged"] is True
+    )
+    assert charged_used == 1
     await close_runtime(rt)
 
 
