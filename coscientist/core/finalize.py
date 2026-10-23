@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from coscientist.core.digest import canonical_json
 from coscientist.core.dispositions import dispositions
 from coscientist.core.domain import Task, TaskOutcome, TaskState
-from coscientist.core.errors import CASUnavailable, LeaseLost
+from coscientist.core.errors import CASUnavailable, Conflict, LeaseLost
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.finalize_nodes import conclusion_ids_for
 from coscientist.core.minimal_report import build_minimal_report, render_markdown_report
@@ -142,7 +142,11 @@ def last_resort_payload(
 
 
 async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
-    """Write StudyFinalized (idempotent). Always attempts a write; LeaseLost propagates."""
+    """Write StudyFinalized (idempotent). Always attempts a write; LeaseLost propagates.
+
+    If the first append committed but a later step failed, a last-resort retry may
+    hit ``Conflict`` on the same idem key — treat that as success and sync fold.
+    """
     if runtime.study is None or is_finalized(runtime):
         return
     sid = runtime.study.study_id
@@ -157,16 +161,33 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
         await _append_finalized(runtime, sid=sid, payload=payload)
     except LeaseLost:
         raise
+    except Conflict:
+        await _sync_finalized_from_store(runtime)
     except Exception as e:  # noqa: BLE001 — retry once with last-resort
         log.warning("finalize append failed: %s; retrying last-resort", e, exc_info=True)
-        await _append_finalized(
-            runtime,
-            sid=sid,
-            payload=last_resort_payload(
-                study_id=sid, trigger=trigger, fallback_reason=type(e).__name__
-            ),
-        )
+        try:
+            await _append_finalized(
+                runtime,
+                sid=sid,
+                payload=last_resort_payload(
+                    study_id=sid, trigger=trigger, fallback_reason=type(e).__name__
+                ),
+            )
+        except Conflict:
+            await _sync_finalized_from_store(runtime)
+        except LeaseLost:
+            raise
     runtime._finalized = True  # noqa: SLF001
+
+
+async def _sync_finalized_from_store(runtime: StudyRuntime) -> None:
+    """Project a committed StudyFinalized if local fold missed it (Conflict path)."""
+    if is_finalized(runtime):
+        return
+    for ev in await runtime.store.read_all():
+        if ev.type == "StudyFinalized":
+            runtime._project_local(ev)  # noqa: SLF001
+            return
 
 
 async def _append_finalized(

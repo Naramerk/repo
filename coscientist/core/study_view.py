@@ -61,6 +61,17 @@ def _compute_verdict(
     return verdict, stub_share
 
 
+def study_phase(
+    *, finalized: bool = False, all_done: bool = False, past_effective: bool = False
+) -> str:
+    """Pure phase: closed | finalizing | running (DESIGN §3.2)."""
+    if finalized:
+        return "closed"
+    if all_done or past_effective:
+        return "finalizing"
+    return "running"
+
+
 def study_view(
     tasks: Iterable[Task],
     *,

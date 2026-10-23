@@ -490,10 +490,25 @@ async def test_accept_plan_rejects_question_text_conflict(tmp_path, clock):
     await close_runtime(rt)
 
 
+def _fin_payload(*, trigger: str = "all_done") -> dict:
+    return {
+        "trigger": trigger,
+        "terminal_reason": "completed",
+        "contributing_reasons": [],
+        "verdict": "partial",
+        "question_dispositions": {},
+        "report_artifact_id": None,
+        "conclusion_ids": [],
+        "minimal_report": None,
+        "fallback_reason": None,
+    }
+
+
 @pytest.mark.asyncio
-async def test_finalized_cache_not_set_on_rollback(tmp_path, clock, monkeypatch):
+@pytest.mark.parametrize("via", ["append_many", "append"])
+async def test_finalized_cache_not_set_on_rollback(tmp_path, clock, monkeypatch, via):
     """StudyFinalized insert + rollback must not leave _finalized_cached True."""
-    sid = "st_rb"
+    sid = f"st_rb_{via}"
     rt = await _boot(tmp_path, clock, sid)
     await _skip_all(rt)
     store = rt.store
@@ -511,25 +526,21 @@ async def test_finalized_cache_not_set_on_rollback(tmp_path, clock, monkeypatch)
         type="StudyFinalized",
         entity_key=sid,
         idem_key=make_idem("StudyFinalized", sid),
-        payload={
-            "trigger": "all_done",
-            "terminal_reason": "completed",
-            "contributing_reasons": [],
-            "verdict": "partial",
-            "question_dispositions": {},
-            "report_artifact_id": None,
-            "conclusion_ids": [],
-            "minimal_report": None,
-            "fallback_reason": None,
-        },
+        payload=_fin_payload(),
         ts=clock.now(),
         schema_version=1,
     )
     with pytest.raises(RuntimeError, match="after_insert_before_commit"):
-        await store.append_many([fin_ev])
+        if via == "append_many":
+            await store.append_many([fin_ev])
+        else:
+            await store.append(fin_ev)
     assert store._finalized_cached is not True
     monkeypatch.setattr(store, "_apply_projection", real_apply)
-    await store.append_many([fin_ev])
+    if via == "append_many":
+        await store.append_many([fin_ev])
+    else:
+        await store.append(fin_ev)
     assert store._finalized_cached is True
     with pytest.raises(StudyClosedError):
         await store.append(

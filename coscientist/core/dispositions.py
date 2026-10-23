@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from coscientist.core.domain import Task, TaskOutcome, TaskState
+from coscientist.core.domain import Task, TaskState
 from coscientist.core.question_tasks import known_questions, question_tasks
 from coscientist.core.reasons import Disposition, NotAttemptedReason, TaskReason
 
@@ -31,6 +31,20 @@ def _reasons_for(tasks: list[Task]) -> list[TaskReason]:
     return out
 
 
+def not_attempted_reason(covering_outcomes: list[str | None]) -> str:
+    """Map covering task outcomes → NotAttemptedReason value (oracle API)."""
+    if not covering_outcomes:
+        return NotAttemptedReason.NO_TASK.value
+    done = [o for o in covering_outcomes if o is not None]
+    if not done:
+        return NotAttemptedReason.NO_TASK.value
+    if any(o in ("SUCCESS", "PARTIAL") for o in done):
+        return NotAttemptedReason.NO_COUNTING_CLAIMS.value
+    if all(o == "FAILED" for o in done):
+        return NotAttemptedReason.TASKS_FAILED.value
+    return NotAttemptedReason.TASKS_SKIPPED.value
+
+
 def _not_attempted_for_covering(
     covering: list[Task],
 ) -> tuple[NotAttemptedReason, list[TaskReason]]:
@@ -39,12 +53,9 @@ def _not_attempted_for_covering(
     done = [t for t in covering if t.state == TaskState.DONE]
     if not done:
         return NotAttemptedReason.NO_TASK, _reasons_for(covering)
-    if any(t.outcome in {TaskOutcome.SUCCESS, TaskOutcome.PARTIAL} for t in done):
-        # PR 6/8: compute answered/… from claims. Core has no claim pipeline.
-        return NotAttemptedReason.NO_COUNTING_CLAIMS, _reasons_for(done)
-    if all(t.outcome == TaskOutcome.FAILED for t in done):
-        return NotAttemptedReason.TASKS_FAILED, _reasons_for(done)
-    return NotAttemptedReason.TASKS_SKIPPED, _reasons_for(done)
+    # PR 6/8: answered/… from counting claims. Core has no claim pipeline.
+    outcomes = [t.outcome.value if t.outcome is not None else None for t in done]
+    return NotAttemptedReason(not_attempted_reason(outcomes)), _reasons_for(done)
 
 
 def dispositions(
