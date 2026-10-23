@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping
-from math import ceil
 from typing import Any, Literal
 
 DecomposeOrigin = Literal["explicit", "implicit", "emergent"]
@@ -136,28 +135,37 @@ def max_decomposes_depth(parent_of: Mapping[str, str | None]) -> int:
 def question_origin_from_plans(
     plans: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]],
 ) -> dict[str, str]:
-    """question_id → origin (explicit|implicit|emergent); first wins."""
+    """question_id → origin (explicit|implicit|emergent); first wins.
+
+    DESIGN_M1 §10 / RESEARCH_MODEL ``decomposes.origin``:
+
+    - ``explicit`` — named in ``PlanOut.subquestions`` (planner declared the edge)
+      or stamped ``origin=explicit``.
+    - ``implicit`` — child has ``parent_id`` but was **not** listed in
+      ``subquestions`` (inferred parent link, e.g. dotted id / addresses-only
+      hierarchy) or stamped ``origin=implicit``.
+    - ``emergent`` — added by ``PlanExpanded(origin=emergent)`` / agent expansion.
+    """
     found: dict[str, str] = {}
     rows = plans.values() if isinstance(plans, Mapping) else plans
     for plan in rows:
         if not isinstance(plan, Mapping):
             continue
         plan_origin = str(plan.get("origin") or "")
+        named_sub_ids = {
+            str(q.get("id") or "")
+            for q in (plan.get("subquestions") or [])
+            if isinstance(q, dict) and q.get("id")
+        }
         for q in plan.get("questions") or []:
             if not isinstance(q, dict):
                 continue
             qid = str(q.get("id") or "")
             if not qid or qid in found:
                 continue
-            raw = q.get("origin")
-            if raw in VALID_DECOMPOSE_ORIGINS:
-                found[qid] = str(raw)
-            elif plan_origin == "emergent":
-                found[qid] = "emergent"
-            elif q.get("parent_id"):
-                found[qid] = "explicit"
-            else:
-                found[qid] = "explicit"
+            found[qid] = _infer_question_origin(
+                q, plan_origin=plan_origin, named_sub_ids=named_sub_ids
+            )
         for q in plan.get("subquestions") or []:
             if not isinstance(q, dict):
                 continue
@@ -165,6 +173,7 @@ def question_origin_from_plans(
             if not qid or qid in found:
                 continue
             raw = q.get("origin")
+            # Listed in PlanOut.subquestions → explicit unless stamped otherwise.
             found[qid] = str(raw) if raw in VALID_DECOMPOSE_ORIGINS else "explicit"
         for q in plan.get("added_questions") or []:
             if not isinstance(q, dict):
@@ -172,14 +181,28 @@ def question_origin_from_plans(
             qid = str(q.get("id") or "")
             if not qid or qid in found:
                 continue
-            raw = q.get("origin")
-            if raw in VALID_DECOMPOSE_ORIGINS:
-                found[qid] = str(raw)
-            elif plan_origin == "emergent":
-                found[qid] = "emergent"
-            else:
-                found[qid] = "explicit"
+            found[qid] = _infer_question_origin(
+                q, plan_origin=plan_origin, named_sub_ids=named_sub_ids
+            )
     return found
+
+
+def _infer_question_origin(
+    q: Mapping[str, Any],
+    *,
+    plan_origin: str,
+    named_sub_ids: set[str],
+) -> str:
+    raw = q.get("origin")
+    if raw in VALID_DECOMPOSE_ORIGINS:
+        return str(raw)
+    if plan_origin == "emergent":
+        return "emergent"
+    qid = str(q.get("id") or "")
+    if q.get("parent_id"):
+        # Named in subquestions → explicit; otherwise inferred parent → implicit.
+        return "explicit" if qid in named_sub_ids else "implicit"
+    return "explicit"
 
 
 def question_revision_from_plans(
@@ -250,8 +273,38 @@ def superseded_task_keys_from_plans(
     return keys
 
 
+def stamp_question_origins(
+    questions: list[Any],
+    *,
+    named_sub_ids: set[str],
+    plan_origin: str | None = None,
+) -> list[Any]:
+    """Fill unset ``QuestionSpec.origin`` per DESIGN_M1 §10 (explicit|implicit|emergent)."""
+    out: list[Any] = []
+    for q in questions:
+        if getattr(q, "origin", None) is not None:
+            out.append(q)
+            continue
+        parent = getattr(q, "parent_id", None)
+        if not parent:
+            out.append(q)
+            continue
+        if plan_origin == "emergent":
+            origin: DecomposeOrigin = "emergent"
+        elif getattr(q, "id", None) in named_sub_ids:
+            origin = "explicit"
+        else:
+            origin = "implicit"
+        out.append(q.model_copy(update={"origin": origin}))
+    return out
+
+
 def majority_threshold(n: int) -> int:
-    """Strict majority: ⌈n/2⌉."""
+    """Strict majority: ``n // 2 + 1`` (ties never win).
+
+    ``ceil(n/2)`` is wrong: for n=2 it yields 1 so a 1:1 tie would both
+    meet the bar and then preference-order to ``answered``.
+    """
     if n <= 0:
         return 0
-    return int(ceil(n / 2))
+    return n // 2 + 1

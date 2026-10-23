@@ -28,7 +28,9 @@ _RESOLVED: frozenset[str] = frozenset(
     }
 )
 
-# Preference order for ``any`` when multiple resolved dispositions differ.
+# Preference order for ``any`` when multiple *child* resolved dispositions differ.
+# Never used to raise a parent above its own PR 8b claims-based verdict (see
+# ``_combine_with_own_claims``).
 _ANY_PREF: tuple[str, ...] = (
     Disposition.ANSWERED.value,
     Disposition.SURVIVED.value,
@@ -38,6 +40,29 @@ _ANY_PREF: tuple[str, ...] = (
     Disposition.ILL_POSED.value,
     Disposition.RUBRIC_NOT_MET.value,
     Disposition.INCONCLUSIVE.value,
+)
+
+# Higher = more positive. Rollup may only keep or lower a claims-based parent.
+_DISP_RANK: dict[str, int] = {
+    Disposition.ANSWERED.value: 80,
+    Disposition.SURVIVED.value: 70,
+    Disposition.NEEDS_MORE_DATA.value: 55,
+    Disposition.INCONCLUSIVE.value: 50,
+    Disposition.RUBRIC_NOT_MET.value: 40,
+    Disposition.ILL_POSED.value: 35,
+    Disposition.INFEASIBLE.value: 30,
+    Disposition.REFUTED.value: 20,
+    Disposition.NOT_ATTEMPTED.value: 10,
+}
+
+# Dispositions that can come from counting claims (PR 8b / DESIGN_M1 §14).
+_CLAIMS_DISPOSITIONS: frozenset[str] = frozenset(
+    {
+        Disposition.ANSWERED.value,
+        Disposition.REFUTED.value,
+        Disposition.SURVIVED.value,
+        Disposition.INCONCLUSIVE.value,
+    }
 )
 
 
@@ -50,6 +75,12 @@ def apply_rollup(
 
     ``rubric``: parents keep their own (artifact) disposition — no child override.
     Parents without children are unchanged.
+
+    PR 8b / DESIGN_M1 §10+§14: when the parent already has a claims-based
+    verdict, rollup may only **lower or keep** it — never raise (e.g.
+    ``rollup=any`` must not turn a refuted parent into answered because a
+    child is answered). Parents without counting claims (typical decomposition
+    roots with ``not_attempted``) take the children rollup as today.
     """
     parent_of = parent_map_from_plans(plans)
     if not any(parent_of.values()):
@@ -59,14 +90,21 @@ def apply_rollup(
         return leaf_dispositions
     rule = plan_rollup(plans)
     out = {qid: dict(row) for qid, row in leaf_dispositions.items()}
-    # Bottom-up: deepest parents first so multi-level trees compose.
     depth_of: dict[str, int] = {}
+    max_nodes = max(len(parent_of), 1) + 2
 
-    def _depth(qid: str) -> int:
+    def _depth(qid: str, stack: frozenset[str] = frozenset()) -> int:
         if qid in depth_of:
             return depth_of[qid]
+        if qid in stack:
+            raise ValueError(f"cyclic decomposes at {qid!r}")
+        if len(stack) > max_nodes:
+            raise ValueError("cyclic decomposes (depth guard)")
         parent = parent_of.get(qid)
-        d = 1 if not parent else _depth(parent) + 1
+        if not parent:
+            d = 1
+        else:
+            d = _depth(parent, stack | {qid}) + 1
         depth_of[qid] = d
         return d
 
@@ -82,15 +120,47 @@ def apply_rollup(
         if not child_rows:
             continue
         rolled = _rollup_children(child_rows, rule=rule)
-        formulation = out[pid].get("formulation", "")
+        own = out[pid]
+        combined = _combine_with_own_claims(own, rolled)
+        formulation = own.get("formulation", "")
         out[pid] = {
-            **rolled,
+            **combined,
             "formulation": formulation,
             "rollup": rule,
             "rollup_children": list(kids[pid]),
-            "final_type": out[pid].get("final_type"),
+            "final_type": own.get("final_type"),
         }
     return out
+
+
+def _has_claims_based_verdict(row: Mapping[str, Any]) -> bool:
+    """True when PR 8b counting claims already set a real disposition."""
+    d = str(row.get("disposition") or "")
+    if d not in _CLAIMS_DISPOSITIONS:
+        return False
+    # Claims / verdict path stamps ``verdict``; not_attempted fallbacks usually do not.
+    return row.get("verdict") is not None
+
+
+def _combine_with_own_claims(
+    own: Mapping[str, Any], rolled: dict[str, Any]
+) -> dict[str, Any]:
+    """Clamp children rollup so it never raises above the parent's claims verdict."""
+    if not _has_claims_based_verdict(own):
+        return rolled
+    own_d = str(own.get("disposition") or Disposition.NOT_ATTEMPTED.value)
+    rolled_d = str(rolled.get("disposition") or Disposition.NOT_ATTEMPTED.value)
+    if _DISP_RANK.get(rolled_d, 0) > _DISP_RANK.get(own_d, 0):
+        detail = list(own.get("reason_detail") or [])
+        detail.append("rollup_clamped_to_claims")
+        out = dict(own)
+        out["rollup_clamped"] = True
+        out["rollup_would_have"] = rolled_d
+        out["reason_detail"] = detail
+        if out.get("reason") is None:
+            out["reason"] = "rollup_clamped_to_claims"
+        return out
+    return rolled
 
 
 def _rollup_children(child_rows: list[dict[str, Any]], *, rule: str) -> dict[str, Any]:
@@ -154,25 +224,19 @@ def _rollup_any(disps: list[str]) -> dict[str, Any]:
 
 
 def _rollup_majority(disps: list[str], *, n: int) -> dict[str, Any]:
+    """Strict majority ``n//2+1``. Ties (1:1, 2:2, …) → no majority."""
     need = majority_threshold(n)
     counts = Counter(disps)
-    # Prefer a resolved disposition that meets majority; else not_attempted.
-    winners = [(d, c) for d, c in counts.items() if c >= need]
-    if not winners:
+    # Under strict majority at most one disposition can meet the bar.
+    winners = [d for d, c in counts.items() if c >= need]
+    if len(winners) != 1:
         return {
             "disposition": Disposition.NOT_ATTEMPTED.value,
             "reason": "rollup_no_majority",
             "reason_detail": ["rollup_majority"],
         }
-    # Tie-break by _ANY_PREF then lexical.
-    winners.sort(key=lambda pair: (_ANY_PREF.index(pair[0]) if pair[0] in _ANY_PREF else 99, pair[0]))
-    # Among those with max count first.
-    max_c = max(c for _, c in winners)
-    top = [d for d, c in winners if c == max_c]
-    top.sort(key=lambda d: (_ANY_PREF.index(d) if d in _ANY_PREF else 99, d))
-    chosen = top[0]
     return {
-        "disposition": chosen,
+        "disposition": winners[0],
         "reason": "rollup_majority",
         "reason_detail": ["rollup_majority"],
     }

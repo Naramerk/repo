@@ -6,6 +6,7 @@ from datetime import timedelta
 
 import pytest
 
+from coscientist.core.artifacts import make_tool_ref
 from coscientist.core.decomposes import (
     DECOMPOSITION_COVERS_ITEM_ID,
     assert_decomposes_acyclic,
@@ -13,6 +14,8 @@ from coscientist.core.decomposes import (
 )
 from coscientist.core.dispositions import dispositions
 from coscientist.core.domain import (
+    AgentTaskOutput,
+    ArtifactHandle,
     OutputSpec,
     QuestionSpec,
     RequirementRef,
@@ -22,17 +25,20 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
+from coscientist.core.errors import LeaseLost
 from coscientist.core.events import (
     PLAN_ACCEPTED_SCHEMA_VERSION,
     PLAN_EXPANDED_SCHEMA_VERSION,
 )
+from coscientist.core.finalize import finalize
 from coscientist.core.minimal_report import render_markdown_report
 from coscientist.core.plan_validate import validate_decomposes
-from coscientist.core.reasons import Disposition, TaskReason
+from coscientist.core.reasons import Disposition, TaskReason, TerminalReason
+from coscientist.core.recover import recover
 from coscientist.core.rubric import freeze_rubric
 from coscientist.core.rubric_types import Rubric, RubricItem
 from coscientist.core.upcasters import upcast
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import attach_executor, close_runtime, open_runtime
 
 # --- helpers -----------------------------------------------------------------
 
@@ -135,7 +141,7 @@ def _task(
 
 
 def _assert_single_finalized(events: list) -> dict:
-    """REVIEW_CHECKLIST: exactly one StudyFinalized; report XOR minimal; conclusion_ids."""
+    """Exactly one StudyFinalized; report XOR minimal_report; non-empty conclusion_ids."""
     finals = [e for e in events if e.type == "StudyFinalized"]
     assert len(finals) == 1
     p = finals[0].payload or {}
@@ -258,6 +264,13 @@ async def test_accept_plan_writes_decomposes_edge(tmp_path, clock):
 
 def test_rollup_rule():
     """all / any / majority / rubric parent disposition from children."""
+    from coscientist.core.decomposes import majority_threshold
+    from coscientist.core.rollup import apply_rollup
+
+    assert majority_threshold(2) == 2
+    assert majority_threshold(4) == 3
+    assert majority_threshold(3) == 2
+
     plans = {
         "p1": {
             "plan_id": "p1",
@@ -282,8 +295,6 @@ def test_rollup_rule():
     assert d["Q.a"]["disposition"] == Disposition.NOT_ATTEMPTED.value
     assert d["Q"]["disposition"] == Disposition.NOT_ATTEMPTED.value
     assert d["Q"].get("rollup") == "all"
-
-    from coscientist.core.rollup import apply_rollup
 
     leaves = {
         "Q": {"disposition": Disposition.NOT_ATTEMPTED.value, "reason": "no_task", "formulation": "root"},
@@ -323,6 +334,174 @@ def test_rollup_rule():
     rolled_rub = apply_rollup(leaves, plans=plans_rub)
     assert rolled_rub["Q"]["disposition"] == Disposition.NOT_ATTEMPTED.value
     assert rolled_rub["Q"].get("rollup") == "rubric"
+
+
+def test_majority_ties_do_not_win():
+    """Strict majority: 1:1 and 2:2 → no majority (never preference-tiebreak to answered)."""
+    from coscientist.core.rollup import apply_rollup
+
+    base_q = [
+        {"id": "Q", "text": "root", "parent_id": None},
+        {"id": "Q.a", "text": "a", "parent_id": "Q"},
+        {"id": "Q.b", "text": "b", "parent_id": "Q"},
+    ]
+    plans_11 = {
+        "p1": {
+            "plan_id": "p1",
+            "revision": 1,
+            "rollup": "majority",
+            "questions": base_q,
+            "tasks": [],
+        }
+    }
+    leaves_11 = {
+        "Q": {"disposition": Disposition.NOT_ATTEMPTED.value, "reason": "no_task", "formulation": "root"},
+        "Q.a": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "a"},
+        "Q.b": {"disposition": Disposition.REFUTED.value, "reason": None, "formulation": "b"},
+    }
+    rolled_11 = apply_rollup(leaves_11, plans=plans_11)
+    assert rolled_11["Q"]["disposition"] == Disposition.NOT_ATTEMPTED.value
+    assert rolled_11["Q"]["reason"] == "rollup_no_majority"
+
+    plans_22 = {
+        "p1": {
+            "plan_id": "p1",
+            "revision": 1,
+            "rollup": "majority",
+            "questions": base_q
+            + [
+                {"id": "Q.c", "text": "c", "parent_id": "Q"},
+                {"id": "Q.d", "text": "d", "parent_id": "Q"},
+            ],
+            "tasks": [],
+        }
+    }
+    leaves_22 = {
+        "Q": {"disposition": Disposition.NOT_ATTEMPTED.value, "reason": "no_task", "formulation": "root"},
+        "Q.a": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "a"},
+        "Q.b": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "b"},
+        "Q.c": {"disposition": Disposition.REFUTED.value, "reason": None, "formulation": "c"},
+        "Q.d": {"disposition": Disposition.REFUTED.value, "reason": None, "formulation": "d"},
+    }
+    rolled_22 = apply_rollup(leaves_22, plans=plans_22)
+    assert rolled_22["Q"]["disposition"] == Disposition.NOT_ATTEMPTED.value
+    assert rolled_22["Q"]["reason"] == "rollup_no_majority"
+
+
+def test_rollup_any_never_raises_above_parent_claims():
+    """Adversarial PR 8b: parent claims=refuted + child answered → stay refuted."""
+    from coscientist.core.rollup import apply_rollup
+
+    plans = {
+        "p1": {
+            "plan_id": "p1",
+            "revision": 1,
+            "rollup": "any",
+            "questions": [
+                {"id": "Q", "text": "root", "parent_id": None},
+                {"id": "Q.a", "text": "a", "parent_id": "Q"},
+                {"id": "Q.b", "text": "b", "parent_id": "Q"},
+            ],
+            "tasks": [],
+        }
+    }
+    leaves = {
+        "Q": {
+            "disposition": Disposition.REFUTED.value,
+            "reason": None,
+            "verdict": "refuted",
+            "formulation": "root",
+        },
+        "Q.a": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "a"},
+        "Q.b": {
+            "disposition": Disposition.NOT_ATTEMPTED.value,
+            "reason": "no_task",
+            "formulation": "b",
+        },
+    }
+    rolled = apply_rollup(leaves, plans=plans)
+    assert rolled["Q"]["disposition"] == Disposition.REFUTED.value
+    assert rolled["Q"].get("rollup_clamped") is True
+    assert rolled["Q"].get("rollup_would_have") == Disposition.ANSWERED.value
+
+
+def test_rollup_can_lower_parent_claims():
+    """Children rollup may lower a claims-based parent (answered → refuted via all)."""
+    from coscientist.core.rollup import apply_rollup
+
+    plans = {
+        "p1": {
+            "plan_id": "p1",
+            "revision": 1,
+            "rollup": "all",
+            "questions": [
+                {"id": "Q", "text": "root", "parent_id": None},
+                {"id": "Q.a", "text": "a", "parent_id": "Q"},
+                {"id": "Q.b", "text": "b", "parent_id": "Q"},
+            ],
+            "tasks": [],
+        }
+    }
+    leaves = {
+        "Q": {
+            "disposition": Disposition.ANSWERED.value,
+            "reason": None,
+            "verdict": "supported",
+            "formulation": "root",
+        },
+        "Q.a": {"disposition": Disposition.REFUTED.value, "reason": None, "formulation": "a"},
+        "Q.b": {"disposition": Disposition.REFUTED.value, "reason": None, "formulation": "b"},
+    }
+    rolled = apply_rollup(leaves, plans=plans)
+    assert rolled["Q"]["disposition"] == Disposition.REFUTED.value
+    assert rolled["Q"]["reason"] == "rollup_all"
+
+
+def test_rollup_depth_guard_rejects_cycle():
+    from coscientist.core.rollup import apply_rollup
+
+    plans = {
+        "p1": {
+            "plan_id": "p1",
+            "revision": 1,
+            "rollup": "all",
+            "questions": [
+                {"id": "A", "text": "a", "parent_id": "B"},
+                {"id": "B", "text": "b", "parent_id": "A"},
+            ],
+            "tasks": [],
+        }
+    }
+    leaves = {
+        "A": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "a"},
+        "B": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "b"},
+    }
+    with pytest.raises(ValueError, match="cyclic"):
+        apply_rollup(leaves, plans=plans)
+
+
+def test_question_origin_implicit_vs_explicit():
+    from coscientist.core.decomposes import question_origin_from_plans
+
+    origins = question_origin_from_plans(
+        {
+            "p1": {
+                "plan_id": "p1",
+                "revision": 1,
+                "questions": [
+                    {"id": "Q", "text": "root"},
+                    # parent_id set but not listed in subquestions → implicit
+                    {"id": "Q.inferred", "text": "inferred", "parent_id": "Q"},
+                ],
+                "subquestions": [
+                    {"id": "Q.named", "text": "named", "parent_id": "Q"},
+                ],
+            }
+        }
+    )
+    assert origins["Q.named"] == "explicit"
+    assert origins["Q.inferred"] == "implicit"
+    assert origins["Q"] == "explicit"
 
 
 @pytest.mark.asyncio
@@ -420,7 +599,7 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
     assert "## Дерево подзадач" in md
     assert "origin=emergent" in md
     assert "`Q.b`" in md
-    assert "~~`E1`~~" in md or "superseded" in md
+    assert "~~`E1`~~" in md
     expanded = [e for e in await rt.store.read_all() if e.type == "PlanExpanded"]
     assert expanded
     assert expanded[-1].schema_version == PLAN_EXPANDED_SCHEMA_VERSION == 4
@@ -461,3 +640,277 @@ def test_validate_decomposes_pure_cycle():
             ],
             rollup="all",
         )
+
+
+def test_expand_graph_rejects_cycle_via_existing_edges():
+    """expand_graph must see the full decomposes tree, not only the new self-pair."""
+    from coscientist.core.expand_graph import _decomposes_parent_map, question_graph_events
+    from coscientist.core.graph import (
+        GraphEdge,
+        GraphNode,
+        GraphStore,
+        default_execution_registry,
+    )
+    from coscientist.core.ids import question_node_id
+
+    class _RT:
+        def __init__(self) -> None:
+            self.graph = GraphStore(default_execution_registry())
+
+    rt = _RT()
+    sid = "st_cycle"
+    now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+    # Existing B→A, C→B (child→parent).
+    for qid, parent in (("A", None), ("B", "A"), ("C", "B")):
+        nid = question_node_id(sid, qid)
+        rt.graph.upsert_node(
+            GraphNode(
+                node_id=nid,
+                kind="question",
+                study_id=sid,
+                ref_id=qid,
+                attrs={"formulation": qid},
+                created_at=now,
+            )
+        )
+        if parent:
+            pn = question_node_id(sid, parent)
+            eid = f"decomposes:{nid}:{pn}"
+            rt.graph.add_edge(
+                GraphEdge(
+                    edge_id=eid,
+                    kind="decomposes",
+                    study_id=sid,
+                    src_id=nid,
+                    dst_id=pn,
+                    attrs={"origin": "explicit"},
+                    created_at=now,
+                )
+            )
+    # Batch-local cycle X⇄Y (old code only checked {qid: parent, parent: None}).
+    with pytest.raises(ValueError, match="cyclic|self-loop"):
+        question_graph_events(
+            rt,  # type: ignore[arg-type]
+            sid=sid,
+            pid="p_new",
+            added_questions=[
+                QuestionSpec(id="X", text="x", parent_id="Y", origin="emergent"),
+                QuestionSpec(id="Y", text="y", parent_id="X", origin="emergent"),
+            ],
+            superseded_questions=[],
+            known_texts={},
+            now=now,
+        )
+    # Closing the existing chain (A→C while C→B→A) via full parent map.
+    parent_of = _decomposes_parent_map(rt, sid)  # type: ignore[arg-type]
+    assert parent_of["B"] == "A"
+    assert parent_of["C"] == "B"
+    parent_of["A"] = "C"
+    with pytest.raises(ValueError, match="cyclic"):
+        assert_decomposes_acyclic(parent_of)
+
+
+async def _complete_report_and_finalize(rt, tmp_path) -> None:
+    aid = await rt.start_attempt("REPORT")
+    if aid is None:
+        await rt.ensure_lease(ttl_s=10_000)
+        await rt.tick()
+        return
+    ex, arts = attach_executor(rt, tmp_path)
+    art = arts.put(
+        b"# report\n",
+        make_tool_ref(f"{aid}:main"),
+        name="main",
+        media_type="text/markdown",
+    )
+    await ex.record(
+        aid,
+        AgentTaskOutput(
+            summary="report",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+        ),
+    )
+    await rt.ensure_lease(ttl_s=10_000)
+    await rt.tick()
+
+
+@pytest.mark.asyncio
+async def test_rollup_run_finalizes_with_single_study_finalized(tmp_path, clock):
+    """Full accept → leaf success → StudyFinalized with checklist asserts."""
+    rt = await _boot(tmp_path, clock, "pr16-rollup-run")
+    rub = freeze_rubric(
+        Rubric(
+            items=[
+                RubricItem(
+                    id=DECOMPOSITION_COVERS_ITEM_ID,
+                    text="декомпозиция покрывает исходный вопрос",
+                    required=True,
+                    check="code",
+                    code_kind="artifact_exists",
+                )
+            ],
+            aggregate="all_required",
+        )
+    )
+    q_root = _q("Q", "root")
+    q_a = _q("Q.a", "child A", parent="Q", origin="explicit")
+    pid = await rt.accept_plan(
+        [_exp("E0", addresses=["Q.a"], rubric=rub)],
+        questions=[q_root],
+        subquestions=[q_a],
+        rollup="all",
+    )
+    assert pid
+    ex, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("E0")
+    assert aid is not None
+    art = arts.put(
+        b"# leaf\n",
+        make_tool_ref(f"{aid}:main"),
+        name="main",
+        media_type="text/markdown",
+    )
+    await ex.record(
+        aid,
+        AgentTaskOutput(
+            summary="leaf done",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+        ),
+    )
+    await _complete_report_and_finalize(rt, tmp_path)
+    events = await rt.store.read_all()
+    payload = _assert_single_finalized(events)
+    qdisp = payload.get("question_dispositions") or {}
+    # Parent has no own claims; leaf rubric_met → rollup all → answered.
+    assert qdisp.get("Q.a", {}).get("disposition") == Disposition.ANSWERED.value
+    assert qdisp.get("Q", {}).get("disposition") == Disposition.ANSWERED.value
+    assert qdisp.get("Q", {}).get("rollup") == "all"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_internal_error_finalizes_once(tmp_path, clock):
+    rt = await _boot(tmp_path, clock, "pr16-internal")
+    rub = _decomp_rubric()
+    await rt.accept_plan(
+        [_exp("E0", addresses=["Q.a"], rubric=rub)],
+        questions=[_q("Q", "root")],
+        subquestions=[_q("Q.a", "child", parent="Q", origin="explicit")],
+        rollup="any",
+    )
+    attach_executor(rt, tmp_path)
+    await finalize(rt, trigger="internal_error")
+    events = await rt.store.read_all()
+    payload = _assert_single_finalized(events)
+    assert payload.get("terminal_reason") == TerminalReason.INTERNAL_ERROR.value
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_recover_then_finalize_single(tmp_path, clock):
+    rt = await _boot(tmp_path, clock, "pr16-recover")
+    rub = freeze_rubric(
+        Rubric(
+            items=[
+                RubricItem(
+                    id=DECOMPOSITION_COVERS_ITEM_ID,
+                    text="декомпозиция покрывает исходный вопрос",
+                    required=True,
+                    check="code",
+                    code_kind="artifact_exists",
+                )
+            ],
+            aggregate="all_required",
+        )
+    )
+    await rt.accept_plan(
+        [_exp("E0", addresses=["Q.a"], rubric=rub)],
+        questions=[_q("Q", "root")],
+        subquestions=[_q("Q.a", "child", parent="Q", origin="explicit")],
+        rollup="all",
+    )
+    await close_runtime(rt)
+    rt2 = await open_runtime(tmp_path, "pr16-recover", clock=clock, owner="t2")
+    attach_executor(rt2, tmp_path)
+    await recover(rt2)
+    ex, arts = attach_executor(rt2, tmp_path)
+    aid = await rt2.start_attempt("E0")
+    assert aid is not None
+    art = arts.put(
+        b"# leaf\n",
+        make_tool_ref(f"{aid}:main"),
+        name="main",
+        media_type="text/markdown",
+    )
+    await ex.record(
+        aid,
+        AgentTaskOutput(
+            summary="leaf done",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+        ),
+    )
+    await _complete_report_and_finalize(rt2, tmp_path)
+    _assert_single_finalized(await rt2.store.read_all())
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_expand_plan_propagates_lease_lost(tmp_path, clock):
+    rt = await _boot(tmp_path, clock, "pr16-lease")
+    rub = _decomp_rubric()
+    await rt.accept_plan(
+        [
+            _exp("E0", addresses=["Q.a"], rubric=rub),
+            _exp("E1", addresses=["Q.a"], rubric=rub),
+        ],
+        questions=[_q("Q", "root")],
+        subquestions=[_q("Q.a", "child", parent="Q", origin="explicit")],
+        rollup="all",
+    )
+    # Expire + steal lease so expand_plan's append raises LeaseLost (must not swallow).
+    stale_nonce = rt.store.owner_nonce
+    stale_epoch = rt.store.epoch
+    clock.advance(timedelta(seconds=31))
+    interloper = await open_runtime(tmp_path, "pr16-lease", clock=clock, owner="thief")
+    await close_runtime(interloper)
+    rt.store.owner = "t1"
+    rt.store.epoch = stale_epoch
+    rt.store.owner_nonce = stale_nonce
+    with pytest.raises(LeaseLost):
+        await rt.expand_plan(
+            after_task="E0",
+            added_tasks=[_exp("E2", addresses=["Q.b"], rubric=rub)],
+            added_questions=[_q("Q.b", "emergent", parent="Q", origin="emergent")],
+            superseded_tasks=["E1"],
+            origin="emergent",
+            reason="should lose lease",
+        )
+    # Runtime lease is dead — do not close_runtime (would try release).
+    await rt.store.close()
+
+
+def test_graph_edge_decomposes_in_affected_tables():
+    from coscientist.core.events import EventEnvelope
+    from coscientist.core.projections import _affected_tables, fold_events
+
+    assert "graph_edges" in _affected_tables("GraphEdgeAdded")
+    sid = "st"
+    ev = EventEnvelope(
+        study_id=sid,
+        type="GraphEdgeAdded",
+        entity_key="decomposes:a:b",
+        idem_key="idem",
+        payload={
+            "edge_id": "decomposes:a:b",
+            "kind": "decomposes",
+            "study_id": sid,
+            "src_id": "a",
+            "dst_id": "b",
+            "attrs": {"origin": "explicit"},
+        },
+        ts=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+        schema_version=1,
+    )
+    proj = fold_events([ev])
+    assert "graph_edges" in proj
+    assert "decomposes:a:b" in proj["graph_edges"]

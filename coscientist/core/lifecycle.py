@@ -315,6 +315,14 @@ class LifecycleMixin:
                 for s in (subquestions or [])
             ]
             questions, named_subs = merge_plan_questions(questions, raw_subs)
+            from coscientist.core.decomposes import stamp_question_origins
+
+            questions = stamp_question_origins(
+                questions, named_sub_ids={s.id for s in named_subs}
+            )
+            named_subs = [
+                q for q in questions if getattr(q, "parent_id", None)
+            ] or named_subs
             expand_after = list(expand_after or [])
             self._validate_dag(tasks)
             known_texts = await self._known_question_texts()
