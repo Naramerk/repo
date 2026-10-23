@@ -398,6 +398,8 @@ def _derive_claim_core_attrs(
     timeout_kind: str | None = None
     refute_unresolved = False
     timeout_checks = [c for c in (checks or ()) if check_is_guest_timeout(c)]
+    claim_outcome: str | None
+    validity_s: str
     if timeout_checks:
         # Guest timeout is never a counting outcome (not k_ref / not k_sup).
         for tc in timeout_checks:
@@ -741,7 +743,7 @@ class Executor:
                 if isinstance(c.effect, dict)
             ]
             idle = any(k == "idle_timeout" for k in kinds)
-            reason = (
+            timeout_reason = (
                 TaskReason.IDLE_TIMEOUT.value
                 if idle
                 else TaskReason.SANDBOX_TIMEOUT.value
@@ -753,7 +755,7 @@ class Executor:
                 out,
                 provenance,
                 checks=checks,
-                reason=reason,
+                reason=timeout_reason,
                 detail=";".join(kinds) or "timeout",
                 agent_output_digest=str(agent_digest or ""),
             )

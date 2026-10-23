@@ -631,6 +631,7 @@ def evaluate_task_checks(
                 )
             )
             continue
+        check: CodeCheck | ReviewCheck
         if isinstance(tmpl.check, CodeCheck):
             from coscientist.checks.sandbox_limits import apply_frozen_limits
 
