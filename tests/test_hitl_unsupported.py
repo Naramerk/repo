@@ -85,6 +85,8 @@ async def test_experimental_open_runtime_accepts_open_hitl_journal(tmp_path, clo
 @pytest.mark.asyncio
 async def test_core_opens_when_all_hitl_gates_closed(tmp_path, clock):
     """Approve (or timeout-close) every gate → core open + recover succeed."""
+    from coscientist.core.domain import TaskState
+
     root, rt = await _boot_exp(tmp_path, clock)
     rid = await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
     await rt.answer_hitl(rid, "accept")
@@ -94,8 +96,11 @@ async def test_core_opens_when_all_hitl_gates_closed(tmp_path, clock):
     core = await open_runtime(
         root, "st_hitl", clock=clock, runtime_cls=CoreStudyRuntime, owner=owner
     )
+    # SPEC already DONE via record_success; no open attempts to close.
+    assert core.tasks["st_hitl/SPEC"].state == TaskState.DONE
     out = await recover(core)
-    assert out["closed"] >= 0
+    assert out == {"closed": 0, "retried": 0}
+    assert core.tasks["st_hitl/SPEC"].state == TaskState.DONE
     await close_runtime(core)
 
 
@@ -145,4 +150,97 @@ async def test_hitl_unsupported_does_not_hold_lease(tmp_path, clock):
         root, "st_lease", clock=clock, runtime_cls=ExpStudyRuntime, owner="exp-y"
     )
     assert exp.owner == "exp-y"
+    await close_runtime(exp)
+
+
+@pytest.mark.asyncio
+async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatch):
+    """Events appended between pre-check and lease are visible after acquire.
+
+    Inject HitlOpened + an ordinary TaskDone under a racing writer before the
+    opener's acquire_lease. Core must raise HitlUnsupported and release; the
+    experimental path must project both new events.
+    """
+    from coscientist.core.domain import TaskOutcome, TaskState
+    from coscientist.core.events import EventEnvelope, make_idem
+    from coscientist.core.ids import hitl_request_id
+
+    root, rt = await _boot_exp(tmp_path, clock, sid="st_race")
+    n_before = len(rt.store.read_all())
+    owner = await _close_and_expire(rt, clock)
+    db_path = root / "st_race" / "events.db"
+
+    real_acquire = SqliteEventStore.acquire_lease
+    injected = {"done": False}
+
+    async def acquire_after_race(self, acq_owner: str, ttl_s: float | None = None):
+        if not injected["done"]:
+            injected["done"] = True
+            # Inject under a separate connection using the unbound method (not the patch).
+            racer = SqliteEventStore("st_race", db_path, clock=clock)
+            await real_acquire(racer, "racer")
+            now = clock.now()
+            rid = hitl_request_id()
+            hitl_payload = {
+                "request_id": rid,
+                "kind": "plan_approval",
+                "payload_ref": "st_race/PLAN",
+                "deadline": (now + timedelta(seconds=30)).isoformat(),
+                "study_id": "st_race",
+                "task_id": "st_race/PLAN",
+                "open": True,
+                "cost_rub": 0.0,
+            }
+            await racer.append_many(
+                [
+                    EventEnvelope(
+                        study_id="st_race",
+                        type="HitlOpened",
+                        entity_key=rid,
+                        idem_key=make_idem("HitlOpened", rid),
+                        payload=hitl_payload,
+                        ts=now,
+                    ),
+                    EventEnvelope(
+                        study_id="st_race",
+                        type="TaskDone",
+                        entity_key="st_race/REPORT",
+                        idem_key=make_idem("TaskDone", "st_race/REPORT", "race"),
+                        payload={
+                            "task_id": "st_race/REPORT",
+                            "outcome": TaskOutcome.SKIPPED.value,
+                            "reason": "race_inject",
+                        },
+                        ts=now,
+                    ),
+                ]
+            )
+            await racer.release_lease("racer")
+            racer.close()
+        return await real_acquire(self, acq_owner, ttl_s=ttl_s)
+
+    monkeypatch.setattr(SqliteEventStore, "acquire_lease", acquire_after_race)
+
+    with pytest.raises(HitlUnsupported, match="open HITL"):
+        await open_runtime(
+            root, "st_race", clock=clock, runtime_cls=CoreStudyRuntime, owner="core-race"
+        )
+    store = SqliteEventStore("st_race", db_path, clock=clock)
+    held_owner, _, _ = store.current_lease()
+    store.close()
+    assert held_owner != "core-race"
+
+    # Experimental accepts the raced journal and rebuilds from the post-lease read.
+    exp = await open_runtime(
+        root, "st_race", clock=clock, runtime_cls=ExpStudyRuntime, owner=owner
+    )
+    events = exp.store.read_all()
+    assert len(events) == n_before + 2
+    assert any(e.type == "HitlOpened" for e in events)
+    assert any(
+        e.type == "TaskDone" and e.payload.get("reason") == "race_inject" for e in events
+    )
+    assert exp.tasks["st_race/REPORT"].state == TaskState.DONE
+    assert exp.tasks["st_race/REPORT"].reason == "race_inject"
+    assert any(h.open for h in exp.hitl.values())
     await close_runtime(exp)

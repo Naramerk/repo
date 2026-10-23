@@ -26,11 +26,15 @@ from hypothesis.stateful import (
 
 from coscientist.core.clock import FakeClock
 from coscientist.core.domain import Clarification, TaskSpec, TaskState
-from coscientist.core.errors import LeaseLost
+from coscientist.core.errors import HitlUnsupported, LeaseLost
 from coscientist.core.hitl_guard import supports_hitl
+from coscientist.core.inputs import InputUnavailable
 from coscientist.core.projections import fold_events
 from coscientist.core.recover import recover
 from coscientist.core.runtime_factory import close_runtime, open_runtime
+
+# Expected failures when a random rule hits an invalid transition / missing key.
+_RULE_ERR = (RuntimeError, KeyError, ValueError, InputUnavailable, AssertionError)
 
 
 class StudyClosesMachine(RuleBasedStateMachine):
@@ -102,7 +106,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
                 try:
                     self._run(self.rt.start_attempt(key))
                     self._run(self.rt.cancel_task(key, reason="prop_advance"))
-                except Exception:
+                except _RULE_ERR:
                     pass
         if not any(
             k.startswith("EXP-") for k in (t.spec.task_key for t in self.rt.tasks.values())
@@ -125,7 +129,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
             ]
             try:
                 self._run(self.rt.accept_plan(specs))
-            except Exception:
+            except _RULE_ERR:
                 pass
         return "EXP-1"
 
@@ -135,7 +139,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
             return "none"
         try:
             return self._run(self.rt.start_attempt(key))
-        except Exception:
+        except _RULE_ERR:
             return "none"
 
     @rule(aid=attempt_ids)
@@ -147,7 +151,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
             tid = att.get("task_id")
             if tid:
                 self._run(self.rt.cancel_task(tid, reason="prop_finish"))
-        except Exception:
+        except _RULE_ERR:
             pass
 
     @rule(aid=attempt_ids)
@@ -156,7 +160,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
             return
         try:
             self._run(self.rt.fail_attempt(aid, retryable=True))
-        except Exception:
+        except _RULE_ERR:
             pass
 
     @rule(delta=st.integers(min_value=1, max_value=30))
@@ -167,8 +171,6 @@ class StudyClosesMachine(RuleBasedStateMachine):
                 self._run(self.rt.tick())
             except LeaseLost:
                 self.lost_lease = True
-            except Exception:
-                pass
 
     @precondition(lambda self: self._hitl_ok())
     @rule(key=task_keys, target=hitl_ids)
@@ -177,7 +179,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
             return "none"
         try:
             return self._run(self.rt.open_hitl(key, kind="plan_approval", timeout_s=15))
-        except Exception:
+        except _RULE_ERR:
             return "none"
 
     @precondition(lambda self: self._hitl_ok())
@@ -187,7 +189,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
             return
         try:
             self._run(self.rt.answer_hitl(hid))
-        except Exception:
+        except _RULE_ERR:
             pass
 
     @precondition(lambda self: self._hitl_ok())
@@ -200,7 +202,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
             self._run(recover(self.rt))
         except LeaseLost:
             self.lost_lease = True
-        except Exception:
+        except (HitlUnsupported, RuntimeError):
             pass
 
     @rule(key=task_keys)
@@ -209,7 +211,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
             return
         try:
             self._run(self.rt.cancel_task(key))
-        except Exception:
+        except _RULE_ERR:
             pass
 
     @precondition(lambda self: self._hitl_ok())
@@ -220,7 +222,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
         try:
             self._run(self.rt.fork([Clarification(target="EXP-1", text="retry")]))
             self.fork_count += 1
-        except Exception:
+        except _RULE_ERR:
             pass
 
     @rule()
@@ -246,12 +248,10 @@ class StudyClosesMachine(RuleBasedStateMachine):
             raise AssertionError("stale epoch must not write")
         except LeaseLost:
             pass
-        except Exception:
-            pass
         self.clock.advance(timedelta(seconds=31))
         try:
             self._run(close_runtime(other))
-        except Exception:
+        except (LeaseLost, RuntimeError, OSError):
             other.store.close()
 
     @rule()
@@ -262,7 +262,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
             self._run(recover(self.rt))
         except LeaseLost:
             self.lost_lease = True
-        except Exception:
+        except (HitlUnsupported, RuntimeError):
             pass
 
     @invariant()

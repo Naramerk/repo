@@ -25,8 +25,10 @@ async def open_runtime(
     """Open a study runtime. ``runtime_cls`` defaults to core ``StudyRuntime``.
 
     Core refuses journals that still have open HITL gates (use experimental).
-    The journal is checked **before** ``acquire_lease`` so a refused open does
-    not leave a dangling lease until TTL.
+
+    A cheap pre-lease HITL check is a fast path only. After ``acquire_lease``,
+    the journal is re-read and that post-lease snapshot is the sole source for
+    HITL re-check and local rebuild (closes the TOCTOU window).
     """
     cls = runtime_cls or StudyRuntime
     clock = clock or SystemClock()
@@ -34,14 +36,29 @@ async def open_runtime(
     root = Path(data_root) / study_id
     root.mkdir(parents=True, exist_ok=True)
     store = SqliteEventStore(study_id, root / "events.db", clock=clock, owner=None)
+
+    # Fast path: refuse before taking the lease when the journal is already dirty.
+    try:
+        reject_open_hitl_if_unsupported(cls, store.read_all())
+    except Exception:
+        store.close()
+        raise
+
+    acquired = False
+    if acquire:
+        await store.acquire_lease(owner)
+        acquired = True
+
+    # Authoritative read under the lease — never rebuild from the pre-lease snapshot.
     events = store.read_all()
     try:
         reject_open_hitl_if_unsupported(cls, events)
     except Exception:
+        if acquired:
+            await store.release_lease(owner)
         store.close()
         raise
-    if acquire:
-        await store.acquire_lease(owner)
+
     writer = StudyWriter(store)
     writer.start()
     rt = cls(

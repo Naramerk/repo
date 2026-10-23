@@ -81,6 +81,17 @@ class StudyRuntime(CoreStudyRuntime, HitlForkMixin):
         )
         return study_view(self.tasks.values(), open_hitl=open_hitl, simulated_done=sim)
 
+    def invariant_deadlines(self) -> bool:
+        if not super().invariant_deadlines():
+            return False
+        if self.study is None:
+            return True
+        sd = self.study.deadline
+        for h in self.hitl.values():
+            if h.deadline > sd:
+                return False
+        return True
+
     async def tick(self) -> None:
         if self.study is None or self._lease_lost:
             return

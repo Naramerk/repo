@@ -94,7 +94,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         return True
 
     def invariant_deadlines(self) -> bool:
-        """Every task/attempt/(optional HITL) deadline ≤ study.deadline."""
+        """Every task/attempt deadline ≤ study.deadline."""
         if self.study is None:
             return True
         sd = self.study.deadline
@@ -109,10 +109,6 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                     ad = datetime.fromisoformat(ad)
                 if ad > sd:
                     return False
-        # Experimental runtimes may carry open HitlRequest maps.
-        for h in getattr(self, "hitl", {}).values():
-            if h.deadline > sd:
-                return False
         return True
 
     async def ensure_lease(self, ttl_s: float = 30.0) -> None:
