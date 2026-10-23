@@ -10,6 +10,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from coscientist.core.reasons import CloseReason, TaskReason
+from coscientist.core.rubric_types import FinalType, Rubric
 
 
 class Frozen(BaseModel):
@@ -171,6 +172,8 @@ class OutputSpec(Frozen):
     required: bool = True
     # Plan-accepted role (core-owned after accept_plan); independence code-vs-data.
     role: ArtifactRole | None = None
+    # M1 PR13: qualitative acceptance (literature review, design, …). Frozen at PLAN.
+    rubric: Rubric | None = None
 
 
 class InputSpec(Frozen):
@@ -240,6 +243,8 @@ class QuestionSpec(Frozen):
     text: str
     # Optional parent for decomposes / max_depth (DESIGN_M1 §10).
     parent_id: str | None = None
+    # M1 PR13: verdict (claims) | artifact (rubric) | both (DESIGN_M1 §6.1).
+    final_type: FinalType = "verdict"
 
 
 class ExperimentMethod(StrEnum):
@@ -555,6 +560,8 @@ class CodeCheck(Frozen):
         "tests_pass",
         "metric_on_holdout",
         "reproducible_rerun",
+        # M1 PR13 qualitative rubric (DESIGN_M1 §6.2)
+        "rubric",
     ]
     output: str | None = None
     schema_ref: str | None = None
@@ -581,6 +588,8 @@ class CodeCheck(Frozen):
     holdout_output: str | None = None  # legacy; migrated away in load_catalog
     # reproducible_rerun (alias of tolerance when set)
     rerun_tol: float | None = None
+    # kind=rubric: items frozen in catalog or filled from OutputSpec.rubric at eval
+    rubric: Rubric | None = None
 
 
 class ReviewCheck(Frozen):

@@ -160,8 +160,29 @@ def priority_refuted_support_note(
     return excluded_confirmations_note(claims, verdict_value=v)
 
 
-def study_fulfilled(question_verdicts: dict[str, str], all_required_success: bool) -> bool:
-    return all_required_success and all(v != "untested" for v in question_verdicts.values())
+def study_fulfilled(
+    question_verdicts: dict[str, str],
+    all_required_success: bool,
+    *,
+    question_final_types: dict[str, str] | None = None,
+) -> bool:
+    """Fulfilled when required tasks succeed and every question is settled.
+
+    For ``final_type=artifact``, ``answered`` (rubric MET) counts as settled —
+    ``untested`` only blocks verdict/both questions (DESIGN_M1 §6.1).
+    """
+    if not all_required_success:
+        return False
+    ftypes = question_final_types or {}
+    for qid, v in question_verdicts.items():
+        ft = ftypes.get(qid, "verdict")
+        if ft == "artifact":
+            if v in ("untested", "not_attempted"):
+                return False
+            continue
+        if v == "untested":
+            return False
+    return True
 
 
 def study_view_verdict(all_required_success: bool, question_verdicts: dict[str, str]) -> str:

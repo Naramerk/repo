@@ -11,6 +11,15 @@
 - Provenance: opaque `FetchCapability` id + private issued registry in `tools.effects` (not forgeable); verify looks up binds and **consumes**. `AttemptTainted` **before** any `is_fetch` call; `SourceFetched` only via permit after consume; store cannot bypass. Digests attempt-scoped (retries/downstream re-fetch). `countable=True`+`trusted=False`. `ArtifactProducer` includes `user`.
 - `NORMALIZATION_VERSION` rules `3`+unidata; M1 gaps documented.
 
+### M1 PR13
+- `QuestionSpec.final_type` (`verdict` | `artifact` | `both`) and `OutputSpec.rubric` (`Rubric` / `RubricItem`).
+- CodeCheck kind `rubric`: qualitative deliverables; aggregate `all_required` | `k_of_n` (required items only); digest = sha256(JCS(canonical fields, `v=1`)).
+- PlanValidator: `artifact` ⇒ OutputSpec.rubric; `verdict` ⇒ ≥1 **explicit** criterion (catalog defaults do **not** count); `both` ⇒ both. All plan validation + pydantic `TaskSpec`/`QuestionSpec` → `PlanRefused` + immediate `StudyFinalized`. Idem = sid + sha256(**full** detail, never truncated).
+- Finalize may only **downgrade** verdict (never raise to fulfilled); `study_view` gets `question_final_types`; blocking: not_attempted / inconclusive / rubric_not_met / rubric_pending. `rt.view().verdict` == `StudyFinalized.verdict`.
+- Judge: keys = JSON array `(task_id, attempt_id, check_id, item_id, output_digest)` (fail-closed if empty); live status == journal (`PENDING` while retry remains); rebuild from ResultPending/ReviewRecorded only (not RouteReturned); corrupt pending CAS → `JudgeCasCorrupt` + finalize.
+- Rubric role=validity but excluded from `validity_ok` (failed rubric ≠ claim validity_failed). `both` + verdict + rubric pending → reason `rubric_pending`. Bugs in rubric eval / freeze propagate (no `except Exception → UNASSESSED`).
+- Upcasters: PlanAccepted **v8**; TaskCreated **v10**; PlanExpanded **v2** — legacy unknown `final_type` → verdict + report line; current unknown → PlanRefused.
+- **M1 gap:** NodeRequirement `STALE` on rubric supersede not implemented; MET of one covering task never covers another's rubric.
 
 ### M1 PR18
 - Frozen closed `core.tool_registry` (loader-gated `register_tool` only; freeze at end of `tool_loader` → `MappingProxyType`; unregistered → `external_effect`); `invoke_tool` only (import-linter + agents AST); `ToolSpec.effect` advisory.

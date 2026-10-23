@@ -172,6 +172,44 @@ def _validate(
         getattr(runtime, "executor", None), "catalog", None
     )
     validate_plan_criteria(merged, catalog)
+    # M1 PR13: final_type + rubric immutability (change only via supersede).
+    from coscientist.core.plan_validate import validate_plan_final_types_or_err
+
+    # Active questions after supersede (H-f: only new / non-disposed need coverage).
+    superseded_q_old = {s.old_id for s in superseded_questions}
+    active_qs = (set(active_q_ids) | {q.id for q in added_questions}) - superseded_q_old
+    prev_final: dict[str, str] = {}
+    store_plans = getattr(runtime, "plans", None)
+    plan_rows: list[Any] = []
+    if isinstance(store_plans, dict):
+        plan_rows = list(store_plans.values())
+    for plan in plan_rows:
+        qs = plan.get("questions") if isinstance(plan, dict) else getattr(plan, "questions", None)
+        for q in qs or []:
+            if isinstance(q, dict) and q.get("id"):
+                prev_final[str(q["id"])] = str(q.get("final_type") or "verdict")
+            elif hasattr(q, "id"):
+                prev_final[str(q.id)] = str(getattr(q, "final_type", None) or "verdict")
+    q_for_validate: list[QuestionSpec] = list(added_questions)
+    seen_q = {q.id for q in q_for_validate}
+    for qid, text in texts.items():
+        if qid in seen_q or qid not in active_qs:
+            continue
+        ft = prev_final.get(qid, "verdict")
+        q_for_validate.append(
+            QuestionSpec(id=qid, text=text, final_type=ft)  # type: ignore[arg-type]
+        )
+        seen_q.add(qid)
+    ft_err = validate_plan_final_types_or_err(
+        merged,
+        q_for_validate,
+        active_question_ids=active_qs if active_qs else None,
+        prev_tasks=prev_tasks,
+        superseded_tasks=set(superseded_tasks),
+        catalog=catalog,
+    )
+    if ft_err is not None:
+        return ft_err
     # max_depth: decomposes chain via QuestionSpec.parent_id (optional).
     max_depth = int(getattr(study, "max_depth", 8) or 8)
     parent_of = {q.id: getattr(q, "parent_id", None) for q in added_questions}

@@ -221,6 +221,49 @@ def _plan_accepted_v6_to_v7_shares(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _ensure_rubric_final_type_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR13: QuestionSpec.final_type + OutputSpec.rubric defaults."""
+    out = dict(payload)
+    questions = out.get("questions")
+    if isinstance(questions, list):
+        rewritten_q: list[Any] = []
+        for q in questions:
+            if isinstance(q, dict):
+                q = dict(q)
+                q.setdefault("final_type", "verdict")
+                rewritten_q.append(q)
+            else:
+                rewritten_q.append(q)
+        out["questions"] = rewritten_q
+    tasks = out.get("tasks")
+    if isinstance(tasks, list):
+        rewritten_t: list[Any] = []
+        for t in tasks:
+            if not isinstance(t, dict):
+                rewritten_t.append(t)
+                continue
+            t = dict(t)
+            outs = t.get("expected_outputs")
+            if isinstance(outs, list):
+                new_outs: list[Any] = []
+                for o in outs:
+                    if isinstance(o, dict):
+                        o = dict(o)
+                        o.setdefault("rubric", None)
+                        new_outs.append(o)
+                    else:
+                        new_outs.append(o)
+                t["expected_outputs"] = new_outs
+            rewritten_t.append(t)
+        out["tasks"] = rewritten_t
+    return out
+
+
+def _plan_accepted_v7_to_v8_rubric(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR13: final_type + rubric on PlanAccepted v8."""
+    return _ensure_rubric_final_type_fields(payload)
+
+
 def _attempt_started_v4_to_v5_shares(payload: dict[str, Any]) -> dict[str, Any]:
     """PR12: P2 share allocation fields on AttemptStarted."""
     out = dict(payload)
@@ -473,6 +516,7 @@ register_upcaster("PlanAccepted", 3, _plan_accepted_v3_to_v4_expand_after)
 register_upcaster("PlanAccepted", 4, _plan_accepted_v4_to_v5_foreach_quorum)
 register_upcaster("PlanAccepted", 5, _plan_accepted_v5_to_v6_sandbox)
 register_upcaster("PlanAccepted", 6, _plan_accepted_v6_to_v7_shares)
+register_upcaster("PlanAccepted", 7, _plan_accepted_v7_to_v8_rubric)
 register_upcaster("StudyCreated", 1, _study_created_v1_to_v2)
 register_upcaster("StudyCreated", 2, _study_created_v2_to_v3)
 register_upcaster("StudyCreated", 3, _study_created_v3_to_v4)

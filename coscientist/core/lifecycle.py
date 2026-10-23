@@ -263,7 +263,10 @@ class LifecycleMixin:
         sid = self.study.study_id
         now = self.clock.now()
         if questions is None and spec_output is not None:
-            questions = [QuestionSpec(**q) for q in questions_from_spec_output(spec_output)]
+            questions = [
+                QuestionSpec.model_validate(q)
+                for q in questions_from_spec_output(spec_output)
+            ]
         questions = list(questions or [])
         expand_after = list(expand_after or [])
         self._validate_dag(tasks)
@@ -288,6 +291,10 @@ class LifecycleMixin:
             raise ValueError(share_err)
         catalog = getattr(self, "catalog", None) or getattr(getattr(self, "executor", None), "catalog", None)
         validate_plan_criteria(tasks, catalog)
+        # M1 PR13: freeze rubric digests + final_type PlanValidator (§6.1).
+        from coscientist.core.plan_validate import freeze_plan_rubrics
+
+        tasks, questions = freeze_plan_rubrics(tasks, questions, catalog=catalog)
         pid = plan_id()
         plan = Plan(
             plan_id=pid,
@@ -306,7 +313,7 @@ class LifecycleMixin:
                 idem_key=make_idem("PlanAccepted", pid),
                 payload=plan.model_dump(mode="json"),
                 ts=now,
-                schema_version=7,
+                schema_version=8,
             )
         ]
         # Question nodes so claim ``about`` can bind without auto-creating targets.
@@ -315,6 +322,10 @@ class LifecycleMixin:
             qnid = question_node_id(sid, q.id)
             if graph is not None and graph.get_node(qnid) is not None:
                 continue  # never clobber existing attrs
+            q_attrs: dict[str, Any] = {
+                "formulation": q.text,
+                "final_type": getattr(q, "final_type", None) or "verdict",
+            }
             events.append(
                 EventEnvelope(
                     study_id=sid,
@@ -326,13 +337,52 @@ class LifecycleMixin:
                         kind="question",
                         study_id=sid,
                         ref_id=q.id,
-                        attrs={"formulation": q.text},
+                        attrs=q_attrs,
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
                     schema_version=1,
                 )
             )
+        # Freeze rubric digests onto criterion-like nodes (frozen_at_seq via projection).
+        seen_rubrics: set[str] = set()
+        for spec in tasks:
+            for o in spec.expected_outputs or []:
+                rub = getattr(o, "rubric", None)
+                if rub is None:
+                    continue
+                dig = str(getattr(rub, "digest", "") or "")
+                if not dig or dig in seen_rubrics:
+                    continue
+                seen_rubrics.add(dig)
+                rnid = criterion_node_id(sid, f"rubric:{dig}")
+                if graph is not None and graph.get_node(rnid) is not None:
+                    continue
+                events.append(
+                    EventEnvelope(
+                        study_id=sid,
+                        type="GraphNodeUpserted",
+                        entity_key=rnid,
+                        idem_key=make_idem("GraphNodeUpserted", rnid, pid),
+                        payload=GraphNode(
+                            node_id=rnid,
+                            kind="criterion",
+                            study_id=sid,
+                            ref_id=f"rubric:{dig}",
+                            attrs={
+                                "frozen": True,
+                                "template_id": f"rubric:{dig}",
+                                "rubric_digest": dig,
+                                "check": "rubric",
+                                # Qualitative — never a stance source.
+                                "affects_stance": False,
+                            },
+                            created_at=now,
+                        ).model_dump(mode="json"),
+                        ts=now,
+                        schema_version=1,
+                    )
+                )
         # Freeze plan criteria at accept (DESIGN_M1 §6 / frozen_at_seq).
         seen_criteria: set[str] = set()
         for spec in tasks:

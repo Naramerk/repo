@@ -42,16 +42,17 @@ def known_questions(
     return found
 
 
-def questions_from_spec_output(spec_out: Mapping[str, Any] | None) -> list[dict[str, str]]:
+def questions_from_spec_output(spec_out: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     """Extract QuestionSpec dicts from a ResearchSpecOut-shaped payload.
 
     Orchestrators call ``accept_plan(..., questions=[QuestionSpec(**q) for q in ...])``.
     Accepts ``questions`` as list of ``{id, text}`` or ``{formulation}`` (id derived).
+    Optional ``final_type`` (PR13) is passed through when present.
     """
     if not spec_out:
         return []
     raw = spec_out.get("questions") or []
-    out: list[dict[str, str]] = []
+    out: list[dict[str, Any]] = []
     for i, item in enumerate(raw):
         if isinstance(item, str):
             out.append({"id": f"Q{i + 1}", "text": item})
@@ -60,5 +61,12 @@ def questions_from_spec_output(spec_out: Mapping[str, Any] | None) -> list[dict[
             continue
         qid = str(item.get("id") or item.get("question_id") or f"Q{i + 1}")
         text = str(item.get("text") or item.get("formulation") or "")
-        out.append({"id": qid, "text": text})
+        row: dict[str, Any] = {"id": qid, "text": text}
+        ft = item.get("final_type")
+        if ft in ("verdict", "artifact", "both"):
+            row["final_type"] = ft
+        parent = item.get("parent_id")
+        if parent:
+            row["parent_id"] = str(parent)
+        out.append(row)
     return out

@@ -484,6 +484,21 @@ def evaluate_code_check(
                 prov_fields={},
             )
 
+        if check.kind == "rubric":
+            from coscientist.checks.kinds.rubric import evaluate_rubric
+
+            # Role forced to validity inside evaluate_rubric (stance invariant).
+            return evaluate_rubric(
+                check,
+                template_id=template_id,
+                check_id=check_id,
+                out=out,
+                artifacts=artifacts,
+                role=role,
+                attempt_id=attempt_id,
+                evaluate_code_check=evaluate_code_check,
+            )
+
     except ArtifactCorrupt as e:
         return CheckResult(
             check_id=check_id,
@@ -694,6 +709,42 @@ def evaluate_task_checks(
                     detail=check.question,
                 )
             )
+        elif isinstance(check, CodeCheck) and check.kind == "rubric":
+            from coscientist.checks.kinds.rubric import evaluate_rubric
+            from coscientist.core.rubric import freeze_rubric
+
+            # Prefer OutputSpec.rubric for the named output (plan-frozen).
+            out_rubric = None
+            for o in spec.expected_outputs or []:
+                if o.name == (check.output or "main") and o.rubric is not None:
+                    out_rubric = freeze_rubric(o.rubric)
+                    break
+            cr = evaluate_rubric(
+                check,
+                template_id=tmpl.id,
+                check_id=cid,
+                out=out,
+                artifacts=artifacts,
+                role="validity",
+                review_statuses=review_statuses,
+                output_rubric=out_rubric,
+                attempt_id=attempt_id,
+                evaluate_code_check=evaluate_code_check,
+            )
+            results.append(
+                CheckResult(
+                    check_id=cr.check_id,
+                    template_id=cr.template_id,
+                    status=cr.status,
+                    is_code=cr.is_code,
+                    required=ref.required and tmpl.required,
+                    role="validity",
+                    evidence=cr.evidence,
+                    detail=cr.detail,
+                    effect=cr.effect,
+                    used_sesoi=False,
+                )
+            )
         else:
             cr = evaluate_code_check(
                 check,  # type: ignore[arg-type]  # CodeCheck after ReviewCheck branch
@@ -725,4 +776,20 @@ def evaluate_task_checks(
                     used_sesoi=cr.used_sesoi,
                 )
             )
+
+    # Plan-frozen OutputSpec.rubric without an explicit rubric criterion still runs
+    # (artifact deliverables: literature review, design doc, …).
+    from coscientist.checks.kinds.rubric import evaluate_output_spec_rubrics
+
+    results.extend(
+        evaluate_output_spec_rubrics(
+            spec,
+            out=out,
+            artifacts=artifacts,
+            review_statuses=review_statuses,
+            attempt_id=attempt_id,
+            already={r.template_id for r in results},
+            evaluate_code_check=evaluate_code_check,
+        )
+    )
     return results

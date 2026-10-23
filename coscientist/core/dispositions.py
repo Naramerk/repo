@@ -15,6 +15,7 @@ from coscientist.core.domain import Study, Task, TaskOutcome, TaskState
 from coscientist.core.graph import GraphStore
 from coscientist.core.question_tasks import known_questions, question_tasks
 from coscientist.core.reasons import Disposition, NotAttemptedReason, TaskReason
+from coscientist.core.rubric import question_final_types, task_rubrics_met
 from coscientist.core.rules import priority_refuted_support_note, verdict
 from coscientist.core.verdict import NO_EFFECT_EXCLUSION_REASONS
 
@@ -139,15 +140,40 @@ def _dispositions_inner(
     )
     supp_k = study.supported_needed if study is not None else 2
 
+    final_types = question_final_types(plans)
     result: dict[str, dict[str, Any]] = {}
     for qid, text in qmap.items():
         keys = cover.get(qid, set())
         covering = [by_key[kk] for kk in sorted(keys) if kk in by_key]
+        ft = final_types.get(qid, "verdict")
         claims = claims_for_ref(by_target, qid, prefer="question")  # explicit kind
         counting = [c for c in claims if c.counts()]
         excluded = excluded_claims_report(claims)
         validity_excl = [e for e in excluded if e["reason"] == "validity_failed"]
         any_exp = any(t.state == TaskState.DONE for t in covering)
+        # PR13: artifact (or both without counting claims) fulfilled by rubric MET.
+        if ft in ("artifact", "both") and not counting:
+            if task_rubrics_met(task_keys=keys, tasks=tasks, results=results):
+                result[qid] = {
+                    "disposition": Disposition.ANSWERED.value,
+                    "reason": "rubric_met",
+                    "reason_detail": [],
+                    "formulation": text,
+                    "final_type": ft,
+                    "verdict": "answered",
+                }
+                continue
+            if ft == "artifact":
+                # No claims path — map covering outcomes to not_attempted reasons.
+                reason, detail = _not_attempted_for_covering(covering)
+                result[qid] = {
+                    "disposition": Disposition.NOT_ATTEMPTED.value,
+                    "reason": reason.value,
+                    "reason_detail": [r.value for r in detail],
+                    "formulation": text,
+                    "final_type": ft,
+                }
+                continue
         if counting:
             # Per-experiment exclusion: verdict from valid claims only.
             v, _by_lit = verdict(
