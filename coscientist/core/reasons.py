@@ -61,6 +61,7 @@ class TerminalReason(StrEnum):
     INFEASIBLE = "infeasible"
     CANCELLED = "cancelled"
     COMPLETED = "completed"
+    INTERNAL_ERROR = "internal_error"
 
 
 class Disposition(StrEnum):

@@ -31,7 +31,7 @@ from coscientist.core.reviews import review_key
 from coscientist.core.rubric import freeze_rubric, rubric_digest
 from coscientist.core.rubric_types import Rubric, RubricItem
 from coscientist.core.stance import claim_stance
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
 _SCOPE = dict(task_id="t1", attempt_id="a1", output_digest="deadbeef")
 
@@ -116,7 +116,11 @@ def _exp(
     )
 
 
-async def _boot(tmp_path, clock, sid: str):
+async def _boot(tmp_path, clock, sid: str, *, cancel_stages: bool = True):
+    """Boot a study. Default cancels SPEC/HYP/LIT (fast path for non-fulfilled tests).
+
+    Use ``cancel_stages=False`` + ``record_success`` for e2e fulfilled paths.
+    """
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
     await rt.create_study(
         profile="t",
@@ -126,10 +130,21 @@ async def _boot(tmp_path, clock, sid: str):
         finalize_reserve_s=30,
         sid=sid,
     )
-    for key in ("SPEC", "HYP", "LIT"):
-        await rt.start_attempt(key)
-        await rt.cancel_task(key, reason="cancelled")
+    if cancel_stages:
+        for key in ("SPEC", "HYP", "LIT"):
+            await rt.start_attempt(key)
+            await rt.cancel_task(key, reason="cancelled")
     return rt
+
+
+async def _boot_stages_ok(tmp_path, clock, sid: str):
+    """Production-path boot: SPEC/HYP/LIT succeed (required for fulfilled)."""
+    rt = await _boot(tmp_path, clock, sid, cancel_stages=False)
+    ex, arts = attach_executor(rt, tmp_path)
+    for key in ("SPEC", "HYP", "LIT"):
+        aid = await rt.start_attempt(key)
+        await record_success(rt, aid, arts)
+    return rt, ex, arts
 
 
 async def _record_hitl_expand(rt, **kwargs):
@@ -945,6 +960,38 @@ def test_upcast_taskcreated_v10_and_plan_expanded_v2():
     assert p3["questions"][0]["final_type"] == "verdict"
 
 
+def test_study_view_uses_study_fulfilled_final_types():
+    """view must not stay fulfilled when study_fulfilled would downgrade (artifact+refuted)."""
+    from coscientist.core.domain import Task, TaskKind, TaskState
+    from coscientist.core.study_view import study_view
+
+    rub = _judge_only_rubric()
+    t = Task(
+        task_id="s/E0",
+        kind=TaskKind.EXPERIMENT,
+        spec=_exp("E0", addresses=["Q1"], rubric=rub, criteria=[]),
+        state=TaskState.DONE,
+        deadline=__import__("datetime").datetime(2026, 1, 1, tzinfo=__import__("datetime").timezone.utc),
+        outcome=TaskOutcome.SUCCESS,
+        attempts=["a0"],
+    )
+    # Task-level SUCCESS would be fulfilled, but artifact+refuted must cap at partial.
+    view = study_view(
+        [t],
+        finalized=True,
+        question_dispositions={"Q1": {"disposition": "refuted", "verdict": "refuted"}},
+        question_final_types={"Q1": "artifact"},
+    )
+    assert view.verdict == "partial"
+    view2 = study_view(
+        [t],
+        finalized=True,
+        question_dispositions={"Q1": {"disposition": "untested"}},
+        question_final_types={"Q1": "verdict"},
+    )
+    assert view2.verdict == "partial"
+
+
 def test_study_fulfilled_wires_final_types():
     from coscientist.core.rules import study_fulfilled
 
@@ -1169,16 +1216,23 @@ async def test_planner_validation_error_taskspec_dict_plan_refused(tmp_path, clo
 
 
 async def _assert_accept_plan_refused_finalizes(rt, *, pid: str, detail_substr: str | None = None) -> None:
-    """Canonical PlanRefused path: empty plan_id + PlanRefused + StudyFinalized."""
+    """Canonical PlanRefused path: empty plan_id + PlanRefused + StudyFinalized(REFUSED)."""
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
     assert len(refused) == 1
     if detail_substr is not None:
         assert detail_substr in str(refused[0].payload.get("detail") or "")
+    assert refused[0].payload.get("report_line")
     fin = [e for e in events if e.type == "StudyFinalized"]
     assert len(fin) == 1
+    payload = fin[0].payload
+    assert payload.get("trigger") == "intake"
+    assert payload.get("terminal_reason") == "refused"
+    assert payload.get("report_artifact_id") is not None or payload.get("minimal_report") is not None
+    assert payload.get("conclusion_ids") is not None
     assert rt.view().phase == "closed"
+    assert rt.view().verdict == payload.get("verdict")
     await close_runtime(rt)
 
 
@@ -1220,6 +1274,113 @@ async def test_accept_plan_shares_critic_plan_refused(tmp_path, clock):
         questions=[QuestionSpec(id="Q1", text="q", final_type="artifact")],
     )
     await _assert_accept_plan_refused_finalizes(rt, pid=pid, detail_substr="budget_share")
+
+
+@pytest.mark.asyncio
+async def test_accept_plan_unknown_dependency_plan_refused(tmp_path, clock):
+    """Unknown depends_on key → PlanRefused + StudyFinalized."""
+    rt = await _boot(tmp_path, clock, "st_pr13_unk_dep")
+    bad = _exp(
+        "E0",
+        addresses=["Q1"],
+        rubric=_judge_only_rubric(),
+        criteria=[],
+        depends_on=["NO_SUCH_TASK"],
+    )
+    pid = await rt.accept_plan(
+        [bad],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="artifact")],
+    )
+    await _assert_accept_plan_refused_finalizes(rt, pid=pid, detail_substr="unknown dependency")
+
+
+@pytest.mark.asyncio
+async def test_e2e_fulfilled_view_matches_payload(tmp_path, clock):
+    """Production path: stages succeed → artifact answered → fulfilled; view == payload."""
+    rt, _ex, arts = await _boot_stages_ok(tmp_path, clock, "st_pr13_fulfilled")
+    rub = freeze_rubric(
+        Rubric(
+            items=[
+                RubricItem(
+                    id="exists",
+                    text="Write a literature review",
+                    required=True,
+                    check="code",
+                    code_kind="artifact_exists",
+                )
+            ],
+            aggregate="all_required",
+        )
+    )
+    await rt.accept_plan(
+        [_exp("E0", addresses=["Q1"], rubric=rub, criteria=[])],
+        questions=[QuestionSpec(id="Q1", text="lit review of X", final_type="artifact")],
+    )
+    ex, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("E0")
+    assert aid is not None
+    art = arts.put(
+        b"# Literature review\n...",
+        make_tool_ref(f"{aid}:main"),
+        name="main",
+        media_type="text/markdown",
+    )
+    await ex.record(
+        aid,
+        AgentTaskOutput(
+            summary="review done",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+        ),
+    )
+    task = next(t for t in rt.tasks.values() if t.spec.task_key == "E0")
+    assert task.outcome == TaskOutcome.SUCCESS
+    await _complete_report_and_finalize(rt, tmp_path)
+    fin = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    assert len(fin) == 1
+    payload = fin[-1].payload
+    assert payload.get("verdict") == "fulfilled"
+    assert rt.view().phase == "closed"
+    assert rt.view().verdict == payload.get("verdict") == "fulfilled"
+    qdisp = payload.get("question_dispositions") or {}
+    assert qdisp.get("Q1", {}).get("disposition") == "answered"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_e2e_downgrade_unaddressed_question_view_matches(tmp_path, clock):
+    """All required SUCCESS but unaddressed question → partial; view == payload."""
+    rt, _ex, arts = await _boot_stages_ok(tmp_path, clock, "st_pr13_downgrade")
+    # E0 does not address Q1 → disposition not_attempted; tasks can still all SUCCESS.
+    await rt.accept_plan(
+        [_exp("E0", addresses=[], rubric=None, criteria=[RequirementRef(template_id="artifact_present")])],
+        questions=[QuestionSpec(id="Q1", text="orphan question", final_type="verdict")],
+    )
+    ex, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("E0")
+    assert aid is not None
+    art = arts.put(
+        b"{}",
+        make_tool_ref(f"{aid}:main"),
+        name="main",
+        media_type="application/json",
+    )
+    await ex.record(
+        aid,
+        AgentTaskOutput(
+            summary="ok",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            values={"count": 1},
+        ),
+    )
+    await _complete_report_and_finalize(rt, tmp_path)
+    fin = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    assert len(fin) == 1
+    payload = fin[-1].payload
+    assert payload.get("verdict") == "partial"
+    assert rt.view().verdict == payload.get("verdict") == "partial"
+    qdisp = payload.get("question_dispositions") or {}
+    assert qdisp.get("Q1", {}).get("disposition") in ("not_attempted", "untested")
+    await close_runtime(rt)
 
 
 @pytest.mark.asyncio
@@ -1272,6 +1433,8 @@ async def test_corrupt_judge_cas_finalizes_internal_error(tmp_path, clock):
     assert any(e.type == "JudgeCasCorrupt" for e in events)
     fin = [e for e in events if e.type == "StudyFinalized"]
     assert len(fin) == 1
+    assert fin[0].payload.get("trigger") == "internal_error"
+    assert fin[0].payload.get("terminal_reason") == "internal_error"
     contrib = fin[0].payload.get("contributing_reasons") or []
     assert any("judge CAS" in str(x) for x in contrib)
     assert rt2.view().phase == "closed"

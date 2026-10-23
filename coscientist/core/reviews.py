@@ -187,15 +187,20 @@ def review_scheduled_events(
 
 def _load_agent_output(artifacts: Any, digest: str) -> AgentTaskOutput:
     """Load pending AgentTaskOutput from CAS; raise on missing/corrupt (fail-closed)."""
+    from pydantic import ValidationError
+
+    from coscientist.core.errors import ArtifactCorrupt
+
     if artifacts is None or not digest:
         raise JudgePendingCorrupt("missing artifacts store or output digest")
     try:
         raw = artifacts.read_cas(digest)
-    except Exception as e:  # noqa: BLE001 — surface as corrupt, never swallow
+    except (OSError, KeyError, ArtifactCorrupt) as e:
+        # Narrow: expected CAS I/O / integrity — never bare Exception (bugs propagate).
         raise JudgePendingCorrupt(f"cas_read:{type(e).__name__}:{e}") from e
     try:
         return AgentTaskOutput.model_validate_json(raw)
-    except Exception as e:  # noqa: BLE001
+    except (ValidationError, ValueError, TypeError) as e:
         raise JudgePendingCorrupt(f"cas_validate:{type(e).__name__}:{e}") from e
 
 
@@ -243,7 +248,10 @@ def rebuild_judge_state(
                     pass
             retry = p.get("retry")
             if retry is not None:
-                judge_retry[key] = int(retry)
+                try:
+                    judge_retry[key] = int(retry)
+                except (TypeError, ValueError) as e:
+                    raise JudgePendingCorrupt(f"retry_corrupt:{key}:{retry!r}") from e
             fk = p.get("failure_kind")
             if fk:
                 failure_kinds[key] = str(fk)

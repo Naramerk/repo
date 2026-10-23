@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from coscientist.core.domain import StudyView, Task, TaskOutcome, TaskState
+from coscientist.core.rules import study_fulfilled
 
 
 def _task_is_stub(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> bool:
@@ -18,17 +19,18 @@ def _task_is_stub(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> bool
     return False
 
 
-_BLOCKING_DISPOSITIONS = frozenset({"not_attempted", "inconclusive", "rubric_not_met"})
-_BLOCKING_REASONS = frozenset({"rubric_pending"})
-
-
-def _disposition_blocks_fulfilled(d: Mapping[str, Any]) -> bool:
-    """not_attempted / inconclusive / rubric_not_met / rubric_pending block fulfilled."""
-    if d.get("disposition") in _BLOCKING_DISPOSITIONS:
-        return True
-    if d.get("reason") in _BLOCKING_REASONS:
-        return True
-    return False
+def _q_verdicts_from_dispositions(
+    question_dispositions: Mapping[str, Mapping[str, Any]] | None,
+) -> dict[str, str]:
+    """Disposition/verdict strings for study_fulfilled (same mapping as finalize)."""
+    if not question_dispositions:
+        return {}
+    out: dict[str, str] = {}
+    for qid, d in question_dispositions.items():
+        if not isinstance(d, dict):
+            continue
+        out[str(qid)] = str(d.get("disposition") or d.get("verdict") or "untested")
+    return out
 
 
 def _compute_verdict(
@@ -38,7 +40,7 @@ def _compute_verdict(
     question_dispositions: Mapping[str, Mapping[str, Any]] | None,
     question_final_types: Mapping[str, str] | None = None,
 ) -> tuple[str, float]:
-    del question_final_types  # reserved for callers; blocking uses dispositions
+    """Task-level verdict, then cap via study_fulfilled (single source with finalize)."""
     done_tasks = [t for t in tasks if t.state == TaskState.DONE]
     done = len(done_tasks)
     stub_share = (sum(1 for t in done_tasks if _task_is_stub(t, atts)) / done) if done else 0.0
@@ -60,11 +62,14 @@ def _compute_verdict(
     else:
         verdict = "partial"
 
-    # PR 2 / PR13: blocking dispositions/reasons → never above partial
-    if question_dispositions and any(_disposition_blocks_fulfilled(d) for d in question_dispositions.values()):
-        if verdict == "fulfilled":
-            verdict = "partial"
-        elif verdict == "stubbed":
+    # PR13: same gate as finalize — study_fulfilled + final_types (never diverge).
+    if verdict in ("fulfilled", "stubbed"):
+        all_required_success = bool(req) and all(
+            t.state == TaskState.DONE and t.outcome in req_ok for t in req
+        )
+        q_verdicts = _q_verdicts_from_dispositions(question_dispositions)
+        ftypes = {str(k): str(v) for k, v in (question_final_types or {}).items()}
+        if not study_fulfilled(q_verdicts, all_required_success, question_final_types=ftypes):
             verdict = "partial"
     return verdict, stub_share
 
@@ -92,9 +97,8 @@ def study_view(
     """Compute StudyView.
 
     closed ⇔ finalized (∃ StudyFinalized). finalizing when all DONE or past
-    effective_deadline without a final event. Questions cap fulfilled/stubbed
-    at partial when any disposition is not_attempted / inconclusive /
-    rubric_not_met / rubric_pending (PR 2 / PR13).
+    effective_deadline without a final event. Fulfilled/stubbed are capped via
+    ``study_fulfilled`` + ``question_final_types`` (same source as finalize).
     """
     tasks = list(tasks)
     atts: Mapping[str, Mapping[str, Any]] = attempts or {}

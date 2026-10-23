@@ -85,7 +85,7 @@ JSON Schema (draft 2020-12), хранится в `coscientist/schema/minimal_rep
  "properties":{
   "study_id":{"type":"string"},
   "terminal_reason":{"enum":["refused","human_timeout","budget","deadline","infeasible","cancelled","completed"]},
-  "trigger":{"enum":["cancel","budget","deadline","all_done","intake"]},
+  "trigger":{"enum":["cancel","budget","deadline","all_done","intake","internal_error"]},
   "contributing_reasons":{"type":"array","items":{"type":"string"},"maxItems":20},
   "summary":{"type":"string","maxLength":1000},
   "fallback_reason":{"type":["string","null"],"maxLength":200},

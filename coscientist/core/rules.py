@@ -160,7 +160,7 @@ def priority_refuted_support_note(
     return excluded_confirmations_note(claims, verdict_value=v)
 
 
-# Caps fulfilled for every final_type (aligns with study_view._disposition_blocks_fulfilled).
+# Caps fulfilled for every final_type (single source used by study_view + finalize).
 _FULFILLMENT_BLOCKING = frozenset(
     {
         "untested",

@@ -161,7 +161,7 @@ async def open_runtime(
             await rt._append(close_events)  # noqa: SLF001
             import coscientist.core.finalize as finalize_mod
 
-            await finalize_mod.finalize(rt, trigger="cancel")
+            await finalize_mod.finalize(rt, trigger="internal_error")
         # PR18: seal tool registry after built-ins — no late register_tool at runtime.
         ensure_core_tools_ready()
         return rt

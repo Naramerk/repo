@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-FinalizeTrigger = Literal["cancel", "budget", "deadline", "all_done", "intake"]
+FinalizeTrigger = Literal["cancel", "budget", "deadline", "all_done", "intake", "internal_error"]
 
 
 def _escape_report_text(value: object) -> str:
@@ -52,6 +52,7 @@ _TRIGGER_TERMINAL: dict[str, str] = {
     "deadline": TerminalReason.DEADLINE.value,
     "intake": TerminalReason.REFUSED.value,
     "all_done": TerminalReason.COMPLETED.value,
+    "internal_error": TerminalReason.INTERNAL_ERROR.value,
 }
 _TASKDONE_DETAIL_LINES = {
     "foreach_quorum_gt_children": "не выполнено: кворум > числа детей",
@@ -108,6 +109,8 @@ def terminal_reason_for(
         return TerminalReason.DEADLINE
     if trigger == "intake":
         return TerminalReason.REFUSED
+    if trigger == "internal_error":
+        return TerminalReason.INTERNAL_ERROR
     req = [t for t in tasks.values() if t.spec.required and t.state == TaskState.DONE]
     if any(t.outcome == TaskOutcome.FAILED and t.reason == TaskReason.HUMAN_TIMEOUT for t in req):
         return TerminalReason.HUMAN_TIMEOUT
@@ -496,9 +499,8 @@ async def _build_rich_payload(runtime: StudyRuntime, *, sid: str, trigger: Final
                     contrib.append(str(line))
     study = runtime.study
     assert study is not None
-    # PR13 §6.1: final_types into study_view so rt.view() == StudyFinalized.
+    # PR13 §6.1: final_types into study_view; view uses study_fulfilled (single source).
     from coscientist.core.rubric import question_final_types
-    from coscientist.core.rules import study_fulfilled
 
     ftypes = question_final_types(plans)
     view = study_view(
@@ -511,22 +513,8 @@ async def _build_rich_payload(runtime: StudyRuntime, *, sid: str, trigger: Final
         question_dispositions=qdisp,
         question_final_types=dict(ftypes),
     )
+    # Never raise above study_view — it already applied study_fulfilled.
     verdict = view.verdict or "partial"
-    # Prefer disposition over claim-level verdict for study_fulfilled checks.
-    q_verdicts = {
-        qid: str(d.get("disposition") or d.get("verdict") or "untested")
-        for qid, d in qdisp.items()
-        if isinstance(d, dict)
-    }
-    req = [t for t in runtime.tasks.values() if t.spec.required]
-    all_required_success = bool(req) and all(
-        t.state == TaskState.DONE and t.outcome in {TaskOutcome.SUCCESS, TaskOutcome.PARTIAL} for t in req
-    )
-    # Only DOWNGRADE — never raise study_view verdict to fulfilled.
-    if verdict == "fulfilled" and not study_fulfilled(
-        q_verdicts, all_required_success, question_final_types=dict(ftypes)
-    ):
-        verdict = "partial"
     payload = await _build_finalized_payload(
         runtime,
         sid=sid,

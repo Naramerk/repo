@@ -9,6 +9,9 @@ unless that key is superseded (change only via PlanExpanded / HITL).
 
 Invalid plans → ``PlanRefused`` + immediate ``StudyFinalized`` (never raw
 ``ValueError`` escaping ``accept_plan``).
+
+**Public API for #24 / callers:** ``apply_plan_refused``, ``refuse_detail``,
+``PLAN_REFUSED_LINE`` — emit PlanRefused, close open tasks, finalize(trigger=intake).
 """
 
 from __future__ import annotations
@@ -18,6 +21,16 @@ from typing import Any
 from coscientist.core.domain import QuestionSpec, TaskSpec
 from coscientist.core.rubric import freeze_rubric, freeze_task_rubrics
 from coscientist.core.rubric_types import VALID_FINAL_TYPES, Rubric
+
+__all__ = [
+    "PLAN_REFUSED_LINE",
+    "apply_plan_refused",
+    "freeze_plan_rubrics",
+    "refuse_detail",
+    "validate_final_types",
+    "validate_plan_final_types_or_err",
+    "validate_rubric_immutable",
+]
 
 
 def _rubric_digest_of(spec: TaskSpec) -> str | None:
@@ -107,7 +120,11 @@ async def apply_plan_refused(
     detail: str,
     report_line: str = PLAN_REFUSED_LINE,
 ) -> str:
-    """Emit PlanRefused, fail PLAN, finalize immediately; return '' (no plan_id)."""
+    """Canonical plan refusal (PR13; #24 reuses — do not fork).
+
+    Emits ``PlanRefused`` (idem = sid + sha256(full detail)), closes open tasks,
+    ``finalize(trigger=\"intake\")`` → ``terminal_reason=REFUSED``. Returns ``\"\"``.
+    """
     import coscientist.core.finalize as finalize_mod
     from coscientist.core.domain import TaskOutcome, TaskState
     from coscientist.core.events import EventEnvelope, make_idem
