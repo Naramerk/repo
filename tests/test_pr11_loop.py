@@ -196,6 +196,21 @@ async def _drive_to_finalized(rt, arts) -> Any:
     return fin
 
 
+def _assert_internal_error_finalized(fins: list[Any]) -> Any:
+    """Exactly one StudyFinalized(internal_error) with report XOR + conclusion_ids."""
+    from coscientist.core.reasons import TerminalReason
+
+    assert len(fins) == 1
+    fin = fins[0]
+    assert fin.payload.get("terminal_reason") == TerminalReason.INTERNAL_ERROR.value
+    has_art = fin.payload.get("report_artifact_id") is not None
+    has_min = fin.payload.get("minimal_report") is not None
+    assert has_art ^ has_min, "report_artifact_id XOR minimal_report"
+    cids = fin.payload.get("conclusion_ids")
+    assert isinstance(cids, list) and len(cids) > 0, "conclusion_ids must be non-empty"
+    return fin
+
+
 async def _assert_plan_refused(rt, *, match: str) -> None:
     from coscientist.core.reasons import TerminalReason
 
@@ -1526,7 +1541,6 @@ async def test_loop_unexpected_error_finalizes_on_recover(
     """recover() must finalize internal_error, not hang before tick()."""
     import coscientist.core.loop as loop_mod
     import coscientist.core.loop_predicates as lp
-    from coscientist.core.reasons import TerminalReason
 
     name = f"test_plugin_ok_then_boom_{runtime_cls.__name__}"
     lp._REGISTRY.pop(name, None)
@@ -1570,16 +1584,14 @@ async def test_loop_unexpected_error_finalizes_on_recover(
         assert rt2._finalized is True
         events = await rt2.store.read_all()
         fins = [e for e in events if e.type == "StudyFinalized"]
-        assert len(fins) == 1
-        assert fins[0].payload["terminal_reason"] == TerminalReason.INTERNAL_ERROR.value
-        has_art = fins[0].payload.get("report_artifact_id") is not None
-        has_min = fins[0].payload.get("minimal_report") is not None
-        assert has_art ^ has_min, "report_artifact_id XOR minimal_report"
+        _assert_internal_error_finalized(fins)
         # Second recover must not hang / raise; still exactly one StudyFinalized.
         await recover(rt2)
         assert rt2._finalized is True
         events2 = await rt2.store.read_all()
-        assert len([e for e in events2 if e.type == "StudyFinalized"]) == 1
+        _assert_internal_error_finalized(
+            [e for e in events2 if e.type == "StudyFinalized"]
+        )
         await close_runtime(rt2)
     finally:
         lp._REGISTRY.pop(name, None)
@@ -1816,7 +1828,7 @@ async def test_internal_error_closes_running_tasks_and_attempts(
     import coscientist.core.loop_predicates as lp
     from coscientist.core.domain import TaskState
     from coscientist.core.errors import AttemptClosedError, Conflict, StudyClosedError
-    from coscientist.core.reasons import CloseReason, TaskReason, TerminalReason
+    from coscientist.core.reasons import CloseReason, TaskReason
 
     name = f"test_plugin_boom_running_{runtime_cls.__name__}"
     lp._REGISTRY.pop(name, None)
@@ -1861,8 +1873,7 @@ async def test_internal_error_closes_running_tasks_and_attempts(
         assert rt._finalized is True
         events = await rt.store.read_all()
         fins = [e for e in events if e.type == "StudyFinalized"]
-        assert len(fins) == 1
-        assert fins[0].payload["terminal_reason"] == TerminalReason.INTERNAL_ERROR.value
+        _assert_internal_error_finalized(fins)
         out_done = [
             e
             for e in events
@@ -1879,9 +1890,6 @@ async def test_internal_error_closes_running_tasks_and_attempts(
         assert closed
         assert closed[-1].payload.get("close_reason") == CloseReason.CRASHED.value
         assert rt.tasks[out.task_id].state == TaskState.DONE
-        has_art = fins[0].payload.get("report_artifact_id") is not None
-        has_min = fins[0].payload.get("minimal_report") is not None
-        assert has_art ^ has_min
         # Late write on the closed attempt must not add another TaskDone.
         with pytest.raises((AttemptClosedError, StudyClosedError, Conflict)):
             await _ok(rt, arts, out_aid)
@@ -1907,7 +1915,6 @@ async def test_internal_error_close_does_not_reenter_hooks(
 ):
     """Nested _append(TaskDone CORE_BUG) under _finalizing must not create PLAN-n."""
     import coscientist.core.loop_predicates as lp
-    from coscientist.core.reasons import TerminalReason
 
     name = f"test_plugin_boom_reentry_{runtime_cls.__name__}"
     lp._REGISTRY.pop(name, None)
@@ -1957,10 +1964,10 @@ async def test_internal_error_close_does_not_reenter_hooks(
             aid = await rt.start_attempt(t.spec.task_key)
             await _ok(rt, arts, aid)
         assert rt._finalized is True
+        assert rt._finalizing is False
         events = await rt.store.read_all()
         fins = [e for e in events if e.type == "StudyFinalized"]
-        assert len(fins) == 1
-        assert fins[0].payload["terminal_reason"] == TerminalReason.INTERNAL_ERROR.value
+        _assert_internal_error_finalized(fins)
         created_after = {e.entity_key for e in events if e.type == "TaskCreated"}
         # No PLAN-n / new materialization from expand_after on CORE_BUG close.
         assert created_after == created_before
@@ -1978,7 +1985,6 @@ async def test_count_survivors_failure_finalizes_internal_error(
 ):
     """Exception inside count_survivors during advance → internal_error."""
     import coscientist.core.loop_predicates as lp
-    from coscientist.core.reasons import TerminalReason
 
     def boom_survivors(*_a, **_k):
         raise RuntimeError("count_survivors boom")
@@ -2003,8 +2009,7 @@ async def test_count_survivors_failure_finalizes_internal_error(
         await _ok(rt, arts, aid)
     assert rt._finalized is True
     fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
-    assert len(fins) == 1
-    assert fins[0].payload["terminal_reason"] == TerminalReason.INTERNAL_ERROR.value
+    _assert_internal_error_finalized(fins)
     await close_runtime(rt)
 
 
@@ -2015,7 +2020,6 @@ async def test_materialize_loop_iter_failure_finalizes_internal_error(
     """Exception inside materialize_loop_iter during advance → internal_error."""
     import coscientist.core.loop as loop_mod
     import coscientist.core.loop_predicates as lp
-    from coscientist.core.reasons import TerminalReason
 
     name = f"test_plugin_keep_mat_{runtime_cls.__name__}"
     lp._REGISTRY.pop(name, None)
@@ -2045,8 +2049,7 @@ async def test_materialize_loop_iter_failure_finalizes_internal_error(
             await _ok(rt, arts, aid)
         assert rt._finalized is True
         fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
-        assert len(fins) == 1
-        assert fins[0].payload["terminal_reason"] == TerminalReason.INTERNAL_ERROR.value
+        _assert_internal_error_finalized(fins)
         await close_runtime(rt)
     finally:
         lp._REGISTRY.pop(name, None)
@@ -2058,7 +2061,6 @@ async def test_plan_invalid_from_predicate_body_finalizes(
 ):
     """PlanInvalid raised from a predicate body during advance → internal_error."""
     import coscientist.core.loop_predicates as lp
-    from coscientist.core.reasons import TerminalReason
     from coscientist.core.rules import PlanInvalid
 
     name = f"test_plugin_plan_invalid_{runtime_cls.__name__}"
@@ -2089,8 +2091,7 @@ async def test_plan_invalid_from_predicate_body_finalizes(
         assert rt._finalized is True
         events = await rt.store.read_all()
         fins = [e for e in events if e.type == "StudyFinalized"]
-        assert len(fins) == 1
-        assert fins[0].payload["terminal_reason"] == TerminalReason.INTERNAL_ERROR.value
+        _assert_internal_error_finalized(fins)
         await close_runtime(rt)
     finally:
         lp._REGISTRY.pop(name, None)

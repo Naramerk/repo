@@ -73,7 +73,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         self.hypothesis_verdicts: dict[str, dict[str, Any]] = {}
         self._retry_at: dict[str, datetime] = {}
         self._finalized = False
-        # True while closing open work for internal_error / cancel-style finalize —
+        # True while finalize_loop_internal_error closes open work —
         # nested _append(TaskDone) must not re-enter expand/foreach/loop hooks.
         self._finalizing = False
         self._study_cancelled = False
