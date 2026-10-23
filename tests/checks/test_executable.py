@@ -225,29 +225,24 @@ def test_sandbox_sleep_bypass_is_idle_or_wall_timeout():
 
 
 def test_sandbox_busy_loop_is_cpu_or_wall_timeout():
-    """Busy loop: host cpu/wall timeout; without cgroup RLIMIT SIGXCPU → NONZERO."""
+    """Busy loop → cpu_timeout (cgroup watcher or no-cgroup rusage≥budget)."""
     _require_hard()
     r = run_sandbox(
         ["python3", "-c", "while True: pass"],
         limits=SandboxLimits(timeout_s=3.0, memory_mb=64, max_output_bytes=10_000),
     )
     assert r.status not in INFRA_STATUSES
-    if r.status is SandboxStatus.TIMEOUT:
-        assert r.reason in ("cpu_timeout", "wall_timeout")
-        assert r.reason != "idle_timeout"
-        assert r.is_guest_timeout
-    else:
-        # No cgroup: host RLIMIT_CPU may deliver forgeable SIGXCPU/152 → scientific.
-        assert r.status is SandboxStatus.NONZERO
-        assert r.reason != "cpu_timeout"
-        assert r.exit_code in (152, -24, 128 + 24)
+    assert r.status is SandboxStatus.TIMEOUT
+    assert r.reason in ("cpu_timeout", "wall_timeout")
+    assert r.reason != "idle_timeout"
+    assert r.is_guest_timeout
 
 
 def test_sandbox_fork_cpu_spread_is_busy_timeout():
-    """CPU spread across children: cgroup tree timeout, else scientific SIGXCPU."""
+    """CPU spread across children still bounded → busy timeout (not idle)."""
     _require_hard()
     # Fork several busy children so per-process RLIMIT alone would not catch them
-    # before wall; tree-wide cpu.stat / wall must still yield a busy timeout.
+    # before wall; tree-wide cpu.stat / wall / rusage must still yield a busy timeout.
     attack = r"""
 import os, sys
 kids = []
@@ -265,12 +260,9 @@ while True:
         limits=SandboxLimits(timeout_s=2.0, memory_mb=64, max_output_bytes=10_000),
     )
     assert r.status not in INFRA_STATUSES
-    if r.status is SandboxStatus.TIMEOUT:
-        assert r.reason in ("cpu_timeout", "wall_timeout")
-        assert r.reason != "idle_timeout"
-    else:
-        assert r.status is SandboxStatus.NONZERO
-        assert r.reason != "cpu_timeout"
+    assert r.status is SandboxStatus.TIMEOUT
+    assert r.reason in ("cpu_timeout", "wall_timeout")
+    assert r.reason != "idle_timeout"
 
 
 def test_sandbox_positive_exit_137_is_scientific_not_oom():
@@ -1367,7 +1359,8 @@ def test_classify_guest_timeout_idle_vs_busy():
         )
         == "idle_timeout"
     )
-    # Guest SIGXCPU / exit 152 alone never classifies as cpu_timeout.
+    # kill_cause=None alone never yields cpu_timeout from classify_guest_timeout
+    # (SIGXCPU promotion is in _classify via rusage / cgroup measurement).
     assert (
         classify_guest_timeout(
             kill_cause=None, duration_s=1.0, cpu_usage_s=0.5
@@ -1377,7 +1370,7 @@ def test_classify_guest_timeout_idle_vs_busy():
 
 
 def test_guest_forged_sigxcpu_is_scientific_nonzero():
-    """Guest os.kill(SIGXCPU) / exit 152 must NOT become host cpu_timeout."""
+    """Guest os.kill(SIGXCPU) / exit 152 with low rusage must stay NONZERO."""
     _require_hard()
     r = run_sandbox(
         [
@@ -1390,13 +1383,62 @@ def test_guest_forged_sigxcpu_is_scientific_nonzero():
     assert r.status is SandboxStatus.NONZERO
     assert r.reason != "cpu_timeout"
     assert r.status not in INFRA_STATUSES
-    # exit 152 (128+SIGXCPU) likewise
+    # exit 152 (128+SIGXCPU) with no CPU burn likewise
     r2 = run_sandbox(
         ["python3", "-c", "raise SystemExit(152)"],
         limits=SandboxLimits(timeout_s=5, memory_mb=64),
     )
     assert r2.status is SandboxStatus.NONZERO
     assert r2.exit_code == 152
+    assert r2.reason != "cpu_timeout"
+
+
+def test_rlimit_cpu_fuse_above_cgroup_budget():
+    """With cgroup: RLIMIT_CPU is strictly above budget (fuse); without: at budget."""
+    from coscientist.checks.sandbox import (
+        _cpu_budget_seconds,
+        _rlimit_cpu_seconds,
+    )
+
+    wall = 10.0
+    budget = _cpu_budget_seconds(wall)
+    fuse = _rlimit_cpu_seconds(wall, cgroup_live=True)
+    bare = _rlimit_cpu_seconds(wall, cgroup_live=False)
+    assert fuse is not None and bare is not None
+    assert fuse > budget
+    assert fuse < wall
+    assert bare <= int(budget) or bare == int(budget)
+    assert bare < wall
+    # Fuse clears the race: watcher budget < fuse RLIMIT.
+    assert fuse >= int(budget + max(1.0, budget * 0.10)) or fuse == int(
+        max(budget + 0.05, wall - 0.05)
+    )
+
+
+def test_sigxcpu_with_rusage_at_budget_is_cpu_timeout(monkeypatch):
+    """No-cgroup path: SIGXCPU + host rusage ≥ budget → cpu_timeout."""
+    import coscientist.checks.sandbox as sb
+
+    _require_hard()
+    # Force no cgroup leaf so classification uses rusage.
+    monkeypatch.setattr(sb, "_cgroup_prepare_leaf", lambda *a, **k: None)
+    monkeypatch.setattr(sb, "_cgroup_delegation_available", lambda: False)
+
+    # Busy loop will hit RLIMIT at budget; rusage should promote to cpu_timeout.
+    r = run_sandbox(
+        ["python3", "-c", "while True: pass"],
+        limits=SandboxLimits(timeout_s=3.0, memory_mb=64, max_output_bytes=10_000),
+    )
+    assert r.status is SandboxStatus.TIMEOUT
+    assert r.reason == "cpu_timeout"
+    assert r.status not in INFRA_STATUSES
+
+    # Forged 152 with negligible CPU stays NONZERO.
+    r2 = run_sandbox(
+        ["python3", "-c", "raise SystemExit(152)"],
+        limits=SandboxLimits(timeout_s=5, memory_mb=64),
+    )
+    assert r2.status is SandboxStatus.NONZERO
     assert r2.reason != "cpu_timeout"
 
 
@@ -2071,3 +2113,219 @@ def test_freeze_shared_helper_used_by_all_task_create_paths():
     )
     assert out.sandbox_check_limits["exec_ok"]["timeout_s"] == 12.0
     assert out.sandbox_timeout_s is None
+
+
+@pytest.mark.asyncio
+async def test_alternating_prediction_timeouts_elevate_untestable(
+    tmp_path, clock, runtime_cls, monkeypatch
+):
+    """≥2 prediction timeouts on a task (different templates) → idle/untestable.
+
+    Alternating template_ids must not evade the structural rule.
+    """
+    from coscientist.core.domain import CheckResult
+
+    cat = _catalog_with(
+        {
+            "id": "pred_a",
+            "title": "a",
+            "check": {"kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5},
+            "role": "prediction",
+        },
+        {
+            "id": "pred_b",
+            "title": "b",
+            "check": {"kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5},
+            "role": "prediction",
+        },
+    )
+    sid = "st_sbx_alt_to"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat
+    )
+    rt.max_attempts = 3
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0-pr17",
+        deadline=clock.now() + timedelta(seconds=120),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    ex, arts = attach_executor(rt, tmp_path)
+    ex.catalog = cat
+    ex.max_attempts = 3
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E1",
+                title="run",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[
+                    RequirementRef(template_id="pred_a"),
+                    RequirementRef(template_id="pred_b"),
+                ],
+            )
+        ]
+    )
+
+    call_n = {"n": 0}
+
+    def _fake_eval(*_a, **_kw):
+        call_n["n"] += 1
+        # Attempt 1: only pred_a times out; attempt 2: only pred_b times out.
+        tid = "pred_a" if call_n["n"] == 1 else "pred_b"
+        other = "pred_b" if tid == "pred_a" else "pred_a"
+        return [
+            CheckResult(
+                check_id=f"{tid}#0",
+                template_id=tid,
+                status=ReqStatus.FAILED,
+                is_code=True,
+                required=True,
+                role="prediction",
+                detail="wall_timeout",
+                effect={
+                    "timeout_kind": "wall_timeout",
+                    "refute_unresolved": True,
+                    "observation_only": True,
+                    "countable": False,
+                    "jail_inputs_digest": f"dig-{call_n['n']}",
+                    "core_evaluated": True,
+                    "producer": "sandbox",
+                    "produced_by_call_id": f"aid:{call_n['n']}",
+                },
+            ),
+            CheckResult(
+                check_id=f"{other}#1",
+                template_id=other,
+                status=ReqStatus.MET,
+                is_code=True,
+                required=True,
+                role="prediction",
+                detail="ok",
+                effect={
+                    "countable": True,
+                    "core_evaluated": True,
+                    "producer": "sandbox",
+                    "produced_by_call_id": f"aid:{call_n['n']}:ok",
+                    "jail_inputs_digest": f"dig-{call_n['n']}-ok",
+                },
+            ),
+        ]
+
+    monkeypatch.setattr(
+        "coscientist.core.executor.evaluate_task_checks", _fake_eval
+    )
+
+    aid1 = await rt.start_attempt("E1")
+    r1 = await ex.record(aid1, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS))
+    # First prediction timeout on the task — do NOT escalate to untestable.
+    assert r1.reason == TaskReason.SANDBOX_TIMEOUT.value
+    row1 = rt.results[aid1]
+    assert row1.get("result_class") == "timeout"
+    assert "repeat_timeout" not in str(row1.get("detail") or "")
+
+    clock.advance(timedelta(seconds=1))
+    aid2 = await rt.start_attempt("E1")
+    r2 = await ex.record(aid2, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS))
+    # Second prediction timeout (different template) → structural idle/untestable.
+    assert r2.reason == TaskReason.IDLE_TIMEOUT.value
+    row2 = rt.results[aid2]
+    assert row2.get("result_class") == "timeout"
+    assert "repeat_timeout" in str(row2.get("detail") or "") or any(
+        (cr.get("effect") or {}).get("repeat_timeout")
+        for cr in (row2.get("check_results") or [])
+        if isinstance(cr, dict)
+    )
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_single_prediction_timeout_on_last_attempt_not_escalated(
+    tmp_path, clock, runtime_cls, monkeypatch
+):
+    """One prediction timeout on the last charged attempt stays sandbox_timeout."""
+    from coscientist.core.domain import CheckResult
+
+    cat = _catalog_with(
+        {
+            "id": "pred_only",
+            "title": "p",
+            "check": {"kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5},
+            "role": "prediction",
+        }
+    )
+    sid = "st_sbx_last_to"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat
+    )
+    rt.max_attempts = 1
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0-pr17",
+        deadline=clock.now() + timedelta(seconds=120),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    ex, arts = attach_executor(rt, tmp_path)
+    ex.catalog = cat
+    ex.max_attempts = 1
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E1",
+                title="run",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="pred_only")],
+            )
+        ]
+    )
+
+    def _fake_eval(*_a, **_kw):
+        return [
+            CheckResult(
+                check_id="pred_only#0",
+                template_id="pred_only",
+                status=ReqStatus.FAILED,
+                is_code=True,
+                required=True,
+                role="prediction",
+                detail="wall_timeout",
+                effect={
+                    "timeout_kind": "wall_timeout",
+                    "refute_unresolved": True,
+                    "observation_only": True,
+                    "countable": False,
+                    "jail_inputs_digest": "dig-1",
+                    "core_evaluated": True,
+                    "producer": "sandbox",
+                    "produced_by_call_id": "aid:1",
+                },
+            )
+        ]
+
+    monkeypatch.setattr(
+        "coscientist.core.executor.evaluate_task_checks", _fake_eval
+    )
+    aid = await rt.start_attempt("E1")
+    r = await ex.record(aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS))
+    assert r.reason == TaskReason.SANDBOX_TIMEOUT.value
+    row = rt.results[aid]
+    assert not any(
+        (cr.get("effect") or {}).get("repeat_timeout")
+        for cr in (row.get("check_results") or [])
+        if isinstance(cr, dict)
+    )
+    await close_runtime(rt)

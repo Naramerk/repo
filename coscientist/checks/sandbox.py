@@ -282,31 +282,101 @@ def _cpu_budget_seconds(timeout_s: float) -> float:
     return max(0.05, budget)
 
 
-def _rlimit_cpu_seconds(timeout_s: float) -> int | None:
-    """Per-process RLIMIT_CPU in whole seconds, only when still < wall."""
+def _rlimit_cpu_seconds(timeout_s: float, *, cgroup_live: bool) -> int | None:
+    """Per-process RLIMIT_CPU in whole seconds, always strictly below wall.
+
+    With a live cgroup: set RLIMIT **above** the cgroup budget (budget +
+    max(1s, 10%)) as a fuse only — the host watcher must win the race and
+    classify ``cpu_timeout``. Without cgroup: RLIMIT at the budget; exit
+    SIGXCPU/152 is classified via host-measured child rusage (see ``_classify``).
+    """
     wall = float(timeout_s)
     budget = _cpu_budget_seconds(wall)
-    # RLIMIT_CPU is integer seconds; only set when we can stay strictly < wall.
-    whole = int(budget)
+    if cgroup_live:
+        fuse = budget + max(1.0, budget * 0.10)
+        if fuse >= wall:
+            fuse = max(budget + 0.05, wall - 0.05)
+        whole = int(fuse)
+    else:
+        whole = int(budget)
     if whole >= 1 and whole < wall:
         return whole
     return None
 
 
-def _wrapper_script(*, memory_mb: int, timeout_s: float) -> str:
+def _is_sigxcpu_exit(code: int) -> bool:
+    """True for raw -SIGXCPU or shell-style 128+SIGXCPU (152)."""
+    return code in (-int(signal.SIGXCPU), 128 + int(signal.SIGXCPU))
+
+
+def _host_tree_cpu_s(root_pid: int) -> float | None:
+    """Sum utime+stime (seconds) for ``root_pid`` and descendants via ``/proc``.
+
+    Used when cgroup ``cpu.stat`` is unavailable: bwrap guests are not the
+    direct ``wait4`` child, so ``RUSAGE_CHILDREN`` under-counts. Sampling the
+    host-visible process tree is the accurate host-side CPU measurement.
+    """
+    try:
+        clk = float(os.sysconf("SC_CLK_TCK"))
+    except (ValueError, OSError, AttributeError):
+        clk = 100.0
+    if clk <= 0:
+        clk = 100.0
+    try:
+        pids: set[int] = {int(root_pid)}
+        queue = [int(root_pid)]
+        while queue:
+            pid = queue.pop()
+            try:
+                for name in os.listdir(f"/proc/{pid}/task"):
+                    children = Path(f"/proc/{pid}/task/{name}/children")
+                    if not children.is_file():
+                        continue
+                    for tok in children.read_text().split():
+                        try:
+                            cpid = int(tok)
+                        except ValueError:
+                            continue
+                        if cpid not in pids:
+                            pids.add(cpid)
+                            queue.append(cpid)
+            except OSError:
+                continue
+        ticks = 0
+        for pid in pids:
+            try:
+                raw = Path(f"/proc/{pid}/stat").read_text()
+            except OSError:
+                continue
+            # comm may contain spaces/parens — split after the last ") ".
+            try:
+                rest = raw[raw.rindex(")") + 2 :].split()
+                # fields 14,15 (1-indexed) → indices 11,12 after state in rest
+                # After ") ": state is rest[0], utime rest[11], stime rest[12].
+                ticks += int(rest[11]) + int(rest[12])
+            except (ValueError, IndexError):
+                continue
+        return ticks / clk
+    except OSError:
+        return None
+
+
+def _wrapper_script(
+    *, memory_mb: int, timeout_s: float, cgroup_live: bool = False
+) -> str:
     """setrlimit, close infra FD, then exec.
 
     Host starts bwrap already inside the cgroup leaf (launcher). Rlimit failure
     writes magic to ``COSCIENTIST_INFRA_FD`` then aborts. Infra FD closed before
-    exec so agent/test code never inherits it. Per-process RLIMIT_CPU is set
-    only when it can stay strictly below wall; cgroup ``cpu.stat`` is the
-    tree-wide backstop.
+    exec so agent/test code never inherits it. With cgroup, RLIMIT_CPU is a
+    fuse above the cgroup budget; without cgroup it matches the budget and
+    classification uses host rusage.
     """
-    rlimit = _rlimit_cpu_seconds(timeout_s)
+    rlimit = _rlimit_cpu_seconds(timeout_s, cgroup_live=cgroup_live)
     rlimit_block = (
         f"resource.setrlimit(resource.RLIMIT_CPU, ({rlimit}, {rlimit + 1}))"
         if rlimit is not None
-        else "pass  # cgroup cpu.stat enforces tree-wide budget"
+        else "pass  # no integer RLIMIT_CPU slot below wall"
     )
     return f"""
 import os, sys
@@ -515,10 +585,12 @@ def _watch_process(
     *,
     lim: SandboxLimits,
     cgroup_leaf: Path | None = None,
-) -> tuple[bool, bool, bytes, bytes, str | None, float | None]:
-    """Return (timed_out, overflow, stdout, stderr, kill_cause, cpu_usage_s).
+) -> tuple[bool, bool, bytes, bytes, str | None, float | None, float | None]:
+    """Return (timed_out, overflow, stdout, stderr, kill_cause, cpu_s, rusage_cpu_s).
 
     ``kill_cause`` is ``wall`` or ``cpu`` when the host budget tripped.
+    ``cpu_s`` is cgroup ``cpu.stat`` when available; ``rusage_cpu_s`` is the
+    host-measured process-tree CPU (for no-cgroup SIGXCPU classification).
     """
     out_sink: list[bytes] = []
     err_sink: list[bytes] = []
@@ -539,6 +611,7 @@ def _watch_process(
     deadline = started + float(lim.timeout_s)
     cpu_budget_usec = int(_cpu_budget_seconds(lim.timeout_s) * 1_000_000)
     last_usage: int | None = None
+    tree_cpu_s: float | None = None
     while proc.poll() is None:
         if overflow[0]:
             _kill_group_term_then_kill(proc)
@@ -556,7 +629,15 @@ def _watch_process(
                 kill_cause = "cpu"
                 _kill_group_term_then_kill(proc)
                 break
+        # Sample host tree CPU while the guest is still alive (for SIGXCPU path).
+        if cgroup_leaf is None and proc.pid:
+            sampled = _host_tree_cpu_s(proc.pid)
+            if sampled is not None:
+                tree_cpu_s = sampled
         time.sleep(0.02)
+    # Final sample before/around reap (guest may already be gone).
+    if cgroup_leaf is None and proc.pid and tree_cpu_s is None:
+        tree_cpu_s = _host_tree_cpu_s(proc.pid)
     try:
         proc.wait(timeout=5)
     except Exception:  # noqa: BLE001
@@ -571,6 +652,7 @@ def _watch_process(
         err_sink[0] if err_sink else b"",
         kill_cause,
         cpu_s,
+        tree_cpu_s,
     )
 
 
@@ -584,8 +666,9 @@ def classify_guest_timeout(
 ) -> str:
     """Host-only classification: idle_timeout | cpu_timeout | wall_timeout.
 
-    ``cpu_timeout`` only when the host watcher tripped the cgroup CPU budget
-    (``kill_cause==\"cpu\"``). Guest ``SIGXCPU`` / exit 152 is never trusted.
+    ``cpu_timeout`` when ``kill_cause==\"cpu\"`` (host cgroup watcher). Guest
+    ``SIGXCPU`` / exit 152 is handled in ``_classify`` via host rusage (no
+    cgroup) or cgroup measurement — never trusted from the exit code alone.
 
     Idle (cpu/wall below ``idle_ratio``) requires measured ``cpu.stat``. Without
     a measurement, refute-role timeouts are treated as ``idle_timeout``
@@ -619,6 +702,8 @@ def _classify(
     result_files: dict[str, bytes],
     kill_cause: str | None = None,
     cpu_usage_s: float | None = None,
+    rusage_cpu_s: float | None = None,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
 ) -> SandboxResult:
     note = soft_isolation_note(net_i, fs_i)
     if not oom_detectable:
@@ -660,8 +745,7 @@ def _classify(
             reason="output_exceeded",
         )
     code = proc.returncode if proc.returncode is not None else -1
-    # Guest SIGXCPU / exit 152 is forgeable — never treat as host cpu_timeout.
-    # cpu_timeout only when the host watcher set kill_cause=\"cpu\" via cgroup budget.
+    budget = _cpu_budget_seconds(timeout_s)
     if timed_out:
         # Guest timeout is NOT countable evidence — classified host-side only.
         # Role-aware idle elevation (refute / no cpu.stat) happens in evaluate.
@@ -682,6 +766,40 @@ def _classify(
             status=SandboxStatus.OOM,
             exit_code=proc.returncode,
             reason="sandbox_oom",
+        )
+    # SIGXCPU / exit 152: forgeable by the guest. With live cgroup the watcher
+    # should have won; without cgroup promote to cpu_timeout only when host
+    # tree CPU shows the child actually burned the (integer) RLIMIT budget.
+    if _is_sigxcpu_exit(code):
+        if cgroup_leaf is not None:
+            measured = cpu_usage_s
+            threshold = budget
+        else:
+            measured = rusage_cpu_s
+            # RLIMIT_CPU is whole seconds at floor(budget); compare to that
+            # threshold so a real busy loop that hit RLIMIT promotes cleanly.
+            rlim = _rlimit_cpu_seconds(timeout_s, cgroup_live=False)
+            threshold = float(rlim) if rlim is not None else budget
+        # Sampling lags the integer RLIMIT edge by up to one watch tick; accept
+        # measured CPU within 1s of the threshold (still far above a forge≈0).
+        reached = (
+            measured is not None
+            and float(measured) >= max(0.5, float(threshold) - 1.0 + 1e-6)
+        )
+        if reached:
+            # Prefer cgroup measurement; else stamp host tree CPU into the result.
+            if cpu_usage_s is None:
+                cpu_usage_s = float(measured)  # type: ignore[arg-type]
+            return fin(
+                status=SandboxStatus.TIMEOUT,
+                exit_code=code,
+                reason="cpu_timeout",
+                timeout_kill="cpu",
+            )
+        return fin(
+            status=SandboxStatus.NONZERO,
+            exit_code=code,
+            reason=f"exit:{code}",
         )
     # Guest signals / nonzero exits (including forged 75) are scientific.
     if code == 0:
@@ -831,8 +949,8 @@ def _run_jailed(
         if oom_frag:
             note = f"{note}; {oom_frag}" if note else oom_frag
 
-        timed_out, overflow, out_b, err_b, kill_cause, cpu_s = _watch_process(
-            proc, lim=lim, cgroup_leaf=leaf if oom_det else None
+        timed_out, overflow, out_b, err_b, kill_cause, cpu_s, rusage_s = (
+            _watch_process(proc, lim=lim, cgroup_leaf=leaf if oom_det else None)
         )
         infra_msg = b""
         try:
@@ -867,6 +985,8 @@ def _run_jailed(
             result_files=files,
             kill_cause=kill_cause,
             cpu_usage_s=cpu_s,
+            rusage_cpu_s=rusage_s,
+            timeout_s=lim.timeout_s,
         )
     finally:
         _cgroup_remove_leaf(leaf)
@@ -936,7 +1056,11 @@ def run_sandbox(
             p.chmod(0o444)
         wrapper = work / "_cos_wrapper.py"
         wrapper.write_text(
-            _wrapper_script(memory_mb=lim.memory_mb, timeout_s=lim.timeout_s),
+            _wrapper_script(
+                memory_mb=lim.memory_mb,
+                timeout_s=lim.timeout_s,
+                cgroup_live=_cgroup_delegation_available(),
+            ),
             encoding="utf-8",
         )
         extra_env = [(str(k), str(v)) for k, v in (env or {}).items()]
@@ -1065,7 +1189,11 @@ def run_verifier(
 
         wrapper = results_dir / "_cos_wrapper.py"
         wrapper.write_text(
-            _wrapper_script(memory_mb=lim.memory_mb, timeout_s=lim.timeout_s),
+            _wrapper_script(
+                memory_mb=lim.memory_mb,
+                timeout_s=lim.timeout_s,
+                cgroup_live=_cgroup_delegation_available(),
+            ),
             encoding="utf-8",
         )
 

@@ -744,14 +744,30 @@ class Executor:
                 for c in timeout_checks
                 if isinstance(c.effect, dict)
             ]
-            # Structural: ≥2 timeouts on the same prediction/refute check →
-            # untestable_by_agent (sabotage-suspected), regardless of CPU ratio.
-            refute_timeout_tids = {
-                str(getattr(c, "template_id", "") or "")
-                for c in timeout_checks
-                if getattr(c, "role", None) == "prediction"
-            }
-            prior_refute_timeouts = 0
+            # Structural: ≥2 prediction/refute-role timeouts on this TASK
+            # (any template_id — alternation does not evade) → untestable.
+            # A single timeout (even on the last charged attempt) stays a
+            # plain timeout; refute_unresolved already blocks supported.
+            def _prediction_timeout_in_row(row: dict[str, Any]) -> bool:
+                if str(row.get("result_class") or "") != "timeout":
+                    return False
+                for cr in row.get("check_results") or []:
+                    if not isinstance(cr, dict):
+                        continue
+                    if str(cr.get("role") or "") != "prediction":
+                        continue
+                    raw_eff = cr.get("effect")
+                    eff: dict[str, Any] = (
+                        dict(raw_eff) if isinstance(raw_eff, dict) else {}
+                    )
+                    if eff.get("timeout_kind") or eff.get("refute_unresolved"):
+                        return True
+                return False
+
+            current_prediction_timeout = any(
+                getattr(c, "role", None) == "prediction" for c in timeout_checks
+            )
+            prior_prediction_timeouts = 0
             for prev_aid in list(getattr(task, "attempts", []) or []):
                 if prev_aid == attempt_id:
                     continue
@@ -760,27 +776,12 @@ class Executor:
                     if isinstance(results_map, dict)
                     else None
                 )
-                if not isinstance(prev, dict):
-                    continue
-                if str(prev.get("result_class") or "") != "timeout":
-                    continue
-                for cr in prev.get("check_results") or []:
-                    if not isinstance(cr, dict):
-                        continue
-                    tid = str(cr.get("template_id") or "")
-                    if tid not in refute_timeout_tids:
-                        continue
-                    role = str(cr.get("role") or "")
-                    raw_eff = cr.get("effect")
-                    eff: dict[str, Any] = (
-                        dict(raw_eff) if isinstance(raw_eff, dict) else {}
-                    )
-                    if role == "prediction" and (
-                        eff.get("timeout_kind") or eff.get("refute_unresolved")
-                    ):
-                        prior_refute_timeouts += 1
-                        break
-            repeat_refute_timeout = prior_refute_timeouts >= 1
+                if isinstance(prev, dict) and _prediction_timeout_in_row(prev):
+                    prior_prediction_timeouts += 1
+            task_prediction_timeouts = prior_prediction_timeouts + (
+                1 if current_prediction_timeout else 0
+            )
+            repeat_refute_timeout = task_prediction_timeouts >= 2
             idle = any(k == "idle_timeout" for k in kinds) or repeat_refute_timeout
             if repeat_refute_timeout:
                 elevated: list[Any] = []
