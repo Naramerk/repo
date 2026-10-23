@@ -1,8 +1,8 @@
 """SQLite WAL EventStore: lease fencing, idempotency, projections (DESIGN §3.5 / §3.5a).
 
 Writes/leases run under ``threading.RLock`` via ``asyncio.to_thread``.
-Reads use a separate read-only connection (WAL-safe) also via ``to_thread``,
-so a concurrent read does not wait on a slow write / fsync.
+Reads use a separate read-only connection (WAL-safe) under ``_read_lock``,
+also via ``to_thread``, so concurrent reads do not wait on a slow write.
 """
 
 from __future__ import annotations
@@ -88,6 +88,7 @@ class SqliteEventStore:
         self.lease_ttl_s = lease_ttl_s
         self._closed = False
         self._db_lock = threading.RLock()
+        self._read_lock = threading.RLock()
         with self._db_lock:
             self._conn = _open_conn(self.db_path)
             self._conn.execute("PRAGMA journal_mode=WAL")
@@ -96,7 +97,6 @@ class SqliteEventStore:
             self._conn.executescript(_SCHEMA)
             self._ensure_lease_nonce_column()
             self._conn.commit()
-        # Separate reader: WAL allows concurrent reads without the write lock.
         self._read_conn = _open_conn(self.db_path, readonly=True)
 
     def _ensure_lease_nonce_column(self) -> None:
@@ -116,23 +116,32 @@ class SqliteEventStore:
         return await asyncio.to_thread(_run)
 
     async def _read_thread(self, fn: Callable[[], T]) -> T:
-        """Off-loop read on the read-only connection (does not take the write lock)."""
-        return await asyncio.to_thread(fn)
+        """Off-loop read under ``_read_lock`` (does not take the write lock)."""
+
+        def _run() -> T:
+            with self._read_lock:
+                if self._closed:
+                    raise RuntimeError("store is closed")
+                return fn()
+
+        return await asyncio.to_thread(_run)
 
     @property
     def closed(self) -> bool:
         return self._closed
 
     async def close(self) -> None:
-        """Close connections. Safe to call more than once."""
+        """Close connections after in-flight reads finish. Safe to call more than once."""
         if self._closed:
             return
-        self._closed = True
 
         def _close() -> None:
+            # Take read lock first so we wait for in-flight readers, then mark closed.
+            with self._read_lock:
+                self._closed = True
+                self._read_conn.close()
             with self._db_lock:
                 self._conn.close()
-            self._read_conn.close()
 
         await asyncio.to_thread(_close)
 
@@ -421,7 +430,6 @@ class SqliteEventStore:
         )
 
     def _get_projection_write(self, table: str) -> list[dict[str, Any]]:
-        """Write-connection projection read (same txn as append). Lock must be held."""
         cur = self._conn.execute(
             "SELECT data FROM projections WHERE table_name=?", (table,)
         )
@@ -438,7 +446,6 @@ class SqliteEventStore:
     def _upsert_projection_write(
         self, table: str, key: str, data: dict[str, Any]
     ) -> None:
-        """Projection upsert on the write connection (in-txn, already fenced)."""
         self._conn.execute(
             "INSERT INTO projections(table_name, row_key, data) VALUES (?,?,?) "
             "ON CONFLICT(table_name, row_key) DO UPDATE SET data=excluded.data",
@@ -468,7 +475,7 @@ class SqliteEventStore:
     async def upsert_projection(
         self, table: str, key: str, data: dict[str, Any]
     ) -> None:
-        """Fenced projection write via the writer connection (not a free sync path)."""
+        """Fenced projection write via the writer connection."""
 
         def _write() -> None:
             try:

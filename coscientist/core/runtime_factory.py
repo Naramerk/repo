@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -34,6 +35,10 @@ async def open_runtime(
     the journal is re-read and that post-lease snapshot is the sole source for
     HITL re-check and local rebuild (closes the TOCTOU window).
 
+    Acquire runs under ``asyncio.shield``: on cancel we wait for the worker
+    thread to finish, then release if this open acquired the lease (not merely
+    if ``owner_nonce`` was seeded on the constructor with ``acquire=False``).
+
     Any failure after the lease is acquired stops a started writer, releases the
     lease (owner+epoch+nonce), and closes the store. Cleanup catches
     ``BaseException`` so ``CancelledError`` cannot leave the lease held.
@@ -57,9 +62,22 @@ async def open_runtime(
 
     writer: StudyWriter | None = None
     writer_started = False
+    # Only release leases this open_runtime call actually acquired (not seeded nonce).
+    acquired_here = False
     try:
         if acquire:
-            await store.acquire_lease(owner)
+            task = asyncio.create_task(store.acquire_lease(owner))
+            try:
+                await asyncio.shield(task)
+                acquired_here = True
+            except asyncio.CancelledError:
+                # Wait for the worker thread; it may have committed before cancel.
+                try:
+                    await task
+                except BaseException:
+                    pass
+                acquired_here = store.owner == owner and bool(store.owner_nonce)
+                raise
 
         # Authoritative read under the lease — never rebuild from the pre-lease snapshot.
         events = await store.read_all()
@@ -85,9 +103,7 @@ async def open_runtime(
                 await writer.stop()
             except BaseException:
                 log.warning("writer.stop failed during open_runtime cleanup", exc_info=True)
-        # to_thread may have committed the lease before CancelledError reached us —
-        # release based on whether the store actually holds a nonce, not a local flag.
-        if store.owner_nonce is not None:
+        if acquired_here:
             try:
                 await store.release_lease(owner, store.epoch)
             except BaseException:
@@ -97,7 +113,6 @@ async def open_runtime(
         try:
             await store.close()
         except BaseException:
-            # Never mask the original exception that triggered cleanup.
             log.warning("store.close failed during open_runtime cleanup", exc_info=True)
         raise
 
@@ -112,7 +127,6 @@ async def close_runtime(rt: StudyRuntime) -> None:
             if rt.store.owner is not None:
                 await rt.store.release_lease(rt.owner, rt.store.epoch)
         except LeaseLost:
-            # Lease already gone or identity mismatch — still close the store.
             log.warning("release_lease during close_runtime", exc_info=True)
         finally:
             await rt.store.close()

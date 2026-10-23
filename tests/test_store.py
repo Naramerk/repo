@@ -417,3 +417,94 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(
     assert read_finished_during_write
     rt.store.write_delay_s = 0.0
     await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_append_rejects_datetime_in_payload(tmp_path: Path, clock: FakeClock):
+    """Append with datetime in payload raises at json.dumps (strict; no stringification).
+
+    Pre-sets payload_digest so the failure is the store's JSON encode, not JCS digest.
+    """
+    store = SqliteEventStore("st_json2", tmp_path / "json2.db", clock=clock)
+    await store.acquire_lease("o1")
+    with pytest.raises(TypeError, match="not JSON serializable|datetime"):
+        await store.append(
+            EventEnvelope(
+                study_id="st_json2",
+                type="StudyCreated",
+                entity_key="st_json2",
+                idem_key="StudyCreated:st_json2",
+                payload={"study_id": "st_json2", "created_at": clock.now()},
+                ts=clock.now(),
+                # Skip digest so we exercise json.dumps in _insert_one.
+                payload_digest="a" * 64,
+            )
+        )
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_read_connection_rejects_writes(tmp_path: Path, clock: FakeClock):
+    """The WAL read connection is opened read-only; writes must fail."""
+    import sqlite3
+
+    store = SqliteEventStore("st_ro", tmp_path / "ro.db", clock=clock)
+    await store.acquire_lease("o1")
+    with pytest.raises(sqlite3.OperationalError, match="readonly|read-only|READ"):
+        store._read_conn.execute(  # noqa: SLF001
+            "INSERT INTO projections(table_name, row_key, data) VALUES (?,?,?)",
+            ("t", "k", "{}"),
+        )
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_reads_under_read_lock(tmp_path: Path, clock: FakeClock):
+    """Many concurrent read_all/get_projection calls succeed under the read lock."""
+    rt = await open_runtime(tmp_path, "st_cread", clock=clock)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(minutes=30),
+        sid="st_cread",
+    )
+
+    async def _one(i: int) -> int:
+        events = await rt.store.read_all()
+        proj = await rt.store.get_projection("tasks")
+        assert events
+        assert isinstance(proj, list)
+        return i
+
+    results = await asyncio.gather(*[_one(i) for i in range(32)])
+    assert results == list(range(32))
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_close_waits_for_in_flight_read(tmp_path: Path, clock: FakeClock):
+    """close() takes the read lock after in-flight readers finish."""
+    import threading
+
+    store = SqliteEventStore("st_cwait", tmp_path / "cwait.db", clock=clock)
+    await store.acquire_lease("o1")
+    entered = threading.Event()
+    release_read = threading.Event()
+
+    async def hold_read_lock() -> None:
+        def _blocked() -> None:
+            with store._read_lock:  # noqa: SLF001
+                entered.set()
+                release_read.wait(timeout=5.0)
+
+        await asyncio.to_thread(_blocked)
+
+    read_task = asyncio.create_task(hold_read_lock())
+    assert await asyncio.to_thread(entered.wait, 5.0)
+    close_task = asyncio.create_task(store.close())
+    await asyncio.sleep(0.05)
+    assert not close_task.done(), "close must wait for the in-flight read lock holder"
+    release_read.set()
+    await asyncio.wait_for(asyncio.gather(read_task, close_task), timeout=3.0)
+    assert store.closed

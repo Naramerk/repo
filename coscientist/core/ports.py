@@ -11,6 +11,9 @@ from coscientist.core.events import EventEnvelope
 
 class EventStore(Protocol):
     study_id: str
+    owner: str | None
+    epoch: int
+    owner_nonce: str | None
 
     async def append(self, event: EventEnvelope) -> EventEnvelope: ...
 
