@@ -279,33 +279,48 @@ class SqliteEventStore:
         return await self._to_thread(lambda: self._append_locked(event))
 
     def _study_is_finalized(self) -> bool:
-        if self._finalized_cached is not None:
-            return self._finalized_cached
+        """Return whether the study has a StudyFinalized in projections.
+
+        Only ``True`` is cached. Caching ``False`` is unsafe: a same-batch
+        ``StudyFinalized`` (or peer) can flip projections before the next
+        append check, and a stale False would skip I3.
+        """
+        if self._finalized_cached is True:
+            return True
         row = self._get_row_write("meta", self.study_id)
         if row and row.get("finalized"):
             self._finalized_cached = True
             return True
         study = self._get_row_write("studies", self.study_id)
-        found = bool(study and study.get("finalized"))
-        self._finalized_cached = found  # cleared on acquire_lease
-        return found
+        if study and study.get("finalized"):
+            self._finalized_cached = True
+            return True
+        return False
 
     def _reject_if_finalized(self, event_type: str) -> None:
         if reject_write_after_finalized(self._study_is_finalized(), event_type):
             bump_late_write_rejected(event_type)
             raise StudyClosedError(self.study_id, event_type)
 
-    def _ensure_append_allowed(self, event: EventEnvelope) -> None:
+    def _ensure_append_allowed(
+        self, event: EventEnvelope, *, batch_finalized: bool = False
+    ) -> None:
         """I3: after StudyFinalized, reject writes — except identical finalize retry.
 
         A study has exactly one StudyFinalized. Idempotency is checked *before*
         StudyClosedError so a crash/timeout retry with the same idem_key+payload
         returns the recorded outcome instead of failing closed.
+
+        ``batch_finalized`` covers an earlier StudyFinalized in the same
+        ``append_many`` transaction (projections may not be visible via cache yet).
         """
+        finalized = batch_finalized or self._study_is_finalized()
         if event.type != "StudyFinalized":
-            self._reject_if_finalized(event.type)
+            if finalized:
+                bump_late_write_rejected(event.type)
+                raise StudyClosedError(self.study_id, event.type)
             return
-        if not self._study_is_finalized():
+        if not finalized:
             return
         digest = event.payload_digest or payload_digest(event.payload)
         existing = self._conn.execute(
@@ -324,13 +339,18 @@ class SqliteEventStore:
         # Identical retry: fall through to _insert_one → Idempotent / existing.
 
     def _append_locked(self, event: EventEnvelope) -> EventEnvelope:
+        mutated = False
         try:
             self._fence()
             self._ensure_append_allowed(event)
             stored, idem = self._insert_one(event)
+            mutated = True
             self._conn.commit()
         except Exception:
             self._conn.rollback()
+            # Insert may have applied finalized projection in-txn; drop cache.
+            if mutated:
+                self._finalized_cached = None
             raise
         if idem is not None:
             raise Idempotent(idem.seq)
@@ -371,7 +391,10 @@ class SqliteEventStore:
         source_fetched_cap_id: str | None = None,
     ) -> list[EventEnvelope]:
         out: list[EventEnvelope] = []
-        saw_finalized = False
+        # In-batch closed flag: first StudyFinalized closes the rest of the batch
+        # even before commit / before _finalized_cached flips to True.
+        batch_finalized = self._study_is_finalized()
+        mutated = False
         try:
             self._fence()
             if require_open_attempt is not None:
@@ -380,7 +403,7 @@ class SqliteEventStore:
                     raise AttemptClosedError(require_open_attempt)
             for ev in events:
                 # First StudyFinalized is allowed; after that only identical retry.
-                self._ensure_append_allowed(ev)
+                self._ensure_append_allowed(ev, batch_finalized=batch_finalized)
                 if ev.type == "SourceFetched":
                     # Must present a capability id whose write permit was granted
                     # by effects.verify (consume). Bool bypass flags are gone.
@@ -399,18 +422,24 @@ class SqliteEventStore:
                         study_id=str(ev.study_id or ""),
                     )
                 stored, idem = self._insert_one(ev)
+                mutated = True
                 if idem is not None:
                     out.append(self._fetch_by_idem(ev.idem_key))
+                    if ev.type == "StudyFinalized":
+                        batch_finalized = True
                     continue
                 assert stored is not None
                 if ev.type == "StudyFinalized":
-                    saw_finalized = True
+                    batch_finalized = True
                 out.append(stored)
             self._conn.commit()
         except Exception:
             self._conn.rollback()
+            # Rolled-back insert may have applied finalized projection in-txn.
+            if mutated:
+                self._finalized_cached = None
             raise
-        if saw_finalized:
+        if batch_finalized:
             self._finalized_cached = True
         return out
 

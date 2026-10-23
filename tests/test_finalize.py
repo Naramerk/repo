@@ -882,7 +882,19 @@ async def test_identical_finalize_retry_returns_original(tmp_path, clock):
     key = make_idem("StudyFinalized", sid)
     first = _study_finalized_envelope(sid, clock, idem_key=key, payload=payload)
     stored = (await rt.store.append_many([first]))[0]
-    assert rt.store._finalized_cached is True
+    # Late non-finalize write rejected ⇒ study is closed (behavior, not cache).
+    with pytest.raises(StudyClosedError):
+        await rt.store.append(
+            EventEnvelope(
+                study_id=sid,
+                type="TaskDone",
+                entity_key="late",
+                idem_key=make_idem("TaskDone", "late"),
+                payload={"task_id": "late", "outcome": "FAILED", "reason": "failed"},
+                ts=clock.now(),
+                schema_version=2,
+            )
+        )
     # Writer path (append_many): returns existing envelope.
     out = await rt.store.append_many(
         [_study_finalized_envelope(sid, clock, idem_key=key, payload=payload)]
@@ -933,6 +945,148 @@ async def test_identical_finalize_retry_after_restart(tmp_path, clock):
     fins = [e for e in await rt2.store.read_all() if e.type == "StudyFinalized"]
     assert len(fins) == 1
     await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("warm_false_cache", [False, True])
+async def test_append_many_two_study_finalized_rejects_second(
+    tmp_path, clock, warm_false_cache
+):
+    """B1: append_many([SF(k1), SF(k2)]) must not commit two StudyFinalized."""
+    sid = f"st_sf_batch2_{int(warm_false_cache)}"
+    rt = await _boot(tmp_path, clock, sid)
+    await _skip_all(rt)
+    if warm_false_cache:
+        # Stale False must not disable same-batch I3 (only True is trusted).
+        rt.store._finalized_cached = False  # noqa: SLF001
+    sf1 = _study_finalized_envelope(
+        sid, clock, idem_key=f"StudyFinalized:{sid}:a", payload=_fin_payload()
+    )
+    sf2 = _study_finalized_envelope(
+        sid,
+        clock,
+        idem_key=f"StudyFinalized:{sid}:b",
+        payload=_fin_payload(trigger="cancel"),
+    )
+    with pytest.raises(StudyClosedError):
+        await rt.store.append_many([sf1, sf2])
+    events = await rt.store.read_all()
+    assert [e for e in events if e.type == "StudyFinalized"] == []
+    # Single SF still works after the rolled-back batch.
+    stored = (await rt.store.append_many([sf1]))[0]
+    assert stored.type == "StudyFinalized"
+    assert len([e for e in await rt.store.read_all() if e.type == "StudyFinalized"]) == 1
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("warm_false_cache", [False, True])
+async def test_append_many_study_finalized_then_other_rejects(
+    tmp_path, clock, warm_false_cache
+):
+    """B1: append_many([SF, TaskCreated]) must not write past finalize in-batch."""
+    sid = f"st_sf_batch_other_{int(warm_false_cache)}"
+    rt = await _boot(tmp_path, clock, sid)
+    await _skip_all(rt)
+    n_before = len(await rt.store.read_all())
+    if warm_false_cache:
+        rt.store._finalized_cached = False  # noqa: SLF001
+    sf = _study_finalized_envelope(
+        sid, clock, idem_key=make_idem("StudyFinalized", sid), payload=_fin_payload()
+    )
+    late = EventEnvelope(
+        study_id=sid,
+        type="TaskCreated",
+        entity_key=f"{sid}/X",
+        idem_key=make_idem("TaskCreated", sid, "X"),
+        payload={
+            "task_id": f"{sid}/X",
+            "kind": "experiment",
+            "spec": {
+                "task_key": "X",
+                "title": "x",
+                "goal": "g",
+                "route": "experiment",
+            },
+            "state": "PENDING",
+            "deadline": clock.now().isoformat(),
+        },
+        ts=clock.now(),
+        schema_version=1,
+    )
+    with pytest.raises(StudyClosedError):
+        await rt.store.append_many([sf, late])
+    events = await rt.store.read_all()
+    assert len(events) == n_before
+    assert not any(e.type == "StudyFinalized" for e in events)
+    assert not any(e.type == "TaskCreated" and e.entity_key.endswith("/X") for e in events)
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_finalize_exactly_one(tmp_path, clock):
+    """Concurrent finalize() calls leave exactly one StudyFinalized."""
+    import asyncio
+
+    sid = "st_sf_concurrent"
+    rt = await _boot(tmp_path, clock, sid)
+    await _skip_all(rt)
+    await asyncio.gather(
+        rt.finalize(trigger="all_done"),
+        rt.finalize(trigger="deadline"),
+        rt.finalize(trigger="cancel"),
+    )
+    fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    assert len(fins) == 1
+    assert rt._finalized
+    assert rt.view().phase == "closed"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_finalize_study_closed_with_event_is_success(
+    tmp_path, clock, monkeypatch
+):
+    """StudyClosedError on append succeeds when StudyFinalized already exists."""
+    sid = "st_sf_closed_ok"
+    rt = await _boot(tmp_path, clock, sid)
+    await _skip_all(rt)
+    key = make_idem("StudyFinalized", sid)
+    await rt.store.append_many(
+        [_study_finalized_envelope(sid, clock, idem_key=key, payload=_fin_payload())]
+    )
+    assert not rt._finalized
+
+    async def boom_closed(_events):
+        raise StudyClosedError(sid, "StudyFinalized")
+
+    monkeypatch.setattr(rt, "_append", boom_closed)
+    await rt.finalize(trigger="cancel")
+    assert rt._finalized
+    assert rt.view().phase == "closed"
+    assert len([e for e in await rt.store.read_all() if e.type == "StudyFinalized"]) == 1
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_finalize_study_closed_without_event_reraises(
+    tmp_path, clock, monkeypatch
+):
+    """StudyClosedError with no StudyFinalized in store must not mark finalized."""
+    sid = "st_sf_closed_neg"
+    rt = await _boot(tmp_path, clock, sid)
+    await _skip_all(rt)
+
+    async def boom_closed(_events):
+        raise StudyClosedError(sid, "StudyFinalized")
+
+    monkeypatch.setattr(rt, "_append", boom_closed)
+    with pytest.raises(StudyClosedError):
+        await rt.finalize(trigger="all_done")
+    assert not rt._finalized
+    assert not any(e.type == "StudyFinalized" for e in await rt.store.read_all())
+    assert rt.view().phase != "closed"
+    await close_runtime(rt)
 
 
 @pytest.mark.asyncio
@@ -1215,7 +1369,8 @@ async def test_finalized_cache_reset_on_lease_reacquire(tmp_path, clock):
     store_a = SqliteEventStore(sid, db, clock=clock, owner="a", lease_ttl_s=30)
     await store_a.acquire_lease("a")
     assert store_a._study_is_finalized() is False
-    assert store_a._finalized_cached is False
+    # False is not cached (only True is); probe leaves cache unset.
+    assert store_a._finalized_cached is not True
 
     # Expire A's lease; B acquires and finalizes.
     clock.advance(timedelta(seconds=31))
@@ -1246,8 +1401,8 @@ async def test_finalized_cache_reset_on_lease_reacquire(tmp_path, clock):
     await store_b.release_lease("b", store_b.epoch)
     await store_b.close()
 
-    # A still holds stale False until acquire_lease clears it.
-    assert store_a._finalized_cached is False
+    # A may hold a stale non-True cache until acquire_lease clears it.
+    assert store_a._finalized_cached is not True
     clock.advance(timedelta(seconds=31))
     await store_a.acquire_lease("a")
     assert store_a._finalized_cached is None
