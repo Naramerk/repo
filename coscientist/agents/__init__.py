@@ -2,5 +2,6 @@
 
 Agents must call tools only via ``coscientist.tools.invoke_tool``. Direct
 ``Tool.call``, ``register_tool``, and imports of ``tools.contract`` /
-``core.tool_registry`` are forbidden (import-linter + AST tests).
+``core.tool_registry`` / ``core.dispose`` / ``core.artifact_stamp`` are
+forbidden (import-linter + AST tests).
 """

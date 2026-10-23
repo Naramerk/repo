@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from coscientist.core.digest import sha256_hex
 from coscientist.core.domain import (
     Artifact,
+    ArtifactKind,
     ArtifactProducer,
     ArtifactRole,
     FsIsolation,
@@ -82,6 +83,7 @@ class LocalArtifactStore:
         producer: ArtifactProducer,
         schema_ref: str | None = None,
         role: str | None = None,
+        kind: str | None = None,
         attempt_closed: bool = False,
         net_isolation: NetIsolation | None = None,
         fs_isolation: FsIsolation | None = None,
@@ -102,6 +104,11 @@ class LocalArtifactStore:
             inferred = role
         else:
             inferred = media_role
+        # kind is core-stamped only (experiment_design / contradiction_map).
+        stamped_kind = cast(
+            ArtifactKind | None,
+            kind if kind in ("experiment_design", "contradiction_map") else None,
+        )
         art = Artifact(
             artifact_id=artifact_id,
             name=name,
@@ -112,6 +119,7 @@ class LocalArtifactStore:
             produced_by=produced_by,
             schema_ref=schema_ref,
             role=inferred,  # type: ignore[arg-type]
+            kind=stamped_kind,
             producer=producer,
             net_isolation=net_isolation if producer == "sandbox" else None,
             fs_isolation=fs_isolation if producer == "sandbox" else None,
@@ -133,11 +141,17 @@ class LocalArtifactStore:
         media_type: str,
         schema_ref: str | None = None,
         role: str | None = None,
+        kind: str | None = None,
         attempt_closed: bool = False,
         tainted: bool = False,
         context_tainted: bool = False,
     ) -> Artifact:
-        """Agent-controlled path — always ``producer=agent`` (never trusted)."""
+        """Agent-controlled path — always ``producer=agent`` (never trusted).
+
+        ``kind`` is ignored here (agent cannot stamp experiment_design); use
+        ``put_core`` / executor OutputSpec stamping.
+        """
+        del kind  # agent cannot forge artifact.kind
         return self._store(
             content,
             produced_by,
@@ -145,6 +159,7 @@ class LocalArtifactStore:
             media_type=media_type,
             schema_ref=schema_ref,
             role=role,
+            kind=None,
             attempt_closed=attempt_closed,
             producer="agent",
             tainted=tainted,
@@ -233,6 +248,7 @@ class LocalArtifactStore:
         media_type: str,
         schema_ref: str | None = None,
         role: str | None = None,
+        kind: str | None = None,
         attempt_closed: bool = False,
         context_tainted: bool = False,
         tainted: bool = False,
@@ -245,6 +261,7 @@ class LocalArtifactStore:
             media_type=media_type,
             schema_ref=schema_ref,
             role=role,
+            kind=kind,
             attempt_closed=attempt_closed,
             producer="core",
             tainted=tainted,

@@ -91,6 +91,8 @@ class StudyRuntime(CoreStudyRuntime, HitlForkMixin):
                 study=self.study,
                 results=getattr(self, "results", None),
                 artifact_lookup=lookup if callable(lookup) else None,
+                question_disposals=getattr(self, "question_disposals", None),
+                journal_kinds=getattr(self, "artifact_kinds", None),
             )
             if self.plans
             else None

@@ -76,6 +76,14 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         # True while finalize_loop_internal_error closes open work —
         # nested _append(TaskDone) must not re-enter expand/foreach/loop hooks.
         self._finalizing = False
+        self.question_disposals: dict[str, dict] = {}
+        # PR15: ArtifactRegistered(stamped) → artifact_id → kind (journal authority).
+        self.artifact_kinds: dict[str, str] = {}
+        # PR15: folded QuestionDisposeRejected rows (also in contributing_reasons).
+        self._disposal_rejects: list[dict] = []
+        # PR15: stamped kind with missing meta on replay (tainted / internal_error).
+        self._stamp_meta_missing: list[dict] = []
+        self._pending_kind_stamps: list[tuple[str, str]] = []
         self._study_cancelled = False
         self._budget_exceeded = False
         self._intake_refusal: IntakeRefuse | None = None
@@ -152,11 +160,16 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             review_statuses=review_statuses,
             get_graph=lambda: self.graph,
             get_results=lambda: self.results,
+            get_artifact_kinds=lambda: self.artifact_kinds,
             max_attempts=self.max_attempts,
             on_budget_debit=make_budget_debit_cb(self),
         )
         self.artifacts = artifacts
         self.catalog = catalog
+        # Fold may have deferred kind stamps (open_runtime projects before bind).
+        flush = getattr(self, "_flush_pending_kind_stamps", None)
+        if callable(flush):
+            flush()
         self.bind_executor(ex)
         # Executor writes via writer (not StudyRuntime._append); wrap to run H-g.
         orig_append = ex._append
@@ -252,6 +265,8 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                 results=self.results,
                 artifact_lookup=lookup if callable(lookup) else None,
                 loop_capped_questions=capped_scope_questions(self),
+                question_disposals=getattr(self, "question_disposals", None),
+                journal_kinds=getattr(self, "artifact_kinds", None),
             )
         ed = self.study.effective_deadline() if self.study else None
         ftypes = None

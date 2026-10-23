@@ -927,8 +927,10 @@ def test_upcast_taskcreated_v10_and_plan_expanded_v2():
             },
         },
     )
-    assert v == 11
+    # PR13 rubric (v10) + PR11 loop (v11) + PR15 kind (v12) + evidence_kind (v13).
+    assert v == 13
     assert p["spec"]["expected_outputs"][0]["rubric"] is None
+    assert p["spec"]["expected_outputs"][0]["kind"] is None
     v2, p2 = upcast(
         "PlanExpanded",
         1,
@@ -943,9 +945,10 @@ def test_upcast_taskcreated_v10_and_plan_expanded_v2():
             "added_questions": [{"id": "Q1", "text": "q"}],
         },
     )
-    assert v2 == 4  # PR16 PlanExpanded v4 after PR11 loop v3
+    assert v2 == 5  # PR15 kind v5 after PR16 decomposes v4
     assert p2["added_tasks"][0]["expected_outputs"][0]["rubric"] is None
     assert p2["added_tasks"][0]["loop_id"] is None
+    assert p2["added_tasks"][0]["expected_outputs"][0]["kind"] is None
     assert p2["added_questions"][0]["final_type"] == "verdict"
     assert p2.get("rollup") == "all"
     # Legacy unknown final_type coerced to verdict (current unknown → PlanRefused).
@@ -958,7 +961,7 @@ def test_upcast_taskcreated_v10_and_plan_expanded_v2():
             "tasks": [],
         },
     )
-    assert v3 == 10  # PR16 PlanAccepted v10 after PR11 loops v9
+    assert v3 == 11  # PR15 kind v11 after PR16 decomposes v10
     assert p3["questions"][0]["final_type"] == "verdict"
     assert p3.get("loops") == []
     assert p3.get("rollup") == "all"

@@ -982,20 +982,33 @@ def hypothesis_verdict(
     refutation_priority: bool = True,
     supported_needed: int = 2,
     confirmations_needed: int = 1,
-) -> tuple[str, bool, str | None]:
+) -> tuple[str, bool, bool, str | None]:
     """Hypothesis/question verdict (SPEC §5).
 
     ``supported_needed`` (≥2) is the severe-support threshold. ``confirmations_needed``
     is retained for PR8 snapshot ``k`` compat and is not the support gate.
-    Returns ``(verdict, by_literature, rule)``.
+    Returns ``(verdict, by_literature, by_theory, rule)``.
+
+    PR15 derivation: review-only derivation never feeds k_sup/k_ref; any
+    derivation claim sets ``by_theory`` (marked «теоретически»). When only
+    review-only derivation is present → ``inconclusive``.
     """
+    from coscientist.core.derivation import (
+        apply_derivation_ceiling,
+        by_theory_mark,
+        derivation_caps_inconclusive,
+    )
+
     del confirmations_needed  # PR8 k — not used for supported gate
     del any_experiment_done
     about = list(claims)
     if not about:
-        return "untested", False, "no_counted"
+        return "untested", False, False, "no_counted"
 
     counted = [c for c in about if claim_counts_for_verdict(c)]
+    theory = by_theory_mark(list(about))
+    if not counted and derivation_caps_inconclusive(list(about)):
+        return "inconclusive", False, True, "derivation_review_only"
 
     # Symmetric countability: non-countable inconsistent never counts toward k_ref.
     inconsistent = distinct_by_key(
@@ -1036,35 +1049,41 @@ def hypothesis_verdict(
     unresolved = [c for c in about if _refute_unresolved(c)]
     idle_unresolved = any(_timeout_kind(c) == "idle_timeout" for c in unresolved)
 
+    def _ret(v: str, rule: str | None) -> tuple[str, bool, bool, str | None]:
+        capped = apply_derivation_ceiling(v, list(about))
+        if capped != v:
+            return capped, False, theory, "derivation_review_only"
+        return capped, False, theory, rule
+
     if n_inc >= k_ref and refutation_priority:
-        return "refuted", False, "k_ref"
+        return _ret("refuted", "k_ref")
     if n_inc >= k_ref and not refutation_priority:
         if consistent_severe:
-            return "inconclusive", False, "k_ref"
-        return "refuted", False, "k_ref"
+            return _ret("inconclusive", "k_ref")
+        return _ret("refuted", "k_ref")
     if n_inc > 0:
-        return "inconclusive", False, "inc_below_k_ref"
+        return _ret("inconclusive", "inc_below_k_ref")
     # Guest timeout on a refute-role check hard-blocks supported (never k_sup).
     if unresolved and idle_unresolved:
-        return "untestable_by_agent", False, "idle_timeout"
+        return _ret("untestable_by_agent", "idle_timeout")
     if n_con >= k_sup and any(refute_intent_counts(c) for c in consistent_severe):
         if unresolved:
-            return "inconclusive", False, "refute_unresolved"
-        return "supported", False, "support_min"
+            return _ret("inconclusive", "refute_unresolved")
+        return _ret("supported", "support_min")
     if n_con >= 1:
         if unresolved and idle_unresolved:
-            return "untestable_by_agent", False, "idle_timeout"
-        return "survived", False, "single_severe"
+            return _ret("untestable_by_agent", "idle_timeout")
+        return _ret("survived", "single_severe")
     if unresolved and idle_unresolved:
-        return "untestable_by_agent", False, "idle_timeout"
+        return _ret("untestable_by_agent", "idle_timeout")
     if unresolved:
-        return "inconclusive", False, "refute_unresolved"
+        return _ret("inconclusive", "refute_unresolved")
     if counted:
-        return "inconclusive", False, "no_counted"
+        return _ret("inconclusive", "no_counted")
     if any(effective_validity(c) == "invalid" for c in about):
-        return "inconclusive", False, "validity_failed"
+        return _ret("inconclusive", "validity_failed")
     # Only excluded (stub/partial/lit/…) claims — inconclusive, not untested.
-    return "inconclusive", False, "no_counted"
+    return _ret("inconclusive", "no_counted")
 
 
 def verdict(
@@ -1079,9 +1098,9 @@ def verdict(
     """Compat wrapper matching ``rules.verdict`` return shape.
 
     ``k`` is PR8 ``confirmations_needed`` (snapshot field); support gate uses
-    ``supported_needed``.
+    ``supported_needed``. ``by_theory`` is available via ``hypothesis_verdict``.
     """
-    v, by_lit, _rule = hypothesis_verdict(
+    v, by_lit, _by_theory, _rule = hypothesis_verdict(
         claims,
         any_experiment_done,
         refutations_needed=refutations_needed,

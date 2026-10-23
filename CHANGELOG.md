@@ -2,12 +2,23 @@
 
 ## Unreleased
 
+### M1 PR15
+### M1 PR15
+- `needs_more_data` + required `artifact(role=report, kind=experiment_design)` with rubric ids `hypothesis` / `variables` / `sample_size` / `success_criterion` (DESIGN_M1 §6.4). Event `QuestionDisposed` (v1; **first-wins**); rejected disposals → journaled `QuestionDisposeRejected` (`_note_reject` only after successful append; fold + `contributing_reasons`).
+- Explicit `OutputSpec.kind` + `OutputSpec.evidence_kind` (PlanValidator; rubric ids never imply evidence_kind). Writers: TaskCreated **v13** / PlanAccepted **v11** / PlanExpanded **v5** continuous after #29 PA10/PE4 (`bd413e0`). StudyCreated **v10**. No duplicate `register_upcaster`.
+- Fold-only `apply_kind_stamp` (`_stamp_kind` private); missing meta on replay → `_stamp_meta_missing` tainted/internal_error (study still opens → StudyFinalized). `design_artifact_ok` never trusts `meta.kind` alone.
+- Honest terminals (`needs_more_data` / `infeasible` / `ill_posed`) stamp `verdict` for PR16 rollup clamp.
+- Projections: dirty-key `_put` for `question_disposals` / `disposal_rejects`; equivalence seed covers decomposes + dispose tables.
+- Derivation: review-only never counts; only claim-bound executable CodeCheck MET lifts. `by_theory`. Import-linter: agents ↛ dispose / artifact_stamp.
+- **PR8 debt:** `terminal_reason=infeasible` still needs PR8 ill_posed wiring.
+
 ### M1 PR16
 - `decomposes` acyclicity (self-loop + cycle) on accept/expand writes; `Plan.rollup` (`all|any|majority|rubric`) + `Plan.subquestions` / `QuestionSpec.origin` (`explicit` = PlanOut.subquestions; `implicit` = parent_id without subquestions listing; `emergent` = PlanExpanded origin=emergent).
 - PlanValidator: named subquestions; leaf coverage (task or disposition hook); frozen rubric item `decomposition_covers`; depth ≤ `max_depth`; question count ≤ `max_tasks`.
 - Parent disposition via `apply_rollup` in `dispositions()` (after PR11 loop-cap tagging). Strict majority `n//2+1` (1:1 / 2:2 → no majority). Rollup never **raises** a parent above its PR 8b claims-based verdict (may lower/keep); `expand_graph` cycle check uses the full existing decomposes tree. Report section «Дерево подзадач».
-- Upcasters (rebased on #24+#26+#27 / main `d88f96b`): PlanAccepted **v10** (after loops v9); PlanExpanded **v4** (after loop fields v3). StudyCreated unchanged (v10; #23 takes v11). Open #28 stacks PlanAccepted **v11** / PlanExpanded **v5** after this PR — whichever merges second renumbers. `GraphEdgeAdded` → `graph_edges` in `_affected_tables` for #27 dirty-key projection; load-writes seed covers decomposes edges. No duplicate `register_upcaster`.
+- Upcasters: PlanAccepted **v10** (after loops v9); PlanExpanded **v4** (after loop fields v3). StudyCreated unchanged (v10; #23 takes v11). `#28` stacks PlanAccepted **v11** / PlanExpanded **v5**. `GraphEdgeAdded` → `graph_edges` in `_affected_tables` for #27 dirty-key projection; load-writes seed covers decomposes edges. No duplicate `register_upcaster`.
 - Rollup clamp: terminal own = ``disposition != not_attempted`` or ``verdict is not None`` (covers PR11 ``iteration_cap`` without ``verdict``); incomplete/no-majority/cycle never wipe own terminal; cyclic decomposes localized to subtree (not study-wide wipe).
+
 
 ### M1 PR14 follow-up
 - `append_source_fetched`: try/finally releases write permit if append fails after verify; `release_source_fetched_write_permit` raises when no handler is registered.
@@ -17,7 +28,7 @@
 ### Perf / journal write SLO
 - Restored honest DESIGN §3.5a measurement: 20 parallel attempts on real-disk `tmp_path`, full `StudyWriter` path (queue → `to_thread` → fence/insert/commit), `writer.latency_samples_ms`, 50ms p99, no retries/skips.
 - **Root cause (why only rt_exp tailed):** `projections.apply_event` rewrote *every* row in affected tables on each append (thousands of upserts per load) on the fsync-critical path. Experimental `_project_local` (HITL fold) made the writer queue wait longer between commits, so the O(n²) upsert tax showed up as rt_exp p99 spikes (165–356ms) while rt_core stayed ~6ms. Fix: load only needed tables and upsert keys ``_put`` marks dirty (ContextVar — not `id(row)`). Local measure: dirty-keys alone → p99 ~2–3ms for both runtimes; `asyncio.sleep(0)` after append was **not** required and is omitted so in-memory projection stays seq-ordered with the durable batch.
-- **Behavior:** `SourceFetched` `apply_event` now loads `fetch_calls` so journaled pairs land in the SQLite projection (previously the truncated table list left pairs invisible on the write path). Rebase on #26 keeps `AttemptTainted` → `(attempts, fetch_calls, fetch_integrity)`, `FetchIntegrityRaised`, `_row_key` for `fetch_integrity`, and `FetchToolReclassified` fold handling (no `QuestionDisposed` stub — that belongs in #28).
+- **Behavior:** `SourceFetched` `apply_event` now loads `fetch_calls` so journaled pairs land in the SQLite projection (previously the truncated table list left pairs invisible on the write path). Rebase on #26 keeps `AttemptTainted` → `(attempts, fetch_calls, fetch_integrity)`, `FetchIntegrityRaised`, `_row_key` for `fetch_integrity`, and `FetchToolReclassified` fold handling. `#28` adds `QuestionDisposed` / `disposal_rejects` via dirty-key `_put`.
 - Equivalence: after the 20-parallel load plus seeded AttemptTainted/SourceFetched/FetchIntegrityRaised/HitlOpened, SQLite projections match `fold_events` with non-empty `source_fetches` / `fetch_calls` / `fetch_integrity` / `hitl_requests`. Canon is strict JSON (no `default=str`).
 - Removed store commit-only / shm / wal-autocheckpoint / GC test knobs (those hollowed the SLO).
 

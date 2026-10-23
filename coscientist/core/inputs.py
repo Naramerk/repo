@@ -372,6 +372,8 @@ def claim_nodes_from_attempt(
         attrs["evidence_kind"] = core.get("evidence_kind", "computational")
         attrs["frozen"] = bool(core.get("frozen", False))
         attrs["lit_own_criterion"] = bool(core.get("lit_own_criterion", False))
+        if "derivation_executable" in core:
+            attrs["derivation_executable"] = bool(core.get("derivation_executable"))
         attrs["accepted"] = bool(core.get("accepted", False))
         attrs["validity_ok"] = bool(core.get("validity_ok", True))
         role = core.get("check_role", "unknown")

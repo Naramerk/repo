@@ -20,7 +20,7 @@ from coscientist.core.ids import (
     hypothesis_node_id,
     question_node_id,
 )
-from coscientist.core.rules import priority_refuted_support_note, verdict
+from coscientist.core.rules import priority_refuted_support_note
 from coscientist.core.stance import DEFAULT_TESTS_INTENT, TestsIntent, claim_stance
 
 # Agent-supplied fields only. Counting controls (criterion_status, frozen,
@@ -68,6 +68,7 @@ _CORE_CLAIM_ATTRS: frozenset[str] = frozenset(
         "alpha",
         "refute_unresolved",
         "timeout_kind",
+        "derivation_executable",
     }
 )
 
@@ -93,6 +94,8 @@ class RuntimeClaim:
     attempt_id: str = ""
     artifact_id: str = ""
     lit_own_criterion: bool = False
+    # M1 PR15: derivation with executable CodeCheck MET lifts inconclusive ceiling.
+    derivation_executable: bool = False
     intent: TestsIntent = DEFAULT_TESTS_INTENT
     criterion_frozen_at_seq: int | None = None
     first_cited_evidence_seq: int | None = None
@@ -147,12 +150,18 @@ class RuntimeClaim:
     def is_lit(self) -> bool:
         return self.evidence_kind == "literature"
 
+    @property
+    def is_derivation(self) -> bool:
+        return self.evidence_kind == "derivation"
+
     def counts(self) -> bool:
-        """PR8b/PR9 counting filter: real ∧ valid ∧ consistent|inconsistent ∧ not lit.
+        """PR8b/PR9/PR15 counting filter: real ∧ valid ∧ consistent|inconsistent.
 
         Stubs/partials are excluded **before** counting (no provenance ceiling).
-        Literature never counts. Validity failures never count.
-        PR9/C10: claims whose target (or checked_against) is superseded are out.
+        Literature never counts. Review-only derivation never counts (DESIGN_M1
+        §6.6); only derivation with a real executable CodeCheck MET feeds
+        k_sup/k_ref. Validity failures never count. PR9/C10: claims whose
+        target (or checked_against) is superseded are out.
         """
         if self.exclusion_reason == "superseded":
             return False
@@ -160,7 +169,11 @@ class RuntimeClaim:
             return False
         if self.provenance != "real":
             return False
-        if self.is_lit or self.evidence_kind not in ("computational", "experimental"):
+        if self.is_lit:
+            return False
+        if self.evidence_kind not in ("computational", "experimental", "derivation"):
+            return False
+        if self.is_derivation and not self.derivation_executable:
             return False
         from coscientist.core.verdict import effective_outcome
 
@@ -534,12 +547,9 @@ def runtime_claim_from_node(
         if frozen is None:
             return None, "bad_frozen"
         ek = _coerce_str(attrs.get("evidence_kind"))
-        if ek is None or ek not in (
-            "computational",
-            "experimental",
-            "literature",
-            "expert",
-        ):
+        from coscientist.core.derivation import VALID_EVIDENCE_KINDS
+
+        if ek is None or ek not in VALID_EVIDENCE_KINDS:
             return None, "bad_evidence_kind"
         lit_own = _coerce_bool(attrs.get("lit_own_criterion"))
         if lit_own is None:
@@ -628,6 +638,7 @@ def runtime_claim_from_node(
             attempt_id=aid or node.node_id,
             artifact_id=art,
             lit_own_criterion=lit_own,
+            derivation_executable=bool(attrs.get("derivation_executable")),
             intent=intent,
             criterion_frozen_at_seq=frozen_seq,
             first_cited_evidence_seq=first_ev,
@@ -823,13 +834,15 @@ def compute_verdict_snapshots(
         # listed in excluded_claims and do not rewrite a normal verdict.
         counting = [c for c in claims if c.counts()]
         excluded = excluded_claims_report(claims)
-        v, by_lit = verdict(
+        from coscientist.core.verdict import hypothesis_verdict as _hyp_v
+
+        v, by_lit, by_theory, _rule = _hyp_v(
             claims,
             any_experiment_done,
-            conf_k,
             refutations_needed=k_ref,
             refutation_priority=priority,
             supported_needed=supp_k,
+            confirmations_needed=conf_k,
         )
         validity_excl = [e for e in excluded if e["reason"] == "validity_failed"]
         # Only when no valid claims remain: inconclusive + validity_failed.
@@ -847,6 +860,7 @@ def compute_verdict_snapshots(
             "target_kind": kind,
             "verdict": v,
             "by_literature": by_lit,
+            "by_theory": by_theory,
             "provenance": source,
             "refutations_needed": k_ref,
             "refutation_priority": priority,

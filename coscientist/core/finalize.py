@@ -234,6 +234,16 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
         elif ev.type == "FetchIntegrityRaised":
             if "internal_error" not in seen:
                 seen.append("internal_error")
+        elif ev.type == "QuestionDisposeRejected":
+            custom = (ev.payload or {}).get("report_line")
+            if custom:
+                line = str(custom)
+            else:
+                from coscientist.core.dispose import dispose_reject_report_line
+
+                line = dispose_reject_report_line(str(ev.payload.get("detail") or ""))
+            if line and line not in seen:
+                seen.append(line)
         elif ev.type == "EffectIntended":
             # Track for unknown (Intended without Done) pass below.
             pass
@@ -551,6 +561,8 @@ async def _build_rich_payload(
         results=getattr(runtime, "results", None),
         artifact_lookup=lookup,
         loop_capped_questions=capped_scope_questions(runtime),
+        question_disposals=getattr(runtime, "question_disposals", None),
+        journal_kinds=getattr(runtime, "artifact_kinds", None),
     )
     hyp_verdicts, hyp_unavail = report_hypothesis_verdicts(
         graph=getattr(runtime, "graph", None),
@@ -567,6 +579,9 @@ async def _build_rich_payload(
         folded = fold_events(events)
         if folded.get("fetch_integrity"):
             contrib.append("internal_error")
+    # PR15: stamped ArtifactRegistered with missing meta on replay → tainted mark.
+    if "internal_error" not in contrib and getattr(runtime, "_stamp_meta_missing", None):
+        contrib.append("internal_error")
     # PR13: disposition report_line (e.g. «не выполнено: рубрика не принята»).
     for d in qdisp.values():
         line = d.get("report_line") if isinstance(d, dict) else None

@@ -244,6 +244,17 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         _put(proj, "graph_nodes", event.entity_key, dict(p))
     elif t == "GraphEdgeAdded":
         _put(proj, "graph_edges", event.entity_key, dict(p))
+    elif t == "QuestionDisposed":
+        qid = str(p.get("question_id") or event.entity_key)
+        _put(proj, "question_disposals", qid, dict(p))
+    elif t == "QuestionDisposeRejected":
+        # Key by idem-stable detail digest so restarts keep every distinct reject.
+        detail = str(p.get("detail") or "")
+        qid = str(p.get("question_id") or event.entity_key or "")
+        from coscientist.core.digest import sha256_hex
+
+        key = f"{qid}:{sha256_hex(detail)[:16]}"
+        _put(proj, "disposal_rejects", key, {**dict(p), "row_key": key})
     elif t == "RequirementUpserted":
         _put(proj, "requirements", event.entity_key, dict(p))
     elif t == "ReviewScheduled":
@@ -329,6 +340,8 @@ def _row_key(table: str, row: dict[str, Any]) -> str | None:
         "hitl_requests": "request_id",
         "graph_nodes": "node_id",
         "graph_edges": "edge_id",
+        "question_disposals": "question_id",
+        "disposal_rejects": "row_key",
         "meta": "study_id",
     }
     if table == "fetch_integrity":
@@ -380,6 +393,8 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         # kind=decomposes (PR16) writes graph_edges; keep in the set so #27's
         # dirty-key apply_event path still projects those edges.
         "GraphEdgeAdded": ("graph_edges",),
+        "QuestionDisposed": ("question_disposals",),
+        "QuestionDisposeRejected": ("disposal_rejects",),
         "RequirementUpserted": ("requirements",),
         "ReviewScheduled": ("requirements",),
     }.get(event_type, ())

@@ -178,7 +178,9 @@ class Claim:
             return False
         if self.provenance != "real":
             return False
-        if self.is_lit or self.evidence_kind not in ("computational", "experimental"):
+        if self.is_lit:
+            return False
+        if self.evidence_kind not in ("computational", "experimental", "derivation"):
             return False
         return self.claim_outcome in ("consistent", "inconsistent")
 

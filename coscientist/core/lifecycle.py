@@ -717,3 +717,9 @@ class LifecycleMixin:
         from coscientist.core.expand import expand_plan as _expand
 
         return await _expand(self, **kwargs)  # type: ignore[arg-type]
+
+    async def dispose_question(self, disposal: Any) -> str | None:
+        """PR15: explicit needs_more_data|infeasible → QuestionDisposed."""
+        from coscientist.core.dispose import dispose_question as _dispose
+
+        return await _dispose(self, disposal)

@@ -505,9 +505,26 @@ def _derive_claim_core_attrs(
         and effect_is_countable(effect)
         and (effect_has_interval(effect) if predicts_null else True)
     )
+    from coscientist.core.derivation import (
+        EVIDENCE_KIND_DERIVATION,
+        executable_check_met,
+        is_derivation_task_spec,
+    )
+
+    if lit:
+        ek = "literature"
+    elif is_derivation_task_spec(spec):
+        ek = EVIDENCE_KIND_DERIVATION
+    else:
+        ek = "computational"
+    # §6.6: only the check bound to this claim may lift review-only derivation.
+    der_exec = bool(
+        ek == EVIDENCE_KIND_DERIVATION
+        and executable_check_met(list(checks or []), bound_key=key)
+    )
     out: dict[str, Any] = {
         "criterion_status": status,
-        "evidence_kind": "literature" if lit else "computational",
+        "evidence_kind": ek,
         "frozen": frozen,
         "lit_own_criterion": bool(lit and criteria),
         "accepted": bool(validated),
@@ -527,6 +544,7 @@ def _derive_claim_core_attrs(
         "data_digests": data_digests,
         "criterion_template_ids": criterion_template_ids,
         "study_id": study_id,
+        "derivation_executable": der_exec,
     }
     if indep_notes:
         out["independence_notes"] = list(indep_notes)
@@ -561,6 +579,7 @@ class Executor:
         review_statuses: dict[str, ReqStatus] | None = None,
         get_graph: Any | None = None,
         get_results: Any | None = None,
+        get_artifact_kinds: Any | None = None,
         max_attempts: int = 3,
         on_budget_debit: Any | None = None,
     ) -> None:
@@ -579,6 +598,8 @@ class Executor:
         self._output_digests: dict[str, str] = {}
         self.get_graph = get_graph
         self.get_results = get_results
+        # PR15: folded ArtifactRegistered(stamped) kinds (never trust meta alone).
+        self.get_artifact_kinds = get_artifact_kinds
         self.max_attempts = int(max_attempts)
         # PR12: async (task_id, spent_rub, request_id) → record_budget_debit
         self.on_budget_debit = on_budget_debit
@@ -1000,6 +1021,120 @@ class Executor:
         # Keep claims so not_met can refute (invariant 10); only infra drops them.
         payload["result_class"] = "scientific"
         payload["payload_digest"] = payload_digest(payload)
+        # PR15: journal kind stamps + QuestionDisposed in the same append as result.
+        # Meta.kind is applied only in fold after a successful append (never pre-commit).
+        from pydantic import ValidationError
+
+        from coscientist.core.artifact_stamp import kind_stamped_event
+        from coscientist.core.dispose import (
+            DisposeRejected,
+            QuestionDisposal,
+            question_dispose_rejected_event,
+            question_disposed_event,
+            validate_disposal,
+        )
+        from coscientist.core.errors import ArtifactRejected
+        from coscientist.core.experiment_design import artifact_kind_from_output_spec
+
+        out_map = dict(out.outputs or {})
+        extra_events: list[EventEnvelope] = []
+        now_stamp = self.clock.now()
+        pending_design_ids: set[str] = set()
+        for ospec in getattr(task.spec, "expected_outputs", None) or ():
+            kind = artifact_kind_from_output_spec(ospec)
+            if not kind:
+                continue
+            name = str(getattr(ospec, "name", "") or "")
+            if name not in out_map:
+                raise ArtifactRejected(
+                    f"OutputSpec.kind={kind!r} but output {name!r} missing"
+                )
+            handle = out_map[name]
+            meta = self.artifacts.get_meta(handle.artifact_id)
+            if meta is None:
+                raise ArtifactRejected(
+                    f"artifact missing for kind stamp: {handle.artifact_id!r}"
+                )
+            if kind == "experiment_design":
+                pending_design_ids.add(handle.artifact_id)
+            # Journal only — fold applies meta via apply_kind_stamp after append.
+            extra_events.append(
+                kind_stamped_event(
+                    study_id=study_id,
+                    artifact_id=handle.artifact_id,
+                    kind=kind,  # type: ignore[arg-type]
+                    now=now_stamp,
+                    name=meta.name,
+                    sha256=meta.sha256,
+                    role=meta.role,
+                )
+            )
+        for raw in list(out.question_disposals or []):
+            qid_hint: str | None = None
+            disp_hint: str | None = None
+            try:
+                if isinstance(raw, dict):
+                    qid_hint = str(raw.get("question_id") or "") or None
+                    disp_hint = str(raw.get("disposition") or "") or None
+                disposal = (
+                    raw
+                    if isinstance(raw, QuestionDisposal)
+                    else QuestionDisposal.model_validate(raw)
+                )
+                qid_hint = disposal.question_id
+                disp_hint = disposal.disposition
+                if (
+                    disposal.disposition == "needs_more_data"
+                    and not disposal.design_artifact_id
+                    and out_map
+                ):
+                    for ospec in getattr(task.spec, "expected_outputs", None) or ():
+                        if artifact_kind_from_output_spec(ospec) == "experiment_design":
+                            oname = str(ospec.name)
+                            if oname in out_map:
+                                disposal = disposal.model_copy(
+                                    update={"design_artifact_id": out_map[oname].artifact_id}
+                                )
+                                break
+                # Prefer live graph; else task addresses — never invent from disposal id.
+                g = self.get_graph() if self.get_graph is not None else None
+                known: set[str] = set()
+                if g is not None:
+                    for n in g.nodes_by_kind("question"):
+                        if n.study_id == study_id:
+                            known.add(n.ref_id or n.node_id.split(":")[-1])
+                if not known:
+                    known = {str(a) for a in (task.spec.addresses or []) if a}
+                kinds_fn = getattr(self, "get_artifact_kinds", None)
+                rt_kinds = kinds_fn() if callable(kinds_fn) else None
+                validate_disposal(
+                    disposal,
+                    known_question_ids=known,
+                    covering_task_keys={task.spec.task_key},
+                    tasks={task_id: task},
+                    results=self.get_results() if self.get_results is not None else None,
+                    journal_kinds=rt_kinds if isinstance(rt_kinds, dict) else None,
+                    pending_design_ids=pending_design_ids,
+                )
+                extra_events.append(
+                    question_disposed_event(
+                        study_id=study_id,
+                        disposal=disposal,
+                        now=now_stamp,
+                    )
+                )
+            except (DisposeRejected, ValidationError) as e:
+                extra_events.append(
+                    question_dispose_rejected_event(
+                        study_id=study_id,
+                        detail=str(e),
+                        now=now_stamp,
+                        question_id=qid_hint,
+                        disposition=disp_hint,
+                    )
+                )
+                continue
+
         return await self._commit_result(
             attempt_id,
             study_id,
@@ -1011,6 +1146,7 @@ class Executor:
             checks=checks,
             infra_failure=False,
             cost_rub=out.cost_rub,
+            extra_events=extra_events,
         )
 
     async def record_review(
@@ -1253,6 +1389,7 @@ class Executor:
         charge_attempt: bool = True,
         allow_retry: bool = False,
         cost_rub: Decimal | float | int | str | None = None,
+        extra_events: list[EventEnvelope] | None = None,
     ) -> Result:
         # Attempt-open check runs inside the write transaction (_append_many_sync).
         now = self.clock.now()
@@ -1327,6 +1464,22 @@ class Executor:
             payload = {**payload, "claims_dropped": drops}
             payload["payload_digest"] = payload_digest(payload)
 
+        # PR15: contradicts edges for opposite-stance accepted claims (same batch).
+        from coscientist.core.contradicts import contradicts_events_for_new_claims
+
+        new_claim_ids = {
+            str(ev.entity_key)
+            for ev in claim_events
+            if ev.type == "GraphNodeUpserted"
+        }
+        contradict_events = contradicts_events_for_new_claims(
+            study_id=study_id,
+            graph=graph,
+            now=now,
+            new_claim_ids=new_claim_ids or None,
+            pending_claim_events=claim_events,
+        )
+
         charged_after = self._charged_count_after(task, attempt_id, charge_attempt=charge_attempt)
         deadline = getattr(task, "deadline", None)
         within_deadline = deadline is None or now < deadline
@@ -1345,6 +1498,8 @@ class Executor:
 
         events = [
             *claim_events,
+            *contradict_events,
+            *(extra_events or ()),
             EventEnvelope(
                 study_id=study_id,
                 type="ResultRecorded",

@@ -155,6 +155,16 @@ class HitlPolicy(Frozen):
 
 
 ArtifactRole = Literal["paper", "data", "code", "figure", "table", "log", "report"]
+# M1 PR15: subtype on report artifacts (core-stamped from OutputSpec.kind).
+ArtifactKind = Literal["experiment_design", "contradiction_map"]
+# M1 PR15 §6.6: explicit claim evidence kind on OutputSpec (never inferred from rubric ids).
+EvidenceKind = Literal[
+    "computational",
+    "experimental",
+    "literature",
+    "expert",
+    "derivation",
+]
 # Who stored the artifact bytes. effect.trusted is a reporting tag (M1 verdicts
 # gate on countable). Sandbox puts are trusted only when both net and fs
 # isolation are hard (soft/none ⇒ trusted=False). ``tests_pass`` is
@@ -175,6 +185,10 @@ class OutputSpec(Frozen):
     role: ArtifactRole | None = None
     # M1 PR13: qualitative acceptance (literature review, design, …). Frozen at PLAN.
     rubric: Rubric | None = None
+    # M1 PR15: explicit deliverable kind (PlanValidator-enforced; not inferred).
+    kind: ArtifactKind | None = None
+    # M1 PR15 §6.6: explicit evidence_kind (PlanValidator; never inferred from rubric ids).
+    evidence_kind: EvidenceKind | None = None
 
 
 class InputSpec(Frozen):
@@ -545,6 +559,9 @@ class Artifact(Frozen):
     produced_by: ToolCallRef
     schema_ref: str | None = None
     role: ArtifactRole | None = None
+    # M1 PR15: subtype stamped by core from OutputSpec.kind
+    # (experiment_design | contradiction_map); not agent-settable.
+    kind: ArtifactKind | None = None
     # Core-stamped; agent ``put`` always ``agent``. Never settable by AgentTaskOutput.
     producer: ArtifactProducer = "agent"
     # Sandbox only: isolation actually achieved (PR17). trusted only if both hard.
@@ -736,6 +753,8 @@ class AgentTaskOutput(Frozen):
     expansion_request: ExpansionRequest | None = None
     # PR12: actual spend → BudgetDebited(task_id) from Executor.record.
     cost_rub: Decimal | None = None
+    # M1 PR15: explicit needs_more_data|infeasible (validated → QuestionDisposed).
+    question_disposals: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class StudyView(Frozen):

@@ -175,12 +175,16 @@ def apply_rollup(
 def _has_own_terminal_verdict(row: Mapping[str, Any]) -> bool:
     """True when the parent already carries a terminal own disposition/verdict.
 
-    ``disposition != not_attempted`` **or** ``verdict is not None``.
+    ``terminal is True`` **or** ``disposition != not_attempted`` **or**
+    ``verdict is not None``.
 
-    Covers PR 8b claims (``verdict``), ``rubric_not_met``, and PR11
+    Covers PR15 honest terminals (``terminal=True`` without claim-style
+    ``verdict``), PR 8b claims (``verdict``), ``rubric_not_met``, and PR11
     ``iteration_cap`` rows that stamp ``disposition=inconclusive`` without a
     ``verdict`` key (``dispositions.py`` ~383-388).
     """
+    if row.get("terminal") is True:
+        return True
     disp = str(row.get("disposition") or Disposition.NOT_ATTEMPTED.value)
     if disp != Disposition.NOT_ATTEMPTED.value:
         return True

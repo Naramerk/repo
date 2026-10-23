@@ -97,14 +97,14 @@ def test_stub_partial_excluded_before_counting():
     )
     assert not stub.counts()
     assert exclusion_reason(stub) == "stub"
-    v, _, rule = hypothesis_verdict(
+    v, _, _, rule = hypothesis_verdict(
         [stub, real_ref],
         True,
         refutations_needed=1,
         refutation_priority=True,
     )
     assert v == "refuted" and rule == "k_ref"
-    v2, _, _ = hypothesis_verdict(
+    v2, _, _, _ = hypothesis_verdict(
         [real_ref], True, refutations_needed=1, refutation_priority=True
     )
     assert v2 == "refuted"
@@ -981,7 +981,7 @@ def test_inc_below_k_ref_inconclusive():
         sesoi=None,
         refute_capable=False,
     )
-    v, _, rule = hypothesis_verdict(
+    v, _, _, rule = hypothesis_verdict(
         [r1], True, refutations_needed=2, refutation_priority=True
     )
     assert v == "inconclusive" and rule == "inc_below_k_ref"
@@ -1105,7 +1105,7 @@ class VerdictPropertyMachine(RuleBasedStateMachine):
         self.k_ref = 1
         self.k_sup = 2
         self.priority = True
-        self._last: tuple[str, bool, str | None] | None = None
+        self._last: tuple[str, bool, bool, str | None] | None = None
 
     def _verdict(self, claims=None):
         return hypothesis_verdict(
@@ -1246,7 +1246,7 @@ class VerdictPropertyMachine(RuleBasedStateMachine):
     @invariant()
     def v3_supported_needs_keys_and_refute(self):
         """supported ⇒ ≥supported_needed distinct core keys, all severe, ≥1 capable refute."""
-        v, _, _ = self._verdict()
+        v, _, _, _ = self._verdict()
         if v != "supported":
             return
         counted = [c for c in self.claims if c.counts()]
@@ -1262,7 +1262,7 @@ class VerdictPropertyMachine(RuleBasedStateMachine):
 
     @invariant()
     def v4_refuted_needs_k_ref_not_validity_alone(self):
-        v, _, _ = self._verdict()
+        v, _, _, _ = self._verdict()
         if v != "refuted":
             return
         counted = [c for c in self.claims if c.counts()]
@@ -1275,7 +1275,7 @@ class VerdictPropertyMachine(RuleBasedStateMachine):
 
     @invariant()
     def v5_legacy_never_supported(self):
-        v, _, _ = self._verdict()
+        v, _, _, _ = self._verdict()
         if v != "supported":
             return
         counted = [c for c in self.claims if c.counts() and claim_is_severe(c)]
@@ -1963,7 +1963,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
     assert all((c.effect or {}).get("trusted") is False for c in hyps)
     assert all((c.effect or {}).get("countable") is True for c in hyps)
     assert all(c.severe for c in hyps)
-    v, _, rule = hypothesis_verdict(
+    v, _, _, rule = hypothesis_verdict(
         hyps, True, supported_needed=2, refutations_needed=1, refutation_priority=True
     )
     assert v == "supported" and rule == "support_min"
@@ -2144,7 +2144,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
     assert all((c.effect or {}).get("trusted") is True for c in hyps)
     assert all((c.effect or {}).get("countable") is True for c in hyps)
     assert all(c.severe for c in hyps)
-    v, _, rule = hypothesis_verdict(
+    v, _, _, rule = hypothesis_verdict(
         hyps, True, supported_needed=2, refutations_needed=1, refutation_priority=True
     )
     assert v == "supported" and rule == "support_min"

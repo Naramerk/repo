@@ -115,6 +115,7 @@ nodes:
     fields:
       - {name: artifact_id, type: str, required: true}
       - {name: role, type: enum(paper|data|code|figure|table|log|report), required: true}
+      - {name: kind, type: enum(experiment_design|contradiction_map), required: false, note: "M1 PR15; stamps core from explicit OutputSpec.kind (PlanValidator)"}
       - {name: media_type, type: str, required: false}
       - {name: sha256, type: digest, required: false}
       - {name: doi_or_url, type: str, required: false, note: "обяз. для paper; идентичность"}
@@ -129,7 +130,7 @@ nodes:
     from_output: LiteratureOut.quotes, AgentTaskOutput.evidence
     text_ru: Адресуемое наблюдение
     fields:
-      - {name: kind, type: enum(literature|computational|experimental|expert), required: true}
+      - {name: kind, type: enum(literature|computational|experimental|expert|derivation), required: true, note: "M1 PR15 derivation = first principles"}
       - {name: statement, type: str, required: true}
       - {name: ref, type: obj(EvidenceRef|SourceQuote), required: true}
       - {name: measured_on, type: str, required: false}
@@ -199,6 +200,7 @@ edges:
   - {name: depends_on, pairs: [[experiment, experiment]], card: {out: "0..n", in: "0..n"}, by: plan, note: ацикл.}
   - {name: uses_input, pairs: [[experiment, artifact]], card: {out: "0..n", in: "0..n"}, by: ядро (P2), note: "provenance на ребре"}
   - {name: uses_claim, pairs: [[experiment, claim]], card: {out: "0..n", in: "0..n"}, by: "ядро (P2, InputSpec.kind=claim)", note: "M1 PR7; научный вход claim"}
+  - {name: contradicts, pairs: [[claim, claim]], card: {out: "0..n", in: "0..n"}, by: "ядро (противоположный stance к одной цели)", note: "M1 PR15 §6.5; одна запись на неупорядоченную пару (min,max); повтор → Idempotent"}
   - {name: produced, pairs: [[experiment, artifact]], card: {out: "0..n", in: "1..1"}, by: слой инструментов, note: "attempt_n на ребре; повторно найденная paper — то же ребро"}
   - {name: derived_from, pairs: [[evidence, artifact]], card: {out: "1..1", in: "0..n"}, by: код по EvidenceRef/SourceQuote}
   - {name: about, pairs: [[claim, hypothesis], [claim, question]], card: {out: "1..1", in: "0..n"}, by: код}

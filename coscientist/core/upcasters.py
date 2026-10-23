@@ -220,6 +220,40 @@ def _ensure_output_rubric_defaults(spec: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _ensure_output_kind_defaults(spec: dict[str, Any]) -> dict[str, Any]:
+    """PR15: OutputSpec.kind default null (experiment_design | contradiction_map)."""
+    out = dict(spec)
+    outs = out.get("expected_outputs")
+    if isinstance(outs, list):
+        new_outs: list[Any] = []
+        for o in outs:
+            if isinstance(o, dict):
+                o = dict(o)
+                o.setdefault("kind", None)
+                new_outs.append(o)
+            else:
+                new_outs.append(o)
+        out["expected_outputs"] = new_outs
+    return out
+
+
+def _ensure_output_evidence_kind_defaults(spec: dict[str, Any]) -> dict[str, Any]:
+    """PR15 §6.6: OutputSpec.evidence_kind default null (explicit only)."""
+    out = dict(spec)
+    outs = out.get("expected_outputs")
+    if isinstance(outs, list):
+        new_outs: list[Any] = []
+        for o in outs:
+            if isinstance(o, dict):
+                o = dict(o)
+                o.setdefault("evidence_kind", None)
+                new_outs.append(o)
+            else:
+                new_outs.append(o)
+        out["expected_outputs"] = new_outs
+    return out
+
+
 FINAL_TYPE_COERCED_LINE = "не выполнено: неизвестный final_type приведён к verdict (журнал)"
 
 
@@ -242,6 +276,24 @@ def _task_created_v9_to_v10_rubric(payload: dict[str, Any]) -> dict[str, Any]:
     spec = out.get("spec")
     if isinstance(spec, dict):
         out["spec"] = _ensure_output_rubric_defaults(spec)
+    return out
+
+
+def _task_created_v11_to_v12_output_kind(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR15: OutputSpec.kind default null on TaskCreated v12 (after PR11 loop v11)."""
+    out = dict(payload)
+    spec = out.get("spec")
+    if isinstance(spec, dict):
+        out["spec"] = _ensure_output_kind_defaults(spec)
+    return out
+
+
+def _task_created_v12_to_v13_evidence_kind(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR15: OutputSpec.evidence_kind default null on TaskCreated v13."""
+    out = dict(payload)
+    spec = out.get("spec")
+    if isinstance(spec, dict):
+        out["spec"] = _ensure_output_evidence_kind_defaults(spec)
     return out
 
 
@@ -283,6 +335,26 @@ def _plan_expanded_v2_to_v3_loop(payload: dict[str, Any]) -> dict[str, Any]:
         for t in added:
             if isinstance(t, dict):
                 rewritten.append(_ensure_loop_fields(dict(t)))
+            else:
+                rewritten.append(t)
+        out["added_tasks"] = rewritten
+    return out
+
+
+def _ensure_pr15_output_defaults(spec: dict[str, Any]) -> dict[str, Any]:
+    """PR15: OutputSpec.kind + evidence_kind defaults (single PA11/PE5 step)."""
+    return _ensure_output_evidence_kind_defaults(_ensure_output_kind_defaults(spec))
+
+
+def _plan_expanded_v4_to_v5_pr15_kinds(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR15: kind + evidence_kind on PlanExpanded.added_tasks (after PR16 decomposes v4)."""
+    out = dict(payload)
+    added = out.get("added_tasks")
+    if isinstance(added, list):
+        rewritten: list[Any] = []
+        for t in added:
+            if isinstance(t, dict):
+                rewritten.append(_ensure_pr15_output_defaults(dict(t)))
             else:
                 rewritten.append(t)
         out["added_tasks"] = rewritten
@@ -409,6 +481,23 @@ def _plan_accepted_v9_to_v10_decomposes(payload: dict[str, Any]) -> dict[str, An
 def _plan_expanded_v3_to_v4_decomposes(payload: dict[str, Any]) -> dict[str, Any]:
     """PR16: rollup/subquestions/origin on PlanExpanded v4 (after PR11 loop v3)."""
     return _ensure_decomposes_fields(payload)
+
+
+def _plan_accepted_v10_to_v11_pr15_kinds(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR15: kind + evidence_kind on PlanAccepted v11 (after PR16 decomposes v10)."""
+    out = dict(payload)
+    tasks = out.get("tasks")
+    if isinstance(tasks, list):
+        rewritten: list[Any] = []
+        for t in tasks:
+            if isinstance(t, dict):
+                rewritten.append(_ensure_pr15_output_defaults(dict(t)))
+            else:
+                rewritten.append(t)
+        out["tasks"] = rewritten
+    return out
+
+
 
 
 def _attempt_started_v4_to_v5_shares(payload: dict[str, Any]) -> dict[str, Any]:
@@ -700,6 +789,8 @@ register_upcaster("TaskCreated", 7, _task_created_v7_to_v8_sandbox)
 register_upcaster("TaskCreated", 8, _task_created_v8_to_v9_shares)
 register_upcaster("TaskCreated", 9, _task_created_v9_to_v10_rubric)
 register_upcaster("TaskCreated", 10, _task_created_v10_to_v11_loop)
+register_upcaster("TaskCreated", 11, _task_created_v11_to_v12_output_kind)
+register_upcaster("TaskCreated", 12, _task_created_v12_to_v13_evidence_kind)
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)
 register_upcaster("PlanAccepted", 2, _plan_accepted_v2_to_v3_check_role)
 register_upcaster("PlanAccepted", 3, _plan_accepted_v3_to_v4_expand_after)
@@ -709,9 +800,11 @@ register_upcaster("PlanAccepted", 6, _plan_accepted_v6_to_v7_shares)
 register_upcaster("PlanAccepted", 7, _plan_accepted_v7_to_v8_rubric)
 register_upcaster("PlanAccepted", 8, _plan_accepted_v8_to_v9_loops)
 register_upcaster("PlanAccepted", 9, _plan_accepted_v9_to_v10_decomposes)
+register_upcaster("PlanAccepted", 10, _plan_accepted_v10_to_v11_pr15_kinds)
 register_upcaster("PlanExpanded", 1, _plan_expanded_v1_to_v2_rubric)
 register_upcaster("PlanExpanded", 2, _plan_expanded_v2_to_v3_loop)
 register_upcaster("PlanExpanded", 3, _plan_expanded_v3_to_v4_decomposes)
+register_upcaster("PlanExpanded", 4, _plan_expanded_v4_to_v5_pr15_kinds)
 register_upcaster("StudyCreated", 1, _study_created_v1_to_v2)
 register_upcaster("StudyCreated", 2, _study_created_v2_to_v3)
 register_upcaster("StudyCreated", 3, _study_created_v3_to_v4)
