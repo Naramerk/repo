@@ -208,3 +208,93 @@ async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
     )
     await close_runtime(rt2)
 
+
+
+@pytest.mark.asyncio
+async def test_study_budget_exceeded_from_costly_spend(tmp_path, clock, runtime_cls):
+    """record_budget_debit → fold → tick emits BudgetExceeded (core + exp)."""
+    from datetime import timedelta
+    from decimal import Decimal
+
+    from coscientist.core.domain import Budget
+    from coscientist.core.runtime_factory import close_runtime, open_runtime
+
+    budget = Budget(
+        max_cost_rub=Decimal("100"),
+        delegated_costly=Decimal("100"),
+        deadline=clock.now() + timedelta(hours=1),
+    )
+    sid = "st_study_bud"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, runtime_cls=runtime_cls, owner="t1"
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(minutes=30),
+        sid=sid,
+        budget=budget,
+        finalize_reserve_s=5,
+    )
+    await rt.record_budget_debit(spent_rub=Decimal("100"), request_id="debit-1")
+    assert rt._study_spent_rub == Decimal("100")
+    assert not rt._budget_exceeded
+    await rt.tick()
+    types = [e.type for e in await rt.store.read_all()]
+    assert "BudgetDebited" in types
+    assert "BudgetExceeded" in types
+    fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    assert len(fins) == 1
+    assert fins[0].payload["trigger"] == "budget"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_settle_delegated_spend_emits_study_budget(tmp_path, clock):
+    """Exp settle → BudgetDebited → BudgetExceeded (wired emit, not getattr)."""
+    from datetime import timedelta
+    from decimal import Decimal
+
+    from coscientist.core.domain import Budget, GateConfig, HitlPolicy
+    from coscientist.core.runtime_factory import close_runtime, open_runtime
+    from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
+    from tests.helpers import attach_executor, record_success
+
+    policy = HitlPolicy(
+        mode="interactive",
+        gates={
+            "costly_or_nonreal": GateConfig(
+                enabled=True, timeout_s=30, on_timeout="fail"
+            )
+        },
+    )
+    budget = Budget(
+        max_cost_rub=Decimal("100"),
+        delegated_costly=Decimal("100"),
+        deadline=clock.now() + timedelta(hours=1),
+    )
+    sid = "st_settle_bud"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, runtime_cls=ExpStudyRuntime, owner="t1"
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(minutes=30),
+        sid=sid,
+        hitl_policy=policy,
+        budget=budget,
+        finalize_reserve_s=5,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    await record_success(rt, await rt.start_attempt("SPEC"), arts)
+    rid = await rt.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=100)
+    await rt.answer_hitl(rid, "delegate")
+    await rt.settle_delegated_spend(rid, actual_rub=100)
+    types = [e.type for e in await rt.store.read_all()]
+    assert "BudgetDebited" in types
+    assert "BudgetExceeded" in types
+    assert rt._budget_exceeded
+    await close_runtime(rt)

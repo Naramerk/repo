@@ -2,15 +2,28 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any, Protocol
 
 from coscientist.core.domain import HitlRequest, Task, TaskOutcome, TaskState
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.reasons import TaskReason
 from coscientist.experimental.costly import DelegatedBudget, costly_gate, settle
 
-if TYPE_CHECKING:
-    pass
+
+class _StudyBudgetEmitter(Protocol):
+    """Core ``StudyRuntime`` surface used after a costly debit (no MRO stubs)."""
+
+    async def record_budget_debit(
+        self,
+        *,
+        spent_rub: Any,
+        request_id: str,
+        extra: dict[str, Any] | None = None,
+    ) -> None: ...
+
+    async def _emit_study_budget_if_exhausted(self) -> None: ...
+
+    async def _append(self, events: list[EventEnvelope]) -> None: ...
 
 
 class CostlyHitlMixin:
@@ -54,34 +67,22 @@ class CostlyHitlMixin:
             return {"spent_rub": 0.0}
         budget = self._ensure_delegated_budget()
         settled = settle(dict(pending), budget, actual_rub)
-        now = self.clock.now()
-        await self._append(
-            [
-                EventEnvelope(
-                    study_id=self.study.study_id,
-                    type="BudgetDebited",
-                    entity_key=request_id,
-                    idem_key=make_idem(
-                        "BudgetDebited",
-                        request_id,
-                        str(actual_rub),
-                        str(settled["spent_rub"]),
-                    ),
-                    payload={
-                        "request_id": request_id,
-                        "actual_rub": actual_rub,
-                        "spent_rub": settled["spent_rub"],
-                        "cost_estimate_rub": pending.get("cost_estimate_rub"),
-                        "decided_by": settled.get("decided_by"),
-                        "delegated_by": settled.get("delegated_by"),
-                        "reason": settled.get("reason"),
-                        "budget": budget.to_state() if budget else None,
-                    },
-                    ts=now,
-                )
-            ]
+        core: _StudyBudgetEmitter = self  # type: ignore[assignment]
+        await core.record_budget_debit(
+            spent_rub=settled["spent_rub"],
+            request_id=request_id,
+            extra={
+                "actual_rub": actual_rub,
+                "cost_estimate_rub": pending.get("cost_estimate_rub"),
+                "decided_by": settled.get("decided_by"),
+                "delegated_by": settled.get("delegated_by"),
+                "reason": settled.get("reason"),
+                "budget": budget.to_state() if budget else None,
+            },
         )
         self._pending_costly_events.pop(request_id, None)
+        # Study-level Budget.max_cost_rub: costly spend counts toward the study.
+        await core._emit_study_budget_if_exhausted()
         return settled
 
     async def _apply_costly_or_nonreal(

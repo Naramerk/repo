@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from coscientist.core.attempts import AttemptsMixin
@@ -73,6 +74,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         self._study_cancelled = False
         self._budget_exceeded = False
         self._intake_refusal: IntakeRefuse | None = None
+        self._study_spent_rub = Decimal("0")
 
     async def _append(self, events: list[EventEnvelope]) -> None:
         if self._lease_lost:
@@ -159,6 +161,61 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             ]
         )
 
+    async def record_budget_debit(
+        self,
+        *,
+        spent_rub: Decimal | float | int | str,
+        request_id: str,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        """Public writer for ``BudgetDebited`` (study spend fold).
+
+        Does not emit ``BudgetExceeded`` — call ``tick`` (or costly settle) so the
+        producer re-checks the cap.
+        """
+        if self.study is None:
+            raise RuntimeError("no study")
+        spent = Decimal(str(spent_rub))
+        payload: dict[str, Any] = {
+            "spent_rub": str(spent),
+            "request_id": request_id,
+            **(extra or {}),
+        }
+        await self._append(
+            [
+                EventEnvelope(
+                    study_id=self.study.study_id,
+                    type="BudgetDebited",
+                    entity_key=request_id,
+                    idem_key=make_idem(
+                        "BudgetDebited",
+                        request_id,
+                        str(spent),
+                        str(payload.get("actual_rub", spent)),
+                    ),
+                    payload=payload,
+                    ts=self.clock.now(),
+                )
+            ]
+        )
+
+    def _study_budget_exhausted(self) -> bool:
+        """True when folded ``BudgetDebited.spent_rub`` reaches ``Budget.max_cost_rub``.
+
+        Reaching the cap (``>=``) counts as exhausted — aligned with DESIGN §7.4.
+        """
+        if self.study is None or self.study.budget is None:
+            return False
+        bud = self.study.budget
+        return bud.max_cost_rub is not None and self._study_spent_rub >= bud.max_cost_rub
+
+    async def _emit_study_budget_if_exhausted(self) -> None:
+        """Production producer: spend via BudgetDebited → BudgetExceeded(study)."""
+        if self._budget_exceeded or self._finalized:
+            return
+        if self._study_budget_exhausted():
+            await self.note_budget_exceeded()
+
     async def finalize(self, *, trigger: FinalizeTrigger) -> None:
         await _finalize(self, trigger=trigger)
 
@@ -187,6 +244,10 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
 
         # P5 first: tasks with deadline < ed and now > deadline → FAILED(deadline)
         await self._apply_p5(now, ed)
+        if self._finalized:
+            return
+
+        await self._emit_study_budget_if_exhausted()
         if self._finalized:
             return
 

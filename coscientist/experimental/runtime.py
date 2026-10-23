@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from coscientist.core.domain import HitlRequest
@@ -17,13 +18,13 @@ class StudyRuntime(CoreStudyRuntime, HitlForkMixin):
     """Core state machine plus HITL gates, DelegatedBudget, and fork stub.
 
     Core is listed first so ``_append`` / ``cancel_task`` resolve to the real
-    implementations rather than mixin ``NotImplementedError`` stubs.
+    implementations rather than mixin Protocol/`...` stubs.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.hitl: dict[str, HitlRequest] = {}
-        self._delegated_costly_spent: float = 0.0
+        self._delegated_costly_spent: Decimal = Decimal("0")
         self.delegated_budget: DelegatedBudget | None = None
         self._pending_costly_events: dict[str, dict[str, Any]] = {}
         self._hitl_notices: list[dict[str, Any]] = []
@@ -38,9 +39,10 @@ class StudyRuntime(CoreStudyRuntime, HitlForkMixin):
                 )
             return
         if ev.type == "BudgetDebited":
+            super()._project_local(ev)  # study spent for BudgetExceeded
             if p.get("budget"):
                 self.delegated_budget = DelegatedBudget.from_state(p["budget"])
-            spent = float(p.get("spent_rub") or 0.0)
+            spent = Decimal(str(p.get("spent_rub") or 0))
             if spent > 0:
                 self._delegated_costly_spent += spent
             return
@@ -54,7 +56,7 @@ class StudyRuntime(CoreStudyRuntime, HitlForkMixin):
                 h = self.hitl.get(p["request_id"])
                 if h:
                     self.hitl[p["request_id"]] = h.model_copy(update={"open": False})
-            spent = float(p.get("spent_rub") or 0.0)
+            spent = Decimal(str(p.get("spent_rub") or 0))
             if spent > 0:
                 self._delegated_costly_spent += spent
             return

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from coscientist.core.domain import Study, Task, TaskOutcome, TaskState
@@ -26,6 +27,7 @@ class LocalProjectMixin:
     _study_cancelled: bool
     _budget_exceeded: bool
     _intake_refusal: IntakeRefuse | None
+    _study_spent_rub: Decimal
 
     def _project_local(self, ev: EventEnvelope) -> None:
         p = ev.payload
@@ -37,6 +39,8 @@ class LocalProjectMixin:
                 reason=str(p.get("reason") or ""),
                 classifier_error=bool(p.get("classifier_error", False)),
             )
+        elif ev.type == "BudgetDebited":
+            self._study_spent_rub += Decimal(str(p.get("spent_rub") or 0))
         elif ev.type == "BudgetExceeded":
             if str(p.get("scope") or "study") == "study":
                 self._budget_exceeded = True

@@ -410,6 +410,136 @@ async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
+async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_cls):
+    """BudgetDebited only → crash → reopen → tick re-checks spend → trigger=budget."""
+    from decimal import Decimal
+
+    from coscientist.core.domain import Budget
+
+    sid = "st_bg_debit_crash"
+    budget = Budget(
+        max_cost_rub=Decimal("50"),
+        deadline=clock.now() + timedelta(seconds=60),
+    )
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=60),
+        sid=sid,
+        budget=budget,
+        finalize_reserve_s=5,
+    )
+    # Public debit without BudgetExceeded (crash before producer tick).
+    await rt.record_budget_debit(spent_rub=Decimal("50"), request_id="debit-crash")
+    assert rt._study_spent_rub == Decimal("50")
+    assert not rt._budget_exceeded
+    assert not any(e.type == "BudgetExceeded" for e in await rt.store.read_all())
+    await close_runtime(rt)
+
+    rt2 = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
+    )
+    assert rt2._study_spent_rub == Decimal("50")
+    assert not rt2._budget_exceeded
+    await rt2.tick()
+    assert rt2._budget_exceeded
+    assert _fin(await rt2.store.read_all()).payload["trigger"] == "budget"
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime_cls):
+    from decimal import Decimal
+
+    from coscientist.core.domain import Budget
+
+    sid = "st_bg_bad"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    with pytest.raises(ValueError, match="delegated_costly"):
+        await rt.create_study(
+            profile="research",
+            request="q",
+            catalog_version="0.1.0",
+            deadline=clock.now() + timedelta(seconds=60),
+            sid=sid,
+            budget=Budget(
+                max_cost_rub=Decimal("100"),
+                delegated_costly=Decimal("101"),
+            ),
+            finalize_reserve_s=5,
+        )
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runtime_cls):
+    """Old StudyCreated with delegated_costly > max_cost_rub still reopens + finalizes."""
+    from decimal import Decimal
+
+    from coscientist.core.domain import HitlPolicy
+    from coscientist.core.store import SqliteEventStore
+
+    sid = "st_bg_old_ratio"
+    root = tmp_path / sid
+    root.mkdir()
+    store = SqliteEventStore(sid, root / "events.db", clock=clock, owner="seed")
+    await store.acquire_lease("seed")
+    now = clock.now()
+    # Raw journal row (pre-create_study check): looser delegated_costly than max_cost_rub.
+    await store.append(
+        EventEnvelope(
+            study_id=sid,
+            type="StudyCreated",
+            entity_key=sid,
+            idem_key=make_idem("StudyCreated", sid),
+            payload={
+                "study_id": sid,
+                "profile": "research",
+                "request": "q",
+                "catalog_version": "0.1.0",
+                "hitl_policy": HitlPolicy().model_dump(mode="json"),
+                "deadline": (now + timedelta(seconds=60)).isoformat(),
+                "created_at": now.isoformat(),
+                "parent_study_id": None,
+                "budget": {
+                    "max_llm_calls": 100,
+                    "max_tokens": 1_000_000,
+                    "max_cost_rub": "50",
+                    "max_tool_calls": 500,
+                    "deadline": None,
+                    "delegated_costly": "999",
+                },
+                "finalize_reserve_s": 5,
+            },
+            ts=now,
+            schema_version=2,
+        )
+    )
+    await store.release_lease("seed", store.epoch)
+    await store.close()
+
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    assert rt.study is not None
+    assert rt.study.budget is not None
+    assert rt.study.budget.delegated_costly == Decimal("999")
+    assert rt.study.budget.max_cost_rub == Decimal("50")
+    await rt.ensure_lease(ttl_s=300)
+    clock.advance(timedelta(seconds=120))
+    await rt.tick()
+    assert rt._finalized
+    assert _fin(await rt.store.read_all()).payload["trigger"] == "deadline"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
 async def test_all_done_budget_reasons_finalize_all_done(tmp_path, clock):
     """All tasks DONE(budget) without study flag → all_done, not budget trigger."""
     from coscientist.core.cancel import _close_open_work
