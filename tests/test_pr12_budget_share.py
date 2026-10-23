@@ -394,18 +394,15 @@ async def test_foreach_children_share_parent_budget(tmp_path, clock):
     await close_runtime(rt)
 
 
-@pytest.mark.asyncio
-async def test_budget_hitl_delegation(tmp_path, clock):
-    rt = await open_runtime_experimental(
-        tmp_path, "share-hitl", clock=clock, owner="t1"
-    )
+async def _boot_hitl_budget(tmp_path, clock, sid: str):
+    rt = await open_runtime_experimental(tmp_path, sid, clock=clock, owner="t1")
     await rt.create_study(
         profile="t",
         request="research question",
         catalog_version="1",
         deadline=clock.now() + timedelta(hours=1),
         finalize_reserve_s=30,
-        sid="share-hitl",
+        sid=sid,
         replan_reserve=0.0,
         hitl_policy=HitlPolicy(mode="interactive"),
     )
@@ -419,6 +416,13 @@ async def test_budget_hitl_delegation(tmp_path, clock):
         ],
         questions=[QuestionSpec(id="Q1", text="q")],
     )
+    return rt
+
+
+@pytest.mark.asyncio
+async def test_budget_hitl_delegate_applies_shares(tmp_path, clock):
+    """Budget «реши сам» routes to _apply_budget_hitl (not plan expand)."""
+    rt = await _boot_hitl_budget(tmp_path, clock, "share-hitl-delegate")
     rid = await rt.open_hitl("E0", kind="budget")
     await rt.answer_hitl(
         rid,
@@ -434,45 +438,62 @@ async def test_budget_hitl_delegation(tmp_path, clock):
     assert decided
     assert decided[0].payload.get("delegated_by") == "human"
     assert decided[0].payload.get("approved_by") == "critic"
-    # Delegation attrs on HITL decision node only — not plan / study.
     hitl_node = rt.graph.get_node(f"{rt.study.study_id}:hitl:{rid}")
     assert hitl_node is not None
     assert hitl_node.attrs.get("delegated_by") == "human"
     assert hitl_node.attrs.get("approved_by") == "critic"
     study_node = rt.graph.get_node(f"{rt.study.study_id}:study")
     assert study_node is None or study_node.attrs.get("delegated_by") is None
-    # Delegate on budget must apply shares (not plan expand).
-    adj_del = [
+    adj = [
         e
         for e in events
         if e.type == "BudgetSharesAdjusted" and e.payload.get("request_id") == rid
     ]
-    assert adj_del and adj_del[0].payload["approved_by"] == "critic"
-    assert adj_del[0].payload["budget_shares"]["E0"] == pytest.approx(0.35)
+    assert adj and adj[0].payload["approved_by"] == "critic"
+    assert adj[0].payload["budget_shares"]["E0"] == pytest.approx(0.35)
     assert rt.tasks[task_id(rt.study.study_id, "E0")].spec.budget_share == pytest.approx(
         0.35
     )
+    # Must not expand the plan on budget delegate.
+    assert not any(e.type == "PlanExpanded" for e in events)
+    await close_runtime(rt)
 
-    rid2 = await rt.open_hitl("E0", kind="budget")
+
+@pytest.mark.asyncio
+async def test_budget_hitl_accept_applies_shares(tmp_path, clock):
+    rt = await _boot_hitl_budget(tmp_path, clock, "share-hitl-accept")
+    rid = await rt.open_hitl("E0", kind="budget")
     await rt.answer_hitl(
-        rid2,
+        rid,
         decision="accept",
         expansion={"budget_shares": {"E0": 0.3, "E1": 0.7}},
     )
     adj = [e for e in await rt.store.read_all() if e.type == "BudgetSharesAdjusted"]
     assert adj and adj[-1].payload["budget_shares"]["E0"] == pytest.approx(0.3)
-    assert rt.tasks[task_id(rt.study.study_id, "E0")].spec.budget_share == pytest.approx(0.3)
+    assert adj[-1].payload.get("approved_by") == "human"
+    assert rt.tasks[task_id(rt.study.study_id, "E0")].spec.budget_share == pytest.approx(
+        0.3
+    )
+    await close_runtime(rt)
 
-    rid3 = await rt.open_hitl("E0", kind="budget")
+
+@pytest.mark.asyncio
+async def test_budget_hitl_shares_refused(tmp_path, clock):
+    """Critic reject on budget approve → BudgetSharesRefused + report line."""
+    rt = await _boot_hitl_budget(tmp_path, clock, "share-hitl-refuse")
+    rid = await rt.open_hitl("E0", kind="budget")
     await rt.answer_hitl(
-        rid3,
+        rid,
         decision="accept",
         expansion={"budget_shares": {"E0": 0.9, "E1": 0.9}},
     )
-    refused = [
-        e for e in await rt.store.read_all() if e.type == "BudgetSharesRefused"
-    ]
+    refused = [e for e in await rt.store.read_all() if e.type == "BudgetSharesRefused"]
     assert refused and refused[-1].payload.get("reason") == "critic_rejected"
+    assert refused[-1].payload.get("request_id") == rid
+    # Shares unchanged on refuse.
+    assert rt.tasks[task_id(rt.study.study_id, "E0")].spec.budget_share == pytest.approx(
+        0.5
+    )
     await rt.cancel_study()
     await rt.tick()
     fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
@@ -996,7 +1017,7 @@ async def test_budget_debit_atomic_crash_between_recover(tmp_path, clock):
 
 @pytest.mark.asyncio
 async def test_single_attempt_budget_overrun(tmp_path, clock):
-    """B3: spend past remaining limit → overrun flag, no retries, report line."""
+    """Spend past remaining limit → overrun flag, keep SUCCESS detail, no retries."""
     rt = await _boot(
         tmp_path,
         clock,
@@ -1011,6 +1032,7 @@ async def test_single_attempt_budget_overrun(tmp_path, clock):
         questions=[QuestionSpec(id="Q1", text="q")],
     )
     aid = await rt.start_attempt("E0")
+    assert aid is not None
     tid = task_id(rt.study.study_id, "E0")
     limit = Decimal(str(rt.attempts[aid]["budget_limit_rub"]))
     assert limit > 0
@@ -1030,14 +1052,60 @@ async def test_single_attempt_budget_overrun(tmp_path, clock):
     )
     row = rt.results[aid]
     assert row.get("budget_overrun") is True
+    assert row.get("outcome") == TaskOutcome.SUCCESS.value
     # Cap forbids retries: task closed, no retry_at.
     assert tid not in rt._retry_at
     assert rt.tasks[tid].state == TaskState.DONE
+    assert rt.tasks[tid].outcome == TaskOutcome.SUCCESS
     assert rt._task_spent_rub[tid] == limit + Decimal("10")
+    done = next(
+        e
+        for e in await rt.store.read_all()
+        if e.type == "TaskDone" and e.payload.get("task_id") == tid
+    )
+    assert done.payload.get("budget_overrun") is True
+    assert done.payload.get("detail") != "budget_overrun"
+    assert done.payload.get("outcome") == TaskOutcome.SUCCESS.value
     await rt.cancel_study()
     await rt.tick()
     fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
-    assert TASK_BUDGET_OVERRUN_LINE in (fin.payload.get("contributing_reasons") or [])
+    reasons = fin.payload.get("contributing_reasons") or []
+    assert TASK_BUDGET_OVERRUN_LINE in reasons
+    assert not TASK_BUDGET_OVERRUN_LINE.startswith("не выполнено:")
+    await close_runtime(rt)
+
+
+def test_would_exceed_budget_limit_helper():
+    from coscientist.core.shares import would_exceed_budget_limit
+
+    assert not would_exceed_budget_limit(
+        spent_so_far=1, next_cost=2, limit=Decimal("10")
+    )
+    assert would_exceed_budget_limit(spent_so_far=9, next_cost=2, limit=Decimal("10"))
+    assert not would_exceed_budget_limit(spent_so_far=0, next_cost=1, limit=None)
+
+
+@pytest.mark.asyncio
+async def test_start_attempt_none_not_recordable(tmp_path, clock):
+    """Callers must not pass start_attempt()'s None into Executor.record."""
+    from tests.helpers import record_success
+
+    rt = await _boot(
+        tmp_path,
+        clock,
+        "share-none-aid",
+        replan_reserve=0.0,
+        budget=Budget(max_cost_rub=Decimal("100")),
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    await rt.accept_plan(
+        [_exp("E0", budget_share=0.0, criteria=False)],
+        questions=[QuestionSpec(id="Q1", text="q")],
+    )
+    aid = await rt.start_attempt("E0")
+    assert aid is None
+    with pytest.raises(AssertionError, match="returned None"):
+        await record_success(rt, aid, arts)
     await close_runtime(rt)
 
 

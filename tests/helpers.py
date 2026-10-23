@@ -134,9 +134,13 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
 
 
 async def record_success(
-    rt: RuntimeLike, aid: str, arts: LocalArtifactStore, *, count: int = 225
+    rt: RuntimeLike, aid: str | None, arts: LocalArtifactStore, *, count: int = 225
 ) -> None:
     assert rt.executor is not None
+    if aid is None:
+        raise AssertionError(
+            "start_attempt returned None (task refused; no AttemptStarted)"
+        )
     content = json.dumps({"count": count}).encode()
     art = arts.put(
         content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"

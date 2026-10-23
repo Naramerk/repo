@@ -173,6 +173,11 @@ class AttemptsMixin:
         *,
         provenance: Provenance | None = None,
     ) -> str | None:
+        """Start an attempt, or return ``None`` when the task is refused without one.
+
+        Callers must treat ``None`` as a successful refusal (task already
+        ``SKIPPED(budget)`` / similar) — never pass it to ``Executor.record``.
+        """
         task = self._resolve_task(task_key_or_id)
         # Foreach templates are materialization placeholders — never dispatched.
         if task.spec.foreach is not None:

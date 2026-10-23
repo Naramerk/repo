@@ -1252,10 +1252,11 @@ class Executor:
                 "outcome": task_outcome.value,
                 "reason": reason,
             }
+            # Keep original detail/result; overrun is a separate flag (not «не выполнено»).
             if payload.get("detail"):
                 done_payload["detail"] = payload["detail"]
             if overrun:
-                done_payload["detail"] = "budget_overrun"
+                done_payload["budget_overrun"] = True
             events.append(
                 EventEnvelope(
                     study_id=study_id,

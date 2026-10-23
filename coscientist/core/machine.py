@@ -497,6 +497,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                 continue
             prov = self._provenance_for_retry(tid)
             self._retry_at.pop(tid, None)
+            # None = honest refuse (zero share / empty pool); task already SKIPPED.
             await self.start_attempt(tid, provenance=prov)
 
 def new_owner() -> str:

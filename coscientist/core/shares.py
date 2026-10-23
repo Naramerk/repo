@@ -16,9 +16,9 @@ ShareField = Literal["budget_share", "deadline_share"]
 # Study-level vs per-task Russian report lines (finalize contributing_reasons).
 BUDGET_EXHAUSTED_LINE = "не выполнено: бюджет исчерпан"
 TASK_BUDGET_EXHAUSTED_LINE = "не выполнено: бюджет задачи исчерпан"
-# Single-attempt spend past remaining share when runner cannot enforce mid-flight.
+# SUCCESS (or other outcome) with spend past remaining share — task was done.
 TASK_BUDGET_OVERRUN_LINE = (
-    "не выполнено: перерасход доли бюджета задачи (лимит только запрещает повторы)"
+    "выполнено с перерасходом доли бюджета задачи (лимит запрещает повторы)"
 )
 BUDGET_SHARES_REFUSED_LINE = "не выполнено: отказ критика (доли бюджета)"
 
@@ -337,6 +337,7 @@ _ALLOC_EXPORTS = frozenset(
         "outstanding_task_allocations",
         "p2_share_payload_fields",
         "renorm_deadline",
+        "would_exceed_budget_limit",
     }
 )
 

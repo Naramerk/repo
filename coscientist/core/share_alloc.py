@@ -165,8 +165,9 @@ def p2_share_payload_fields(runtime: Any, task: Task) -> dict[str, Any]:
 
     Reuses a fixed first-allocation cap across retries (M3).
     ``budget_limit_rub`` is the *remaining* task cap for this attempt (runner
-    limit). When the runner cannot enforce it mid-flight, an overrun is
-    recorded on the result and the cap only forbids retries.
+    limit). M1 has no LLM/tool loop — mid-flight enforcement is an M1 gap;
+    use ``would_exceed_budget_limit`` in M2. Until then overrun is recorded
+    post-hoc and the cap only forbids retries.
     """
     prior = (getattr(runtime, "_task_budget_alloc", None) or {}).get(task.task_id)
     deadline, budget, renormed = compute_p2_allocation(runtime, task)
@@ -272,6 +273,22 @@ async def attempt_share_fields_or_refuse(
         )
         return None
     return fields
+
+
+def would_exceed_budget_limit(
+    *,
+    spent_so_far: Decimal | float | int | str,
+    next_cost: Decimal | float | int | str,
+    limit: Decimal | float | int | str | None,
+) -> bool:
+    """True when a runner must abort *before* the next billed call.
+
+    M1 has no LLM/tool-call loop — this helper is the contract for M2 runners.
+    Core still records post-hoc overrun when the runner cannot enforce mid-flight.
+    """
+    if limit is None:
+        return False
+    return Decimal(str(spent_so_far)) + Decimal(str(next_cost)) > Decimal(str(limit))
 
 
 def budget_debit_event(
