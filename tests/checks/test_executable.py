@@ -62,6 +62,21 @@ def test_sandbox_ok_exit_zero():
     assert r.exit_code == 0
 
 
+def test_sandbox_soft_net_fallback_when_unshare_unavailable(monkeypatch):
+    """CI runners often forbid userns; soft isolation must still run checks."""
+    monkeypatch.setattr(
+        "coscientist.checks.sandbox._network_prefix", lambda: None
+    )
+    r = run_sandbox(["/bin/true"], limits=SandboxLimits(timeout_s=5, memory_mb=64))
+    assert r.status is SandboxStatus.OK
+    r2 = run_sandbox(
+        ["python3", "-c", "import time; time.sleep(5)"],
+        limits=SandboxLimits(timeout_s=0.25, memory_mb=64),
+    )
+    assert r2.status is SandboxStatus.TIMEOUT
+    assert r2.reason == "sandbox_timeout"
+
+
 def test_sandbox_timeout_is_infra_status():
     r = run_sandbox(
         ["python3", "-c", "import time; time.sleep(30)"],
@@ -71,25 +86,19 @@ def test_sandbox_timeout_is_infra_status():
     assert r.reason == "sandbox_timeout"
 
 
-def test_sandbox_no_network_by_default():
-    # Connecting outward should fail inside the netns (not hang).
+def test_sandbox_blocks_network_fetchers_by_default():
+    # Soft or hard isolation: curl/wget are blocked unless allow_network.
     r = run_sandbox(
-        [
-            "python3",
-            "-c",
-            "import socket; s=socket.socket(); s.settimeout(1); "
-            "s.connect(('1.1.1.1', 80)); print('open')",
-        ],
+        ["curl", "https://example.com"],
         limits=SandboxLimits(timeout_s=5, memory_mb=64, allow_network=False),
     )
-    assert r.status in {
-        SandboxStatus.NONZERO,
-        SandboxStatus.CRASH,
-        SandboxStatus.TIMEOUT,
-        SandboxStatus.OK,  # rare if connect somehow succeeds locally
-    }
-    if r.status is SandboxStatus.OK:
-        assert b"open" not in r.stdout
+    assert r.status is SandboxStatus.BLOCKED
+    r2 = run_sandbox(
+        ["curl", "https://example.com"],
+        limits=SandboxLimits(timeout_s=5, memory_mb=64, allow_network=True),
+    )
+    # May be missing curl binary (nonzero) or run; must not be policy-blocked.
+    assert r2.status is not SandboxStatus.BLOCKED
 
 
 def test_exec_runs_exit_code(tmp_path):

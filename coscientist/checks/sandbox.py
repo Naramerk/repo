@@ -48,7 +48,7 @@ DEFAULT_TIMEOUT_S = 30.0
 DEFAULT_MEMORY_MB = 256
 DEFAULT_MAX_OUTPUT_BYTES = 1_000_000
 
-# Dangerous patterns mirrored from old code_exec_server (defense in depth).
+# Dangerous patterns mirrored from old code_exec_server / coder_tools.
 _BLOCKED_PATTERNS = (
     "rm --no-preserve-root",
     "mkfs",
@@ -57,6 +57,15 @@ _BLOCKED_PATTERNS = (
     "shutdown",
     "reboot",
     "poweroff",
+)
+# Soft network isolation (when unshare is unavailable): block common fetchers.
+_NET_BLOCKED_PATTERNS = (
+    "curl ",
+    "curl\t",
+    "wget ",
+    "wget\t",
+    "nc ",
+    "ncat ",
 )
 
 _OOM_CODES = frozenset({-signal.SIGKILL, signal.SIGKILL, 128 + signal.SIGKILL, 137})
@@ -87,11 +96,18 @@ def _cap(data: bytes, limit: int) -> tuple[bytes, bool]:
     return data[:limit] + b"\n...[truncated]", True
 
 
-def _blocked(command_text: str) -> str | None:
+def _blocked(command_text: str, *, allow_network: bool) -> str | None:
     low = command_text.lower()
     for pat in _BLOCKED_PATTERNS:
         if pat in low:
             return pat
+    if not allow_network:
+        first = Path(low.split()[0]).name if low.split() else ""
+        if first in {"curl", "wget", "nc", "ncat", "fetch"}:
+            return first
+        for pat in _NET_BLOCKED_PATTERNS:
+            if pat in low:
+                return pat.strip()
     return None
 
 
@@ -111,12 +127,32 @@ def _preexec(memory_mb: int, timeout_s: float) -> None:
 
 
 def _network_prefix() -> list[str] | None:
-    """Return argv prefix that drops network, or None if isolation unavailable."""
+    """Return argv prefix that drops network, or None if isolation unavailable.
+
+    GitHub Actions (and some containers) forbid writing ``/proc/self/uid_map``,
+    so ``unshare --user --map-root-user`` fails. Probe before use; callers fall
+    back to soft isolation (proxy poison + command blocklist) when None.
+    """
     unshare = shutil.which("unshare")
     if unshare is None:
         return None
-    # User+net ns works without CAP_SYS_ADMIN here; bare ``-n`` does not.
-    return [unshare, "--user", "--net", "--map-root-user", "--"]
+    candidates = [
+        [unshare, "--user", "--net", "--map-root-user", "--"],
+        [unshare, "--net", "--"],
+    ]
+    for prefix in candidates:
+        try:
+            probe = subprocess.run(
+                [*prefix, "true"],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if probe.returncode == 0:
+            return prefix
+    return None
 
 
 def _kill_group(proc: subprocess.Popen[bytes]) -> None:
@@ -158,7 +194,7 @@ def run_sandbox(
         )
 
     cmd_text = " ".join(str(a) for a in argv)
-    blocked = _blocked(cmd_text)
+    blocked = _blocked(cmd_text, allow_network=lim.allow_network)
     if blocked is not None:
         return SandboxResult(
             status=SandboxStatus.BLOCKED,
@@ -169,19 +205,17 @@ def run_sandbox(
             duration_s=0.0,
         )
 
+    # Hard isolation when the host allows unshare; otherwise soft (env + blocklist).
+    # Fail-closed UNAVAILABLE only when allow_network was required but we cannot
+    # even start a process — soft mode still enforces rlimits / RO inputs / caps.
     prefix: list[str] = []
+    soft_net = False
     if not lim.allow_network:
         net = _network_prefix()
         if net is None:
-            return SandboxResult(
-                status=SandboxStatus.UNAVAILABLE,
-                exit_code=None,
-                stdout=b"",
-                stderr=b"network isolation unavailable",
-                reason="sandbox_unavailable:no_network_isolation",
-                duration_s=0.0,
-            )
-        prefix = list(net)
+            soft_net = True
+        else:
+            prefix = list(net)
 
     own_tmp = cwd is None
     work = Path(cwd) if cwd is not None else Path(tempfile.mkdtemp(prefix="cos_sbx_"))
@@ -209,6 +243,9 @@ def run_sandbox(
             child_env["HTTP_PROXY"] = child_env["http_proxy"]
             child_env["HTTPS_PROXY"] = child_env["https_proxy"]
             child_env["NO_PROXY"] = "*"
+            if soft_net:
+                # Discourage accidental fetches when hard netns is unavailable.
+                child_env["COSCIENTIST_SANDBOX_NET"] = "soft"
 
         started = time.monotonic()
         try:

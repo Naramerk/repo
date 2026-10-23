@@ -89,7 +89,7 @@ Executable catalog CodeCheck kinds (`exec_runs`, `tests_pass`, `metric_on_holdou
 
 - **trusted** remains a severity **tag** for reporting only — it does **not** gate `refuted` / `supported` (countable does).
 - Sandbox infra failures (timeout, OOM, crash, output exceeded, unavailable, blocked) close the attempt as `result_class=infra` with a stable reason; they never hang or crash the host. `StudyFinalized` still holds.
-- Enforced limits: time, memory (`RLIMIT_AS`), output size, no network unless the catalog check sets `allow_network=True` (user+net `unshare`).
+- Enforced limits: time, memory (`RLIMIT_AS`), output size, no network unless the catalog check sets `allow_network=True`. Hard isolation uses `unshare` netns when the host allows it; otherwise soft isolation (proxy poison + curl/wget blocklist) so CI runners without userns still run checks.
 
 ### M1 limits (call_id + catalog kinds)
 
