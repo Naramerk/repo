@@ -207,7 +207,11 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
             _append_foreach_report_lines(seen, ev.payload)
         elif ev.type == "SideEffectDenied":
             tool = str(ev.payload.get("tool") or "?")
-            line = f"отклонено: побочный эффект ({tool})"
+            reason = str(ev.payload.get("reason") or "")
+            if reason == "taint_deny":
+                line = f"отклонено: tainted контекст ({tool})"
+            else:
+                line = f"отклонено: побочный эффект ({tool})"
             if line not in seen:
                 seen.append(line)
         elif ev.type == "EffectIntended":

@@ -51,15 +51,6 @@ class LocalArtifactStore:
         self.meta.mkdir(parents=True, exist_ok=True)
         self.tmp.mkdir(parents=True, exist_ok=True)
         self._index: dict[str, Artifact] = {}
-        # Set by Executor for the active attempt so sandbox/verifier puts inherit taint.
-        self._context_tainted: bool = False
-
-    def set_context_tainted(self, value: bool) -> None:
-        self._context_tainted = bool(value)
-
-    @property
-    def context_tainted(self) -> bool:
-        return self._context_tainted
 
     def put_cas(self, content: bytes, *, tmp_name: str = "cas") -> str:
         """Write raw bytes to content-addressed storage; return sha256 hex digest."""
@@ -124,10 +115,8 @@ class LocalArtifactStore:
             producer=producer,
             net_isolation=net_isolation if producer == "sandbox" else None,
             fs_isolation=fs_isolation if producer == "sandbox" else None,
-            tainted=derived_tainted(
-                context_tainted=bool(context_tainted or self._context_tainted),
-                explicit=tainted,
-            ),
+            # context_tainted arg OR ContextVar (per-attempt; safe under foreach).
+            tainted=derived_tainted(context_tainted=context_tainted, explicit=tainted),
         )
         self._index[artifact_id] = art
         (self.meta / f"{artifact_id}.json").write_text(

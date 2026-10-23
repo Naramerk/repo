@@ -4,6 +4,8 @@
 agent wiring lands later. Effect is taken from this registry — never from a
 caller-supplied ``ToolSpec.effect``. Unknown / unregistered names resolve to
 ``external_effect`` (fail-closed).
+
+After ``freeze_registry()``, registration is forbidden (no silent replace).
 """
 
 from __future__ import annotations
@@ -14,8 +16,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 ToolEffect = Literal["read", "write", "external_effect"]
 
-# Fail-closed default for anything not explicitly registered.
 DEFAULT_UNREGISTERED_EFFECT: ToolEffect = "external_effect"
+
+_REGISTRY: dict[str, RegisteredToolSpec] = {}
+_FROZEN: bool = False
 
 
 class RegisteredToolSpec(BaseModel):
@@ -34,16 +38,34 @@ class RegisteredToolSpec(BaseModel):
     output_schema: dict | None = None
 
 
-_REGISTRY: dict[str, RegisteredToolSpec] = {}
+class RegistryFrozenError(RuntimeError):
+    """Raised when mutating a frozen tool registry."""
 
 
-def clear_registry() -> None:
-    """Test helper — empty the closed registry."""
-    _REGISTRY.clear()
+class RegistryDuplicateError(ValueError):
+    """Raised when registering a name that already exists (no silent replace)."""
+
+
+def freeze_registry() -> None:
+    """Seal the registry — further ``register_tool`` calls raise."""
+    global _FROZEN
+    _FROZEN = True
+
+
+def is_registry_frozen() -> bool:
+    return _FROZEN
 
 
 def register_tool(spec: RegisteredToolSpec) -> RegisteredToolSpec:
-    """Register or replace a tool. Production catalogs call this at boot."""
+    """Register a tool. Fails if frozen or if ``name`` is already registered."""
+    if _FROZEN:
+        raise RegistryFrozenError(
+            f"tool registry is frozen; cannot register {spec.name!r}"
+        )
+    if spec.name in _REGISTRY:
+        raise RegistryDuplicateError(
+            f"tool already registered: {spec.name!r} (replacement forbidden)"
+        )
     _REGISTRY[spec.name] = spec
     return spec
 
@@ -66,3 +88,10 @@ def resolve_spec(name: str) -> RegisteredToolSpec:
     if spec is not None:
         return spec
     return RegisteredToolSpec(name=name, effect=DEFAULT_UNREGISTERED_EFFECT)
+
+
+def _reset_registry_for_tests() -> None:
+    """Test-only: unfreeze and clear. Not part of the public production API."""
+    global _FROZEN
+    _FROZEN = False
+    _REGISTRY.clear()

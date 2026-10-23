@@ -637,18 +637,19 @@ class Executor:
             raise AttemptClosedError(attempt_id)
 
         task = self.get_task(task_id)
-        # PR18: propagate attempt taint onto sandbox/verifier puts (foreach/inputs too).
+        # PR18: per-attempt ContextVar taint (not shared store state — foreach-safe).
+        from coscientist.core.taint import push_attempt_taint, reset_attempt_taint
+
         _tainted = False
         if hasattr(attempt, "tainted_context"):
             _tainted = bool(attempt.tainted_context)
         elif isinstance(attempt, dict):
             _tainted = bool(attempt.get("tainted_context"))
-        set_taint = getattr(self.artifacts, "set_context_tainted", None)
-        if callable(set_taint):
-            set_taint(_tainted)
+        _taint_token = push_attempt_taint(_tainted)
         try:
             try:
                 # MJ2: no sync Popen on the event loop — evaluate (sandbox) off-thread.
+                # to_thread on 3.12+ copies ContextVar so sandbox puts see taint.
                 checks = await asyncio.to_thread(
                     evaluate_task_checks,
                     self.catalog,
@@ -698,8 +699,7 @@ class Executor:
                     result_class="core_bug",
                 )
         finally:
-            if callable(set_taint):
-                set_taint(False)
+            reset_attempt_taint(_taint_token)
         for c in checks:
             if not c.is_code and c.status == ReqStatus.UNASSESSED:
                 self._scheduled_reviews.append(c.check_id)

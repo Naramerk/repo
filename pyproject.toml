@@ -86,3 +86,14 @@ name = "core must not import experimental"
 type = "forbidden"
 source_modules = ["coscientist.core"]
 forbidden_modules = ["coscientist.experimental"]
+
+[[tool.importlinter.contracts]]
+name = "invoke_tool is the only tools entry (no direct contract/effects import)"
+type = "forbidden"
+source_modules = ["coscientist.api", "coscientist.checks", "coscientist.experimental"]
+forbidden_modules = [
+  "coscientist.tools.contract",
+  "coscientist.tools.effects",
+  "coscientist.tools.gate",
+  "coscientist.tools.taint",
+]

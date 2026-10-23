@@ -501,11 +501,11 @@ class Tool(Protocol):
 class ToolOutput(BaseModel):
     data: Any; artifacts: list[Artifact]    # обёртка сама регистрирует артефакты и считает sha256
 ```
-- **Единственный путь вызова:** `coscientist.tools.invoke_tool` (агентский wiring — позже). Прямой `Tool.call` обходит гейты — запрещён вне тестов.
-- Класс эффекта берётся из **закрытого реестра** `core.tool_registry` (name → ToolSpec); незарегистрированное имя → `external_effect` (fail-closed). `ToolSpec.effect` у вызывающего — advisory only.
-- `write` / `external_effect` только через HITL-гейт `side_effect` (headless default `deny` → событие `SideEffectDenied` + строка в отчёте + `ToolError(local)`).
-- `effect_idem_key = sha256(JCS({study_id, task_key, tool, args_digest, attempt_id}))` — только для write/external_effect; **read не индексируется** (повторы намеренны). События `EffectIntended` / `EffectDone`; Intended без Done → статус unknown в отчёте; `transport_unsent` → терминальный `EffectDone(failed)`.
-- Taint считается в **core** из input-артефактов попытки (`AttemptStarted.tainted_context`) и наследуется derived/sandbox put; web/tool-вывод → `tainted=true`. В tainted-контексте write/external_effect не выдаются.
+- **Единственный путь вызова:** `coscientist.tools.invoke_tool` (агентский wiring — позже). Прямой `Tool.call` обходит гейты — запрещён вне тестов; import-linter: api/checks/experimental не импортируют `tools.contract` / `tools.effects` напрямую.
+- Класс эффекта — **закрытый** `core.tool_registry` (после `freeze_registry` замена запрещена); незарегистрированное имя → `external_effect`. `ToolSpec.effect` — advisory only.
+- `write` / `external_effect` только через HITL-гейт `side_effect` (headless default `deny` → `SideEffectDenied` + строка в отчёте). Taint deny — тоже `SideEffectDenied(reason=taint_deny)`.
+- `effect_idem_key` включает `attempt_id` для завершённых эффектов; **read не индексируется**. Перед вызовом: любой `EffectIntended` без `EffectDone` с тем же `(study, task_key, tool, args_digest)` на **любой** attempt → opaque/unknown, повтор запрещён (exactly-once). `transport_unsent` → `EffectDone(failed)`.
+- Taint: `AttemptStarted.tainted_context` из журнала (не от вызывающего); наследование на derived/sandbox через per-attempt `ContextVar` (не shared store).
 
 ### 6.2 Правила повтора
 

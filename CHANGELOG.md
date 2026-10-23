@@ -3,11 +3,11 @@
 ## Unreleased
 
 ### M1 PR18
-- Closed `core.tool_registry` is authoritative for effect (unregistered → `external_effect`); `invoke_tool` is the only call path; `ToolSpec.effect` is advisory.
-- HITL gate `side_effect` (headless default `deny` → `SideEffectDenied` + report line + `ToolError(local)`).
-- `effect_idem_key` includes `attempt_id`; **read is not indexed**; write journals `EffectIntended`/`EffectDone` loaded from the journal on every invoke; Intended-without-Done → unknown in report; `transport_unsent` → terminal `EffectDone(failed)`.
-- Taint computed in core from input artifact metas (`AttemptStarted.tainted_context`); propagates to derived/sandbox puts; filters write tools.
-- `POST /studies` Idempotency-Key: deterministic `study_id`, `O_EXCL` reserve, fsync+atomic rename; restart/concurrent safe.
+- Frozen closed `core.tool_registry` (no replace; unregistered → `external_effect`); `invoke_tool` only (import-linter); `ToolSpec.effect` advisory.
+- Exactly-once: in-doubt Intended-without-Done spans all attempts by fingerprint; completed keys keep `attempt_id`; read not indexed.
+- Taint from journal `AttemptStarted.tainted_context`; per-attempt `ContextVar` for sandbox puts (foreach-safe); taint/side_effect deny → `SideEffectDenied` + report lines.
+- Journal effect index cached incrementally on the writer; artifact store required before write call.
+- `POST /studies` Idempotency-Key: deterministic id, `O_EXCL`, empty-file recover, fsync+rename; takeover + multi-process race tests.
 
 ### M1 PR12
 - `TaskSpec.budget_share` / `deadline_share` (None = equal remainder of undistributed pool).

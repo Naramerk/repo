@@ -1,11 +1,34 @@
-"""Taint from input artifacts (DESIGN_M1 §8 / K5) — computed in core, not by callers."""
+"""Taint from input artifacts (DESIGN_M1 §8 / K5) — computed in core, not by callers.
+
+Per-attempt taint for sandbox/verifier puts uses a ``ContextVar`` so parallel
+foreach attempts do not clobber each other (unlike shared store state).
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextvars import ContextVar, Token
 from typing import Any
 
 GetMeta = Callable[[str], Any | None]
+
+# Per-async-task / per-thread (copied into to_thread on 3.12+).
+_attempt_context_tainted: ContextVar[bool] = ContextVar(
+    "attempt_context_tainted", default=False
+)
+
+
+def push_attempt_taint(value: bool) -> Token[bool]:
+    """Bind attempt taint for the current context; return token for reset."""
+    return _attempt_context_tainted.set(bool(value))
+
+
+def reset_attempt_taint(token: Token[bool]) -> None:
+    _attempt_context_tainted.reset(token)
+
+
+def current_attempt_taint() -> bool:
+    return bool(_attempt_context_tainted.get())
 
 
 def artifact_is_tainted(meta: Any | None) -> bool:
@@ -57,4 +80,4 @@ def bindings_tainted(
 
 def derived_tainted(*, context_tainted: bool, explicit: bool = False) -> bool:
     """Propagate context taint onto a newly stored artifact."""
-    return bool(context_tainted or explicit)
+    return bool(context_tainted or explicit or current_attempt_taint())

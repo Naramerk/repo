@@ -19,8 +19,11 @@ from pydantic import BaseModel, ConfigDict
 
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import Budget, HitlPolicy
-from coscientist.core.errors import Conflict
+from coscientist.core.errors import Conflict, LeaseLost
 from coscientist.core.runtime_factory import close_runtime, open_runtime
+
+# Default wait for another worker to finish create_study before takeover.
+_WAIT_COMPLETE_S = 2.0
 
 
 class CreateStudyBody(BaseModel):
@@ -56,7 +59,10 @@ def _read_mapping(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_text(encoding="utf-8").strip()
+        if not raw:
+            return None  # empty file from crash between O_EXCL and write
+        return json.loads(raw)
     except (OSError, json.JSONDecodeError):
         return None
 
@@ -72,7 +78,6 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, path)
-        # Best-effort directory fsync for durability of the rename.
         try:
             dir_fd = os.open(str(path.parent), os.O_RDONLY)
             try:
@@ -89,13 +94,13 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
                 pass
 
 
-def _reserve_key(
+async def _reserve_key(
     path: Path, *, study_id: str, request_digest: str, key: str
 ) -> tuple[dict[str, Any], bool]:
     """O_EXCL create the mapping file.
 
-    Returns ``(mapping, created)``. ``created=True`` means this caller owns the
-    reservation and must run ``create_study``. Raises Conflict on digest mismatch.
+    Returns ``(mapping, created)``. Empty/corrupt reservation left by a crash
+    between O_EXCL and write is unlinked and retried (recoverable).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -105,31 +110,49 @@ def _reserve_key(
         "status": "pending",
     }
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-    try:
-        fd = os.open(str(path), flags, 0o644)
-    except FileExistsError:
-        existing = _read_mapping(path)
-        if existing is None:
-            time.sleep(0.05)
+
+    for _attempt in range(3):
+        try:
+            fd = os.open(str(path), flags, 0o644)
+        except FileExistsError:
             existing = _read_mapping(path)
-        if existing is None:
-            raise Conflict(f"Idempotency-Key reservation unreadable: {key!r}") from None
-        if existing.get("request_digest") != request_digest:
-            raise Conflict(
-                f"Idempotency-Key reused with a different POST /studies body "
-                f"(key={key!r})"
-            ) from None
-        return existing, False
-    try:
-        data = json.dumps(payload, sort_keys=True).encode("utf-8")
-        os.write(fd, data)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    return payload, True
+            if existing is None:
+                # Empty (crash between O_EXCL and write) or corrupt JSON.
+                try:
+                    st = path.stat()
+                    if st.st_size == 0:
+                        path.unlink(missing_ok=True)
+                        await asyncio.sleep(0)
+                        continue
+                except OSError:
+                    pass
+                await asyncio.sleep(0.05)
+                existing = _read_mapping(path)
+            if existing is None:
+                # Still unreadable — recover by unlinking and retrying O_EXCL.
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                await asyncio.sleep(0.05)
+                continue
+            if existing.get("request_digest") != request_digest:
+                raise Conflict(
+                    f"Idempotency-Key reused with a different POST /studies body "
+                    f"(key={key!r})"
+                ) from None
+            return existing, False
+        try:
+            data = json.dumps(payload, sort_keys=True).encode("utf-8")
+            os.write(fd, data)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        return payload, True
+    raise Conflict(f"Idempotency-Key reservation unreadable after retries: {key!r}")
 
 
-async def _wait_complete(path: Path, *, timeout_s: float = 30.0) -> dict[str, Any]:
+async def _wait_complete(path: Path, *, timeout_s: float = _WAIT_COMPLETE_S) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         existing = _read_mapping(path)
@@ -148,17 +171,13 @@ async def post_studies(
     *,
     idempotency_key: str | None = None,
     catalog: Any,
+    wait_complete_s: float = _WAIT_COMPLETE_S,
     **create_kwargs: Any,
 ) -> dict[str, str]:
     """Create a study (``POST /studies`` semantics).
 
-    When ``Idempotency-Key`` is provided:
-    - ``study_id`` is derived deterministically from the key;
-    - reservation is created with ``O_EXCL`` before ``create_study``;
-    - concurrent losers wait for ``status=complete`` (no double create);
-    - repeat with the same body returns the same ``study_id``;
-    - repeat with a different body raises ``Conflict`` (HTTP 409);
-    - crash after reserve / before complete: retry is safe (StudyCreated idempotent).
+    ``wait_complete_s`` is how long a losing concurrent caller waits for the
+    winner before taking over a stale pending reservation (testable).
     """
     root = Path(data_root)
     root.mkdir(parents=True, exist_ok=True)
@@ -169,20 +188,16 @@ async def post_studies(
     if idempotency_key:
         sid = study_id_from_idempotency_key(idempotency_key)
         path = _idem_path(root, idempotency_key)
-        mapping, reserved = _reserve_key(
+        mapping, reserved = await _reserve_key(
             path, study_id=sid, request_digest=req_digest, key=idempotency_key
         )
         if mapping.get("status") == "complete":
             return {"study_id": str(mapping["study_id"])}
         if not reserved:
-            # Another worker holds the pending reservation — wait for complete.
-            # If the winner crashed, a later retry (new process) may O_EXCL-miss
-            # and see pending forever; take over after a short wait.
             try:
-                done = await _wait_complete(path, timeout_s=2.0)
+                done = await _wait_complete(path, timeout_s=wait_complete_s)
                 return {"study_id": str(done["study_id"])}
             except Conflict:
-                # Take over: pending stale — proceed to create (StudyCreated idempotent).
                 sid = str(mapping["study_id"])
         else:
             sid = str(mapping["study_id"])
@@ -192,21 +207,47 @@ async def post_studies(
         sid = new_study_id()
         path = None
 
-    rt = await open_runtime(root, sid, catalog=catalog)
+    async def _wait_for_peer() -> dict[str, str]:
+        if path is None:
+            raise Conflict(f"lease lost creating study {sid} without idempotency path")
+        done = await _wait_complete(path, timeout_s=max(wait_complete_s * 10, 30.0))
+        return {"study_id": str(done["study_id"])}
+
     try:
-        created_id = await rt.create_study(
-            profile=body.profile,
-            request=body.request,
-            catalog_version=body.catalog_version,
-            hitl_policy=body.hitl_policy,
-            deadline=body.deadline,
-            budget=body.budget,
-            finalize_reserve_s=body.finalize_reserve_s,
-            sid=sid,
-            **create_kwargs,
-        )
+        rt = await open_runtime(root, sid, catalog=catalog)
+    except LeaseLost:
+        if idempotency_key:
+            return await _wait_for_peer()
+        raise
+
+    created_id: str | None = None
+    try:
+        try:
+            created_id = await rt.create_study(
+                profile=body.profile,
+                request=body.request,
+                catalog_version=body.catalog_version,
+                hitl_policy=body.hitl_policy,
+                deadline=body.deadline,
+                budget=body.budget,
+                finalize_reserve_s=body.finalize_reserve_s,
+                sid=sid,
+                **create_kwargs,
+            )
+        except Conflict:
+            # Peer wrote StudyCreated (payload clock differs) — treat as success.
+            events = await rt.store.read_all()
+            if any(e.type == "StudyCreated" for e in events):
+                created_id = sid
+            else:
+                raise
     finally:
         await close_runtime(rt)
+
+    if created_id is None:
+        if idempotency_key:
+            return await _wait_for_peer()
+        raise Conflict(f"create_study produced no study_id for {sid}")
 
     if idempotency_key and path is not None:
         _atomic_write(
