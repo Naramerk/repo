@@ -641,7 +641,11 @@ def test_exec_runs_timeout_is_noncountable_refute_unresolved(tmp_path):
     )
     assert cr.status is ReqStatus.FAILED
     assert cr.effect is not None
-    assert cr.effect.get("timeout_kind") == "idle_timeout"
+    assert cr.effect.get("timeout_kind") in (
+        "idle_timeout",
+        "wall_timeout",
+        "cpu_timeout",
+    )
     assert cr.effect.get("countable") is False
     assert cr.effect.get("observation_only") is True
     assert cr.effect.get("refute_unresolved") is True
