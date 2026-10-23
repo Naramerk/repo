@@ -134,8 +134,9 @@ async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
 
 def test_upcast_provenance_simulated_to_stub():
     v, p = upcast("AttemptStarted", 1, {"provenance": "simulated", "attempt_id": "a"})
-    # v1→v2 simulated→stub, then v2→v3 inputs=[] (PR7).
-    assert v == 3 and p["provenance"] == "stub" and p["inputs"] == []
+    # v1→v2 simulated→stub, v2→v3 inputs=[] (PR7), v3→v4 limitations=[] (PR10).
+    assert v == 4 and p["provenance"] == "stub" and p["inputs"] == []
+    assert p["limitations"] == []
     v, p = upcast(
         "ResultRecorded",
         1,

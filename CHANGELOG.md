@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### M1 PR10
+- `TaskSpec.foreach` (selected/all hypothesis|question of a source task): core materializes N `EXP-<n>` at source `TaskDone` via `PlanExpanded(foreach=true)` — no planner, no expansion quota; restart/recover resumes; report lines in Russian.
+- `InputSpec.quorum` fan-in: start when ≥ quorum inputs bind as real/partial; gaps → `AttemptStarted.limitations[]` (RU); miss → `SKIPPED(input_unavailable)` + `не выполнено: кворум входов` on `StudyFinalized`.
+- Upcasters: TaskCreated v7, PlanAccepted v5, AttemptStarted v4.
+
 ### M1 PR9
 - `PlanExpanded` + H-g trigger (`expand_after` / `AgentTaskOutput.expansion_request` / HITL).
 - Agent `expansion_request` / `expand_after` enqueue **PLAN-n → critic** (never direct `PlanExpanded`); HITL plan edit / «decide yourself» is the third trigger; `delegated_by` from `HitlDecided`.

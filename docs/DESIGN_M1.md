@@ -373,7 +373,7 @@ CodeCheck kinds: `exec_runs` (команда в sandbox, exit 0, лимиты в
 | 8 | Вшивка `verdict()` в runtime finalize/report + `InputSpec.kind=verdict` (digest на P2); k_ref / intent / survived в проде; check `role` (Duhem–Quine); `QuestionDisposed` (needs_more_data/infeasible), premises + premise_idx (ill_posed вычисляемый), конфликт в отчёте, PlanValidator с частичным покрытием | K8, H-f, S2/S3 runtime | 2, 6, 7 |
 | 8b | Hypothesis verdict model (DESIGN_HYP_DELTA): claim `validity`/`outcome`/`severe`/`independence_key` (data-overlap sources); `supported_needed` (≥2); SESOI from catalog only; e-value deferred; `hypothesis_report_row` in finalize | H-e, S2/S3 model | 6, 7, 8 |
 | 9 | `PlanExpanded` + триггер + квоты агента/человека + replan_reserve + question add/supersede + фильтр k | S6, H-d, H-g, C10 | 8b |
-| 10 | foreach + quorum fan-in | S9 | 9 |
+| 10 | foreach + quorum fan-in (`TaskSpec.foreach`, `InputSpec.quorum`; RU report lines; no expansion quota) | S9 | 9 |
 | 11 | LoopSpec (scope, 3 предиката, обязательный max_iter, LoopCapped) | S10 | 9 |
 | 12 | budget_share/deadline_share + перенормировка + валидатор (критический путь) | S4 | 9 |
 | 13 | Рубрика + final_type + PlanValidator | B2, B5, K7 | 8 |

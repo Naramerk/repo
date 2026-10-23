@@ -106,7 +106,7 @@ def expansion_not_done_line(reason: str, detail: str) -> str:
 
 
 def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
-    """TaskReason values + ExpansionRefused report lines, first-seen order by seq."""
+    """TaskReason values + ExpansionRefused / foreach / quorum report lines."""
     seen: list[str] = []
     for ev in sorted(events, key=lambda e: e.seq or 0):
         if ev.type == "TaskDone":
@@ -117,11 +117,26 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
                 except ValueError:
                     continue
                 seen.append(str(reason))
+            # PR10: quorum miss → honest Russian line alongside TaskReason.
+            if (
+                ev.payload.get("detail") == "quorum"
+                and "не выполнено: кворум входов" not in seen
+            ):
+                seen.append("не выполнено: кворум входов")
         elif ev.type == "ExpansionRefused":
             line = expansion_not_done_line(
                 str(ev.payload.get("reason") or ""),
                 str(ev.payload.get("detail") or ""),
             )
+            if line not in seen:
+                seen.append(line)
+        elif ev.type == "PlanExpanded" and ev.payload.get("foreach"):
+            items = ev.payload.get("foreach_items") or []
+            added = ev.payload.get("added_tasks") or []
+            if len(items) == 0 and len(added) == 0:
+                line = "не выполнено: foreach пуст"
+            else:
+                line = f"foreach: развёрнуто {len(added)}"
             if line not in seen:
                 seen.append(line)
     return seen

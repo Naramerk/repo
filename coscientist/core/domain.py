@@ -167,6 +167,10 @@ class InputSpec(Frozen):
     ``kind=claim``: ``ref`` is a claim node id; core adds ``uses_claim`` at P2.
     ``kind=verdict``: ``ref`` is a hypothesis/question id; P2 binds a persisted
     verdict snapshot digest (runtime ``verdict()``, M1 PR 8).
+
+    ``quorum`` (M1 PR10 fan-in): task starts when ≥ quorum inputs bind as
+    real/partial; unbound / failed / stub inputs become experiment limitations.
+    ``None`` = require every input (legacy). ``"all"`` = same as len(inputs).
     """
 
     from_task: str = ""
@@ -175,6 +179,26 @@ class InputSpec(Frozen):
     # M1 PR5: default forbid (was use_partial). Old journals restored via upcaster.
     mode: Literal["use_partial", "simulate", "forbid"] = "forbid"
     kind: Literal["artifact", "claim", "verdict"] = "artifact"
+    ref: str | None = None
+    quorum: int | Literal["all"] | None = None
+
+
+class ForEachSpec(Frozen):
+    """Expand one template task into N tasks at source DONE (M1 PR10 / S9).
+
+    Example: ``selected hypotheses of HYP-0`` → kind=hypothesis, of_task=HYP-0,
+    selector=selected. Core assigns EXP-<n>; no planner; no expansion quota.
+    """
+
+    kind: Literal["hypothesis", "question"]
+    of_task: str
+    selector: Literal["selected", "all"] = "selected"
+
+
+class Limitation(Frozen):
+    """experiment.limitations[] entry (fan-in quorum gaps, partial inputs)."""
+
+    text: str
     ref: str | None = None
 
 
@@ -234,6 +258,10 @@ class TaskSpec(Frozen):
     tolerate_failed_dep: bool = False
     # Scientific method; simulation does not upgrade stub/partial input provenance.
     method: ExperimentMethod | None = None
+    # M1 PR10: template expanded at of_task DONE (selector → N concrete tasks).
+    foreach: ForEachSpec | None = None
+    # Bound hypothesis/question id after foreach materialization (None on template).
+    foreach_item: str | None = None
 
 
 class Budget(Frozen):

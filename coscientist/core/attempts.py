@@ -23,6 +23,7 @@ from coscientist.core.inputs import (
     collect_bindable_claims,
     uses_claim_graph_events,
 )
+from coscientist.core.quorum import bind_with_quorum, has_quorum_spec
 from coscientist.core.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
 
 # Persisted on AttemptClosed.retry_at; fired by StudyRuntime.tick vs injected Clock.
@@ -67,7 +68,15 @@ class AttemptsMixin:
         return dep
 
     def _deps_done(self, task: Task) -> bool:
+        children_map = getattr(self, "_foreach_children", None) or {}
         for d in task.spec.depends_on:
+            # PR10: depends_on a foreach template → wait for all concrete children.
+            if d in children_map:
+                for ck in children_map[d]:
+                    child = self._lookup_dep(ck)
+                    if child is None or child.state != TaskState.DONE:
+                        return False
+                continue
             dep = self._lookup_dep(d)
             if dep is None or dep.state != TaskState.DONE:
                 return False
@@ -125,9 +134,7 @@ class AttemptsMixin:
                 if dep is None or dep.state != TaskState.DONE:
                     continue
                 if self._hc_cascade_parent(dep):
-                    await self.cancel_task(
-                        task.task_id, reason=TaskReason.INPUT_UNAVAILABLE
-                    )
+                    await self.cancel_task(task.task_id, reason=TaskReason.INPUT_UNAVAILABLE)
                     break
 
     def _resolve_task(self, key_or_id: str) -> Task:
@@ -149,9 +156,7 @@ class AttemptsMixin:
             raise RuntimeError("task already DONE")
         if not self._deps_done(task):
             raise RuntimeError("dependencies not DONE")
-        open_atts = [
-            a for a in task.attempts if not self.attempts.get(a, {}).get("closed")
-        ]
+        open_atts = [a for a in task.attempts if not self.attempts.get(a, {}).get("closed")]
         if open_atts:
             raise RuntimeError("already has open attempt")
         n = len(task.attempts) + 1
@@ -160,19 +165,11 @@ class AttemptsMixin:
 
         graph = getattr(self, "graph", None)
         results = getattr(self, "results", None) or {}
-        known_claims, claim_provenance = collect_bindable_claims(
-            graph, results=results
-        )
+        known_claims, claim_provenance = collect_bindable_claims(graph, results=results)
         # Prefer journaled snapshots (replay); else compute scoped to this task.
         stored = getattr(self, "verdict_snapshots", None) or {}
-        verdict_refs = [
-            inp.ref
-            for inp in task.spec.inputs
-            if inp.kind == "verdict" and inp.ref
-        ]
-        verdict_snapshots: dict[str, dict] = {
-            r: stored[r] for r in verdict_refs if r in stored
-        }
+        verdict_refs = [inp.ref for inp in task.spec.inputs if inp.kind == "verdict" and inp.ref]
+        verdict_snapshots: dict[str, dict] = {r: stored[r] for r in verdict_refs if r in stored}
         need = [r for r in verdict_refs if r not in verdict_snapshots]
         if need and graph is not None and self.study is not None:
             try:
@@ -183,11 +180,9 @@ class AttemptsMixin:
                         addrs = set(spec.get("addresses") or [])
                         if addrs & set(need):
                             cover_keys.add(str(spec.get("task_key") or ""))
-                cover_tasks = [
-                    t
-                    for t in self.tasks.values()
-                    if t.spec.task_key in cover_keys
-                ] or list(self.tasks.values())
+                cover_tasks = [t for t in self.tasks.values() if t.spec.task_key in cover_keys] or list(
+                    self.tasks.values()
+                )
                 any_exp = any(
                     t.state == TaskState.DONE
                     and t.outcome
@@ -209,18 +204,64 @@ class AttemptsMixin:
                 verdict_snapshots.update(computed)
             except Exception:  # noqa: BLE001 — start_attempt must not crash
                 verdict_snapshots = {**verdict_snapshots}
+        from coscientist.core.foreach import expand_input_specs_foreach
+        from coscientist.core.quorum import task_quorum_needed
+
+        # PR10: fan-in inputs that name a foreach template → one InputSpec per child.
+        # ``self`` is StudyRuntime at runtime (AttemptsMixin).
+        orig_inputs = list(task.spec.inputs)
+        expanded_inputs = expand_input_specs_foreach(self, orig_inputs)  # type: ignore[arg-type]
+        bind_task = (
+            task
+            if expanded_inputs == orig_inputs
+            else task.model_copy(update={"spec": task.spec.model_copy(update={"inputs": expanded_inputs})})
+        )
+        limitations: list[Any] = []
         try:
-            bindings, derived = bind_inputs(
-                task,
-                dep_tasks=self._dep_map(),
-                dep_outputs=self.dep_outputs,
-                dep_provenance=self.dep_provenance,
-                known_claim_ids=known_claims,
-                claim_provenance=claim_provenance,
-                verdict_snapshots=verdict_snapshots,
+            use_quorum = has_quorum_spec(orig_inputs) or has_quorum_spec(bind_task.spec.inputs)
+            if use_quorum:
+                # Preserve quorum from the template InputSpec when children expand.
+                orig_needed = task_quorum_needed(orig_inputs)
+                if has_quorum_spec(orig_inputs) and bind_task.spec.inputs:
+                    q = next(i.quorum for i in orig_inputs if i.quorum is not None)
+                    bind_task = bind_task.model_copy(
+                        update={
+                            "spec": bind_task.spec.model_copy(
+                                update={
+                                    "inputs": [inp.model_copy(update={"quorum": q}) for inp in bind_task.spec.inputs]
+                                }
+                            )
+                        }
+                    )
+                # Foreach → 0 children but quorum > 0 → honest miss.
+                if not bind_task.spec.inputs and orig_needed > 0:
+                    raise InputUnavailable("quorum")
+                bindings, derived, limitations = bind_with_quorum(
+                    bind_task,
+                    dep_tasks=self._dep_map(),
+                    dep_outputs=self.dep_outputs,
+                    dep_provenance=self.dep_provenance,
+                    known_claim_ids=known_claims,
+                    claim_provenance=claim_provenance,
+                    verdict_snapshots=verdict_snapshots,
+                )
+            else:
+                bindings, derived = bind_inputs(
+                    bind_task,
+                    dep_tasks=self._dep_map(),
+                    dep_outputs=self.dep_outputs,
+                    dep_provenance=self.dep_provenance,
+                    known_claim_ids=known_claims,
+                    claim_provenance=claim_provenance,
+                    verdict_snapshots=verdict_snapshots,
+                )
+        except InputUnavailable as e:
+            detail = "quorum" if str(e.reason) == "quorum" else None
+            await self.cancel_task(
+                task.task_id,
+                reason=TaskReason.INPUT_UNAVAILABLE,
+                detail=detail,
             )
-        except InputUnavailable:
-            await self.cancel_task(task.task_id, reason=TaskReason.INPUT_UNAVAILABLE)
             raise
 
         # method=simulation is scientific metadata (not a stub by itself); input
@@ -234,6 +275,7 @@ class AttemptsMixin:
         assert self.study is not None
         sid = self.study.study_id
         deadline = min(task.deadline, self.study.effective_deadline())
+        lim_payload = [lim.model_dump(mode="json") if hasattr(lim, "model_dump") else dict(lim) for lim in limitations]
         payload = {
             "attempt_id": aid,
             "n": n,
@@ -248,6 +290,8 @@ class AttemptsMixin:
             "study_id": sid,
             # PR7: P2 bindings (+ digest) live in the journal for replay.
             "inputs": [b.model_dump(mode="json") for b in bindings],
+            # PR10: fan-in gaps (inputs below quorum / failed deps).
+            "limitations": lim_payload,
         }
         events: list[EventEnvelope] = [
             EventEnvelope(
@@ -257,7 +301,7 @@ class AttemptsMixin:
                 idem_key=make_idem("AttemptStarted", aid),
                 payload=payload,
                 ts=now,
-                schema_version=3,
+                schema_version=4,
             )
         ]
         # Persist full verdict snapshots used at bind (not digest-only).
@@ -379,6 +423,8 @@ class AttemptsMixin:
         self,
         task_key_or_id: str,
         reason: str | TaskReason = TaskReason.CANCELLED,
+        *,
+        detail: str | None = None,
     ) -> None:
         task = self._resolve_task(task_key_or_id)
         if task.state == TaskState.DONE:
@@ -415,17 +461,20 @@ class AttemptsMixin:
                 t = self._attempt_tasks.pop(aid, None)
                 if t:
                     t.cancel()
+        done_payload: dict[str, Any] = {
+            "task_id": task.task_id,
+            "outcome": TaskOutcome.SKIPPED.value,
+            "reason": reason_s,
+        }
+        if detail:
+            done_payload["detail"] = detail
         events.append(
             EventEnvelope(
                 study_id=self.study.study_id,
                 type="TaskDone",
                 entity_key=task.task_id,
                 idem_key=make_idem("TaskDone", task.task_id),
-                payload={
-                    "task_id": task.task_id,
-                    "outcome": TaskOutcome.SKIPPED.value,
-                    "reason": reason_s,
-                },
+                payload=done_payload,
                 ts=now,
                 schema_version=2,
             )

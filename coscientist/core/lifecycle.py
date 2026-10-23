@@ -227,7 +227,7 @@ class LifecycleMixin:
                     idem_key=make_idem("TaskCreated", tid),
                     payload=task.model_dump(mode="json"),
                     ts=now,
-                    schema_version=6,
+                    schema_version=7,
                 )
             )
             # Graph nodes for stages: only schema kinds. SPEC/HYP/LIT are DAG
@@ -269,6 +269,12 @@ class LifecycleMixin:
             if k not in task_keys:
                 raise ValueError(f"expand_after unknown task_key: {k!r}")
         validate_input_specs(tasks)
+        from coscientist.core.foreach import validate_foreach_specs
+
+        validate_foreach_specs(
+            tasks,
+            known_keys={t.spec.task_key for t in self.tasks.values()},
+        )
         catalog = getattr(self, "catalog", None) or getattr(getattr(self, "executor", None), "catalog", None)
         validate_plan_criteria(tasks, catalog)
         pid = plan_id()
@@ -289,7 +295,7 @@ class LifecycleMixin:
                 idem_key=make_idem("PlanAccepted", pid),
                 payload=plan.model_dump(mode="json"),
                 ts=now,
-                schema_version=4,
+                schema_version=5,
             )
         ]
         # Question nodes so claim ``about`` can bind without auto-creating targets.
@@ -399,7 +405,7 @@ class LifecycleMixin:
                     idem_key=make_idem("TaskCreated", tid),
                     payload=task.model_dump(mode="json"),
                     ts=now,
-                    schema_version=6,
+                    schema_version=7,
                 )
             )
         await self._append(events)
