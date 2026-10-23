@@ -124,6 +124,21 @@
         "human": {"type": "array", "items": {"type": "string"}}
       }
     },
+    "custom_checks": {
+      "type": "array",
+      "items": {"type": "object", "additionalProperties": true},
+      "description": "M1 PR20: agent-proposed non-catalog checks"
+    },
+    "observations": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {"type": "string"},
+          {"type": "object", "additionalProperties": true}
+        ]
+      },
+      "description": "M1 PR20: unverified findings outside the plan"
+    },
     "truncated": {"type": "boolean"}
   }
 }

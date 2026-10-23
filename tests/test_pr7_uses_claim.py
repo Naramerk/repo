@@ -132,14 +132,15 @@ def test_upcast_attempt_started_inputs_default():
             "deadline": "2026-01-01T00:00:00+00:00",
         },
     )
-    # …v6→v7 tainted (PR18), v7→v8 inputs_digest (PR19).
-    assert v == 8
+    # …v7 tainted (PR18) → v8 inputs_digest (#23) → v9 attempt_role (PR20).
+    assert v == 9
     assert p["inputs"] == []
     assert p["limitations"] == []
     assert p["allocated_budget_rub"] is None
     assert p["budget_limit_rub"] is None
     assert p["tainted_context"] is False
     assert p.get("inputs_digest") is None
+    assert p["attempt_role"] == "agent"
 
 
 @pytest.mark.asyncio
@@ -302,9 +303,10 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
     edges = [e for e in rt.graph.edges_from(exp_id) if e.kind == "uses_claim"]
     assert len(edges) == 1 and edges[0].dst_id == claim_id
     started = next(e for e in await rt.store.read_all() if e.type == "AttemptStarted" and e.entity_key == aid)
-    assert started.schema_version == 8
+    assert started.schema_version == 9
     assert started.payload.get("tainted_context") is False
     assert started.payload.get("inputs_digest")
+    assert started.payload.get("attempt_role") == "agent"
     assert len(started.payload["inputs"]) == 1
     assert started.payload["inputs"][0]["kind"] == "claim"
     assert started.payload["inputs"][0]["digest"]

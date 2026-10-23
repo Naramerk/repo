@@ -188,6 +188,10 @@ class AttemptsMixin:
 
         Callers must treat ``None`` as a successful refusal (task already
         ``SKIPPED(budget)`` / similar) — never pass it to ``Executor.record``.
+
+        Reviewer role for proposed_check is **not** caller-chosen: bind via
+        ``bind_proposed_check_reviewer`` against ``ReviewScheduled`` (journal).
+        AttemptStarted.attempt_role stays ``agent`` (v9 default / upcaster).
         """
         task = self._resolve_task(task_key_or_id)
         # Foreach templates are materialization placeholders — never dispatched.
@@ -396,6 +400,9 @@ class AttemptsMixin:
             "tainted_context": tainted_context,
             # PR10: fan-in gaps (inputs below quorum / failed deps).
             "limitations": lim_payload,
+            # PR20: attempt_role is journal-default agent; reviewer bind is
+            # ReviewScheduled.reviewer_attempt_id (not a start_attempt kwarg).
+            "attempt_role": "agent",
             **share_fields,
         }
         events: list[EventEnvelope] = [
@@ -406,7 +413,7 @@ class AttemptsMixin:
                 idem_key=make_idem("AttemptStarted", aid),
                 payload=payload,
                 ts=now,
-                # v7 = PR18 tainted; v8 = PR19 inputs_digest + binding snapshot fields.
+                # v8 = #23 inputs_digest; v9 = PR20 attempt_role (schema_versions).
                 schema_version=ATTEMPT_STARTED_SCHEMA_VERSION,
             )
         ]

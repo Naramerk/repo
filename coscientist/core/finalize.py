@@ -470,6 +470,8 @@ async def _sync_finalized_from_store(
 
 
 async def _append_finalized(runtime: StudyRuntime, *, sid: str, payload: dict[str, Any]) -> None:
+    from coscientist.core.events import STUDY_FINALIZED_SCHEMA_VERSION
+
     now = runtime.clock.now()
     await runtime._append(  # noqa: SLF001
         [
@@ -480,7 +482,7 @@ async def _append_finalized(runtime: StudyRuntime, *, sid: str, payload: dict[st
                 idem_key=make_idem("StudyFinalized", sid),
                 payload=payload,
                 ts=now,
-                schema_version=3,
+                schema_version=STUDY_FINALIZED_SCHEMA_VERSION,
             )
         ]
     )
@@ -701,6 +703,8 @@ async def _build_finalized_payload(
         fallback = type(e).__name__
         log.warning("finalize primary path failed: %s", e, exc_info=True)
         try:
+            from coscientist.core.proposed_check import custom_checks_report as _ccr
+
             minimal = build_minimal_report(
                 study_id=sid,
                 terminal_reason=term.value,
@@ -714,11 +718,25 @@ async def _build_finalized_payload(
                 refusal=refusal,
                 hypotheses=hypothesis_verdicts or {},
                 hypotheses_unavailable=hypotheses_unavailable,
+                custom_checks=_ccr(runtime),
+                observations=list(getattr(runtime, "_observations", None) or []),
             )
         except LeaseLost:
             raise
         except Exception as e2:  # noqa: BLE001
             raise RuntimeError(f"minimal_report:{type(e2).__name__}") from e2
+    from coscientist.core.proposed_check import custom_checks_report
+
+    custom_checks = custom_checks_report(runtime)
+    # Findings outside the plan stay unverified observations (DESIGN_M1 §16).
+    observations = list(getattr(runtime, "_observations", None) or [])
+    if minimal is not None and isinstance(minimal, dict):
+        minimal = dict(minimal)
+        # Prefer already-truncated lists from build_minimal_report when present.
+        if not minimal.get("custom_checks"):
+            minimal["custom_checks"] = custom_checks
+        if not minimal.get("observations"):
+            minimal["observations"] = observations
     return {
         "trigger": trigger,
         "terminal_reason": term.value,
@@ -732,6 +750,8 @@ async def _build_finalized_payload(
         "minimal_report": minimal,
         "fallback_reason": fallback,
         "refusal": refusal,
+        "custom_checks": custom_checks,
+        "observations": observations,
     }
 
 
@@ -751,6 +771,8 @@ async def _primary_report_path(
     as_of_s = None
     if as_of_raw is not None:
         as_of_s = as_of_raw.isoformat() if hasattr(as_of_raw, "isoformat") else str(as_of_raw)
+    from coscientist.core.proposed_check import custom_checks_report
+
     plans_local = getattr(runtime, "plans", None)
     md = render_markdown_report(
         study_id=sid,
@@ -763,6 +785,8 @@ async def _primary_report_path(
         refusal=refusal,
         as_of=as_of_s,
         plans=plans_local if isinstance(plans_local, dict) else None,
+        custom_checks=list(custom_checks_report(runtime)),
+        observations=list(getattr(runtime, "_observations", None) or []),
     )
     # Surface infra details (sandbox reason + soft-isolation note) in report text.
     # Escape agent/host-provided strings so markdown/HTML injection cannot reshape

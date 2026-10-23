@@ -9,9 +9,23 @@
 
 ### M1 PR16 follow-up
 - Finalize LeaseLost reraise coverage for `_primary_report_path` / `render_markdown_report` / `build_minimal_report`.
+<<<<<<< HEAD
 - `dispositions()` order on main `7217a95` (#28+#31+#33): skip_cap/scoped_capped → `apply_loop_cap_dispositions` → `_stamp_honest_terminals` → `apply_rollup`. Skip cap only for decomposes parents with **no own covering tasks** (plans + ``runtime.tasks`` addresses — foreach/expand/loop). Combined cover **excludes** ``superseded`` / ``cancelled`` (fold ``TaskDone.reason``) so dead tasks cannot falsely keep a parent under loop-cap.
+=======
+- `dispositions()` order on main `9494350` (#28+#31+#33+#32): skip_cap/scoped_capped → `apply_loop_cap_dispositions` → `_stamp_honest_terminals` → `apply_rollup`. Skip cap only for decomposes parents with **no own covering tasks** (plans + ``runtime.tasks`` addresses — foreach/expand/loop). Combined cover **excludes** ``superseded`` / ``cancelled`` (fold ``TaskDone.reason``) so dead tasks cannot falsely keep a parent under loop-cap.
+>>>>>>> 6b6d286 (fix(pr20): macaque #30 — rebase main, fail-closed prereg, journal reviewer)
 - Combined cover (plans ∪ runtime) can change ``not_attempted`` reason for questions that previously had ``no_task`` (e.g. runtime-only covering → ``tasks_skipped`` / ``tasks_failed``; cancelled-only covering → empty cover → ``no_task`` again).
 - Equal-rank rollup keeps own without false ``rollup_clamped``; lowering preserves ``iteration_cap`` in ``reason_detail``. Clamp predicate includes ``terminal=True`` (#28).
+
+### M1 PR20
+- Catalog meta-template `proposed_check`: agent proposes a check when no catalog template fits, with required justification + nearest rejected templates.
+- Preregistration: `CheckProposed` (v1) NFKC+JCS digest **before** evaluating `AttemptStarted` / any `ResultRecorded` for that task/target; approval bound to one `task_id`+`target` (target on `RequirementRef.params`; no silent `bound_target` fallback).
+- Approval HITL/API/reviewer sources: `CheckApproved` / `CheckRejected`; `by=human` only via journaled `HitlOpened` + `HitlDecided(by=human)` from `answer_hitl` (`kind=proposed_check` + matching `payload_ref`; empty kind/ref fail-closed; propose-written `HitlOpened` / free-form `human_principal` alone never authenticates); delegated reviewer from `ReviewScheduled.reviewer_task_id` + `attempt_role=reviewer` bind; timeout≡reject.
+- Core-only counting: unapproved → `unapproved_check`; approved executable like catalog (severe iff trusted); rubric qualitative never-severe; delegated counts but must not tip catalog ties **including 0:0**.
+- Quota: `Study.max_proposals` (default 3) caps new pids before eval; excess → `PROPOSAL_QUOTA` with late-write-safe close + StudyFinalized; agent tool `propose_check` registered in `tool_loader`.
+- Report: `custom_checks[]`/`observations[]` in 10KB minimal_report truncate; markdown escapes measures; keeps PR16 «Дерево подзадач».
+- Upcasters (on main after #28+#29+#31+#32): StudyCreated **v12** (`max_proposals`); bridge **v10→v11** byte-identical to #23 @ 57bc1ad; AttemptStarted **v9** (`attempt_role`, after #23 v8 bridge). StudyFinalized **v4**. Keeps TaskCreated **v13** / PlanAccepted **v11** / PlanExpanded **v5** from #28.
+- **Coordinator:** #23 owns StudyCreated v11 / AttemptStarted v8 — delete bridge copies on rebase after #23. Never merge from this agent.
 
 ### M1 PR15
 - `needs_more_data` + required `artifact(role=report, kind=experiment_design)` with rubric ids `hypothesis` / `variables` / `sample_size` / `success_criterion` (DESIGN_M1 §6.4). Event `QuestionDisposed` (v1; **first-wins**); rejected disposals → journaled `QuestionDisposeRejected` (`_note_reject` only after successful append; fold + `contributing_reasons`).

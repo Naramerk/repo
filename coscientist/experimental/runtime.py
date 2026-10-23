@@ -47,7 +47,10 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
                 self._delegated_costly_spent += spent
             return
         if ev.type == "HitlOpened":
-            self.hitl[p["request_id"]] = HitlRequest.model_validate(p)
+            # Strip unknown keys (e.g. legacy proposal_id); HitlRequest is extra=forbid.
+            fields = getattr(HitlRequest, "model_fields", None) or {}
+            clean = {k: v for k, v in p.items() if k in fields} if fields else dict(p)
+            self.hitl[p["request_id"]] = HitlRequest.model_validate(clean)
             return
         if ev.type in ("HitlDecided", "HitlTimedOut"):
             if p.get("keep_open") or p.get("effect") == "WAIT":
@@ -127,4 +130,8 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
         for _hid, h in list(self.hitl.items()):
             if h.open and now > h.deadline:
                 await self._hitl_timeout(h)
+        # PR20: delegated proposed_check_review timeout ≡ reject (no PENDING hang).
+        from coscientist.core.proposed_check import reject_stale_proposed_check_reviews
+
+        await reject_stale_proposed_check_reviews(self)
         await super().tick()
