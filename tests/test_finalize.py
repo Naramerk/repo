@@ -994,6 +994,64 @@ async def test_internal_error_finalize_exactly_one(tmp_path, clock, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_fetch_integrity_raised_before_finalize_then_guard(tmp_path, clock):
+    """Open-time FetchIntegrityRaised (#26) still appends; after finalize store rejects it.
+
+    Reconcile journals FIR while the study is open; termination leaves exactly one
+    StudyFinalized; a late FIR (or second finalize) hits StudyClosedError.
+    """
+    sid = "st_sf_fir"
+    rt = await _boot(tmp_path, clock, sid)
+    await _skip_all(rt)
+    fir = EventEnvelope(
+        study_id=sid,
+        type="FetchIntegrityRaised",
+        entity_key="call1",
+        idem_key=make_idem("FetchIntegrityRaised", "call1", "papers_get"),
+        payload={
+            "kind": "fetch_tool_reclassified",
+            "tool": "papers_get",
+            "call_id": "call1",
+            "internal_error": True,
+        },
+        ts=clock.now(),
+        schema_version=1,
+    )
+    stored_fir = (await rt.store.append_many([fir]))[0]
+    assert stored_fir.type == "FetchIntegrityRaised"
+    await rt.finalize(trigger="all_done")
+    events = await rt.store.read_all()
+    fins = [e for e in events if e.type == "StudyFinalized"]
+    assert len(fins) == 1
+    assert any(e.type == "FetchIntegrityRaised" for e in events)
+    fin_seq = int(fins[0].seq or 0)
+    assert int(stored_fir.seq or 0) < fin_seq
+    # Late FIR after StudyFinalized — I3 via store guard (not idempotent bypass).
+    with pytest.raises(StudyClosedError):
+        await rt.store.append(
+            EventEnvelope(
+                study_id=sid,
+                type="FetchIntegrityRaised",
+                entity_key="call2",
+                idem_key=make_idem("FetchIntegrityRaised", "call2", "papers_get"),
+                payload={
+                    "kind": "fetch_tool_reclassified",
+                    "tool": "papers_get",
+                    "call_id": "call2",
+                    "internal_error": True,
+                },
+                ts=clock.now(),
+                schema_version=1,
+            )
+        )
+    # Identical FIR retry also rejected once finalized (only StudyFinalized is idempotent).
+    with pytest.raises(StudyClosedError):
+        await rt.store.append(fir)
+    assert len([e for e in await rt.store.read_all() if e.type == "StudyFinalized"]) == 1
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
 async def test_write_after_finalized_rejected_no_event(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_lw")
     await _skip_all(rt)
@@ -1061,7 +1119,7 @@ async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
     assert refused and "unknown question" in str(refused[0].payload.get("detail") or "")
-    assert any(e.type == "StudyFinalized" for e in events)
+    assert len([e for e in events if e.type == "StudyFinalized"]) == 1
     await close_runtime(rt)
 
 
@@ -1074,7 +1132,7 @@ async def test_accept_plan_rejects_question_text_conflict(tmp_path, clock):
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
     assert refused and "text conflict" in str(refused[0].payload.get("detail") or "")
-    assert any(e.type == "StudyFinalized" for e in events)
+    assert len([e for e in events if e.type == "StudyFinalized"]) == 1
     await close_runtime(rt)
 
 
