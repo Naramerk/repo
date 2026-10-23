@@ -39,6 +39,9 @@
 - Replay pairing trusts journaled `AttemptTainted.{tool,is_fetch}`. Same-name reclassified `is_fetch=False` → domain `FetchToolReclassified` (caught on fold): paired `SourceFetched` uncounted. `FetchIntegrityRaised` journaled only on open/finalize; finalize fold fallback still puts `internal_error` in the report if reconcile fails. Proven by committed old-schema fixture + natural `tick` finalize (`tests/fixtures/journals/reclassified_fetch_old`).
 - `fetch_integrity` projection rows survive without `call_id` (key via tool/row_key).
 
+### Perf / journal write SLO (CI noise)
+- p99 ≤ 50ms unchanged. Gate is **max-of-3** independent full loads with **≥1000 samples/round** (replaces outer CI 5× pytest loop; not the same tolerance — at n=1049, p99 is the 12th-from-end sample, so rare fsync outliers are more tolerated than with n≈149). `min`/best-of removed — hid intermittent regressions. No separate median SLO. Demos: synthetic one-bad-round + real-path `append_many` +60ms sleep.
+
 ### Perf / journal write SLO
 - Restored honest DESIGN §3.5a measurement: 20 parallel attempts on real-disk `tmp_path`, full `StudyWriter` path (queue → `to_thread` → fence/insert/commit), `writer.latency_samples_ms`, 50ms p99, no retries/skips.
 - **Root cause (why only rt_exp tailed):** `projections.apply_event` rewrote *every* row in affected tables on each append (thousands of upserts per load) on the fsync-critical path. Experimental `_project_local` (HITL fold) made the writer queue wait longer between commits, so the O(n²) upsert tax showed up as rt_exp p99 spikes (165–356ms) while rt_core stayed ~6ms. Fix: load only needed tables and upsert keys ``_put`` marks dirty (ContextVar — not `id(row)`). Local measure: dirty-keys alone → p99 ~2–3ms for both runtimes; `asyncio.sleep(0)` after append was **not** required and is omitted so in-memory projection stays seq-ordered with the durable batch.

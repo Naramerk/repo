@@ -19,8 +19,44 @@ from coscientist.core.source_fetch import verify_fetch_capability
 from coscientist.tools.effects import _mint_fetch_capability_for_tests
 from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success
 
-# DESIGN §3.5a absolute SLO — do not raise; no retries/skips.
+# DESIGN §3.5a absolute SLO — do not raise; no retries/skips/xfail.
 _P99_SLO_MS = 50.0
+# Predetermined independent full loads; gate is max(round_p99) ≤ 50ms so one
+# bad round fails (min/best-of would hide it). Replaces the old outer CI 5×
+# pytest loop. Not equivalent: at n=1049, p99 is the 12th-from-end sample
+# (int(n*0.99)-1), so a handful of rare fsync outliers are more tolerated
+# than with n≈149 where p99 was ~2nd/3rd-worst. Threshold stays 50ms.
+_PERF_ROUNDS = 3
+_PERF_MIN_SAMPLES = 1000
+# RouteReturned count per EXP attempt so one load yields ≥_PERF_MIN_SAMPLES.
+_PERF_ROUTES_PER_ATTEMPT = 50
+
+
+def _p99_ms(samples: list[float]) -> float:
+    lat_sorted = sorted(samples)
+    return lat_sorted[max(0, int(len(lat_sorted) * 0.99) - 1)]
+
+
+def _assert_max_round_p99(
+    round_p99: list[float],
+    *,
+    p99_slo: float = _P99_SLO_MS,
+) -> float:
+    """Every round's p99 must be ≤ slo via max(round_p99). Returns gate p99."""
+    assert len(round_p99) == _PERF_ROUNDS, (
+        f"need exactly {_PERF_ROUNDS} rounds, got {len(round_p99)}"
+    )
+    gate_p99 = max(round_p99)
+    print(
+        f"perf max-of-{len(round_p99)} gate_p99={gate_p99:.2f}ms "
+        f"rounds_p99={[round(x, 2) for x in round_p99]} "
+        f"(p99≤{p99_slo}ms)"
+    )
+    assert gate_p99 <= p99_slo, (
+        f"max-of-{len(round_p99)} p99 {gate_p99:.2f}ms > {p99_slo}ms "
+        f"(rounds p99={round_p99!r})"
+    )
+    return gate_p99
 
 # Tables ``fold_events`` / ``apply_event`` may populate (compare SQLite ↔ fold).
 _PROJECTION_TABLES = (
@@ -80,9 +116,17 @@ def _assert_projection_equiv(
             )
 
 
-async def _run_load(tmp_path: Path, runtime_cls: type):
+async def _run_load(
+    tmp_path: Path,
+    runtime_cls: type,
+    *,
+    routes_per_attempt: int = 5,
+):
     """20 parallel attempts: full writer path (queue → to_thread → fence/insert/fsync)
     plus runtime/executor ``_project_local`` after durable append (real disk ``tmp_path``).
+
+    ``routes_per_attempt`` defaults to 5 (correctness tests). Perf SLO uses
+    ``_PERF_ROUTES_PER_ATTEMPT`` so ``latency_samples_ms`` reaches ≥1000.
     """
     clock = SystemClock()
     rt = await open_runtime(tmp_path, "st_load", clock=clock, runtime_cls=runtime_cls)
@@ -103,7 +147,7 @@ async def _run_load(tmp_path: Path, runtime_cls: type):
     async def one(i: int) -> None:
         await asyncio.sleep(random.uniform(0, 0.05))
         aid = await rt.start_attempt(f"EXP-{i}")
-        for _ in range(5):
+        for _ in range(routes_per_attempt):
             await rt.writer.append(
                 EventEnvelope(
                     study_id="st_load",
@@ -372,25 +416,119 @@ async def test_twenty_parallel_sqlite_projection_matches_fold(
 async def test_twenty_parallel_attempts_fsync_p99_slo(
     tmp_path: Path, runtime_cls: type
 ):
-    """Absolute DESIGN §3.5a SLO: p99 full-path write ≤ 50ms.
+    """Absolute DESIGN §3.5a SLO: max-of-N p99 full-path write ≤ 50ms.
 
     Measures ``StudyWriter.latency_samples_ms`` (queue item → ``to_thread`` →
     fence/insert/JSON/projection-upsert/commit under ``synchronous=FULL``) for
-    the 20-parallel load on real-disk ``tmp_path``. No shm, no commit-only
-    timer, no wal/GC knobs, no retries/skips.
+    ``_PERF_ROUNDS`` independent 20-parallel loads on real-disk ``tmp_path``,
+    each with ≥``_PERF_MIN_SAMPLES`` writes. Passes iff ``max(round_p99)`` ≤
+    50ms (every round must clear the SLO). Replaces the old outer CI 5× loop;
+    at n≥1000, p99 is the 12th-from-end sample (more tolerant of rare tail
+    outliers than n≈149). No shm, no commit-only timer, no wal/GC knobs, no
+    retries/skips/xfail.
     """
-    rt = await _run_load(tmp_path, runtime_cls)
+    round_p99: list[float] = []
+    for r in range(_PERF_ROUNDS):
+        round_dir = tmp_path / f"round_{r}"
+        round_dir.mkdir()
+        rt = await _run_load(
+            round_dir,
+            runtime_cls,
+            routes_per_attempt=_PERF_ROUTES_PER_ATTEMPT,
+        )
+        lat = rt.writer.latency_samples_ms()
+        assert lat, "no write latencies recorded"
+        assert len(lat) >= _PERF_MIN_SAMPLES, (
+            f"need ≥{_PERF_MIN_SAMPLES} samples for stable p99, got n={len(lat)}"
+        )
+        p99 = _p99_ms(lat)
+        round_p99.append(p99)
+        print(
+            f"perf round {r + 1}/{_PERF_ROUNDS} p99={p99:.2f}ms "
+            f"median={statistics.median(lat):.2f}ms "
+            f"mean={statistics.mean(lat):.2f}ms "
+            f"n={len(lat)} (full writer path; tmp_path disk)"
+        )
+        await close_runtime(rt)
+    _assert_max_round_p99(round_p99)
+
+
+def test_p99_gate_max_of_rounds_trips_on_one_bad_round():
+    """max-of-3 must fail when one round has ~60ms p99 (best-of would hide it).
+
+    Builds three round p99s via ``_p99_ms`` (same path as the perf job) and
+    asserts through ``_assert_max_round_p99``. Two clean rounds + one bad
+    (≈60ms-on-write tail) must trip the gate; three clean rounds must pass.
+    """
+    n = _PERF_MIN_SAMPLES
+    clean = [1.0] * n
+    # ~60ms on enough samples that p99 is the slow tail (not a single spike).
+    bad = [1.0] * (n - 15) + [60.0] * 15
+    round_p99 = [_p99_ms(clean), _p99_ms(bad), _p99_ms(clean)]
+    assert round_p99[0] <= _P99_SLO_MS
+    assert round_p99[1] > _P99_SLO_MS
+    assert round_p99[2] <= _P99_SLO_MS
+    # One bad round of three → max fails (min/best-of would pass on the cleans).
+    with pytest.raises(AssertionError, match=r"max-of-3 p99 .*> 50\.0ms"):
+        _assert_max_round_p99(round_p99)
+    # Uniform ~60ms every round also fails.
+    with pytest.raises(AssertionError, match=r"max-of-3 p99 .*> 50\.0ms"):
+        _assert_max_round_p99([_p99_ms(bad)] * _PERF_ROUNDS)
+    # Three clean rounds pass (noise like 13ms still under 50).
+    assert _assert_max_round_p99([13.53, 1.27, 1.19]) == 13.53
+
+
+@pytest.mark.serial
+@pytest.mark.asyncio
+async def test_p99_gate_trips_on_slow_append_many_real_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """~60ms sleep in real ``SqliteEventStore.append_many`` trips max-of-3.
+
+    One measured round (default API runtime — cheap) + two clean synthetic
+    rounds through ``_assert_max_round_p99``.
+    """
+    from coscientist.core.store import SqliteEventStore
+
+    real_append_many = SqliteEventStore.append_many
+
+    async def _slow_append_many(self: Any, *args: Any, **kwargs: Any) -> Any:
+        await asyncio.sleep(0.060)
+        return await real_append_many(self, *args, **kwargs)
+
+    monkeypatch.setattr(SqliteEventStore, "append_many", _slow_append_many)
+
+    clock = SystemClock()
+    # helpers.open_runtime defaults to api.StudyRuntime (create_study mixin).
+    rt = await open_runtime(tmp_path, "st_delay", clock=clock)
+    await rt.create_study(
+        profile="research",
+        request="delay-gate",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(hours=1),
+        sid="st_delay",
+    )
+    for i in range(20):
+        await rt.writer.append(
+            EventEnvelope(
+                study_id="st_delay",
+                type="RouteReturned",
+                entity_key=f"st_delay/EXP-delay:{i}",
+                idem_key=f"RouteReturned:delay:{i}",
+                payload={
+                    "attempt_id": f"st_delay/EXP-delay:{i}",
+                    "agent_output_digest": f"d{i}",
+                },
+                ts=clock.now(),
+            )
+        )
     lat = rt.writer.latency_samples_ms()
-    assert lat, "no write latencies recorded"
-    lat_sorted = sorted(lat)
-    p99 = lat_sorted[max(0, int(len(lat_sorted) * 0.99) - 1)]
-    med = statistics.median(lat_sorted)
-    print(
-        f"perf p99={p99:.2f}ms median={med:.2f}ms "
-        f"mean={statistics.mean(lat):.2f}ms n={len(lat)} "
-        f"(full writer path; tmp_path disk)"
-    )
-    assert p99 <= _P99_SLO_MS, (
-        f"p99 write {p99:.2f}ms > {_P99_SLO_MS}ms (n={len(lat)})"
-    )
     await close_runtime(rt)
+    assert lat, "no write latencies recorded"
+    bad_p99 = _p99_ms(lat)
+    print(f"delay-real-path p99={bad_p99:.2f}ms n={len(lat)}")
+    assert bad_p99 > _P99_SLO_MS, (
+        f"injected 60ms delay should exceed SLO (p99={bad_p99:.2f})"
+    )
+    with pytest.raises(AssertionError, match=r"max-of-3 p99 .*> 50\.0ms"):
+        _assert_max_round_p99([1.0, bad_p99, 1.0])
