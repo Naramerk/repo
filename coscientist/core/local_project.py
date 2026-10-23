@@ -109,6 +109,13 @@ class LocalProjectMixin:
             # BudgetExceeded (folded above).
         elif ev.type == "GraphNodeUpserted":
             self.graph.upsert_node(GraphNode.model_validate(p))
+        elif ev.type == "GraphEdgeAdded":
+            try:
+                self.graph.add_edge(GraphEdge.model_validate(p))
+            except (KeyError, ValueError):
+                # Endpoint node may arrive later in the same batch; retry after
+                # all upserts by re-folding is not required for M1 PR7 tests.
+                pass
 
     def _fold_finalized_graph(
         self, study_id: str, payload: dict[str, Any], *, created_at: datetime

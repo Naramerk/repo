@@ -357,7 +357,7 @@ CodeCheck kinds: `exec_runs` (команда в sandbox, exit 0, лимиты в
 | 4 | Intake + refuse (budget=0, пустой, duration ≤ reserve, safety/scope за портом) | X3, K3, K12 | 2 |
 | 5 | `simulate=forbid` по умолчанию; H-c (`tolerate_failed_dep`); `method=simulation` | S5, H-c | 1 |
 | 6 | R17 в `counts()`/`verdict()`; `tests.intent`, `survived`, k_ref + refutation_priority на Study (правила + модель; **runtime wiring → PR 8**) | S2, S3, H-e | 1 |
-| 7 | `InputSpec.kind` + ребро `uses_claim` | S1 | 6 |
+| 7 | `InputSpec.kind` (artifact\|claim\|verdict) + ребро `uses_claim` (P2); verdict → `InputBinding.digest` | S1 | 6 |
 | 8 | Вшивка `verdict()` в runtime finalize/report (k_ref / intent / survived начинают действовать в проде); `QuestionDisposed` (needs_more_data/infeasible), premises + premise_idx (ill_posed вычисляемый), конфликт в отчёте, PlanValidator с частичным покрытием | K8, H-f, S2/S3 runtime | 2, 6 |
 | 9 | `PlanExpanded` + триггер + квоты агента/человека + replan_reserve + question add/supersede + фильтр k | S6, H-d, H-g, C10 | 8 |
 | 10 | foreach + quorum fan-in | S9 | 9 |

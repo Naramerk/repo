@@ -9,7 +9,11 @@ from typing import Any
 from coscientist.core.domain import Provenance, Task, TaskKind, TaskOutcome, TaskState
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.ids import attempt_id, task_id
-from coscientist.core.inputs import InputUnavailable, bind_inputs
+from coscientist.core.inputs import (
+    InputUnavailable,
+    bind_inputs,
+    uses_claim_graph_events,
+)
 from coscientist.core.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
 
 # Persisted on AttemptClosed.retry_at; fired by StudyRuntime.tick vs injected Clock.
@@ -120,12 +124,22 @@ class AttemptsMixin:
         if n > self.max_attempts:
             raise RuntimeError("max_attempts exceeded")
 
+        graph = getattr(self, "graph", None)
+        known_claims: set[str] = set()
+        if graph is not None:
+            try:
+                known_claims = {n.node_id for n in graph.nodes_by_kind("claim")}
+            except KeyError:
+                known_claims = set()
+        verdicts = dict(getattr(self, "verdict_snapshots", {}) or {})
         try:
-            _bindings, derived = bind_inputs(
+            bindings, derived = bind_inputs(
                 task,
                 dep_tasks=self._dep_map(),
                 dep_outputs=self.dep_outputs,
                 dep_provenance=self.dep_provenance,
+                known_claim_ids=known_claims,
+                verdicts=verdicts,
             )
         except InputUnavailable:
             await self.cancel_task(task.task_id, reason=TaskReason.INPUT_UNAVAILABLE)
@@ -140,6 +154,7 @@ class AttemptsMixin:
         aid = attempt_id(task.task_id, n)
         now = self.clock.now()
         assert self.study is not None
+        sid = self.study.study_id
         deadline = min(task.deadline, self.study.effective_deadline())
         payload = {
             "attempt_id": aid,
@@ -152,21 +167,30 @@ class AttemptsMixin:
             "agent_output_digest": None,
             "deadline": deadline.isoformat(),
             "task_id": task.task_id,
-            "study_id": self.study.study_id,
+            "study_id": sid,
         }
-        await self._append(
-            [
-                EventEnvelope(
-                    study_id=self.study.study_id,
-                    type="AttemptStarted",
-                    entity_key=aid,
-                    idem_key=make_idem("AttemptStarted", aid),
-                    payload=payload,
-                    ts=now,
-                    schema_version=2,
-                )
-            ]
+        events: list[EventEnvelope] = [
+            EventEnvelope(
+                study_id=sid,
+                type="AttemptStarted",
+                entity_key=aid,
+                idem_key=make_idem("AttemptStarted", aid),
+                payload=payload,
+                ts=now,
+                schema_version=2,
+            )
+        ]
+        # PR7: uses_claim edges for kind=claim inputs (DESIGN_M1 §3).
+        events.extend(
+            uses_claim_graph_events(
+                study_id=sid,
+                task=task,
+                bindings=bindings,
+                now=now,
+                graph=graph,
+            )
         )
+        await self._append(events)
         return aid
 
     async def fail_attempt(

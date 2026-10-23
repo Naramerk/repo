@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### M1 PR7
+- `InputSpec.kind: artifact | claim | verdict` (+ `ref`); `uses_claim` edge (17th) at P2 for claim inputs; verdict snapshot in `InputBinding.digest`.
+- TaskCreated v4→v5 upcaster defaults `kind=artifact`.
+- #12 leftovers: R17 confirm-only (refutes still count); refmodel `intent` Literal + raise; gen emits edge attrs; cancel patches `finalize_mod.finalize`; r17 import at rules module level.
+
 ### M1 PR6
 - `tests.intent` (confirm|refute, edge attr in graph_schema): refute+met → verdict `survived`; `Study.refutations_needed` / `refutation_priority` at create.
 - Pure rules only: `k_ref` / `refutation_priority` / `intent` take effect in production once **PR 8** wires `verdict()` into runtime finalize.

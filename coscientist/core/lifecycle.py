@@ -182,7 +182,7 @@ class LifecycleMixin:
                     idem_key=make_idem("TaskCreated", tid),
                     payload=task.model_dump(mode="json"),
                     ts=now,
-                    schema_version=4,
+                    schema_version=5,
                 )
             )
             # Graph nodes for stages: only schema kinds. SPEC/HYP/LIT are DAG
@@ -275,7 +275,7 @@ class LifecycleMixin:
                     idem_key=make_idem("TaskCreated", tid),
                     payload=task.model_dump(mode="json"),
                     ts=now,
-                    schema_version=4,
+                    schema_version=5,
                 )
             )
         await self._append(events)

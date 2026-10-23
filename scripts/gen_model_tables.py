@@ -37,6 +37,26 @@ def _field(f):
     return s + (f" ({f['note']})" if f.get("note") else "")
 
 
+def _edge_attr(a):
+    """Render one edge attribute for the note column."""
+    s = f"attrs.{a['name']}: {a['type']}"
+    if a.get("default") is not None:
+        s += f" (default {a['default']})"
+    elif not a.get("required", False):
+        s += " (optional)"
+    return s
+
+
+def _edge_note(e):
+    parts = []
+    if e.get("note"):
+        parts.append(str(e["note"]))
+    attrs = e.get("attrs") or []
+    if attrs:
+        parts.append("; ".join(_edge_attr(a) for a in attrs))
+    return "; ".join(parts)
+
+
 def render(s):
     n = ["| NodeKind | Префикс | Поля (обязательные — жирным) | Создаёт задача | Из вывода | Смысл |",
          "|---|---|---|---|---|---|"]
@@ -44,7 +64,7 @@ def render(s):
           f"{x['created_by']} | {_esc(x['from_output'])} | {x['text_ru']} |" for x in s["nodes"]]
     e = ["| Ребро | Пары (from → to) | out / in | Кем выводится | Примечание |", "|---|---|---|---|---|"]
     e += [f"| `{x['name']}` | {', '.join(f'{a} → {b}' for a, b in x['pairs'])} | "
-          f"{_card(x['card'])} | {x['by']} | {_esc(x.get('note', ''))} |" for x in s["edges"]]
+          f"{_card(x['card'])} | {x['by']} | {_esc(_edge_note(x))} |" for x in s["edges"]]
     b = ["| # | id | Узлы | CodeCheck.kind | Проверка |", "|---|---|---|---|---|"]
     b += [f"| {x['num']} | {x['id']} | {', '.join(x['nodes'])} | {', '.join(x['check_kinds'])} | {_esc(x['check'])} |"
           for x in s["volume_b"]]

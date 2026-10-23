@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Literal, Protocol
 
 from coscientist.core.graph import load_schema
+from coscientist.core.r17 import claim_counts_under_r17
 
 SCHEMA = load_schema()
 PAIRS = {e["name"]: {tuple(p) for p in e["pairs"]} for e in SCHEMA["edges"]}
@@ -92,11 +93,15 @@ def _tests_intent(claim: _ClaimLike) -> TestsIntent:
 
 
 def _claim_counts(claim: _ClaimLike) -> bool:
-    """Base ``counts()`` plus R17 when freeze/evidence metadata is present."""
-    from coscientist.core.r17 import claim_counts_under_r17
+    """Base ``counts()`` plus R17 when freeze/evidence metadata is present.
 
+    R17 (§12) applies only to confirming claims; ``refutes`` skip the
+    confirming-evidence gate.
+    """
     if not claim.counts():
         return False
+    if claim.stance == "refutes":
+        return True
     frozen_at = claim.criterion_frozen_at_seq
     first_ev = claim.first_cited_evidence_seq
     confirming = claim.confirming_evidence_ids
@@ -109,6 +114,7 @@ def _claim_counts(claim: _ClaimLike) -> bool:
         first_cited_evidence_seq=first_ev,
         confirming_evidence_ids=set(confirming or ()),
         threshold_source_evidence_ids=set(threshold_src or ()),
+        stance=claim.stance,
     )
 
 
