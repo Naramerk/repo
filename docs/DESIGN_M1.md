@@ -382,7 +382,7 @@ CodeCheck kinds: `exec_runs` (agent jail, exit 0; **prediction/refute role → v
 | 13 | Рубрика + final_type + PlanValidator | B2, B5, K7 | 8 |
 | 14 | quote_in_source с нормализацией по CAS | K9 | — |
 | 15 | needs_more_data + experiment_design; contradicts; derivation | строки 4, 5, 8, 9 | 13 |
-| 16 | decomposes (ацикл.) + rollup + дерево в отчёте (**done**) | строки 14, 15, S8 | 9, 13 |
+| 16 | decomposes (ацикл.) + rollup + дерево в отчёте | строки 14, 15, S8 | 9, 13 |
 | 17 | Исполняемые CodeCheck kinds + sandbox-лимиты | B7, B8, K5 | — |
 | 18 | ToolSpec.effect, гейт side_effect, effect_idem_key, taint, Idempotency-Key | K4, K5, K13 | — |
 | 19 | Снимок входа + пользовательские inputs + InputLimits | K10, A3, K1 | 4 |
