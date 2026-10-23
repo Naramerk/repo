@@ -1,40 +1,56 @@
-"""Derived study status — never stored (DESIGN §3.2)."""
+"""Derived study status — never stored (DESIGN §3.2 / §3.4)."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 from coscientist.core.domain import StudyView, Task, TaskOutcome, TaskState
+
+
+def _task_is_stub(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> bool:
+    for aid in task.attempts:
+        if attempts.get(aid, {}).get("provenance") == "stub":
+            return True
+    return False
 
 
 def study_view(
     tasks: Iterable[Task],
     *,
     open_hitl: int = 0,
-    simulated_done: int | None = None,
+    attempts: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> StudyView:
+    """Compute StudyView from tasks (+ optional attempt map for stub provenance).
+
+    Verdict rule (DESIGN §3.4): stubbed ⇔ all required ∈ {SUCCESS, PARTIAL}
+    and ≥1 required task has provenance=stub. Non-required stubs only affect
+    stub_share. Questions are not considered until PR 2.
+    """
     tasks = list(tasks)
+    atts: Mapping[str, Mapping[str, Any]] = attempts or {}
     if not tasks:
         return StudyView(phase="running", progress=0.0, awaiting_human=open_hitl > 0)
 
     total = len(tasks)
-    done = sum(1 for t in tasks if t.state == TaskState.DONE)
+    done_tasks = [t for t in tasks if t.state == TaskState.DONE]
+    done = len(done_tasks)
     if any(t.state != TaskState.DONE for t in tasks):
+        stub_share = (sum(1 for t in done_tasks if _task_is_stub(t, atts)) / done) if done else 0.0
         return StudyView(
             phase="running",
             progress=done / total,
             awaiting_human=open_hitl > 0,
+            stub_share=stub_share,
         )
 
     req = [t for t in tasks if t.spec.required]
-    stub_share = 0.0
-    if simulated_done is not None and done:
-        stub_share = simulated_done / done
+    stub_share = (sum(1 for t in done_tasks if _task_is_stub(t, atts)) / done) if done else 0.0
+    req_ok = {TaskOutcome.SUCCESS, TaskOutcome.PARTIAL}
+    has_required_stub = any(_task_is_stub(t, atts) for t in req)
 
     if not req:
         verdict: str = "partial"
-    elif all(t.outcome == TaskOutcome.SUCCESS for t in req):
-        verdict = "fulfilled"
     elif all(t.outcome in {TaskOutcome.FAILED, TaskOutcome.SKIPPED} for t in req):
         verdict = "failed"
     elif any(
@@ -42,10 +58,10 @@ def study_view(
         for t in tasks
     ):
         verdict = "failed"
-    elif stub_share > 0 and all(
-        t.outcome in {TaskOutcome.SUCCESS, TaskOutcome.PARTIAL} for t in req
-    ):
-        verdict = "simulated"
+    elif all(t.outcome in req_ok for t in req) and has_required_stub:
+        verdict = "stubbed"
+    elif all(t.outcome == TaskOutcome.SUCCESS for t in req):
+        verdict = "fulfilled"
     else:
         verdict = "partial"
 

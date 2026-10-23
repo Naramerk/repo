@@ -20,6 +20,7 @@ from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.graph import GraphStore, KindRegistry, default_execution_registry
 from coscientist.core.lifecycle import LifecycleMixin
 from coscientist.core.local_project import LocalProjectMixin
+from coscientist.core.reasons import CloseReason, TaskReason
 from coscientist.core.store import SqliteEventStore
 from coscientist.core.study_view import study_view
 from coscientist.core.writer import StudyWriter
@@ -71,16 +72,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             self._project_local(ev)
 
     def view(self):
-        sim = sum(
-            1
-            for t in self.tasks.values()
-            if t.state == TaskState.DONE
-            and any(
-                self.attempts.get(a, {}).get("provenance", "real") != "real"
-                for a in t.attempts
-            )
-        )
-        return study_view(self.tasks.values(), open_hitl=0, simulated_done=sim)
+        return study_view(self.tasks.values(), open_hitl=0, attempts=self.attempts)
 
     def invariant_open_attempts(self) -> bool:
         """≤1 open attempt per task (DESIGN §3.3 property invariant)."""
@@ -94,12 +86,12 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         return True
 
     def invariant_deadlines(self) -> bool:
-        """Every task/attempt deadline ≤ study.deadline."""
+        """Every task/attempt deadline ≤ study.effective_deadline()."""
         if self.study is None:
             return True
-        sd = self.study.deadline
+        ed = self.study.effective_deadline()
         for t in self.tasks.values():
-            if t.deadline > sd:
+            if t.deadline > ed:
                 return False
             for a in t.attempts:
                 ad = self.attempts.get(a, {}).get("deadline")
@@ -107,7 +99,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                     continue
                 if isinstance(ad, str):
                     ad = datetime.fromisoformat(ad)
-                if ad > sd:
+                if ad > ed:
                     return False
         return True
 
@@ -135,9 +127,20 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             if task.state == TaskState.DONE:
                 continue
             if now > task.deadline or now > self.study.deadline:
-                reason = "deadline" if now > task.deadline else "study_deadline"
+                reason = (
+                    TaskReason.DEADLINE
+                    if now > task.deadline
+                    else TaskReason.STUDY_DEADLINE
+                )
+                close = (
+                    CloseReason.DEADLINE
+                    if reason is TaskReason.DEADLINE
+                    else CloseReason.STUDY_DEADLINE
+                )
                 outcome = (
-                    TaskOutcome.FAILED if reason == "deadline" else TaskOutcome.SKIPPED
+                    TaskOutcome.FAILED
+                    if reason is TaskReason.DEADLINE
+                    else TaskOutcome.SKIPPED
                 )
                 events: list[EventEnvelope] = []
                 for aid in task.attempts:
@@ -147,14 +150,15 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                                 study_id=sid,
                                 type="AttemptClosed",
                                 entity_key=aid,
-                                idem_key=make_idem("AttemptClosed", aid, reason),
+                                idem_key=make_idem("AttemptClosed", aid, close.value),
                                 payload={
                                     "attempt_id": aid,
                                     "closed": True,
-                                    "close_reason": reason,
+                                    "close_reason": close.value,
                                     "task_id": task.task_id,
                                 },
                                 ts=now,
+                                schema_version=2,
                             )
                         )
                         t = self._attempt_tasks.pop(aid, None)
@@ -169,9 +173,10 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                         payload={
                             "task_id": task.task_id,
                             "outcome": outcome.value,
-                            "reason": reason,
+                            "reason": reason.value,
                         },
                         ts=now,
+                        schema_version=2,
                     )
                 )
                 await self._append(events)

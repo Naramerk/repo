@@ -13,7 +13,7 @@ from coscientist.core.domain import (
     TaskState,
 )
 
-PROVENANCE_RANK = {"real": 0, "partial": 1, "simulated": 2}
+PROVENANCE_RANK = {"real": 0, "partial": 1, "stub": 2}
 
 
 class InputMode(StrEnum):
@@ -23,7 +23,7 @@ class InputMode(StrEnum):
 
 
 def worst_provenance(*values: Provenance) -> Provenance:
-    """Least favorable under real < partial < simulated."""
+    """Least favorable under real < partial < stub."""
     return max(values, key=lambda p: PROVENANCE_RANK[p])
 
 
@@ -67,12 +67,12 @@ def bind_inputs(
         elif aid and mode in {InputMode.USE_PARTIAL, InputMode.SIMULATE}:
             source = "partial"
         elif mode == InputMode.SIMULATE:
-            source = "simulated"
+            source = "stub"
             aid = f"stub:{spec.from_task}:{spec.output}"
         else:
             raise InputUnavailable()
 
-        if source != "simulated":
+        if source != "stub":
             source = worst_provenance(source, dep_prov)
         bindings.append(InputBinding(input=spec.output, artifact_id=aid, source=source))
         provs.append(source)

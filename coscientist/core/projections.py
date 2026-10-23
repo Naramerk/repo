@@ -56,7 +56,7 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
                     {
                         **task,
                         "state": "PENDING",
-                        "reason": "retry_scheduled",
+                        "reason": "retry_scheduled",  # TaskReason.RETRY_SCHEDULED
                         "retry_at": p["retry_at"],
                     },
                 )
