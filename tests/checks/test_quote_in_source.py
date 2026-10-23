@@ -785,7 +785,9 @@ async def test_invoke_tool_non_fetch_read_rejected(
 
 
 @pytest.mark.asyncio
-async def test_store_fetched_source_journals_and_matches(tmp_path: Path, clock):
+async def test_store_fetched_source_journals_and_matches(
+    tmp_path: Path, clock, fetch_registry
+):
     """Happy path: store_fetched_source (with capability) → MET + countable."""
     catalog = _catalog_quote()
     sid = "st_fetch_ok"
@@ -871,7 +873,9 @@ async def test_store_fetched_source_journals_and_matches(tmp_path: Path, clock):
 
 
 @pytest.mark.asyncio
-async def test_source_fetched_survives_crash_reopen(tmp_path: Path, clock):
+async def test_source_fetched_survives_crash_reopen(
+    tmp_path: Path, clock, fetch_registry
+):
     """Checklist §1: SourceFetched + CAS meta survive crash; no recreate."""
     catalog = _catalog_quote()
     sid = "st_fetch_reopen"
@@ -943,6 +947,7 @@ async def test_source_fetched_survives_crash_reopen(tmp_path: Path, clock):
     assert meta is not None
     assert meta.sha256 == paper_sha
     assert meta.producer == "tool"
+    assert meta.tainted is True
     qart = _put_quote_json(
         arts2,
         {
@@ -972,7 +977,7 @@ async def test_source_fetched_survives_crash_reopen(tmp_path: Path, clock):
 
 
 @pytest.mark.asyncio
-async def test_fetched_quote_met_closes_study(tmp_path: Path, clock):
+async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_registry):
     catalog = _catalog_quote()
     sid = "st_quote_met"
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog)
@@ -1313,6 +1318,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
     assert meta is not None
     assert meta.sha256 == paper_sha
     assert meta.producer == "tool"
+    assert meta.tainted is True
 
     class _Write:
         spec = ToolSpec(name="write_note", effect="write")
@@ -1371,7 +1377,11 @@ async def test_direct_writer_append_source_fetched_rejected(tmp_path: Path, cloc
         await rt.writer.append(ev)
     with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
         await rt.store.append_many([ev])
-    # Forge: plain dataclass with stolen-looking id is not in the registry.
+    # Bool bypass gone: forged capability id without effects write permit refused.
+    with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
+        await rt.store.append_many(
+            [ev], _source_fetched_cap_id="forged-not-issued"
+        )
     forged = FetchCapability(id="forged-not-issued")
     from coscientist.core.source_fetch import verify_fetch_capability
 
@@ -1551,15 +1561,226 @@ def test_projection_source_fetched_requires_fetch_call_pairing():
             "reason": "source_fetch",
             "call_id": "att:1",
             "tool": "papers_get",
+            "is_fetch": True,
         },
         ts=datetime.now(UTC),
         schema_version=1,
         seq=2,
     )
+    # Registry must know papers_get as is_fetch for the marker check.
+    _reset_registry_for_tests()
+    _register_tool_for_tests(
+        RegisteredToolSpec(name="papers_get", effect="read", is_fetch=True)
+    )
+    freeze_registry()
     apply_to_map(proj, at)
+    _reset_registry_for_tests()
     row = _get(proj, "attempts", "att")
     assert row is not None
     assert row.get("reason") == "keep_me"
     assert row.get("tainted_context") is True
     apply_to_map(proj, sf.model_copy(update={"seq": 3}))
     assert "deadbeef" in (proj.get("source_fetches") or {})
+
+
+@pytest.mark.asyncio
+async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registry):
+    """Fetch returning only output.data (no artifacts) still taints + journals."""
+
+    class _DataOnlyFetch:
+        spec = ToolSpec(name="papers_get", effect="read", is_fetch=True)
+
+        async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+            assert ctx.fetch_capability is not None
+            return ToolOutput(data={"url": "https://normalized.example/empty"})
+
+    catalog = _catalog_quote()
+    sid = "st_data_only"
+    rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0-pr14",
+        deadline=clock.now() + timedelta(seconds=60),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    _ex, arts = attach_executor(rt, tmp_path)
+    rt.artifacts = arts
+    for key in ("SPEC", "HYP", "LIT"):
+        await record_success(rt, await rt.start_attempt(key), arts)
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="LIT-0",
+                title="lit",
+                goal="g",
+                route="literature",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="quote_ok")],
+            )
+        ],
+        questions=[],
+    )
+    aid = await rt.start_attempt("LIT-0")
+    assert aid is not None
+    out = await invoke_tool(
+        _DataOnlyFetch(),
+        {"url": "https://agent.example/x"},
+        CallCtx(
+            study_id=sid,
+            task_key="LIT-0",
+            attempt_id=aid,
+            hitl_policy=HitlPolicy(),
+            call_seq=1,
+        ),
+        writer=rt.writer,
+        artifacts=arts,
+    )
+    assert out.artifacts == [] or out.artifacts is None or not out.artifacts
+    events = await rt.store.read_all()
+    assert any(
+        e.type == "AttemptTainted"
+        and e.payload.get("call_id") == f"{aid}:1"
+        and e.payload.get("is_fetch") is True
+        for e in events
+    )
+    assert not any(e.type == "SourceFetched" for e in events)
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry):
+    """Two tool-producer artifacts in one fetch → remint + both SourceFetched."""
+
+    class _MultiFetch:
+        def __init__(self, arts: LocalArtifactStore):
+            self.spec = ToolSpec(name="papers_get", effect="read", is_fetch=True)
+            self.arts = arts
+
+        async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+            call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
+            arts_out = []
+            for i, body in enumerate(
+                (
+                    b"First paper has four word tokens right here now.",
+                    b"Second paper has four word tokens right here now.",
+                )
+            ):
+                arts_out.append(
+                    self.arts.put_fetched(
+                        body,
+                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name),
+                        name=f"p{i}.txt",
+                        media_type="text/plain",
+                        role="paper",
+                        capability=ctx.fetch_capability,
+                        expected_tool=self.spec.name,
+                        expected_call_id=call_id,
+                        expected_study_id=ctx.study_id,
+                        expected_attempt_id=ctx.attempt_id,
+                    )
+                )
+            return ToolOutput(
+                data={"url": "https://normalized.example/multi"},
+                artifacts=arts_out,
+            )
+
+    catalog = _catalog_quote()
+    sid = "st_remint"
+    rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0-pr14",
+        deadline=clock.now() + timedelta(seconds=60),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    _ex, arts = attach_executor(rt, tmp_path)
+    rt.artifacts = arts
+    for key in ("SPEC", "HYP", "LIT"):
+        await record_success(rt, await rt.start_attempt(key), arts)
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="LIT-0",
+                title="lit",
+                goal="g",
+                route="literature",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="quote_ok")],
+            )
+        ],
+        questions=[],
+    )
+    aid = await rt.start_attempt("LIT-0")
+    assert aid is not None
+    out = await invoke_tool(
+        _MultiFetch(arts),
+        {"url": "https://agent.example/multi"},
+        CallCtx(
+            study_id=sid,
+            task_key="LIT-0",
+            attempt_id=aid,
+            hitl_policy=HitlPolicy(),
+            call_seq=1,
+        ),
+        writer=rt.writer,
+        artifacts=arts,
+    )
+    assert len(out.artifacts) == 2
+    digests = {a.sha256 for a in out.artifacts}
+    events = await rt.store.read_all()
+    sf = [
+        e
+        for e in events
+        if e.type == "SourceFetched" and e.payload.get("digest") in digests
+    ]
+    assert len(sf) == 2
+    await close_runtime(rt)
+
+
+def test_core_cannot_bypass_source_fetched_with_bool_flag(tmp_path: Path, clock):
+    """Direct core store path cannot grant SourceFetched without effects permit."""
+    import asyncio
+
+    from coscientist.core.errors import ArtifactRejected
+    from coscientist.core.events import EventEnvelope, make_idem
+
+    async def _run() -> None:
+        rt = await open_runtime(tmp_path, "st_core_bypass", clock=clock)
+        await rt.create_study(
+            profile="research",
+            request="q",
+            catalog_version="0.1.0-pr14",
+            deadline=clock.now() + timedelta(seconds=30),
+            sid="st_core_bypass",
+            finalize_reserve_s=5,
+        )
+        ev = EventEnvelope(
+            study_id="st_core_bypass",
+            type="SourceFetched",
+            entity_key="bypass",
+            idem_key=make_idem("SourceFetched", "bypass"),
+            payload={
+                "call_id": "a:1",
+                "tool": "papers_get",
+                "digest": "abc",
+                "url": "https://x",
+            },
+            ts=datetime.now(UTC),
+            schema_version=1,
+        )
+        # No kwarg / empty id / random id — all refused (effects registry).
+        with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
+            await rt.store.append_many([ev])
+        with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
+            await rt.store.append_many([ev], _source_fetched_cap_id="")
+        with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
+            await rt.store.append_many(
+                [ev], _source_fetched_cap_id="not-from-effects-registry"
+            )
+        await close_runtime(rt)
+
+    asyncio.run(_run())

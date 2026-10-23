@@ -89,8 +89,15 @@ class StudyWriter:
         self._depth_high_water = max(self._depth_high_water, self.queue.qsize())
         return await fut
 
-    async def append(self, event: EventEnvelope) -> EventEnvelope:
-        out = await self.append_many([event])
+    async def append(
+        self,
+        event: EventEnvelope,
+        *,
+        _source_fetched_cap_id: str | None = None,
+    ) -> EventEnvelope:
+        out = await self.append_many(
+            [event], _source_fetched_cap_id=_source_fetched_cap_id
+        )
         if out:
             return out[0]
         # Defensive: append_many always returns stored envelopes (incl. idempotent).
@@ -101,27 +108,23 @@ class StudyWriter:
         events: list[EventEnvelope],
         *,
         require_open_attempt: str | None = None,
+        _source_fetched_cap_id: str | None = None,
     ) -> list[EventEnvelope]:
-        allow_source_fetched = False
         for ev in events:
             if getattr(ev, "type", None) == "SourceFetched":
-                # Direct StudyWriter.append(SourceFetched) is closed — only the
-                # capability-gated append_source_fetched path sets the permit.
+                # Capability id required; store takes the effects write permit.
                 from coscientist.core.errors import ArtifactRejected
-                from coscientist.core.source_fetch import source_fetched_permitted
 
-                if not source_fetched_permitted():
+                if not _source_fetched_cap_id:
                     raise ArtifactRejected("fetch_capability_required")
-                allow_source_fetched = True
 
-        # Capture permit for the writer-queue task (ContextVar does not cross).
-        _allow_sf = allow_source_fetched
+        _cap_id = _source_fetched_cap_id
 
         async def _do() -> list[EventEnvelope]:
             return await self.store.append_many(
                 events,
                 require_open_attempt=require_open_attempt,
-                _allow_source_fetched=_allow_sf,
+                _source_fetched_cap_id=_cap_id,
             )
 
         return await self.submit(_do)

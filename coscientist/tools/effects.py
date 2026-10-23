@@ -46,6 +46,9 @@ class _IssuedFetchCap:
 
 
 _ISSUED_FETCH_CAPS: dict[str, _IssuedFetchCap] = {}
+# After verify consumes an issued id, a one-shot write permit for SourceFetched
+# remains until store/writer takes it (bound to the same capability id).
+_SOURCE_FETCHED_WRITE_PERMITS: dict[str, _IssuedFetchCap] = {}
 
 
 def _mint_fetch_capability(
@@ -85,7 +88,9 @@ def _mint_fetch_capability_for_tests(
 def _invalidate_fetch_capability(capability: FetchCapability | None) -> None:
     if capability is None:
         return
-    _ISSUED_FETCH_CAPS.pop(getattr(capability, "id", None) or "", None)
+    cap_id = getattr(capability, "id", None) or ""
+    _ISSUED_FETCH_CAPS.pop(cap_id, None)
+    _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id, None)
 
 
 def _lookup_issued(
@@ -139,8 +144,8 @@ def _verify_fetch_capability(
     study_id: str | None = None,
     attempt_id: str | None = None,
 ) -> FetchCapability:
-    """Bind check and **consume** (single-use)."""
-    cap, _entry = _lookup_issued(
+    """Bind check, consume issued id, grant one-shot SourceFetched write permit."""
+    cap, entry = _lookup_issued(
         capability,
         tool=tool,
         call_id=call_id,
@@ -148,11 +153,29 @@ def _verify_fetch_capability(
         attempt_id=attempt_id,
     )
     _ISSUED_FETCH_CAPS.pop(cap.id, None)
+    _SOURCE_FETCHED_WRITE_PERMITS[cap.id] = entry
     return cap
 
 
+def _take_source_fetched_write_permit(
+    cap_id: str,
+    *,
+    tool: str,
+    call_id: str,
+    study_id: str,
+) -> None:
+    """Consume the one-shot write permit granted by verify (effects-private)."""
+    entry = _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id, None)
+    if entry is None:
+        raise ArtifactRejected("fetch_capability_required")
+    if entry.tool != tool or entry.call_id != call_id or entry.study_id != study_id:
+        raise ArtifactRejected("fetch_capability_mismatch")
+
+
 register_fetch_capability_verifier(
-    _verify_fetch_capability, assert_fn=_assert_fetch_capability
+    _verify_fetch_capability,
+    assert_fn=_assert_fetch_capability,
+    take_write_permit_fn=_take_source_fetched_write_permit,
 )
 
 
@@ -400,6 +423,7 @@ async def _journal_attempt_tainted(
             "reason": "source_fetch",
             "call_id": call_id,
             "tool": tool,
+            "is_fetch": True,
         },
         ts=datetime.now(UTC),
         schema_version=1,
@@ -512,7 +536,7 @@ async def invoke_tool(
     if effect == "read":
         is_fetch = bool(getattr(reg, "is_fetch", False))
         call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
-        cap: FetchCapability | None = None
+        minted: list[FetchCapability] = []
         try:
             if is_fetch:
                 # Taint BEFORE the call — any is_fetch attempt, success or fail.
@@ -531,6 +555,7 @@ async def invoke_tool(
                     study_id=ctx.study_id,
                     attempt_id=ctx.attempt_id,
                 )
+                minted.append(cap)
                 ctx.fetch_capability = cap
             else:
                 ctx.fetch_capability = None
@@ -541,7 +566,7 @@ async def invoke_tool(
             # capability-gated put_fetched + SourceFetched (not any read tool).
             if (
                 is_fetch
-                and cap is not None
+                and minted
                 and artifacts is not None
                 and output.artifacts
             ):
@@ -554,7 +579,7 @@ async def invoke_tool(
                         output.data.get("url") or output.data.get("uri") or ""
                     )
                 # First digest consumes the capability; further digests need a
-                # fresh mint (single-use verify). Typical fetch → one artifact.
+                # fresh mint (single-use verify). Track all mints for finally.
                 first = True
                 for art in output.artifacts:
                     if getattr(art, "producer", None) != "tool":
@@ -562,14 +587,16 @@ async def invoke_tool(
                     digest = str(getattr(art, "sha256", "") or "")
                     if not digest:
                         continue
-                    use_cap = cap
-                    if not first:
+                    if first:
+                        use_cap = minted[0]
+                    else:
                         use_cap = _mint_fetch_capability(
                             tool=name,
                             call_id=call_id,
                             study_id=ctx.study_id,
                             attempt_id=ctx.attempt_id,
                         )
+                        minted.append(use_cap)
                     await append_source_fetched(
                         writer,
                         study_id=ctx.study_id,
@@ -583,8 +610,9 @@ async def invoke_tool(
                     first = False
             return output
         finally:
-            # Drop any leftover issued id so the handle cannot be reused.
-            _invalidate_fetch_capability(cap)
+            # Drop every minted id (issued + leftover write permits) on any path.
+            for c in minted:
+                _invalidate_fetch_capability(c)
             ctx.fetch_capability = None
 
     # Write/external_effect require an artifact store up front (before the call).

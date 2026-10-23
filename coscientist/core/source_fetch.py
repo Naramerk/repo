@@ -18,9 +18,7 @@ Payload v1: ``{call_id, tool, digest, url}``.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar, Token
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -32,43 +30,44 @@ from coscientist.core.writer import StudyWriter
 
 VerifyFetchCap = Callable[..., "FetchCapability"]
 AssertFetchCap = Callable[..., "FetchCapability"]
+TakeWritePermit = Callable[..., None]
 
 # Installed by coscientist.tools.effects at import (registry never lives here).
 _verify_impl: VerifyFetchCap | None = None
 _assert_impl: AssertFetchCap | None = None
-
-# One-shot permit after verify+consume — store/writer refuse SourceFetched otherwise.
-_SOURCE_FETCHED_PERMIT: ContextVar[bool] = ContextVar(
-    "source_fetched_permit", default=False
-)
-
-
-def source_fetched_permitted() -> bool:
-    return bool(_SOURCE_FETCHED_PERMIT.get())
-
-
-@contextmanager
-def _source_fetched_permit_scope() -> Iterator[None]:
-    tok: Token[bool] = _SOURCE_FETCHED_PERMIT.set(True)
-    try:
-        yield
-    finally:
-        _SOURCE_FETCHED_PERMIT.reset(tok)
+_take_write_permit_impl: TakeWritePermit | None = None
 
 
 def register_fetch_capability_verifier(
     verify_fn: VerifyFetchCap,
     *,
     assert_fn: AssertFetchCap | None = None,
+    take_write_permit_fn: TakeWritePermit | None = None,
 ) -> None:
     """Called once from ``tools.effects`` — core never mints capabilities."""
-    global _verify_impl, _assert_impl
+    global _verify_impl, _assert_impl, _take_write_permit_impl
     if _verify_impl is not None and _verify_impl is not verify_fn:
         raise RuntimeError("fetch capability verifier already registered")
     _verify_impl = verify_fn
     if assert_fn is not None:
         _assert_impl = assert_fn
+    if take_write_permit_fn is not None:
+        _take_write_permit_impl = take_write_permit_fn
 
+
+def take_source_fetched_write_permit(
+    cap_id: str,
+    *,
+    tool: str,
+    call_id: str,
+    study_id: str,
+) -> None:
+    """Consume the one-shot write permit for this capability id (effects registry)."""
+    if _take_write_permit_impl is None:
+        raise ArtifactRejected("fetch_capability_required")
+    _take_write_permit_impl(
+        cap_id, tool=tool, call_id=call_id, study_id=study_id
+    )
 
 @dataclass(frozen=True, slots=True)
 class FetchCapability:
@@ -221,10 +220,15 @@ def apply_source_fetch_events(
         if not isinstance(p, dict):
             continue
         if t == "AttemptTainted" and str(p.get("reason") or "") == "source_fetch":
-            idx.note_fetch_call(
-                call_id=str(p.get("call_id") or ""),
-                tool=str(p.get("tool") or ""),
-            )
+            tool = str(p.get("tool") or "")
+            # Marker must claim is_fetch; also cross-check the closed registry.
+            from coscientist.core.tool_registry import resolve_is_fetch
+
+            if tool and bool(p.get("is_fetch")) and resolve_is_fetch(tool):
+                idx.note_fetch_call(
+                    call_id=str(p.get("call_id") or ""),
+                    tool=tool,
+                )
         elif t == "SourceFetched":
             idx.note(p)
     return max_seq
@@ -308,8 +312,7 @@ async def append_source_fetched(
         ts=datetime.now(UTC),
         schema_version=1,
     )
-    with _source_fetched_permit_scope():
-        stored = await writer.append(ev)
+    stored = await writer.append(ev, _source_fetched_cap_id=capability.id)
     _cache_note_fetch(writer, stored)
     if on_event is not None:
         on_event(stored)
@@ -350,6 +353,7 @@ async def store_fetched_source(
             "reason": "source_fetch",
             "call_id": call_id,
             "tool": tool,
+            "is_fetch": True,
         },
         ts=datetime.now(UTC),
         schema_version=1,

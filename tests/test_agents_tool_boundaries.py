@@ -28,11 +28,18 @@ _TEST_ONLY_DEF_MODULES = {
     "_mint_fetch_capability_for_tests": COSI / "tools" / "effects.py",
 }
 
-# Fetch mint / registry: only tools.effects may define or call mint.
+# Fetch mint / registry / write-permit: only tools.effects may define these.
 _FETCH_MINT_NAMES = (
     "_mint_fetch_capability",
     "_ISSUED_FETCH_CAPS",
     "_IssuedFetchCap",
+    "_SOURCE_FETCHED_WRITE_PERMITS",
+    "_take_source_fetched_write_permit",
+    # Removed bool-bypass APIs — must not reappear under coscientist/.
+    "_source_fetched_permit_scope",
+    "source_fetched_permitted",
+    "_allow_source_fetched",
+    "allow_source_fetched",
 )
 _FETCH_MINT_ALLOWED = {COSI / "tools" / "effects.py"}
 
@@ -110,21 +117,40 @@ def test_test_only_registry_helpers_banned_outside_tests():
     assert not offenders, f"test-only registry helpers in production: {offenders}"
 
 
+# Bool / scope bypass names must not appear anywhere under coscientist/.
+_FETCH_BYPASS_BANNED = (
+    "_source_fetched_permit_scope",
+    "source_fetched_permitted",
+    "_allow_source_fetched",
+    "allow_source_fetched",
+)
+
+
 def test_fetch_capability_mint_only_in_effects():
-    """Only ``coscientist.tools.effects`` may mint / hold the fetch cap secret."""
+    """Only ``coscientist.tools.effects`` may mint / hold the fetch registry."""
     offenders: list[str] = []
+    registry_names = (
+        "_mint_fetch_capability",
+        "_ISSUED_FETCH_CAPS",
+        "_IssuedFetchCap",
+        "_SOURCE_FETCHED_WRITE_PERMITS",
+        "_take_source_fetched_write_permit",
+    )
     for path in _py_files(COSI):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _FETCH_BYPASS_BANNED:
+            if _calls_name(tree, name) or _names_attr_or_name(tree, name):
+                offenders.append(f"{path.relative_to(ROOT)}: {name}")
         if path in _FETCH_MINT_ALLOWED:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for name in _FETCH_MINT_NAMES:
+        for name in registry_names:
             if _calls_name(tree, name) or _names_attr_or_name(tree, name):
                 offenders.append(f"{path.relative_to(ROOT)}: {name}")
             if _imports_name(tree, module_suffix="effects", name=name):
                 offenders.append(f"{path.relative_to(ROOT)}: import {name}")
             if _imports_name(tree, module_suffix="source_fetch", name=name):
                 offenders.append(f"{path.relative_to(ROOT)}: import {name}")
-    assert not offenders, f"fetch mint leaked outside effects: {offenders}"
+    assert not offenders, f"fetch mint/bypass leaked: {offenders}"
 
 
 def test_agents_forbid_registry_and_direct_tool_call():
@@ -167,5 +193,4 @@ def test_import_linter_contracts_run():
         f"lint-imports failed (rc={proc.returncode}):\n"
         f"{proc.stdout}\n{proc.stderr}"
     )
-    assert "Contracts:" in proc.stdout
-    assert "0 broken" in proc.stdout or "KEPT" in proc.stdout
+    assert "0 broken" in proc.stdout

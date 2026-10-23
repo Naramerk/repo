@@ -151,12 +151,15 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         call_id = str(p.get("call_id") or "")
         tool = str(p.get("tool") or "")
         if call_id and tool and str(p.get("reason") or "") == "source_fetch":
-            _put(
-                proj,
-                "fetch_calls",
-                call_id,
-                {"call_id": call_id, "tool": tool, "attempt_id": aid},
-            )
+            from coscientist.core.tool_registry import resolve_is_fetch
+
+            if bool(p.get("is_fetch")) and resolve_is_fetch(tool):
+                _put(
+                    proj,
+                    "fetch_calls",
+                    call_id,
+                    {"call_id": call_id, "tool": tool, "attempt_id": aid},
+                )
     elif t == "SourceFetched":
         # Only fold when paired with a journaled fetch ToolCall (AttemptTainted).
         from coscientist.core.source_fetch import source_fetched_paired_with_fetch_call
