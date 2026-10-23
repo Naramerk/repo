@@ -11,10 +11,12 @@ from typing import TYPE_CHECKING, Literal
 
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.events import (
-    PLAN_EXPANDED_SCHEMA_VERSION,
-    TASK_CREATED_SCHEMA_VERSION,
     EventEnvelope,
     make_idem,
+)
+from coscientist.core.events.schema_versions import (
+    PLAN_EXPANDED_SCHEMA_VERSION,
+    TASK_CREATED_SCHEMA_VERSION,
 )
 from coscientist.core.events.ids import plan_id, task_id
 from coscientist.core.execution.domain import (
@@ -53,15 +55,12 @@ if TYPE_CHECKING:
 Origin = Literal["plan", "emergent"]
 DelegatedBy = Literal["human", "timeout"] | None
 
-
 def _quota_kind(delegated_by: DelegatedBy) -> Literal["agent", "human"]:
     # DESIGN_M1 §4: only delegated_by=human uses human quota. timeout → agent
     # (and goes through MJ-b refutation checks).
     return "human" if delegated_by == "human" else "agent"
 
-
 _PLAN_EXPAND_HITL_KINDS = frozenset({"plan", "plan_approval", "plan_expansion"})
-
 
 def _delegated_by_from_hitl(
     runtime: StudyRuntime,
@@ -119,7 +118,6 @@ def _delegated_by_from_hitl(
         return "timeout" if db == "timeout" else "human"
     return "missing_hitl_decided"
 
-
 async def expand_plan(
     runtime: StudyRuntime,
     *,
@@ -163,7 +161,6 @@ async def expand_plan(
     except Exception:  # noqa: BLE001 — never raise to tick/record
         await refuse_expansion(runtime, after_task, reason="invalid", detail="expand_crash")
         return None
-
 
 async def _expand_plan(
     runtime: StudyRuntime,
@@ -470,7 +467,6 @@ async def _expand_plan(
     await materialize_ready_foreach(runtime)
     return pid
 
-
 def _resolve_plan_n_request(
     runtime: StudyRuntime, plan_key: str, meta: dict
 ) -> tuple[ExpansionRequest | None, str | None]:
@@ -501,7 +497,6 @@ def _resolve_plan_n_request(
     if req is None:
         return None, err or "malformed_planner_output"
     return req, None
-
 
 async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str | None:
     """Run M1 critic gate, then apply ExpansionRequest after PLAN-n SUCCESS.
@@ -558,7 +553,6 @@ async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str |
     if isinstance(reqs, dict):
         reqs.pop(plan_key, None)
     return pid
-
 
 from coscientist.core.plan.expand_trigger import maybe_expand_after_task_done  # noqa: E402
 from coscientist.core.plan.supersede import (  # noqa: E402

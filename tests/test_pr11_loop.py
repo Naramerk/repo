@@ -10,13 +10,6 @@ import pytest
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import Disposition, TaskReason, TerminalReason
 from coscientist.core.events.ids import hypothesis_node_id
-from coscientist.core.events.upcasters import (
-    UPCASTERS,
-    assert_upcaster_chain_continuous,
-    register_upcaster,
-    upcast,
-    writer_schema_version,
-)
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -1165,98 +1158,8 @@ def test_dispositions_preserve_infeasible_and_outside_answers_under_cap():
     assert err["Q2"]["disposition"] == Disposition.NOT_ATTEMPTED.value
 
 
-def test_upcast_study_created_max_loop_iter():
-    v, p = upcast(
-        "StudyCreated",
-        1,
-        {
-            "study_id": "st_old",
-            "profile": "research",
-            "request": "q",
-            "catalog_version": "0.1.0",
-            "hitl_policy": {},
-            "deadline": "2026-01-01T01:00:00+00:00",
-            "created_at": "2026-01-01T00:00:00+00:00",
-        },
-    )
-    assert v == 12
-    # #24 v10 setdefault(max_loop_iter, 8); #23 v11 preserves it; PR20 v12 max_proposals.
-    assert p["max_loop_iter"] == 8
-    assert p["as_of"] is None
-    assert p["user_input_ids"] == []
-    assert p["max_proposals"] == 3
-    from coscientist.core.events.upcasters import _study_created_v9_to_v10
-
-    assert _study_created_v9_to_v10({})["max_loop_iter"] == 8
 
 
-def test_upcast_plan_accepted_loops_default():
-    v, p = upcast(
-        "PlanAccepted",
-        1,
-        {
-            "plan_id": "pl1",
-            "study_id": "st",
-            "revision": 1,
-            "hypothesis_id": None,
-            "tasks": [],
-        },
-    )
-    assert v == 11  # PR15 kind after PR16 decomposes v10
-    assert p["loops"] == []
-    assert p.get("rollup") == "all"
-
-
-def test_upcast_task_created_loop_fields():
-    v, p = upcast(
-        "TaskCreated",
-        1,
-        {
-            "task_id": "st:EXP-0",
-            "kind": "experiment",
-            "spec": {
-                "task_key": "EXP-0",
-                "title": "t",
-                "goal": "g",
-                "route": "experiment",
-            },
-            "state": "PENDING",
-            "deadline": "2026-01-01T01:00:00+00:00",
-        },
-    )
-    assert v == 13
-    assert p["spec"]["loop_id"] is None
-    assert p["spec"]["loop_iter"] is None
-
-
-def test_upcaster_duplicate_and_continuous_chains():
-    from coscientist.core.events.events import (
-        PLAN_ACCEPTED_SCHEMA_VERSION,
-        STUDY_CREATED_SCHEMA_VERSION,
-        TASK_CREATED_SCHEMA_VERSION,
-    )
-
-    with pytest.raises(ValueError, match="duplicate upcaster"):
-        register_upcaster("TaskCreated", 1, lambda p: p)
-    for etype, writer in (
-        ("StudyCreated", STUDY_CREATED_SCHEMA_VERSION),
-        ("PlanAccepted", PLAN_ACCEPTED_SCHEMA_VERSION),
-        ("TaskCreated", TASK_CREATED_SCHEMA_VERSION),
-        ("AttemptStarted", writer_schema_version("AttemptStarted")),
-        ("ResultRecorded", writer_schema_version("ResultRecorded")),
-        ("StudyFinalized", writer_schema_version("StudyFinalized")),
-    ):
-        assert_upcaster_chain_continuous(etype, writer)
-        assert writer_schema_version(etype) == writer
-    # Writer constants must match the end of each upcaster chain.
-    assert writer_schema_version("StudyCreated") == STUDY_CREATED_SCHEMA_VERSION
-    assert writer_schema_version("PlanAccepted") == PLAN_ACCEPTED_SCHEMA_VERSION
-    assert writer_schema_version("TaskCreated") == TASK_CREATED_SCHEMA_VERSION
-    # Every registered chain is continuous 1..N-1 for its max.
-    for etype, bucket in UPCASTERS.items():
-        n = writer_schema_version(etype)
-        assert_upcaster_chain_continuous(etype, n)
-        assert max(bucket) == n - 1
 
 
 def test_validate_loop_predicate_builtins():
@@ -1471,7 +1374,7 @@ async def test_unregistered_plugin_predicate_fail_closed_on_restart(
 
 @pytest.mark.asyncio
 async def test_plan_expanded_uses_writer_constant(tmp_path, clock, runtime_cls):
-    from coscientist.core.events.events import PLAN_EXPANDED_SCHEMA_VERSION
+    from coscientist.core.events.schema_versions import PLAN_EXPANDED_SCHEMA_VERSION
 
     rt, arts = await _open_study(
         tmp_path, clock, "st_loop_sv", runtime_cls=runtime_cls
@@ -1659,7 +1562,7 @@ def test_count_survivors_and_validate_loop_specs_plan_invalid():
 @pytest.mark.asyncio
 async def test_materialize_loop_iter_writes_plan_expanded(tmp_path, clock, runtime_cls):
     """materialize_loop_iter emits PlanExpanded(loop=true) at writer schema."""
-    from coscientist.core.events.events import PLAN_EXPANDED_SCHEMA_VERSION
+    from coscientist.core.events.schema_versions import PLAN_EXPANDED_SCHEMA_VERSION
     from coscientist.core.plan.loop import materialize_loop_iter
 
     rt, arts = await _open_study(
@@ -1697,7 +1600,7 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
     """Corrupt plan loops → real pydantic ValidationError → internal_error finalize."""
     import coscientist.core.plan.loop_predicates as lp
     from coscientist.core.claims.reasons import TerminalReason
-    from coscientist.core.events.events import (
+    from coscientist.core.events.schema_versions import (
         PLAN_ACCEPTED_SCHEMA_VERSION,
         EventEnvelope,
         make_idem,
@@ -2112,32 +2015,3 @@ async def test_plan_invalid_from_predicate_body_finalizes(
         lp._REGISTRY.pop(name, None)
 
 
-def test_upcast_plan_expanded_v2_loop_field_defaults():
-    """Old PlanExpanded v2 without loop fields → TaskSpec defaults on replay."""
-    v, p = upcast(
-        "PlanExpanded",
-        2,
-        {
-            "plan_id": "pl_old",
-            "added_tasks": [
-                {
-                    "task_key": "EXP-0",
-                    "title": "t",
-                    "goal": "g",
-                    "route": "experiment",
-                    "expected_outputs": [
-                        {"name": "main", "media_type": "application/json"}
-                    ],
-                }
-            ],
-            "added_questions": [],
-        },
-    )
-    assert v == 5  # PR15 kind+evidence after PR16 decomposes v4
-    spec = p["added_tasks"][0]
-    assert spec["loop_id"] is None
-    assert spec["loop_iter"] is None
-    assert spec["loop_template_key"] is None
-    assert p.get("rollup") == "all"
-    assert spec["expected_outputs"][0].get("kind") is None
-    assert spec["expected_outputs"][0].get("evidence_kind") is None

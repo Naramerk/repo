@@ -8,7 +8,6 @@ from typing import Any, Protocol
 from coscientist.core.events.events import EventEnvelope
 from coscientist.core.execution.domain import Artifact, StudyView
 
-
 class EventStore(Protocol):
     study_id: str
     owner: str | None
@@ -54,7 +53,6 @@ class EventStore(Protocol):
 
     async def close(self) -> None: ...
 
-
 class ArtifactStore(Protocol):
     def put(
         self, content: bytes, produced_by_call_id: str, *, name: str, media_type: str
@@ -64,10 +62,8 @@ class ArtifactStore(Protocol):
 
     def get_meta(self, artifact_id: str) -> Artifact | None: ...
 
-
 class AgentPort(Protocol):
     async def run(self, role: str, input: Any, tools: list[Any], budget: Any) -> Any: ...
-
 
 class StudyService(Protocol):
     def study_view(self, study_id: str) -> StudyView: ...

@@ -24,17 +24,13 @@ class EventEnvelope(BaseModel):
 
 
 # Typed payload helpers used by the machine / executor.
-
-# Writer: #24 TC11 / #29 PA10+PE4 / #28 TC13/PA11/PE5 / #23 StudyCreated v11;
-# PR20 stacks StudyCreated **v12** (max_proposals).
-PLAN_EXPANDED_SCHEMA_VERSION = 5
-STUDY_CREATED_SCHEMA_VERSION = 12  # PR20: max_proposals (#23 owns v11)
-PLAN_ACCEPTED_SCHEMA_VERSION = 11
-TASK_CREATED_SCHEMA_VERSION = 13
-STUDY_FINALIZED_SCHEMA_VERSION = 4  # PR20: custom_checks / observations
+# Envelope schema_version constants live in schema_versions.py (derived from UPCASTERS).
 
 EventType = Literal[
     "StudyCreated",
+    "StudyRefused",
+    "StudyCancelled",
+    "StudyFinalized",
     "TaskCreated",
     "TaskInherited",
     "AttemptStarted",
@@ -54,10 +50,12 @@ EventType = Literal[
     "HitlTimedOut",
     "HitlDeadlineExtended",
     "BudgetDebited",
+    "BudgetExceeded",
     "BudgetSharesAdjusted",
     "BudgetSharesRefused",
     "ArtifactRegistered",
     "LateWriteRejected",
+    "DowngradeRejected",
     "CatalogErrorRaised",
     "SandboxInfraRaised",
     "SameDigestRetryRejected",
@@ -65,7 +63,6 @@ EventType = Literal[
     "ResultPending",
     "ReviewScheduled",
     "ReviewRecorded",
-    "PlanRefused",
     "JudgeCasCorrupt",
     "ForkCreated",
     "VerdictSnapshotsRecorded",

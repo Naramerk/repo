@@ -10,7 +10,6 @@ from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hypothesis_node_id, task_id
-from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -519,7 +518,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                     "limitations": [],
                 },
                 ts=now,
-                schema_version=4,
+                schema_version=1,
             ),
             EventEnvelope(
                 study_id=sid,
@@ -533,7 +532,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                     "task_id": e0_tid,
                 },
                 ts=now,
-                schema_version=2,
+                schema_version=1,
             ),
             EventEnvelope(
                 study_id=sid,
@@ -546,7 +545,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                     "reason": None,
                 },
                 ts=now,
-                schema_version=2,
+                schema_version=1,
             ),
         ]
     )
@@ -1455,48 +1454,5 @@ async def test_foreach_empty_superseded_expand_after_queues_plan_n(
     await close_runtime(rt)
 
 
-def test_upcast_task_created_foreach_quorum():
-    v, p = upcast(
-        "TaskCreated",
-        6,
-        {
-            "task_id": "s/E0",
-            "kind": "experiment",
-            "spec": {
-                "task_key": "E0",
-                "title": "t",
-                "goal": "g",
-                "route": "experiment",
-                "inputs": [{"from_task": "A", "output": "main"}],
-            },
-            "state": "PENDING",
-            "deadline": "2020-01-01T00:00:00+00:00",
-            "attempts": [],
-        },
-    )
-    assert v == 13
-    assert p["spec"]["foreach"] is None
-    assert p["spec"]["inputs"][0]["quorum"] is None
-    assert p["spec"]["sandbox_timeout_s"] is None
-    assert p["spec"]["budget_share"] is None
 
 
-def test_upcast_attempt_limitations():
-    v, p = upcast("AttemptStarted", 3, {"attempt_id": "a", "inputs": []})
-    # …v7 tainted (PR18) → v8 inputs_digest (#23) → v9 attempt_role (PR20).
-    assert v == 9
-    assert p["limitations"] == []
-    assert p["allocated_budget_rub"] is None
-    assert p["budget_limit_rub"] is None
-    assert p["tainted_context"] is False
-    assert p.get("inputs_digest") is None
-    assert p["attempt_role"] == "agent"
-
-
-def test_upcast_study_foreach_cap():
-    v, p = upcast("StudyCreated", 7, {"study_id": "s"})
-    assert v == 12
-    assert p["max_foreach_children"] == 32
-    assert p["as_of"] is None
-    assert p["user_input_ids"] == []
-    assert p["max_proposals"] == 3

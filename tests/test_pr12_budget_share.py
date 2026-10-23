@@ -12,7 +12,6 @@ from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.errors import CoreBugError, SandboxInfraError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hypothesis_node_id, task_id
-from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -731,86 +730,6 @@ async def test_executor_debits_cost_rub(tmp_path, clock):
     await close_runtime(rt)
 
 
-def test_upcast_task_created_shares():
-    v, p = upcast(
-        "TaskCreated",
-        7,
-        {
-            "task_id": "t",
-            "kind": "experiment",
-            "spec": {
-                "task_key": "E0",
-                "title": "t",
-                "goal": "g",
-                "route": "experiment",
-                "foreach": None,
-                "foreach_item": None,
-                "addresses": [],
-                "inputs": [],
-            },
-            "state": "PENDING",
-            "deadline": "2020-01-01T00:00:00+00:00",
-        },
-    )
-    assert v >= 9
-    assert p["spec"]["budget_share"] is None
-    assert p["spec"]["deadline_share"] is None
-    # v8 is sandbox-only; share defaults arrive at v9.
-    v8, p8 = upcast(
-        "TaskCreated",
-        8,
-        {
-            "task_id": "t",
-            "kind": "experiment",
-            "spec": {
-                "task_key": "E0",
-                "title": "t",
-                "goal": "g",
-                "route": "experiment",
-                "sandbox_timeout_s": None,
-                "sandbox_memory_mb": None,
-                "sandbox_check_limits": None,
-                "sandbox_limits_note": None,
-                "foreach": None,
-                "foreach_item": None,
-                "addresses": [],
-                "inputs": [],
-            },
-            "state": "PENDING",
-            "deadline": "2020-01-01T00:00:00+00:00",
-        },
-    )
-    assert v8 >= 9
-    assert p8["spec"]["budget_share"] is None
-
-
-def test_upcast_plan_accepted_shares():
-    v, p = upcast(
-        "PlanAccepted",
-        5,
-        {
-            "plan_id": "p",
-            "study_id": "s",
-            "revision": 1,
-            "hypothesis_id": None,
-            "tasks": [
-                {
-                    "task_key": "E0",
-                    "title": "t",
-                    "goal": "g",
-                    "route": "experiment",
-                    "foreach": None,
-                    "foreach_item": None,
-                    "addresses": [],
-                    "inputs": [],
-                }
-            ],
-            "questions": [],
-            "expand_after": [],
-        },
-    )
-    assert v >= 7
-    assert p["tasks"][0]["budget_share"] is None
 
 
 async def _plan_one(rt, *, share: float = 0.5):
@@ -992,7 +911,7 @@ async def test_budget_debit_atomic_crash_between_recover(tmp_path, clock):
                     "payload_digest": "x",
                 },
                 ts=now,
-                schema_version=3,
+                schema_version=1,
             )
         ]
     )

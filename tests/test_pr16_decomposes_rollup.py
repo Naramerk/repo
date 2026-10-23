@@ -12,14 +12,12 @@ from coscientist.core.claims.reasons import Disposition, NotAttemptedReason, Tas
 from coscientist.core.claims.rubric import freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.events.errors import LeaseLost
-from coscientist.core.events.events import (
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.ids import hypothesis_node_id, task_id
+from coscientist.core.events.schema_versions import (
     PLAN_ACCEPTED_SCHEMA_VERSION,
     PLAN_EXPANDED_SCHEMA_VERSION,
-    EventEnvelope,
-    make_idem,
 )
-from coscientist.core.events.ids import hypothesis_node_id, task_id
-from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -265,7 +263,7 @@ async def test_accept_plan_writes_decomposes_edge(tmp_path, clock):
     assert len(decomp) == 1
     assert decomp[0].payload["attrs"]["origin"] == "explicit"
     accepted = next(e for e in await rt.store.read_all() if e.type == "PlanAccepted")
-    assert accepted.schema_version == PLAN_ACCEPTED_SCHEMA_VERSION == 11
+    assert accepted.schema_version == PLAN_ACCEPTED_SCHEMA_VERSION == 1
     await close_runtime(rt)
 
 
@@ -1532,32 +1530,10 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
     assert "~~`E1`~~" in md
     expanded = [e for e in await rt.store.read_all() if e.type == "PlanExpanded"]
     assert expanded
-    assert expanded[-1].schema_version == PLAN_EXPANDED_SCHEMA_VERSION == 5
+    assert expanded[-1].schema_version == PLAN_EXPANDED_SCHEMA_VERSION == 1
     await close_runtime(rt)
 
 
-def test_upcaster_planaccepted_v9_to_v10_decomposes():
-    v, p = upcast(
-        "PlanAccepted",
-        9,
-        {"plan_id": "p", "tasks": [], "questions": [{"id": "Q", "text": "t"}], "loops": []},
-    )
-    assert v == 11
-    assert p["rollup"] == "all"
-    assert p["subquestions"] == []
-    assert p["questions"][0].get("origin") is None
-    assert p["questions"][0].get("parent_id") is None
-
-
-def test_upcaster_planexpanded_v3_to_v4_decomposes():
-    v, p = upcast(
-        "PlanExpanded",
-        3,
-        {"plan_id": "p", "added_questions": [{"id": "Q.a", "text": "a", "parent_id": "Q"}]},
-    )
-    assert v == 5
-    assert p["rollup"] == "all"
-    assert p["added_questions"][0].get("origin") is None
 
 
 def test_validate_decomposes_pure_cycle():

@@ -12,7 +12,6 @@ from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.claims.verdict import recompute_effect_provenance
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id, hypothesis_node_id, question_node_id
-from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -731,7 +730,7 @@ async def test_plan_n_non_success_refused(tmp_path, clock, runtime_cls):
                     "reason": None,
                 },
                 ts=rt.clock.now(),
-                schema_version=2,
+                schema_version=1,
             )
         ]
     )
@@ -899,7 +898,7 @@ async def test_restart_after_refusal_no_duplicate_events(tmp_path, clock, runtim
                     "reason": None,
                 },
                 ts=rt.clock.now(),
-                schema_version=2,
+                schema_version=1,
             )
         ]
     )
@@ -2056,17 +2055,6 @@ def test_core_evaluated_only_from_effect_not_meta():
     assert out2["countable"] is False
 
 
-def test_upcaster_studycreated_v6_to_v7_expansion_fields():
-    v, p = upcast("StudyCreated", 6, {"study_id": "s", "max_replans": 4})
-    assert v >= 7
-    assert p["max_expansions"] == 4
-    assert p["max_depth"] == 8
-
-
-def test_upcaster_planaccepted_v3_to_v4_expand_after():
-    v, p = upcast("PlanAccepted", 3, {"plan_id": "p", "tasks": [], "questions": []})
-    assert v >= 4
-    assert p["expand_after"] == []
 
 
 def test_schema_valid_missing_artifact(tmp_path):

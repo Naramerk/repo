@@ -28,7 +28,6 @@ from coscientist.core.events.schema_versions import ARTIFACT_REGISTERED_SCHEMA_V
 from coscientist.core.execution._attempt_frame import attempt_active
 from coscientist.core.execution.domain import Artifact
 
-
 def _make_issued_registry() -> tuple[
     Any, Any, Any
 ]:
@@ -46,9 +45,7 @@ def _make_issued_registry() -> tuple[
 
     return put, pop, get
 
-
 _issued_put, _issued_pop, _issued_get = _make_issued_registry()
-
 
 @dataclass(frozen=True, slots=True)
 class UserPutCapability:
@@ -61,7 +58,6 @@ class UserPutCapability:
     _nonce: str
     _token: str
 
-
 def mint_user_put_capability() -> UserPutCapability:
     """Mint a capability for one study create / input registration."""
     nonce = secrets.token_hex(16)
@@ -69,13 +65,11 @@ def mint_user_put_capability() -> UserPutCapability:
     _issued_put(nonce, token)
     return UserPutCapability(_nonce=nonce, _token=token)
 
-
 def release_user_put_capability(cap: UserPutCapability | None) -> None:
     if cap is None:
         return
     if type(cap) is UserPutCapability:
         _issued_pop(cap._nonce)
-
 
 def verify_user_put_capability(cap: object | None) -> bool:
     """Exact-type + hmac against closure registry — no ``isinstance`` / methods."""
@@ -85,7 +79,6 @@ def verify_user_put_capability(cap: object | None) -> bool:
     if expected is None:
         return False
     return hmac.compare_digest(expected, cap._token)
-
 
 def put_user(
     store: Any,
@@ -122,7 +115,6 @@ def put_user(
         user_put=capability,
     )
 
-
 class UserInputRegistrationError(Exception):
     """Fail-closed: user inputs present but CAS registration cannot complete."""
 
@@ -132,7 +124,6 @@ class UserInputRegistrationError(Exception):
         self.reason = reason
         self.kind = kind
         super().__init__(reason)
-
 
 def register_user_input_artifacts(
     inputs: list[Any],

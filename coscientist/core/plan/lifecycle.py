@@ -11,11 +11,17 @@ from coscientist.core.claims.graph import GraphNode
 from coscientist.core.events.clock import Clock
 from coscientist.core.events.errors import CASUnavailable, Conflict, LeaseLost, SandboxInfraError
 from coscientist.core.events.events import (
-    PLAN_ACCEPTED_SCHEMA_VERSION,
-    STUDY_CREATED_SCHEMA_VERSION,
-    TASK_CREATED_SCHEMA_VERSION,
     EventEnvelope,
     make_idem,
+)
+from coscientist.core.events.schema_versions import (
+    GRAPH_EDGE_ADDED_SCHEMA_VERSION,
+    GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
+    PLAN_ACCEPTED_SCHEMA_VERSION,
+    STUDY_CREATED_SCHEMA_VERSION,
+    STUDY_REFUSED_SCHEMA_VERSION,
+    TASK_CREATED_SCHEMA_VERSION,
+    TASK_DONE_SCHEMA_VERSION,
 )
 from coscientist.core.events.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
 from coscientist.core.events.ports import EventStore
@@ -46,7 +52,6 @@ STAGE_KEYS = [
     ("PLAN", TaskKind.PLAN),
     ("REPORT", TaskKind.REPORT),
 ]
-
 
 class LifecycleMixin:
     """Attribute stubs so mypy accepts mixin use on StudyRuntime."""
@@ -285,7 +290,7 @@ class LifecycleMixin:
                         "classifier_error": decision.classifier_error,
                     },
                     ts=now,
-                    schema_version=1,
+                    schema_version=STUDY_REFUSED_SCHEMA_VERSION,
                 )
             )
             await self._append(events)
@@ -550,7 +555,7 @@ class LifecycleMixin:
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
+                    schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                 )
             )
         # PR16: decomposes edges on accept (child → parent); acyclicity already checked.
@@ -578,7 +583,7 @@ class LifecycleMixin:
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
+                    schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
                 )
             )
         # Freeze rubric digests onto criterion-like nodes (frozen_at_seq via projection).
@@ -617,7 +622,7 @@ class LifecycleMixin:
                             created_at=now,
                         ).model_dump(mode="json"),
                         ts=now,
-                        schema_version=1,
+                        schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                     )
                 )
         # Freeze plan criteria at accept (DESIGN_M1 §6 / frozen_at_seq).
@@ -665,7 +670,7 @@ class LifecycleMixin:
                             created_at=now,
                         ).model_dump(mode="json"),
                         ts=now,
-                        schema_version=1,
+                        schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                     )
                 )
         plan_tid = task_id(sid, "PLAN")
@@ -682,7 +687,7 @@ class LifecycleMixin:
                         "reason": None,
                     },
                     ts=now,
-                    schema_version=2,
+                    schema_version=TASK_DONE_SCHEMA_VERSION,
                 )
             )
         effective = self.study.effective_deadline()

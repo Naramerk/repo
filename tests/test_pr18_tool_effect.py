@@ -190,7 +190,7 @@ async def _journal_attempt(
                 "limitations": [],
             },
             ts=datetime.now(UTC),
-            schema_version=5,
+            schema_version=1,
         )
     )
 

@@ -27,6 +27,11 @@ from coscientist.core.events.errors import ArtifactRejected, FetchToolReclassifi
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.domain import Catalog, CodeCheck, RequirementRef, TaskSpec
+from coscientist.core.events.schema_versions import (
+    ATTEMPT_TAINTED_SCHEMA_VERSION,
+    FETCH_INTEGRITY_RAISED_SCHEMA_VERSION,
+    SOURCE_FETCHED_SCHEMA_VERSION,
+)
 
 VerifyFetchCap = Callable[..., "FetchCapability"]
 AssertFetchCap = Callable[..., "FetchCapability"]
@@ -38,7 +43,6 @@ _verify_impl: VerifyFetchCap | None = None
 _assert_impl: AssertFetchCap | None = None
 _take_write_permit_impl: TakeWritePermit | None = None
 _release_write_permit_impl: ReleaseWritePermit | None = None
-
 
 def register_fetch_capability_verifier(
     verify_fn: VerifyFetchCap,
@@ -59,7 +63,6 @@ def register_fetch_capability_verifier(
     if release_write_permit_fn is not None:
         _release_write_permit_impl = release_write_permit_fn
 
-
 def take_source_fetched_write_permit(
     cap_id: str,
     *,
@@ -74,7 +77,6 @@ def take_source_fetched_write_permit(
         cap_id, tool=tool, call_id=call_id, study_id=study_id
     )
 
-
 def release_source_fetched_write_permit(cap_id: str) -> None:
     """Drop a write permit without journaling (append failed after verify)."""
     if _release_write_permit_impl is None:
@@ -86,7 +88,6 @@ class FetchCapability:
     """Opaque capability handle — only an id; binding lives in effects registry."""
 
     id: str
-
 
 def verify_fetch_capability(
     capability: Any,
@@ -107,7 +108,6 @@ def verify_fetch_capability(
         attempt_id=attempt_id,
     )
 
-
 def assert_fetch_capability_bound(
     capability: Any,
     *,
@@ -127,7 +127,6 @@ def assert_fetch_capability_bound(
         attempt_id=attempt_id,
     )
 
-
 def task_needs_source_fetch(catalog: Catalog, spec: TaskSpec) -> bool:
     """True when evaluating this task may run ``quote_in_source`` (avoid journal scan)."""
     by_id = {t.id: t for t in catalog.templates}
@@ -144,13 +143,11 @@ def task_needs_source_fetch(catalog: Catalog, spec: TaskSpec) -> bool:
             return True
     return False
 
-
 def _attempt_id_from_call_id(call_id: str) -> str:
     """``call_id`` is ``{attempt_id}:{call_seq}`` — split on the last colon."""
     if ":" not in call_id:
         return call_id
     return call_id.rsplit(":", 1)[0]
-
 
 def source_fetched_payload_ok(payload: dict[str, Any]) -> bool:
     """True when SourceFetched payload has the fetch ToolCall shape fields."""
@@ -166,7 +163,6 @@ def source_fetched_payload_ok(payload: dict[str, Any]) -> bool:
         return False
     return True
 
-
 def source_fetched_paired_with_fetch_call(
     payload: dict[str, Any],
     fetch_calls: dict[str, str],
@@ -177,7 +173,6 @@ def source_fetched_paired_with_fetch_call(
     call_id = str(payload.get("call_id") or "")
     tool = str(payload.get("tool") or "")
     return fetch_calls.get(call_id) == tool
-
 
 @dataclass
 class SourceFetchIndex:
@@ -229,7 +224,6 @@ class SourceFetchIndex:
             return frozenset()
         return frozenset(self.by_attempt.get(attempt_id, ()))
 
-
 def note_fetch_call_from_attempt_tainted(payload: dict[str, Any]) -> tuple[str, str] | None:
     """Resolve a fetch-call marker from ``AttemptTainted`` payload.
 
@@ -254,7 +248,6 @@ def note_fetch_call_from_attempt_tainted(payload: dict[str, Any]) -> tuple[str, 
         raise FetchToolReclassified(tool, call_id)
     # Unregistered (renamed away) or still is_fetch — trust journaled identity.
     return call_id, tool
-
 
 def apply_source_fetch_events(
     idx: SourceFetchIndex, events: list[Any]
@@ -286,12 +279,10 @@ def apply_source_fetch_events(
             idx.note(p)
     return max_seq
 
-
 def load_source_fetch_index(events: list[Any]) -> SourceFetchIndex:
     idx = SourceFetchIndex()
     apply_source_fetch_events(idx, events)
     return idx
-
 
 async def journal_fetch_integrity_raised(
     writer: StudyWriter,
@@ -322,7 +313,7 @@ async def journal_fetch_integrity_raised(
                 "internal_error": True,
             },
             ts=datetime.now(UTC),
-            schema_version=1,
+            schema_version=FETCH_INTEGRITY_RAISED_SCHEMA_VERSION,
         )
         try:
             stored = await writer.append(ev)
@@ -335,7 +326,6 @@ async def journal_fetch_integrity_raised(
         if on_event is not None:
             on_event(stored)
     return out
-
 
 async def reconcile_fetch_integrity(writer: StudyWriter) -> SourceFetchIndex:
     """Fold journal, journal any reclassified markers, return index (uncounted).
@@ -379,7 +369,6 @@ async def reconcile_fetch_integrity(writer: StudyWriter) -> SourceFetchIndex:
         )
     return idx
 
-
 async def load_source_fetch_index_from_writer(writer: StudyWriter) -> SourceFetchIndex:
     """Incremental fold cached on the writer (O(Δ) after first load)."""
     store = getattr(writer, "store", None)
@@ -409,7 +398,6 @@ async def load_source_fetch_index_from_writer(writer: StudyWriter) -> SourceFetc
     # ``reconcile_fetch_integrity`` on open/finalize.
     return idx
 
-
 def _cache_note_fetch(writer: StudyWriter, ev: EventEnvelope) -> None:
     idx = writer.source_fetch_idx
     if idx is None:
@@ -418,7 +406,6 @@ def _cache_note_fetch(writer: StudyWriter, ev: EventEnvelope) -> None:
     seq = int(getattr(ev, "seq", 0) or 0)
     if seq > int(writer.source_fetch_seq or 0):
         writer.source_fetch_seq = seq
-
 
 async def append_source_fetched(
     writer: StudyWriter,
@@ -452,7 +439,7 @@ async def append_source_fetched(
             "url": url,
         },
         ts=datetime.now(UTC),
-        schema_version=1,
+        schema_version=SOURCE_FETCHED_SCHEMA_VERSION,
     )
     # verify granted a write permit — release it if append fails so it never leaks.
     try:
@@ -464,7 +451,6 @@ async def append_source_fetched(
     if on_event is not None:
         on_event(stored)
     return stored
-
 
 async def store_fetched_source(
     writer: StudyWriter,
@@ -503,7 +489,7 @@ async def store_fetched_source(
             "is_fetch": True,
         },
         ts=datetime.now(UTC),
-        schema_version=1,
+        schema_version=ATTEMPT_TAINTED_SCHEMA_VERSION,
     )
     stored_taint = await writer.append(tainted)
     _cache_note_fetch(writer, stored_taint)

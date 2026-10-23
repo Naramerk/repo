@@ -15,11 +15,9 @@ from coscientist.core.plan.shares import (
     shares_present,
 )
 
-
 def _raw_budget(spec: TaskSpec) -> float | None:
     v = getattr(spec, "budget_share", None)
     return None if v is None else float(v)
-
 
 def renorm_deadline(
     task_key: str,
@@ -46,7 +44,6 @@ def renorm_deadline(
     span = remaining * (share_i / denom)
     return min(now + timedelta(seconds=span), ed)
 
-
 def outstanding_task_allocations(runtime: Any) -> Decimal:
     """Sum of (alloc − spent) for non-DONE tasks with a journaled cap (open reservations)."""
     caps = getattr(runtime, "_task_budget_alloc", None) or {}
@@ -64,7 +61,6 @@ def outstanding_task_allocations(runtime: Any) -> Decimal:
         if rem > 0:
             total += rem
     return total
-
 
 def allocate_budget(
     task_key: str,
@@ -104,7 +100,6 @@ def allocate_budget(
     if denom <= 0:
         return Decimal("0")
     return (pool * share_i / denom).quantize(Decimal("0.0001"))
-
 
 def compute_p2_allocation(
     runtime: Any, task: Task
@@ -159,7 +154,6 @@ def compute_p2_allocation(
     )
     return deadline, budget, do_renorm
 
-
 def p2_share_payload_fields(runtime: Any, task: Task) -> dict[str, Any]:
     """Fields merged into AttemptStarted for journaled share allocation.
 
@@ -186,7 +180,6 @@ def p2_share_payload_fields(runtime: Any, task: Task) -> dict[str, Any]:
         "budget_limit_rub": None if limit is None else str(limit),
         "share_renorm": renormed,
     }
-
 
 def agent_raises_budget_share(
     *,
@@ -225,14 +218,12 @@ def agent_raises_budget_share(
         return f"agent_share_raise:total:{explicit_added}>{prev_explicit}"
     return None
 
-
 def ensure_share_defaults(spec: dict[str, Any]) -> dict[str, Any]:
     """Upcaster helper: old journals lack budget_share / deadline_share."""
     out = dict(spec)
     out.setdefault("budget_share", None)
     out.setdefault("deadline_share", None)
     return out
-
 
 async def enforce_task_budget_share(runtime: Any, task_id: str) -> None:
     """If task spend > allocated share → SKIPPED(budget). Does not close study."""
@@ -254,7 +245,6 @@ async def enforce_task_budget_share(runtime: Any, task_id: str) -> None:
         task_id, reason=TaskReason.BUDGET, detail="task_share_exhausted"
     )
 
-
 async def attempt_share_fields_or_refuse(
     runtime: Any, task: Task
 ) -> dict[str, Any] | None:
@@ -274,7 +264,6 @@ async def attempt_share_fields_or_refuse(
         return None
     return fields
 
-
 def would_exceed_budget_limit(
     *,
     spent_so_far: Decimal | float | int | str,
@@ -289,7 +278,6 @@ def would_exceed_budget_limit(
     if limit is None:
         return False
     return Decimal(str(spent_so_far)) + Decimal(str(next_cost)) > Decimal(str(limit))
-
 
 def budget_debit_event(
     *,
@@ -327,7 +315,6 @@ def budget_debit_event(
         ts=ts,
     )
 
-
 def make_budget_debit_cb(runtime: Any) -> Any:
     """Post-append hook after atomic ``BudgetDebited`` (enforce + study exhaust).
 
@@ -351,7 +338,6 @@ def make_budget_debit_cb(runtime: Any) -> Any:
         await runtime._emit_study_budget_if_exhausted()
 
     return _cb
-
 
 def build_budget_shares_payload(
     runtime: Any,
@@ -390,7 +376,6 @@ def build_budget_shares_payload(
         "deadline_shares": dmap,
         "tasks": [s.model_dump(mode="json") for s in specs],
     }
-
 
 def fold_budget_shares_adjusted(runtime: Any, payload: dict[str, Any]) -> None:
     """Fold BudgetSharesAdjusted into active plan blob + live Task.spec (replay==live)."""

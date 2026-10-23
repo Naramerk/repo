@@ -1,4 +1,4 @@
-"""PR2 finalize totality, I2 replay, last-resort fallbacks, legacy upcasts."""
+"""PR2 finalize totality, I2 replay, last-resort fallbacks, legacy journal reopen."""
 
 from __future__ import annotations
 
@@ -466,8 +466,8 @@ async def test_tick_ensure_lease_after_finalized(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
-    """Old journal PlanAccepted v1 + TaskCreated v2 upcast and finalize."""
+async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
+    """Seeded complete v1 PlanAccepted + TaskCreated reopen and finalize."""
     sid = "st_leg"
     root = tmp_path / sid
     root.mkdir()
@@ -493,7 +493,7 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
                     "finalize_reserve_s": 5,
                 },
                 ts=now,
-                schema_version=2,
+                schema_version=1,
             ),
             EventEnvelope(
                 study_id=sid,
@@ -512,9 +512,10 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
                             "goal": "g",
                             "route": "experiment",
                             "depends_on": ["PLAN"],
+                            "addresses": [],
                         }
                     ],
-                    # no questions / addresses → upcast v1→v2
+                    "questions": [],
                 },
                 ts=now,
                 schema_version=1,
@@ -533,6 +534,7 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
                         "goal": "g",
                         "route": "experiment",
                         "depends_on": ["PLAN"],
+                        "addresses": [],
                     },
                     "state": TaskState.PENDING.value,
                     "outcome": None,
@@ -542,7 +544,7 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
                     "inherited_from": None,
                 },
                 ts=now,
-                schema_version=2,  # upcast → addresses=[]
+                schema_version=1,
             ),
         ]
     )

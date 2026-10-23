@@ -3,13 +3,13 @@
   "digest": "bedb5c946e3618f42866f7c1acb5246a22b33648a3e59a79d42ddc680a7806bd",
   "call_id": "att_lit:1",
   "tool": "papers_get",
-  "note": "Pre-reclassify journal: StudyCreated v2 / PlanAccepted v1 / TaskCreated v2 (upcasters run on open). AttemptTainted journals is_fetch=True for papers_get; later live registry may set is_fetch=False.",
+  "note": "Schema v1 baseline journal: complete payloads at schema_version=1. AttemptTainted journals is_fetch=True for papers_get; later live registry may set is_fetch=False. Rebuild events.db via scripts/gen_reclassified_fetch_old_journal.py.",
   "events": [
     {
       "type": "StudyCreated",
       "entity_key": "st_reclass_old",
       "idem_key": "StudyCreated:st_reclass_old",
-      "schema_version": 2,
+      "schema_version": 1,
       "ts": "2024-01-01T00:00:00+00:00",
       "payload": {
         "study_id": "st_reclass_old",
@@ -19,17 +19,61 @@
         "hitl_policy": {
           "mode": "headless",
           "gates": {
-            "spec_approval": {"enabled": true, "timeout_s": 120, "on_timeout": "delegate"},
-            "plan": {"enabled": true, "timeout_s": 180, "on_timeout": "delegate"},
-            "plan_approval": {"enabled": true, "timeout_s": 180, "on_timeout": "delegate"},
-            "plan_expansion": {"enabled": true, "timeout_s": 180, "on_timeout": "delegate"},
-            "hypotheses": {"enabled": true, "timeout_s": 1800, "on_timeout": "delegate"},
-            "costly_or_nonreal": {"enabled": true, "timeout_s": 1800, "on_timeout": "fail"},
-            "report": {"enabled": true, "timeout_s": 1800, "on_timeout": "delegate"},
-            "result_acceptance": {"enabled": true, "timeout_s": 1800, "on_timeout": "delegate"},
-            "skip_task": {"enabled": true, "timeout_s": 1800, "on_timeout": "delegate"},
-            "budget": {"enabled": true, "timeout_s": 1800, "on_timeout": "delegate"},
-            "side_effect": {"enabled": true, "timeout_s": 1800, "on_timeout": "fail"}
+            "spec_approval": {
+              "enabled": true,
+              "timeout_s": 120,
+              "on_timeout": "delegate"
+            },
+            "plan": {
+              "enabled": true,
+              "timeout_s": 180,
+              "on_timeout": "delegate"
+            },
+            "plan_approval": {
+              "enabled": true,
+              "timeout_s": 180,
+              "on_timeout": "delegate"
+            },
+            "plan_expansion": {
+              "enabled": true,
+              "timeout_s": 180,
+              "on_timeout": "delegate"
+            },
+            "hypotheses": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "delegate"
+            },
+            "costly_or_nonreal": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "fail"
+            },
+            "report": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "delegate"
+            },
+            "result_acceptance": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "delegate"
+            },
+            "skip_task": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "delegate"
+            },
+            "budget": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "delegate"
+            },
+            "side_effect": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "fail"
+            }
           },
           "timeout_s": {
             "spec_approval": 120,
@@ -47,7 +91,25 @@
         },
         "deadline": "2024-01-01T00:01:00+00:00",
         "created_at": "2024-01-01T00:00:00+00:00",
-        "finalize_reserve_s": 5
+        "finalize_reserve_s": 5,
+        "refutations_needed": 1,
+        "refutation_priority": false,
+        "confirmations_needed": 1,
+        "aggregate": "count",
+        "evalue_alpha": 0.05,
+        "supported_needed": 2,
+        "max_expansions": 2,
+        "max_human_expansions": 10,
+        "replan_reserve": 0.1,
+        "max_tasks": 64,
+        "max_depth": 8,
+        "plan_timeout_s": 600,
+        "max_foreach_children": 32,
+        "max_task_budget_share": 1.0,
+        "max_loop_iter": 8,
+        "as_of": null,
+        "user_input_ids": [],
+        "max_proposals": 3
       }
     },
     {
@@ -67,16 +129,35 @@
             "title": "e1",
             "goal": "g",
             "route": "experiment",
-            "depends_on": ["PLAN"]
+            "depends_on": [
+              "PLAN"
+            ],
+            "addresses": [],
+            "foreach": null,
+            "foreach_item": null,
+            "sandbox_timeout_s": null,
+            "sandbox_memory_mb": null,
+            "sandbox_check_limits": null,
+            "sandbox_limits_note": null,
+            "budget_share": null,
+            "deadline_share": null,
+            "loop_id": null,
+            "loop_iter": null,
+            "loop_template_key": null
           }
-        ]
+        ],
+        "questions": [],
+        "expand_after": [],
+        "loops": [],
+        "rollup": "all",
+        "subquestions": []
       }
     },
     {
       "type": "TaskCreated",
       "entity_key": "st_reclass_old/E1",
       "idem_key": "TaskCreated:st_reclass_old/E1",
-      "schema_version": 2,
+      "schema_version": 1,
       "ts": "2024-01-01T00:00:02+00:00",
       "payload": {
         "task_id": "st_reclass_old/E1",
@@ -86,7 +167,21 @@
           "title": "e1",
           "goal": "g",
           "route": "experiment",
-          "depends_on": ["PLAN"]
+          "depends_on": [
+            "PLAN"
+          ],
+          "addresses": [],
+          "foreach": null,
+          "foreach_item": null,
+          "sandbox_timeout_s": null,
+          "sandbox_memory_mb": null,
+          "sandbox_check_limits": null,
+          "sandbox_limits_note": null,
+          "budget_share": null,
+          "deadline_share": null,
+          "loop_id": null,
+          "loop_iter": null,
+          "loop_template_key": null
         },
         "state": "PENDING",
         "outcome": null,
@@ -107,7 +202,13 @@
         "task_id": "st_reclass_old/E1",
         "task_key": "E1",
         "inputs": [],
-        "tainted_context": false
+        "tainted_context": false,
+        "limitations": [],
+        "allocated_budget_rub": null,
+        "share_renorm": false,
+        "budget_limit_rub": null,
+        "inputs_digest": null,
+        "attempt_role": "agent"
       }
     },
     {

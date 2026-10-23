@@ -9,6 +9,9 @@ from typing import TYPE_CHECKING, Any, Literal
 from coscientist.core.claims.dispositions import dispositions, report_hypothesis_verdicts
 from coscientist.core.claims.reasons import TaskReason, TerminalReason
 from coscientist.core.events.digest import canonical_json
+from coscientist.core.events.schema_versions import (
+    STUDY_FINALIZED_SCHEMA_VERSION,
+)
 from coscientist.core.events.errors import (
     CASUnavailable,
     Conflict,
@@ -28,7 +31,6 @@ log = logging.getLogger(__name__)
 
 FinalizeTrigger = Literal["cancel", "budget", "deadline", "all_done", "intake", "internal_error"]
 
-
 def _escape_report_text(value: object) -> str:
     """Escape agent/host detail so it cannot inject markdown/HTML structure.
 
@@ -46,7 +48,6 @@ def _escape_report_text(value: object) -> str:
         .replace("http://", "hxxp://")
         .replace("https://", "hxxps://")
     )
-
 
 # Bound rich StudyFinalized payload (JCS); oversized → last-resort.
 MAX_FINALIZED_PAYLOAD_BYTES = 65_536
@@ -68,10 +69,8 @@ _TASKDONE_DETAIL_LINES = {
     "zero_share_or_pool": "не выполнено: бюджет задачи исчерпан",
 }
 
-
 def is_finalized(runtime: StudyRuntime) -> bool:
     return bool(getattr(runtime, "_finalized", False))
-
 
 def pick_finalize_trigger(
     *,
@@ -98,7 +97,6 @@ def pick_finalize_trigger(
         return "all_done"
     return None
 
-
 def terminal_reason_for(
     trigger: FinalizeTrigger,
     *,
@@ -122,7 +120,6 @@ def terminal_reason_for(
     _ = question_dispositions
     return TerminalReason.COMPLETED
 
-
 def expansion_not_done_line(reason: str, detail: str) -> str:
     """Report line for ExpansionRefused (DESIGN_M1 §4 — Russian wording)."""
     r, d = str(reason or ""), str(detail or "")
@@ -138,13 +135,11 @@ def expansion_not_done_line(reason: str, detail: str) -> str:
         return "не выполнено: отказ критика"
     return "не выполнено: лимит расширений"  # quota / reserve / expansion_limit
 
-
 # Guest sandbox timeout exhaustion (PR17) — Russian report lines.
 TIMEOUT_BUDGET_RU = "не проверено в пределах бюджета"
 IDLE_TIMEOUT_RU = "не проверено: простой агента (подозрение на саботаж)"
 # Must survive `_bound_rich_payload` contributing_reasons truncation.
 _PROTECTED_CONTRIBUTING_REASONS = frozenset({TIMEOUT_BUDGET_RU, IDLE_TIMEOUT_RU})
-
 
 def sandbox_timeout_report_line(reason: str | None, detail: str | None = None) -> str | None:
     """Russian line when a task closes after guest timeouts.
@@ -159,7 +154,6 @@ def sandbox_timeout_report_line(reason: str | None, detail: str | None = None) -
     if r == TaskReason.SANDBOX_TIMEOUT.value:
         return TIMEOUT_BUDGET_RU
     return None
-
 
 def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
     """TaskReason + ExpansionRefused / foreach / quorum / timeout lines (by seq)."""
@@ -297,7 +291,6 @@ def _append_loop_capped_report_line(seen: list[str], p: dict[str, Any]) -> None:
     if "iteration_cap" not in seen:
         seen.append("iteration_cap")
 
-
 def _append_loop_refused_report_line(seen: list[str], p: dict[str, Any]) -> None:
     """LoopRefused: honest error/refuse line (not iteration_cap)."""
     try:
@@ -311,7 +304,6 @@ def _append_loop_refused_report_line(seen: list[str], p: dict[str, Any]) -> None
         seen.append(line)
     if reason not in seen:
         seen.append(reason)
-
 
 def _append_loop_completed_report_line(seen: list[str], p: dict[str, Any]) -> None:
     """Until-met completion line (journaled LoopCompleted)."""
@@ -327,7 +319,6 @@ def _append_loop_completed_report_line(seen: list[str], p: dict[str, Any]) -> No
     line = f"цикл завершён после {i} итераций, осталось {m}"
     if line not in seen:
         seen.append(line)
-
 
 def _append_foreach_report_lines(seen: list[str], p: dict[str, Any]) -> None:
     items, added = p.get("foreach_items") or [], p.get("added_tasks") or []
@@ -359,7 +350,6 @@ def _append_foreach_report_lines(seen: list[str], p: dict[str, Any]) -> None:
     for n in p.get("foreach_rank_notes") or []:
         if n and str(n) not in seen:
             seen.append(str(n))
-
 
 def last_resort_payload(
     *,
@@ -404,7 +394,6 @@ def last_resort_payload(
         "fallback_reason": fallback_reason,
         "refusal": refusal,
     }
-
 
 async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     """Write StudyFinalized (idempotent). Always attempts a write; LeaseLost propagates.
@@ -455,7 +444,6 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
             await _sync_finalized_from_store(runtime, sid=sid, err=err)
     runtime._finalized = True  # noqa: SLF001
 
-
 async def _sync_finalized_from_store(
     runtime: StudyRuntime, *, sid: str, err: BaseException
 ) -> None:
@@ -468,9 +456,8 @@ async def _sync_finalized_from_store(
             return
     raise err
 
-
 async def _append_finalized(runtime: StudyRuntime, *, sid: str, payload: dict[str, Any]) -> None:
-    from coscientist.core.events.events import STUDY_FINALIZED_SCHEMA_VERSION
+    
 
     now = runtime.clock.now()
     await runtime._append(  # noqa: SLF001
@@ -486,7 +473,6 @@ async def _append_finalized(runtime: StudyRuntime, *, sid: str, payload: dict[st
             )
         ]
     )
-
 
 def truncate_contributing_reasons(reasons: list[str] | None, *, limit: int = 10) -> list[str]:
     """Truncate contributing_reasons while keeping timeout RU lines.
@@ -515,7 +501,6 @@ def truncate_contributing_reasons(reasons: list[str] | None, *, limit: int = 10)
     room = max(0, limit - len(pinned))
     return pinned + others[:room]
 
-
 def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Shrink question_dispositions / reasons until JCS ≤ MAX; else raise."""
     out = dict(payload)
@@ -533,7 +518,6 @@ def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if len(canonical_json(out)) <= MAX_FINALIZED_PAYLOAD_BYTES:
         return out
     raise RuntimeError("finalized_payload_too_large")
-
 
 def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
     """``get_meta`` when an artifact store is attached (live replay); else None."""
@@ -648,14 +632,12 @@ async def _build_rich_payload(
     )
     return _bound_rich_payload(payload)
 
-
 async def _load_plans(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
     local = getattr(runtime, "plans", None)
     if isinstance(local, dict) and local:
         return local
     rows = await runtime.store.get_projection("plans")
     return {str(r.get("plan_id") or i): r for i, r in enumerate(rows)}
-
 
 def _refusal_payload(runtime: StudyRuntime, trigger: FinalizeTrigger) -> str | None:
     if trigger != "intake":
@@ -667,7 +649,6 @@ def _refusal_payload(runtime: StudyRuntime, trigger: FinalizeTrigger) -> str | N
     reason = getattr(ref, "reason", "")
     kv = getattr(kind, "value", kind)
     return f"{kv}:{reason}" if kv else str(reason)
-
 
 async def _build_finalized_payload(
     runtime: StudyRuntime,
@@ -750,7 +731,6 @@ async def _build_finalized_payload(
         "observations": observations,
     }
 
-
 def _safe_custom_checks(runtime: Any) -> list[dict[str, Any]]:
     """Isolate custom_checks_report — never block StudyFinalized on report bugs."""
     try:
@@ -762,7 +742,6 @@ def _safe_custom_checks(runtime: Any) -> list[dict[str, Any]]:
     except Exception as e:  # noqa: BLE001 — degrade to []
         log.warning("custom_checks_report failed: %s", e, exc_info=True)
         return []
-
 
 async def _primary_report_path(
     runtime: StudyRuntime,
@@ -824,7 +803,6 @@ async def _primary_report_path(
         media_type="text/markdown",
     )
     return art.artifact_id
-
 
 def _artifact_store(runtime: StudyRuntime) -> Any:
     ex = getattr(runtime, "executor", None)

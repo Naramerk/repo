@@ -8,10 +8,14 @@ from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.execution.domain import TaskOutcome, TaskState
 from coscientist.core.finalize import finalize as finalize_mod
+from coscientist.core.events.schema_versions import (
+    ATTEMPT_CLOSED_SCHEMA_VERSION,
+    STUDY_CANCELLED_SCHEMA_VERSION,
+    TASK_DONE_SCHEMA_VERSION,
+)
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
-
 
 async def cancel_study(runtime: StudyRuntime, by: str = "user") -> None:
     """Emit StudyCancelled, close open work as cancelled, then finalize(trigger=cancel)."""
@@ -27,7 +31,7 @@ async def cancel_study(runtime: StudyRuntime, by: str = "user") -> None:
             idem_key=make_idem("StudyCancelled", sid),
             payload={"study_id": sid, "by": by, "at": now.isoformat()},
             ts=now,
-            schema_version=1,
+            schema_version=STUDY_CANCELLED_SCHEMA_VERSION,
         )
     ]
     events.extend(
@@ -39,7 +43,6 @@ async def cancel_study(runtime: StudyRuntime, by: str = "user") -> None:
     runtime._study_cancelled = True  # noqa: SLF001
     # Module attribute — tests patch ``finalize_mod.finalize`` reliably.
     await finalize_mod.finalize(runtime, trigger="cancel")
-
 
 def _close_open_work(
     runtime: Any,
@@ -69,7 +72,7 @@ def _close_open_work(
                             "task_id": task.task_id,
                         },
                         ts=now,
-                        schema_version=2,
+                        schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
                     )
                 )
                 t = runtime._attempt_tasks.pop(aid, None)  # noqa: SLF001
@@ -87,7 +90,7 @@ def _close_open_work(
                     "reason": reason.value,
                 },
                 ts=now,
-                schema_version=2,
+                schema_version=TASK_DONE_SCHEMA_VERSION,
             )
         )
     return events

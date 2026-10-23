@@ -8,10 +8,12 @@ from typing import TYPE_CHECKING, Any
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.events import (
-    PLAN_EXPANDED_SCHEMA_VERSION,
-    TASK_CREATED_SCHEMA_VERSION,
     EventEnvelope,
     make_idem,
+)
+from coscientist.core.events.schema_versions import (
+    PLAN_EXPANDED_SCHEMA_VERSION,
+    TASK_CREATED_SCHEMA_VERSION,
 )
 from coscientist.core.events.ids import task_id
 from coscientist.core.execution.domain import (

@@ -13,7 +13,6 @@ import pytest
 
 from coscientist.core.claims.reasons import RefusalKind, TerminalReason
 from coscientist.core.events.errors import ArtifactRejected
-from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution._ingest_gate import (
     mint_user_put_capability,
     put_user,
@@ -886,8 +885,8 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
         for e in await rt.store.read_all()
         if e.type == "AttemptStarted" and e.entity_key == aid
     )
-    # #23 writer v8 (inputs_digest); PR20 stacks v9 (attempt_role).
-    assert started.schema_version == 9
+    # Schema v1 AttemptStarted carries inputs_digest + attempt_role.
+    assert started.schema_version == 1
     assert started.payload.get("inputs_digest")
     assert isinstance(started.payload["inputs_digest"], str)
     assert len(started.payload["inputs_digest"]) == 64
@@ -1007,28 +1006,30 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
         ],
         questions=[],
     )
-    # Seed a synthetic prior CLOSED attempt as if replayed from v7 (null digests).
+    # Seed a synthetic prior CLOSED attempt with null digests (stale formula).
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
-    v, payload = upcast(
-        "AttemptStarted",
-        7,
-        {
-            "attempt_id": fake_aid,
-            "n": 1,
-            "dispatch_id": f"dispatch:{fake_aid}",
-            "task_id": task.task_id,
-            "study_id": sid,
-            "provenance": "real",
-            "closed": True,
-            "close_reason": "failed",
-            "inputs": [{"input": "x", "artifact_id": "art_old", "source": "real"}],
-            "tainted_context": False,
-            "inputs_digest": "deadbeef" * 8,
-        },
-    )
-    # #23 v7→v8 inputs_digest; PR20 v8→v9 attempt_role (continuous chain).
-    assert v == 9
+    payload = {
+        "attempt_id": fake_aid,
+        "n": 1,
+        "dispatch_id": f"dispatch:{fake_aid}",
+        "task_id": task.task_id,
+        "study_id": sid,
+        "provenance": "real",
+        "closed": True,
+        "close_reason": "failed",
+        "inputs": [
+            {
+                "input": "x",
+                "artifact_id": "art_old",
+                "source": "real",
+                "digest": None,
+            }
+        ],
+        "tainted_context": False,
+        "inputs_digest": "deadbeef" * 8,
+        "attempt_role": "agent",
+    }
     assert payload["inputs"][0].get("digest") is None
     assert payload.get("attempt_role") == "agent"
     rt.attempts[fake_aid] = payload
@@ -1111,33 +1112,11 @@ async def test_as_of_appears_in_report(tmp_path, clock, runtime_cls):
     await close_runtime(rt)
 
 
-def test_upcast_study_created_v9_to_v11():
-    """#24 v10 setdefault max_loop_iter; #23 v11 as_of/ids; PR20 v12 max_proposals."""
-    v, p = upcast("StudyCreated", 9, {"study_id": "s", "request": "q"})
-    assert v == 12
-    assert p.get("max_loop_iter") == 8
-    assert p.get("as_of") is None
-    assert p.get("user_input_ids") == []
-    assert p.get("max_proposals") == 3
-
-
-def test_upcast_study_created_v10_to_v11_keeps_max_loop_iter():
-    """Custom max_loop_iter (≠ default 8) must survive v10→v11→v12."""
-    v, p = upcast(
-        "StudyCreated",
-        10,
-        {"study_id": "s", "request": "q", "max_loop_iter": 2},
-    )
-    assert v == 12
-    assert p["max_loop_iter"] == 2
-    assert p.get("as_of") is None
-    assert p.get("user_input_ids") == []
-    assert p.get("max_proposals") == 3
 
 
 @pytest.mark.asyncio
 async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
-    """Writer v12 records max_loop_iter=2; reopen must not raise the cap to 8."""
+    """Writer v1 records max_loop_iter=2; reopen must not raise the cap to 8."""
     sid = "st_loop_iter_2"
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
@@ -1154,7 +1133,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
     assert rt.study is not None
     assert rt.study.max_loop_iter == 2
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 12
+    assert created.schema_version == 1
     assert created.payload.get("max_loop_iter") == 2
     assert created.payload.get("max_proposals") == 3
     await close_runtime(rt)
@@ -1166,25 +1145,6 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
     assert rt2.study.max_loop_iter == 2
     await close_runtime(rt2)
 
-
-def test_upcast_attempt_started_v7_to_v8():
-    """#23 v7→v8 inputs_digest; PR20 continues to v9 attempt_role."""
-    v, p = upcast(
-        "AttemptStarted",
-        7,
-        {
-            "attempt_id": "a",
-            "inputs": [{"input": "x", "artifact_id": "", "source": "real"}],
-            "tainted_context": False,
-        },
-    )
-    assert v == 9
-    assert "inputs_digest" in p
-    assert p.get("attempt_role") == "agent"
-    assert p["inputs"][0].get("digest") is None
-    assert p["inputs"][0].get("digest_version") is None
-    assert p["inputs"][0].get("retrieved_at") is None
-    assert p["inputs"][0].get("source_uri") is None
 
 
 @pytest.mark.asyncio
@@ -1424,8 +1384,10 @@ async def test_api_corrupt_deflate_study_finalized_not_500(tmp_path, catalog):
 
 
 @pytest.mark.asyncio
-async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls):
-    """Persist AttemptStarted schema_version=7, reopen (upcast), next attempt unknown."""
+async def test_journal_replay_null_digest_version_drift_unknown(
+    tmp_path, clock, runtime_cls
+):
+    """Persist AttemptStarted with bindings lacking digest_version; reopen → unknown."""
     from coscientist.core.claims.reasons import CloseReason
     from coscientist.core.events.events import EventEnvelope, make_idem
 
@@ -1458,7 +1420,7 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
     )
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
-    # Write a raw v7 journal row (pre-PR19) then close it.
+    # Bindings without digest / digest_version → input_drift_unknown on next attempt.
     await rt.store.append(
         EventEnvelope(
             study_id=sid,
@@ -1477,9 +1439,10 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
                     {"input": "x", "artifact_id": "art_old", "source": "real"}
                 ],
                 "tainted_context": False,
+                "attempt_role": "agent",
             },
             ts=clock.now(),
-            schema_version=7,
+            schema_version=1,
         )
     )
     await rt.store.append(
@@ -1495,12 +1458,11 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
                 "closed": True,
             },
             ts=clock.now(),
-            schema_version=2,
+            schema_version=1,
         )
     )
     await close_runtime(rt)
 
-    # Reopen → store upcasts v7→v8 (digest_version=None).
     rt2 = await open_runtime(
         tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
     )
@@ -1521,16 +1483,16 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
     await close_runtime(rt2)
 
 
-def test_study_created_writer_is_v11_after_loopspec():
-    """#24 owns max_loop_iter (v10); #23 writer was v11; PR20 stacks v12."""
-    from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION
+def test_study_created_writer_is_v1_with_loop_and_proposals_fields():
+    """Schema v1 baseline: StudyCreated writer is 1; Study carries loop/proposal caps."""
+    from coscientist.core.events.schema_versions import STUDY_CREATED_SCHEMA_VERSION
     from coscientist.core.events.upcasters import writer_schema_version
     from coscientist.core.execution.domain import Study
 
     assert "max_loop_iter" in Study.model_fields
     assert "max_proposals" in Study.model_fields
-    assert STUDY_CREATED_SCHEMA_VERSION == 12
-    assert writer_schema_version("StudyCreated") == 12
+    assert STUDY_CREATED_SCHEMA_VERSION == 1
+    assert writer_schema_version("StudyCreated") == 1
 
 
 def test_tar_many_members_early_exit():
@@ -1639,16 +1601,15 @@ def test_stale_digest_version_garbage_fails_closed():
 
 
 @pytest.mark.asyncio
-async def test_old_study_created_v9_with_digest_drift_unknown(
+async def test_stale_digest_formula_without_version_drift_unknown(
     tmp_path, clock, runtime_cls
 ):
-    """Real pre-PR19 StudyCreated v9 + AttemptStarted with non-empty old digest.
+    """AttemptStarted with non-empty digest but absent digest_version → unknown.
 
     Absent digest_version → input_drift_unknown without partial (not empty digest).
     """
     from coscientist.core.claims.reasons import CloseReason
     from coscientist.core.events.events import EventEnvelope, make_idem
-    from coscientist.core.events.schema_versions import STUDY_CREATED_SCHEMA_VERSION
 
     sid = "st_v9_digest"
     rt = await open_runtime(
@@ -1661,20 +1622,10 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
+        max_loop_iter=2,
     )
-    # Rewrite StudyCreated as schema_version=9 with non-default max_loop_iter.
-    events = await rt.store.read_all()
-    created = next(e for e in events if e.type == "StudyCreated")
-    v9_payload = dict(created.payload)
-    v9_payload.pop("as_of", None)
-    v9_payload.pop("user_input_ids", None)
-    v9_payload["max_loop_iter"] = 2
-    # Upcast continuity: v9 → v10 keeps 2; v11 adds as_of/ids and keeps 2.
-    v_after, up = upcast("StudyCreated", 9, dict(v9_payload))
-    assert v_after == STUDY_CREATED_SCHEMA_VERSION
-    assert up.get("max_loop_iter") == 2
-    assert "user_input_ids" in up
-    assert "as_of" in up
+    assert rt.study is not None
+    assert rt.study.max_loop_iter == 2
 
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -1717,9 +1668,10 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
                     }
                 ],
                 "tainted_context": False,
+                "attempt_role": "agent",
             },
             ts=clock.now(),
-            schema_version=7,
+            schema_version=1,
         )
     )
     await rt.store.append(
@@ -1735,7 +1687,7 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
                 "closed": True,
             },
             ts=clock.now(),
-            schema_version=2,
+            schema_version=1,
         )
     )
     await close_runtime(rt)
@@ -1743,6 +1695,8 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
     rt2 = await open_runtime(
         tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
     )
+    assert rt2.study is not None
+    assert rt2.study.max_loop_iter == 2
     prior = rt2.attempts.get(fake_aid) or {}
     assert prior.get("inputs")
     assert prior["inputs"][0].get("digest") == old_digest

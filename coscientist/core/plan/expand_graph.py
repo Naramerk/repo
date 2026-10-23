@@ -10,12 +10,17 @@ from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import question_node_id, task_id
 from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskOutcome, TaskState
 from coscientist.core.plan.supersede import plan_node_id
+from coscientist.core.events.schema_versions import (
+    ATTEMPT_CLOSED_SCHEMA_VERSION,
+    GRAPH_EDGE_ADDED_SCHEMA_VERSION,
+    GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
+    TASK_DONE_SCHEMA_VERSION,
+)
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
 DelegatedBy = Literal["human", "timeout"] | None
-
 
 def plan_graph_events(
     runtime: StudyRuntime,
@@ -50,7 +55,7 @@ def plan_graph_events(
                 created_at=now,
             ).model_dump(mode="json"),
             ts=now,
-            schema_version=1,
+            schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
         )
     )
     if not prev_pid:
@@ -72,7 +77,7 @@ def plan_graph_events(
                     created_at=now,
                 ).model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
+                schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
             )
         )
     eid = f"supersedes:{pnid}:{prev_nid}"
@@ -92,11 +97,10 @@ def plan_graph_events(
                 created_at=now,
             ).model_dump(mode="json"),
             ts=now,
-            schema_version=1,
+            schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
         )
     )
     return events
-
 
 def _decomposes_parent_map(runtime: StudyRuntime, sid: str) -> dict[str, str | None]:
     """Existing decomposes edges as question_id → parent_id (plus known roots)."""
@@ -123,7 +127,6 @@ def _decomposes_parent_map(runtime: StudyRuntime, sid: str) -> dict[str, str | N
         if qid:
             parent_of.setdefault(qid, None)
     return parent_of
-
 
 def question_graph_events(
     runtime: StudyRuntime,
@@ -159,7 +162,7 @@ def question_graph_events(
                     created_at=now,
                 ).model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
+                schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
             )
         )
         parent = getattr(q, "parent_id", None)
@@ -190,7 +193,7 @@ def question_graph_events(
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
+                    schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
                 )
             )
     added_ids = {q.id for q in added_questions}
@@ -213,7 +216,7 @@ def question_graph_events(
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
+                    schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                 )
             )
         if runtime.graph.get_node(new_nid) is None and s.new_id not in added_ids:
@@ -232,7 +235,7 @@ def question_graph_events(
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
+                    schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                 )
             )
         eid = f"supersedes:{new_nid}:{old_nid}"
@@ -252,11 +255,10 @@ def question_graph_events(
                     created_at=now,
                 ).model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
+                schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
             )
         )
     return events
-
 
 def skip_superseded_task_events(
     runtime: StudyRuntime,
@@ -286,7 +288,7 @@ def skip_superseded_task_events(
                             "task_id": tid,
                         },
                         ts=now,
-                        schema_version=2,
+                        schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
                     )
                 )
         events.append(
@@ -301,7 +303,7 @@ def skip_superseded_task_events(
                     "reason": TaskReason.SUPERSEDED.value,
                 },
                 ts=now,
-                schema_version=2,
+                schema_version=TASK_DONE_SCHEMA_VERSION,
             )
         )
     return events

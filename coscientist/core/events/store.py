@@ -21,6 +21,7 @@ from coscientist.core.events.errors import (
     AttemptClosedError,
     Conflict,
     Idempotent,
+    JournalFormatError,
     LeaseLost,
     StudyClosedError,
 )
@@ -33,9 +34,13 @@ _parse_iso = _db.parse_iso
 _open_conn = _db.open_conn
 _new_owner_nonce = _db.new_owner_nonce
 init_schema = _db.init_schema
+ensure_journal_store_format = _db.ensure_journal_store_format
+JOURNAL_STORE_FORMAT = _db.JOURNAL_STORE_FORMAT
+
+# Re-export for callers / tests.
+__all__ = ["SqliteEventStore", "JournalFormatError", "JOURNAL_STORE_FORMAT"]
 
 T = TypeVar("T")
-
 
 class SqliteEventStore:
     """One DB per study. Writes need ``(owner, epoch, owner_nonce)`` fencing."""
@@ -69,7 +74,7 @@ class SqliteEventStore:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=FULL")
             self._conn.execute("PRAGMA busy_timeout=5000")
-            init_schema(self._conn)
+            ensure_journal_store_format(self._conn)
             self._ensure_lease_nonce_column()
             self._conn.commit()
         self._read_conn = _open_conn(self.db_path, readonly=True)

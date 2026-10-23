@@ -24,17 +24,19 @@ from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.attempts import AttemptsMixin
 from coscientist.core.execution.domain import Provenance, Study, Task, TaskOutcome, TaskState
 from coscientist.core.execution.local_project import LocalProjectMixin
-from coscientist.core.finalize.finalize import (
-    FinalizeTrigger,
-    pick_finalize_trigger,
+from coscientist.core.events.schema_versions import (
+    ATTEMPT_CLOSED_SCHEMA_VERSION,
+    BUDGET_EXCEEDED_SCHEMA_VERSION,
+    TASK_DONE_SCHEMA_VERSION,
 )
 from coscientist.core.finalize.finalize import (
+    FinalizeTrigger,
     finalize as _finalize,
+    pick_finalize_trigger,
 )
 from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.cancel import cancel_study as _cancel_study
 from coscientist.core.plan.intake import IntakeRefuse
-
 
 class StudyRuntime(LocalProjectMixin, AttemptsMixin):
     """In-process owner of one study: store, writer, tasks, timers.
@@ -349,7 +351,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                     idem_key=make_idem("BudgetExceeded", sid, "study"),
                     payload={"scope": "study"},
                     ts=self.clock.now(),
-                    schema_version=1,
+                    schema_version=BUDGET_EXCEEDED_SCHEMA_VERSION,
                 )
             ]
         )
@@ -514,7 +516,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                                 "task_id": task.task_id,
                             },
                             ts=now,
-                            schema_version=2,
+                            schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
                         )
                     )
                     t = self._attempt_tasks.pop(aid, None)
@@ -532,7 +534,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                         "reason": TaskReason.DEADLINE.value,
                     },
                     ts=now,
-                    schema_version=2,
+                    schema_version=TASK_DONE_SCHEMA_VERSION,
                 )
             )
             await self._append(events)
@@ -561,7 +563,6 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             self._retry_at.pop(tid, None)
             # None = honest refuse (zero share / empty pool); task already SKIPPED.
             await self.start_attempt(tid, provenance=prov)
-
 
 def new_owner() -> str:
     return str(uuid.uuid4())

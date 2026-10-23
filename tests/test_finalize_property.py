@@ -411,7 +411,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                             "reason": "failed",
                         },
                         ts=self.clock.now(),
-                        schema_version=2,
+                        schema_version=1,
                     )
                 )
             )

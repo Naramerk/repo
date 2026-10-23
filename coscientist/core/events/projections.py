@@ -19,17 +19,14 @@ _DIRTY_KEYS: ContextVar[set[tuple[str, str]] | None] = ContextVar(
     "projection_dirty_keys", default=None
 )
 
-
 def _put(proj: ProjectionMap, table: str, key: str, data: dict[str, Any]) -> None:
     proj.setdefault(table, {})[key] = data
     dirty = _DIRTY_KEYS.get()
     if dirty is not None:
         dirty.add((table, key))
 
-
 def _get(proj: ProjectionMap, table: str, key: str) -> dict[str, Any] | None:
     return proj.get(table, {}).get(key)
-
 
 def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
     p = event.payload
@@ -318,13 +315,11 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
             },
         )
 
-
 def fold_events(events: list[EventEnvelope]) -> ProjectionMap:
     proj: ProjectionMap = {}
     for ev in events:
         apply_to_map(proj, ev)
     return proj
-
 
 def _projection_load_tables(event_type: str) -> tuple[str, ...]:
     """Tables ``apply_to_map`` may read or write for this event (not the world)."""
@@ -341,7 +336,6 @@ def _projection_load_tables(event_type: str) -> tuple[str, ...]:
             seen.add(t)
             out.append(t)
     return tuple(out)
-
 
 def apply_event(store: Any, event: EventEnvelope) -> None:
     """Apply one event into the store's projection table (in-txn write connection).
@@ -381,7 +375,6 @@ def apply_event(store: Any, event: EventEnvelope) -> None:
         if data is not None:
             put_row(table, key, data)
 
-
 def _row_key(table: str, row: dict[str, Any]) -> str | None:
     mapping = {
         "studies": "study_id",
@@ -418,7 +411,6 @@ def _row_key(table: str, row: dict[str, Any]) -> str | None:
     if table == "meta":
         return str(row["study_id"]) if row.get("study_id") else row.get("row_key")
     return str(row[field]) if field and field in row else row.get("row_key")
-
 
 def _affected_tables(event_type: str) -> tuple[str, ...]:
     return {

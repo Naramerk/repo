@@ -6,6 +6,10 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from coscientist.core.events.schema_versions import (
+    GRAPH_EDGE_ADDED_SCHEMA_VERSION,
+    GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
+)
 from coscientist.core.claims.claims import (
     namespaced_claim_id,
     producer_attempt_failed,
@@ -43,22 +47,18 @@ __all__ = [
     "collect_bindable_claims",
 ]
 
-
 class InputMode(StrEnum):
     USE_PARTIAL = "use_partial"
     SIMULATE = "simulate"
     FORBID = "forbid"
 
-
 def normalize_input_mode(spec: InputSpec) -> InputMode:
     return InputMode(spec.mode)
-
 
 class InputUnavailable(Exception):
     def __init__(self, reason: str = "input_unavailable") -> None:
         self.reason = reason
         super().__init__(reason)
-
 
 def input_binding_digest(
     *,
@@ -87,7 +87,6 @@ def input_binding_digest(
         )
     )
 
-
 def verdict_binding_digest(*, ref: str, snapshot: dict[str, Any]) -> str:
     """P2 digest of a persisted verdict snapshot (``InputSpec.kind=verdict``)."""
     return sha256_hex(
@@ -105,7 +104,6 @@ def verdict_binding_digest(*, ref: str, snapshot: dict[str, Any]) -> str:
         )
     )
 
-
 def _claim_source(
     ref: str,
     *,
@@ -119,7 +117,6 @@ def _claim_source(
     if prov not in VALID_PROVENANCE:
         return "stub"
     return prov  # type: ignore[return-value]
-
 
 def bind_inputs(
     task: Task,
@@ -239,7 +236,6 @@ def bind_inputs(
         provs.append(source)
     return bindings, worst_provenance(*provs)
 
-
 def _claim_structurally_ok(
     *,
     claim_id: str | None,
@@ -261,7 +257,6 @@ def _claim_structurally_ok(
         return False
     dst = graph.get_node(target_id)
     return dst is not None and dst.kind in ("question", "hypothesis")
-
 
 def claim_nodes_from_attempt(
     *,
@@ -502,7 +497,7 @@ def claim_nodes_from_attempt(
                 idem_key=make_idem("GraphNodeUpserted", cid, attempt_id),
                 payload=node.model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
+                schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
             )
         )
         have_about = False
@@ -534,11 +529,10 @@ def claim_nodes_from_attempt(
                     idem_key=make_idem("GraphEdgeAdded", eid),
                     payload=edge.model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
+                    schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
                 )
             )
     return events, drops
-
 
 def uses_claim_graph_events(
     *,
@@ -575,7 +569,7 @@ def uses_claim_graph_events(
                 idem_key=make_idem("GraphNodeUpserted", exp_id),
                 payload=node.model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
+                schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
             )
         )
     for b in claim_bindings:
@@ -600,11 +594,10 @@ def uses_claim_graph_events(
                 idem_key=make_idem("GraphEdgeAdded", eid),
                 payload=edge.model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
+                schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
             )
         )
     return events
-
 
 def validate_input_specs(tasks: list[TaskSpec]) -> None:
     """Reject invalid InputSpec at accept_plan (kind-specific fields)."""
@@ -635,11 +628,9 @@ def validate_input_specs(tasks: list[TaskSpec]) -> None:
                 raise ValueError(f"unknown InputSpec.kind: {kind!r}")
     validate_quorum_specs(tasks)
 
-
 _FORBIDDEN_THRESHOLD_PARAMS = frozenset(
     {"sesoi", "min_power", "predicts_null", "power", "uses_sesoi", "predicted_direction"}
 )
-
 
 def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
     """Reject unknown templates, role mismatches, and planner-set SESOI params.
@@ -693,7 +684,6 @@ def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
                     f"criterion role {plan_role!r} disagrees with template "
                     f"{tid!r} role {tmpl_role!r} (task {spec.task_key!r})"
                 )
-
 
 def collect_bindable_claims(
     graph: Any,

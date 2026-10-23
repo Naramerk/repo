@@ -7,7 +7,6 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from coscientist.core.claims.reasons import TaskReason
-from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.domain import (
     ExperimentMethod,
     InputSpec,
@@ -54,26 +53,6 @@ def test_default_forbid_no_stubs():
             dep_provenance={"A": "real"},
         )
 
-
-def test_upcast_input_mode_keeps_old_default():
-    """TaskCreated v3 without mode → use_partial (pre-PR5 default), not forbid."""
-    v, p = upcast(
-        "TaskCreated",
-        3,
-        {
-            "task_id": "t",
-            "spec": {
-                "task_key": "E1",
-                "inputs": [{"from_task": "A", "output": "main"}],
-            },
-        },
-    )
-    assert v == 13
-    assert p["spec"]["inputs"][0]["mode"] == "use_partial"
-    assert p["spec"]["inputs"][0]["kind"] == "artifact"
-    assert p["spec"]["sandbox_memory_mb"] is None
-    assert p["spec"]["budget_share"] is None
-    assert p["spec"]["budget_share"] is None
 
 
 def test_experiment_method_enum_matches_graph():

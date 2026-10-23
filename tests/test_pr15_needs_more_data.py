@@ -36,18 +36,6 @@ from coscientist.core.claims.reasons import Disposition
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.verdict import hypothesis_verdict
 from coscientist.core.events.errors import ArtifactRejected
-from coscientist.core.events.events import (
-    PLAN_ACCEPTED_SCHEMA_VERSION,
-    PLAN_EXPANDED_SCHEMA_VERSION,
-    TASK_CREATED_SCHEMA_VERSION,
-)
-from coscientist.core.events.upcasters import (
-    UPCASTERS,
-    assert_upcaster_chain_continuous,
-    register_upcaster,
-    upcast,
-    writer_schema_version,
-)
 from coscientist.core.execution.artifact_stamp import apply_kind_stamp
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
@@ -848,48 +836,6 @@ def test_executable_check_met_excludes_presence_and_waived():
     )()
     assert executable_check_met([real], bound_key="x") is True
 
-
-def test_upcaster_chains_continuous_and_no_overwrite():
-    """Checklist: chains 1..N-1 continuous vs writer versions; no registry mutate."""
-    for et in (
-        "TaskCreated",
-        "PlanAccepted",
-        "PlanExpanded",
-        "AttemptStarted",
-        "ResultRecorded",
-        "StudyCreated",
-        "StudyFinalized",
-        "TaskDone",
-        "AttemptClosed",
-        "QuestionDisposed",
-        "QuestionDisposeRejected",
-    ):
-        w = writer_schema_version(et)
-        assert_upcaster_chain_continuous(et, w)
-    # Writers for plan events match registered chain ends (PR15 OutputSpec.kind).
-    assert writer_schema_version("TaskCreated") == TASK_CREATED_SCHEMA_VERSION == 13
-    assert writer_schema_version("PlanAccepted") == PLAN_ACCEPTED_SCHEMA_VERSION == 11
-    assert writer_schema_version("PlanExpanded") == PLAN_EXPANDED_SCHEMA_VERSION == 5
-    assert writer_schema_version("QuestionDisposed") == 1
-    assert writer_schema_version("QuestionDisposeRejected") == 1
-    v, p = upcast(
-        "TaskCreated",
-        12,
-        {
-            "task_id": "t",
-            "spec": {
-                "task_key": "E0",
-                "expected_outputs": [{"name": "main", "media_type": "text/plain"}],
-            },
-        },
-    )
-    assert v == 13
-    assert p["spec"]["expected_outputs"][0].get("evidence_kind") is None
-    # Duplicate guard without mutating production event registries.
-    register_upcaster("_pr15_dup_guard", 1, lambda p: p)
-    with pytest.raises(ValueError, match="duplicate upcaster"):
-        register_upcaster("_pr15_dup_guard", 1, lambda p: p)
-    UPCASTERS.pop("_pr15_dup_guard", None)
 
 
 @pytest.mark.asyncio

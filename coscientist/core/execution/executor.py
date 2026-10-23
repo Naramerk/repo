@@ -12,6 +12,11 @@ from typing import Any
 from coscientist.checks.evaluate import evaluate_task_checks, role_from_catalog
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.digest import canonical_json, payload_digest, sha256_hex
+from coscientist.core.events.schema_versions import (
+    ATTEMPT_CLOSED_SCHEMA_VERSION,
+    RESULT_RECORDED_SCHEMA_VERSION,
+    TASK_DONE_SCHEMA_VERSION,
+)
 from coscientist.core.events.errors import (
     AttemptClosedError,
     CatalogError,
@@ -39,7 +44,6 @@ from coscientist.core.execution.outcome import compute_outcome
 
 log = logging.getLogger(__name__)
 
-
 def _provenance(attempt: Any) -> Provenance:
     p = getattr(attempt, "provenance", None)
     if p is None and isinstance(attempt, dict):
@@ -48,7 +52,6 @@ def _provenance(attempt: Any) -> Provenance:
         raise ValueError(f"invalid attempt provenance: {p!r}")
     return p  # type: ignore[return-value]
 
-
 def _req_to_criterion_status(status: ReqStatus) -> str:
     if status in (ReqStatus.MET, ReqStatus.WAIVED, ReqStatus.NOT_APPLICABLE):
         return "met"
@@ -56,12 +59,10 @@ def _req_to_criterion_status(status: ReqStatus) -> str:
         return "not_met"
     return "unassessed"
 
-
 def _check_field(c: Any, name: str) -> Any:
     if isinstance(c, dict):
         return c.get(name)
     return getattr(c, name, None)
-
 
 def _normalize_to_template_id(key: str, checks: list[Any], criteria: list[Any]) -> str:
     """Map check_id (``value_match#0``) → template_id; leave template_id as-is."""
@@ -78,7 +79,6 @@ def _normalize_to_template_id(key: str, checks: list[Any], criteria: list[Any]) 
             return str(tid)
     return key
 
-
 def _criterion_key_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any]) -> str | None:
     """Resolve checked_against → template_id, else sole check / sole plan criterion."""
     checked = raw.get("checked_against")
@@ -91,7 +91,6 @@ def _criterion_key_for_claim(raw: dict[str, Any], checks: list[Any], criteria: l
         tid = _check_field(criteria[0], "template_id")
         return str(tid) if tid else None
     return None
-
 
 def _criterion_status_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any] | None = None) -> str:
     """Map claim.checked_against → ReqStatus of that criterion's check."""
@@ -117,13 +116,11 @@ def _criterion_status_for_claim(raw: dict[str, Any], checks: list[Any], criteria
             return _req_to_criterion_status(st)
     return "unassessed"
 
-
 def _check_role(c: Any) -> str:
     role = _check_field(c, "role")
     if role in ("prediction", "validity", "unknown"):
         return str(role)
     return "unknown"
-
 
 def _is_rubric_check(c: Any) -> bool:
     """Rubric checks are validity-role but must not flip claim validity_ok (PR13)."""
@@ -133,7 +130,6 @@ def _is_rubric_check(c: Any) -> bool:
     tid = str(_check_field(c, "template_id") or "")
     cid = str(_check_field(c, "check_id") or "")
     return tid.startswith("rubric:") or cid.startswith("rubric:")
-
 
 def _required_validity_failed(checks: list[Any]) -> bool:
     """True when a required validity check FAILED (Duhem–Quine cap).
@@ -160,7 +156,6 @@ def _required_validity_failed(checks: list[Any]) -> bool:
             return True
     return False
 
-
 _NO_EFFECT_DETAIL_ALIASES = {
     "foreign_artifact": "foreign_artifact",
     "output_not_submitted": "output_not_submitted",
@@ -170,7 +165,6 @@ _NO_EFFECT_DETAIL_ALIASES = {
     "output missing": "output_not_submitted",
     "artifact missing": "artifact_missing",
 }
-
 
 def _no_effect_reason_from_checks(checks: list[Any]) -> str | None:
     """Specific reason when a prediction FAILED with no numeric effect."""
@@ -196,7 +190,6 @@ def _no_effect_reason_from_checks(checks: list[Any]) -> str | None:
             return mapped
     return None
 
-
 def _role_for_claim_key(
     raw: dict[str, Any],
     checks: list[Any],
@@ -218,7 +211,6 @@ def _role_for_claim_key(
         return _check_role(checks[0])
     return "unknown"
 
-
 def _criterion_node(graph: Any, study_id: str, template_id: Any) -> Any | None:
     if not template_id or graph is None:
         return None
@@ -230,7 +222,6 @@ def _criterion_node(graph: Any, study_id: str, template_id: Any) -> Any | None:
         return None
     return node
 
-
 def _criterion_is_frozen(graph: Any, study_id: str, template_id: Any) -> bool:
     """True when plan-accept freeze marked the criterion node (keyed by template_id)."""
     node = _criterion_node(graph, study_id, template_id)
@@ -238,7 +229,6 @@ def _criterion_is_frozen(graph: Any, study_id: str, template_id: Any) -> bool:
         return False
     attrs = node.attrs or {}
     return attrs.get("frozen_at_seq") is not None or bool(attrs.get("frozen"))
-
 
 def _criterion_freeze_attrs(graph: Any, study_id: str, template_id: Any) -> dict[str, Any]:
     """sesoi / predicts_null / uses_sesoi from the frozen criterion (catalog)."""
@@ -262,7 +252,6 @@ def _criterion_freeze_attrs(graph: Any, study_id: str, template_id: Any) -> dict
     if attrs.get("predicted_direction") in ("positive", "negative", "two_sided"):
         out["predicted_direction"] = str(attrs["predicted_direction"])
     return out
-
 
 def _effect_from_checks(
     checks: list[Any],
@@ -322,7 +311,6 @@ def _effect_from_checks(
         used = bool(_check_field(c, "used_sesoi"))
         return effect, used
     return None, False
-
 
 def _derive_claim_core_attrs(
     task: Any,
@@ -588,7 +576,6 @@ def _derive_claim_core_attrs(
     if exclusion_reason is not None:
         out["exclusion_reason"] = exclusion_reason
     return out
-
 
 class Executor:
     def __init__(
@@ -1558,7 +1545,7 @@ class Executor:
                 idem_key=make_idem("ResultRecorded", payload["result_id"]),
                 payload=payload,
                 ts=now,
-                schema_version=3,
+                schema_version=RESULT_RECORDED_SCHEMA_VERSION,
             ),
             EventEnvelope(
                 study_id=study_id,
@@ -1567,7 +1554,7 @@ class Executor:
                 idem_key=make_idem("AttemptClosed", attempt_id, CloseReason.RESULT.value),
                 payload=close_payload,
                 ts=now,
-                schema_version=2,
+                schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
             ),
         ]
         if not schedule_retry:
@@ -1589,7 +1576,7 @@ class Executor:
                     idem_key=make_idem("TaskDone", task_id),
                     payload=done_payload,
                     ts=now,
-                    schema_version=2,
+                    schema_version=TASK_DONE_SCHEMA_VERSION,
                 )
             )
         # PR12: debit actual cost_rub in the SAME append batch as the result

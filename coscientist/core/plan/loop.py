@@ -16,10 +16,16 @@ from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.events import (
-    PLAN_EXPANDED_SCHEMA_VERSION,
-    TASK_CREATED_SCHEMA_VERSION,
     EventEnvelope,
     make_idem,
+)
+from coscientist.core.events.schema_versions import (
+    EXPANSION_REFUSED_SCHEMA_VERSION,
+    LOOP_CAPPED_SCHEMA_VERSION,
+    LOOP_COMPLETED_SCHEMA_VERSION,
+    LOOP_REFUSED_SCHEMA_VERSION,
+    PLAN_EXPANDED_SCHEMA_VERSION,
+    TASK_CREATED_SCHEMA_VERSION,
 )
 from coscientist.core.events.ids import task_id
 from coscientist.core.execution.domain import (
@@ -52,7 +58,6 @@ LOOP_REASON_ITERATION_CAP = "iteration_cap"
 LOOP_REASON_ERROR = "error"
 LOOP_REASON_REFUSED = "refused"
 
-
 def normalize_loop_id(raw: str) -> str:
     """NFKC-normalize loop_id; reject empty / invisible-only ids."""
     s = unicodedata.normalize("NFKC", str(raw or ""))
@@ -63,14 +68,11 @@ def normalize_loop_id(raw: str) -> str:
         raise PlanInvalid(f"LoopSpec.loop_id has invisible/control chars: {raw!r}")
     return s.strip()
 
-
 def loop_dep_key(loop_id: str) -> str:
     return f"{LOOP_DEP_PREFIX}{loop_id}"
 
-
 def is_loop_dep(key: str) -> bool:
     return str(key).startswith(LOOP_DEP_PREFIX)
-
 
 def parse_loop_dep(key: str) -> str | None:
     """Return NFKC-normalized loop_id from ``loop:<id>``, or None if not a barrier."""
@@ -82,10 +84,8 @@ def parse_loop_dep(key: str) -> str | None:
     except PlanInvalid:
         return None
 
-
 def loop_plan_id(study_id: str, loop_id: str, iter_n: int, rev: int) -> str:
     return f"pl_loop_{study_id}_{loop_id}_i{iter_n}_r{rev}"
-
 
 def _loops_from_plans(runtime: StudyRuntime) -> list[LoopSpec]:
     """Active LoopSpecs from the latest plan blob that carries ``loops``.
@@ -108,14 +108,12 @@ def _loops_from_plans(runtime: StudyRuntime) -> list[LoopSpec]:
             seen[ls.loop_id] = ls
     return list(seen.values())
 
-
 def _loop_state(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
     st = getattr(runtime, "_loop_state", None)
     if not isinstance(st, dict):
         runtime._loop_state = {}  # noqa: SLF001
         st = runtime._loop_state  # noqa: SLF001
     return st
-
 
 def loop_status(runtime: StudyRuntime, loop_id: str) -> str | None:
     """None | running | done | capped."""
@@ -124,10 +122,8 @@ def loop_status(runtime: StudyRuntime, loop_id: str) -> str | None:
         return None
     return str(row.get("status") or "") or None
 
-
 def loop_is_complete(runtime: StudyRuntime, loop_id: str) -> bool:
     return loop_status(runtime, loop_id) in ("done", "capped", "refused")
-
 
 def iter_keys(runtime: StudyRuntime, loop_id: str, iter_n: int) -> list[str]:
     row = _loop_state(runtime).get(loop_id) or {}
@@ -135,14 +131,12 @@ def iter_keys(runtime: StudyRuntime, loop_id: str, iter_n: int) -> list[str]:
     keys = by_iter.get(str(iter_n)) or by_iter.get(iter_n) or []
     return [str(k) for k in keys]
 
-
 def current_iter(runtime: StudyRuntime, loop_id: str) -> int:
     row = _loop_state(runtime).get(loop_id) or {}
     try:
         return int(row.get("iter") or 0)
     except (TypeError, ValueError):
         return 0
-
 
 def validate_loop_specs(
     loops: list[LoopSpec] | list[dict[str, Any]] | None,
@@ -251,14 +245,12 @@ def validate_loop_specs(
         out.append(ls)
     return out
 
-
 def loop_known(runtime: StudyRuntime, loop_id: str) -> bool:
     """True when a LoopSpec with this id exists in accepted/expanded plans."""
     for ls in _loops_from_plans(runtime):
         if ls.loop_id == loop_id:
             return True
     return False
-
 
 def _deps_ready(runtime: StudyRuntime, keys: list[str]) -> bool:
     for d in keys:
@@ -271,7 +263,6 @@ def _deps_ready(runtime: StudyRuntime, keys: list[str]) -> bool:
             return False
     return True
 
-
 def _iter_all_done(runtime: StudyRuntime, loop_id: str, iter_n: int) -> bool:
     keys = iter_keys(runtime, loop_id, iter_n)
     if not keys:
@@ -281,7 +272,6 @@ def _iter_all_done(runtime: StudyRuntime, loop_id: str, iter_n: int) -> bool:
         if not matches or matches[0].state != TaskState.DONE:
             return False
     return True
-
 
 def _concrete_body(
     body: list[TaskSpec],
@@ -320,7 +310,6 @@ def _concrete_body(
             )
         )
     return out
-
 
 async def materialize_loop_iter(
     runtime: StudyRuntime,
@@ -506,7 +495,6 @@ async def materialize_loop_iter(
     await runtime._append(events)  # noqa: SLF001
     return pid
 
-
 async def _emit_loop_capped(
     runtime: StudyRuntime,
     loop: LoopSpec,
@@ -552,10 +540,9 @@ async def _emit_loop_capped(
         idem_key=make_idem("LoopCapped", sid, loop.loop_id, reason),
         payload=payload,
         ts=now,
-        schema_version=1,
+        schema_version=LOOP_CAPPED_SCHEMA_VERSION,
     )
     await runtime._append([ev])  # noqa: SLF001
-
 
 async def _emit_loop_refused(
     runtime: StudyRuntime,
@@ -602,7 +589,7 @@ async def _emit_loop_refused(
                 "until": until,
             },
             ts=now,
-            schema_version=1,
+            schema_version=LOOP_REFUSED_SCHEMA_VERSION,
         ),
         EventEnvelope(
             study_id=sid,
@@ -622,7 +609,7 @@ async def _emit_loop_refused(
                 "refuse_detail": detail_s,
             },
             ts=now,
-            schema_version=1,
+            schema_version=LOOP_CAPPED_SCHEMA_VERSION,
         ),
         EventEnvelope(
             study_id=sid,
@@ -641,11 +628,10 @@ async def _emit_loop_refused(
                 "loop_reason": reason,
             },
             ts=now,
-            schema_version=1,
+            schema_version=EXPANSION_REFUSED_SCHEMA_VERSION,
         ),
     ]
     await runtime._append(events)  # noqa: SLF001
-
 
 async def _emit_loop_completed(
     runtime: StudyRuntime, loop: LoopSpec, *, iter_n: int
@@ -678,10 +664,9 @@ async def _emit_loop_completed(
         idem_key=make_idem("LoopCompleted", sid, loop.loop_id),
         payload=payload,
         ts=now,
-        schema_version=1,
+        schema_version=LOOP_COMPLETED_SCHEMA_VERSION,
     )
     await runtime._append([ev])  # noqa: SLF001
-
 
 async def _refuse_loop(
     runtime: StudyRuntime,
@@ -695,7 +680,6 @@ async def _refuse_loop(
     await _emit_loop_refused(
         runtime, loop, iter_n=cur, detail=detail, reason=reason
     )
-
 
 async def _emit_loop_advance_failed(
     runtime: StudyRuntime, *, detail: str
@@ -723,11 +707,10 @@ async def _emit_loop_advance_failed(
                     "report_line": "не выполнено: внутренняя ошибка (loop)",
                 },
                 ts=now,
-                schema_version=1,
+                schema_version=EXPANSION_REFUSED_SCHEMA_VERSION,
             )
         ]
     )
-
 
 async def finalize_loop_internal_error(
     runtime: StudyRuntime,
@@ -789,7 +772,6 @@ async def finalize_loop_internal_error(
     finally:
         runtime._finalizing = False  # noqa: SLF001
 
-
 async def refuse_orphaned_loop_barriers(runtime: StudyRuntime) -> int:
     """SKIPPED-refuse tasks waiting on unknown/dropped ``loop:<id>`` barriers.
 
@@ -823,7 +805,6 @@ async def refuse_orphaned_loop_barriers(runtime: StudyRuntime) -> int:
             break
     return n
 
-
 async def _advance_one(runtime: StudyRuntime, loop: LoopSpec) -> str | None:
     """Start next iter or emit LoopCapped / LoopCompleted. Returns plan_id if any.
 
@@ -852,7 +833,6 @@ async def _advance_one(runtime: StudyRuntime, loop: LoopSpec) -> str | None:
         return None
 
     return await materialize_loop_iter(runtime, loop, iter_n=cur + 1)
-
 
 async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
     """Advance all loops that can take a step (start / next iter / cap / complete).
@@ -902,7 +882,6 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
             break
     return done
 
-
 async def maybe_loop_after_task_done(
     runtime: StudyRuntime, task_id_full: str
 ) -> list[str]:
@@ -910,7 +889,6 @@ async def maybe_loop_after_task_done(
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return []
     return await maybe_advance_loops(runtime)
-
 
 async def resume_pending_loops(runtime: StudyRuntime) -> int:
     """Recover: re-advance loops so live == replay.
@@ -928,7 +906,6 @@ async def resume_pending_loops(runtime: StudyRuntime) -> int:
     except Exception as e:  # noqa: BLE001 — belt-and-suspenders for recover
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
         return 0
-
 
 def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
     """Rebuild ``_loop_state`` from a PlanExpanded(loop=true) payload."""
@@ -956,7 +933,6 @@ def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
         row["status"] = "running"
     st[lid] = row
 
-
 def fold_loop_capped(runtime: Any, payload: dict[str, Any]) -> None:
     lid = str(payload.get("loop_id") or "")
     if not lid:
@@ -981,7 +957,6 @@ def fold_loop_capped(runtime: Any, payload: dict[str, Any]) -> None:
         capped = runtime._loop_capped
     capped[lid] = dict(payload)
 
-
 def fold_loop_refused(runtime: Any, payload: dict[str, Any]) -> None:
     """Rebuild refused status from LoopRefused (before LoopCapped on the same path)."""
     lid = str(payload.get("loop_id") or "")
@@ -1000,7 +975,6 @@ def fold_loop_refused(runtime: Any, payload: dict[str, Any]) -> None:
     if payload.get("detail"):
         row["refuse_detail"] = str(payload.get("detail"))[:200]
     st[lid] = row
-
 
 def fold_loop_completed(runtime: Any, payload: dict[str, Any]) -> None:
     """Rebuild until-met completion from journal (live ≡ replay)."""
@@ -1022,7 +996,6 @@ def fold_loop_completed(runtime: Any, payload: dict[str, Any]) -> None:
         runtime._loop_done = set()
         done = runtime._loop_done
     done.add(lid)
-
 
 def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
     """ExpansionRefused for a loop restores terminal status (barrier / no re-advance).
@@ -1047,7 +1020,6 @@ def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
     row["reason"] = loop_reason
     row["refuse_detail"] = str(payload.get("detail") or "")[:200]
     st[lid] = row
-
 
 def capped_scope_questions(runtime: Any) -> dict[str, dict[str, Any]]:
     """qid → LoopCapped payload only for true iteration_cap with ≥1 iter.

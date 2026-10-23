@@ -17,6 +17,9 @@ from coscientist.core.claims.graph import GraphEdge, GraphStore
 from coscientist.core.claims.stance import claim_stance
 from coscientist.core.events.digest import sha256_hex
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.schema_versions import (
+    GRAPH_EDGE_ADDED_SCHEMA_VERSION,
+)
 
 __all__ = [
     "contradicts_edge_id",
@@ -25,11 +28,9 @@ __all__ = [
     "render_contradiction_map",
 ]
 
-
 def contradicts_edge_id(study_id: str, a: str, b: str) -> str:
     lo, hi = (a, b) if a <= b else (b, a)
     return f"{study_id}:contradicts:{lo}:{hi}"
-
 
 def _stance_of(attrs: dict[str, Any]) -> str:
     status = str(attrs.get("criterion_status") or "unassessed")
@@ -38,10 +39,8 @@ def _stance_of(attrs: dict[str, Any]) -> str:
     except KeyError:
         return "inconclusive"
 
-
 def _accepted(attrs: dict[str, Any]) -> bool:
     return bool(attrs.get("accepted")) and bool(attrs.get("frozen", True))
-
 
 def contradiction_pairs(
     graph: GraphStore,
@@ -88,7 +87,6 @@ def contradiction_pairs(
                 seen.add(key)
                 out.append((lo, hi, target))
     return out
-
 
 def contradicts_events_for_new_claims(
     *,
@@ -193,11 +191,10 @@ def contradicts_events_for_new_claims(
                         idem_key=make_idem("GraphEdgeAdded", eid),
                         payload=edge.model_dump(mode="json"),
                         ts=now,
-                        schema_version=1,
+                        schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
                     )
                 )
     return events
-
 
 def render_contradiction_map(
     graph: GraphStore,

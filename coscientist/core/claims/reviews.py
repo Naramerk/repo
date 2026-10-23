@@ -23,10 +23,8 @@ JUDGE_FAILURE_KINDS = frozenset({"timeout", "invalid_json", "refusal"})
 
 JUDGE_CAS_CORRUPT_LINE = "не выполнено: внутренняя ошибка (judge CAS)"
 
-
 class JudgePendingCorrupt(Exception):
     """Pending agent output CAS missing/corrupt on rebuild — fail closed."""
-
 
 def review_key(
     *,
@@ -49,7 +47,6 @@ def review_key(
         separators=(",", ":"),
     )
 
-
 def parse_review_key(key: str) -> dict[str, str] | None:
     try:
         parts = json.loads(key)
@@ -65,11 +62,9 @@ def parse_review_key(key: str) -> dict[str, str] | None:
         "output_digest": str(parts[4]),
     }
 
-
 def plan_refused_idem(study_id: str, detail: str) -> str:
     """Idem key for PlanRefused: sid + sha256(**full** detail)."""
     return make_idem("PlanRefused", study_id, sha256_hex(detail.encode("utf-8")))
-
 
 def resolve_review_status(
     *,
@@ -89,7 +84,6 @@ def resolve_review_status(
         raise ValueError("record_review requires status or failure_kind")
     st = status if isinstance(status, ReqStatus) else ReqStatus(str(status))
     return st, prior_retries, None
-
 
 def review_scheduled_events(
     *,
@@ -184,7 +178,6 @@ def review_scheduled_events(
             )
     return events
 
-
 def _load_agent_output(artifacts: Any, digest: str) -> AgentTaskOutput:
     """Load pending AgentTaskOutput from CAS; raise on missing/corrupt (fail-closed)."""
     from pydantic import ValidationError
@@ -202,7 +195,6 @@ def _load_agent_output(artifacts: Any, digest: str) -> AgentTaskOutput:
         return AgentTaskOutput.model_validate_json(raw)
     except (ValidationError, ValueError, TypeError) as e:
         raise JudgePendingCorrupt(f"cas_validate:{type(e).__name__}:{e}") from e
-
 
 def rebuild_judge_state(
     events: list[Any],
@@ -271,7 +263,6 @@ def rebuild_judge_state(
         digests[aid] = dig
         pending_outputs[aid] = _load_agent_output(artifacts, dig)
     return review_statuses, judge_retry, failure_kinds, pending_outputs, digests
-
 
 def apply_judge_journal(executor: Any, events: list[Any]) -> None:
     """Load journaled judge state onto a live Executor (open_runtime / reopen).

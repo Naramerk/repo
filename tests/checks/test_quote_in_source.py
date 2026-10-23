@@ -2050,11 +2050,11 @@ _RECLASS_FIXTURE = (
     / "reclassified_fetch_old"
 )
 
-# Raw schema_version values committed in events.db (before upcast on open).
+# Raw schema_version values committed in events.db (schema v1 baseline).
 _RECLASS_RAW_SCHEMA_VERSIONS = (
-    ("StudyCreated", 2),
+    ("StudyCreated", 1),
     ("PlanAccepted", 1),
-    ("TaskCreated", 2),
+    ("TaskCreated", 1),
     ("AttemptStarted", 1),
     ("AttemptTainted", 1),
     ("SourceFetched", 1),
@@ -2119,13 +2119,14 @@ def _copy_reclass_fixture(tmp_path: Path) -> tuple[str, str, str, Path]:
 async def test_reclassified_tool_study_opens_finalizes_uncounted(
     tmp_path: Path, clock
 ):
-    """MAJOR: OLD-schema fixture opens under reclassified tool; natural finalize.
+    """MAJOR: schema-v1 fixture opens under reclassified tool; natural finalize.
 
-    Committed journal (StudyCreated v2 / PlanAccepted v1 / TaskCreated v2 +
-    AttemptTainted is_fetch=True + SourceFetched). Upcasters run on open.
+    Committed journal (complete v1 StudyCreated / PlanAccepted / TaskCreated +
+    AttemptTainted is_fetch=True + SourceFetched). No production upcasters.
     Finalization via tick/deadline — not finalize(trigger=...).
     """
     from coscientist.core.events.projections import fold_events
+    from coscientist.core.events.schema_versions import STUDY_CREATED_SCHEMA_VERSION
     from coscientist.core.execution.source_fetch import load_source_fetch_index_from_writer
 
     sid, digest, call_id, db = _copy_reclass_fixture(tmp_path)
@@ -2135,10 +2136,9 @@ async def test_reclassified_tool_study_opens_finalizes_uncounted(
 
     catalog = _catalog_quote()
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog, owner="t2")
-    # Upcasters applied on read (StudyCreated lands at current schema).
     events_open = await rt.store.read_all()
     sc = next(e for e in events_open if e.type == "StudyCreated")
-    assert sc.schema_version >= 9
+    assert sc.schema_version == STUDY_CREATED_SCHEMA_VERSION == 1
     assert any(e.type == "FetchIntegrityRaised" for e in events_open)
 
     folded = fold_events(events_open)

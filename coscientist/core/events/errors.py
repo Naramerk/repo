@@ -13,6 +13,10 @@ class Conflict(CoreError):
     """Idempotency key reused with a different payload."""
 
 
+class JournalFormatError(CoreError):
+    """Journal store-format marker missing or incompatible (refuse old dev DBs)."""
+
+
 class Idempotent(CoreError):
     """Same idem_key and same payload — treat as no-op success."""
 

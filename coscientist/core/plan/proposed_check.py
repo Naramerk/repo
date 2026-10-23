@@ -37,6 +37,15 @@ from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import AttemptClosedError, StudyClosedError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hitl_request_id, proposal_id
+from coscientist.core.events.schema_versions import (
+    ATTEMPT_CLOSED_SCHEMA_VERSION,
+    CHECK_APPROVED_SCHEMA_VERSION,
+    CHECK_PROPOSED_SCHEMA_VERSION,
+    CHECK_REJECTED_SCHEMA_VERSION,
+    HITL_OPENED_SCHEMA_VERSION,
+    REVIEW_SCHEDULED_SCHEMA_VERSION,
+    TASK_DONE_SCHEMA_VERSION,
+)
 from coscientist.core.execution.domain import (
     PROPOSED_CHECK_TEMPLATE_ID,
     CheckProposal,
@@ -66,7 +75,6 @@ _ALLOWED_PROPOSED_KINDS = frozenset(
     }
 )
 
-
 _PREREG_FIELDS = frozenset(
     {
         "target",
@@ -85,7 +93,6 @@ _PREREG_FIELDS = frozenset(
     }
 )
 
-
 def _nfkc(value: Any) -> Any:
     """NFKC-normalize strings (and nested string leaves) for stable digests.
 
@@ -100,7 +107,6 @@ def _nfkc(value: Any) -> Any:
         return {str(_nfkc(k)): _nfkc(v) for k, v in value.items()}
     return value
 
-
 def proposal_prereg_body(proposal: CheckProposal | Mapping[str, Any]) -> dict[str, Any]:
     """Canonical body hashed at CheckProposed (excludes approval / runtime ids)."""
     if isinstance(proposal, CheckProposal):
@@ -111,11 +117,9 @@ def proposal_prereg_body(proposal: CheckProposal | Mapping[str, Any]) -> dict[st
     body = {k: raw[k] for k in sorted(_PREREG_FIELDS) if k in raw}
     return _nfkc(body)  # type: ignore[return-value]
 
-
 def compute_proposal_digest(proposal: CheckProposal | Mapping[str, Any]) -> str:
     """sha256 of JCS(NFKC(prereg body)) — fixed before any check result."""
     return sha256_hex(canonical_json(proposal_prereg_body(proposal)))
-
 
 def _reject_non_finite_threshold(proposal: CheckProposal) -> None:
     for name in ("threshold", "sesoi"):
@@ -126,7 +130,6 @@ def _reject_non_finite_threshold(proposal: CheckProposal) -> None:
             for v in val.values():
                 if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
                     raise ValueError(f"CheckProposal.{name} must be finite (not NaN/inf)")
-
 
 def validate_proposal_content(proposal: CheckProposal) -> None:
     """Fail-closed validation before journal write."""
@@ -164,14 +167,12 @@ def validate_proposal_content(proposal: CheckProposal) -> None:
         raise ValueError("uses_sesoi requires sesoi or threshold")
     _reject_non_finite_threshold(proposal)
 
-
 def _proposals_map(runtime: Any) -> dict[str, dict[str, Any]]:
     m = getattr(runtime, "_check_proposals", None)
     if not isinstance(m, dict):
         runtime._check_proposals = {}
         m = runtime._check_proposals
     return m
-
 
 def _reviews_map(runtime: Any) -> dict[str, dict[str, Any]]:
     m = getattr(runtime, "_proposed_check_reviews", None)
@@ -180,20 +181,16 @@ def _reviews_map(runtime: Any) -> dict[str, dict[str, Any]]:
         m = runtime._proposed_check_reviews
     return m
 
-
 def proposal_count(runtime: Any) -> int:
     """Number of CheckProposed events folded on this study (quota counter)."""
     return len(_proposals_map(runtime))
 
-
 def get_proposal(runtime: Any, proposal_id_s: str) -> dict[str, dict[str, Any]] | dict[str, Any] | None:
     return _proposals_map(runtime).get(str(proposal_id_s))
-
 
 def proposal_is_approved(runtime: Any, proposal_id_s: str) -> bool:
     row = get_proposal(runtime, proposal_id_s)
     return bool(row and row.get("status") == "approved")
-
 
 def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
     """Fold CheckProposed / CheckApproved / CheckRejected / ReviewScheduled."""
@@ -282,7 +279,6 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
             "deadline": merged.get("deadline") or prev.get("deadline"),
         }
 
-
 def requirement_ref_for_proposal(
     proposal_id_s: str,
     *,
@@ -303,7 +299,6 @@ def requirement_ref_for_proposal(
         required=required,
     )
 
-
 def _task_has_result(runtime: Any, task_id: str) -> bool:
     results = getattr(runtime, "results", None) or {}
     if not isinstance(results, dict):
@@ -314,7 +309,6 @@ def _task_has_result(runtime: Any, task_id: str) -> bool:
         if str(row.get("task_id") or "") == str(task_id):
             return True
     return False
-
 
 def _task_has_started_attempt(
     runtime: Any,
@@ -342,7 +336,6 @@ def _task_has_started_attempt(
             continue
         return True
     return False
-
 
 def _result_seq_for_task(
     results: Mapping[str, Mapping[str, Any]] | None, task_id: str
@@ -375,7 +368,6 @@ def _result_seq_for_task(
     if missing_seq:
         return -1
     return best
-
 
 async def propose_check(
     runtime: Any,
@@ -480,7 +472,7 @@ async def propose_check(
             idem_key=make_idem("CheckProposed", pid),
             payload=proposal.model_dump(mode="json"),
             ts=now,
-            schema_version=1,
+            schema_version=CHECK_PROPOSED_SCHEMA_VERSION,
         )
     ]
 
@@ -519,13 +511,12 @@ async def propose_check(
                 idem_key=make_idem("HitlOpened", hitl_rid),
                 payload=req.model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
+                schema_version=HITL_OPENED_SCHEMA_VERSION,
             )
         )
 
     await _append_events(runtime, events)
     return pid
-
 
 def proposed_check_decision_lock(runtime: Any, proposal_id: str) -> asyncio.Lock:
     """Per-proposal lock shared by HITL answer/timeout, consume, and stale reject.
@@ -539,14 +530,12 @@ def proposed_check_decision_lock(runtime: Any, proposal_id: str) -> asyncio.Lock
         runtime._hitl_decision_locks = locks
     return locks.setdefault(str(proposal_id), asyncio.Lock())
 
-
 def _decision_lock_owners(runtime: Any) -> dict[str, asyncio.Task[Any]]:
     owners = getattr(runtime, "_hitl_decision_lock_owners", None)
     if not isinstance(owners, dict):
         owners = {}
         runtime._hitl_decision_lock_owners = owners
     return owners
-
 
 @asynccontextmanager
 async def hold_proposed_check_decision_lock(
@@ -575,7 +564,6 @@ async def hold_proposed_check_decision_lock(
             del owners[pid]
         lock.release()
 
-
 async def _append_events(runtime: Any, events: list[EventEnvelope]) -> None:
     append = getattr(runtime, "_append", None)
     if callable(append):
@@ -588,7 +576,6 @@ async def _append_events(runtime: Any, events: list[EventEnvelope]) -> None:
             on_events(ev)
         else:
             fold_proposed_check_event(runtime, ev)
-
 
 async def _close_task_proposal_quota(
     runtime: Any, *, task_id: str, attempt_id: str
@@ -622,7 +609,7 @@ async def _close_task_proposal_quota(
                         "close_reason": CloseReason.FAILED.value,
                     },
                     ts=now,
-                    schema_version=2,
+                    schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
                 )
             )
     if task is not None and task.state != TaskState.DONE:
@@ -638,7 +625,7 @@ async def _close_task_proposal_quota(
                     "reason": TaskReason.PROPOSAL_QUOTA.value,
                 },
                 ts=now,
-                schema_version=2,
+                schema_version=TASK_DONE_SCHEMA_VERSION,
             )
         )
     if not events:
@@ -647,7 +634,6 @@ async def _close_task_proposal_quota(
         await _append_events(runtime, events)
     except StudyClosedError:
         raise
-
 
 def _validate_reviewer_attempt(
     runtime: Any,
@@ -690,7 +676,6 @@ def _validate_reviewer_attempt(
         )
     return att
 
-
 def _lookup_hitl_request(runtime: Any, request_id: str) -> Any | None:
     hitl_map = getattr(runtime, "hitl", None)
     if not isinstance(hitl_map, dict):
@@ -699,14 +684,12 @@ def _lookup_hitl_request(runtime: Any, request_id: str) -> Any | None:
         return None
     return hitl_map.get(request_id)
 
-
 def _lookup_hitl_decision(runtime: Any, request_id: str) -> Mapping[str, Any] | None:
     decisions = getattr(runtime, "_hitl_decisions", None)
     if not isinstance(decisions, dict):
         return None
     row = decisions.get(request_id)
     return row if isinstance(row, dict) else None
-
 
 def _verify_human_principal(
     runtime: Any,
@@ -781,7 +764,6 @@ def _verify_human_principal(
             f"HitlDecided for {rid!r} bound to proposal {dec_pid!r}, not {proposal_id_s!r}"
         )
     return f"hitl:{rid}"
-
 
 async def bind_proposed_check_reviewer(
     runtime: Any,
@@ -872,11 +854,10 @@ async def bind_proposed_check_reviewer(
                 ),
                 payload=payload,
                 ts=now,
-                schema_version=1,
+                schema_version=REVIEW_SCHEDULED_SCHEMA_VERSION,
             )
         ],
     )
-
 
 async def approve_check(
     runtime: Any,
@@ -953,12 +934,11 @@ async def approve_check(
             idem_key=make_idem("CheckApproved", str(proposal_id_s)),
             payload=payload,
             ts=now,
-            schema_version=1,
+            schema_version=CHECK_APPROVED_SCHEMA_VERSION,
         )
         # HitlDecided(by=human) must already be journaled (answer_hitl); do not mint it
         # here — that would let source=api|hitl approve from propose_check's HitlOpened alone.
         await _append_events(runtime, [ev])
-
 
 async def reject_check(
     runtime: Any,
@@ -1037,7 +1017,7 @@ async def reject_check(
                 idem_key=make_idem("CheckRejected", str(proposal_id_s)),
                 payload=payload,
                 ts=now,
-                schema_version=1,
+                schema_version=CHECK_REJECTED_SCHEMA_VERSION,
             )
         ]
         if hitl_request_id_s and reason == "human_timeout":
@@ -1059,7 +1039,6 @@ async def reject_check(
         # Human reject: HitlDecided(by=human, decision=reject) must already be journaled
         # (answer_hitl); do not mint a decision here.
         await _append_events(runtime, events)
-
 
 async def schedule_proposed_check_review(
     runtime: Any,
@@ -1117,11 +1096,10 @@ async def schedule_proposed_check_review(
                     "status": "pending",
                 },
                 ts=now,
-                schema_version=1,
+                schema_version=REVIEW_SCHEDULED_SCHEMA_VERSION,
             )
         ],
     )
-
 
 async def consume_proposed_check_review(
     runtime: Any,
@@ -1169,7 +1147,6 @@ async def consume_proposed_check_review(
                 delegated=True,
                 reviewer_attempt_id=reviewer_attempt_id,
             )
-
 
 async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
     """Timeout≡reject for delegated reviews past deadline. Returns rejected proposal ids."""
@@ -1222,7 +1199,6 @@ async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
             )
             rejected.append(pid)
     return rejected
-
 
 def assert_proposal_preregistered_for_eval(
     row: Mapping[str, Any],
@@ -1288,7 +1264,6 @@ def assert_proposal_preregistered_for_eval(
         )
     return None
 
-
 def code_check_from_proposal(row: Mapping[str, Any]) -> CodeCheck | None:
     """Build the frozen CodeCheck from a folded proposal row (None if rubric)."""
     raw = row.get("check")
@@ -1296,14 +1271,12 @@ def code_check_from_proposal(row: Mapping[str, Any]) -> CodeCheck | None:
         return None
     return raw if isinstance(raw, CodeCheck) else CodeCheck.model_validate(raw)
 
-
 def rubric_from_proposal(row: Mapping[str, Any]) -> Rubric | None:
     raw = row.get("rubric")
     if raw is None:
         return None
     r = raw if isinstance(raw, Rubric) else Rubric.model_validate(raw)
     return freeze_rubric(r)
-
 
 def custom_checks_report(runtime: Any) -> list[dict[str, Any]]:
     """Report section ``custom_checks[]`` (non-catalog; DESIGN_M1 §16)."""
@@ -1333,14 +1306,12 @@ def custom_checks_report(runtime: Any) -> list[dict[str, Any]]:
         )
     return out
 
-
 def is_delegated_proposed_claim(claim: Any) -> bool:
     """True when claim evidence comes from an approved delegated proposed_check."""
     effect = getattr(claim, "effect", None)
     if not isinstance(effect, dict):
         return False
     return bool(effect.get("proposed_check") and effect.get("delegated"))
-
 
 def is_proposed_claim(claim: Any) -> bool:
     effect = getattr(claim, "effect", None)

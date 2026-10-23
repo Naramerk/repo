@@ -18,6 +18,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from coscientist.core.events.schema_versions import (
+    QUESTION_DISPOSED_SCHEMA_VERSION,
+    QUESTION_DISPOSE_REJECTED_SCHEMA_VERSION,
+)
 from coscientist.core.claims.experiment_design import (
     MISSING_DESIGN_LINE,
     MISSING_DESIGN_REASON,
@@ -44,7 +48,6 @@ DISPOSE_REJECTED_LINE_PREFIX = "не выполнено: disposal rejected"
 # restart/replay digests match (fold re-applies the same detail string).
 DISPOSE_REJECT_DETAIL_MAX = 500
 
-
 class QuestionDisposal(BaseModel):
     """Typed agent/core request to dispose a question without a counting claim."""
 
@@ -57,10 +60,8 @@ class QuestionDisposal(BaseModel):
     # Required for needs_more_data (artifact_id of experiment_design report).
     design_artifact_id: str | None = None
 
-
 class DisposeRejected(ValueError):
     """Disposal refused (missing refs / design / unknown question)."""
-
 
 def _refs_ok(refs: list[str]) -> bool:
     """Require ≥1 ref with a known prefix (evidence|limitation|hitl|art_|claim:)."""
@@ -74,7 +75,6 @@ def _refs_ok(refs: list[str]) -> bool:
             continue
         return False
     return True
-
 
 def validate_disposal(
     disposal: QuestionDisposal,
@@ -110,7 +110,6 @@ def validate_disposal(
         ):
             raise DisposeRejected(f"{MISSING_DESIGN_REASON}: {MISSING_DESIGN_LINE}")
 
-
 def question_disposed_event(
     *,
     study_id: str,
@@ -132,9 +131,8 @@ def question_disposed_event(
         idem_key=make_idem("QuestionDisposed", study_id, disposal.question_id),
         payload=payload,
         ts=now,
-        schema_version=1,
+        schema_version=QUESTION_DISPOSED_SCHEMA_VERSION,
     )
-
 
 def dispose_reject_report_line(detail: str) -> str:
     """Russian contributing_reasons line for a rejected disposal."""
@@ -143,7 +141,6 @@ def dispose_reject_report_line(detail: str) -> str:
         return MISSING_DESIGN_LINE
     short = d[:120] if d else "unknown"
     return f"{DISPOSE_REJECTED_LINE_PREFIX}: {short}"
-
 
 def question_dispose_rejected_event(
     *,
@@ -172,9 +169,8 @@ def question_dispose_rejected_event(
         idem_key=make_idem("QuestionDisposeRejected", study_id, entity, digest),
         payload=payload,
         ts=now,
-        schema_version=1,
+        schema_version=QUESTION_DISPOSE_REJECTED_SCHEMA_VERSION,
     )
-
 
 def fold_question_disposed(
     store: dict[str, dict[str, Any]],
@@ -193,7 +189,6 @@ def fold_question_disposed(
         "refs": list(payload.get("refs") or []),
         "design_artifact_id": payload.get("design_artifact_id"),
     }
-
 
 def fold_question_dispose_rejected(
     store: list[dict[str, Any]],
@@ -214,7 +209,6 @@ def fold_question_dispose_rejected(
         ) == row["question_id"]:
             return
     store.append(row)
-
 
 async def dispose_question(
     runtime: Any,
@@ -294,7 +288,6 @@ async def dispose_question(
         return None
     return disposal.question_id
 
-
 async def _journal_reject(
     runtime: Any,
     *,
@@ -327,7 +320,6 @@ async def _journal_reject(
         return
     # Live mirror only after durable append; fold re-applies on replay.
     _note_reject(runtime, detail, report_line=ev.payload.get("report_line"))
-
 
 def _note_reject(
     runtime: Any,

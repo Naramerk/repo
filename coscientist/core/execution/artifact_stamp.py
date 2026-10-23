@@ -16,6 +16,9 @@ from typing import Any, Literal
 from coscientist.core.events.errors import ArtifactRejected
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.execution.domain import Artifact, ArtifactKind
+from coscientist.core.events.schema_versions import (
+    ARTIFACT_REGISTERED_SCHEMA_VERSION,
+)
 
 VALID_ARTIFACT_KINDS: frozenset[str] = frozenset({"experiment_design", "contradiction_map"})
 
@@ -24,7 +27,6 @@ __all__ = [
     "kind_stamped_event",
     "apply_kind_stamp",
 ]
-
 
 def _stamp_kind(store: Any, artifact_id: str, kind: str | None) -> Artifact:
     """Apply ``kind`` to artifact meta (fold-internal only)."""
@@ -42,7 +44,6 @@ def _stamp_kind(store: Any, artifact_id: str, kind: str | None) -> Artifact:
     )
     return updated
 
-
 def apply_kind_stamp(store: Any, artifact_id: str, kind: str | None) -> Artifact:
     """Fold-time apply. Missing meta raises ``ArtifactRejected`` (caller may soften)."""
     if kind is not None and kind not in VALID_ARTIFACT_KINDS:
@@ -53,7 +54,6 @@ def apply_kind_stamp(store: Any, artifact_id: str, kind: str | None) -> Artifact
     if art.kind == kind:
         return art
     return _stamp_kind(store, artifact_id, kind)
-
 
 def kind_stamped_event(
     *,
@@ -83,5 +83,5 @@ def kind_stamped_event(
         idem_key=make_idem("ArtifactRegistered", artifact_id, "kind", str(kind)),
         payload=payload,
         ts=now,
-        schema_version=1,
+        schema_version=ARTIFACT_REGISTERED_SCHEMA_VERSION,
     )

@@ -16,9 +16,11 @@ from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.hitl_guard import reject_open_hitl_if_unsupported
 from coscientist.core.execution.machine import StudyRuntime, new_owner
 from coscientist.core.execution.tool_loader import ensure_core_tools_ready
+from coscientist.core.events.schema_versions import (
+    TASK_DONE_SCHEMA_VERSION,
+)
 
 log = logging.getLogger(__name__)
-
 
 async def open_runtime(
     data_root: Path | str,
@@ -155,7 +157,7 @@ async def open_runtime(
                             "detail": str(e),
                         },
                         ts=now,
-                        schema_version=2,
+                        schema_version=TASK_DONE_SCHEMA_VERSION,
                     )
                 )
             await rt._append(close_events)  # noqa: SLF001
@@ -193,7 +195,6 @@ async def open_runtime(
         except BaseException:
             log.warning("store.close failed during open_runtime cleanup", exc_info=True)
         raise
-
 
 async def close_runtime(rt: StudyRuntime) -> None:
     for t in list(rt._attempt_tasks.values()):  # noqa: SLF001

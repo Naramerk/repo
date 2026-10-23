@@ -217,7 +217,7 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
                             "reason": "cancelled",
                         },
                         ts=now,
-                        schema_version=2,
+                        schema_version=1,
                     ),
                 ]
             )

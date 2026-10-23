@@ -30,7 +30,6 @@ from coscientist.core.execution.quorum import bind_input_groups
 # Persisted on AttemptClosed.retry_at; fired by StudyRuntime.tick vs injected Clock.
 RETRY_BACKOFF_S = 0.05
 
-
 def _attempt_role_from_reviews(runtime: Any, task_id: str) -> str:
     """Derive AttemptStarted.attempt_role from pending ReviewScheduled rows."""
     reviews = getattr(runtime, "_proposed_check_reviews", None) or {}
@@ -55,7 +54,6 @@ _STAGE_KINDS = frozenset(
         TaskKind.REPORT,
     }
 )
-
 
 class AttemptsMixin:
     """P2/P3/P6 attempt lifecycle methods for StudyRuntime."""
@@ -342,7 +340,12 @@ class AttemptsMixin:
         now = self.clock.now()
         assert self.study is not None
         sid = self.study.study_id
-        from coscientist.core.events.schema_versions import ATTEMPT_STARTED_SCHEMA_VERSION
+        from coscientist.core.events.schema_versions import (
+            ATTEMPT_CLOSED_SCHEMA_VERSION,
+            ATTEMPT_STARTED_SCHEMA_VERSION,
+            TASK_DONE_SCHEMA_VERSION,
+            VERDICT_SNAPSHOTS_RECORDED_SCHEMA_VERSION,
+        )
         from coscientist.core.execution.domain import Limitation as _Limitation
         from coscientist.core.execution.input_limits import (
             apply_input_drift,
@@ -451,7 +454,7 @@ class AttemptsMixin:
                         "snapshots": bound_verdicts,
                     },
                     ts=now,
-                    schema_version=1,
+                    schema_version=VERDICT_SNAPSHOTS_RECORDED_SCHEMA_VERSION,
                 )
             )
         # PR7: uses_claim edges for kind=claim inputs (DESIGN_M1 §3).
@@ -498,7 +501,7 @@ class AttemptsMixin:
                     "task_id": tid,
                 },
                 ts=now,
-                schema_version=2,
+                schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
             )
         ]
         # Budget uses charged attempts (current defaults charged=True until stamped).
@@ -527,7 +530,7 @@ class AttemptsMixin:
                         "reason": TaskReason.FAILED.value,
                     },
                     ts=now,
-                    schema_version=2,
+                    schema_version=TASK_DONE_SCHEMA_VERSION,
                 )
             )
         else:
@@ -593,7 +596,7 @@ class AttemptsMixin:
                             "task_id": task.task_id,
                         },
                         ts=now,
-                        schema_version=2,
+                        schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
                     )
                 )
                 t = self._attempt_tasks.pop(aid, None)
@@ -614,7 +617,7 @@ class AttemptsMixin:
                 idem_key=make_idem("TaskDone", task.task_id),
                 payload=done_payload,
                 ts=now,
-                schema_version=2,
+                schema_version=TASK_DONE_SCHEMA_VERSION,
             )
         )
         await self._append(events)

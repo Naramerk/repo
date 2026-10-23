@@ -13,12 +13,10 @@ from coscientist.core.events.store import SqliteEventStore
 
 WriteFn = Callable[[], Awaitable[Any]]
 
-
 @dataclass
 class _Item:
     coro_factory: WriteFn
     future: asyncio.Future[Any]
-
 
 class StudyWriter:
     """Serializes all study mutations through one queue (maxsize=1000)."""

@@ -15,7 +15,6 @@ from coscientist.core.plan.intake import IntakeRefuse
 
 log = logging.getLogger(__name__)
 
-
 class LocalProjectMixin:
     """Fold journal events into StudyRuntime local maps (no HITL)."""
 

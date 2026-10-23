@@ -25,6 +25,10 @@ from __future__ import annotations
 from typing import Any
 
 from coscientist.core.claims.derivation import EVIDENCE_KIND_DERIVATION, VALID_EVIDENCE_KINDS
+from coscientist.core.events.schema_versions import (
+    PLAN_REFUSED_SCHEMA_VERSION,
+    TASK_DONE_SCHEMA_VERSION,
+)
 from coscientist.core.claims.experiment_design import (
     ARTIFACT_KIND_CONTRADICTION_MAP,
     ARTIFACT_KIND_EXPERIMENT_DESIGN,
@@ -58,7 +62,6 @@ __all__ = [
     "validate_rubric_immutable",
 ]
 
-
 def _rubric_digest_of(spec: TaskSpec) -> str | None:
     digests: list[str] = []
     for o in spec.expected_outputs or []:
@@ -73,16 +76,13 @@ def _rubric_digest_of(spec: TaskSpec) -> str | None:
         return None
     return "|".join(digests)
 
-
 def _has_rubric(spec: TaskSpec) -> bool:
     return any(getattr(o, "rubric", None) is not None for o in (spec.expected_outputs or []))
-
 
 def _has_criterion(spec: TaskSpec, catalog: Any | None = None) -> bool:
     """True iff the task declares ≥1 criterion. Catalog defaults do **not** count."""
     del catalog  # explicit criteria only — defaults are runtime eval, not plan coverage
     return bool(spec.criteria)
-
 
 def validate_output_kinds(tasks: list[TaskSpec]) -> None:
     """Raise ValueError if OutputSpec.kind is set without role/rubric match."""
@@ -121,7 +121,6 @@ def validate_output_kinds(tasks: list[TaskSpec]) -> None:
                     f"unknown OutputSpec.kind {kind!r}"
                 )
 
-
 def validate_evidence_kinds(tasks: list[TaskSpec]) -> None:
     """Raise ValueError if OutputSpec.evidence_kind is invalid or mis-roled.
 
@@ -145,7 +144,6 @@ def validate_evidence_kinds(tasks: list[TaskSpec]) -> None:
                         f"task {spec.task_key!r} output {o.name!r}: "
                         f"evidence_kind=derivation requires role=code|report"
                     )
-
 
 def validate_final_types(
     tasks: list[TaskSpec],
@@ -188,9 +186,7 @@ def validate_final_types(
             if not any(_has_criterion(t, catalog) for t in covering):
                 raise ValueError(f"question {qid!r} final_type={ft}: need ≥1 criterion on an addressing task")
 
-
 PLAN_REFUSED_LINE = "не выполнено: план отклонён (рубрика/final_type)"
-
 
 def refuse_detail(err: BaseException | str, *, truncate: bool = False) -> str:
     """Full detail string for PlanRefused idem hashing.
@@ -203,7 +199,6 @@ def refuse_detail(err: BaseException | str, *, truncate: bool = False) -> str:
     if truncate:
         return full[:200]
     return full
-
 
 async def apply_plan_refused(
     runtime: Any,
@@ -241,7 +236,7 @@ async def apply_plan_refused(
                 "report_line": report_line,
             },
             ts=now,
-            schema_version=1,
+            schema_version=PLAN_REFUSED_SCHEMA_VERSION,
         )
     ]
     # Close PLAN + any still-open stage tasks so finalize is immediate.
@@ -265,13 +260,12 @@ async def apply_plan_refused(
                     "detail": detail,
                 },
                 ts=now,
-                schema_version=2,
+                schema_version=TASK_DONE_SCHEMA_VERSION,
             )
         )
     await runtime._append(events)  # noqa: SLF001
     await finalize_mod.finalize(runtime, trigger="intake")
     return ""
-
 
 def validate_rubric_immutable(
     *,
@@ -299,7 +293,6 @@ def validate_rubric_immutable(
                 f"(supersede old task); digest {old_d[:12]}… → {new_d[:12]}…"
             )
 
-
 def merge_plan_questions(
     questions: list[QuestionSpec] | None,
     subquestions: list[QuestionSpec] | None,
@@ -323,7 +316,6 @@ def merge_plan_questions(
         named = list(subs)
     return all_qs, named
 
-
 def _has_decomposition_covers_rubric(tasks: list[TaskSpec]) -> bool:
     for spec in tasks:
         for o in spec.expected_outputs or []:
@@ -339,7 +331,6 @@ def _has_decomposition_covers_rubric(tasks: list[TaskSpec]) -> bool:
                 if it.id == DECOMPOSITION_COVERS_ITEM_ID:
                     return True
     return False
-
 
 def validate_decomposes(
     tasks: list[TaskSpec],
@@ -413,7 +404,6 @@ def validate_decomposes(
         if len(parent_of) > max_tasks:
             raise ValueError(f"max_tasks:{max_tasks}")
 
-
 def freeze_plan_rubrics(
     tasks: list[TaskSpec],
     questions: list[QuestionSpec],
@@ -438,7 +428,6 @@ def freeze_plan_rubrics(
         disposed_question_ids=disposed_question_ids,
     )
     return frozen_tasks, list(questions)
-
 
 def validate_plan_final_types_or_err(
     tasks: list[TaskSpec],
