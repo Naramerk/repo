@@ -60,7 +60,8 @@ class SqliteEventStore:
         self.epoch = epoch
         self.lease_ttl_s = lease_ttl_s
         self._closed = False
-        # None=unknown, False/True=cached; avoids a SELECT on every append.
+        # None=unknown; True/False for this lease (cleared on acquire_lease).
+        # True only after a successful StudyFinalized commit.
         self._finalized_cached: bool | None = None
         self._db_lock = threading.RLock()
         self._read_lock = threading.RLock()
@@ -175,6 +176,7 @@ class SqliteEventStore:
             self.owner_nonce = nonce
             self.epoch = epoch
             self.lease_ttl_s = ttl
+            self._finalized_cached = None  # peer may have finalized
             return epoch
         except Exception:
             self._conn.rollback()
@@ -284,8 +286,9 @@ class SqliteEventStore:
             self._finalized_cached = True
             return True
         study = self._get_row_write("studies", self.study_id)
-        self._finalized_cached = bool(study and study.get("finalized"))
-        return self._finalized_cached
+        found = bool(study and study.get("finalized"))
+        self._finalized_cached = found  # cleared on acquire_lease
+        return found
 
     def _reject_if_finalized(self, event_type: str) -> None:
         if self._study_is_finalized():
@@ -305,6 +308,8 @@ class SqliteEventStore:
         if idem is not None:
             raise Idempotent(idem.seq)
         assert stored is not None
+        if event.type == "StudyFinalized":
+            self._finalized_cached = True
         return stored
 
     async def append_many(
@@ -335,6 +340,7 @@ class SqliteEventStore:
         require_open_attempt: str | None = None,
     ) -> list[EventEnvelope]:
         out: list[EventEnvelope] = []
+        saw_finalized = False
         try:
             self._fence()
             if require_open_attempt is not None:
@@ -350,11 +356,15 @@ class SqliteEventStore:
                     out.append(self._fetch_by_idem(ev.idem_key))
                     continue
                 assert stored is not None
+                if ev.type == "StudyFinalized":
+                    saw_finalized = True
                 out.append(stored)
             self._conn.commit()
         except Exception:
             self._conn.rollback()
             raise
+        if saw_finalized:
+            self._finalized_cached = True
         return out
 
     def _insert_one(
@@ -394,8 +404,6 @@ class SqliteEventStore:
             update={"seq": seq, "epoch": self.epoch, "payload_digest": digest, "ts": ts}
         )
         self._apply_projection(stored)
-        if event.type == "StudyFinalized":
-            self._finalized_cached = True
         return stored, None
 
     async def read_all(self) -> list[EventEnvelope]:

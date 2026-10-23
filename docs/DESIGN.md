@@ -187,6 +187,8 @@ def study_view(tasks, *, attempts=None, finalized=False, now=None, effective_dea
     return StudyView(phase="finalizing", verdict=verdict, stub_share=..., ...)
 ```
 I1: `closed ⇔ ∃ StudyFinalized`. Тест: `test_b1_closed_only_when_all_tasks_done` (фаза closed только при finalized).
+I2: `closed ⇒ ∀ question: (∃! conclusion −answers→ question) ∨ (question_id ∈ minimal_report.questions ∨ minimal_report.truncated ∧ учтён в summary)`; на основном пути — conclusion у каждого question, на fallback — покрытие `minimal_report`. **Отклонение:** last-resort payload (`last_resort_payload`) пишет только study-level conclusion (`conclusion_ids_for(sid, {})`) и пустые `questions` — per-question conclusions отсутствуют.
+I3: после `StudyFinalized` store отклоняет любые записи (`StudyClosedError`); метрика `late_write_rejected_total`.
 
 ### 3.3 Переходы
 

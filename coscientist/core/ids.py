@@ -39,13 +39,3 @@ def hitl_request_id() -> str:
 
 def plan_id() -> str:
     return f"pl_{_ulid_like()}"
-
-
-def conclusion_id() -> str:
-    """Random conclusion id (prefer finalize_nodes.conclusion_id_for_*)."""
-    return f"cn_{_ulid_like()}"
-
-
-def report_node_id() -> str:
-    """Random report node id (prefer finalize_nodes.report_node_id_for)."""
-    return f"rp_{_ulid_like()}"

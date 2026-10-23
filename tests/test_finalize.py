@@ -488,3 +488,123 @@ async def test_accept_plan_rejects_question_text_conflict(tmp_path, clock):
             [], questions=[QuestionSpec(id="Q1", text="other")], revision=2
         )
     await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_finalized_cache_not_set_on_rollback(tmp_path, clock, monkeypatch):
+    """StudyFinalized insert + rollback must not leave _finalized_cached True."""
+    sid = "st_rb"
+    rt = await _boot(tmp_path, clock, sid)
+    await _skip_all(rt)
+    store = rt.store
+    assert store._finalized_cached is not True
+    real_apply = store._apply_projection
+
+    def boom_after_insert(ev: EventEnvelope) -> None:
+        real_apply(ev)
+        if ev.type == "StudyFinalized":
+            raise RuntimeError("after_insert_before_commit")
+
+    monkeypatch.setattr(store, "_apply_projection", boom_after_insert)
+    fin_ev = EventEnvelope(
+        study_id=sid,
+        type="StudyFinalized",
+        entity_key=sid,
+        idem_key=make_idem("StudyFinalized", sid),
+        payload={
+            "trigger": "all_done",
+            "terminal_reason": "completed",
+            "contributing_reasons": [],
+            "verdict": "partial",
+            "question_dispositions": {},
+            "report_artifact_id": None,
+            "conclusion_ids": [],
+            "minimal_report": None,
+            "fallback_reason": None,
+        },
+        ts=clock.now(),
+        schema_version=1,
+    )
+    with pytest.raises(RuntimeError, match="after_insert_before_commit"):
+        await store.append_many([fin_ev])
+    assert store._finalized_cached is not True
+    monkeypatch.setattr(store, "_apply_projection", real_apply)
+    await store.append_many([fin_ev])
+    assert store._finalized_cached is True
+    with pytest.raises(StudyClosedError):
+        await store.append(
+            EventEnvelope(
+                study_id=sid,
+                type="TaskDone",
+                entity_key="x",
+                idem_key=make_idem("TaskDone", "x", "late"),
+                payload={"task_id": "x", "outcome": "FAILED", "reason": "failed"},
+                ts=clock.now(),
+                schema_version=2,
+            )
+        )
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_finalized_cache_reset_on_lease_reacquire(tmp_path, clock):
+    """Stale False on store A must clear on reacquire after B finalizes (I3)."""
+    from coscientist.core.store import SqliteEventStore
+
+    sid = "st_lease_cache"
+    root = tmp_path / sid
+    root.mkdir()
+    db = root / "events.db"
+    store_a = SqliteEventStore(sid, db, clock=clock, owner="a", lease_ttl_s=30)
+    await store_a.acquire_lease("a")
+    assert store_a._study_is_finalized() is False
+    assert store_a._finalized_cached is False
+
+    # Expire A's lease; B acquires and finalizes.
+    clock.advance(timedelta(seconds=31))
+    store_b = SqliteEventStore(sid, db, clock=clock, owner="b", lease_ttl_s=30)
+    await store_b.acquire_lease("b")
+    await store_b.append(
+        EventEnvelope(
+            study_id=sid,
+            type="StudyFinalized",
+            entity_key=sid,
+            idem_key=make_idem("StudyFinalized", sid),
+            payload={
+                "trigger": "all_done",
+                "terminal_reason": "completed",
+                "contributing_reasons": [],
+                "verdict": "partial",
+                "question_dispositions": {},
+                "report_artifact_id": None,
+                "conclusion_ids": [],
+                "minimal_report": None,
+                "fallback_reason": None,
+            },
+            ts=clock.now(),
+            schema_version=1,
+        )
+    )
+    assert store_b._finalized_cached is True
+    await store_b.release_lease("b", store_b.epoch)
+    await store_b.close()
+
+    # A still holds stale False until acquire_lease clears it.
+    assert store_a._finalized_cached is False
+    clock.advance(timedelta(seconds=31))
+    await store_a.acquire_lease("a")
+    assert store_a._finalized_cached is None
+    with pytest.raises(StudyClosedError):
+        await store_a.append(
+            EventEnvelope(
+                study_id=sid,
+                type="TaskDone",
+                entity_key="late",
+                idem_key=make_idem("TaskDone", "late"),
+                payload={"task_id": "late", "outcome": "FAILED", "reason": "failed"},
+                ts=clock.now(),
+                schema_version=2,
+            )
+        )
+    assert store_a._finalized_cached is True
+    await store_a.close()

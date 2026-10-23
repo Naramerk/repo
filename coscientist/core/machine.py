@@ -139,14 +139,19 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         await _cancel_study(self, by=by)
 
     def note_budget_exceeded(self) -> None:
-        """Mark budget trigger for the next tick (core has no BudgetExceeded yet)."""
+        """Mark study-level budget trigger for the next tick (no BudgetExceeded yet)."""
         self._budget_exceeded = True
 
     async def finalize(self, *, trigger: FinalizeTrigger) -> None:
         await _finalize(self, trigger=trigger)
 
     def _budget_trigger_active(self) -> bool:
-        """In-memory flag or derived from DONE(SKIPPED/FAILED, budget) tasks."""
+        """Study-level budget: flag or any DONE task with reason=budget.
+
+        A single TaskDone(..., reason=budget) from a costly/HITL path is enough
+        to close the whole study on the next tick (trigger=budget), not only
+        that task. Remaining open work is closed as SKIPPED(budget) first.
+        """
         if self._budget_exceeded:
             return True
         for t in self.tasks.values():

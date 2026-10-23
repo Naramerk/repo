@@ -6,9 +6,10 @@ import logging
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
+from coscientist.core.digest import canonical_json
 from coscientist.core.dispositions import dispositions
 from coscientist.core.domain import Task, TaskOutcome, TaskState
-from coscientist.core.errors import CASUnavailable
+from coscientist.core.errors import CASUnavailable, LeaseLost
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.finalize_nodes import conclusion_ids_for
 from coscientist.core.minimal_report import build_minimal_report, render_markdown_report
@@ -21,6 +22,9 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 FinalizeTrigger = Literal["cancel", "budget", "deadline", "all_done", "intake"]
+
+# Bound rich StudyFinalized payload (JCS); oversized → last-resort.
+MAX_FINALIZED_PAYLOAD_BYTES = 65_536
 
 _TRIGGER_TERMINAL: dict[str, str] = {
     "cancel": TerminalReason.CANCELLED.value,
@@ -101,7 +105,13 @@ def last_resort_payload(
     trigger: FinalizeTrigger,
     fallback_reason: str,
 ) -> dict[str, Any]:
-    """Constant-only StudyFinalized payload (no tasks/plans/store access)."""
+    """Constant-only StudyFinalized payload (no tasks/plans/store access).
+
+    I2 deviation: ``question_dispositions`` is empty, so fold emits only the
+    study-level conclusion via ``conclusion_ids_for(study_id, {})``. Questions
+    have no per-question conclusion on this path (nor entries in
+    ``minimal_report.questions``). Prefer the rich/minimal paths when possible.
+    """
     term = _TRIGGER_TERMINAL.get(trigger, TerminalReason.COMPLETED.value)
     minimal: dict[str, Any] = {
         "study_id": study_id,
@@ -125,14 +135,14 @@ def last_resort_payload(
         "verdict": "failed",
         "question_dispositions": {},
         "report_artifact_id": None,
-        "conclusion_ids": [f"cn_study_{study_id}"],
+        "conclusion_ids": conclusion_ids_for(study_id, {}),
         "minimal_report": minimal,
         "fallback_reason": fallback_reason,
     }
 
 
 async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
-    """Write StudyFinalized (idempotent). Always writes; never raises to caller."""
+    """Write StudyFinalized (idempotent). Always attempts a write; LeaseLost propagates."""
     if runtime.study is None or is_finalized(runtime):
         return
     sid = runtime.study.study_id
@@ -143,6 +153,25 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
         payload = last_resort_payload(
             study_id=sid, trigger=trigger, fallback_reason=type(e).__name__
         )
+    try:
+        await _append_finalized(runtime, sid=sid, payload=payload)
+    except LeaseLost:
+        raise
+    except Exception as e:  # noqa: BLE001 — retry once with last-resort
+        log.warning("finalize append failed: %s; retrying last-resort", e, exc_info=True)
+        await _append_finalized(
+            runtime,
+            sid=sid,
+            payload=last_resort_payload(
+                study_id=sid, trigger=trigger, fallback_reason=type(e).__name__
+            ),
+        )
+    runtime._finalized = True  # noqa: SLF001
+
+
+async def _append_finalized(
+    runtime: StudyRuntime, *, sid: str, payload: dict[str, Any]
+) -> None:
     now = runtime.clock.now()
     await runtime._append(  # noqa: SLF001
         [
@@ -157,7 +186,27 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
             )
         ]
     )
-    runtime._finalized = True  # noqa: SLF001
+
+
+def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Shrink question_dispositions / reasons until JCS ≤ MAX; else raise."""
+    out = dict(payload)
+    if len(canonical_json(out)) <= MAX_FINALIZED_PAYLOAD_BYTES:
+        return out
+    qdisp = {
+        qid: {
+            **(d if isinstance(d, dict) else {}),
+            "formulation": str((d or {}).get("formulation", ""))[:80]
+            if isinstance(d, dict)
+            else "",
+        }
+        for qid, d in (out.get("question_dispositions") or {}).items()
+    }
+    out["question_dispositions"] = qdisp
+    out["contributing_reasons"] = list(out.get("contributing_reasons") or [])[:10]
+    if len(canonical_json(out)) <= MAX_FINALIZED_PAYLOAD_BYTES:
+        return out
+    raise RuntimeError("finalized_payload_too_large")
 
 
 async def _build_rich_payload(
@@ -182,7 +231,7 @@ async def _build_rich_payload(
         question_dispositions=qdisp,
     )
     verdict = view.verdict or "partial"
-    return await _build_finalized_payload(
+    payload = await _build_finalized_payload(
         runtime,
         sid=sid,
         trigger=trigger,
@@ -191,6 +240,7 @@ async def _build_rich_payload(
         verdict=verdict,
         qdisp=qdisp,
     )
+    return _bound_rich_payload(payload)
 
 
 async def _load_plans(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:

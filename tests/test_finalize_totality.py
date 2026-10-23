@@ -13,6 +13,7 @@ from coscientist.core.finalize import last_resort_payload
 from coscientist.core.finalize_nodes import (
     conclusion_id_for_question,
     conclusion_id_for_study,
+    conclusion_ids_for,
 )
 from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.store import SqliteEventStore
@@ -123,14 +124,20 @@ async def test_finalize_total_on_minimal_report_failure(tmp_path, clock, monkeyp
 
 
 def test_last_resort_payload_constants_only():
+    from coscientist.core.finalize_nodes import conclusion_ids_for
+
+    sid = "st_x"
     p = last_resort_payload(
-        study_id="st_x", trigger="deadline", fallback_reason="Boom"
+        study_id=sid, trigger="deadline", fallback_reason="Boom"
     )
     assert p["trigger"] == "deadline"
     assert p["terminal_reason"] == "deadline"
     assert p["fallback_reason"] == "Boom"
     assert p["question_dispositions"] == {}
     assert p["minimal_report"]["tasks"] == []
+    assert p["minimal_report"]["questions"] == []
+    # Matches fold ids; I2 deviation: no per-question conclusions.
+    assert p["conclusion_ids"] == conclusion_ids_for(sid, {})
 
 
 @pytest.mark.asyncio
@@ -162,6 +169,7 @@ async def test_i2_conclusions_after_restart(tmp_path, clock):
 
 @pytest.mark.asyncio
 async def test_crash_mid_finalize_recover_idempotent(tmp_path, clock):
+    """Retry after a full finalize is still idempotent (one StudyFinalized)."""
     sid = "st_crash"
     rt = await _boot(tmp_path, clock, sid)
     await _skip_all(rt)
@@ -175,6 +183,67 @@ async def test_crash_mid_finalize_recover_idempotent(tmp_path, clock):
     n2 = sum(1 for e in await rt2.store.read_all() if e.type == "StudyFinalized")
     assert n2 == 1
     await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_crash_between_cancelled_and_finalized(tmp_path, clock, monkeypatch):
+    """Crash after StudyCancelled, before StudyFinalized; reopen finalizes."""
+    sid = "st_cx_mid"
+    rt = await _boot(tmp_path, clock, sid)
+
+    async def crash_finalize(_rt, *, trigger):
+        return  # simulate process death before StudyFinalized
+
+    # cancel_study imports finalize by name each call — patch the module attr.
+    monkeypatch.setattr("coscientist.core.finalize.finalize", crash_finalize)
+    await rt.cancel_study(by="user")
+    types = [e.type for e in await rt.store.read_all()]
+    assert "StudyCancelled" in types
+    assert "StudyFinalized" not in types
+    await close_runtime(rt)
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    await rt2.tick()
+    assert _fin(await rt2.store.read_all()).payload["trigger"] == "cancel"
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_crash_between_cas_put_and_append(tmp_path, clock, monkeypatch):
+    """CAS put succeeds, then append fails → last-resort retry still finalizes."""
+    sid = "st_cas_mid"
+    rt = await _boot(tmp_path, clock, sid)
+    rt.artifacts = LocalArtifactStore(tmp_path / "arts")
+    await _skip_all(rt)
+    calls = {"n": 0}
+    real_append = rt._append
+
+    async def boom_then_ok(events):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("append_after_cas")
+        return await real_append(events)
+
+    monkeypatch.setattr(rt, "_append", boom_then_ok)
+    await rt.finalize(trigger="all_done")
+    ev = _fin(await rt.store.read_all())
+    assert ev.payload["fallback_reason"] == "OSError"
+    assert ev.payload["conclusion_ids"] == conclusion_ids_for(sid, {})
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_recover_after_finalize(tmp_path, clock):
+    """recover() after StudyFinalized is a no-op success (not cut by writable)."""
+    from coscientist.core.recover import recover
+
+    sid = "st_rec_fin"
+    rt = await _boot(tmp_path, clock, sid)
+    await _skip_all(rt)
+    await rt.finalize(trigger="all_done")
+    out = await recover(rt)
+    assert out["closed"] == 0
+    assert _fin(await rt.store.read_all()).type == "StudyFinalized"
+    await close_runtime(rt)
 
 
 @pytest.mark.asyncio
@@ -289,23 +358,18 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
     await close_runtime(rt)
 
 
-def test_pick_trigger_matches_refmodel():
-    import refmodel
-
-    from coscientist.core.finalize import pick_finalize_trigger as core_pick
-
-    assert core_pick(cancelled=True, budget=True, deadline=True) == (
-        refmodel.pick_finalize_trigger(cancelled=True, budget=True, deadline=True)
-    )
-    assert core_pick(budget=True, deadline=True) == refmodel.pick_finalize_trigger(
-        budget=True, deadline=True
-    )
+def test_pick_finalize_trigger(impl):
+    assert impl.pick_finalize_trigger(
+        cancelled=True, budget=True, deadline=True
+    ) == "cancel"
+    assert impl.pick_finalize_trigger(budget=True, deadline=True) == "budget"
+    assert impl.pick_finalize_trigger(deadline=True, all_done=True) == "deadline"
+    assert impl.pick_finalize_trigger(all_done=True) == "all_done"
+    assert impl.pick_finalize_trigger() is None
 
 
-def test_terminal_reason_matches_refmodel():
+def test_terminal_reason_for(impl):
     from datetime import UTC, datetime
-
-    import refmodel
 
     from coscientist.core.domain import (
         Task,
@@ -314,7 +378,6 @@ def test_terminal_reason_matches_refmodel():
         TaskSpec,
         TaskState,
     )
-    from coscientist.core.finalize import terminal_reason_for
     from coscientist.core.reasons import TaskReason
 
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -327,8 +390,13 @@ def test_terminal_reason_matches_refmodel():
         reason=TaskReason.HUMAN_TIMEOUT,
         deadline=now,
     )
-    core = terminal_reason_for("all_done", tasks={"a": t}, question_dispositions={})
-    ref = refmodel.terminal_reason_for(
-        "all_done", tasks={"a": t}, question_dispositions={}
+    assert (
+        impl.terminal_reason_for(
+            "all_done", tasks={"a": t}, question_dispositions={}
+        )
+        == "human_timeout"
     )
-    assert core.value == ref
+    assert impl.terminal_reason_for("budget", tasks={}, question_dispositions={}) == (
+        "budget"
+    )
+    assert impl.reject_write_after_finalized(True, "TaskDone") == "StudyClosedError"

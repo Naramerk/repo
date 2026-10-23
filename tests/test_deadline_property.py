@@ -186,11 +186,14 @@ class StudyClosesMachine(RuleBasedStateMachine):
             return
         self._call(self.rt.answer_hitl(hid))
 
-    @precondition(lambda self: self._hitl_ok())
     @rule()
     def recover_after_idle(self):
+        """Recover is allowed after finalize (not gated by _writable)."""
+        if self.rt is None or self.lost_lease:
+            return
         try:
-            self._run(self.rt.recover_after_idle(grace_s=5))
+            if supports_hitl(self.rt):
+                self._run(self.rt.recover_after_idle(grace_s=5))
             self._run(recover(self.rt))
         except LeaseLost:
             self.lost_lease = True
@@ -246,7 +249,8 @@ class StudyClosesMachine(RuleBasedStateMachine):
 
     @rule()
     def crash_and_recover(self):
-        if not self._writable():
+        """Recover after crash; also covers post-finalize recover."""
+        if self.rt is None or self.lost_lease:
             return
         try:
             self._run(recover(self.rt))
