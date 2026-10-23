@@ -166,6 +166,7 @@ def render_markdown_report(
     question_dispositions: Mapping[str, Mapping[str, Any]],
     tasks: Mapping[str, Task],
     refusal: str | None = None,
+    as_of: str | None = None,
     plans: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None = None,
 ) -> str:
     """Deterministic MD report (no LLM)."""
@@ -177,6 +178,8 @@ def render_markdown_report(
         f"- verdict: `{verdict}`",
         f"- contributing_reasons: {', '.join(contributing_reasons) or '(none)'}",
     ]
+    if as_of:
+        lines.append(f"- as_of: `{as_of}`")
     if refusal:
         lines.append(f"- refusal: `{refusal}`")
     not_done = [c for c in contributing_reasons if str(c).startswith("не выполнено:")]

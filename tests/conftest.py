@@ -49,7 +49,7 @@ def runtime_kind(request) -> str:
 @pytest.fixture
 def runtime_cls(runtime_kind: str) -> type:
     if runtime_kind == "core":
-        from coscientist.core.machine import StudyRuntime
+        from coscientist.api.runtime import StudyRuntime
 
         return StudyRuntime
     from coscientist.experimental.runtime import StudyRuntime
@@ -101,7 +101,7 @@ async def open_runtime_for(
     """Helper for tests that call open_runtime directly with a runtime kind."""
     if isinstance(kind_or_cls, str):
         if kind_or_cls == "core":
-            from coscientist.core.machine import StudyRuntime as cls
+            from coscientist.api.runtime import StudyRuntime as cls
         else:
             from coscientist.experimental.runtime import StudyRuntime as cls
     else:

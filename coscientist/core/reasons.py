@@ -99,6 +99,7 @@ class RefusalKind(StrEnum):
     CONTRADICTORY = "contradictory"
     EGRESS_POLICY = "egress_policy"
     INPUT_TOO_LARGE = "input_too_large"
+    INPUT_INVALID = "input_invalid"
     # DESIGN §0.5 / PR4: duration ≤ finalize_reserve_s (not in rev5 enum list)
     DURATION_TOO_SHORT = "duration_too_short"
 

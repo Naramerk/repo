@@ -14,6 +14,7 @@ from coscientist.core.domain import (
     TaskKind,
     TaskOutcome,
     TaskState,
+    worst_provenance,
 )
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.ids import attempt_id, task_id
@@ -323,7 +324,54 @@ class AttemptsMixin:
         now = self.clock.now()
         assert self.study is not None
         sid = self.study.study_id
+        from coscientist.core.domain import Limitation as _Limitation
+        from coscientist.core.input_limits import (
+            apply_input_drift,
+            inputs_digest_of,
+            previous_attempt_inputs_state,
+            snapshot_bindings_at_p2,
+            study_user_input_bindings,
+        )
+        from coscientist.core.schema_versions import ATTEMPT_STARTED_SCHEMA_VERSION
         from coscientist.core.shares import attempt_share_fields_or_refuse
+
+        # PR19: bind Study.user_input_ids so DAG tasks consume them + drift covers.
+        user_ids = list(getattr(self.study, "user_input_ids", None) or [])
+        if user_ids:
+            if get_meta is None:
+                # Fail closed: cannot bind user inputs without a store.
+                limitations = list(limitations) + [
+                    _Limitation(text="input_digest_unavailable", ref="user_input_ids")
+                ]
+                prov = worst_provenance(prov, "partial")
+            else:
+                bindings = list(
+                    study_user_input_bindings(
+                        user_input_ids=user_ids,
+                        now=now,
+                        get_meta=get_meta,
+                    )
+                ) + list(bindings)
+
+        # PR19: P2 content snapshot + inputs_digest; drift → limitation + partial.
+        # get_meta errors propagate (never silently None).
+        bindings, snap_lims = snapshot_bindings_at_p2(
+            bindings, now=now, get_meta=get_meta
+        )
+        limitations = list(limitations) + list(snap_lims)
+        if snap_lims:
+            prov = worst_provenance(prov, "partial")
+        in_digest = inputs_digest_of(bindings)
+        prev_digest, prev_bindings = previous_attempt_inputs_state(
+            self.attempts, list(task.attempts), exclude_aid=aid
+        )
+        prov, limitations = apply_input_drift(
+            provenance=prov,
+            limitations=limitations,
+            inputs_digest=in_digest,
+            previous_inputs_digest=prev_digest,
+            previous_bindings=prev_bindings,
+        )
 
         lim_payload = [lim.model_dump(mode="json") if hasattr(lim, "model_dump") else dict(lim) for lim in limitations]
         share_fields = await attempt_share_fields_or_refuse(self, task)
@@ -342,6 +390,8 @@ class AttemptsMixin:
             "task_id": task.task_id,
             "study_id": sid,
             "inputs": [b.model_dump(mode="json") for b in bindings],
+            # PR19: sha256(JCS(sorted bindings)) beside config_digest (R14).
+            "inputs_digest": in_digest,
             # PR18: core-computed taint for tool gating / derived artifacts.
             "tainted_context": tainted_context,
             # PR10: fan-in gaps (inputs below quorum / failed deps).
@@ -356,8 +406,8 @@ class AttemptsMixin:
                 idem_key=make_idem("AttemptStarted", aid),
                 payload=payload,
                 ts=now,
-                # v6 = PR12 shares+budget_limit; v7 = PR18 tainted_context.
-                schema_version=7,
+                # v7 = PR18 tainted; v8 = PR19 inputs_digest + binding snapshot fields.
+                schema_version=ATTEMPT_STARTED_SCHEMA_VERSION,
             )
         ]
         # Persist full verdict snapshots used at bind (not digest-only).

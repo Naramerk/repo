@@ -18,8 +18,6 @@ GetMeta = Callable[[str], Any | None]
 _attempt_context_tainted: ContextVar[list[bool] | None] = ContextVar(
     "attempt_context_tainted", default=None
 )
-
-
 def push_attempt_taint(value: bool) -> Token[list[bool] | None]:
     """Bind attempt taint for the current context; return token for reset."""
     return _attempt_context_tainted.set([bool(value)])

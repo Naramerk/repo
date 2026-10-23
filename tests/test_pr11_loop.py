@@ -1179,8 +1179,12 @@ def test_upcast_study_created_max_loop_iter():
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     )
-    assert v == 10
+    assert v == 11
+    # #24 v10 setdefault(max_loop_iter, 8); #23 v11 preserves it.
     assert p["max_loop_iter"] == 8
+    from coscientist.core.upcasters import _study_created_v9_to_v10
+
+    assert _study_created_v9_to_v10({})["max_loop_iter"] == 8
 
 
 def test_upcast_plan_accepted_loops_default():

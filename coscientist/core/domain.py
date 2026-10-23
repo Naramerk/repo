@@ -170,7 +170,8 @@ EvidenceKind = Literal[
 # isolation are hard (soft/none ⇒ trusted=False). ``tests_pass`` is
 # observation-only (countable=False); other executable kinds stay countable.
 # ``tool`` = is_fetch tool via FetchCapability (SourceFetched); not agent put / sandbox.
-# ``user`` = HITL/uploaded inputs (PR23 joint) — never a quote_in_source source.
+# ``user`` = POST /studies inputs[] task data (DESIGN_M1 §9 / PR19) — never a
+# quote_in_source source (PR14 ``put_fetched`` / SourceFetched only).
 ArtifactProducer = Literal["agent", "core", "sandbox", "tool", "user"]
 NetIsolation = Literal["hard", "soft", "none"]
 FsIsolation = Literal["hard", "soft", "none"]
@@ -406,6 +407,11 @@ class Study(Frozen):
     max_loop_iter: int = Field(default=8, ge=1)
     # PR12: plan critic — no single task may claim more than this budget_share.
     max_task_budget_share: float = Field(default=1.0, ge=0.0, le=1.0)
+    # PR19 / DESIGN_M1 §9: time-sensitive questions; shown in the report when set.
+    as_of: datetime | None = None
+    # Task-data artifact ids from inputs[] before SPEC (role=data, producer=user).
+    # Not quote_in_source sources (PR14 SourceFetched / put_fetched only).
+    user_input_ids: list[str] = Field(default_factory=list)
 
     def effective_deadline(self) -> datetime:
         """Last instant usable by tasks/attempts/HITL (deadline − finalize reserve)."""
@@ -451,8 +457,13 @@ class InputBinding(Frozen):
     source: Provenance
     kind: Literal["artifact", "claim", "verdict"] = "artifact"
     ref: str | None = None
-    # Verdict snapshot at P2 (sha256 of canonical JSON); claim/artifact unused.
+    # P2 content snapshot (DESIGN_M1 §9): artifact CAS sha256 / verdict JCS / claim meta.
     digest: str | None = None
+    # Formula version for ``inputs_digest``; None/absent = legacy (drift unknown).
+    digest_version: int | None = None
+    retrieved_at: datetime | None = None
+    # Client / retrieval URI — never the local CAS ``file://`` path.
+    source_uri: str | None = None
 
 
 class ToolCallRef(Frozen):

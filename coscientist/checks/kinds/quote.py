@@ -5,7 +5,8 @@ match. Never raises for scientific failure — returns FAILED / UNASSESSED with 
 stable reason.
 
 Sources must be journaled ``SourceFetched`` digests (``is_fetch`` tool via
-capability-gated ``put_fetched``). Agent ``put`` / ``put_sandbox`` are
+capability-gated ``put_fetched``). Only ``is_quote_source_producer`` (``tool``)
+is accepted — agent ``put`` / ``put_sandbox`` / ``put_user`` (PR19) are
 rejected. Network content stays ``tainted=True``; journal match proves
 provenance only — content remains untrusted. ``countable`` only when that
 journal match holds.
@@ -45,6 +46,7 @@ from coscientist.core.domain import (
     SourceQuote,
 )
 from coscientist.core.errors import ArtifactCorrupt
+from coscientist.core.input_limits import is_quote_source_producer
 
 # Re-export for tests / callers.
 __all__ = [
@@ -244,9 +246,7 @@ def _match_one(
         return "no_effect", "artifact_missing", None, None
 
     producer = getattr(meta, "producer", "agent")
-    if producer in ("agent", "sandbox"):
-        return "failed", "source_not_fetched", None, None
-    if producer != "tool":
+    if not is_quote_source_producer(producer):
         return "failed", "source_not_fetched", None, None
 
     # Required source_sha256 must match artifact CAS and journaled fetch.
