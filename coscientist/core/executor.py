@@ -953,7 +953,7 @@ class Executor:
         # Keep claims so not_met can refute (invariant 10); only infra drops them.
         payload["result_class"] = "scientific"
         payload["payload_digest"] = payload_digest(payload)
-        result = await self._commit_result(
+        return await self._commit_result(
             attempt_id,
             study_id,
             task_id,
@@ -963,10 +963,8 @@ class Executor:
             claims=list(out.claims or []),
             checks=checks,
             infra_failure=False,
+            cost_rub=out.cost_rub,
         )
-        # PR12: wire per-task BudgetDebited from AgentTaskOutput.cost_rub.
-        await self._debit_task_cost(out, task_id=task_id, attempt_id=attempt_id)
-        return result
 
     async def _commit_timeout(
         self,
@@ -1015,6 +1013,7 @@ class Executor:
             infra_failure=False,
             charge_attempt=True,
             allow_retry=True,
+            cost_rub=out.cost_rub,
         )
 
     async def _commit_failure(
@@ -1033,7 +1032,10 @@ class Executor:
         charge_attempt: bool = True,
         allow_retry: bool = False,
     ) -> Result:
-        """Infra/core_bug/reject path — drop claims; infra never charges the budget."""
+        """Infra/core_bug/reject path — drop claims; infra never charges the *attempt*.
+
+        Money spent is still debited when ``out.cost_rub`` is known (same batch).
+        """
         rid = result_id(attempt_id)
         drop_claims = result_class in ("infra", "core_bug") or reason in (
             TaskReason.SAME_DIGEST_RETRY.value,
@@ -1082,6 +1084,7 @@ class Executor:
             infra_failure=drop_claims,
             charge_attempt=charge_attempt,
             allow_retry=allow_retry,
+            cost_rub=out.cost_rub,
         )
 
     def _charged_count_after(
@@ -1116,6 +1119,7 @@ class Executor:
         infra_failure: bool = False,
         charge_attempt: bool = True,
         allow_retry: bool = False,
+        cost_rub: Decimal | float | int | str | None = None,
     ) -> Result:
         # Attempt-open check runs inside the write transaction (_append_many_sync).
         now = self.clock.now()
@@ -1140,6 +1144,29 @@ class Executor:
             payload["payload_digest"] = payload_digest(payload)
         payload = {**payload, "charged": bool(charge_attempt)}
         payload["payload_digest"] = payload_digest(payload)
+
+        # PR12 B3: remaining share limit from AttemptStarted; overrun forbids retries.
+        limit_raw: Any = None
+        if isinstance(attempt, dict):
+            limit_raw = attempt.get("budget_limit_rub")
+        elif attempt is not None:
+            limit_raw = getattr(attempt, "budget_limit_rub", None)
+        spent_this: Decimal | None = None
+        if cost_rub is not None:
+            spent_this = Decimal(str(cost_rub))
+            if spent_this <= 0:
+                spent_this = None
+        overrun = False
+        if (
+            spent_this is not None
+            and limit_raw is not None
+            and spent_this > Decimal(str(limit_raw))
+        ):
+            overrun = True
+            payload = {**payload, "budget_overrun": True, "budget_limit_rub": str(limit_raw)}
+            payload["payload_digest"] = payload_digest(payload)
+            allow_retry = False
+
         # PR7/PR8: claim nodes carry producing-attempt provenance (H-b);
         # re-upsert keeps worst provenance; about edges + attr whitelist.
         # Scientific FAILED/PARTIAL keep claims (not_met → refute); infra drops.
@@ -1227,6 +1254,8 @@ class Executor:
             }
             if payload.get("detail"):
                 done_payload["detail"] = payload["detail"]
+            if overrun:
+                done_payload["detail"] = "budget_overrun"
             events.append(
                 EventEnvelope(
                     study_id=study_id,
@@ -1238,7 +1267,25 @@ class Executor:
                     schema_version=2,
                 )
             )
+        # PR12: debit actual cost_rub in the SAME append batch as the result
+        # (scientific / timeout / same_digest / core_bug / catalog_error / infra).
+        if spent_this is not None:
+            from coscientist.core.share_alloc import budget_debit_event
+
+            debit_ev = budget_debit_event(
+                study_id=study_id,
+                spent_rub=spent_this,
+                request_id=attempt_id,
+                task_id=task_id,
+                ts=now,
+            )
+            if debit_ev is not None:
+                events.append(debit_ev)
         await self._append(events, require_open_attempt=attempt_id)
+        if spent_this is not None and self.on_budget_debit is not None:
+            await self.on_budget_debit(
+                spent_rub=spent_this, request_id=attempt_id, task_id=task_id
+            )
         return Result(
             result_id=payload["result_id"],
             attempt_id=attempt_id,
@@ -1252,22 +1299,6 @@ class Executor:
             unassessed=list(payload.get("unassessed", [])),
             payload_digest=payload["payload_digest"],
             reason=reason,
-        )
-
-    async def _debit_task_cost(
-        self, out: AgentTaskOutput, *, task_id: str, attempt_id: str
-    ) -> None:
-        """Minimal PR12 hook: debit study+task budget when agent reports cost_rub."""
-        if self.on_budget_debit is None:
-            return
-        cost = out.cost_rub
-        if cost is None:
-            return
-        spent = Decimal(str(cost))
-        if spent <= 0:
-            return
-        await self.on_budget_debit(
-            spent_rub=spent, request_id=attempt_id, task_id=task_id
         )
 
     async def _append(

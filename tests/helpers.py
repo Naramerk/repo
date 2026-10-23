@@ -99,6 +99,8 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
                 "task_id": d["task_id"],
                 "study_id": d["study_id"],
                 "inputs": list(d.get("inputs") or []),
+                "allocated_budget_rub": d.get("allocated_budget_rub"),
+                "budget_limit_rub": d.get("budget_limit_rub"),
             },
         )()
 

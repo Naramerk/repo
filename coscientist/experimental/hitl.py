@@ -99,13 +99,18 @@ class HitlForkMixin(CostlyHitlMixin):
             )
             return
         # DESIGN §7.3 / PR12 budget gate: «реши сам» → critic; mark HITL node only.
+        # Budget shares apply via _apply_budget_hitl (not plan expand).
         if decision == "delegate":
             await self._critic_decide(h, decision="accept", delegated_by="human")
             if h.kind == "budget":
                 await self._mark_hitl_decision_node(
                     h, approved_by="critic", delegated_by="human"
                 )
-            await self._maybe_hitl_expand(h, request_id, expansion)
+                await self._apply_budget_hitl(
+                    h, request_id, expansion, approved_by="critic"
+                )
+            else:
+                await self._maybe_hitl_expand(h, request_id, expansion)
             return
         now = self.clock.now()
         await self._append(
@@ -130,7 +135,9 @@ class HitlForkMixin(CostlyHitlMixin):
         )
         if decision in ("accept", "approve"):
             if h.kind == "budget":
-                await self._apply_budget_hitl(h, request_id, expansion)
+                await self._apply_budget_hitl(
+                    h, request_id, expansion, approved_by="human"
+                )
                 await self._mark_hitl_decision_node(
                     h, approved_by="human", delegated_by=None
                 )
@@ -359,9 +366,17 @@ class HitlForkMixin(CostlyHitlMixin):
         )])
 
     async def _apply_budget_hitl(
-        self, h: HitlRequest, request_id: str, expansion: dict[str, Any] | None
+        self,
+        h: HitlRequest,
+        request_id: str,
+        expansion: dict[str, Any] | None,
+        *,
+        approved_by: str = "human",
     ) -> None:
-        """Apply explicit HITL budget shares via journaled BudgetSharesAdjusted."""
+        """Apply explicit HITL budget shares via journaled BudgetSharesAdjusted.
+
+        Critic rejection emits ``BudgetSharesRefused`` + report line (not silent).
+        """
         if not expansion:
             return
         bmap, dmap = expansion.get("budget_shares") or {}, expansion.get("deadline_shares") or {}
@@ -374,8 +389,26 @@ class HitlForkMixin(CostlyHitlMixin):
             deadline_shares=dict(dmap) if dmap else None, request_id=request_id,
         )
         if err is not None or payload is None:
+            await self._append(
+                [
+                    EventEnvelope(
+                        study_id=h.study_id,
+                        type="BudgetSharesRefused",
+                        entity_key=request_id,
+                        idem_key=make_idem("BudgetSharesRefused", request_id),
+                        payload={
+                            "request_id": request_id,
+                            "reason": "critic_rejected",
+                            "detail": str(err or "invalid"),
+                            "approved_by": approved_by,
+                        },
+                        ts=self.clock.now(),
+                        schema_version=1,
+                    )
+                ]
+            )
             return
-        payload["approved_by"] = "human"
+        payload["approved_by"] = approved_by
         await self._append([EventEnvelope(
             study_id=h.study_id, type="BudgetSharesAdjusted", entity_key=request_id,
             idem_key=make_idem("BudgetSharesAdjusted", request_id),

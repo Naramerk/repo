@@ -159,12 +159,21 @@ def _ensure_sandbox_limit_fields(spec: dict[str, Any]) -> dict[str, Any]:
     return spec
 
 
-def _task_created_v7_to_v8_sandbox_and_shares(payload: dict[str, Any]) -> dict[str, Any]:
-    """PR17 sandbox limits + PR12 budget/deadline shares on TaskCreated v8."""
+def _task_created_v7_to_v8_sandbox(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR17 sandbox limits on TaskCreated v8 (shares are v9)."""
     out = dict(payload)
     spec = out.get("spec")
     if isinstance(spec, dict):
-        out["spec"] = _ensure_share_fields(_ensure_sandbox_limit_fields(spec))
+        out["spec"] = _ensure_sandbox_limit_fields(spec)
+    return out
+
+
+def _task_created_v8_to_v9_shares(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR12: budget_share / deadline_share defaults on TaskCreated v9."""
+    out = dict(payload)
+    spec = out.get("spec")
+    if isinstance(spec, dict):
+        out["spec"] = _ensure_share_fields(spec)
     return out
 
 
@@ -182,17 +191,30 @@ def _plan_accepted_v4_to_v5_foreach_quorum(payload: dict[str, Any]) -> dict[str,
     return out
 
 
-def _plan_accepted_v5_to_v6_sandbox_and_shares(payload: dict[str, Any]) -> dict[str, Any]:
-    """PR17 sandbox limits + PR12 shares on PlanAccepted v6."""
+def _plan_accepted_v5_to_v6_sandbox(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR17 sandbox limits on PlanAccepted v6 (shares are v7)."""
     out = dict(payload)
     tasks = out.get("tasks")
     if isinstance(tasks, list):
         rewritten: list[Any] = []
         for t in tasks:
             if isinstance(t, dict):
-                rewritten.append(
-                    _ensure_share_fields(_ensure_sandbox_limit_fields(dict(t)))
-                )
+                rewritten.append(_ensure_sandbox_limit_fields(dict(t)))
+            else:
+                rewritten.append(t)
+        out["tasks"] = rewritten
+    return out
+
+
+def _plan_accepted_v6_to_v7_shares(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR12: budget_share / deadline_share defaults on PlanAccepted v7."""
+    out = dict(payload)
+    tasks = out.get("tasks")
+    if isinstance(tasks, list):
+        rewritten: list[Any] = []
+        for t in tasks:
+            if isinstance(t, dict):
+                rewritten.append(_ensure_share_fields(dict(t)))
             else:
                 rewritten.append(t)
         out["tasks"] = rewritten
@@ -204,6 +226,13 @@ def _attempt_started_v4_to_v5_shares(payload: dict[str, Any]) -> dict[str, Any]:
     out = dict(payload)
     out.setdefault("allocated_budget_rub", None)
     out.setdefault("share_renorm", False)
+    return out
+
+
+def _attempt_started_v5_to_v6_budget_limit(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR12: remaining task-cap limit for the runner on AttemptStarted."""
+    out = dict(payload)
+    out.setdefault("budget_limit_rub", None)
     return out
 
 
@@ -426,12 +455,14 @@ register_upcaster("TaskCreated", 3, _task_created_v3_to_v4_input_mode)
 register_upcaster("TaskCreated", 4, _task_created_v4_to_v5_input_kind)
 register_upcaster("TaskCreated", 5, _task_created_v5_to_v6_check_role)
 register_upcaster("TaskCreated", 6, _task_created_v6_to_v7_foreach_quorum)
-register_upcaster("TaskCreated", 7, _task_created_v7_to_v8_sandbox_and_shares)
+register_upcaster("TaskCreated", 7, _task_created_v7_to_v8_sandbox)
+register_upcaster("TaskCreated", 8, _task_created_v8_to_v9_shares)
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)
 register_upcaster("PlanAccepted", 2, _plan_accepted_v2_to_v3_check_role)
 register_upcaster("PlanAccepted", 3, _plan_accepted_v3_to_v4_expand_after)
 register_upcaster("PlanAccepted", 4, _plan_accepted_v4_to_v5_foreach_quorum)
-register_upcaster("PlanAccepted", 5, _plan_accepted_v5_to_v6_sandbox_and_shares)
+register_upcaster("PlanAccepted", 5, _plan_accepted_v5_to_v6_sandbox)
+register_upcaster("PlanAccepted", 6, _plan_accepted_v6_to_v7_shares)
 register_upcaster("StudyCreated", 1, _study_created_v1_to_v2)
 register_upcaster("StudyCreated", 2, _study_created_v2_to_v3)
 register_upcaster("StudyCreated", 3, _study_created_v3_to_v4)
@@ -446,6 +477,7 @@ register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)
 register_upcaster("AttemptStarted", 2, _attempt_started_v2_to_v3_inputs)
 register_upcaster("AttemptStarted", 3, _attempt_started_v3_to_v4_limitations)
 register_upcaster("AttemptStarted", 4, _attempt_started_v4_to_v5_shares)
+register_upcaster("AttemptStarted", 5, _attempt_started_v5_to_v6_budget_limit)
 
 
 def _result_recorded_v2_to_v3_output_kinds(payload: dict[str, Any]) -> dict[str, Any]:

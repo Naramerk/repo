@@ -127,6 +127,8 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                     "agent_output_digest": d.get("agent_output_digest"),
                     "charged": d.get("charged", True),
                     "n": d.get("n"),
+                    "allocated_budget_rub": d.get("allocated_budget_rub"),
+                    "budget_limit_rub": d.get("budget_limit_rub"),
                 },
             )()
 

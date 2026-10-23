@@ -172,7 +172,7 @@ class AttemptsMixin:
         task_key_or_id: str,
         *,
         provenance: Provenance | None = None,
-    ) -> str:
+    ) -> str | None:
         task = self._resolve_task(task_key_or_id)
         # Foreach templates are materialization placeholders — never dispatched.
         if task.spec.foreach is not None:
@@ -303,6 +303,9 @@ class AttemptsMixin:
 
         lim_payload = [lim.model_dump(mode="json") if hasattr(lim, "model_dump") else dict(lim) for lim in limitations]
         share_fields = await attempt_share_fields_or_refuse(self, task)
+        if share_fields is None:
+            # Zero share / empty pool: task already SKIPPED(budget); no AttemptStarted.
+            return None
         payload = {
             "attempt_id": aid,
             "n": n,
@@ -326,7 +329,7 @@ class AttemptsMixin:
                 idem_key=make_idem("AttemptStarted", aid),
                 payload=payload,
                 ts=now,
-                schema_version=5,
+                schema_version=6,
             )
         ]
         # Persist full verdict snapshots used at bind (not digest-only).

@@ -5,12 +5,12 @@
 ### M1 PR12
 - `TaskSpec.budget_share` / `deadline_share` (None = equal remainder of undistributed pool).
 - Validators / plan critic: Σ `budget_share` ≤ (1−`replan_reserve`); per-task range + `Study.max_task_budget_share`; critical-path Σ `deadline_share` ≤ (1−reserve). Same critic on `accept_plan`, expansions, foreach, and HITL budget apply.
-- P2 renorm (journaled on `AttemptStarted` v5): when shares present, `deadline = min(task.deadline, renormed, ed)`; without shares, `min(task.deadline, ed)` only. Budget: no `max_cost_rub` → `allocated_budget_rub=None` (no task cap); pool/share 0 → refuse at start `SKIPPED(budget)` (no attempt); else exceed only when `spent > cap`. Cap fixed at first allocation across retries; spend accumulates.
+- P2 renorm (journaled on `AttemptStarted` v6): when shares present, `deadline = min(task.deadline, renormed, ed)`; without shares, `min(task.deadline, ed)` only. Budget: no `max_cost_rub` → `allocated_budget_rub=None` (no task cap); pool/share 0 → refuse at start `SKIPPED(budget)` (no attempt, no exception); else exceed only when `spent > cap`. Cap fixed at first allocation across retries; spend accumulates. Remaining cap passed as `budget_limit_rub` (runner may abort budget-exceeded when enforceable; otherwise overrun is recorded and the cap only forbids retries).
 - Concurrent starts: pool subtracts allocated-but-unspent of open tasks so reserve stays untouchable.
-- Executor wires `AgentTaskOutput.cost_rub` → `BudgetDebited(task_id=)` via `on_budget_debit`.
-- Foreach children **split** the template’s share (`template/N`; `None` template ⇒ `1/N` each); Σ rechecked after expansion. Agents cannot raise own `budget_share` (`agent_share_raise`).
-- HITL `budget`: explicit shares via journaled `BudgetSharesAdjusted` (critic-validated); `delegated_by`/`approved_by` on the HITL decision node only (not plan). Report: task «не выполнено: бюджет задачи исчерпан»; study «не выполнено: бюджет исчерпан».
-- Upcasters: TaskCreated v8 / PlanAccepted v6 also carry share defaults (stacked with PR17 sandbox fields); AttemptStarted v5; StudyCreated v9 (`max_task_budget_share`).
+- Executor debits `AgentTaskOutput.cost_rub` → `BudgetDebited(task_id=)` on **every** result path (scientific / timeout / same_digest / core_bug / catalog_error / infra) in the **same** append batch as `ResultRecorded`/`TaskDone`. Infra still does not charge an *attempt*; money spent is still debited.
+- Foreach children **split** the template’s resolved share (`template_share / N`); when the template share is unset, the resolved parent default (equal remainder, capped) is split the same way. Agents cannot raise own `budget_share` (`agent_share_raise`).
+- HITL `budget`: explicit shares via journaled `BudgetSharesAdjusted` (critic-validated; «реши сам»/delegate also applies shares); critic reject → `BudgetSharesRefused` + report line. `delegated_by`/`approved_by` on the HITL decision node only (not plan). Report: task «не выполнено: бюджет задачи исчерпан» / overrun line; study «не выполнено: бюджет исчерпан».
+- Upcasters: TaskCreated **v9** / PlanAccepted **v7** (share defaults; PR17 sandbox stays on v8/v6); AttemptStarted v6 (`budget_limit_rub`); StudyCreated v9 (`max_task_budget_share`).
 
 ### M1 PR17
 - Executable CodeCheck kinds + sandbox limits (B7, B8, K5): `exec_runs`, `tests_pass`, `metric_on_holdout`, `reproducible_rerun`.

@@ -16,6 +16,11 @@ ShareField = Literal["budget_share", "deadline_share"]
 # Study-level vs per-task Russian report lines (finalize contributing_reasons).
 BUDGET_EXHAUSTED_LINE = "не выполнено: бюджет исчерпан"
 TASK_BUDGET_EXHAUSTED_LINE = "не выполнено: бюджет задачи исчерпан"
+# Single-attempt spend past remaining share when runner cannot enforce mid-flight.
+TASK_BUDGET_OVERRUN_LINE = (
+    "не выполнено: перерасход доли бюджета задачи (лимит только запрещает повторы)"
+)
+BUDGET_SHARES_REFUSED_LINE = "не выполнено: отказ критика (доли бюджета)"
 
 # Default per-task cap when Study.max_task_budget_share is unset.
 DEFAULT_MAX_TASK_BUDGET_SHARE = 1.0
@@ -322,6 +327,7 @@ _ALLOC_EXPORTS = frozenset(
         "allocate_budget",
         "agent_raises_budget_share",
         "attempt_share_fields_or_refuse",
+        "budget_debit_event",
         "build_budget_shares_payload",
         "compute_p2_allocation",
         "enforce_task_budget_share",

@@ -58,6 +58,9 @@ _TASKDONE_DETAIL_LINES = {
     "share_exhausted": "не выполнено: бюджет задачи исчерпан",
     "task_share_exhausted": "не выполнено: бюджет задачи исчерпан",
     "zero_share_or_pool": "не выполнено: бюджет задачи исчерпан",
+    "budget_overrun": (
+        "не выполнено: перерасход доли бюджета задачи (лимит только запрещает повторы)"
+    ),
 }
 
 def is_finalized(runtime: StudyRuntime) -> bool:
@@ -181,6 +184,16 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
 
             if BUDGET_EXHAUSTED_LINE not in seen:
                 seen.append(BUDGET_EXHAUSTED_LINE)
+        elif ev.type == "BudgetSharesRefused":
+            from coscientist.core.shares import BUDGET_SHARES_REFUSED_LINE
+
+            if BUDGET_SHARES_REFUSED_LINE not in seen:
+                seen.append(BUDGET_SHARES_REFUSED_LINE)
+        elif ev.type == "ResultRecorded" and ev.payload.get("budget_overrun"):
+            from coscientist.core.shares import TASK_BUDGET_OVERRUN_LINE
+
+            if TASK_BUDGET_OVERRUN_LINE not in seen:
+                seen.append(TASK_BUDGET_OVERRUN_LINE)
         elif ev.type == "ExpansionRefused":
             line = expansion_not_done_line(
                 str(ev.payload.get("reason") or ""),

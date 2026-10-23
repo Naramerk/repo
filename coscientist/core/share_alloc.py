@@ -164,14 +164,25 @@ def p2_share_payload_fields(runtime: Any, task: Task) -> dict[str, Any]:
     """Fields merged into AttemptStarted for journaled share allocation.
 
     Reuses a fixed first-allocation cap across retries (M3).
+    ``budget_limit_rub`` is the *remaining* task cap for this attempt (runner
+    limit). When the runner cannot enforce it mid-flight, an overrun is
+    recorded on the result and the cap only forbids retries.
     """
     prior = (getattr(runtime, "_task_budget_alloc", None) or {}).get(task.task_id)
     deadline, budget, renormed = compute_p2_allocation(runtime, task)
     if prior is not None:
         budget = Decimal(str(prior))
+    spent = Decimal(
+        str((getattr(runtime, "_task_spent_rub", None) or {}).get(task.task_id, 0))
+    )
+    if budget is None:
+        limit: Decimal | None = None
+    else:
+        limit = max(Decimal("0"), Decimal(str(budget)) - spent)
     return {
         "deadline": deadline.isoformat(),
         "allocated_budget_rub": None if budget is None else str(budget),
+        "budget_limit_rub": None if limit is None else str(limit),
         "share_renorm": renormed,
     }
 
@@ -243,8 +254,14 @@ async def enforce_task_budget_share(runtime: Any, task_id: str) -> None:
     )
 
 
-async def attempt_share_fields_or_refuse(runtime: Any, task: Task) -> dict[str, Any]:
-    """P2 share payload, or cancel task and raise when cap is 0 (no attempt run)."""
+async def attempt_share_fields_or_refuse(
+    runtime: Any, task: Task
+) -> dict[str, Any] | None:
+    """P2 share payload, or cancel task and return None when cap is 0.
+
+    Honest refusal (no exception): caller must not start an attempt so the
+    task/study can still close with a report (StudyFinalized invariant).
+    """
     from coscientist.core.reasons import TaskReason
 
     fields = p2_share_payload_fields(runtime, task)
@@ -253,12 +270,54 @@ async def attempt_share_fields_or_refuse(runtime: Any, task: Task) -> dict[str, 
         await runtime.cancel_task(
             task.task_id, reason=TaskReason.BUDGET, detail="zero_share_or_pool"
         )
-        raise RuntimeError("task budget share exhausted")
+        return None
     return fields
 
 
+def budget_debit_event(
+    *,
+    study_id: str,
+    spent_rub: Decimal | float | int | str,
+    request_id: str,
+    task_id: str | None,
+    ts: datetime,
+    extra: dict[str, Any] | None = None,
+) -> Any | None:
+    """Build ``BudgetDebited`` for the same append batch as the attempt result."""
+    from coscientist.core.events import EventEnvelope, make_idem
+
+    spent = Decimal(str(spent_rub))
+    if spent <= 0:
+        return None
+    payload: dict[str, Any] = {
+        "spent_rub": str(spent),
+        "request_id": request_id,
+        **(extra or {}),
+    }
+    if task_id:
+        payload["task_id"] = task_id
+    return EventEnvelope(
+        study_id=study_id,
+        type="BudgetDebited",
+        entity_key=request_id,
+        idem_key=make_idem(
+            "BudgetDebited",
+            request_id,
+            str(spent),
+            str(payload.get("actual_rub", spent)),
+        ),
+        payload=payload,
+        ts=ts,
+    )
+
+
 def make_budget_debit_cb(runtime: Any) -> Any:
-    """Executor.on_budget_debit → record_budget_debit + study exhaust check."""
+    """Post-append hook after atomic ``BudgetDebited`` (enforce + study exhaust).
+
+    The debit event itself is built by the executor and appended in the same
+    batch as ``ResultRecorded`` / ``TaskDone``. This callback only runs side
+    effects after the fold.
+    """
 
     async def _cb(
         *,
@@ -267,9 +326,11 @@ def make_budget_debit_cb(runtime: Any) -> Any:
         task_id: str | None = None,
         extra: dict[str, Any] | None = None,
     ) -> None:
-        await runtime.record_budget_debit(
-            spent_rub=spent_rub, request_id=request_id, task_id=task_id, extra=extra
-        )
+        _ = spent_rub, request_id, extra
+        if task_id:
+            from coscientist.core.shares import enforce_task_budget_share
+
+            await enforce_task_budget_share(runtime, task_id)
         await runtime._emit_study_budget_if_exhausted()
 
     return _cb

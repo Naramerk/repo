@@ -21,6 +21,7 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
+from coscientist.core.errors import CoreBugError, SandboxInfraError
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.expand_critic import critic_gate
 from coscientist.core.graph import GraphNode
@@ -29,7 +30,9 @@ from coscientist.core.reasons import TaskReason
 from coscientist.core.recover import recover
 from coscientist.core.shares import (
     BUDGET_EXHAUSTED_LINE,
+    BUDGET_SHARES_REFUSED_LINE,
     TASK_BUDGET_EXHAUSTED_LINE,
+    TASK_BUDGET_OVERRUN_LINE,
     allocate_budget,
     apply_foreach_parent_shares,
     critical_path_deadline_share_sum,
@@ -417,7 +420,11 @@ async def test_budget_hitl_delegation(tmp_path, clock):
         questions=[QuestionSpec(id="Q1", text="q")],
     )
     rid = await rt.open_hitl("E0", kind="budget")
-    await rt.answer_hitl(rid, decision="delegate")
+    await rt.answer_hitl(
+        rid,
+        decision="delegate",
+        expansion={"budget_shares": {"E0": 0.35, "E1": 0.55}},
+    )
     events = await rt.store.read_all()
     decided = [
         e
@@ -434,6 +441,17 @@ async def test_budget_hitl_delegation(tmp_path, clock):
     assert hitl_node.attrs.get("approved_by") == "critic"
     study_node = rt.graph.get_node(f"{rt.study.study_id}:study")
     assert study_node is None or study_node.attrs.get("delegated_by") is None
+    # Delegate on budget must apply shares (not plan expand).
+    adj_del = [
+        e
+        for e in events
+        if e.type == "BudgetSharesAdjusted" and e.payload.get("request_id") == rid
+    ]
+    assert adj_del and adj_del[0].payload["approved_by"] == "critic"
+    assert adj_del[0].payload["budget_shares"]["E0"] == pytest.approx(0.35)
+    assert rt.tasks[task_id(rt.study.study_id, "E0")].spec.budget_share == pytest.approx(
+        0.35
+    )
 
     rid2 = await rt.open_hitl("E0", kind="budget")
     await rt.answer_hitl(
@@ -444,6 +462,21 @@ async def test_budget_hitl_delegation(tmp_path, clock):
     adj = [e for e in await rt.store.read_all() if e.type == "BudgetSharesAdjusted"]
     assert adj and adj[-1].payload["budget_shares"]["E0"] == pytest.approx(0.3)
     assert rt.tasks[task_id(rt.study.study_id, "E0")].spec.budget_share == pytest.approx(0.3)
+
+    rid3 = await rt.open_hitl("E0", kind="budget")
+    await rt.answer_hitl(
+        rid3,
+        decision="accept",
+        expansion={"budget_shares": {"E0": 0.9, "E1": 0.9}},
+    )
+    refused = [
+        e for e in await rt.store.read_all() if e.type == "BudgetSharesRefused"
+    ]
+    assert refused and refused[-1].payload.get("reason") == "critic_rejected"
+    await rt.cancel_study()
+    await rt.tick()
+    fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
+    assert BUDGET_SHARES_REFUSED_LINE in (fin.payload.get("contributing_reasons") or [])
     await close_runtime(rt)
 
 
@@ -548,8 +581,8 @@ async def test_zero_pool_refuses_start(tmp_path, clock):
         [_exp("E0", budget_share=0.0, criteria=False)],
         questions=[QuestionSpec(id="Q1", text="q")],
     )
-    with pytest.raises(RuntimeError, match="budget share"):
-        await rt.start_attempt("E0")
+    aid = await rt.start_attempt("E0")
+    assert aid is None  # honest refusal — no exception, no AttemptStarted
     t = rt.tasks[task_id(rt.study.study_id, "E0")]
     assert t.state == TaskState.DONE
     assert t.reason == TaskReason.BUDGET
@@ -559,6 +592,11 @@ async def test_zero_pool_refuses_start(tmp_path, clock):
     assert not any(
         e.type == "AttemptStarted" and e.payload.get("task_id") == tid for e in events
     )
+    # Study still closes with a report (StudyFinalized invariant).
+    await rt.cancel_study()
+    await rt.tick()
+    fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
+    assert TASK_BUDGET_EXHAUSTED_LINE in (fin.payload.get("contributing_reasons") or [])
     await close_runtime(rt)
 
 
@@ -671,9 +709,36 @@ def test_upcast_task_created_shares():
             "deadline": "2020-01-01T00:00:00+00:00",
         },
     )
-    assert v >= 8
+    assert v >= 9
     assert p["spec"]["budget_share"] is None
     assert p["spec"]["deadline_share"] is None
+    # v8 is sandbox-only; share defaults arrive at v9.
+    v8, p8 = upcast(
+        "TaskCreated",
+        8,
+        {
+            "task_id": "t",
+            "kind": "experiment",
+            "spec": {
+                "task_key": "E0",
+                "title": "t",
+                "goal": "g",
+                "route": "experiment",
+                "sandbox_timeout_s": None,
+                "sandbox_memory_mb": None,
+                "sandbox_check_limits": None,
+                "sandbox_limits_note": None,
+                "foreach": None,
+                "foreach_item": None,
+                "addresses": [],
+                "inputs": [],
+            },
+            "state": "PENDING",
+            "deadline": "2020-01-01T00:00:00+00:00",
+        },
+    )
+    assert v8 >= 9
+    assert p8["spec"]["budget_share"] is None
 
 
 def test_upcast_plan_accepted_shares():
@@ -701,5 +766,305 @@ def test_upcast_plan_accepted_shares():
             "expand_after": [],
         },
     )
-    assert v >= 6
+    assert v >= 7
     assert p["tasks"][0]["budget_share"] is None
+
+
+async def _plan_one(rt, *, share: float = 0.5):
+    await rt.accept_plan(
+        [_exp("E0", budget_share=share, criteria=False)],
+        questions=[QuestionSpec(id="Q1", text="q")],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    ["scientific", "infra", "core_bug", "catalog_error", "timeout", "same_digest"],
+)
+async def test_debit_cost_rub_on_every_result_path(tmp_path, clock, monkeypatch, path):
+    """B1: cost_rub debits on scientific/timeout/same_digest/core_bug/catalog/infra."""
+    from coscientist.core.digest import canonical_json, sha256_hex
+    from coscientist.core.domain import CheckResult, ReqStatus
+    from coscientist.core.errors import CatalogError
+
+    rt = await _boot(
+        tmp_path,
+        clock,
+        f"share-debit-{path}",
+        replan_reserve=0.0,
+        budget=Budget(max_cost_rub=Decimal("100")),
+    )
+    ex, arts = attach_executor(rt, tmp_path)
+    await _plan_one(rt)
+    aid = await rt.start_attempt("E0")
+    assert aid is not None
+    tid = task_id(rt.study.study_id, "E0")
+    cost = Decimal("3.5")
+    out = AgentTaskOutput(summary="x", outputs={}, cost_rub=cost)
+
+    if path == "scientific":
+        content = b'{"count": 1}'
+        art = arts.put(
+            content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
+        )
+        out = AgentTaskOutput(
+            summary="ok",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            values={"count": 1},
+            cost_rub=cost,
+        )
+    elif path == "infra":
+        monkeypatch.setattr(
+            "coscientist.core.executor.evaluate_task_checks",
+            lambda *a, **k: (_ for _ in ()).throw(
+                SandboxInfraError("sandbox_unavailable:host")
+            ),
+        )
+    elif path == "core_bug":
+        monkeypatch.setattr(
+            "coscientist.core.executor.evaluate_task_checks",
+            lambda *a, **k: (_ for _ in ()).throw(CoreBugError("boom")),
+        )
+    elif path == "catalog_error":
+        monkeypatch.setattr(
+            "coscientist.core.executor.evaluate_task_checks",
+            lambda *a, **k: [],
+        )
+        monkeypatch.setattr(
+            "coscientist.core.executor.compute_outcome",
+            lambda *a, **k: (_ for _ in ()).throw(CatalogError("bad catalog")),
+        )
+    elif path == "timeout":
+        timeout_check = CheckResult(
+            check_id="t1",
+            template_id="value_match",
+            status=ReqStatus.FAILED,
+            is_code=True,
+            required=True,
+            role="validity",
+            effect={"timeout_kind": "wall_timeout"},
+        )
+        monkeypatch.setattr(
+            "coscientist.core.executor.evaluate_task_checks",
+            lambda *a, **k: [timeout_check],
+        )
+    elif path == "same_digest":
+        timeout_check = CheckResult(
+            check_id="t1",
+            template_id="value_match",
+            status=ReqStatus.FAILED,
+            is_code=True,
+            required=True,
+            role="validity",
+            effect={"timeout_kind": "wall_timeout"},
+        )
+        monkeypatch.setattr(
+            "coscientist.core.executor.evaluate_task_checks",
+            lambda *a, **k: [timeout_check],
+        )
+        await ex.record(aid, AgentTaskOutput(summary="to", outputs={}, cost_rub=Decimal("1")))
+        # Force retry start after backoff window.
+        clock.advance(timedelta(seconds=2))
+        await rt.tick()
+        # Prefer explicit start if tick did not fire.
+        open_aids = [
+            a
+            for a in rt.tasks[tid].attempts
+            if not rt.attempts.get(a, {}).get("closed")
+        ]
+        if not open_aids:
+            aid = await rt.start_attempt("E0")
+            assert aid is not None
+        else:
+            aid = open_aids[0]
+        digest = sha256_hex(canonical_json({"mounted": {}}))
+        # Seed prior timeout row digest if missing.
+        prior = rt.results.get(rt.tasks[tid].attempts[0])
+        if isinstance(prior, dict) and not prior.get("agent_output_digest"):
+            prior["agent_output_digest"] = digest
+        out = AgentTaskOutput(summary="same", outputs={}, cost_rub=cost)
+
+    batches: list[list[str]] = []
+    orig = ex._append
+
+    async def capture(events, **kw):
+        batches.append([e.type for e in events])
+        return await orig(events, **kw)
+
+    monkeypatch.setattr(ex, "_append", capture)
+    await ex.record(aid, out)
+    assert rt._task_spent_rub.get(tid, Decimal("0")) >= cost
+    # Atomic: BudgetDebited in same batch as ResultRecorded.
+    assert any(
+        "ResultRecorded" in b and "BudgetDebited" in b for b in batches
+    ), batches
+    if path == "infra":
+        row = rt.results.get(aid)
+        assert row and row.get("charged") is False
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_budget_debit_atomic_crash_between_recover(tmp_path, clock):
+    """B2: Result without Debit stays unrecovered spend; atomic batch recovers both."""
+    sid = "share-atomic"
+    rt = await _boot(
+        tmp_path,
+        clock,
+        sid,
+        replan_reserve=0.0,
+        budget=Budget(max_cost_rub=Decimal("100")),
+    )
+    attach_executor(rt, tmp_path)
+    await _plan_one(rt)
+    aid = await rt.start_attempt("E0")
+    assert aid is not None
+    tid = task_id(rt.study.study_id, "E0")
+    # Simulate crash between ResultRecorded and a *separate* BudgetDebited:
+    # journal a ResultRecorded alone (old non-atomic path). Spend stays 0.
+    now = rt.clock.now()
+    await rt.writer.append_many(
+        [
+            EventEnvelope(
+                study_id=rt.study.study_id,
+                type="ResultRecorded",
+                entity_key=f"r:{aid}",
+                idem_key=make_idem("ResultRecorded", f"r:{aid}", "orphan"),
+                payload={
+                    "result_id": f"r:{aid}",
+                    "attempt_id": aid,
+                    "task_id": tid,
+                    "outcome": "FAILED",
+                    "computed_outcome": "FAILED",
+                    "reason": "failed",
+                    "provenance": "real",
+                    "check_results": [],
+                    "unassessed": [],
+                    "artifacts": [],
+                    "agent_claim": None,
+                    "inputs": [],
+                    "result_class": "scientific",
+                    "charged": True,
+                    "payload_digest": "x",
+                },
+                ts=now,
+                schema_version=3,
+            )
+        ]
+    )
+    await close_runtime(rt)
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    await recover(rt2)
+    assert Decimal(str(getattr(rt2, "_task_spent_rub", {}).get(tid, 0))) == 0
+    await close_runtime(rt2)
+
+    # Fresh study: atomic path journals both; reopen sees the debit.
+    sid3 = "share-atomic-ok"
+    root3 = tmp_path / "ok"
+    rt3 = await _boot(
+        root3,
+        clock,
+        sid3,
+        replan_reserve=0.0,
+        budget=Budget(max_cost_rub=Decimal("100")),
+    )
+    ex, arts = attach_executor(rt3, root3)
+    await _plan_one(rt3)
+    aid3 = await rt3.start_attempt("E0")
+    assert aid3 is not None
+    tid3 = task_id(rt3.study.study_id, "E0")
+    content = b'{"count": 1}'
+    art = arts.put(
+        content, make_tool_ref(f"{aid3}:out"), name="main", media_type="application/json"
+    )
+    await ex.record(
+        aid3,
+        AgentTaskOutput(
+            summary="ok",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            values={"count": 1},
+            cost_rub=Decimal("7"),
+        ),
+    )
+    await close_runtime(rt3)
+    rt4 = await open_runtime(root3, sid3, clock=clock, owner="t3")
+    await recover(rt4)
+    assert rt4._task_spent_rub.get(tid3) == Decimal("7")
+    await close_runtime(rt4)
+
+
+@pytest.mark.asyncio
+async def test_single_attempt_budget_overrun(tmp_path, clock):
+    """B3: spend past remaining limit → overrun flag, no retries, report line."""
+    rt = await _boot(
+        tmp_path,
+        clock,
+        "share-overrun",
+        replan_reserve=0.0,
+        budget=Budget(max_cost_rub=Decimal("100")),
+    )
+    ex, arts = attach_executor(rt, tmp_path)
+    # Tiny share → small remaining limit.
+    await rt.accept_plan(
+        [_exp("E0", budget_share=0.05, criteria=False)],
+        questions=[QuestionSpec(id="Q1", text="q")],
+    )
+    aid = await rt.start_attempt("E0")
+    tid = task_id(rt.study.study_id, "E0")
+    limit = Decimal(str(rt.attempts[aid]["budget_limit_rub"]))
+    assert limit > 0
+    assert Decimal(str(rt.attempts[aid]["allocated_budget_rub"])) == limit
+    content = b'{"count": 1}'
+    art = arts.put(
+        content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
+    )
+    await ex.record(
+        aid,
+        AgentTaskOutput(
+            summary="ok",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            values={"count": 1},
+            cost_rub=limit + Decimal("10"),
+        ),
+    )
+    row = rt.results[aid]
+    assert row.get("budget_overrun") is True
+    # Cap forbids retries: task closed, no retry_at.
+    assert tid not in rt._retry_at
+    assert rt.tasks[tid].state == TaskState.DONE
+    assert rt._task_spent_rub[tid] == limit + Decimal("10")
+    await rt.cancel_study()
+    await rt.tick()
+    fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
+    assert TASK_BUDGET_OVERRUN_LINE in (fin.payload.get("contributing_reasons") or [])
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_zero_share_retry_fire_does_not_crash(tmp_path, clock):
+    """M1: _fire_due_retries must not raise when share pool is zero."""
+    rt = await _boot(
+        tmp_path,
+        clock,
+        "share-retry-zero",
+        replan_reserve=0.0,
+        budget=Budget(max_cost_rub=Decimal("100")),
+    )
+    await rt.accept_plan(
+        [
+            _exp("E0", budget_share=0.0, criteria=False),
+            _exp("E1", budget_share=1.0, criteria=False),
+        ],
+        questions=[QuestionSpec(id="Q1", text="q")],
+    )
+    # Inject a due retry for the zero-share task (would crash pre-fix).
+    tid = task_id(rt.study.study_id, "E0")
+    rt._retry_at[tid] = clock.now() - timedelta(seconds=1)
+    await rt.tick()  # must not raise
+    assert rt.tasks[tid].state == TaskState.DONE
+    assert rt.tasks[tid].reason == TaskReason.BUDGET
+    await rt.cancel_study()
+    await rt.tick()
+    assert any(e.type == "StudyFinalized" for e in await rt.store.read_all())
+    await close_runtime(rt)

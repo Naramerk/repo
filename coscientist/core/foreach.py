@@ -351,7 +351,7 @@ async def materialize_foreach(
                 idem_key=make_idem("TaskCreated", tid, pid),
                 payload=task.model_dump(mode="json"),
                 ts=now,
-                schema_version=8,
+                schema_version=9,
             )
         )
 

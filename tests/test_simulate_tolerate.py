@@ -68,10 +68,11 @@ def test_upcast_input_mode_keeps_old_default():
             },
         },
     )
-    assert v == 8
+    assert v == 9
     assert p["spec"]["inputs"][0]["mode"] == "use_partial"
     assert p["spec"]["inputs"][0]["kind"] == "artifact"
     assert p["spec"]["sandbox_memory_mb"] is None
+    assert p["spec"]["budget_share"] is None
     assert p["spec"]["budget_share"] is None
 
 
