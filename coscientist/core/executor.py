@@ -283,8 +283,15 @@ def _effect_from_checks(
             if data.get("ci_low") is not None and data.get("ci_high") is not None:
                 effect["ci_low"] = float(data["ci_low"])
                 effect["ci_high"] = float(data["ci_high"])
-            # Preserve isolation stamps so recompute can decide trusted without meta.
-            for key in ("net_isolation", "fs_isolation", "trusted", "countable", "note"):
+            # Preserve isolation / observation stamps (effect-only; not from meta).
+            for key in (
+                "net_isolation",
+                "fs_isolation",
+                "trusted",
+                "countable",
+                "note",
+                "observation_only",
+            ):
                 if key in data:
                     effect[key] = data[key]
             recomputed = recompute_effect_provenance(effect, attempt_id=attempt_id)

@@ -4,7 +4,8 @@ B1 pattern: collect agent declared outputs (sha256); run catalog scorer / task
 tests in a second fresh verifier jail (agent data/scorer/holdout/tests RO;
 results RW only); read reward/result files — never guest stdout.
 ``metric_on_holdout`` never executes agent code (predictions are data).
-``tests_pass`` imports agent modules → always ``trusted=False``.
+``tests_pass`` imports agent modules → ``trusted=False``, ``countable=False``
+(observation; tamper-proof tests = M2).
 Fail-closed without hard isolation. Holdout labels come from the catalog only.
 """
 
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 from coscientist.checks.kinds._util import (
@@ -44,7 +46,7 @@ from coscientist.core.domain import (
     CodeCheck,
     EvidenceRef,
 )
-from coscientist.core.errors import SandboxInfraError
+from coscientist.core.errors import CatalogError, SandboxInfraError
 
 EXECUTABLE_KINDS = frozenset(
     {"exec_runs", "tests_pass", "metric_on_holdout", "reproducible_rerun"}
@@ -55,9 +57,7 @@ REWARD_SCHEMA = "coscientist.reward.v1"
 JUNIT_NAME = "junit.xml"
 DIGEST_NAME = "out.digest"
 
-_TESTS_PASS_NOTE = (
-    "agent code runs in the test process; result is tamper-able"
-)
+_TESTS_PASS_NOTE = "tamper-able, not counted; tamper-proof tests = M2"
 
 # Agent-mounted filenames: reject import-hooks / stdlib shadows / pytest plugs.
 _BLOCKED_AGENT_NAMES = frozenset(
@@ -85,7 +85,7 @@ _SAFE_AGENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_+-]+)?$")
 
 
 def agent_filename_allowed(name: str) -> bool:
-    """True when ``name`` may be mounted as agent data/code under /inputs."""
+    """Defense-in-depth denylist (hooks / stdlib shadows). Prefer allowlists."""
     base = name.rsplit("/", 1)[-1]
     if not base or base.startswith("."):
         return False
@@ -94,6 +94,18 @@ def agent_filename_allowed(name: str) -> bool:
     if ".." in name or name.startswith("/"):
         return False
     return bool(_SAFE_AGENT_NAME.match(base))
+
+
+def _input_allowlist(check: CodeCheck) -> frozenset[str]:
+    """Per-check allowlist of agent input basenames. Empty → mount nothing."""
+    if check.input_allowlist is not None:
+        return frozenset(Path(n).name for n in check.input_allowlist if n)
+    if check.kind == "metric_on_holdout":
+        return frozenset({"predictions.json"})
+    if check.kind == "exec_runs" and check.output:
+        return frozenset({slot_filename(check.output), Path(check.output).name})
+    # tests_pass / reproducible_rerun: fail-closed unless catalog lists names.
+    return frozenset()
 
 
 def _argv_for(check: CodeCheck) -> list[str]:
@@ -111,6 +123,17 @@ def _limits(check: CodeCheck):
         max_output_bytes=check.max_output_bytes,
         allow_network=bool(check.allow_network),
     )
+
+
+def _ensure_python_isolated(argv: list[str]) -> list[str]:
+    """Force ``python3 -I`` so /inputs is never on sys.path via site/PYTHONPATH."""
+    if not argv:
+        return argv
+    if _path_name(argv[0]) in {"python", "python3"}:
+        if "-I" in argv:
+            return list(argv)
+        return [argv[0], "-I", *argv[1:]]
+    return list(argv)
 
 
 def parse_reward(raw: bytes) -> float:
@@ -134,11 +157,16 @@ def _collect_declared_outputs(
     artifacts: LocalArtifactStore,
     slots: list[str] | None = None,
     *,
-    allowlist: bool = True,
+    name_allowlist: frozenset[str] | None = None,
 ) -> tuple[dict[str, bytes], list[EvidenceRef]]:
-    """Collect agent declared outputs with digests (B1 step 1)."""
+    """Collect agent declared outputs with digests (B1 step 1).
+
+    ``name_allowlist`` is allowlist-only (``None``/empty → collect nothing).
+    Denylist still rejects import hooks even if mistakenly allowlisted.
+    """
     inputs: dict[str, bytes] = {}
     evidence: list[EvidenceRef] = []
+    allow = name_allowlist if name_allowlist is not None else frozenset()
     items = (
         ((s, out.outputs[s]) for s in slots if s in out.outputs)
         if slots is not None
@@ -146,7 +174,9 @@ def _collect_declared_outputs(
     )
     for slot, handle in items:
         fname = slot_filename(slot)
-        if allowlist and not agent_filename_allowed(fname):
+        if fname not in allow and slot not in allow:
+            continue
+        if not agent_filename_allowed(fname):
             continue
         meta = artifacts.get_meta(handle.artifact_id)
         if meta is None:
@@ -172,8 +202,10 @@ def evaluate_exec_runs(
     argv = _argv_for(check)
     if not argv:
         raise SandboxInfraError("sandbox_unavailable:missing_command")
+    allow = _input_allowlist(check)
+    slots = [check.output] if check.output else None
     inputs, _ev = _collect_declared_outputs(
-        out, artifacts, [check.output] if check.output else []
+        out, artifacts, slots, name_allowlist=allow
     )
     result = run_sandbox(argv, limits=_limits(check), inputs=inputs or None)
     raise_if_infra(
@@ -204,11 +236,8 @@ def evaluate_exec_runs(
         fs_isolation=result.fs_isolation,
     )
     note = result.note or soft_note(result.net_isolation, result.fs_isolation)
-    # Guest-caused statuses are scientific (not infra).
-    if result.status in (
-        SandboxStatus.OUTPUT_EXCEEDED,
-        SandboxStatus.TIMEOUT,
-    ):
+    # Guest-caused: output flood or RLIMIT_CPU (cpu_limit). Wall timeout is infra.
+    if result.status is SandboxStatus.OUTPUT_EXCEEDED or result.reason == "cpu_limit":
         return base_result(
             check_id=check_id,
             template_id=template_id,
@@ -259,11 +288,11 @@ def _catalog_tests_bytes(check: CodeCheck) -> dict[str, bytes] | None:
 
 
 def _tests_pass_launcher() -> bytes:
-    """Catalog launcher: -I isolated; inject host site-packages + /inputs.
+    """Catalog launcher: import pytest first, then inject /inputs for agent code.
 
-    ``python -I`` ignores PYTHONPATH (so /inputs is never auto-imported) and
-    remaps user-site under HOME. Embed the host site-packages paths that the
-    verifier already RO-binds, then inject /inputs for agent modules.
+    ``python -I`` ignores PYTHONPATH. Embed host site-packages (RO-bound), import
+    pytest/stdlib **before** placing ``/inputs`` on ``sys.path`` so agent
+    ``sitecustomize`` / shadows cannot hijack the harness.
     """
     import site
     from pathlib import Path as P
@@ -283,9 +312,9 @@ import sys
 for p in {sites!r}:
     if p and p not in sys.path:
         sys.path.append(p)
-# Catalog-controlled inject for agent modules under test (not via PYTHONPATH).
-sys.path.insert(0, "/inputs")
 import pytest
+# Agent modules only after pytest/stdlib are loaded (catalog-controlled inject).
+sys.path.insert(0, "/inputs")
 raise SystemExit(
     pytest.main(
         [
@@ -312,7 +341,7 @@ def evaluate_tests_pass(
     role: CheckRole,
     attempt_id: str | None,
 ) -> CheckResult:
-    """Catalog/task tests vs agent code; always trusted=False (tamper-able)."""
+    """Catalog/task tests vs agent code; observation only (not countable)."""
     argv = _argv_for(check)
     catalog_tests = _catalog_tests_bytes(check)
     use_catalog_pytest = (
@@ -331,14 +360,18 @@ def evaluate_tests_pass(
                 "producer": "core",
                 "trusted": False,
                 "core_evaluated": True,
-                "countable": bool(attempt_id),
+                "countable": False,
+                "observation_only": True,
                 "produced_by_call_id": f"{attempt_id or 'noattempt'}:core:{check_id}",
-                "note": "tests_pass requires catalog tests or scorer argv",
+                "note": _TESTS_PASS_NOTE,
             },
         )
 
+    allow = _input_allowlist(check)
     # Agent code under /inputs (allowlisted names only); catalog tests under /tests.
-    code_inputs, ev = _collect_declared_outputs(out, artifacts, allowlist=True)
+    code_inputs, ev = _collect_declared_outputs(
+        out, artifacts, name_allowlist=allow
+    )
     collect = [JUNIT_NAME]
     scorer_bytes = None
 
@@ -346,7 +379,7 @@ def evaluate_tests_pass(
         scorer_bytes = _tests_pass_launcher()
         guest_argv = ["python3", "-I", "/scorer"]
     else:
-        guest_argv = list(argv)
+        guest_argv = _ensure_python_isolated(list(argv))
         if guest_argv and _path_name(guest_argv[0]) in {"pytest", "py.test"}:
             scorer_bytes = _tests_pass_launcher()
             guest_argv = ["python3", "-I", "/scorer"]
@@ -358,6 +391,7 @@ def evaluate_tests_pass(
         tests=catalog_tests,
         scorer_bytes=scorer_bytes,
         collect=collect,
+        input_allowlist=allow,
     )
     raise_if_infra(
         result.status,
@@ -396,6 +430,7 @@ def evaluate_tests_pass(
                 net_isolation=result.net_isolation,
                 fs_isolation=result.fs_isolation,
                 note=note,
+                observation_only=True,
             ),
         )
     try:
@@ -425,6 +460,7 @@ def evaluate_tests_pass(
                 net_isolation=result.net_isolation,
                 fs_isolation=result.fs_isolation,
                 note=note,
+                observation_only=True,
             ),
         )
     min_tests = int(check.min_tests) if check.min_tests is not None else 1
@@ -459,6 +495,7 @@ def evaluate_tests_pass(
             net_isolation=result.net_isolation,
             fs_isolation=result.fs_isolation,
             note=note,
+            observation_only=True,
         ),
     )
 
@@ -496,12 +533,13 @@ def evaluate_metric_on_holdout(
         raise SandboxInfraError("sandbox_unavailable:holdout_missing")
     frozen = check.holdout_digest
     if not frozen:
-        raise SandboxInfraError("sandbox_unavailable:holdout_digest_missing")
+        raise CatalogError("metric_on_holdout: holdout_digest missing")
     holdout_bytes = canonical_json(check.holdout)
     holdout_digest = sha256_hex(holdout_bytes)
     if holdout_digest != frozen:
-        raise SandboxInfraError(
-            f"sandbox_unavailable:holdout_digest_mismatch:{holdout_digest}"
+        raise CatalogError(
+            f"metric_on_holdout: holdout_digest mismatch "
+            f"(catalog={frozen} computed={holdout_digest})"
         )
 
     if predictions is None:
@@ -567,14 +605,13 @@ def evaluate_metric_on_holdout(
         )
 
     # Catalog scorer only — python -I; predictions are JSON data under /inputs.
+    allow = _input_allowlist(check)
     scorer_bytes = None
     if argv == ["catalog:metric"] or argv[0] == "catalog:metric":
         scorer_bytes = _default_metric_scorer().encode()
         guest_argv = ["python3", "-I", "/scorer"]
     else:
-        guest_argv = list(argv)
-        if guest_argv[:1] == ["python3"] and "-I" not in guest_argv:
-            guest_argv = ["python3", "-I", *guest_argv[1:]]
+        guest_argv = _ensure_python_isolated(list(argv))
 
     result = run_verifier(
         guest_argv,
@@ -583,6 +620,7 @@ def evaluate_metric_on_holdout(
         scorer_bytes=scorer_bytes,
         limits=_limits(check),
         collect=[REWARD_NAME],
+        input_allowlist=allow,
     )
     raise_if_infra(
         result.status,
@@ -715,14 +753,18 @@ def evaluate_reproducible_rerun(
     attempt_id: str | None,
     prov_fields: dict[str, Any],
 ) -> CheckResult:
-    """Two verifier runs; compare digests / reward values — not stdout."""
-    argv = _argv_for(check)
+    """Two verifier jails; compare core digests of result files — not stdout.
+
+    Agent argv runs under ``python3 -I``; ``/inputs`` is never on ``sys.path``.
+    """
+    argv = _ensure_python_isolated(_argv_for(check))
     if not argv:
         raise SandboxInfraError("sandbox_unavailable:missing_command")
     tol = float(check.tolerance) if check.tolerance is not None else float(
         check.rerun_tol if check.rerun_tol is not None else 0.0
     )
-    inputs, ev = _collect_declared_outputs(out, artifacts)
+    allow = _input_allowlist(check)
+    inputs, ev = _collect_declared_outputs(out, artifacts, name_allowlist=allow)
     from typing import cast
 
     from coscientist.checks.sandbox import FsIsolation, NetIsolation
@@ -739,6 +781,7 @@ def evaluate_reproducible_rerun(
             inputs=inputs,
             limits=_limits(check),
             collect=[DIGEST_NAME, REWARD_NAME],
+            input_allowlist=allow,
         )
         raise_if_infra(
             result.status,

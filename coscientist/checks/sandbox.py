@@ -7,8 +7,8 @@ Agent jail (``run_sandbox``): bwrap --clearenv, system RO, only work RW,
 Verifier jail (``run_verifier``): fresh bwrap; agent *data*/scorer/holdout/tests
 RO; only results RW; read reward/result files — never trust stdout.
 ``metric_on_holdout`` runs only the catalog scorer (predictions are data; no
-agent code). ``tests_pass`` runs catalog tests that import agent modules — still
-core-evaluated/countable but always ``trusted=False`` (tamper-able).
+agent code). ``tests_pass`` imports agent modules → ``trusted=False``,
+``countable=False`` (observation; tamper-proof tests = M2).
 
 Fail-closed: without verified hard FS isolation (real bwrap probe), do **not**
 execute guest code — return ``sandbox_unavailable``. ``trusted`` requires both
@@ -845,15 +845,18 @@ def run_verifier(
     tests: Mapping[str, bytes] | None = None,
     collect: Sequence[str] = ("reward.txt",),
     extra_ro_files: Mapping[str, bytes] | None = None,
+    input_allowlist: frozenset[str] | None = None,
 ) -> SandboxResult:
     """Catalog verifier in a fresh jail. Agent outputs/tests RO; only results RW.
 
     Reads ``collect`` via O_NOFOLLOW — never stdout. No agent code as entrypoint.
-    Fail-closed without hard isolation.
+    Fail-closed without hard isolation. ``input_allowlist`` is allowlist-only
+    (``None``/empty → mount nothing from agent inputs).
     """
     lim = limits or SandboxLimits()
     net_i, fs_i = resolve_isolation(allow_network=False)
     note = soft_isolation_note(net_i, fs_i)
+    allow = frozenset(input_allowlist) if input_allowlist is not None else frozenset()
 
     if not scorer_argv:
         return _unavailable(
@@ -881,7 +884,7 @@ def run_verifier(
         tests_dir.mkdir()
         for name, data in inputs.items():
             base = Path(name).name
-            if not agent_input_name_allowed(base):
+            if not agent_input_name_allowed(base, allow):
                 log.warning("sandbox: rejecting agent input name %r", base)
                 continue
             p = inputs_dir / base
@@ -889,7 +892,7 @@ def run_verifier(
             p.chmod(0o444)
         for name, data in (extra_ro_files or {}).items():
             base = Path(name).name
-            if not agent_input_name_allowed(base):
+            if not agent_input_name_allowed(base, allow):
                 log.warning("sandbox: rejecting extra input name %r", base)
                 continue
             p = inputs_dir / base

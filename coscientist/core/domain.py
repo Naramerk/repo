@@ -148,7 +148,8 @@ class HitlPolicy(Frozen):
 ArtifactRole = Literal["paper", "data", "code", "figure", "table", "log", "report"]
 # Who stored the artifact bytes. effect.trusted is a reporting tag (M1 verdicts
 # gate on countable). Sandbox puts are trusted only when both net and fs
-# isolation are hard (soft/none ⇒ trusted=False; still core_evaluated/countable).
+# isolation are hard (soft/none ⇒ trusted=False). ``tests_pass`` is
+# observation-only (countable=False); other executable kinds stay countable.
 ArtifactProducer = Literal["agent", "core", "sandbox"]
 NetIsolation = Literal["hard", "soft", "none"]
 FsIsolation = Literal["hard", "soft", "none"]

@@ -4,11 +4,11 @@
 
 ### M1 PR17
 - Executable CodeCheck kinds + sandbox limits (B7, B8, K5): `exec_runs`, `tests_pass`, `metric_on_holdout`, `reproducible_rerun`.
-- **Separate verifier (B1):** collect agent declared outputs (sha256); catalog scorer / task tests in a second fresh bwrap jail (data/scorer/holdout/tests RO; only results RW); read structured `reward.txt` JSON / junit — never stdout. Holdout labels from catalog (`CodeCheck.holdout`); agent holdout slots ignored. `catalog:metric` scores predictions-as-data (`python -I`). `tests_pass` countable but always `trusted=false` (tamper-able).
-- **bwrap hard isolation (B2):** `--clearenv`, system `--ro-bind`, `--tmpfs /tmp`, `--unshare-net`/`--unshare-pid`/`--unshare-ipc`/`uts`/`cgroup-try`, `--disable-userns`, `--cap-drop ALL`, `--new-session`, `--die-with-parent`; journal/CAS never mounted. Hard only after a real probe.
+- **Separate verifier (B1):** collect agent declared outputs (sha256); catalog scorer / task tests in a second fresh bwrap jail (data/scorer/holdout/tests RO; only results RW); read structured `reward.txt` JSON / junit — never stdout. Holdout labels from catalog (`CodeCheck.holdout`); agent holdout slots ignored. `catalog:metric` scores predictions-as-data (`python -I`). `tests_pass` is **observation-only** (`countable=false`, `trusted=false`; tamper-proof = M2). Per-check `input_allowlist` (fail-closed).
+- **bwrap hard isolation (B2):** `--clearenv`, system `--ro-bind`, `--tmpfs /tmp`, `--unshare-net`/`--unshare-pid`/`--unshare-ipc`/`uts`/`cgroup-try`, `--disable-userns`, `--cap-drop ALL`, `--new-session`, `--die-with-parent`; journal/CAS never mounted. Hard only after a real probe. Cgroup: start bwrap inside leaf; `oom_detectable` only after guest host pid verified.
 - **Fail-closed:** without verified hard FS isolation → `sandbox_unavailable` (no guest exec). CI installs `bubblewrap` and lifts Ubuntu 24.04 AppArmor userns restrict.
-- **`trusted=true` only when both net and fs are hard** (never fake hard). Isolation for replay from journal effect, not artifact meta.
-- Infra: wrapper private channel / host timeout (TERM→KILL) / delegated cgroup OOM only; guest exit codes and output overflow are scientific. `CoreBugError` → `result_class=core_bug` (not infra; never counts).
+- **`trusted=true` only when both net and fs are hard** (never fake hard). Isolation + `core_evaluated` for replay from journal effect, not artifact meta.
+- Infra: wrapper private channel / **wall_timeout** (TERM→KILL) / delegated cgroup OOM only; scientific: **cpu_limit** (`RLIMIT_CPU`), guest exit codes, output overflow. `CoreBugError` → `result_class=core_bug` (not infra; never counts).
 - Docs: host requirements (bwrap, userns/AppArmor sysctl, cgroup delegation) in `DESIGN_HYP_DELTA` / `DESIGN_M1`.
 
 ### M1 PR10
@@ -42,7 +42,7 @@
 - `aggregate='evalue'` rejected at create (deferred until core computes p-values).
 - Report: `hypothesis_report_row` in finalize; failures set dedicated `hypotheses_unavailable` (not a fake hypothesis id). Bind snapshots win on replay; finalize recomputes report rows.
 - Keeps PR8: check roles, per-experiment `validity_failed` / `unknown_role`, `VerdictSnapshotsRecorded`.
-- **Known flake:** `test_twenty_parallel_attempts_fsync` p99 write latency (seen 56ms > 50ms on `6fe49e5` push CI); timing-sensitive, not a logic regression.
+- Load write test: serial/slow; p99 budget scales with median (CI-tolerant) without weakening correctness asserts.
 
 ### M1 PR8
 - Runtime `verdict()` wired into `dispositions()` / finalize (Study `confirmations_needed` / `refutations_needed` / `refutation_priority`); supported → answered; hypothesis verdicts in StudyFinalized.

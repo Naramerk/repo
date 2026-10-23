@@ -635,15 +635,18 @@ def recompute_effect_provenance(
 
     ``trusted`` = producer core, or sandbox with both isolations hard.
     ``countable`` requires core_evaluated and attempt binding of call_id.
+    ``observation_only`` (effect-stamped, e.g. tests_pass) ⇒ never countable.
+    ``core_evaluated`` always from the effect — never from artifact meta.
     """
     if not isinstance(effect, Mapping):
         return None
     out = dict(effect)
     producer = out.get("producer", "agent")
     call_id = str(out.get("produced_by_call_id") or "")
-    # Isolation: journal effect only (never artifact meta).
+    # Isolation + core_evaluated: journal effect only (never artifact meta).
     net_isolation = out.get("net_isolation")
     fs_isolation = out.get("fs_isolation")
+    observation_only = bool(out.get("observation_only"))
     if artifact_meta is not None:
         meta_prod = getattr(artifact_meta, "producer", None)
         if meta_prod in ("agent", "core", "sandbox"):
@@ -663,6 +666,8 @@ def recompute_effect_provenance(
         out["net_isolation"] = net_isolation
     if fs_isolation in ("hard", "soft", "none"):
         out["fs_isolation"] = fs_isolation
+    if observation_only:
+        out["observation_only"] = True
     if producer == "core":
         out["trusted"] = out.get("trusted") is not False
     elif producer == "sandbox":
@@ -674,7 +679,10 @@ def recompute_effect_provenance(
     # Never fall back to core_eval alone with a missing call_id (that was the
     # legacy path that let unbound evidence count). Without attempt context
     # (unit derive), honor an explicitly stamped countable ∧ core_eval.
-    if attempt_id:
+    # Observation-only sandbox checks (tests_pass) never count toward k_ref/k_sup.
+    if observation_only:
+        out["countable"] = False
+    elif attempt_id:
         out["countable"] = bool(
             core_eval
             and call_id

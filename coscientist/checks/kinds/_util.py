@@ -175,18 +175,28 @@ def sandbox_effect(
     note: str | None,
     extra: dict[str, Any] | None = None,
     countable: bool | None = None,
+    observation_only: bool = False,
 ) -> dict[str, Any]:
+    """Stamp sandbox provenance. ``observation_only`` → never countable (tests_pass)."""
     call = f"{attempt_id or 'noattempt'}:sandbox:{check_id}"
+    if observation_only:
+        countable_flag = False
+    elif countable is None:
+        countable_flag = bool(attempt_id)
+    else:
+        countable_flag = bool(countable)
     effect: dict[str, Any] = {
         "producer": "sandbox",
         "trusted": trusted,
         "net_isolation": net_isolation,
         "fs_isolation": fs_isolation,
         "core_evaluated": True,
-        "countable": bool(attempt_id) if countable is None else bool(countable),
+        "countable": countable_flag,
         "produced_by_call_id": call,
         "artifact_id": art_id,
     }
+    if observation_only:
+        effect["observation_only"] = True
     if note:
         effect["note"] = note
     if extra:
@@ -200,6 +210,7 @@ def sandbox_effect(
             "core_evaluated",
             "net_isolation",
             "fs_isolation",
+            "observation_only",
         }
         for k, v in extra.items():
             if k in blocked:

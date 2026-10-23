@@ -207,17 +207,28 @@ def test_sandbox_allow_network_runs_but_not_trusted(tmp_path):
     assert cr.effect.get("trusted") is False
 
 
-def test_sandbox_timeout_is_scientific_not_infra():
-    """Guest infinite loop / sleep → scientific timeout (not infra)."""
+def test_sandbox_wall_timeout_is_infra():
+    """Host wall-clock kill (sleep past short wall) → infra wall_timeout."""
     _require_hard()
     r = run_sandbox(
         ["python3", "-c", "import time; time.sleep(30)"],
         limits=SandboxLimits(timeout_s=0.3, memory_mb=64, max_output_bytes=10_000),
     )
     assert r.status is SandboxStatus.TIMEOUT
-    assert r.reason == "timeout"
+    assert r.reason == "wall_timeout"
+    assert r.status in INFRA_STATUSES
+
+
+def test_sandbox_cpu_limit_is_scientific():
+    """Busy loop hits RLIMIT_CPU before wall → scientific cpu_limit."""
+    _require_hard()
+    r = run_sandbox(
+        ["python3", "-c", "while True: pass"],
+        limits=SandboxLimits(timeout_s=3.0, memory_mb=64, max_output_bytes=10_000),
+    )
+    assert r.status is SandboxStatus.NONZERO
+    assert r.reason == "cpu_limit"
     assert r.status not in INFRA_STATUSES
-    assert "OOM not detectable" in (r.note or "")
 
 
 def test_sandbox_positive_exit_137_is_scientific_not_oom():
@@ -405,6 +416,7 @@ def test_tests_pass_runs_catalog_tests_not_agent(tmp_path):
         kind="tests_pass",
         argv=["catalog:pytest"],
         tests=catalog_tests,
+        input_allowlist=["solution.py"],
         min_tests=2,
         timeout_s=30,
         memory_mb=128,
@@ -422,7 +434,10 @@ def test_tests_pass_runs_catalog_tests_not_agent(tmp_path):
     assert cr.status is ReqStatus.MET, cr.detail
     assert cr.effect and cr.effect.get("producer") == "sandbox"
     assert cr.effect.get("trusted") is False
-    assert "tamper-able" in (cr.effect.get("note") or "")
+    assert cr.effect.get("countable") is False
+    assert cr.effect.get("observation_only") is True
+    assert "tamper-able, not counted" in (cr.effect.get("note") or "")
+    assert "M2" in (cr.effect.get("note") or "")
 
 
 def test_holdout_from_catalog_ignores_agent_slot_and_claimed_score(tmp_path):
@@ -566,13 +581,13 @@ def test_countable_requires_attempt_binding(tmp_path):
     assert cr.effect.get("produced_by_call_id", "").startswith("noattempt:")
 
 
-def test_exec_runs_timeout_is_scientific_failed(tmp_path):
+def test_exec_runs_cpu_limit_is_scientific_failed(tmp_path):
     _require_hard()
     arts = LocalArtifactStore(tmp_path)
     check = CodeCheck(
         kind="exec_runs",
-        argv=["python3", "-c", "import time; time.sleep(30)"],
-        timeout_s=0.3,
+        argv=["python3", "-c", "while True: pass"],
+        timeout_s=3.0,
         memory_mb=64,
     )
     cr = evaluate_code_check(
@@ -586,7 +601,29 @@ def test_exec_runs_timeout_is_scientific_failed(tmp_path):
         attempt_id="st/E1#1",
     )
     assert cr.status is ReqStatus.FAILED
-    assert "timeout" in (cr.detail or "")
+    assert "cpu_limit" in (cr.detail or "")
+
+
+def test_exec_runs_wall_timeout_raises_infra(tmp_path):
+    _require_hard()
+    arts = LocalArtifactStore(tmp_path)
+    check = CodeCheck(
+        kind="exec_runs",
+        argv=["python3", "-c", "import time; time.sleep(30)"],
+        timeout_s=0.3,
+        memory_mb=64,
+    )
+    with pytest.raises(SandboxInfraError, match="wall_timeout"):
+        evaluate_code_check(
+            check,
+            template_id="exec",
+            check_id="exec#wall",
+            out=AgentTaskOutput(outputs={}),
+            artifacts=arts,
+            values={},
+            role="validity",
+            attempt_id="st/E1#1",
+        )
 
 
 @pytest.mark.asyncio
@@ -750,6 +787,7 @@ def test_verifier_reads_reward_not_stdout():
             f".joinpath('reward.txt').write_text({reward!r})",
         ],
         inputs={"predictions.json": b'{"y_hat": [0], "score": 0.9}'},
+        input_allowlist=frozenset({"predictions.json"}),
         limits=SandboxLimits(timeout_s=5, memory_mb=64),
         collect=["reward.txt"],
     )
@@ -759,6 +797,8 @@ def test_verifier_reads_reward_not_stdout():
 
 
 def test_agent_filename_allowlist_rejects_hooks_and_pth():
+    from coscientist.checks.sandbox import agent_input_name_allowed
+
     assert not agent_filename_allowed("sitecustomize.py")
     assert not agent_filename_allowed("usercustomize.py")
     assert not agent_filename_allowed("foo.pth")
@@ -766,6 +806,11 @@ def test_agent_filename_allowlist_rejects_hooks_and_pth():
     assert not agent_filename_allowed("pytest.py")
     assert agent_filename_allowed("solution.py")
     assert agent_filename_allowed("predictions.json")
+    # Allowlist-only mount filter (empty → reject all).
+    assert not agent_input_name_allowed("solution.py", None)
+    assert not agent_input_name_allowed("solution.py", frozenset())
+    assert agent_input_name_allowed("solution.py", frozenset({"solution.py"}))
+    assert not agent_input_name_allowed("evil.py", frozenset({"solution.py"}))
 
 
 def test_y_hat_equals_catalog_labels_still_uses_catalog_holdout(tmp_path):
@@ -857,6 +902,7 @@ def test_sitecustomize_slot_rejected_from_inputs(tmp_path):
                     "    assert solution.add(1,2)==3\n"
                 )
             },
+            input_allowlist=["solution.py"],
             min_tests=1,
             timeout_s=30,
             memory_mb=128,
@@ -871,11 +917,16 @@ def test_sitecustomize_slot_rejected_from_inputs(tmp_path):
     )
     assert cr.effect is not None
     assert cr.effect.get("trusted") is False
+    assert cr.effect.get("countable") is False
     assert cr.status is ReqStatus.MET, cr.detail
+    # Rejected sitecustomize must not have written /results/pwned.
+    assert all(
+        "pwned" not in (e.artifact_id or "") for e in (cr.evidence or [])
+    )
 
 
 def test_forged_junit_os_exit_still_untrusted(tmp_path):
-    """Agent code can forge junit + os._exit — countable but trusted=False."""
+    """Agent code can forge junit + os._exit — observation only (not countable)."""
     _require_hard()
     arts = LocalArtifactStore(tmp_path)
     # Malicious module imported by catalog test: forge junit then exit 0.
@@ -900,6 +951,7 @@ def test_forged_junit_os_exit_still_untrusted(tmp_path):
             kind="tests_pass",
             argv=["catalog:pytest"],
             tests={"test_import.py": "import solution\ndef test_noop():\n    assert True\n"},
+            input_allowlist=["solution.py"],
             min_tests=1,
             timeout_s=30,
             memory_mb=128,
@@ -912,11 +964,171 @@ def test_forged_junit_os_exit_still_untrusted(tmp_path):
         role="validity",
         attempt_id="st/E1#1",
     )
-    # May MET if forged junit wins, or FAILED — either way never trusted.
+    # May MET if forged junit wins, or FAILED — never trusted/countable.
     assert cr.effect is not None
     assert cr.effect.get("trusted") is False
-    assert cr.effect.get("countable") is True
-    assert "tamper-able" in (cr.effect.get("note") or "")
+    assert cr.effect.get("countable") is False
+    assert cr.effect.get("observation_only") is True
+    assert "tamper-able, not counted" in (cr.effect.get("note") or "")
+
+
+def test_pth_file_not_mounted_even_if_named_in_outputs(tmp_path):
+    """Real .pth payload is rejected by denylist even when listed as an output."""
+    _require_hard()
+    arts = LocalArtifactStore(tmp_path)
+    pth = arts.put(
+        b"import os; open('/results/pth_pwned','w').write('x')\n",
+        make_tool_ref("st/E1#1:pth"),
+        name="evil.pth",
+        media_type="text/plain",
+    )
+    good = arts.put(
+        b"def add(a,b): return a+b\n",
+        make_tool_ref("st/E1#1:code"),
+        name="solution.py",
+        media_type="text/x-python",
+    )
+    out = AgentTaskOutput(
+        outputs={
+            "evil.pth": ArtifactHandle(artifact_id=pth.artifact_id, name="evil.pth"),
+            "solution.py": ArtifactHandle(
+                artifact_id=good.artifact_id, name="solution.py"
+            ),
+        }
+    )
+    cr = evaluate_code_check(
+        CodeCheck(
+            kind="tests_pass",
+            argv=["catalog:pytest"],
+            tests={
+                "test_add.py": (
+                    "import solution\n"
+                    "def test_add():\n"
+                    "    assert solution.add(1,2)==3\n"
+                )
+            },
+            # Even an explicit allowlist entry cannot mount .pth (denylist wins).
+            input_allowlist=["solution.py", "evil.pth"],
+            min_tests=1,
+            timeout_s=30,
+            memory_mb=128,
+        ),
+        template_id="tp",
+        check_id="tp#pth",
+        out=out,
+        artifacts=arts,
+        values={},
+        role="validity",
+        attempt_id="st/E1#1",
+    )
+    assert cr.status is ReqStatus.MET, cr.detail
+    assert cr.effect and cr.effect.get("countable") is False
+
+
+def test_holdout_digest_mismatch_is_catalog_error(tmp_path):
+    _require_hard()
+    arts = LocalArtifactStore(tmp_path)
+    predictions = arts.put(
+        json.dumps({"y_hat": [0, 1]}).encode(),
+        make_tool_ref("st/E1#1:pred"),
+        name="predictions.json",
+        media_type="application/json",
+    )
+    out = AgentTaskOutput(
+        outputs={
+            "predictions": ArtifactHandle(
+                artifact_id=predictions.artifact_id, name="predictions"
+            )
+        }
+    )
+    from coscientist.core.errors import CatalogError
+
+    with pytest.raises(CatalogError, match="holdout_digest mismatch"):
+        evaluate_code_check(
+            CodeCheck(
+                kind="metric_on_holdout",
+                argv=["catalog:metric"],
+                holdout={"y": [0, 1]},
+                holdout_digest="0" * 64,
+                output="predictions",
+                op=">=",
+                target=0.5,
+                timeout_s=10,
+                memory_mb=64,
+            ),
+            template_id="ho",
+            check_id="ho#bad",
+            out=out,
+            artifacts=arts,
+            values={},
+            role="prediction",
+            attempt_id="st/E1#1",
+        )
+
+
+def test_holdout_never_exposed_to_agent_jail(tmp_path):
+    """Catalog holdout is verifier-only; agent jail must not see labels."""
+    _require_hard()
+    secret = {"y": [1, 0, 1, 0], "secret": "HOLD_LABELS"}
+    # Agent jail: try to read holdout env / typical paths — must fail closed.
+    attack = r"""
+import os, sys
+errs = []
+if 'COSCIENTIST_HOLDOUT' in os.environ:
+    errs.append('env')
+for p in ('/holdout', '/holdout.bin', '/inputs/holdout.json', '/results/holdout.bin'):
+    try:
+        open(p, 'rb').read()
+        errs.append(p)
+    except OSError:
+        pass
+if errs:
+    sys.stderr.write('HOLDOUT_LEAK:' + ','.join(errs) + '\n')
+    sys.exit(2)
+sys.exit(0)
+"""
+    r = run_sandbox(
+        ["python3", "-I", "-c", attack],
+        limits=SandboxLimits(timeout_s=10, memory_mb=64),
+    )
+    assert r.status is SandboxStatus.OK, r.stderr.decode(errors="replace")
+    # Verifier still scores with catalog holdout (secret never in agent outputs).
+    arts = LocalArtifactStore(tmp_path)
+    digest = sha256_hex(canonical_json(secret))
+    predictions = arts.put(
+        json.dumps({"y_hat": [1, 0, 1, 0]}).encode(),
+        make_tool_ref("st/E1#1:pred"),
+        name="predictions.json",
+        media_type="application/json",
+    )
+    cr = evaluate_code_check(
+        CodeCheck(
+            kind="metric_on_holdout",
+            argv=["catalog:metric"],
+            holdout=secret,
+            holdout_digest=digest,
+            output="predictions",
+            op=">=",
+            target=0.99,
+            timeout_s=10,
+            memory_mb=64,
+        ),
+        template_id="ho",
+        check_id="ho#iso",
+        out=AgentTaskOutput(
+            outputs={
+                "predictions": ArtifactHandle(
+                    artifact_id=predictions.artifact_id, name="predictions"
+                )
+            }
+        ),
+        artifacts=arts,
+        values={},
+        role="prediction",
+        attempt_id="st/E1#1",
+    )
+    assert cr.status is ReqStatus.MET
+    assert cr.effect and cr.effect.get("est") == 1.0
 
 
 def test_verifier_jail_hardening_attacks():
@@ -959,6 +1171,7 @@ sys.exit(0)
     r = run_verifier(
         ["python3", "-I", "-c", attack],
         inputs={"predictions.json": b'{"y_hat":[0]}'},
+        input_allowlist=frozenset({"predictions.json"}),
         limits=SandboxLimits(timeout_s=10, memory_mb=64),
         collect=["reward.txt"],
     )
