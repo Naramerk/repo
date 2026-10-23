@@ -152,6 +152,9 @@ class AttemptsMixin:
         provenance: Provenance | None = None,
     ) -> str:
         task = self._resolve_task(task_key_or_id)
+        # Foreach templates are materialization placeholders — never dispatched.
+        if task.spec.foreach is not None:
+            raise RuntimeError("foreach template cannot be started")
         if task.state == TaskState.DONE:
             raise RuntimeError("task already DONE")
         if not self._deps_done(task):

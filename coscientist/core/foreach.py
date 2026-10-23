@@ -74,7 +74,8 @@ def select_foreach_items(
 ) -> list[str]:
     """Logical ids with ``source_task == of_task`` matching the selector.
 
-    Nodes without ``source_task`` are rejected (not matched).
+    Nodes without ``source_task`` are rejected. Order is rank ascending, then
+    numerically aware id (H2 < H10) — cap keeps the head of this order.
     """
     graph = getattr(runtime, "graph", None)
     if graph is None:
@@ -98,8 +99,7 @@ def select_foreach_items(
         if fe.selector == "selected" and not bool(attrs.get("selected", False)):
             continue
         items.append((logical, attrs))
-    # Numerically aware on logical id (H2 < H10); rank is not the order key.
-    items.sort(key=lambda x: _nat_key(x[0]))
+    items.sort(key=lambda x: (int(x[1].get("rank") or 0), _nat_key(x[0])))
     return [i[0] for i in items]
 
 
@@ -174,6 +174,25 @@ def _items_for_source(runtime: StudyRuntime, src: Task, fe: ForEachSpec) -> list
     return []
 
 
+async def _refuse_and_skip_foreach(
+    runtime: StudyRuntime,
+    template: Task,
+    *,
+    after: str,
+    detail: str,
+) -> None:
+    """ExpansionRefused + TaskDone SKIPPED so the template is never dispatched."""
+    await refuse_expansion(
+        runtime, after, reason="invalid", detail=detail[:200]
+    )
+    if template.state != TaskState.DONE:
+        await runtime.cancel_task(  # type: ignore[attr-defined]
+            template.task_id,
+            reason=TaskReason.REFUSED,
+            detail=detail[:200],
+        )
+
+
 async def materialize_foreach(
     runtime: StudyRuntime,
     *,
@@ -193,10 +212,16 @@ async def materialize_foreach(
     fe = template.spec.foreach
     after = fe.of_task if fe else tkey
     cap = int(getattr(study, "max_foreach_children", 32) or 32)
+    # ``items`` arrive rank-ordered; cap keeps head, drop natural-sort would be wrong.
+    foreach_total = len(items)
+    dropped: list[str] = []
     capped = False
-    if len(items) > cap:
-        items = items[:cap]
+    if foreach_total > cap:
+        dropped = list(items[cap:])
+        items = list(items[:cap])
         capped = True
+    # Child dispatch order: numerically aware (H2 < H10).
+    items = sorted(items, key=_nat_key)
 
     prototypes = [
         _concrete_from_template(template.spec, item_id=item, task_key=f"TMP-{i}")
@@ -205,11 +230,11 @@ async def materialize_foreach(
     if prototypes:
         keyed = assign_core_keys(runtime, prototypes)
         if isinstance(keyed, str):
-            await refuse_expansion(
+            await _refuse_and_skip_foreach(
                 runtime,
-                after,
-                reason="invalid",
-                detail=f"foreach_assign_keys:{keyed}"[:200],
+                template,
+                after=after,
+                detail=f"foreach_assign_keys:{keyed}",
             )
             return None
         added: list[TaskSpec] = list(keyed)
@@ -327,6 +352,8 @@ async def materialize_foreach(
         "foreach_kind": fe.kind if fe else None,
         "foreach_capped": capped,
         "foreach_cap": cap,
+        "foreach_total": foreach_total,
+        "foreach_dropped": list(dropped),
         "foreach_refute": (template.spec.tests_intent == "refute"),
     }
     events.append(
@@ -368,32 +395,31 @@ async def maybe_foreach_after_task_done(
 ) -> list[str]:
     """After source TaskDone, materialize any foreach templates waiting on it."""
     done: list[str] = []
-    after = "?"
-    try:
-        if runtime.study is None or getattr(runtime, "_finalized", False):
-            return done
-        src = runtime.tasks.get(task_id_full)
-        if src is None or src.state != TaskState.DONE:
-            return done
-        reason = getattr(src, "reason", None)
-        rv = getattr(reason, "value", reason)
-        if rv == TaskReason.SUPERSEDED.value:
-            return done
-        after = src.spec.task_key
-        for tmpl in foreach_templates(runtime):
-            fe = tmpl.spec.foreach
-            if fe is None or fe.of_task != after:
-                continue
+    if runtime.study is None or getattr(runtime, "_finalized", False):
+        return done
+    src = runtime.tasks.get(task_id_full)
+    if src is None or src.state != TaskState.DONE:
+        return done
+    reason = getattr(src, "reason", None)
+    rv = getattr(reason, "value", reason)
+    if rv == TaskReason.SUPERSEDED.value:
+        return done
+    after = src.spec.task_key
+    for tmpl in list(foreach_templates(runtime)):
+        fe = tmpl.spec.foreach
+        if fe is None or fe.of_task != after:
+            continue
+        try:
             pid = await _materialize_one(runtime, tmpl)
             if pid:
                 done.append(pid)
-    except Exception as e:  # noqa: BLE001 — never raise; refuse visibly
-        await refuse_expansion(
-            runtime,
-            after,
-            reason="invalid",
-            detail=f"foreach_exception:{type(e).__name__}"[:200],
-        )
+        except Exception as e:  # noqa: BLE001 — never raise; refuse + skip
+            await _refuse_and_skip_foreach(
+                runtime,
+                tmpl,
+                after=after,
+                detail=f"foreach_exception:{type(e).__name__}",
+            )
     return done
 
 
@@ -406,18 +432,18 @@ async def materialize_ready_foreach(runtime: StudyRuntime) -> list[str]:
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return done
     for tmpl in list(foreach_templates(runtime)):
+        fe = tmpl.spec.foreach
+        after = fe.of_task if fe else tmpl.spec.task_key
         try:
             pid = await _materialize_one(runtime, tmpl)
             if pid:
                 done.append(pid)
         except Exception as e:  # noqa: BLE001
-            fe = tmpl.spec.foreach
-            after = fe.of_task if fe else tmpl.spec.task_key
-            await refuse_expansion(
+            await _refuse_and_skip_foreach(
                 runtime,
-                after,
-                reason="invalid",
-                detail=f"foreach_exception:{type(e).__name__}"[:200],
+                tmpl,
+                after=after,
+                detail=f"foreach_exception:{type(e).__name__}",
             )
     return done
 

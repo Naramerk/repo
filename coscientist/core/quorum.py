@@ -1,13 +1,13 @@
 """Fan-in quorum binding (M1 PR10 / S9) — per-input, never silent.
 
-Each ``InputSpec`` is its own group (after foreach expansion of ``from_task``):
+Each ``InputSpec`` is its own pool (keyed by input / foreach template id after
+``expand_input_groups``) — never merged by equal ``quorum`` value:
 - ``quorum is None`` → every member must bind real/partial (required).
 - ``quorum == "all"`` → same.
-- ``quorum: int`` (≥1) → need ≥ that many real/partial members; rest → limitations.
+- ``quorum: int`` (≥1) → need ≥ that many real/partial members of **this** input.
 
-Inputs with a quorum set form independent groups; a required input is never
-softened by another input's quorum. Zero counted bindings never yield
-provenance ``real``.
+A required input is never softened by another input's quorum. Zero counted
+bindings never yield provenance ``real``.
 """
 
 from __future__ import annotations
@@ -259,15 +259,11 @@ def bind_input_groups(
     claim_provenance: dict[str, Provenance] | None = None,
     verdict_snapshots: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[InputBinding], Provenance, list[Limitation]]:
-    """Bind groups with per-input quorum semantics.
+    """Bind each InputSpec group independently (pool key = input/template id).
 
-    - ``quorum is None``: that input's members are all required (never softened
-      by another input's quorum).
-    - Explicit ``quorum``: inputs sharing the **same** quorum value form one
-      fan-in pool needing that many real/partial members (static A+B+C or
-      foreach children of one template).
-
-    Empty member list (foreach → 0 children) is always a miss.
+    Never pool by equal ``quorum`` value: foreach X q=2 and Y q=2 stay separate.
+    ``quorum is None`` → all members required; explicit quorum → that many of
+    **this** input's members. Empty members (foreach → 0 children) is a miss.
     Zero counted bindings never return provenance ``real``.
     """
     claims = known_claim_ids or set()
@@ -278,61 +274,24 @@ def bind_input_groups(
     provs: list[Provenance] = []
     limitations: list[Limitation] = []
 
-    required: list[tuple[InputSpec, list[InputSpec]]] = []
-    pools: dict[Any, list[tuple[InputSpec, list[InputSpec]]]] = {}
     for orig, members in groups:
-        if orig.quorum is None:
-            required.append((orig, members))
-        else:
-            pools.setdefault(orig.quorum, []).append((orig, members))
-
-    for orig, members in required:
+        label = orig.from_task or orig.ref or "?"
         if not members:
             limitations.append(
                 Limitation(
-                    text=(
-                        f"вход {orig.from_task or orig.ref or '?'} "
-                        f"недоступен (foreach пуст)"
-                    ),
+                    text=f"вход {label} недоступен (foreach пуст)",
                     ref=orig.from_task or orig.ref,
                 )
             )
-            raise InputUnavailable("input_unavailable")
+            raise InputUnavailable(
+                "quorum" if orig.quorum is not None else "input_unavailable"
+            )
+        needed = group_needed(orig, len(members))
+        miss = "quorum" if orig.quorum is not None else "input_unavailable"
         b, p, lims = _bind_members(
             members,
-            needed=len(members),
-            miss_reason="input_unavailable",
-            dep_tasks=dep_tasks,
-            dep_outputs=dep_outputs,
-            dep_provenance=dep_provenance,
-            known_claim_ids=claims,
-            claim_provenance=claim_prov,
-            verdict_snapshots=snapshots,
-        )
-        bindings.extend(b)
-        provs.extend(p)
-        limitations.extend(lims)
-
-    for qval, entries in pools.items():
-        flat: list[InputSpec] = []
-        for orig, members in entries:
-            if not members:
-                limitations.append(
-                    Limitation(
-                        text=(
-                            f"вход {orig.from_task or orig.ref or '?'} "
-                            f"недоступен (foreach пуст)"
-                        ),
-                        ref=orig.from_task or orig.ref,
-                    )
-                )
-                raise InputUnavailable("quorum")
-            flat.extend(members)
-        needed = len(flat) if qval == "all" else max(1, int(qval))
-        b, p, lims = _bind_members(
-            flat,
             needed=needed,
-            miss_reason="quorum",
+            miss_reason=miss,
             dep_tasks=dep_tasks,
             dep_outputs=dep_outputs,
             dep_provenance=dep_provenance,

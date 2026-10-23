@@ -322,6 +322,7 @@ async def test_foreach_zero_items_report(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_foreach_cap_limitation(tmp_path, clock, runtime_cls):
+    """N2: cap keeps best ranks; journals total/dropped; report names ids."""
     sid = "st_fe_cap"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
@@ -342,15 +343,32 @@ async def test_foreach_cap_limitation(tmp_path, clock, runtime_cls):
         depends_on=["E0"],
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
         criteria=False,
+        tests_intent="refute",
     )
     await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")])
-    await _upsert_selected_hypotheses(rt, of_task="E0", n=5)
+    # Worse natural order first, but better ranks (0..2) must be kept — not nat tail.
+    await _upsert_selected_hypotheses(
+        rt, of_task="E0", n=5, ids=["H10", "H9", "H8", "H1", "H2"]
+    )
     aid = await rt.start_attempt("E0")
     await _ok(rt, arts, aid)
-    assert len(rt._foreach_children["FE"]) == 3
+    kids = rt._foreach_children["FE"]
+    assert len(kids) == 3
+    kept = [rt.tasks[task_id(sid, k)].spec.foreach_item for k in kids]
+    assert set(kept) == {"H10", "H9", "H8"}  # ranks 0..2 kept (not nat-tail H1,H2)
+    assert kept == ["H8", "H9", "H10"]  # then nat sort among kept
+    pe = [e for e in await rt.store.read_all() if e.type == "PlanExpanded"]
+    assert pe and pe[0].payload.get("foreach_total") == 5
+    assert pe[0].payload.get("foreach_dropped") == ["H1", "H2"]
     fin = await _finalize_study(rt)
     contrib = fin.payload.get("contributing_reasons") or []
-    assert any("ограничение foreach: взято 3" in str(c) for c in contrib)
+    assert any("отброшены H1, H2" in str(c) for c in contrib)
+    assert any(
+        "проверка опровержения не выполнена (H1)" in str(c) for c in contrib
+    )
+    assert any(
+        "проверка опровержения не выполнена (H2)" in str(c) for c in contrib
+    )
     await close_runtime(rt)
 
 
@@ -454,6 +472,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_fanin_quorum(tmp_path, clock, runtime_cls):
+    """Per-input pool: one foreach template, quorum=2 of its children."""
     sid = "st_q"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
@@ -463,37 +482,43 @@ async def test_fanin_quorum(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
+        max_expansions=0,
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
-    a = _exp("A", depends_on=["PLAN"], criteria=False)
-    b = _exp("B", depends_on=["PLAN"], criteria=False)
-    c = _exp("C", depends_on=["PLAN"], criteria=False)
+    e0 = _exp("E0", depends_on=["PLAN"], criteria=False)
+    fe = _exp(
+        "FE",
+        depends_on=["E0"],
+        foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
+        criteria=False,
+    )
     summary = TaskSpec(
         task_key="SUM",
         title="sum",
         goal="g",
         route="experiment",
-        depends_on=["A", "B", "C"],
+        depends_on=["FE"],
         addresses=["Q1"],
         criteria=[],
         tolerate_failed_dep=True,
-        inputs=[
-            InputSpec(from_task="A", output="main", quorum=2),
-            InputSpec(from_task="B", output="main", quorum=2),
-            InputSpec(from_task="C", output="main", quorum=2),
-        ],
+        inputs=[InputSpec(from_task="FE", output="main", quorum=2)],
     )
     await rt.accept_plan(
-        [a, b, c, summary],
+        [e0, fe, summary],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
-    for key in ("A", "B"):
-        aid = await rt.start_attempt(key)
+    await _upsert_selected_hypotheses(rt, of_task="E0", n=3)
+    aid = await rt.start_attempt("E0")
+    await _ok(rt, arts, aid)
+    kids = rt._foreach_children["FE"]
+    assert len(kids) == 3
+    for k in kids[:2]:
+        aid = await rt.start_attempt(k)
         await _ok(rt, arts, aid)
-    cid = await rt.start_attempt("C")
+    cid = await rt.start_attempt(kids[2])
     await rt.fail_attempt(cid, retryable=False, close_reason="failed")
-    c_task = rt.tasks[task_id(sid, "C")]
+    c_task = rt.tasks[task_id(sid, kids[2])]
     if c_task.state != TaskState.DONE:
         await rt.cancel_task(c_task.task_id, reason="failed")
     aid = await rt.start_attempt("SUM")
@@ -603,6 +628,7 @@ async def test_quorum_required_not_softened(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_quorum_tie_exact(tmp_path, clock, runtime_cls):
+    """Exactly quorum=2 of 3 foreach children — starts with 2 bindings."""
     sid = "st_q_tie"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
@@ -612,28 +638,39 @@ async def test_quorum_tie_exact(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
+        max_expansions=0,
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
-    tasks = [_exp(k, depends_on=["PLAN"], criteria=False) for k in ("A", "B", "C")]
+    e0 = _exp("E0", depends_on=["PLAN"], criteria=False)
+    fe = _exp(
+        "FE",
+        depends_on=["E0"],
+        foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
+        criteria=False,
+    )
     summary = TaskSpec(
         task_key="SUM",
         title="sum",
         goal="g",
         route="experiment",
-        depends_on=["A", "B", "C"],
+        depends_on=["FE"],
         addresses=["Q1"],
         criteria=[],
         tolerate_failed_dep=True,
-        inputs=[InputSpec(from_task=k, output="main", quorum=2) for k in ("A", "B", "C")],
+        inputs=[InputSpec(from_task="FE", output="main", quorum=2)],
     )
-    await rt.accept_plan(tasks + [summary], questions=[QuestionSpec(id="Q1", text="why")])
-    for key in ("A", "B"):
-        aid = await rt.start_attempt(key)
+    await rt.accept_plan([e0, fe, summary], questions=[QuestionSpec(id="Q1", text="why")])
+    await _upsert_selected_hypotheses(rt, of_task="E0", n=3)
+    aid = await rt.start_attempt("E0")
+    await _ok(rt, arts, aid)
+    kids = rt._foreach_children["FE"]
+    for k in kids[:2]:
+        aid = await rt.start_attempt(k)
         await _ok(rt, arts, aid)
-    aid = await rt.start_attempt("C")
+    aid = await rt.start_attempt(kids[2])
     await rt.fail_attempt(aid, retryable=False, close_reason="failed")
-    t = rt.tasks[task_id(sid, "C")]
+    t = rt.tasks[task_id(sid, kids[2])]
     if t.state != TaskState.DONE:
         await rt.cancel_task(t.task_id, reason="failed")
     aid = await rt.start_attempt("SUM")
@@ -645,6 +682,7 @@ async def test_quorum_tie_exact(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_quorum_partial_infra_failures(tmp_path, clock, runtime_cls):
+    """One foreach child infra-fails; quorum=1 still starts with limitations."""
     sid = "st_q_infra"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
@@ -654,32 +692,39 @@ async def test_quorum_partial_infra_failures(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
+        max_expansions=0,
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
-    a = _exp("A", depends_on=["PLAN"], criteria=False)
-    b = _exp("B", depends_on=["PLAN"], criteria=False)
+    e0 = _exp("E0", depends_on=["PLAN"], criteria=False)
+    fe = _exp(
+        "FE",
+        depends_on=["E0"],
+        foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
+        criteria=False,
+    )
     summary = TaskSpec(
         task_key="SUM",
         title="sum",
         goal="g",
         route="experiment",
-        depends_on=["A", "B"],
+        depends_on=["FE"],
         addresses=["Q1"],
         criteria=[],
         tolerate_failed_dep=True,
-        inputs=[
-            InputSpec(from_task="A", output="main", quorum=1),
-            InputSpec(from_task="B", output="main", quorum=1),
-        ],
+        inputs=[InputSpec(from_task="FE", output="main", quorum=1)],
     )
-    await rt.accept_plan([a, b, summary], questions=[QuestionSpec(id="Q1", text="why")])
-    aid_a = await rt.start_attempt("A")
+    await rt.accept_plan([e0, fe, summary], questions=[QuestionSpec(id="Q1", text="why")])
+    await _upsert_selected_hypotheses(rt, of_task="E0", n=2)
+    aid = await rt.start_attempt("E0")
+    await _ok(rt, arts, aid)
+    kids = rt._foreach_children["FE"]
+    aid_a = await rt.start_attempt(kids[0])
     await rt.fail_attempt(aid_a, retryable=False, close_reason="crashed")
-    t = rt.tasks[task_id(sid, "A")]
+    t = rt.tasks[task_id(sid, kids[0])]
     if t.state != TaskState.DONE:
         await rt.cancel_task(t.task_id, reason="failed")
-    aid_b = await rt.start_attempt("B")
+    aid_b = await rt.start_attempt(kids[1])
     await _ok(rt, arts, aid_b)
     aid = await rt.start_attempt("SUM")
     lims = rt.attempts[aid].get("limitations") or []
@@ -688,6 +733,81 @@ async def test_quorum_partial_infra_failures(tmp_path, clock, runtime_cls):
     await _ok(rt, arts, aid)
     fin = await _finalize_study(rt)
     assert fin.payload.get("minimal_report") or fin.payload.get("report_artifact_id")
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_quorum_xy_not_pooled_by_value(tmp_path, clock, runtime_cls):
+    """M2: foreach X q=2 and Y q=2 stay separate — X children never satisfy Y."""
+    sid = "st_q_xy"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=500),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=0,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    await _boot_stages(rt)
+    src_x = _exp("SX", depends_on=["PLAN"], criteria=False)
+    src_y = _exp("SY", depends_on=["PLAN"], criteria=False)
+    fx = _exp(
+        "FX",
+        depends_on=["SX"],
+        foreach=ForEachSpec(kind="hypothesis", of_task="SX", selector="selected"),
+        criteria=False,
+    )
+    fy = _exp(
+        "FY",
+        depends_on=["SY"],
+        foreach=ForEachSpec(kind="hypothesis", of_task="SY", selector="selected"),
+        criteria=False,
+    )
+    summary = TaskSpec(
+        task_key="SUM",
+        title="sum",
+        goal="g",
+        route="experiment",
+        depends_on=["FX", "FY"],
+        addresses=["Q1"],
+        criteria=[],
+        tolerate_failed_dep=True,
+        inputs=[
+            InputSpec(from_task="FX", output="main", quorum=2),
+            InputSpec(from_task="FY", output="main", quorum=2),
+        ],
+    )
+    await rt.accept_plan(
+        [src_x, src_y, fx, fy, summary],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    await _upsert_selected_hypotheses(rt, of_task="SX", n=3, ids=["HX0", "HX1", "HX2"])
+    await _upsert_selected_hypotheses(rt, of_task="SY", n=3, ids=["HY0", "HY1", "HY2"])
+    for sk in ("SX", "SY"):
+        aid = await rt.start_attempt(sk)
+        await _ok(rt, arts, aid)
+    x_kids = rt._foreach_children["FX"]
+    y_kids = rt._foreach_children["FY"]
+    assert len(x_kids) == 3 and len(y_kids) == 3
+    # Satisfy X fully; leave Y with 0 successes.
+    for k in x_kids:
+        aid = await rt.start_attempt(k)
+        await _ok(rt, arts, aid)
+    for k in y_kids:
+        aid = await rt.start_attempt(k)
+        await rt.fail_attempt(aid, retryable=False, close_reason="failed")
+        t = rt.tasks[task_id(sid, k)]
+        if t.state != TaskState.DONE:
+            await rt.cancel_task(t.task_id, reason="failed")
+    with pytest.raises(InputUnavailable):
+        await rt.start_attempt("SUM")
+    sum_t = rt.tasks[task_id(sid, "SUM")]
+    assert sum_t.state == TaskState.DONE
+    assert sum_t.reason == TaskReason.INPUT_UNAVAILABLE
+    await _finalize_study(rt)
     await close_runtime(rt)
 
 
@@ -797,6 +917,132 @@ async def test_quorum_zero_inputs_edge(tmp_path, clock, runtime_cls):
     assert "не выполнено: foreach пуст" in contrib
     assert "не выполнено: кворум входов" in contrib or "не выполнено: foreach пуст" in contrib
     await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_foreach_refuse_skips_template(tmp_path, clock, runtime_cls, monkeypatch):
+    """N1: ExpansionRefused → template TaskDone SKIPPED (never left PENDING)."""
+    from coscientist.core import foreach as foreach_mod
+
+    sid = "st_fe_ref"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=0,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    await _boot_stages(rt)
+    e0 = _exp("E0", depends_on=["PLAN"], criteria=False)
+    fe = _exp(
+        "FE",
+        depends_on=["E0"],
+        foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
+        criteria=False,
+    )
+    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")])
+    await _upsert_selected_hypotheses(rt, of_task="E0", n=2)
+
+    def _boom(_runtime, _prototypes):
+        return "forced_key_fail"
+
+    monkeypatch.setattr(foreach_mod, "assign_core_keys", _boom)
+    aid = await rt.start_attempt("E0")
+    await _ok(rt, arts, aid)
+    fe_t = rt.tasks[task_id(sid, "FE")]
+    assert fe_t.state == TaskState.DONE
+    assert fe_t.outcome == TaskOutcome.SKIPPED
+    assert fe_t.reason == TaskReason.REFUSED
+    events = await rt.store.read_all()
+    assert any(e.type == "ExpansionRefused" for e in events)
+    assert "FE" not in (rt._foreach_children or {})
+    with pytest.raises(RuntimeError, match="foreach template"):
+        await rt.start_attempt("FE")
+    await _finalize_study(rt)
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_foreach_template_cannot_be_started(tmp_path, clock, runtime_cls):
+    """External driver must not dispatch a PENDING foreach template."""
+    sid = "st_fe_nostart"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=0,
+    )
+    attach_executor(rt, tmp_path)
+    await _boot_stages(rt)
+    e0 = _exp("E0", depends_on=["PLAN"], criteria=False)
+    fe = _exp(
+        "FE",
+        depends_on=["E0"],
+        foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
+        criteria=False,
+    )
+    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")])
+    fe_t = rt.tasks[task_id(sid, "FE")]
+    assert fe_t.state == TaskState.PENDING
+    assert fe_t.spec.foreach is not None
+    with pytest.raises(RuntimeError, match="foreach template"):
+        await rt.start_attempt("FE")
+    await _finalize_study(rt)
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_foreach_when_source_done_via_expand_plan(tmp_path, clock, runtime_cls):
+    """B1: foreach added via expand_plan expands when of_task already DONE."""
+    sid = "st_fe_exp"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=400),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=2,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    await _boot_stages(rt)
+    e0 = _exp("E0", depends_on=["PLAN"], criteria=False)
+    await rt.accept_plan([e0], questions=[QuestionSpec(id="Q1", text="why")])
+    await _upsert_selected_hypotheses(rt, of_task="E0", n=2)
+    aid = await rt.start_attempt("E0")
+    await _ok(rt, arts, aid)
+    assert rt.tasks[task_id(sid, "E0")].state == TaskState.DONE
+    fe = _exp(
+        "FE",
+        depends_on=["E0"],
+        foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
+        criteria=False,
+    )
+    pid = await rt.expand_plan(
+        after_task="E0",
+        added_tasks=[fe],
+        origin="emergent",
+        reason="add_foreach",
+        assign_keys=False,
+    )
+    assert pid is not None
+    children = list(rt._foreach_children.get("FE") or [])
+    assert len(children) == 2
+    assert rt.tasks[task_id(sid, "FE")].reason == TaskReason.SUPERSEDED
+    await close_runtime(rt)
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
+    assert list(rt2._foreach_children.get("FE") or []) == children
+    await _finalize_study(rt2)
+    await close_runtime(rt2)
 
 
 def test_quorum_rejects_zero():

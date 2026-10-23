@@ -134,28 +134,37 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
             if line not in seen:
                 seen.append(line)
         elif ev.type == "PlanExpanded" and ev.payload.get("foreach"):
-            items = ev.payload.get("foreach_items") or []
-            added = ev.payload.get("added_tasks") or []
-            if len(items) == 0 and len(added) == 0:
-                line = "не выполнено: foreach пуст"
-                if line not in seen:
-                    seen.append(line)
-                if ev.payload.get("foreach_refute"):
-                    refute_line = "не выполнено: проверка опровержения не выполнена"
-                    if refute_line not in seen:
-                        seen.append(refute_line)
-            else:
-                line = f"foreach: развёрнуто {len(added)}"
-                if line not in seen:
-                    seen.append(line)
-                if ev.payload.get("foreach_capped"):
-                    cap_line = (
-                        f"ограничение foreach: взято {len(added)} "
-                        f"из лимита {ev.payload.get('foreach_cap')}"
-                    )
-                    if cap_line not in seen:
-                        seen.append(cap_line)
+            _append_foreach_report_lines(seen, ev.payload)
     return seen
+
+
+def _append_foreach_report_lines(seen: list[str], p: dict[str, Any]) -> None:
+    items, added = p.get("foreach_items") or [], p.get("added_tasks") or []
+    dropped = [str(x) for x in (p.get("foreach_dropped") or [])]
+    total = p.get("foreach_total")
+    if total is None:
+        total = len(items) + len(dropped)
+    refute = "не выполнено: проверка опровержения не выполнена"
+    if not items and not added:
+        if "не выполнено: foreach пуст" not in seen:
+            seen.append("не выполнено: foreach пуст")
+        if p.get("foreach_refute") and refute not in seen:
+            seen.append(refute)
+        return
+    line = f"foreach: развёрнуто {len(added)}"
+    if line not in seen:
+        seen.append(line)
+    if p.get("foreach_capped") or dropped:
+        cap = f"ограничение foreach: взято {len(added)} из {total}"
+        if dropped:
+            cap = f"{cap}, отброшены {', '.join(dropped)}"
+        if cap not in seen:
+            seen.append(cap)
+    if p.get("foreach_refute"):
+        for did in dropped:
+            r = f"{refute} ({did})"
+            if r not in seen:
+                seen.append(r)
 
 
 def last_resort_payload(
