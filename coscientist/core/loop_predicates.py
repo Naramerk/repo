@@ -11,10 +11,13 @@ import unicodedata
 from collections.abc import Mapping
 from typing import Any, Protocol
 
+from coscientist.core.claims import claims_for_ref, filtered_claims_by_target
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import LoopPredicate, LoopSpec, ReqStatus, Study
 from coscientist.core.reasons import Disposition
 from coscientist.core.rules import PlanInvalid
+from coscientist.core.rules import verdict as verdict_fn
+from coscientist.core.verdict import disposition_for_question
 
 # survivors_le n is a count threshold — keep well below pathological ints.
 SURVIVORS_LE_N_MAX = 10_000
@@ -155,11 +158,6 @@ def loop_task_keys(runtime: Any, loop_id: str, *, upto_iter: int | None = None) 
 
 def _claims_for_loop_scope(runtime: Any, loop: LoopSpec, *, upto_iter: int) -> dict[str, list]:
     """Claims about scope targets produced by this loop's tasks (upto iter)."""
-    from coscientist.core.claims import (
-        claims_for_ref,
-        filtered_claims_by_target,
-    )
-
     graph = getattr(runtime, "graph", None)
     study = getattr(runtime, "study", None)
     if graph is None or study is None:
@@ -207,8 +205,6 @@ def hypothesis_verdict_scoped(
     upto_iter: int,
 ) -> str:
     """Verdict for one scope hypothesis using only this loop's claims."""
-    from coscientist.core.rules import verdict as verdict_fn
-
     study: Study | None = getattr(runtime, "study", None)
     scoped = _claims_for_loop_scope(runtime, loop, upto_iter=upto_iter)
     claims = scoped.get(hid) or []
@@ -236,9 +232,6 @@ def question_disposition_scoped(
     upto_iter: int,
 ) -> str:
     """Disposition value for one scope question using loop-scoped claims."""
-    from coscientist.core.rules import verdict as verdict_fn
-    from coscientist.core.verdict import disposition_for_question
-
     study: Study | None = getattr(runtime, "study", None)
     scoped = _claims_for_loop_scope(runtime, loop, upto_iter=upto_iter)
     claims = scoped.get(qid) or []
