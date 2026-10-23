@@ -4,10 +4,11 @@
 
 ### M1 PR17
 - Executable CodeCheck kinds + sandbox limits (B7, B8, K5): `exec_runs`, `tests_pass`, `metric_on_holdout`, `reproducible_rerun`.
-- Core-owned local sandbox (`coscientist.checks.sandbox`) mirrors old CoScientist code-exec: subprocess + SIGKILL on timeout, output cap, clean statuses; enforces time / memory (`RLIMIT_AS`) / output size; network policy via catalog `allow_network`.
-- **`net_isolation` (`hard`|`soft`|`none`)** recorded on `SandboxResult` and sandbox `Artifact` meta / effect. Soft fallback (unshare forbidden) logs a warning — never a silent trusted downgrade.
-- `put_sandbox` stamps `producer=sandbox`; **`trusted=true` only when limits fully held** (soft ⇒ `trusted=false` + report note; still core-evaluated / countable).
-- Sandbox infra failures (timeout/OOM/crash/unavailable/blocked/output_exceeded) → `result_class=infra` with reason; never hang/crash; StudyFinalized still holds.
+- Core-owned local sandbox (`coscientist.checks.sandbox`) mirrors old CoScientist code-exec: subprocess + SIGKILL on timeout, **streaming** output cap, clean statuses; enforces time / memory (`RLIMIT_AS` via child wrapper) / output size; network policy via catalog `allow_network`.
+- **`net_isolation` / `fs_isolation` (`hard`|`soft`|`none`)** recorded on `SandboxResult` and sandbox `Artifact` meta / effect. Soft fallback (unshare forbidden) logs a warning — never a silent trusted downgrade. Soft note states network may be open (blocklist bypassable).
+- `tests_pass` / `metric_on_holdout` **run catalog argv inside the sandbox** and read only core-owned outputs (`work/core/*`); agent-submitted junit/metrics are not trusted.
+- `put_sandbox` stamps `producer=sandbox`; **`trusted=true` only when both net and fs isolation are hard** (`allow_network=True` ⇒ not trusted; still core-evaluated / countable).
+- Sandbox infra failures → `TaskReason.SANDBOX_INFRA` + `SandboxInfraRaised` (`result_class=infra`); StudyFinalized still holds. Infra classified by signal/timeout-kill/OOM marker only — positive exits (incl. 137) stay scientific.
 - Docs: `DESIGN_HYP_DELTA` / CHANGELOG no longer say “sandbox not wired in M1”.
 
 ### M1 PR10

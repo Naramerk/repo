@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import re
-import xml.etree.ElementTree as ET
 from typing import Any
 
 from coscientist.checks.sandbox import (
     INFRA_STATUSES,
     SOFT_ISOLATION_NOTE,
+    FsIsolation,
     NetIsolation,
     SandboxStatus,
     limits_fully_held,
@@ -19,10 +19,22 @@ from coscientist.core.errors import SandboxInfraError
 
 _FLOAT_RE = re.compile(rb"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?")
 
+# Unified scientific failure for malformed guest/agent structured output (B3).
+MALFORMED_JUNIT = "malformed_output:junit"
+MALFORMED_METRICS = "malformed_output:metrics"
 
-def raise_if_infra(status: SandboxStatus, reason: str) -> None:
+
+def raise_if_infra(
+    status: SandboxStatus,
+    reason: str,
+    *,
+    net_isolation: NetIsolation = "none",
+    fs_isolation: FsIsolation = "none",
+) -> None:
     if status in INFRA_STATUSES:
-        raise SandboxInfraError(reason)
+        note = soft_note(net_isolation, fs_isolation)
+        full = f"{reason}; {note}" if note else reason
+        raise SandboxInfraError(full)
 
 
 def store_log(
@@ -33,10 +45,11 @@ def store_log(
     body: bytes,
     name: str = "sandbox.log",
     net_isolation: NetIsolation = "none",
+    fs_isolation: FsIsolation = "none",
 ) -> tuple[str, str, bool]:
     """Write via put_sandbox; return (artifact_id, digest, trusted).
 
-    ``trusted`` is False when ``net_isolation=soft`` (limits not fully held).
+    ``trusted`` only when both net and fs isolation are hard.
     """
     call = f"{attempt_id or 'noattempt'}:sandbox:{check_id}"
     art = artifacts.put_sandbox(
@@ -46,14 +59,18 @@ def store_log(
         media_type="text/plain",
         role="log",
         net_isolation=net_isolation,
+        fs_isolation=fs_isolation,
     )
-    return art.artifact_id, art.sha256, limits_fully_held(net_isolation)
+    return art.artifact_id, art.sha256, limits_fully_held(net_isolation, fs_isolation)
 
 
-def soft_note(net_isolation: NetIsolation) -> str | None:
-    if net_isolation == "soft":
-        return SOFT_ISOLATION_NOTE
-    return None
+def soft_note(
+    net_isolation: NetIsolation,
+    fs_isolation: FsIsolation = "none",
+) -> str | None:
+    if limits_fully_held(net_isolation, fs_isolation):
+        return None
+    return SOFT_ISOLATION_NOTE
 
 
 def merge_detail(detail: str | None, note: str | None) -> str | None:
@@ -89,7 +106,15 @@ def base_result(
 
 
 def parse_junit(raw: bytes) -> tuple[int, int]:
-    root = ET.fromstring(raw)
+    """Parse junit XML; raises ValueError on malformed input."""
+    try:
+        from defusedxml import ElementTree as ET
+    except ImportError:  # pragma: no cover — defusedxml is a hard dep
+        import xml.etree.ElementTree as ET  # noqa: S405
+    try:
+        root = ET.fromstring(raw)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"junit_parse:{e.__class__.__name__}") from e
     nodes = [root]
     if root.tag.endswith("testsuites"):
         nodes = list(root)
@@ -149,9 +174,42 @@ def cmp(op: str, left: Any, right: Any, tolerance: float | None) -> bool:
 def first_float(data: bytes) -> float:
     m = _FLOAT_RE.search(data)
     if m is None:
-        raise SandboxInfraError("sandbox_crash:no_numeric_stdout")
+        raise ValueError("malformed_output:numeric_stdout")
     return float(m.group(0))
 
 
 def slot_filename(slot: str) -> str:
     return slot.replace("/", "_") or "input.bin"
+
+
+def sandbox_effect(
+    *,
+    attempt_id: str | None,
+    check_id: str,
+    art_id: str,
+    trusted: bool,
+    net_isolation: NetIsolation,
+    fs_isolation: FsIsolation,
+    note: str | None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    effect: dict[str, Any] = {
+        "producer": "sandbox",
+        "trusted": trusted,
+        "net_isolation": net_isolation,
+        "fs_isolation": fs_isolation,
+        "core_evaluated": True,
+        "countable": bool(attempt_id),
+        "produced_by_call_id": f"{attempt_id or 'noattempt'}:sandbox:{check_id}",
+        "artifact_id": art_id,
+    }
+    if note:
+        effect["note"] = note
+    if extra:
+        effect.update(extra)
+    return effect
+
+
+def protect_paths_for(artifacts: LocalArtifactStore) -> list[str]:
+    """Host CAS/meta paths the sandbox must not be able to rewrite."""
+    return [str(artifacts.meta), str(artifacts.cas), str(artifacts.root)]

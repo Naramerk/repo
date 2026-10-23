@@ -91,7 +91,7 @@ Executable catalog CodeCheck kinds (`exec_runs`, `tests_pass`, `metric_on_holdou
   - `allow_network=True` → `none` (network permitted by catalog).
   - `allow_network=False` + working `unshare` netns → `hard`.
   - `allow_network=False` + unshare forbidden (e.g. GitHub Actions `uid_map` EPERM) → `soft` (proxy poison + curl/wget blocklist); **warning logged**.
-- **`trusted=true` only when catalog limits fully held**, including hard network isolation when `allow_network=False`. Soft isolation stores `trusted=false` (still `core_evaluated` / **countable**) and adds a report note (`net_isolation=soft; … evidence not trusted`). There is no silent downgrade to trusted.
+- **`trusted=true` only when both `net_isolation` and `fs_isolation` are `hard`** (not merely `!= soft`). Soft/none isolation stores `trusted=false` (still `core_evaluated` / **countable**) and adds a report note that network may be open (blocklist is bypassable). `allow_network=True` ⇒ not trusted. There is no silent downgrade to trusted.
 - **trusted** remains a severity **tag** for reporting only — it does **not** gate `refuted` / `supported` (countable does).
 - Sandbox infra failures (timeout, OOM, crash, output exceeded, unavailable, blocked) close the attempt as `result_class=infra` with a stable reason; they never hang or crash the host. `StudyFinalized` still holds.
 - Enforced limits: time, memory (`RLIMIT_AS`), output size, network policy as above.

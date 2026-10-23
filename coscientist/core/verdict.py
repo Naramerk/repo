@@ -634,9 +634,10 @@ def recompute_effect_provenance(
     written at eval from that same meta (``producer``, ``produced_by_call_id``,
     ``core_evaluated``). Journal ``trusted``/``countable`` bits are never trusted.
 
-    ``trusted`` = producer core, or sandbox with ``net_isolation != soft``.
-    Soft sandbox evidence stays core_evaluated/countable but not trusted.
-    ``countable`` = core-evaluated catalog check on an artifact bound to the attempt.
+    ``trusted`` = producer core, or sandbox with both net and fs isolation hard
+    (MJ3: ``== hard``, not ``!= soft``). Soft/none stays core_evaluated/countable
+    but not trusted. ``countable`` = core-evaluated catalog check on an artifact
+    bound to the attempt.
     """
     if not isinstance(effect, Mapping):
         return None
@@ -644,6 +645,7 @@ def recompute_effect_provenance(
     producer = out.get("producer", "agent")
     call_id = str(out.get("produced_by_call_id") or "")
     net_isolation = out.get("net_isolation")
+    fs_isolation = out.get("fs_isolation")
     if artifact_meta is not None:
         meta_prod = getattr(artifact_meta, "producer", None)
         if meta_prod in ("agent", "core", "sandbox"):
@@ -659,15 +661,21 @@ def recompute_effect_provenance(
         meta_ni = getattr(artifact_meta, "net_isolation", None)
         if meta_ni in ("hard", "soft", "none"):
             net_isolation = meta_ni
+        meta_fs = getattr(artifact_meta, "fs_isolation", None)
+        if meta_fs in ("hard", "soft", "none"):
+            fs_isolation = meta_fs
     if producer not in ("agent", "core", "sandbox"):
         producer = "agent"
     out["producer"] = producer
     if net_isolation in ("hard", "soft", "none"):
         out["net_isolation"] = net_isolation
+    if fs_isolation in ("hard", "soft", "none"):
+        out["fs_isolation"] = fs_isolation
     if producer == "core":
-        out["trusted"] = True
+        # Explicit effect.trusted=False (B1 fallback) must not be upgraded.
+        out["trusted"] = out.get("trusted") is not False
     elif producer == "sandbox":
-        out["trusted"] = net_isolation != "soft"
+        out["trusted"] = net_isolation == "hard" and fs_isolation == "hard"
     else:
         out["trusted"] = False
     core_eval = bool(out.get("core_evaluated"))
@@ -691,10 +699,18 @@ def recompute_effect_trusted(
 
 
 def effect_producer_trusted(effect: Mapping[str, Any] | None) -> bool:
-    """True when metric producer is core/sandbox (stronger tag; not M1 counting)."""
+    """True when producer is core, or sandbox with both isolations hard (MJ3)."""
     if not isinstance(effect, Mapping):
         return False
-    return effect.get("producer") in ("core", "sandbox")
+    producer = effect.get("producer")
+    if producer == "core":
+        return effect.get("trusted") is not False
+    if producer == "sandbox":
+        return (
+            effect.get("net_isolation") == "hard"
+            and effect.get("fs_isolation") == "hard"
+        )
+    return False
 
 
 def effect_is_countable(effect: Mapping[str, Any] | None) -> bool:

@@ -2104,6 +2104,8 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
             name="main",
             media_type="application/json",
             role="data",
+            net_isolation="hard",
+            fs_isolation="hard",
         )
         await rt.executor.record(
             aid,
@@ -2123,6 +2125,8 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
             name="main",
             media_type="application/json",
             role="data",
+            net_isolation="hard",
+            fs_isolation="hard",
         )
         assert art.producer == "sandbox"
         await rt.executor.record(
@@ -2182,6 +2186,8 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
         make_tool_ref(f"{aid_f}:1"),
         name="main",
         media_type="application/json",
+        net_isolation="hard",
+        fs_isolation="hard",
     )
     await rt2.executor.record(
         aid_f,

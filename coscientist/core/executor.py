@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from typing import Any
@@ -277,6 +278,10 @@ def _effect_from_checks(
             if data.get("ci_low") is not None and data.get("ci_high") is not None:
                 effect["ci_low"] = float(data["ci_low"])
                 effect["ci_high"] = float(data["ci_high"])
+            # Preserve isolation stamps so recompute can decide trusted without meta.
+            for key in ("net_isolation", "fs_isolation", "trusted", "countable", "note"):
+                if key in data:
+                    effect[key] = data[key]
             recomputed = recompute_effect_provenance(effect, attempt_id=attempt_id)
             if recomputed is not None:
                 effect = recomputed
@@ -576,7 +581,9 @@ class Executor:
 
         task = self.get_task(task_id)
         try:
-            checks = evaluate_task_checks(
+            # MJ2: no sync Popen on the event loop — evaluate (sandbox) off-thread.
+            checks = await asyncio.to_thread(
+                evaluate_task_checks,
                 self.catalog,
                 task.spec,
                 out,
@@ -587,7 +594,7 @@ class Executor:
                 task_key=task.spec.task_key,
             )
         except SandboxInfraError as e:
-            # Timeout/OOM/crash/unavailable → infra failure; StudyFinalized still holds.
+            # Timeout/OOM/crash/unavailable → infra; own reason code (MJ4).
             provenance = _provenance(self.get_attempt(attempt_id))
             return await self._commit_failure(
                 attempt_id,
@@ -596,8 +603,9 @@ class Executor:
                 out,
                 provenance,
                 out.claim,
-                reason=TaskReason.FAILED.value,
+                reason=TaskReason.SANDBOX_INFRA.value,
                 detail=e.reason,
+                event_type="SandboxInfraRaised",
             )
         for c in checks:
             if not c.is_code and c.status == ReqStatus.UNASSESSED:
@@ -747,8 +755,9 @@ class Executor:
         *,
         reason: str,
         detail: str,
+        event_type: str = "CatalogErrorRaised",
     ) -> Result:
-        """Infra/execution failure (catalog, crash path) — drop claims."""
+        """Infra/execution failure (catalog, sandbox, crash path) — drop claims."""
         rid = result_id(attempt_id)
         payload = {
             "result_id": rid,
@@ -770,9 +779,9 @@ class Executor:
             [
                 EventEnvelope(
                     study_id=study_id,
-                    type="CatalogErrorRaised",
+                    type=event_type,
                     entity_key=attempt_id,
-                    idem_key=make_idem("CatalogErrorRaised", attempt_id),
+                    idem_key=make_idem(event_type, attempt_id),
                     payload={"error": detail, "reason": reason},
                     ts=self.clock.now(),
                 )

@@ -132,7 +132,7 @@ def _effect_provenance_fields(
 ) -> dict[str, Any]:
     """Core-stamped producer/trusted/countable from artifact meta (agent cannot set).
 
-    ``trusted`` = producer core, or sandbox with net_isolation != soft.
+    ``trusted`` = producer core, or sandbox with both net and fs isolation hard.
     ``countable`` = core catalog evaluation on an artifact bound to this attempt.
     """
     meta = artifacts.get_meta(artifact_id) if artifact_id else None
@@ -142,7 +142,7 @@ def _effect_provenance_fields(
     produced = getattr(meta, "produced_by", None) if meta is not None else None
     call_id = str(getattr(produced, "call_id", "") or "")
     belongs = artifact_belongs_to_attempt(meta, attempt_id)
-    return {
+    out: dict[str, Any] = {
         "producer": producer,
         "trusted": artifact_producer_trusted(meta),
         "core_evaluated": True,
@@ -151,6 +151,14 @@ def _effect_provenance_fields(
         # Countable only when the artifact was produced for this attempt.
         "countable": bool(belongs),
     }
+    if meta is not None and producer == "sandbox":
+        ni = getattr(meta, "net_isolation", None)
+        fs = getattr(meta, "fs_isolation", None)
+        if ni in ("hard", "soft", "none"):
+            out["net_isolation"] = ni
+        if fs in ("hard", "soft", "none"):
+            out["fs_isolation"] = fs
+    return out
 
 
 def _extract_ci(doc: Any, left: Any) -> dict[str, float] | None:
@@ -464,6 +472,17 @@ def evaluate_code_check(
     except SandboxInfraError:
         raise
     except Exception as e:
+        # Host failures outside the guest (mkdtemp/read/put) on executable kinds
+        # are infra, not scientific FAILED (B3).
+        if check.kind in (
+            "exec_runs",
+            "tests_pass",
+            "metric_on_holdout",
+            "reproducible_rerun",
+        ):
+            raise SandboxInfraError(
+                f"sandbox_unavailable:host:{e.__class__.__name__}"
+            ) from e
         return CheckResult(
             check_id=check_id,
             template_id=template_id,

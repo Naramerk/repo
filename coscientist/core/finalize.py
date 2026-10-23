@@ -464,6 +464,21 @@ async def _primary_report_path(
         tasks=runtime.tasks,
         refusal=refusal,
     )
+    # Surface infra details (sandbox reason + soft-isolation note) in report text.
+    results = getattr(runtime, "results", None) or {}
+    detail_lines: list[str] = []
+    for rid in sorted(results):
+        res = results[rid]
+        if not isinstance(res, dict):
+            continue
+        detail = res.get("detail")
+        if detail:
+            detail_lines.append(f"- result `{rid}` detail: {detail}")
+        reason = res.get("reason")
+        if reason:
+            detail_lines.append(f"- result `{rid}` reason: {reason}")
+    if detail_lines:
+        md = md + "\n## Infra / result details\n" + "\n".join(detail_lines) + "\n"
     arts = _artifact_store(runtime)
     if arts is None:
         raise CASUnavailable("no artifact store on runtime")
