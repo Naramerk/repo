@@ -263,6 +263,14 @@ async def _build_rich_payload(
         study=runtime.study,
         results=getattr(runtime, "results", None),
     )
+    from coscientist.core.dispositions import report_hypothesis_verdicts
+
+    hyp_verdicts = report_hypothesis_verdicts(
+        graph=getattr(runtime, "graph", None),
+        study=runtime.study,
+        results=getattr(runtime, "results", None),
+        tasks=runtime.tasks,
+    )
     term = terminal_reason_for(
         trigger, tasks=runtime.tasks, question_dispositions=qdisp
     )
@@ -288,6 +296,7 @@ async def _build_rich_payload(
         contrib=contrib,
         verdict=verdict,
         qdisp=qdisp,
+        hypothesis_verdicts=hyp_verdicts,
     )
     return _bound_rich_payload(payload)
 
@@ -321,6 +330,7 @@ async def _build_finalized_payload(
     contrib: list[str],
     verdict: str,
     qdisp: dict[str, dict[str, Any]],
+    hypothesis_verdicts: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     fallback: str | None = None
     report_artifact_id: str | None = None
@@ -362,6 +372,7 @@ async def _build_finalized_payload(
         "contributing_reasons": contrib,
         "verdict": verdict,
         "question_dispositions": qdisp,
+        "hypothesis_verdicts": hypothesis_verdicts or {},
         "report_artifact_id": report_artifact_id,
         "conclusion_ids": conclusion_ids,
         "minimal_report": minimal,

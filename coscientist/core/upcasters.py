@@ -118,6 +118,7 @@ def _study_created_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
 def _study_created_v2_to_v3(payload: dict[str, Any]) -> dict[str, Any]:
     """PR 6: k_ref / refutation_priority defaults for old StudyCreated journals."""
     out = dict(payload)
+    out.setdefault("confirmations_needed", 1)
     out.setdefault("refutations_needed", 1)
     out.setdefault("refutation_priority", False)
     return out

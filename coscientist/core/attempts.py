@@ -136,21 +136,52 @@ class AttemptsMixin:
         known_claims, claim_provenance = collect_bindable_claims(
             graph, results=results
         )
-        verdict_snapshots: dict[str, dict] = {}
-        if graph is not None and self.study is not None:
-            any_exp = any(
-                t.state == TaskState.DONE
-                and t.outcome
-                in (TaskOutcome.SUCCESS, TaskOutcome.PARTIAL, TaskOutcome.FAILED)
-                for t in self.tasks.values()
-            )
-            verdict_snapshots = compute_verdict_snapshots(
-                graph,
-                study_id=self.study.study_id,
-                study=self.study,
-                results=results,
-                any_experiment_done=any_exp or bool(known_claims),
-            )
+        # Prefer journaled snapshots (replay); else compute scoped to this task.
+        stored = getattr(self, "verdict_snapshots", None) or {}
+        verdict_refs = [
+            inp.ref
+            for inp in task.spec.inputs
+            if inp.kind == "verdict" and inp.ref
+        ]
+        verdict_snapshots: dict[str, dict] = {
+            r: stored[r] for r in verdict_refs if r in stored
+        }
+        need = [r for r in verdict_refs if r not in verdict_snapshots]
+        if need and graph is not None and self.study is not None:
+            try:
+                # Scope any_exp to covering tasks for these question refs when possible.
+                cover_keys: set[str] = set()
+                for plan in (getattr(self, "plans", None) or {}).values():
+                    for spec in plan.get("tasks") or []:
+                        addrs = set(spec.get("addresses") or [])
+                        if addrs & set(need):
+                            cover_keys.add(str(spec.get("task_key") or ""))
+                cover_tasks = [
+                    t
+                    for t in self.tasks.values()
+                    if t.spec.task_key in cover_keys
+                ] or list(self.tasks.values())
+                any_exp = any(
+                    t.state == TaskState.DONE
+                    and t.outcome
+                    in (
+                        TaskOutcome.SUCCESS,
+                        TaskOutcome.PARTIAL,
+                        TaskOutcome.FAILED,
+                    )
+                    for t in cover_tasks
+                )
+                computed = compute_verdict_snapshots(
+                    graph,
+                    study_id=self.study.study_id,
+                    study=self.study,
+                    results=results,
+                    any_experiment_done=any_exp,
+                    refs=need,
+                )
+                verdict_snapshots.update(computed)
+            except Exception:  # noqa: BLE001 — start_attempt must not crash
+                verdict_snapshots = {**verdict_snapshots}
         try:
             bindings, derived = bind_inputs(
                 task,
@@ -202,6 +233,29 @@ class AttemptsMixin:
                 schema_version=3,
             )
         ]
+        # Persist full verdict snapshots used at bind (not digest-only).
+        bound_verdicts = {
+            b.ref: verdict_snapshots[b.ref]
+            for b in bindings
+            if b.kind == "verdict" and b.ref and b.ref in verdict_snapshots
+        }
+        if bound_verdicts:
+            events.append(
+                EventEnvelope(
+                    study_id=sid,
+                    type="VerdictSnapshotsRecorded",
+                    entity_key=f"{sid}:verdicts:{aid}",
+                    idem_key=make_idem("VerdictSnapshotsRecorded", aid),
+                    payload={
+                        "study_id": sid,
+                        "attempt_id": aid,
+                        "scope": "bind",
+                        "snapshots": bound_verdicts,
+                    },
+                    ts=now,
+                    schema_version=1,
+                )
+            )
         # PR7: uses_claim edges for kind=claim inputs (DESIGN_M1 §3).
         events.extend(
             uses_claim_graph_events(

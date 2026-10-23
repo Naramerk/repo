@@ -12,6 +12,7 @@ from coscientist.core.domain import (
     VALID_PROVENANCE,
     AgentTaskOutput,
     Catalog,
+    ExperimentMethod,
     Outcome,
     Provenance,
     ReqStatus,
@@ -36,6 +37,25 @@ def _provenance(attempt: Any) -> Provenance:
     if p not in VALID_PROVENANCE:
         raise ValueError(f"invalid attempt provenance: {p!r}")
     return p  # type: ignore[return-value]
+
+
+def _derive_claim_core_attrs(task: Any, task_outcome: TaskOutcome) -> dict[str, Any]:
+    """Core-owned counting fields from plan/results — never agent claim attrs."""
+    spec = getattr(task, "spec", None)
+    method = getattr(spec, "method", None) if spec is not None else None
+    lit = method == ExperimentMethod.LITERATURE_SEARCH or str(method or "") == (
+        "literature_search"
+    )
+    success = task_outcome == TaskOutcome.SUCCESS
+    criteria = list(getattr(spec, "criteria", None) or []) if spec is not None else []
+    return {
+        "criterion_status": "met" if success else "unassessed",
+        "evidence_kind": "literature" if lit else "computational",
+        # Plan criteria are treated frozen at accept until freeze events exist.
+        "frozen": True,
+        "lit_own_criterion": bool(lit and criteria),
+        "accepted": bool(success),
+    }
 
 
 class Executor:
@@ -300,9 +320,11 @@ class Executor:
         # Attempt-open check runs inside the write transaction (_append_many_sync).
         now = self.clock.now()
         graph = self.get_graph() if self.get_graph is not None else None
+        task = self.get_task(task_id)
+        derived = _derive_claim_core_attrs(task, task_outcome)
         # PR7/PR8: claim nodes carry producing-attempt provenance (H-b);
         # re-upsert keeps worst provenance; about edges + attr whitelist.
-        claim_events = claim_nodes_from_attempt(
+        claim_events, drops = claim_nodes_from_attempt(
             study_id=study_id,
             attempt_id=attempt_id,
             provenance=payload["provenance"],
@@ -310,7 +332,11 @@ class Executor:
             now=now,
             graph=graph,
             attempt_outcome=task_outcome.value,
+            derived=derived,
         )
+        if drops:
+            payload = {**payload, "claims_dropped": drops}
+            payload["payload_digest"] = payload_digest(payload)
         events = [
             *claim_events,
             EventEnvelope(

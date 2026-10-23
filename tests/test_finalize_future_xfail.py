@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 import pytest
 
 from coscientist.core.domain import (
+    HitlPolicy,
+    Study,
     Task,
     TaskKind,
     TaskOutcome,
@@ -44,29 +46,42 @@ def test_based_on_required_for_counted_dispositions():
 def test_question_disposition_computed_from_verdict():
     """PR8: counting claims on graph → answered via verdict()."""
     from coscientist.core.dispositions import dispositions
-    from coscientist.core.domain import HitlPolicy, Study
     from coscientist.core.graph import GraphEdge, GraphNode, GraphStore, default_execution_registry
+    from coscientist.core.ids import question_node_id
     from coscientist.core.inputs import claim_nodes_from_attempt
 
     sid = "st"
     now = datetime(2026, 1, 1, tzinfo=UTC)
     g = GraphStore(default_execution_registry())
-    for ev in claim_nodes_from_attempt(
+    qnid = question_node_id(sid, "Q1")
+    g.upsert_node(
+        GraphNode(
+            node_id=qnid,
+            kind="question",
+            study_id=sid,
+            ref_id="Q1",
+            attrs={"formulation": "why"},
+        )
+    )
+    aid = f"{sid}/E1#1"
+    evs, drops = claim_nodes_from_attempt(
         study_id=sid,
-        attempt_id=f"{sid}/E1#1",
+        attempt_id=aid,
         provenance="real",
-        claims=[
-            {
-                "id": "C1",
-                "target": "Q1",
-                "criterion_status": "met",
-                "evidence_kind": "computational",
-                "artifact_id": "A1",
-            }
-        ],
+        claims=[{"id": "C1", "target": "Q1"}],
         now=now,
         graph=g,
-    ):
+        derived={
+            "criterion_status": "met",
+            "evidence_kind": "computational",
+            "frozen": True,
+            "lit_own_criterion": False,
+            "accepted": True,
+            "artifact_id": "A1",
+        },
+    )
+    assert drops == []
+    for ev in evs:
         if ev.type == "GraphNodeUpserted":
             g.upsert_node(GraphNode.model_validate(ev.payload))
         elif ev.type == "GraphEdgeAdded":
@@ -105,7 +120,7 @@ def test_question_disposition_computed_from_verdict():
         plans={"pl": plan},
         graph=g,
         study=study,
-        results={f"{sid}/E1#1": {"outcome": "SUCCESS"}},
+        results={aid: {"outcome": "SUCCESS"}},
     )
     assert d["Q1"]["disposition"] == "answered"
 

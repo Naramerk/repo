@@ -40,7 +40,6 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
         get_attempt=lambda aid: type("A", (), rt.attempts[aid])(),
         get_task=lambda tid: rt.tasks[tid],
         on_events=rt._project_local,
-        get_graph=lambda: rt.graph,
     )
 
     def get_attempt(aid: str):
@@ -58,7 +57,13 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
         )()
 
     ex.get_attempt = get_attempt
-    rt.executor = ex
+    # Production path: StudyRuntime.bind_executor wires get_graph.
+    bind = getattr(rt, "bind_executor", None)
+    if callable(bind):
+        bind(ex)
+    else:
+        ex.get_graph = lambda: rt.graph
+        rt.executor = ex
     # finalize/_artifact_store prefers executor.artifacts; no runtime.artifacts assign.
     return ex, arts
 

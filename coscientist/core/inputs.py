@@ -7,8 +7,9 @@ from enum import StrEnum
 from typing import Any
 
 from coscientist.core.claims import (
+    namespaced_claim_id,
     producer_attempt_failed,
-    resolve_about_target_id,
+    resolve_existing_target,
     whitelist_claim_attrs,
 )
 from coscientist.core.digest import canonical_json, sha256_hex
@@ -21,23 +22,32 @@ from coscientist.core.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
+    worst_provenance,
 )
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.graph import GraphEdge, GraphNode
-from coscientist.core.ids import claim_node_id, experiment_node_id
+from coscientist.core.ids import experiment_node_id
 
-PROVENANCE_RANK = {"real": 0, "partial": 1, "stub": 2}
+# Re-export for callers/tests that imported from inputs.
+__all__ = [
+    "InputMode",
+    "InputUnavailable",
+    "worst_provenance",
+    "normalize_input_mode",
+    "input_binding_digest",
+    "verdict_binding_digest",
+    "bind_inputs",
+    "claim_nodes_from_attempt",
+    "uses_claim_graph_events",
+    "validate_input_specs",
+    "collect_bindable_claims",
+]
 
 
 class InputMode(StrEnum):
     USE_PARTIAL = "use_partial"
     SIMULATE = "simulate"
     FORBID = "forbid"
-
-
-def worst_provenance(*values: Provenance) -> Provenance:
-    """Least favorable under real < partial < stub."""
-    return max(values, key=lambda p: PROVENANCE_RANK[p])
 
 
 def normalize_input_mode(spec: InputSpec) -> InputMode:
@@ -239,29 +249,59 @@ def claim_nodes_from_attempt(
     now: datetime,
     graph: Any | None = None,
     attempt_outcome: str = "SUCCESS",
-) -> list[EventEnvelope]:
+    derived: dict[str, Any] | None = None,
+) -> tuple[list[EventEnvelope], list[dict[str, str]]]:
     """Emit ``GraphNodeUpserted`` (+ ``about`` edges) for agent claims.
 
-    Production path (Executor.record): every claim node carries
-    ``attrs.provenance`` from the producing attempt (H-b). On re-upsert of the
-    same agent-chosen id, provenance is the **worst** of existing and new
-    (stub claim cannot be laundered to real). Agent fields are whitelisted.
-    FAILED attempts should pass ``claims=[]`` (caller); ``attempt_outcome`` is
-    still recorded when claims are emitted.
+    Returns ``(events, drops)`` where drops are ``{key, reason}`` for rejected
+    claims (never raises). Agent fields are whitelisted; counting fields come
+    from ``derived`` (Executor). Claim ids are namespaced per attempt. Unknown
+    targets are rejected — never auto-created. Existing target nodes are never
+    clobbered. Re-upsert of the same namespaced id keeps worst provenance.
     """
+    drops: list[dict[str, str]] = []
     if attempt_outcome == "FAILED":
-        return []
+        return [], drops
     if provenance not in VALID_PROVENANCE:
         provenance = "stub"  # type: ignore[assignment]
+    core = dict(derived or {})
     events: list[EventEnvelope] = []
     for i, raw in enumerate(claims):
         if not isinstance(raw, dict):
+            drops.append({"key": str(i), "reason": "not_a_dict"})
             continue
-        key = str(raw.get("id") or raw.get("claim_id") or f"{attempt_id}:{i}")
-        # Allow full node ids or short keys.
-        cid = key if key.startswith(f"{study_id}:claim:") else claim_node_id(study_id, key)
+        agent_key = str(raw.get("id") or raw.get("claim_id") or f"idx{i}")
+        cid = namespaced_claim_id(study_id, attempt_id, agent_key)
+        if cid is None:
+            drops.append({"key": agent_key, "reason": "foreign_claim_id"})
+            continue
         attrs = whitelist_claim_attrs(raw)
-        # Core-owned fields (never agent-controlled wholesale).
+        target = attrs.get("target")
+        if not target:
+            drops.append({"key": agent_key, "reason": "target_missing"})
+            continue
+        resolved = resolve_existing_target(study_id, str(target), graph)
+        if resolved is None:
+            drops.append({"key": agent_key, "reason": "target_unknown"})
+            continue
+        target_id, _target_kind = resolved
+
+        if graph is not None:
+            existing = graph.get_node(cid)
+            if existing is not None:
+                if existing.kind != "claim":
+                    drops.append({"key": agent_key, "reason": "id_collides_non_claim"})
+                    continue
+                old_target = (existing.attrs or {}).get("target")
+                if old_target is not None and str(old_target) != str(target):
+                    drops.append({"key": agent_key, "reason": "target_change_forbidden"})
+                    continue
+                # Existing about must not retarget.
+                old_about = [e for e in graph.edges_from(cid) if e.kind == "about"]
+                if old_about and old_about[0].dst_id != target_id:
+                    drops.append({"key": agent_key, "reason": "about_retarget_forbidden"})
+                    continue
+
         new_prov: Provenance = provenance
         if graph is not None:
             existing = graph.get_node(cid)
@@ -269,11 +309,19 @@ def claim_nodes_from_attempt(
                 old = (existing.attrs or {}).get("provenance")
                 if old in VALID_PROVENANCE:
                     new_prov = worst_provenance(old, provenance)  # type: ignore[arg-type]
+
+        # Core-derived counting fields (Executor); never from agent whitelist.
         attrs["provenance"] = new_prov
         attrs["attempt_id"] = attempt_id
         attrs["attempt_outcome"] = attempt_outcome
-        # Drop agent-supplied stance if it slipped past whitelist (defense).
-        attrs.pop("stance", None)
+        attrs["criterion_status"] = core.get("criterion_status", "unassessed")
+        attrs["evidence_kind"] = core.get("evidence_kind", "computational")
+        attrs["frozen"] = bool(core.get("frozen", False))
+        attrs["lit_own_criterion"] = bool(core.get("lit_own_criterion", False))
+        attrs["accepted"] = bool(core.get("accepted", False))
+        if core.get("artifact_id"):
+            attrs["artifact_id"] = core["artifact_id"]
+
         node = GraphNode(
             node_id=cid,
             kind="claim",
@@ -293,76 +341,39 @@ def claim_nodes_from_attempt(
                 schema_version=1,
             )
         )
-        # Required about edge (claim → hypothesis|question), out 1..1.
-        target = attrs.get("target")
-        if target:
-            target_id, target_kind = resolve_about_target_id(
-                study_id, str(target), graph
+        have_about = False
+        if graph is not None:
+            have_about = any(e.kind == "about" for e in graph.edges_from(cid))
+        if any(
+            ev.type == "GraphEdgeAdded"
+            and (ev.payload or {}).get("src_id") == cid
+            and (ev.payload or {}).get("kind") == "about"
+            for ev in events
+        ):
+            have_about = True
+        if not have_about:
+            eid = f"about:{cid}:{target_id}"
+            edge = GraphEdge(
+                edge_id=eid,
+                kind="about",
+                study_id=study_id,
+                src_id=cid,
+                dst_id=target_id,
+                attrs={},
+                created_at=now,
             )
-            have_about = False
-            if graph is not None:
-                have_about = any(
-                    e.kind == "about" for e in graph.edges_from(cid)
-                )
-                # Also treat edges we are about to emit in this batch.
-            if any(
-                ev.type == "GraphEdgeAdded"
-                and (ev.payload or {}).get("src_id") == cid
-                and (ev.payload or {}).get("kind") == "about"
-                for ev in events
-            ):
-                have_about = True
-            if not have_about:
-                if graph is None or graph.get_node(target_id) is None:
-                    # Ensure endpoint exists so GraphEdgeAdded does not fail.
-                    already = any(
-                        ev.type == "GraphNodeUpserted" and ev.entity_key == target_id
-                        for ev in events
-                    )
-                    if not already:
-                        tnode = GraphNode(
-                            node_id=target_id,
-                            kind=target_kind,
-                            study_id=study_id,
-                            ref_id=str(target),
-                            attrs={},
-                            created_at=now,
-                        )
-                        events.append(
-                            EventEnvelope(
-                                study_id=study_id,
-                                type="GraphNodeUpserted",
-                                entity_key=target_id,
-                                idem_key=make_idem(
-                                    "GraphNodeUpserted", target_id, attempt_id
-                                ),
-                                payload=tnode.model_dump(mode="json"),
-                                ts=now,
-                                schema_version=1,
-                            )
-                        )
-                eid = f"about:{cid}:{target_id}"
-                edge = GraphEdge(
-                    edge_id=eid,
-                    kind="about",
+            events.append(
+                EventEnvelope(
                     study_id=study_id,
-                    src_id=cid,
-                    dst_id=target_id,
-                    attrs={},
-                    created_at=now,
+                    type="GraphEdgeAdded",
+                    entity_key=eid,
+                    idem_key=make_idem("GraphEdgeAdded", eid),
+                    payload=edge.model_dump(mode="json"),
+                    ts=now,
+                    schema_version=1,
                 )
-                events.append(
-                    EventEnvelope(
-                        study_id=study_id,
-                        type="GraphEdgeAdded",
-                        entity_key=eid,
-                        idem_key=make_idem("GraphEdgeAdded", eid),
-                        payload=edge.model_dump(mode="json"),
-                        ts=now,
-                        schema_version=1,
-                    )
-                )
-    return events
+            )
+    return events, drops
 
 
 def uses_claim_graph_events(
@@ -477,11 +488,9 @@ def collect_bindable_claims(
     for node in nodes:
         attrs = node.attrs or {}
         aid = attrs.get("attempt_id")
-        if producer_attempt_failed(
-            str(aid) if aid else None,
-            results=results,
-            attrs_outcome=str(attrs.get("attempt_outcome") or "") or None,
-        ):
+        if str(attrs.get("attempt_outcome") or "") == "FAILED":
+            continue
+        if producer_attempt_failed(str(aid) if aid else None, results=results):
             continue
         known.add(node.node_id)
         p = attrs.get("provenance")

@@ -311,7 +311,11 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
-    claim_id = claim_node_id(sid, "from_E0")
+    from coscientist.core.domain import QuestionSpec
+
+    # Claim ids are namespaced per attempt (PR8); first attempt id is deterministic.
+    aid0_expected = f"{sid}/E0#1"
+    claim_id = claim_node_id(sid, f"{aid0_expected}:from_E0")
     await rt.accept_plan(
         [
             TaskSpec(
@@ -321,6 +325,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
             ),
             TaskSpec(
                 task_key="E1",
@@ -331,9 +336,10 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
                 inputs=[InputSpec(kind="claim", ref=claim_id)],
             ),
         ],
-        questions=[],
+        questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid0 = await rt.start_attempt("E0", provenance="stub")
+    assert aid0 == aid0_expected
     content = b'{"count": 225}'
     art = arts.put(
         content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
@@ -344,7 +350,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": claim_id, "target": "H1"}],
+            claims=[{"id": "from_E0", "target": "Q1"}],
         ),
     )
     node = rt.graph.get_node(claim_id)

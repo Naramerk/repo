@@ -69,12 +69,19 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         self.artifacts: Any | None = None
         self.dep_outputs: dict[str, dict[str, str]] = {}
         self.dep_provenance: dict[str, Provenance] = {}
+        self.verdict_snapshots: dict[str, dict[str, Any]] = {}
         self._retry_at: dict[str, datetime] = {}
         self._finalized = False
         self._study_cancelled = False
         self._budget_exceeded = False
         self._intake_refusal: IntakeRefuse | None = None
         self._study_spent_rub = Decimal("0")
+
+    def bind_executor(self, executor: Any) -> Any:
+        """Wire production ``graph`` into Executor (laundering + about edges)."""
+        executor.get_graph = lambda: self.graph
+        self.executor = executor
+        return executor
 
     async def _append(self, events: list[EventEnvelope]) -> None:
         if self._lease_lost:

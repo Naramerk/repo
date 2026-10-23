@@ -60,6 +60,7 @@ class LifecycleMixin:
         sid: str | None = None,
         budget: Budget | None = None,
         finalize_reserve_s: int = 30,
+        confirmations_needed: int = 1,
         refutations_needed: int = 1,
         refutation_priority: bool = False,
         inputs: list[Any] | None = None,
@@ -71,6 +72,10 @@ class LifecycleMixin:
         dl = deadline or (now + timedelta(hours=2))
         if finalize_reserve_s < 0:
             raise ValueError(f"finalize_reserve_s must be >= 0, got {finalize_reserve_s}")
+        if confirmations_needed < 1:
+            raise ValueError(
+                f"confirmations_needed must be >= 1, got {confirmations_needed}"
+            )
         if refutations_needed < 1:
             raise ValueError(
                 f"refutations_needed must be >= 1, got {refutations_needed}"
@@ -98,6 +103,7 @@ class LifecycleMixin:
             parent_study_id=parent_study_id,
             budget=budget,
             finalize_reserve_s=finalize_reserve_s,
+            confirmations_needed=confirmations_needed,
             refutations_needed=refutations_needed,
             refutation_priority=refutation_priority,
         )
@@ -242,6 +248,33 @@ class LifecycleMixin:
                 schema_version=2,
             )
         ]
+        # Question nodes so claim ``about`` can bind without auto-creating targets.
+        from coscientist.core.graph import GraphNode
+        from coscientist.core.ids import question_node_id
+
+        graph = getattr(self, "graph", None)
+        for q in questions:
+            qnid = question_node_id(sid, q.id)
+            if graph is not None and graph.get_node(qnid) is not None:
+                continue  # never clobber existing attrs
+            events.append(
+                EventEnvelope(
+                    study_id=sid,
+                    type="GraphNodeUpserted",
+                    entity_key=qnid,
+                    idem_key=make_idem("GraphNodeUpserted", qnid, pid),
+                    payload=GraphNode(
+                        node_id=qnid,
+                        kind="question",
+                        study_id=sid,
+                        ref_id=q.id,
+                        attrs={"formulation": q.text},
+                        created_at=now,
+                    ).model_dump(mode="json"),
+                    ts=now,
+                    schema_version=1,
+                )
+            )
         plan_tid = task_id(sid, "PLAN")
         if plan_tid in self.tasks and self.tasks[plan_tid].state != TaskState.DONE:
             events.append(

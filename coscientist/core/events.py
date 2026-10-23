@@ -46,6 +46,9 @@ EventType = Literal[
     "LeaseAcquired",
     "ReviewScheduled",
     "ForkCreated",
+    "VerdictSnapshotsRecorded",
+    "GraphNodeUpserted",
+    "GraphEdgeAdded",
 ]
 
 

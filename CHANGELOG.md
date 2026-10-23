@@ -3,10 +3,13 @@
 ## Unreleased
 
 ### M1 PR8
-- Runtime `verdict()` wired into `dispositions()` / finalize (Study `refutations_needed` / `refutation_priority`); supported → answered.
-- `InputSpec.kind=verdict` enabled: P2 snapshot + persisted digest on `AttemptStarted`.
-- Claim carry-overs: re-upsert keeps **worst** provenance; FAILED attempts emit no claims (+ bind-time guard); claim attrs whitelisted; required `about` edge (cardinality checked).
+- Runtime `verdict()` wired into `dispositions()` / finalize (Study `confirmations_needed` / `refutations_needed` / `refutation_priority`); supported → answered; hypothesis verdicts in StudyFinalized.
+- `InputSpec.kind=verdict` enabled; `VerdictSnapshotsRecorded` persists full snapshots (not digest-only); invalidated on claim/`about` changes.
+- Claim carry-overs: worst provenance; no FAILED claims; tight whitelist (`target`/`checked_against`/`reason`/`premise_idx`); core-derived counting fields; intent from `tests` edge; namespaced claim ids; unknown targets rejected; `about` required.
+- Totality: garbage claim attrs dropped (never raise into finalize/view/start_attempt).
+- `StudyRuntime.bind_executor` wires `get_graph` in production.
 - Priority-refuted provenance exception unchanged.
+- Compat: `view()` with graph/study uses PR8 dispositions; PR7 journals without counting claims stay `not_attempted` (upcaster defaults `confirmations_needed=1`).
 
 ### M1 PR7
 - `InputSpec.kind: artifact | claim` (+ `ref`); `uses_claim` edge (17th) at P2.

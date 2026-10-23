@@ -28,6 +28,7 @@ class LocalProjectMixin:
     _budget_exceeded: bool
     _intake_refusal: IntakeRefuse | None
     _study_spent_rub: Decimal
+    verdict_snapshots: dict[str, dict[str, Any]]
 
     def _project_local(self, ev: EventEnvelope) -> None:
         p = ev.payload
@@ -108,10 +109,42 @@ class LocalProjectMixin:
             # TaskDone(reason=budget) is task-level only; study budget is
             # BudgetExceeded (folded above).
         elif ev.type == "GraphNodeUpserted":
-            self.graph.upsert_node(GraphNode.model_validate(p))
+            node = GraphNode.model_validate(p)
+            # Never clobber richer existing question/hypothesis attrs with empty.
+            existing = self.graph.get_node(node.node_id)
+            if (
+                existing is not None
+                and existing.kind in ("question", "hypothesis")
+                and node.kind == existing.kind
+                and not (node.attrs or {})
+                and (existing.attrs or {})
+            ):
+                pass  # keep existing
+            else:
+                self.graph.upsert_node(node)
+            if node.kind == "claim":
+                self._invalidate_verdict_snapshots(node)
         elif ev.type == "GraphEdgeAdded":
             # Fail loudly: missing endpoints / illegal pairs are journal bugs.
-            self.graph.add_edge(GraphEdge.model_validate(p))
+            edge = GraphEdge.model_validate(p)
+            self.graph.add_edge(edge)
+            if edge.kind == "about":
+                self.verdict_snapshots.clear()
+        elif ev.type == "VerdictSnapshotsRecorded":
+            snaps = p.get("snapshots") or {}
+            if isinstance(snaps, dict):
+                self.verdict_snapshots.update(
+                    {str(k): dict(v) for k, v in snaps.items() if isinstance(v, dict)}
+                )
+
+    def _invalidate_verdict_snapshots(self, node: GraphNode) -> None:
+        """Drop journaled snapshots for a claim's target (DESIGN_M1 PR8)."""
+        target = (node.attrs or {}).get("target")
+        if target is not None and str(target) in self.verdict_snapshots:
+            self.verdict_snapshots.pop(str(target), None)
+        else:
+            # Unknown target mapping — invalidate all (safe).
+            self.verdict_snapshots.clear()
 
     def _fold_finalized_graph(
         self, study_id: str, payload: dict[str, Any], *, created_at: datetime
@@ -122,10 +155,29 @@ class LocalProjectMixin:
             study_id, payload, created_at=created_at
         )
         for row in nodes.values():
-            self.graph.upsert_node(GraphNode.model_validate(row))
+            incoming = GraphNode.model_validate(row)
+            existing = self.graph.get_node(incoming.node_id)
+            if (
+                existing is not None
+                and existing.kind in ("question", "hypothesis")
+                and (existing.attrs or {})
+                and not (incoming.attrs or {}).get("formulation")
+            ):
+                # Preserve formulation from accept_plan when finalize row is sparse.
+                merged = incoming.model_copy(
+                    update={"attrs": {**(existing.attrs or {}), **(incoming.attrs or {})}}
+                )
+                self.graph.upsert_node(merged)
+            else:
+                self.graph.upsert_node(incoming)
         for row in edges.values():
             try:
                 self.graph.add_edge(GraphEdge.model_validate(row))
             except (KeyError, ValueError):
                 # study/question node may be missing in sparse journals
                 pass
+        hv = payload.get("hypothesis_verdicts")
+        if isinstance(hv, dict):
+            self.verdict_snapshots.update(
+                {str(k): dict(v) for k, v in hv.items() if isinstance(v, dict)}
+            )

@@ -6,11 +6,11 @@ from collections.abc import Mapping
 from typing import Any
 
 from coscientist.core.claims import (
-    claims_by_target,
-    claims_missing_about,
     disposition_from_verdict,
+    filtered_claims_by_target,
+    hypothesis_verdicts,
 )
-from coscientist.core.domain import Study, Task, TaskState
+from coscientist.core.domain import Study, Task, TaskOutcome, TaskState
 from coscientist.core.graph import GraphStore
 from coscientist.core.question_tasks import known_questions, question_tasks
 from coscientist.core.reasons import Disposition, NotAttemptedReason, TaskReason
@@ -71,7 +71,7 @@ def dispositions(
     graph: GraphStore | None = None,
     study: Study | None = None,
     results: Mapping[str, Mapping[str, Any]] | None = None,
-    k: int = 1,
+    k: int | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-question disposition.
 
@@ -79,39 +79,69 @@ def dispositions(
     refuted / survived / inconclusive (Study ``refutations_needed`` /
     ``refutation_priority``). Otherwise not_attempted + NotAttemptedReason.
 
-    Claims missing the required ``about`` edge are ignored for counting
-    (cardinality checked via ``claims_missing_about``).
+    Totality: never raises — graph/claim coerce failures fall back to
+    not_attempted.
     """
+    try:
+        return _dispositions_inner(
+            tasks=tasks,
+            plans=plans,
+            graph=graph,
+            study=study,
+            results=results,
+            k=k,
+        )
+    except Exception:  # noqa: BLE001 — finalize/view must never crash
+        qmap = known_questions(plans)
+        return {
+            qid: {
+                "disposition": Disposition.NOT_ATTEMPTED.value,
+                "reason": NotAttemptedReason.NO_COUNTING_CLAIMS.value,
+                "reason_detail": [],
+                "formulation": text,
+            }
+            for qid, text in qmap.items()
+        }
+
+
+def _dispositions_inner(
+    *,
+    tasks: Mapping[str, Task],
+    plans: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]],
+    graph: GraphStore | None,
+    study: Study | None,
+    results: Mapping[str, Mapping[str, Any]] | None,
+    k: int | None,
+) -> dict[str, dict[str, Any]]:
     qmap = known_questions(plans)
     cover = question_tasks(plans)
     by_key = _task_by_key(tasks)
     by_target: dict[str, list] = {}
-    missing_about: set[str] = set()
     if graph is not None and study is not None:
-        missing_about = set(claims_missing_about(graph))
-        by_target = claims_by_target(
+        by_target = filtered_claims_by_target(
             graph, study_id=study.study_id, results=results
         )
-        # Drop claims that violate about cardinality from counting sets.
-        if missing_about:
-            for ref, clist in list(by_target.items()):
-                by_target[ref] = [c for c in clist if c.node_id not in missing_about]
 
     k_ref = study.refutations_needed if study is not None else 1
     priority = study.refutation_priority if study is not None else False
+    conf_k = (
+        k
+        if k is not None
+        else (study.confirmations_needed if study is not None else 1)
+    )
 
     result: dict[str, dict[str, Any]] = {}
     for qid, text in qmap.items():
         keys = cover.get(qid, set())
-        covering = [by_key[k] for k in sorted(keys) if k in by_key]
+        covering = [by_key[kk] for kk in sorted(keys) if kk in by_key]
         claims = by_target.get(qid) or []
         counting = [c for c in claims if c.counts()]
         if counting:
-            any_exp = any(t.state == TaskState.DONE for t in covering) or True
+            any_exp = any(t.state == TaskState.DONE for t in covering)
             v, _by_lit = verdict(
                 claims,
                 any_exp,
-                k,
+                conf_k,
                 refutations_needed=k_ref,
                 refutation_priority=priority,
             )
@@ -133,3 +163,31 @@ def dispositions(
             "formulation": text,
         }
     return result
+
+
+def report_hypothesis_verdicts(
+    *,
+    graph: GraphStore | None,
+    study: Study | None,
+    results: Mapping[str, Mapping[str, Any]] | None,
+    tasks: Mapping[str, Task],
+) -> dict[str, dict[str, Any]]:
+    """Hypothesis verdicts for StudyFinalized / minimal_report (PR8)."""
+    if graph is None or study is None:
+        return {}
+    any_exp = any(
+        t.state == TaskState.DONE
+        and t.outcome in (TaskOutcome.SUCCESS, TaskOutcome.PARTIAL, TaskOutcome.FAILED)
+        for t in tasks.values()
+    )
+    try:
+        return hypothesis_verdicts(
+            graph,
+            study_id=study.study_id,
+            study=study,
+            results=results,
+            k=1,
+            any_experiment_done=any_exp,
+        )
+    except Exception:  # noqa: BLE001
+        return {}

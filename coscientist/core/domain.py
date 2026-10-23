@@ -62,6 +62,14 @@ class ReqStatus(StrEnum):
 
 Provenance = Literal["real", "partial", "stub"]
 VALID_PROVENANCE: frozenset[str] = frozenset({"real", "partial", "stub"})
+PROVENANCE_RANK: dict[str, int] = {"real": 0, "partial": 1, "stub": 2}
+
+
+def worst_provenance(*values: Provenance) -> Provenance:
+    """Least favorable under real < partial < stub. Empty → stub."""
+    if not values:
+        return "stub"
+    return max(values, key=lambda p: PROVENANCE_RANK[p])
 OnTimeout = Literal["delegate", "delegate_capped", "fail"]
 HitlGateKind = Literal[
     "spec_approval",
@@ -241,6 +249,7 @@ class Study(Frozen):
     budget: Budget | None = None
     finalize_reserve_s: int = Field(default=30, ge=0)
     # PR 6 / DESIGN_M1 §3: fixed at create (like catalog_version); change only via fork.
+    confirmations_needed: int = Field(default=1, ge=1)  # k for supported
     refutations_needed: int = Field(default=1, ge=1)  # k_ref
     refutation_priority: bool = False
 
