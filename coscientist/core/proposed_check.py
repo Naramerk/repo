@@ -931,8 +931,8 @@ async def reject_check(
         dec = _lookup_hitl_decision(runtime, str(hitl_request_id_s))
         if isinstance(dec, dict):
             d = str(dec.get("decision") or "").strip()
-            by = str(dec.get("by") or dec.get("decided_by") or "").strip()
-            if by == "human" and d in ("accept", "approve"):
+            decided_by = str(dec.get("by") or dec.get("decided_by") or "").strip()
+            if decided_by == "human" and d in ("accept", "approve"):
                 return
     principal: str | None = None
     if source == "reviewer":
@@ -951,8 +951,9 @@ async def reject_check(
     study = runtime.study
     assert study is not None
     now = runtime.clock.now()
+    by: str
     if source == "timeout":
-        by: str = "timeout"
+        by = "timeout"
     elif source in ("hitl", "api"):
         by = "human"
     else:
