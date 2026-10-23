@@ -250,9 +250,9 @@ async def materialize_foreach(
             TaskSpec.model_validate(t) if isinstance(t, dict) else t
             for t in (prev0.get("tasks") or [])
         ]
-        cap = 1.0 - float(getattr(study, "replan_reserve", 0.0) or 0.0)
+        share_cap = 1.0 - float(getattr(study, "replan_reserve", 0.0) or 0.0)
         added = apply_foreach_parent_shares(
-            template.spec, list(keyed), plan_tasks=plan_specs, share_cap=cap
+            template.spec, list(keyed), plan_tasks=plan_specs, share_cap=share_cap
         )
     else:
         added, prev0, plan_specs = [], active_plan_blob(runtime) or {}, []
