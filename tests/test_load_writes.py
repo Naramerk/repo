@@ -21,11 +21,11 @@ from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime
 
 # DESIGN §3.5a absolute SLO — do not raise; no retries/skips/xfail.
 _P99_SLO_MS = 50.0
-# Predetermined independent full loads. Aggregate with max(round_p99) — same
-# strictness as the old CI 5× all-must-pass loop, without outer pytest retries.
-# min()/best-of hides intermittent regressions (one bad round + two clean).
-# With n≥1000, p99 is ~10th-worst so rare fsync spikes rarely clear 50ms;
-# max-of-3 stays green on residual noise (e.g. 13ms) while a ≥60ms round fails.
+# Predetermined independent full loads; gate is max(round_p99) ≤ 50ms so one
+# bad round fails (min/best-of would hide it). Replaces the old outer CI 5×
+# pytest loop. Not equivalent: at n=1049, p99 is the 12th-from-end sample
+# (int(n*0.99)-1), so a handful of rare fsync outliers are more tolerated
+# than with n≈149 where p99 was ~2nd/3rd-worst. Threshold stays 50ms.
 _PERF_ROUNDS = 3
 _PERF_MIN_SAMPLES = 1000
 # RouteReturned count per EXP attempt so one load yields ≥_PERF_MIN_SAMPLES.
@@ -422,8 +422,10 @@ async def test_twenty_parallel_attempts_fsync_p99_slo(
     fence/insert/JSON/projection-upsert/commit under ``synchronous=FULL``) for
     ``_PERF_ROUNDS`` independent 20-parallel loads on real-disk ``tmp_path``,
     each with ≥``_PERF_MIN_SAMPLES`` writes. Passes iff ``max(round_p99)`` ≤
-    50ms (every round must clear the SLO — replaces the old CI 5× loop).
-    No shm, no commit-only timer, no wal/GC knobs, no retries/skips/xfail.
+    50ms (every round must clear the SLO). Replaces the old outer CI 5× loop;
+    at n≥1000, p99 is the 12th-from-end sample (more tolerant of rare tail
+    outliers than n≈149). No shm, no commit-only timer, no wal/GC knobs, no
+    retries/skips/xfail.
     """
     round_p99: list[float] = []
     for r in range(_PERF_ROUNDS):
@@ -474,3 +476,61 @@ def test_p99_gate_max_of_rounds_trips_on_one_bad_round():
         _assert_max_round_p99([_p99_ms(bad)] * _PERF_ROUNDS)
     # Three clean rounds pass (noise like 13ms still under 50).
     assert _assert_max_round_p99([13.53, 1.27, 1.19]) == 13.53
+
+
+@pytest.mark.serial
+@pytest.mark.asyncio
+async def test_p99_gate_trips_on_slow_append_many_real_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """~60ms sleep in real ``SqliteEventStore.append_many`` trips max-of-3.
+
+    One measured round (core runtime only — cheap) + two clean synthetic
+    rounds through ``_assert_max_round_p99``.
+    """
+    from coscientist.core.machine import StudyRuntime
+    from coscientist.core.store import SqliteEventStore
+
+    real_append_many = SqliteEventStore.append_many
+
+    async def _slow_append_many(self: Any, *args: Any, **kwargs: Any) -> Any:
+        await asyncio.sleep(0.060)
+        return await real_append_many(self, *args, **kwargs)
+
+    monkeypatch.setattr(SqliteEventStore, "append_many", _slow_append_many)
+
+    clock = SystemClock()
+    rt = await open_runtime(
+        tmp_path, "st_delay", clock=clock, runtime_cls=StudyRuntime
+    )
+    await rt.create_study(
+        profile="research",
+        request="delay-gate",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(hours=1),
+        sid="st_delay",
+    )
+    for i in range(20):
+        await rt.writer.append(
+            EventEnvelope(
+                study_id="st_delay",
+                type="RouteReturned",
+                entity_key=f"st_delay/EXP-delay:{i}",
+                idem_key=f"RouteReturned:delay:{i}",
+                payload={
+                    "attempt_id": f"st_delay/EXP-delay:{i}",
+                    "agent_output_digest": f"d{i}",
+                },
+                ts=clock.now(),
+            )
+        )
+    lat = rt.writer.latency_samples_ms()
+    await close_runtime(rt)
+    assert lat, "no write latencies recorded"
+    bad_p99 = _p99_ms(lat)
+    print(f"delay-real-path p99={bad_p99:.2f}ms n={len(lat)}")
+    assert bad_p99 > _P99_SLO_MS, (
+        f"injected 60ms delay should exceed SLO (p99={bad_p99:.2f})"
+    )
+    with pytest.raises(AssertionError, match=r"max-of-3 p99 .*> 50\.0ms"):
+        _assert_max_round_p99([1.0, bad_p99, 1.0])
