@@ -127,6 +127,8 @@ def expansion_not_done_line(reason: str, detail: str) -> str:
 # Guest sandbox timeout exhaustion (PR17) — Russian report lines.
 TIMEOUT_BUDGET_RU = "не проверено в пределах бюджета"
 IDLE_TIMEOUT_RU = "не проверено: простой агента (подозрение на саботаж)"
+# Must survive `_bound_rich_payload` contributing_reasons truncation.
+_PROTECTED_CONTRIBUTING_REASONS = frozenset({TIMEOUT_BUDGET_RU, IDLE_TIMEOUT_RU})
 
 
 def sandbox_timeout_report_line(reason: str | None, detail: str | None = None) -> str | None:
@@ -327,6 +329,36 @@ async def _append_finalized(
         ]
     )
 
+def truncate_contributing_reasons(
+    reasons: list[str] | None, *, limit: int = 10
+) -> list[str]:
+    """Truncate contributing_reasons while keeping timeout RU lines.
+
+    ``TIMEOUT_BUDGET_RU`` / ``IDLE_TIMEOUT_RU`` are non-truncatable: they are
+    always retained (deduped, original relative order). Other reasons fill the
+    remaining slots in first-seen order. If only protected lines remain and
+    somehow exceed ``limit``, collapse duplicates into a single counter line.
+    """
+    src = [str(r) for r in (reasons or [])]
+    if len(src) <= limit:
+        return src
+    pinned: list[str] = []
+    pinned_seen: set[str] = set()
+    others: list[str] = []
+    for r in src:
+        if r in _PROTECTED_CONTRIBUTING_REASONS:
+            if r not in pinned_seen:
+                pinned.append(r)
+                pinned_seen.add(r)
+        else:
+            others.append(r)
+    if len(pinned) > limit:
+        # Aggregate rather than drop (should not happen with two constants).
+        return [f"{pinned[0]} ×{len(pinned)}"][:limit]
+    room = max(0, limit - len(pinned))
+    return pinned + others[:room]
+
+
 def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Shrink question_dispositions / reasons until JCS ≤ MAX; else raise."""
     out = dict(payload)
@@ -342,7 +374,9 @@ def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
         for qid, d in (out.get("question_dispositions") or {}).items()
     }
     out["question_dispositions"] = qdisp
-    out["contributing_reasons"] = list(out.get("contributing_reasons") or [])[:10]
+    out["contributing_reasons"] = truncate_contributing_reasons(
+        list(out.get("contributing_reasons") or [])
+    )
     if len(canonical_json(out)) <= MAX_FINALIZED_PAYLOAD_BYTES:
         return out
     raise RuntimeError("finalized_payload_too_large")

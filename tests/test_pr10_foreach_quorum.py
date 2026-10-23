@@ -64,6 +64,100 @@ async def _boot_stages(rt) -> None:
         await rt.cancel_task(key, reason="cancelled")
 
 
+def test_foreach_selected_ignores_verdict():
+    """Planner/expand never set ``selected`` from verdict; foreach reads attrs only.
+
+    Guaranteed today: the only ``selected`` read in coscientist is
+    ``foreach.select_foreach_items`` on ``attrs.selected``. An inconclusive
+    (e.g. refute_unresolved) hypothesis with ``selected=True`` still expands;
+    ``selected=False`` is dropped even if verdict would be ``supported``.
+    """
+    from pathlib import Path
+
+    from coscientist.core.foreach import select_foreach_items
+    from coscientist.core.graph import GraphStore, default_execution_registry
+
+    # Static guarantee: no production write of selected from verdict/planner.
+    root = Path(__file__).resolve().parents[1] / "coscientist"
+    offenders: list[str] = []
+    for path in root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if path.name == "foreach.py":
+            continue  # selector read is expected
+        # Heuristic: assigning selected from a verdict-like name.
+        if "selected" in text and ("verdict" in text):
+            for i, line in enumerate(text.splitlines(), 1):
+                low = line.lower()
+                if "selected" in low and "verdict" in low and ("=" in line or "attrs" in low):
+                    if "selector" in low or "foreach" in low or "literal" in low:
+                        continue
+                    if line.strip().startswith("#") or line.strip().startswith('"""'):
+                        continue
+                    offenders.append(f"{path.relative_to(root)}:{i}:{line.strip()}")
+    assert not offenders, "selected must not be derived from verdict:\n" + "\n".join(
+        offenders
+    )
+
+    class _RT:
+        def __init__(self, graph):
+            self.graph = graph
+
+    sid = "st_sel"
+    g = GraphStore(default_execution_registry())
+    # selected=True + inconclusive → included
+    g.upsert_node(
+        GraphNode(
+            node_id=hypothesis_node_id(sid, "H_inc"),
+            kind="hypothesis",
+            study_id=sid,
+            ref_id="H_inc",
+            attrs={
+                "selected": True,
+                "verdict": "inconclusive",
+                "rule": "refute_unresolved",
+                "source_task": "E0",
+                "rank": 0,
+            },
+        )
+    )
+    # selected=False + supported → excluded (verdict must not resurrect it)
+    g.upsert_node(
+        GraphNode(
+            node_id=hypothesis_node_id(sid, "H_sup"),
+            kind="hypothesis",
+            study_id=sid,
+            ref_id="H_sup",
+            attrs={
+                "selected": False,
+                "verdict": "supported",
+                "source_task": "E0",
+                "rank": 1,
+            },
+        )
+    )
+    # selected=True + refuted → still included
+    g.upsert_node(
+        GraphNode(
+            node_id=hypothesis_node_id(sid, "H_ref"),
+            kind="hypothesis",
+            study_id=sid,
+            ref_id="H_ref",
+            attrs={
+                "selected": True,
+                "verdict": "refuted",
+                "source_task": "E0",
+                "rank": 2,
+            },
+        )
+    )
+    items, _notes = select_foreach_items(
+        _RT(g),
+        ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
+    )
+    assert items == ["H_inc", "H_ref"]
+    assert "H_sup" not in items
+
+
 async def _upsert_selected_hypotheses(
     rt, *, of_task: str, n: int, selected: bool = True, ids: list[str] | None = None
 ):

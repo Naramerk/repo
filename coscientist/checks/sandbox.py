@@ -25,6 +25,7 @@ bound the whole tree; CPU budget always strictly below wall. Seccomp → M2.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import signal
 import stat as statmod
@@ -283,11 +284,15 @@ def _cpu_budget_seconds(timeout_s: float) -> float:
 
 
 def _rlimit_cpu_seconds(timeout_s: float, *, cgroup_live: bool) -> int | None:
-    """Per-process RLIMIT_CPU in whole seconds, always strictly below wall.
+    """Per-process RLIMIT_CPU in whole seconds.
 
-    With a live cgroup: set RLIMIT **above** the cgroup budget (budget +
-    max(1s, 10%)) as a fuse only — the host watcher must win the race and
-    classify ``cpu_timeout``. Without cgroup: RLIMIT at the budget; exit
+    With a live cgroup: set RLIMIT **strictly above** the cgroup budget
+    (``ceil`` of budget + max(1s, 10%), or ``floor(budget)+1`` when that is
+    larger) as a fuse only — the host watcher must win the race and classify
+    ``cpu_timeout``. For short walls (3–5s) the whole-second fuse may equal
+    ``floor(wall)`` while still staying above budget; that is intentional so
+    ``int()`` truncation cannot collapse the fuse onto/under the budget.
+    Without cgroup: RLIMIT at ``floor(budget)`` (strictly below wall); exit
     SIGXCPU/152 is classified via host-measured child rusage (see ``_classify``).
     """
     wall = float(timeout_s)
@@ -296,9 +301,12 @@ def _rlimit_cpu_seconds(timeout_s: float, *, cgroup_live: bool) -> int | None:
         fuse = budget + max(1.0, budget * 0.10)
         if fuse >= wall:
             fuse = max(budget + 0.05, wall - 0.05)
-        whole = int(fuse)
-    else:
-        whole = int(budget)
+        # Whole seconds must be strictly above budget (watcher wins below fuse).
+        whole = max(math.ceil(fuse), math.floor(budget) + 1)
+        if whole >= 1 and whole > budget and whole <= max(math.floor(wall), 1):
+            return whole
+        return None
+    whole = math.floor(budget)
     if whole >= 1 and whole < wall:
         return whole
     return None

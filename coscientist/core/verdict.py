@@ -1193,7 +1193,7 @@ def hypothesis_report_row(
             + ")"
         )
         severity_note = f"{severity_note}; {excl_txt}" if severity_note else excl_txt
-    return {
+    out: dict[str, Any] = {
         "hypothesis_id": hypothesis_id,
         "question_id": question_id,
         "verdict": verdict_value,
@@ -1205,6 +1205,12 @@ def hypothesis_report_row(
         "auxiliary_assumptions": aux,
         "legacy_claims": legacy_claims,
     }
+    # Refute-role timeout: verdict alone is inconclusive — surface explicit
+    # not-tested so conclusions/report consumers do not treat it as a finished
+    # inconclusive assessment.
+    if (rule or "") == "refute_unresolved":
+        out["not_tested"] = True
+    return out
 
 
 # Alias required by review wording.

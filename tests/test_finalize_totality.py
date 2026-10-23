@@ -324,6 +324,114 @@ def test_rich_payload_bound_truncates_or_raises():
         _bound_rich_payload(huge)
 
 
+def test_timeout_budget_ru_survives_contributing_reasons_truncation():
+    """«не проверено в пределах бюджета» must not be dropped by [:10] truncation."""
+    from coscientist.core.digest import canonical_json
+    from coscientist.core.finalize import (
+        IDLE_TIMEOUT_RU,
+        MAX_FINALIZED_PAYLOAD_BYTES,
+        TIMEOUT_BUDGET_RU,
+        _bound_rich_payload,
+        truncate_contributing_reasons,
+    )
+
+    # RU lines buried past the old [:10] cut must survive.
+    buried = [f"reason_{i}" for i in range(15)] + [TIMEOUT_BUDGET_RU, IDLE_TIMEOUT_RU]
+    kept = truncate_contributing_reasons(buried, limit=10)
+    assert TIMEOUT_BUDGET_RU in kept
+    assert IDLE_TIMEOUT_RU in kept
+    assert len(kept) <= 10
+    # Protected lines come first (non-truncatable), then other reasons.
+    assert kept[0] == TIMEOUT_BUDGET_RU
+    assert kept[1] == IDLE_TIMEOUT_RU
+
+    mid = {
+        "trigger": "all_done",
+        "terminal_reason": "completed",
+        "contributing_reasons": buried,
+        "verdict": "partial",
+        "question_dispositions": {
+            f"Q{i}": {
+                "disposition": "not_attempted",
+                "reason": "no_task",
+                "formulation": "x" * 5000,
+            }
+            for i in range(40)
+        },
+        "report_artifact_id": None,
+        "conclusion_ids": [],
+        "minimal_report": None,
+        "fallback_reason": None,
+    }
+    out = _bound_rich_payload(mid)
+    assert len(canonical_json(out)) <= MAX_FINALIZED_PAYLOAD_BYTES
+    contrib = out["contributing_reasons"]
+    assert TIMEOUT_BUDGET_RU in contrib
+    assert IDLE_TIMEOUT_RU in contrib
+
+
+def test_conclusion_not_tested_marker_for_refute_unresolved():
+    """rule=refute_unresolved → conclusion attrs.not_tested (not just inconclusive)."""
+    from coscientist.core.finalize_nodes import (
+        conclusion_id_for_question,
+        conclusion_id_for_study,
+        conclusion_ids_for,
+        graph_rows_from_finalized,
+    )
+    from coscientist.core.verdict import hypothesis_report_row
+
+    row = hypothesis_report_row(
+        hypothesis_id="H1",
+        question_id="Q1",
+        claims=[],
+        verdict_value="inconclusive",
+        rule="refute_unresolved",
+    )
+    assert row["verdict"] == "inconclusive"
+    assert row["rule"] == "refute_unresolved"
+    assert row.get("not_tested") is True
+
+    sid = "st_nt"
+    qdisp = {
+        "Q1": {
+            "disposition": "inconclusive",
+            "reason": None,
+            "formulation": "q",
+            "verdict": "inconclusive",
+        }
+    }
+    ids = conclusion_ids_for(sid, qdisp)
+    assert conclusion_id_for_question(sid, "Q1") in ids
+    assert conclusion_id_for_study(sid) in ids
+
+    nodes, _edges = graph_rows_from_finalized(
+        sid,
+        {
+            "question_dispositions": qdisp,
+            "terminal_reason": "completed",
+            "hypothesis_verdicts": {
+                "H1": {
+                    "hypothesis_id": "H1",
+                    "question_id": "Q1",
+                    "verdict": "inconclusive",
+                    "rule": "refute_unresolved",
+                    "not_tested": True,
+                }
+            },
+        },
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    q_cid = conclusion_id_for_question(sid, "Q1")
+    s_cid = conclusion_id_for_study(sid)
+    q_attrs = nodes[q_cid]["attrs"]
+    assert q_attrs.get("not_tested") is True
+    assert q_attrs.get("rule") == "refute_unresolved"
+    assert "not_tested" in str(q_attrs.get("synthesis") or "")
+    s_attrs = nodes[s_cid]["attrs"]
+    assert s_attrs.get("not_tested") is True
+    assert "not_tested:refute_unresolved" in str(s_attrs.get("synthesis") or "")
+
+
 @pytest.mark.asyncio
 async def test_recover_after_finalize(tmp_path, clock):
     """recover() after StudyFinalized is a no-op success (not cut by writable)."""

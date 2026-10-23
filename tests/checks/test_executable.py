@@ -1395,6 +1395,8 @@ def test_guest_forged_sigxcpu_is_scientific_nonzero():
 
 def test_rlimit_cpu_fuse_above_cgroup_budget():
     """With cgroup: RLIMIT_CPU is strictly above budget (fuse); without: at budget."""
+    import math
+
     from coscientist.checks.sandbox import (
         _cpu_budget_seconds,
         _rlimit_cpu_seconds,
@@ -1406,13 +1408,36 @@ def test_rlimit_cpu_fuse_above_cgroup_budget():
     bare = _rlimit_cpu_seconds(wall, cgroup_live=False)
     assert fuse is not None and bare is not None
     assert fuse > budget
-    assert fuse < wall
-    assert bare <= int(budget) or bare == int(budget)
+    assert fuse <= math.floor(wall)
+    assert bare == math.floor(budget)
     assert bare < wall
     # Fuse clears the race: watcher budget < fuse RLIMIT.
-    assert fuse >= int(budget + max(1.0, budget * 0.10)) or fuse == int(
-        max(budget + 0.05, wall - 0.05)
+    assert fuse >= max(
+        math.ceil(budget + max(1.0, budget * 0.10)),
+        math.floor(budget) + 1,
+    ) or fuse == max(
+        math.ceil(max(budget + 0.05, wall - 0.05)),
+        math.floor(budget) + 1,
     )
+
+
+@pytest.mark.parametrize("wall", [3.0, 4.0, 5.0])
+def test_rlimit_cpu_fuse_strictly_above_budget_short_wall(wall):
+    """ceil fuse: wall 3–5 must stay strictly above budget (int() used to break this)."""
+    import math
+
+    from coscientist.checks.sandbox import (
+        _cpu_budget_seconds,
+        _rlimit_cpu_seconds,
+    )
+
+    budget = _cpu_budget_seconds(wall)
+    fuse = _rlimit_cpu_seconds(wall, cgroup_live=True)
+    bare = _rlimit_cpu_seconds(wall, cgroup_live=False)
+    assert fuse is not None, f"wall={wall}: expected cgroup fuse"
+    assert fuse > budget, f"wall={wall}: fuse={fuse} must be > budget={budget}"
+    assert fuse <= math.floor(wall)
+    assert bare is not None and bare == math.floor(budget) and bare < wall
 
 
 def test_sigxcpu_with_rusage_at_budget_is_cpu_timeout(monkeypatch):
