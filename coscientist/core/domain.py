@@ -436,7 +436,8 @@ class HitlRequest(Frozen):
     task_id: str
     open: bool = True
     cost_rub: float = 0.0
-    # Bound after_task / PLAN-n key for kind=plan_expansion (expand_plan gate).
+    # Bound after_task / PLAN-n key: when set on plan/plan_approval/plan_expansion,
+    # a HitlDecided plan change may produce PlanExpanded / ExpansionRefused.
     expand_after_task: str | None = None
 
 

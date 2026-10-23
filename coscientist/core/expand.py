@@ -54,6 +54,9 @@ def _quota_kind(delegated_by: DelegatedBy) -> Literal["agent", "human"]:
     return "human" if delegated_by == "human" else "agent"
 
 
+_PLAN_EXPAND_HITL_KINDS = frozenset({"plan", "plan_approval", "plan_expansion"})
+
+
 def _delegated_by_from_hitl(
     runtime: StudyRuntime,
     hitl_request_id: str,
@@ -63,8 +66,10 @@ def _delegated_by_from_hitl(
 ) -> DelegatedBy | str:
     """Derive delegated_by from HitlDecided only. Return error detail if missing/reused.
 
-    HitlOpened must be kind ``plan_expansion`` and bound to this ``after_task``
-    (or PLAN-n key) via ``expand_after_task`` / task_key.
+    Plan change → expansion when ``HitlOpened.kind`` is plan / plan_approval /
+    plan_expansion **and** ``expand_after_task`` is set and matches this
+    ``after_task`` (or PLAN-n key). Kind is not renamed; GateConfig stays on
+    the original kind.
     """
     used = getattr(runtime, "_hitl_expand_used", None)
     if isinstance(used, set) and hitl_request_id in used:
@@ -88,21 +93,17 @@ def _delegated_by_from_hitl(
                 if hasattr(h, "expand_after_task")
                 else (getattr(h, "__dict__", {}) or {}).get("expand_after_task"),
             }
-            # HitlRequest has no expand_after_task field — check payload extras via fold only.
     if req is None:
         return "missing_hitl_opened"
     kind = str(req.get("kind") or "")
-    if kind != "plan_expansion":
+    if kind not in _PLAN_EXPAND_HITL_KINDS:
         return f"hitl_wrong_kind:{kind or 'unknown'}"
+    # Expansion only when expand_after_task is explicitly set (no task_key fallback).
     bound = str(req.get("expand_after_task") or "")
-    if not bound and req.get("task_id"):
-        t = runtime.tasks.get(str(req["task_id"]))
-        if t is not None:
-            bound = t.spec.task_key
-    if bound and bound not in {after_task, plan_key or ""}:
-        return f"hitl_wrong_target:{bound}"
     if not bound:
         return "hitl_unbound"
+    if bound not in {after_task, plan_key or ""}:
+        return f"hitl_wrong_target:{bound}"
     db = row.get("delegated_by")
     if db in ("human", "timeout"):
         return db  # type: ignore[return-value]

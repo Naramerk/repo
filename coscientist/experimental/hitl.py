@@ -31,20 +31,19 @@ class HitlForkMixin(CostlyHitlMixin):
     ) -> str:
         """Open a HITL gate.
 
-        Plan-change offers (``plan`` / ``plan_approval`` / ``plan_expansion``)
-        open as ``kind=plan_expansion`` bound via ``expand_after_task`` so a
-        human edit can produce ``PlanExpanded`` / ``ExpansionRefused``.
+        ``HitlOpened.kind`` stays as requested (``plan`` / ``plan_approval`` / …)
+        so GateConfig / UI / report readers keep working. Plan-change offers bind
+        ``expand_after_task``; a human edit then produces ``PlanExpanded`` or
+        ``ExpansionRefused`` without renaming the gate kind.
         """
         task = self._resolve_task(task_key_or_id)
         assert self.study is not None
         now = self.clock.now()
-        # Plan approval with edits → plan_expansion path (bound after_task).
-        gate_kind = kind
+        # Policy always by the original kind (do NOT rename to plan_expansion).
         after: str | None = expand_after_task
         if kind in ("plan", "plan_approval", "plan_expansion"):
-            gate_kind = "plan_expansion"
             after = after or task.spec.task_key
-        gate = self.study.hitl_policy.gate(gate_kind)
+        gate = self.study.hitl_policy.gate(kind)
         to = timeout_s if timeout_s is not None else gate.timeout_s
         deadline = min(
             now + timedelta(seconds=to),
@@ -54,7 +53,7 @@ class HitlForkMixin(CostlyHitlMixin):
         rid = hitl_request_id()
         req = HitlRequest(
             request_id=rid,
-            kind=gate_kind,  # type: ignore[arg-type]
+            kind=kind,  # type: ignore[arg-type]
             payload_ref=task.task_id,
             deadline=deadline,
             study_id=self.study.study_id,
@@ -155,12 +154,22 @@ class HitlForkMixin(CostlyHitlMixin):
             task = self.tasks.get(h.task_id)
             after = task.spec.task_key if task is not None else h.task_id
         after = after or "HITL"
-        if h.kind != "plan_expansion":
+        # Plan edits only via plan / plan_approval / plan_expansion (+ expand_after_task).
+        # hypotheses / report / … → ExpansionRefused(invalid_hitl), never silent drop.
+        if h.kind not in ("plan", "plan_approval", "plan_expansion"):
             await refuse_expansion(
                 self,  # type: ignore[arg-type]
                 after,
                 reason="invalid_hitl",
                 detail=f"hitl_wrong_kind:{h.kind or 'unknown'}",
+            )
+            return
+        if not getattr(h, "expand_after_task", None) and not expansion.get("after_task"):
+            await refuse_expansion(
+                self,  # type: ignore[arg-type]
+                after,
+                reason="invalid_hitl",
+                detail="hitl_unbound",
             )
             return
         added_tasks = [

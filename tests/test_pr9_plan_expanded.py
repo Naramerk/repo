@@ -1290,7 +1290,7 @@ async def test_timeout_counts_toward_agent_quota(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_hitl_wrong_kind_refused(tmp_path, clock, runtime_cls):
-    """Forged non-plan_expansion HitlOpened still refused by expand_plan."""
+    """Non-plan HitlOpened (hypotheses/report) refused; plan_approval+bound allowed."""
     sid = "st_wrongk"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
@@ -1309,9 +1309,7 @@ async def test_hitl_wrong_kind_refused(tmp_path, clock, runtime_cls):
         tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
-    # plan_approval forged (not via open_hitl) remains invalid; production open
-    # promotes plan_approval → plan_expansion (see real-path tests below).
-    for kind in ("report", "hypotheses", "plan_approval"):
+    for kind in ("report", "hypotheses"):
         rid = f"hitl_{kind}"
         await _record_hitl_opened(rt, rid, kind=kind, expand_after_task="E0")
         await _record_hitl_decided(rt, rid, delegated_by="human")
@@ -1328,6 +1326,19 @@ async def test_hitl_wrong_kind_refused(tmp_path, clock, runtime_cls):
         e.type == "ExpansionRefused" and e.payload.get("reason") == "invalid_hitl"
         for e in await rt.store.read_all()
     )
+    # plan_approval + expand_after_task is a valid expansion gate (kind not renamed).
+    rid_ok = "hitl_plan_approval_ok"
+    await _record_hitl_opened(rt, rid_ok, kind="plan_approval", expand_after_task="E0")
+    await _record_hitl_decided(rt, rid_ok, delegated_by="human")
+    assert (
+        await rt.expand_plan(
+            after_task="E0",
+            added_tasks=[_task(key="Eh_pa", addresses=["Q1"], depends_on=["E0"])],
+            origin="plan",
+            hitl_request_id=rid_ok,
+        )
+        is not None
+    )
     await close_runtime(rt)
 
 
@@ -1343,8 +1354,9 @@ async def _finalize_for_report(rt) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_hitl_open_plan_approval_promotes_plan_expansion(tmp_path, clock):
-    """(a) open_hitl(plan_approval) → kind=plan_expansion + expand_after_task."""
+async def test_hitl_open_plan_approval_keeps_kind_and_binds(tmp_path, clock):
+    """open_hitl(plan_approval) keeps kind; sets expand_after_task; policy by kind."""
+    from coscientist.core.domain import GateConfig, HitlPolicy
     from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
 
     sid = "st_hitl_promo"
@@ -1360,6 +1372,12 @@ async def test_hitl_open_plan_approval_promotes_plan_expansion(tmp_path, clock):
         finalize_reserve_s=5,
         max_expansions=0,
         max_human_expansions=3,
+        hitl_policy=HitlPolicy(
+            gates={
+                "plan_approval": GateConfig(timeout_s=42, on_timeout="fail"),
+                "plan_expansion": GateConfig(timeout_s=180, on_timeout="delegate"),
+            }
+        ),
     )
     attach_executor(rt, tmp_path)
     await _boot_plan(
@@ -1367,10 +1385,13 @@ async def test_hitl_open_plan_approval_promotes_plan_expansion(tmp_path, clock):
         tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
-    rid = await rt.open_hitl("E0", kind="plan_approval", timeout_s=60)
+    rid = await rt.open_hitl("E0", kind="plan_approval")
     h = rt.hitl[rid]
-    assert h.kind == "plan_expansion"
+    assert h.kind == "plan_approval"
     assert h.expand_after_task == "E0"
+    # Deadline must reflect plan_approval GateConfig (42s), not plan_expansion default.
+    delta = (h.deadline - rt.clock.now()).total_seconds()
+    assert 40 <= delta <= 42
     await close_runtime(rt)
 
 
@@ -1402,7 +1423,8 @@ async def test_hitl_human_edit_applied_via_open_decide(tmp_path, clock):
     rid = await rt.open_hitl(
         "E0", kind="plan_approval", timeout_s=60, expand_after_task="E0"
     )
-    assert rt.hitl[rid].kind == "plan_expansion"
+    assert rt.hitl[rid].kind == "plan_approval"
+    assert rt.hitl[rid].expand_after_task == "E0"
     await rt.answer_hitl(
         rid,
         "accept",
@@ -1533,6 +1555,60 @@ async def test_hitl_decide_yourself_delegation_marked(tmp_path, clock):
     assert marked or (
         node is not None and (node.attrs or {}).get("delegated_by") == "human"
     )
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_hitl_plan_approval_timeout_fail_no_auto_accept(tmp_path, clock):
+    """User GateConfig plan_approval.on_timeout=fail → no critic auto-accept; fail reported."""
+    from coscientist.core.domain import GateConfig, HitlPolicy, TaskOutcome
+    from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
+
+    sid = "st_hitl_failto"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=0,
+        max_human_expansions=3,
+        hitl_policy=HitlPolicy(
+            gates={
+                "plan_approval": GateConfig(timeout_s=1, on_timeout="fail"),
+                # If kind were renamed, this default would wrongly auto-delegate.
+                "plan_expansion": GateConfig(timeout_s=180, on_timeout="delegate"),
+            }
+        ),
+    )
+    attach_executor(rt, tmp_path)
+    await _boot_plan(
+        rt,
+        tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    rid = await rt.open_hitl("E0", kind="plan_approval")
+    assert rt.hitl[rid].kind == "plan_approval"
+    clock.advance(timedelta(seconds=2))
+    await rt.tick()
+    assert rt.hitl[rid].open is False
+    events = await rt.store.read_all()
+    # No critic auto-accept / timeout delegate.
+    assert not any(
+        e.type == "HitlDecided" and e.payload.get("approved_by") == "critic"
+        for e in events
+    )
+    assert not any(e.type == "PlanExpanded" for e in events)
+    assert any(e.type == "HitlTimedOut" and e.entity_key == rid for e in events)
+    e0 = next(t for t in rt.tasks.values() if t.spec.task_key == "E0")
+    assert e0.outcome == TaskOutcome.FAILED
+    assert e0.reason == "human_timeout"
+    contrib = await _finalize_for_report(rt)
+    assert "human_timeout" in contrib
     await close_runtime(rt)
 
 
