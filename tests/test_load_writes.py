@@ -15,8 +15,14 @@ from coscientist.core.events import EventEnvelope
 from coscientist.core.projections import fold_events
 from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success
 
+# DESIGN §3.5a absolute SLO — do not raise; no retries/skips.
+_P99_SLO_MS = 50.0
+
 
 async def _run_load(tmp_path: Path, runtime_cls: type):
+    """20 parallel attempts: full writer path (queue → to_thread → fence/insert/fsync)
+    plus runtime/executor ``_project_local`` after durable append (real disk ``tmp_path``).
+    """
     clock = SystemClock()
     rt = await open_runtime(tmp_path, "st_load", clock=clock, runtime_cls=runtime_cls)
     await rt.create_study(
@@ -82,7 +88,13 @@ async def test_twenty_parallel_attempts_fsync(tmp_path: Path, runtime_cls: type)
 async def test_twenty_parallel_attempts_fsync_p99_slo(
     tmp_path: Path, runtime_cls: type
 ):
-    """Absolute DESIGN §3.5a SLO: p99 write ≤ 50ms (separate perf job, not main CI)."""
+    """Absolute DESIGN §3.5a SLO: p99 full-path write ≤ 50ms.
+
+    Measures ``StudyWriter.latency_samples_ms`` (queue item → ``to_thread`` →
+    fence/insert/JSON/projection-upsert/commit under ``synchronous=FULL``) for
+    the 20-parallel load on real-disk ``tmp_path``. No shm, no commit-only
+    timer, no wal/GC knobs, no retries/skips.
+    """
     rt = await _run_load(tmp_path, runtime_cls)
     lat = rt.writer.latency_samples_ms()
     assert lat, "no write latencies recorded"
@@ -91,7 +103,10 @@ async def test_twenty_parallel_attempts_fsync_p99_slo(
     med = statistics.median(lat_sorted)
     print(
         f"perf p99={p99:.2f}ms median={med:.2f}ms "
-        f"mean={statistics.mean(lat):.2f}ms n={len(lat)}"
+        f"mean={statistics.mean(lat):.2f}ms n={len(lat)} "
+        f"(full writer path; tmp_path disk)"
     )
-    assert p99 <= 50.0, f"p99 write {p99:.2f}ms > 50ms (n={len(lat)})"
+    assert p99 <= _P99_SLO_MS, (
+        f"p99 write {p99:.2f}ms > {_P99_SLO_MS}ms (n={len(lat)})"
+    )
     await close_runtime(rt)

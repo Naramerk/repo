@@ -7,6 +7,11 @@
 - Replay pairing trusts journaled `AttemptTainted.{tool,is_fetch}`. Same-name reclassified `is_fetch=False` → domain `FetchToolReclassified` (caught on fold): paired `SourceFetched` uncounted. `FetchIntegrityRaised` journaled only on open/finalize; finalize fold fallback still puts `internal_error` in the report if reconcile fails. Proven by committed old-schema fixture + natural `tick` finalize (`tests/fixtures/journals/reclassified_fetch_old`).
 - `fetch_integrity` projection rows survive without `call_id` (key via tool/row_key).
 
+### Perf / journal write SLO
+- Restored honest DESIGN §3.5a measurement: 20 parallel attempts on real-disk `tmp_path`, full `StudyWriter` path (queue → `to_thread` → fence/insert/commit), `writer.latency_samples_ms`, 50ms p99, no retries/skips.
+- **Root cause:** `projections.apply_event` rewrote *every* row in affected tables on each append (thousands of upserts per load) on the fsync-critical path. Now loads only needed tables and upserts keys ``_put`` marks dirty (ContextVar set — not `id(row)`). After durable append, yield before in-memory `_project_local` so the writer can start the next fsync.
+- Removed store commit-only / shm / wal-autocheckpoint / GC test knobs (those hollowed the SLO).
+
 ### Sandbox (host CPU sample order)
 - `_watch_process`: sample host-tree CPU via `/proc` **before** `poll()` (poll reaps the child and `/proc` vanishes). Keeps no-cgroup SIGXCPU classification accurate; retains the max sample while the guest is alive. Split out of PR14 so quote work stays focused.
 - **M2 notes:** `_host_tree_cpu_s` returns `0.0` (not `None`) when `/proc` is readable but idle; missing `CONFIG_PROC_CHILDREN` silently drops descendants; cgroup idle path untested on CI without delegation.
@@ -25,16 +30,6 @@
 - Provenance: opaque `FetchCapability` id + private issued registry in `tools.effects` (not forgeable); verify looks up binds and **consumes**. `AttemptTainted` **before** any `is_fetch` call; `SourceFetched` only via permit after consume; store cannot bypass. Digests attempt-scoped (retries/downstream re-fetch). `countable=True`+`trusted=False`. `ArtifactProducer` includes `user`.
 - `NORMALIZATION_VERSION` rules `3`+unidata; M1 gaps documented.
 
-### M1 PR13
-- `QuestionSpec.final_type` (`verdict` | `artifact` | `both`) and `OutputSpec.rubric` (`Rubric` / `RubricItem`).
-- CodeCheck kind `rubric`: qualitative deliverables; aggregate `all_required` | `k_of_n` (required items only); digest = sha256(JCS(canonical fields, `v=1`)).
-- PlanValidator: `artifact` ⇒ OutputSpec.rubric; `verdict` ⇒ ≥1 **explicit** criterion (catalog defaults do **not** count); `both` ⇒ both. **Canonical** `accept_plan` refusal: DAG / `expand_after` / shares critic / criteria / pydantic `TaskSpec`/`QuestionSpec` → `PlanRefused` + immediate `StudyFinalized` (never raw `ValueError` to callers; #24 reuses). Idem = sid + sha256(**full** detail, never truncated).
-- Finalize / `rt.view()` share one gate: `study_view` passes `question_final_types` into `study_fulfilled` (never deletes them; `untested` blocks). Verdict may only **downgrade**. `rt.view().verdict` == `StudyFinalized.verdict`.
-- Judge: keys = JSON array `(task_id, attempt_id, check_id, item_id, output_digest)` (fail-closed if empty); live status == journal (`PENDING` while retry remains); rebuild from ResultPending/ReviewRecorded only (not RouteReturned); corrupt pending CAS / bad retry → `JudgeCasCorrupt` + `finalize(trigger=internal_error)`.
-- **Public payload:** `TerminalReason.INTERNAL_ERROR` / finalize `trigger=internal_error` (new enum value for honest study-level failure, e.g. judge CAS corrupt — not `cancel`).
-- Rubric role=validity but excluded from `validity_ok` (failed rubric ≠ claim validity_failed). `both` + verdict + rubric pending → reason `rubric_pending`. Bugs in rubric eval / freeze propagate (no `except Exception → UNASSESSED`).
-- Upcasters: PlanAccepted **v8**; TaskCreated **v10**; PlanExpanded **v2** — legacy unknown `final_type` → verdict + report line; current unknown → PlanRefused.
-- **M1 gap:** NodeRequirement `STALE` on rubric supersede not implemented; MET of one covering task never covers another's rubric.
 
 ### M1 PR18
 - Frozen closed `core.tool_registry` (loader-gated `register_tool` only; freeze at end of `tool_loader` → `MappingProxyType`; unregistered → `external_effect`); `invoke_tool` only (import-linter + agents AST); `ToolSpec.effect` advisory.
