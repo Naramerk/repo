@@ -61,13 +61,25 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         study = _get(proj, "studies", event.study_id) or {}
         meta = _get(proj, "meta", event.study_id) or {}
         # First-wins: legacy journals may contain a second StudyFinalized; keep
-        # the first payload/graph and ignore subsequent ones.
+        # the first payload/graph and mark the I3 breach as taint (not silent).
         if study.get("finalized") or meta.get("finalized"):
             log.warning(
                 "ignoring duplicate StudyFinalized study_id=%s seq=%s "
-                "(first-wins; payload not applied)",
+                "(first-wins; payload not applied; meta tainted)",
                 event.study_id,
                 getattr(event, "seq", None),
+            )
+            _put(
+                proj,
+                "meta",
+                event.study_id,
+                {
+                    **meta,
+                    "study_id": event.study_id,
+                    "finalized": True,
+                    "duplicate_study_finalized": True,
+                    "tainted": True,
+                },
             )
             return
         _put(

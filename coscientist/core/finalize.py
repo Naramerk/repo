@@ -591,6 +591,8 @@ async def _build_rich_payload(
     if "internal_error" not in contrib and getattr(runtime, "_stamp_meta_missing", None):
         contrib.append("internal_error")
     # PR13: disposition report_line (e.g. «не выполнено: рубрика не принята»).
+    # Note: legacy dual StudyFinalized is *not* folded into contrib here — finalize()
+    # returns early when already finalized, so that taint lives in meta / local fold only.
     for d in qdisp.values():
         line = d.get("report_line") if isinstance(d, dict) else None
         if line and line not in contrib:
