@@ -21,15 +21,12 @@ from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime
 
 # DESIGN §3.5a absolute SLO — do not raise; no retries/skips/xfail.
 _P99_SLO_MS = 50.0
-# Separate median gate: healthy CI median is ~1ms; catches uniform slowdowns
-# that best-of-N p99 alone could theoretically miss if N were huge.
-_MEDIAN_SLO_MS = 10.0
-# Predetermined best-of-N independent full loads (not retry-on-failure).
+# Predetermined independent full loads. Aggregate with max(round_p99) — same
+# strictness as the old CI 5× all-must-pass loop, without outer pytest retries.
+# min()/best-of hides intermittent regressions (one bad round + two clean).
+# With n≥1000, p99 is ~10th-worst so rare fsync spikes rarely clear 50ms;
+# max-of-3 stays green on residual noise (e.g. 13ms) while a ≥60ms round fails.
 _PERF_ROUNDS = 3
-# Per-round sample floor. With n≈149, ~8–18 slow fsyncs (~2–12%) set p99 even
-# when median stays ~1ms (seen on push CI: all 3 rounds p99≈60ms). At n≥1000,
-# p99 is the ~10th-worst sample, so a handful of runner spikes no longer dominate;
-# a real ~60ms-on-every-write regression still fails p99 and median every round.
 _PERF_MIN_SAMPLES = 1000
 # RouteReturned count per EXP attempt so one load yields ≥_PERF_MIN_SAMPLES.
 _PERF_ROUTES_PER_ATTEMPT = 50
@@ -40,35 +37,26 @@ def _p99_ms(samples: list[float]) -> float:
     return lat_sorted[max(0, int(len(lat_sorted) * 0.99) - 1)]
 
 
-def _assert_best_of_n_slo(
+def _assert_max_round_p99(
     round_p99: list[float],
-    round_median: list[float],
     *,
     p99_slo: float = _P99_SLO_MS,
-    median_slo: float = _MEDIAN_SLO_MS,
 ) -> float:
-    """Best-of-N p99 ≤ slo; every round's median ≤ median_slo. Returns best p99."""
-    assert round_p99 and len(round_p99) == len(round_median), (
-        f"round stats mismatch p99={len(round_p99)} median={len(round_median)}"
+    """Every round's p99 must be ≤ slo via max(round_p99). Returns gate p99."""
+    assert len(round_p99) == _PERF_ROUNDS, (
+        f"need exactly {_PERF_ROUNDS} rounds, got {len(round_p99)}"
     )
-    best_p99 = min(round_p99)
-    worst_median = max(round_median)
+    gate_p99 = max(round_p99)
     print(
-        f"perf best-of-{len(round_p99)} best_p99={best_p99:.2f}ms "
-        f"worst_median={worst_median:.2f}ms "
+        f"perf max-of-{len(round_p99)} gate_p99={gate_p99:.2f}ms "
         f"rounds_p99={[round(x, 2) for x in round_p99]} "
-        f"rounds_median={[round(x, 2) for x in round_median]} "
-        f"(p99≤{p99_slo}ms median≤{median_slo}ms)"
+        f"(p99≤{p99_slo}ms)"
     )
-    assert best_p99 <= p99_slo, (
-        f"best-of-{len(round_p99)} p99 {best_p99:.2f}ms > {p99_slo}ms "
+    assert gate_p99 <= p99_slo, (
+        f"max-of-{len(round_p99)} p99 {gate_p99:.2f}ms > {p99_slo}ms "
         f"(rounds p99={round_p99!r})"
     )
-    for i, med in enumerate(round_median):
-        assert med <= median_slo, (
-            f"round {i + 1}/{len(round_median)} median {med:.2f}ms > {median_slo}ms"
-        )
-    return best_p99
+    return gate_p99
 
 # Tables ``fold_events`` / ``apply_event`` may populate (compare SQLite ↔ fold).
 _PROJECTION_TABLES = (
@@ -428,17 +416,16 @@ async def test_twenty_parallel_sqlite_projection_matches_fold(
 async def test_twenty_parallel_attempts_fsync_p99_slo(
     tmp_path: Path, runtime_cls: type
 ):
-    """Absolute DESIGN §3.5a SLO: best-of-N p99 full-path write ≤ 50ms.
+    """Absolute DESIGN §3.5a SLO: max-of-N p99 full-path write ≤ 50ms.
 
     Measures ``StudyWriter.latency_samples_ms`` (queue item → ``to_thread`` →
     fence/insert/JSON/projection-upsert/commit under ``synchronous=FULL``) for
     ``_PERF_ROUNDS`` independent 20-parallel loads on real-disk ``tmp_path``,
-    each with ≥``_PERF_MIN_SAMPLES`` writes. Passes if the *best* round p99 ≤
-    50ms and *every* round median ≤ 10ms. No shm, no commit-only timer, no
-    wal/GC knobs, no retries/skips/xfail.
+    each with ≥``_PERF_MIN_SAMPLES`` writes. Passes iff ``max(round_p99)`` ≤
+    50ms (every round must clear the SLO — replaces the old CI 5× loop).
+    No shm, no commit-only timer, no wal/GC knobs, no retries/skips/xfail.
     """
     round_p99: list[float] = []
-    round_median: list[float] = []
     for r in range(_PERF_ROUNDS):
         round_dir = tmp_path / f"round_{r}"
         round_dir.mkdir()
@@ -453,73 +440,37 @@ async def test_twenty_parallel_attempts_fsync_p99_slo(
             f"need ≥{_PERF_MIN_SAMPLES} samples for stable p99, got n={len(lat)}"
         )
         p99 = _p99_ms(lat)
-        med = statistics.median(lat)
         round_p99.append(p99)
-        round_median.append(med)
         print(
             f"perf round {r + 1}/{_PERF_ROUNDS} p99={p99:.2f}ms "
-            f"median={med:.2f}ms mean={statistics.mean(lat):.2f}ms "
+            f"median={statistics.median(lat):.2f}ms "
+            f"mean={statistics.mean(lat):.2f}ms "
             f"n={len(lat)} (full writer path; tmp_path disk)"
         )
         await close_runtime(rt)
-    _assert_best_of_n_slo(round_p99, round_median)
+    _assert_max_round_p99(round_p99)
 
 
-@pytest.mark.serial
-@pytest.mark.asyncio
-async def test_p99_gate_trips_on_artificial_60ms_write_delay(
-    tmp_path: Path, runtime_cls: type, monkeypatch: pytest.MonkeyPatch
-):
-    """Regression detector: ~60ms sleep on every durable append fails the SLO gate.
+def test_p99_gate_max_of_rounds_trips_on_one_bad_round():
+    """max-of-3 must fail when one round has ~60ms p99 (best-of would hide it).
 
-    Uses the same ``_assert_best_of_n_slo`` helper as the perf job (threshold
-    unchanged). Not marked ``perf`` — intentional failure path; kept short
-    (20 appends) so main CI stays cheap.
+    Builds three round p99s via ``_p99_ms`` (same path as the perf job) and
+    asserts through ``_assert_max_round_p99``. Two clean rounds + one bad
+    (≈60ms-on-write tail) must trip the gate; three clean rounds must pass.
     """
-    from coscientist.core.store import SqliteEventStore
-
-    real_append_many = SqliteEventStore.append_many
-
-    async def _slow_append_many(self: Any, *args: Any, **kwargs: Any) -> Any:
-        await asyncio.sleep(0.060)
-        return await real_append_many(self, *args, **kwargs)
-
-    monkeypatch.setattr(SqliteEventStore, "append_many", _slow_append_many)
-
-    clock = SystemClock()
-    rt = await open_runtime(tmp_path, "st_delay", clock=clock, runtime_cls=runtime_cls)
-    await rt.create_study(
-        profile="research",
-        request="delay-gate",
-        catalog_version="0.1.0",
-        deadline=clock.now() + timedelta(hours=1),
-        sid="st_delay",
-    )
-    for i in range(20):
-        await rt.writer.append(
-            EventEnvelope(
-                study_id="st_delay",
-                type="RouteReturned",
-                entity_key=f"st_delay/EXP-delay:{i}",
-                idem_key=f"RouteReturned:delay:{i}",
-                payload={
-                    "attempt_id": f"st_delay/EXP-delay:{i}",
-                    "agent_output_digest": f"d{i}",
-                },
-                ts=clock.now(),
-            )
-        )
-    lat = rt.writer.latency_samples_ms()
-    await close_runtime(rt)
-    assert lat, "no write latencies recorded"
-    p99 = _p99_ms(lat)
-    med = statistics.median(lat)
-    print(
-        f"delay-demo p99={p99:.2f}ms median={med:.2f}ms n={len(lat)} "
-        f"(expect gate fail; ~60ms/write)"
-    )
-    assert p99 > _P99_SLO_MS or med > _MEDIAN_SLO_MS, (
-        f"injected 60ms delay should exceed SLO (p99={p99:.2f} median={med:.2f})"
-    )
-    with pytest.raises(AssertionError, match=r"p99|median"):
-        _assert_best_of_n_slo([p99], [med])
+    n = _PERF_MIN_SAMPLES
+    clean = [1.0] * n
+    # ~60ms on enough samples that p99 is the slow tail (not a single spike).
+    bad = [1.0] * (n - 15) + [60.0] * 15
+    round_p99 = [_p99_ms(clean), _p99_ms(bad), _p99_ms(clean)]
+    assert round_p99[0] <= _P99_SLO_MS
+    assert round_p99[1] > _P99_SLO_MS
+    assert round_p99[2] <= _P99_SLO_MS
+    # One bad round of three → max fails (min/best-of would pass on the cleans).
+    with pytest.raises(AssertionError, match=r"max-of-3 p99 .*> 50\.0ms"):
+        _assert_max_round_p99(round_p99)
+    # Uniform ~60ms every round also fails.
+    with pytest.raises(AssertionError, match=r"max-of-3 p99 .*> 50\.0ms"):
+        _assert_max_round_p99([_p99_ms(bad)] * _PERF_ROUNDS)
+    # Three clean rounds pass (noise like 13ms still under 50).
+    assert _assert_max_round_p99([13.53, 1.27, 1.19]) == 13.53

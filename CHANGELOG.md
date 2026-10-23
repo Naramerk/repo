@@ -40,7 +40,7 @@
 - `fetch_integrity` projection rows survive without `call_id` (key via tool/row_key).
 
 ### Perf / journal write SLO (CI noise)
-- p99 ≤ 50ms unchanged. Gate is **best-of-3** independent full loads (predetermined N, not retry-on-fail) with **≥1000 samples/round** plus **median ≤ 10ms** every round. Rationale: with n≈149, ~8–18 slow fsyncs still set every-round p99≈60ms (push CI); at n≥1000 p99 is ~10th-worst so a handful of spikes do not dominate, while ~60ms-on-every-write still fails p99+median. CI perf: one pytest invocation (was 5× all-must-pass). Demo: `test_p99_gate_trips_on_artificial_60ms_write_delay`.
+- p99 ≤ 50ms unchanged. Gate is **max-of-3** independent full loads with **≥1000 samples/round** (replaces outer CI 5× all-must-pass). `min`/best-of removed — it hid intermittent regressions. No separate median SLO (did not catch write-path regressions under the p99 cap). Demo: `test_p99_gate_max_of_rounds_trips_on_one_bad_round` (one ~60ms round of three trips max; best-of would pass).
 
 ### Perf / journal write SLO
 - Restored honest DESIGN §3.5a measurement: 20 parallel attempts on real-disk `tmp_path`, full `StudyWriter` path (queue → `to_thread` → fence/insert/commit), `writer.latency_samples_ms`, 50ms p99, no retries/skips.
