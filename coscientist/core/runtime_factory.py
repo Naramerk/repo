@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from coscientist.core.clock import Clock, SystemClock
@@ -10,6 +11,8 @@ from coscientist.core.hitl_guard import reject_open_hitl_if_unsupported
 from coscientist.core.machine import StudyRuntime, new_owner
 from coscientist.core.store import SqliteEventStore
 from coscientist.core.writer import StudyWriter
+
+log = logging.getLogger(__name__)
 
 
 async def open_runtime(
@@ -30,8 +33,9 @@ async def open_runtime(
     the journal is re-read and that post-lease snapshot is the sole source for
     HITL re-check and local rebuild (closes the TOCTOU window).
 
-    Any failure after the lease is acquired releases the lease, stops a started
-    writer, and closes the store.
+    Any failure after the lease is acquired stops a started writer, releases the
+    lease (owner+epoch+nonce), and closes the store. Cleanup catches
+    ``BaseException`` so ``CancelledError`` cannot leave the lease held.
     """
     cls = runtime_cls or StudyRuntime
     clock = clock or SystemClock()
@@ -43,8 +47,11 @@ async def open_runtime(
     # Fast path: refuse before taking the lease when the journal is already dirty.
     try:
         reject_open_hitl_if_unsupported(cls, store.read_all())
-    except Exception:
-        store.close()
+    except BaseException:
+        try:
+            store.close()
+        except BaseException:
+            log.warning("store.close failed during pre-lease cleanup", exc_info=True)
         raise
 
     acquired = False
@@ -72,18 +79,25 @@ async def open_runtime(
         for ev in events:
             rt._project_local(ev)  # noqa: SLF001
         return rt
-    except Exception:
-        if acquired:
-            try:
-                await store.release_lease(owner, store.epoch)
-            except Exception:
-                pass
+    except BaseException:
+        # Stop the writer first so in-flight appends cannot race release.
         if writer_started and writer is not None:
             try:
                 await writer.stop()
-            except Exception:
-                pass
-        store.close()
+            except BaseException:
+                log.warning("writer.stop failed during open_runtime cleanup", exc_info=True)
+        if acquired:
+            try:
+                await store.release_lease(owner, store.epoch)
+            except BaseException:
+                log.warning(
+                    "release_lease failed during open_runtime cleanup", exc_info=True
+                )
+        try:
+            store.close()
+        except BaseException:
+            # Never mask the original exception that triggered cleanup.
+            log.warning("store.close failed during open_runtime cleanup", exc_info=True)
         raise
 
 

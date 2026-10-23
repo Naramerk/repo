@@ -41,6 +41,10 @@ class StudyWriter:
     def latency_samples_ms(self) -> list[float]:
         return list(self._latencies_ms)
 
+    @property
+    def running(self) -> bool:
+        return self._task is not None
+
     def start(self) -> None:
         if self._task is None:
             self._task = asyncio.create_task(

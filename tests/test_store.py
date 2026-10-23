@@ -48,9 +48,20 @@ async def test_same_owner_reacquire_keeps_epoch(tmp_path: Path, clock: FakeClock
     store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock)
     epoch1 = await store.acquire_lease("o1", ttl_s=30)
     assert epoch1 == 1
+    nonce = store.owner_nonce
+    assert nonce
     epoch2 = await store.acquire_lease("o1", ttl_s=30)
     assert epoch2 == 1
+    assert store.owner_nonce == nonce
     store.close()
+
+
+@pytest.mark.asyncio
+async def test_store_close_idempotent(tmp_path: Path, clock: FakeClock):
+    store = SqliteEventStore("st1", tmp_path / "close.db", clock=clock)
+    store.close()
+    store.close()
+    assert store.closed is True
 
 
 @pytest.mark.asyncio

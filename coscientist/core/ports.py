@@ -26,7 +26,18 @@ class EventStore(Protocol):
 
     async def acquire_lease(self, owner: str, ttl_s: float = 30.0) -> int: ...
 
-    async def renew_lease(self, owner: str, epoch: int, ttl_s: float = 30.0) -> None: ...
+    async def renew_lease(
+        self,
+        owner: str,
+        epoch: int,
+        ttl_s: float = 30.0,
+        *,
+        nonce: str | None = None,
+    ) -> None: ...
+
+    async def release_lease(
+        self, owner: str, epoch: int, nonce: str | None = None
+    ) -> None: ...
 
     def current_lease(self) -> tuple[str | None, int, datetime | None]: ...
 

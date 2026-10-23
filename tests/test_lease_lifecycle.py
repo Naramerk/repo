@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from coscientist.core.clock import FakeClock
+from coscientist.core.errors import LeaseLost
 from coscientist.core.machine import StudyRuntime
 from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.store import SqliteEventStore
@@ -48,6 +49,56 @@ async def test_release_lease_requires_matching_epoch(tmp_path, clock):
 
 
 @pytest.mark.asyncio
+async def test_release_lease_rejects_foreign_owner(tmp_path, clock):
+    store = SqliteEventStore("st_fo", tmp_path / "st_fo.db", clock=clock)
+    epoch = await store.acquire_lease("owner-a", ttl_s=30)
+    nonce = store.owner_nonce
+    assert nonce
+    await store.release_lease("owner-b", epoch, nonce)
+    assert store.current_lease()[0] == "owner-a"
+    await store.release_lease("owner-a", epoch, nonce)
+    assert store.current_lease()[0] is None
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_release_lease_rejects_foreign_nonce(tmp_path, clock):
+    store = SqliteEventStore("st_fn", tmp_path / "st_fn.db", clock=clock)
+    epoch = await store.acquire_lease("owner-a", ttl_s=30)
+    await store.release_lease("owner-a", epoch, "not-the-holder-nonce")
+    assert store.current_lease()[0] == "owner-a"
+    await store.release_lease("owner-a", epoch, store.owner_nonce)
+    assert store.current_lease()[0] is None
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_same_owner_name_different_nonce_cannot_steal(tmp_path, clock):
+    db = tmp_path / "st_steal.db"
+    holder = SqliteEventStore("st_steal", db, clock=clock)
+    epoch = await holder.acquire_lease("shared-name", ttl_s=30)
+    assert epoch == 1
+    interloper = SqliteEventStore("st_steal", db, clock=clock)
+    with pytest.raises(LeaseLost, match="different nonce"):
+        await interloper.acquire_lease("shared-name", ttl_s=30)
+    with pytest.raises(LeaseLost):
+        await interloper.renew_lease("shared-name", epoch, nonce="foreign-nonce")
+    assert holder.current_lease()[0] == "shared-name"
+    interloper.close()
+    holder.close()
+
+
+@pytest.mark.asyncio
+async def test_store_close_is_idempotent(tmp_path, clock):
+    store = SqliteEventStore("st_close2", tmp_path / "st_close2.db", clock=clock)
+    assert store.closed is False
+    store.close()
+    assert store.closed is True
+    store.close()  # second close must not raise
+    assert store.closed is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "fail_at",
     ["hitl_check", "writer_init", "writer_start", "runtime_cls", "project_local"],
@@ -77,6 +128,22 @@ async def test_open_runtime_releases_lease_on_post_acquire_failure(
     await close_runtime(seed)
     assert _lease_owner(db, sid, clock) is None
 
+    stores: list[SqliteEventStore] = []
+    writers: list[StudyWriter] = []
+
+    class TrackingStore(SqliteEventStore):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            stores.append(self)
+
+    class TrackingWriter(StudyWriter):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            writers.append(self)
+
+    monkeypatch.setattr(rf, "SqliteEventStore", TrackingStore)
+    monkeypatch.setattr(rf, "StudyWriter", TrackingWriter)
+
     if fail_at == "hitl_check":
         # Pre-lease check must pass; fail only on the post-lease re-check.
         calls = {"n": 0}
@@ -92,7 +159,7 @@ async def test_open_runtime_releases_lease_on_post_acquire_failure(
 
     elif fail_at == "writer_init":
 
-        class BoomWriter(StudyWriter):
+        class BoomWriter(TrackingWriter):
             def __init__(self, *a, **k):
                 raise RuntimeError("inject:writer_init")
 
@@ -103,7 +170,7 @@ async def test_open_runtime_releases_lease_on_post_acquire_failure(
         def boom_start(self):
             raise RuntimeError("inject:writer_start")
 
-        monkeypatch.setattr(StudyWriter, "start", boom_start)
+        monkeypatch.setattr(TrackingWriter, "start", boom_start)
 
     elif fail_at == "runtime_cls":
 
@@ -116,6 +183,10 @@ async def test_open_runtime_releases_lease_on_post_acquire_failure(
                 tmp_path, sid, clock=clock, owner=owner, runtime_cls=BoomRuntime
             )
         assert _lease_owner(db, sid, clock) is None
+        assert stores, "open_runtime must construct a store"
+        assert stores[-1].closed
+        assert writers, "writer starts before runtime_cls"
+        assert writers[-1].running is False
         store = SqliteEventStore(sid, db, clock=clock)
         await store.acquire_lease("reopen")
         assert store.current_lease()[0] == "reopen"
@@ -134,6 +205,13 @@ async def test_open_runtime_releases_lease_on_post_acquire_failure(
         await open_runtime(tmp_path, sid, clock=clock, owner=owner)
 
     assert _lease_owner(db, sid, clock) is None
+    assert stores, "open_runtime must construct a store"
+    assert stores[-1].closed
+    if fail_at in ("runtime_cls", "project_local"):
+        assert writers and writers[-1].running is False
+    elif fail_at == "writer_start":
+        # start() raised before the writer was marked running.
+        assert writers and writers[-1].running is False
     # Prove the lease is free without going through the still-patched open_runtime.
     store = SqliteEventStore(sid, db, clock=clock)
     await store.acquire_lease("reopen")

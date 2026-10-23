@@ -73,3 +73,9 @@ forbidden_modules = [
   "coscientist.agents",
   "web",
 ]
+
+[[tool.importlinter.contracts]]
+name = "core must not import experimental"
+type = "forbidden"
+source_modules = ["coscientist.core"]
+forbidden_modules = ["coscientist.experimental"]
