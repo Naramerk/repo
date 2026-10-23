@@ -414,14 +414,15 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[],
+                # Explicit criterion (PlanValidator ignores catalog defaults).
+                criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid0 = await rt.start_attempt("E0")
-    # No artifact → default artifact_present (validity) FAILED → scientific.
+    # No artifact → artifact_present (validity) FAILED → scientific.
     result = await ex.record(
         aid0,
         AgentTaskOutput(

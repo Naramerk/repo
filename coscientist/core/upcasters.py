@@ -194,23 +194,24 @@ def _ensure_output_rubric_defaults(spec: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _coerce_final_type_default(raw: Any) -> str:
+FINAL_TYPE_COERCED_LINE = "не выполнено: неизвестный final_type приведён к verdict (журнал)"
+
+
+def _coerce_final_type_default(raw: Any) -> tuple[str, str | None]:
     """Pre-v8/v10 journals: missing or unknown final_type → verdict.
 
-    Current-schema unknown values are refused at plan accept (PlanRefused);
-    upcasters only heal legacy payloads.
+    Returns ``(final_type, report_line_or_None)``. Unknown (not missing) yields
+    a report line; current-schema unknown values are refused at plan accept.
     """
     if raw in ("verdict", "artifact", "both"):
-        return str(raw)
-    return "verdict"
+        return str(raw), None
+    if raw is None:
+        return "verdict", None
+    return "verdict", FINAL_TYPE_COERCED_LINE
 
 
 def _task_created_v9_to_v10_rubric(payload: dict[str, Any]) -> dict[str, Any]:
-    """PR13: OutputSpec.rubric on TaskCreated v10 (stacked after shares v9).
-
-    If PR18 (#20) merges second and also bumps TaskCreated, resolve order in
-    upcasters.py so this step remains contiguous.
-    """
+    """PR13: OutputSpec.rubric on TaskCreated v10 (after shares v9)."""
     out = dict(payload)
     spec = out.get("spec")
     if isinstance(spec, dict):
@@ -236,7 +237,10 @@ def _plan_expanded_v1_to_v2_rubric(payload: dict[str, Any]) -> dict[str, Any]:
         for q in questions:
             if isinstance(q, dict):
                 q = dict(q)
-                q["final_type"] = _coerce_final_type_default(q.get("final_type"))
+                ft, line = _coerce_final_type_default(q.get("final_type"))
+                q["final_type"] = ft
+                if line:
+                    q["final_type_report_line"] = line
                 rewritten_q.append(q)
             else:
                 rewritten_q.append(q)
@@ -297,7 +301,10 @@ def _ensure_rubric_final_type_fields(payload: dict[str, Any]) -> dict[str, Any]:
         for q in questions:
             if isinstance(q, dict):
                 q = dict(q)
-                q["final_type"] = _coerce_final_type_default(q.get("final_type"))
+                ft, line = _coerce_final_type_default(q.get("final_type"))
+                q["final_type"] = ft
+                if line:
+                    q["final_type_report_line"] = line
                 rewritten_q.append(q)
             else:
                 rewritten_q.append(q)

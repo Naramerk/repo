@@ -34,21 +34,18 @@ def judge_item_key(
     check_id: str,
     item_id: str,
     *,
-    task_id: str = "",
-    attempt_id: str = "",
-    output_digest: str = "",
+    task_id: str,
+    attempt_id: str,
+    output_digest: str,
 ) -> str:
-    """Scoped review key (task, attempt, check, item, output digest)."""
-    if task_id and attempt_id and output_digest:
-        return review_key(
-            task_id=task_id,
-            attempt_id=attempt_id,
-            check_id=check_id,
-            item_id=item_id,
-            output_digest=output_digest,
-        )
-    # Unit-test helper path without attempt scope (never used in production eval).
-    return f"{check_id}:{item_id}"
+    """Scoped review key — fail-closed when scope fields are empty (no bare fallback)."""
+    return review_key(
+        task_id=task_id,
+        attempt_id=attempt_id,
+        check_id=check_id,
+        item_id=item_id,
+        output_digest=output_digest,
+    )
 
 
 def evaluate_rubric(
@@ -68,34 +65,23 @@ def evaluate_rubric(
     output_digest: str | None = None,
     evaluate_code_check: Any | None = None,
 ) -> CheckResult:
-    """Evaluate a rubric check; never raises into the executor."""
-    try:
-        return _evaluate(
-            check,
-            template_id=template_id,
-            check_id=check_id,
-            out=out,
-            artifacts=artifacts,
-            role=role,
-            review_statuses=review_statuses or {},
-            judge_retry=judge_retry or {},
-            failure_kinds=failure_kinds or {},
-            output_rubric=output_rubric,
-            attempt_id=attempt_id,
-            task_id=task_id,
-            output_digest=output_digest,
-            evaluate_code_check=evaluate_code_check,
-        )
-    except Exception as e:  # noqa: BLE001 — totality
-        return CheckResult(
-            check_id=check_id,
-            template_id=template_id,
-            status=ReqStatus.UNASSESSED,
-            is_code=False,
-            required=True,
-            role="validity",
-            detail=f"rubric_eval_error:{type(e).__name__}:{e}",
-        )
+    """Evaluate a rubric check. Bugs propagate (no swallow → UNASSESSED)."""
+    return _evaluate(
+        check,
+        template_id=template_id,
+        check_id=check_id,
+        out=out,
+        artifacts=artifacts,
+        role=role,
+        review_statuses=review_statuses or {},
+        judge_retry=judge_retry or {},
+        failure_kinds=failure_kinds or {},
+        output_rubric=output_rubric,
+        attempt_id=attempt_id,
+        task_id=task_id,
+        output_digest=output_digest,
+        evaluate_code_check=evaluate_code_check,
+    )
 
 
 def _evaluate(
@@ -134,13 +120,15 @@ def _evaluate(
     has_judge = False
     has_code = False
 
+    if not task_id or not attempt_id or not output_digest:
+        raise ValueError("evaluate_rubric requires non-empty task_id, attempt_id, output_digest")
     for item in rubric.items:
         item_key = judge_item_key(
             check_id,
             item.id,
-            task_id=task_id or "",
-            attempt_id=attempt_id or "",
-            output_digest=output_digest or "",
+            task_id=task_id,
+            attempt_id=attempt_id,
+            output_digest=output_digest,
         )
         if item.check == "judge":
             has_judge = True
@@ -240,26 +228,15 @@ def evaluate_output_spec_rubrics(
     task_id: str | None = None,
     output_digest: str | None = None,
 ) -> list[CheckResult]:
-    """Evaluate each OutputSpec.rubric not already covered by a criterion."""
+    """Evaluate each OutputSpec.rubric not already covered by a criterion.
+
+    Freeze/eval errors propagate — never swallowed as UNASSESSED.
+    """
     extra: list[CheckResult] = []
     for o in getattr(spec, "expected_outputs", None) or []:
         if getattr(o, "rubric", None) is None:
             continue
-        try:
-            rub = freeze_rubric(o.rubric)
-        except Exception as e:  # noqa: BLE001
-            extra.append(
-                CheckResult(
-                    check_id=f"rubric:{o.name}",
-                    template_id=f"rubric:{o.name}",
-                    status=ReqStatus.UNASSESSED,
-                    is_code=False,
-                    required=bool(getattr(o, "required", True)),
-                    role="validity",
-                    detail=f"rubric_freeze_error:{type(e).__name__}",
-                )
-            )
-            continue
+        rub = freeze_rubric(o.rubric)
         tid = f"rubric:{rub.digest}"
         if tid in already:
             continue

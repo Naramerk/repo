@@ -18,17 +18,30 @@ def _task_is_stub(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> bool
     return False
 
 
+_BLOCKING_DISPOSITIONS = frozenset({"not_attempted", "inconclusive", "rubric_not_met"})
+_BLOCKING_REASONS = frozenset({"rubric_pending"})
+
+
+def _disposition_blocks_fulfilled(d: Mapping[str, Any]) -> bool:
+    """not_attempted / inconclusive / rubric_not_met / rubric_pending block fulfilled."""
+    if d.get("disposition") in _BLOCKING_DISPOSITIONS:
+        return True
+    if d.get("reason") in _BLOCKING_REASONS:
+        return True
+    return False
+
+
 def _compute_verdict(
     tasks: list[Task],
     *,
     atts: Mapping[str, Mapping[str, Any]],
     question_dispositions: Mapping[str, Mapping[str, Any]] | None,
+    question_final_types: Mapping[str, str] | None = None,
 ) -> tuple[str, float]:
+    del question_final_types  # reserved for callers; blocking uses dispositions
     done_tasks = [t for t in tasks if t.state == TaskState.DONE]
     done = len(done_tasks)
-    stub_share = (
-        (sum(1 for t in done_tasks if _task_is_stub(t, atts)) / done) if done else 0.0
-    )
+    stub_share = (sum(1 for t in done_tasks if _task_is_stub(t, atts)) / done) if done else 0.0
     # report is required=False (PR 2) — excluded when required=False
     req = [t for t in tasks if t.spec.required]
     req_ok = {TaskOutcome.SUCCESS, TaskOutcome.PARTIAL}
@@ -38,10 +51,7 @@ def _compute_verdict(
         verdict = "partial"
     elif all(t.outcome in {TaskOutcome.FAILED, TaskOutcome.SKIPPED} for t in req):
         verdict = "failed"
-    elif any(
-        t.kind.value == "plan" and t.outcome in {TaskOutcome.FAILED, TaskOutcome.SKIPPED}
-        for t in tasks
-    ):
+    elif any(t.kind.value == "plan" and t.outcome in {TaskOutcome.FAILED, TaskOutcome.SKIPPED} for t in tasks):
         verdict = "failed"
     elif all(t.outcome in req_ok for t in req) and has_required_stub:
         verdict = "stubbed"
@@ -50,11 +60,8 @@ def _compute_verdict(
     else:
         verdict = "partial"
 
-    # PR 2 / PR13: ≥1 not_attempted or rubric_not_met → verdict not above partial
-    if question_dispositions and any(
-        d.get("disposition") in ("not_attempted", "rubric_not_met")
-        for d in question_dispositions.values()
-    ):
+    # PR 2 / PR13: blocking dispositions/reasons → never above partial
+    if question_dispositions and any(_disposition_blocks_fulfilled(d) for d in question_dispositions.values()):
         if verdict == "fulfilled":
             verdict = "partial"
         elif verdict == "stubbed":
@@ -62,9 +69,7 @@ def _compute_verdict(
     return verdict, stub_share
 
 
-def study_phase(
-    *, finalized: bool = False, all_done: bool = False, past_effective: bool = False
-) -> str:
+def study_phase(*, finalized: bool = False, all_done: bool = False, past_effective: bool = False) -> str:
     """Pure phase: closed | finalizing | running (DESIGN §3.2)."""
     if finalized:
         return "closed"
@@ -82,31 +87,30 @@ def study_view(
     now: datetime | None = None,
     effective_deadline: datetime | None = None,
     question_dispositions: Mapping[str, Mapping[str, Any]] | None = None,
+    question_final_types: Mapping[str, str] | None = None,
 ) -> StudyView:
     """Compute StudyView.
 
     closed ⇔ finalized (∃ StudyFinalized). finalizing when all DONE or past
     effective_deadline without a final event. Questions cap fulfilled/stubbed
-    at partial when any disposition is not_attempted (PR 2).
+    at partial when any disposition is not_attempted / inconclusive /
+    rubric_not_met / rubric_pending (PR 2 / PR13).
     """
     tasks = list(tasks)
     atts: Mapping[str, Mapping[str, Any]] = attempts or {}
     total = len(tasks)
     done = sum(1 for t in tasks if t.state == TaskState.DONE)
     all_done = bool(tasks) and done == total
-    past_effective = (
-        now is not None
-        and effective_deadline is not None
-        and now >= effective_deadline
-    )
-    phase = study_phase(
-        finalized=finalized, all_done=all_done, past_effective=past_effective
-    )
+    past_effective = now is not None and effective_deadline is not None and now >= effective_deadline
+    phase = study_phase(finalized=finalized, all_done=all_done, past_effective=past_effective)
     if phase == "closed":
         if not tasks:
             return StudyView(phase="closed", progress=1.0, awaiting_human=False)
         verdict, stub_share = _compute_verdict(
-            tasks, atts=atts, question_dispositions=question_dispositions
+            tasks,
+            atts=atts,
+            question_dispositions=question_dispositions,
+            question_final_types=question_final_types,
         )
         return StudyView(
             phase="closed",
@@ -117,7 +121,10 @@ def study_view(
         )
     if phase == "finalizing":
         verdict, stub_share = _compute_verdict(
-            tasks, atts=atts, question_dispositions=question_dispositions
+            tasks,
+            atts=atts,
+            question_dispositions=question_dispositions,
+            question_final_types=question_final_types,
         )
         return StudyView(
             phase="finalizing",
@@ -131,9 +138,7 @@ def study_view(
     stub_share = 0.0
     done_tasks = [t for t in tasks if t.state == TaskState.DONE]
     if done_tasks:
-        stub_share = sum(1 for t in done_tasks if _task_is_stub(t, atts)) / len(
-            done_tasks
-        )
+        stub_share = sum(1 for t in done_tasks if _task_is_stub(t, atts)) / len(done_tasks)
     return StudyView(
         phase="running",
         progress=done / total,

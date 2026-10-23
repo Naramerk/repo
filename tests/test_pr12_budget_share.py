@@ -53,7 +53,11 @@ def _exp(key: str, *, depends_on: list[str] | None = None, **kw) -> TaskSpec:
         goal=kw.get("goal", "g"),
         route="experiment",
         depends_on=depends_on or [],
-        addresses=kw.get("addresses", ["Q1"]),
+        # Empty criteria ⇒ no addresses by default (PlanValidator: no catalog-default credit).
+        addresses=kw.get(
+            "addresses",
+            ["Q1"] if kw.get("criteria", True) else [],
+        ),
         criteria=[RequirementRef(template_id="value_match")] if kw.get("criteria", True) else [],
         budget_share=kw.get("budget_share"),
         deadline_share=kw.get("deadline_share"),

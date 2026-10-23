@@ -35,7 +35,10 @@ def _exp(key: str, *, depends_on: list[str], **kw) -> TaskSpec:
         goal=kw.get("goal", "g"),
         route="experiment",
         depends_on=depends_on,
-        addresses=kw.get("addresses", ["Q1"]),
+        addresses=kw.get(
+            "addresses",
+            ["Q1"] if kw.get("criteria", True) else [],
+        ),
         criteria=[RequirementRef(template_id="value_match")] if kw.get("criteria", True) else [],
         inputs=kw.get("inputs", []),
         foreach=kw.get("foreach"),
@@ -589,7 +592,7 @@ async def test_fanin_quorum(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["A", "B", "C"],
         addresses=["Q1"],
-        criteria=[],
+        criteria=[RequirementRef(template_id="artifact_present")],
         tolerate_failed_dep=True,
         inputs=[
             InputSpec(from_task="A", output="main", quorum=2),
@@ -644,7 +647,7 @@ async def test_quorum_all_fail(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["A", "B"],
         addresses=["Q1"],
-        criteria=[],
+        criteria=[RequirementRef(template_id="artifact_present")],
         tolerate_failed_dep=True,
         inputs=[
             InputSpec(from_task="A", output="main", quorum=1),
@@ -692,7 +695,7 @@ async def test_quorum_required_not_softened(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["A", "B"],
         addresses=["Q1"],
-        criteria=[],
+        criteria=[RequirementRef(template_id="artifact_present")],
         tolerate_failed_dep=True,
         inputs=[
             InputSpec(from_task="A", output="main", quorum=1),  # pool
@@ -737,7 +740,7 @@ async def test_quorum_tie_exact(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["A", "B", "C"],
         addresses=["Q1"],
-        criteria=[],
+        criteria=[RequirementRef(template_id="artifact_present")],
         tolerate_failed_dep=True,
         inputs=[InputSpec(from_task=k, output="main", quorum=2) for k in ("A", "B", "C")],
     )
@@ -781,7 +784,7 @@ async def test_quorum_partial_infra_failures(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["A", "B"],
         addresses=["Q1"],
-        criteria=[],
+        criteria=[RequirementRef(template_id="artifact_present")],
         tolerate_failed_dep=True,
         inputs=[
             InputSpec(from_task="A", output="main", quorum=1),
@@ -843,7 +846,7 @@ async def test_quorum_xy_not_pooled_by_value(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["FX", "FY"],
         addresses=["Q1"],
-        criteria=[],
+        criteria=[RequirementRef(template_id="artifact_present")],
         tolerate_failed_dep=True,
         inputs=[
             InputSpec(from_task="FX", output="main", quorum=2),
@@ -910,7 +913,7 @@ async def test_foreach_plus_quorum_fanin(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["FE"],
         addresses=["Q1"],
-        criteria=[],
+        criteria=[RequirementRef(template_id="artifact_present")],
         tolerate_failed_dep=True,
         inputs=[InputSpec(from_task="FE", output="main", quorum=2)],
     )
@@ -970,7 +973,7 @@ async def test_quorum_zero_inputs_edge(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["FE"],
         addresses=["Q1"],
-        criteria=[],
+        criteria=[RequirementRef(template_id="artifact_present")],
         inputs=[InputSpec(from_task="FE", output="main", quorum=1)],
     )
     await rt.accept_plan([e0, fe, summary], questions=[QuestionSpec(id="Q1", text="why")])
@@ -1383,7 +1386,7 @@ async def test_foreach_quorum_gt_children_misses(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["FE"],
         addresses=["Q1"],
-        criteria=[],
+        criteria=[RequirementRef(template_id="artifact_present")],
         tolerate_failed_dep=True,
         inputs=[InputSpec(from_task="FE", output="main", quorum=3)],
     )

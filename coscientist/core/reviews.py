@@ -4,11 +4,13 @@ Review state is journaled (``ResultPending`` / ``ReviewScheduled`` /
 ``ReviewRecorded``) and rebuilt on open/replay so live == restart.
 
 Keys are scoped: ``(task_id, attempt_id, check_id, item_id, output_digest)``
-so a MET from another attempt/task never applies.
+encoded as a JSON array (not ``"|"``-joined) so a MET from another
+attempt/task never applies.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
 from coscientist.core.digest import sha256_hex
@@ -19,8 +21,11 @@ JudgeFailureKind = Literal["timeout", "invalid_json", "refusal"]
 # Keep in sync with checks.kinds.rubric.JUDGE_FAILURE_KINDS (no circular import).
 JUDGE_FAILURE_KINDS = frozenset({"timeout", "invalid_json", "refusal"})
 
-# Field separator — digests/ids are hex or opaque without this char.
-_SEP = "|"
+JUDGE_CAS_CORRUPT_LINE = "не выполнено: внутренняя ошибка (judge CAS)"
+
+
+class JudgePendingCorrupt(Exception):
+    """Pending agent output CAS missing/corrupt on rebuild — fail closed."""
 
 
 def review_key(
@@ -31,25 +36,38 @@ def review_key(
     item_id: str,
     output_digest: str,
 ) -> str:
-    """Stable scoped key for review_statuses / ReviewScheduled / record_review."""
-    return _SEP.join([str(task_id), str(attempt_id), str(check_id), str(item_id), str(output_digest)])
+    """Stable scoped key for review_statuses / ReviewScheduled / record_review.
+
+    Encoded as a JSON array so field values may contain any character.
+    Empty ``task_id`` / ``attempt_id`` / ``output_digest`` is rejected (fail-closed).
+    """
+    if not task_id or not attempt_id or not output_digest:
+        raise ValueError("review_key requires non-empty task_id, attempt_id, output_digest")
+    return json.dumps(
+        [str(task_id), str(attempt_id), str(check_id), str(item_id), str(output_digest)],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def parse_review_key(key: str) -> dict[str, str] | None:
-    parts = str(key).split(_SEP)
-    if len(parts) != 5:
+    try:
+        parts = json.loads(key)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(parts, list) or len(parts) != 5:
         return None
     return {
-        "task_id": parts[0],
-        "attempt_id": parts[1],
-        "check_id": parts[2],
-        "item_id": parts[3],
-        "output_digest": parts[4],
+        "task_id": str(parts[0]),
+        "attempt_id": str(parts[1]),
+        "check_id": str(parts[2]),
+        "item_id": str(parts[3]),
+        "output_digest": str(parts[4]),
     }
 
 
 def plan_refused_idem(study_id: str, detail: str) -> str:
-    """Idem key for PlanRefused: sid + sha256(full detail), not a truncated detail."""
+    """Idem key for PlanRefused: sid + sha256(**full** detail)."""
     return make_idem("PlanRefused", study_id, sha256_hex(detail.encode("utf-8")))
 
 
@@ -167,14 +185,18 @@ def review_scheduled_events(
     return events
 
 
-def _load_agent_output(artifacts: Any, digest: str) -> AgentTaskOutput | None:
+def _load_agent_output(artifacts: Any, digest: str) -> AgentTaskOutput:
+    """Load pending AgentTaskOutput from CAS; raise on missing/corrupt (fail-closed)."""
     if artifacts is None or not digest:
-        return None
+        raise JudgePendingCorrupt("missing artifacts store or output digest")
     try:
         raw = artifacts.read_cas(digest)
+    except Exception as e:  # noqa: BLE001 — surface as corrupt, never swallow
+        raise JudgePendingCorrupt(f"cas_read:{type(e).__name__}:{e}") from e
+    try:
         return AgentTaskOutput.model_validate_json(raw)
-    except Exception:  # noqa: BLE001 — missing/corrupt CAS → no pending output
-        return None
+    except Exception as e:  # noqa: BLE001
+        raise JudgePendingCorrupt(f"cas_validate:{type(e).__name__}:{e}") from e
 
 
 def rebuild_judge_state(
@@ -186,11 +208,12 @@ def rebuild_judge_state(
     dict[str, int],
     dict[str, str],
     dict[str, AgentTaskOutput],
+    dict[str, str],
 ]:
-    """Rebuild review_statuses / judge_retry / failure_kinds / pending outputs.
+    """Rebuild review_statuses / judge_retry / failure_kinds / pending / digests.
 
-    Replay order: ResultPending seeds output digest; ReviewRecorded applies
-    statuses; ResultRecorded / AttemptClosed clear pending for that attempt.
+    Only judge-path events: ``ResultPending``, ``ReviewRecorded``,
+    ``ResultRecorded``, ``AttemptClosed``. ``RouteReturned`` is ignored.
     """
     review_statuses: dict[str, ReqStatus] = {}
     judge_retry: dict[str, int] = {}
@@ -208,15 +231,9 @@ def rebuild_judge_state(
             dig = str(p.get("agent_output_digest") or "")
             if aid and dig:
                 pending_digests[aid] = dig
-        elif t == "RouteReturned":
-            aid = str(p.get("attempt_id") or getattr(ev, "entity_key", "") or "")
-            dig = str(p.get("agent_output_digest") or "")
-            if aid and dig:
-                pending_digests[aid] = dig
         elif t == "ReviewRecorded":
             key = str(p.get("review_key") or "")
             if not key:
-                # Legacy composite check_id:item_id — skip (cannot scope safely).
                 continue
             st_raw = p.get("status")
             if st_raw is not None:
@@ -239,30 +256,26 @@ def rebuild_judge_state(
                 pending_digests.pop(aid, None)
 
     pending_outputs: dict[str, AgentTaskOutput] = {}
+    digests: dict[str, str] = {}
     for aid, dig in pending_digests.items():
         if aid in closed:
             continue
-        out = _load_agent_output(artifacts, dig)
-        if out is not None:
-            pending_outputs[aid] = out
-    return review_statuses, judge_retry, failure_kinds, pending_outputs
+        digests[aid] = dig
+        pending_outputs[aid] = _load_agent_output(artifacts, dig)
+    return review_statuses, judge_retry, failure_kinds, pending_outputs, digests
 
 
 def apply_judge_journal(executor: Any, events: list[Any]) -> None:
-    """Load journaled judge state onto a live Executor (open_runtime / reopen)."""
-    statuses, retries, kinds, pending = rebuild_judge_state(events, artifacts=getattr(executor, "artifacts", None))
+    """Load journaled judge state onto a live Executor (open_runtime / reopen).
+
+    Raises ``JudgePendingCorrupt`` when a pending digest cannot be loaded —
+    callers must finalize the study as an honest internal error (no hang).
+    """
+    statuses, retries, kinds, pending, digests = rebuild_judge_state(
+        events, artifacts=getattr(executor, "artifacts", None)
+    )
     executor.review_statuses = statuses
     executor.judge_retry = retries
     executor.failure_kinds = kinds
     executor._pending_outputs = pending  # noqa: SLF001
-    # Also stash digests for key construction when attempt projection lags.
-    digests: dict[str, str] = {}
-    for ev in events:
-        t = getattr(ev, "type", None)
-        p = getattr(ev, "payload", None) or {}
-        if t in ("ResultPending", "RouteReturned") and isinstance(p, dict):
-            aid = str(p.get("attempt_id") or "")
-            dig = str(p.get("agent_output_digest") or "")
-            if aid and dig:
-                digests[aid] = dig
     executor._output_digests = digests  # noqa: SLF001

@@ -482,8 +482,25 @@ async def _build_rich_payload(runtime: StudyRuntime, *, sid: str, trigger: Final
             line = (ev.payload or {}).get("report_line") or ("не выполнено: план отклонён")
             if line not in contrib:
                 contrib.append(str(line))
+        if ev.type == "JudgeCasCorrupt":
+            line = (ev.payload or {}).get("report_line") or ("не выполнено: внутренняя ошибка (judge CAS)")
+            if line not in contrib:
+                contrib.append(str(line))
+    # Upcaster-coerced unknown final_type → report line on plan questions.
+    for plan in plans or []:
+        qs = plan.get("questions") if isinstance(plan, dict) else getattr(plan, "questions", None)
+        for q in qs or []:
+            if isinstance(q, dict):
+                line = q.get("final_type_report_line")
+                if line and line not in contrib:
+                    contrib.append(str(line))
     study = runtime.study
     assert study is not None
+    # PR13 §6.1: final_types into study_view so rt.view() == StudyFinalized.
+    from coscientist.core.rubric import question_final_types
+    from coscientist.core.rules import study_fulfilled
+
+    ftypes = question_final_types(plans)
     view = study_view(
         runtime.tasks.values(),
         open_hitl=0,
@@ -492,15 +509,10 @@ async def _build_rich_payload(runtime: StudyRuntime, *, sid: str, trigger: Final
         now=runtime.clock.now(),
         effective_deadline=study.effective_deadline(),
         question_dispositions=qdisp,
+        question_final_types=dict(ftypes),
     )
     verdict = view.verdict or "partial"
-    # PR13 §6.1: study_fulfilled with question_final_types (artifact/both).
-    from coscientist.core.rubric import question_final_types
-    from coscientist.core.rules import study_fulfilled
-
-    ftypes = question_final_types(plans)
-    # Prefer disposition (answered / rubric_not_met / …) over claim-level
-    # verdict (supported / …) so study_fulfilled sees final_type-aware status.
+    # Prefer disposition over claim-level verdict for study_fulfilled checks.
     q_verdicts = {
         qid: str(d.get("disposition") or d.get("verdict") or "untested")
         for qid, d in qdisp.items()
@@ -510,10 +522,10 @@ async def _build_rich_payload(runtime: StudyRuntime, *, sid: str, trigger: Final
     all_required_success = bool(req) and all(
         t.state == TaskState.DONE and t.outcome in {TaskOutcome.SUCCESS, TaskOutcome.PARTIAL} for t in req
     )
-    if study_fulfilled(q_verdicts, all_required_success, question_final_types=dict(ftypes)):
-        verdict = "fulfilled"
-    elif all_required_success and verdict == "fulfilled":
-        # study_fulfilled disagreed (e.g. artifact still not_attempted).
+    # Only DOWNGRADE — never raise study_view verdict to fulfilled.
+    if verdict == "fulfilled" and not study_fulfilled(
+        q_verdicts, all_required_success, question_final_types=dict(ftypes)
+    ):
         verdict = "partial"
     payload = await _build_finalized_payload(
         runtime,

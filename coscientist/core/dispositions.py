@@ -221,9 +221,10 @@ def _dispositions_inner(
                                 "report_line": RUBRIC_REJECTED_LINE,
                             }
                         else:
+                            # Verdict present, rubric still pending — own reason.
                             result[qid] = {
                                 "disposition": Disposition.NOT_ATTEMPTED.value,
-                                "reason": NotAttemptedReason.NO_COUNTING_CLAIMS.value,
+                                "reason": "rubric_pending",
                                 "reason_detail": ["rubric_pending"],
                                 "formulation": text,
                                 "final_type": ft,

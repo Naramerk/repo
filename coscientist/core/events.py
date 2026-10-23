@@ -54,6 +54,7 @@ EventType = Literal[
     "ReviewScheduled",
     "ReviewRecorded",
     "PlanRefused",
+    "JudgeCasCorrupt",
     "ForkCreated",
     "VerdictSnapshotsRecorded",
     "GraphNodeUpserted",

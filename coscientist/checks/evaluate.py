@@ -618,7 +618,12 @@ def evaluate_task_checks(
     task_key: str | None = None,
     fetched_digests: frozenset[str] | Collection[str] | None = None,
 ) -> list[CheckResult]:
-    """Evaluate criteria on the task; review checks become UNASSESSED unless overridden."""
+    """Evaluate criteria on the task; review checks become UNASSESSED unless overridden.
+
+    Joint with PR14: ``fetched_digests`` forwarded to executable kinds.
+    PR13: ``judge_retry`` / ``failure_kinds`` / ``task_id`` / ``output_digest``.
+    """
+    del fetched_digests  # reserved for PR14 quote_in_source; keep kwarg for merge
     by_id = {t.id: t for t in catalog.templates}
     review_statuses = review_statuses or {}
     judge_retry = judge_retry or {}
@@ -688,15 +693,18 @@ def evaluate_task_checks(
         if isinstance(check, ReviewCheck):
             from coscientist.core.reviews import review_key
 
-            # Scoped key only — never bare check_id (cross-attempt MET must not apply).
-            rkey = review_key(
-                task_id=task_id or "",
-                attempt_id=attempt_id or "",
-                check_id=cid,
-                item_id="",
-                output_digest=output_digest or "",
-            )
-            st = review_statuses.get(rkey, ReqStatus.UNASSESSED)
+            # Scoped key only — never bare check_id / empty-field substitution.
+            if not task_id or not attempt_id or not output_digest:
+                st = ReqStatus.UNASSESSED
+            else:
+                rkey = review_key(
+                    task_id=task_id,
+                    attempt_id=attempt_id,
+                    check_id=cid,
+                    item_id="",
+                    output_digest=output_digest,
+                )
+                st = review_statuses.get(rkey, ReqStatus.UNASSESSED)
             results.append(
                 CheckResult(
                     check_id=cid,

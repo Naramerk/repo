@@ -110,9 +110,58 @@ async def open_runtime(
         arts = artifacts if artifacts is not None else LocalArtifactStore(root / "arts")
         rt.make_executor(catalog, arts)
         # PR13: rebuild judge state from journal so reopen == live.
-        from coscientist.core.reviews import apply_judge_journal
+        from coscientist.core.reviews import (
+            JUDGE_CAS_CORRUPT_LINE,
+            JudgePendingCorrupt,
+            apply_judge_journal,
+        )
 
-        apply_judge_journal(rt.executor, events)
+        try:
+            apply_judge_journal(rt.executor, events)
+        except JudgePendingCorrupt as e:
+            # Corrupt/missing pending CAS → honest internal-error finalize (no hang).
+            from coscientist.core.domain import TaskOutcome, TaskState
+            from coscientist.core.events import EventEnvelope, make_idem
+            from coscientist.core.reasons import TaskReason
+
+            now = rt.clock.now()
+            sid = rt.study.study_id if rt.study else study_id
+            close_events: list[Any] = [
+                EventEnvelope(
+                    study_id=sid,
+                    type="JudgeCasCorrupt",
+                    entity_key=sid,
+                    idem_key=make_idem("JudgeCasCorrupt", sid, str(e)[:80]),
+                    payload={
+                        "detail": str(e),
+                        "report_line": JUDGE_CAS_CORRUPT_LINE,
+                    },
+                    ts=now,
+                )
+            ]
+            for t in list(rt.tasks.values()):
+                if getattr(t, "state", None) == TaskState.DONE:
+                    continue
+                close_events.append(
+                    EventEnvelope(
+                        study_id=sid,
+                        type="TaskDone",
+                        entity_key=t.task_id,
+                        idem_key=make_idem("TaskDone", t.task_id, "judge_cas_corrupt"),
+                        payload={
+                            "task_id": t.task_id,
+                            "outcome": TaskOutcome.FAILED.value,
+                            "reason": TaskReason.CORE_BUG.value,
+                            "detail": str(e),
+                        },
+                        ts=now,
+                        schema_version=2,
+                    )
+                )
+            await rt._append(close_events)  # noqa: SLF001
+            import coscientist.core.finalize as finalize_mod
+
+            await finalize_mod.finalize(rt, trigger="cancel")
         # PR18: seal tool registry after built-ins — no late register_tool at runtime.
         ensure_core_tools_ready()
         return rt

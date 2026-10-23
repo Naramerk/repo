@@ -125,9 +125,25 @@ def _check_role(c: Any) -> str:
     return "unknown"
 
 
+def _is_rubric_check(c: Any) -> bool:
+    """Rubric checks are validity-role but must not flip claim validity_ok (PR13)."""
+    effect = _check_field(c, "effect")
+    if isinstance(effect, dict) and effect.get("rubric_kind") == "rubric":
+        return True
+    tid = str(_check_field(c, "template_id") or "")
+    cid = str(_check_field(c, "check_id") or "")
+    return tid.startswith("rubric:") or cid.startswith("rubric:")
+
+
 def _required_validity_failed(checks: list[Any]) -> bool:
-    """True when a required validity check FAILED (Duhem–Quine cap)."""
+    """True when a required validity check FAILED (Duhem–Quine cap).
+
+    Rubric checks are excluded: a failed rubric must not mark claims
+    ``validity_failed`` (PR 8b counting stays independent of rubric).
+    """
     for c in checks:
+        if _is_rubric_check(c):
+            continue
         if _check_role(c) != "validity":
             continue
         if not bool(_check_field(c, "required")):
@@ -337,6 +353,7 @@ def _derive_claim_core_attrs(
     validity_ok = True
     exclusion_reason: str | None = None
     # Required validity failure invalidates this experiment's claims only.
+    # Rubric (even role=validity) never flips validity_ok — see _is_rubric_check.
     if _required_validity_failed(checks):
         validity_ok = False
         status = "unassessed"
@@ -345,7 +362,7 @@ def _derive_claim_core_attrs(
         validity_ok = False
         status = "unassessed"
         exclusion_reason = "unknown_role"
-    elif role == "validity" and status == "not_met":
+    elif role == "validity" and status == "not_met" and not any(_is_rubric_check(c) for c in (checks or ())):
         validity_ok = False
         status = "unassessed"
         exclusion_reason = "validity_failed"
@@ -1043,17 +1060,19 @@ class Executor:
         prior = int(self.judge_retry.get(key, 0))
         st, retries, fk = resolve_review_status(status=status, failure_kind=failure_kind, prior_retries=prior)
         self.judge_retry[key] = retries
+        # ONE status live == journal: PENDING while retry budget remains;
+        # UNASSESSED only after retries exhausted (or explicit status).
         if fk and retries <= 1:
-            self.review_statuses[key] = ReqStatus.PENDING
+            wait_status = ReqStatus.PENDING
+            self.review_statuses[key] = wait_status
             self.failure_kinds[key] = fk
-            wait_status = ReqStatus.UNASSESSED
         else:
-            self.review_statuses[key] = st
+            wait_status = st
+            self.review_statuses[key] = wait_status
             if fk:
                 self.failure_kinds[key] = fk
             else:
                 self.failure_kinds.pop(key, None)
-            wait_status = st
         await self._append(
             [
                 EventEnvelope(
@@ -1238,6 +1257,7 @@ class Executor:
         # Attempt-open check runs inside the write transaction (_append_many_sync).
         now = self.clock.now()
         self._pending_outputs.pop(attempt_id, None)
+        self._output_digests.pop(attempt_id, None)
         graph = self.get_graph() if self.get_graph is not None else None
         task = self.get_task(task_id)
         attempt = self.get_attempt(attempt_id)

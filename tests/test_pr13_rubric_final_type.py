@@ -26,10 +26,43 @@ from coscientist.core.plan_validate import (
     validate_final_types,
     validate_rubric_immutable,
 )
+from coscientist.core.reasons import NotAttemptedReason
+from coscientist.core.reviews import review_key
 from coscientist.core.rubric import freeze_rubric, rubric_digest
 from coscientist.core.rubric_types import Rubric, RubricItem
 from coscientist.core.stance import claim_stance
 from tests.helpers import attach_executor, close_runtime, open_runtime
+
+_SCOPE = dict(task_id="t1", attempt_id="a1", output_digest="deadbeef")
+
+
+def _rk(check_id: str, item_id: str) -> str:
+    return review_key(check_id=check_id, item_id=item_id, **_SCOPE)
+
+
+async def _complete_report_and_finalize(rt, tmp_path) -> None:
+    """Finish REPORT via production path (no cancel / clock skip)."""
+    aid = await rt.start_attempt("REPORT")
+    if aid is None:
+        await rt.ensure_lease(ttl_s=10_000)
+        await rt.tick()
+        return
+    ex, arts = attach_executor(rt, tmp_path)
+    art = arts.put(
+        b"# report\n",
+        make_tool_ref(f"{aid}:main"),
+        name="main",
+        media_type="text/markdown",
+    )
+    await ex.record(
+        aid,
+        AgentTaskOutput(
+            summary="report",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+        ),
+    )
+    await rt.ensure_lease(ttl_s=10_000)
+    await rt.tick()
 
 
 def _lit_rubric(*, title: str = "Write a literature review") -> Rubric:
@@ -230,6 +263,7 @@ def test_rubric_never_changes_stance():
     )
     before = c.stance
     # Simulate rubric CheckResult on the side — stance property ignores it.
+    key = _rk("rubric_check#0", "adequate")
     rub = evaluate_rubric(
         CodeCheck(kind="rubric", output="main", rubric=_judge_only_rubric()),
         template_id="rubric_check",
@@ -237,7 +271,8 @@ def test_rubric_never_changes_stance():
         out=AgentTaskOutput(summary="x"),
         artifacts=None,
         role="prediction",  # even if mis-labeled, evaluator forces validity
-        review_statuses={"rubric_check#0:adequate": ReqStatus.MET},
+        review_statuses={key: ReqStatus.MET},
+        **_SCOPE,
     )
     assert rub.role == "validity"
     assert rub.effect and rub.effect.get("affects_stance") is False
@@ -249,6 +284,7 @@ def test_judge_not_met_stays_failed():
     """Judge verdict not-met → FAILED (never remapped to UNASSESSED)."""
     rub = _judge_only_rubric()
     check = CodeCheck(kind="rubric", output="main", rubric=rub)
+    key = _rk("r#0", "adequate")
     cr = evaluate_rubric(
         check,
         template_id="rubric_check",
@@ -256,8 +292,9 @@ def test_judge_not_met_stays_failed():
         out=AgentTaskOutput(summary="x"),
         artifacts=None,
         role="validity",
-        review_statuses={"r#0:adequate": ReqStatus.FAILED},
+        review_statuses={key: ReqStatus.FAILED},
         judge_retry={},
+        **_SCOPE,
     )
     assert cr.status == ReqStatus.FAILED
     assert "judge:FAILED" in (cr.detail or "")
@@ -267,6 +304,7 @@ def test_judge_failure_unassessed_retry():
     """Infra failure → UNASSESSED path; retry then MET."""
     rub = _judge_only_rubric()
     check = CodeCheck(kind="rubric", output="main", rubric=rub)
+    key = _rk("r#0", "adequate")
     # First infra failure while waiting → PENDING (attempt stays open).
     cr = evaluate_rubric(
         check,
@@ -275,9 +313,10 @@ def test_judge_failure_unassessed_retry():
         out=AgentTaskOutput(summary="x"),
         artifacts=None,
         role="validity",
-        review_statuses={"r#0:adequate": ReqStatus.PENDING},
-        judge_retry={"r#0:adequate": 1},
-        failure_kinds={"r#0:adequate": "timeout"},
+        review_statuses={key: ReqStatus.PENDING},
+        judge_retry={key: 1},
+        failure_kinds={key: "timeout"},
+        **_SCOPE,
     )
     assert cr.status == ReqStatus.PENDING
     assert "judge_failure" in (cr.detail or "")
@@ -289,9 +328,10 @@ def test_judge_failure_unassessed_retry():
         out=AgentTaskOutput(summary="x"),
         artifacts=None,
         role="validity",
-        review_statuses={"r#0:adequate": ReqStatus.UNASSESSED},
-        judge_retry={"r#0:adequate": 2},
-        failure_kinds={"r#0:adequate": "timeout"},
+        review_statuses={key: ReqStatus.UNASSESSED},
+        judge_retry={key: 2},
+        failure_kinds={key: "timeout"},
+        **_SCOPE,
     )
     assert cr_u.status == ReqStatus.UNASSESSED
     # Successful retry answer → MET.
@@ -302,8 +342,9 @@ def test_judge_failure_unassessed_retry():
         out=AgentTaskOutput(summary="x"),
         artifacts=None,
         role="validity",
-        review_statuses={"r#0:adequate": ReqStatus.MET},
-        judge_retry={"r#0:adequate": 1},
+        review_statuses={key: ReqStatus.MET},
+        judge_retry={key: 1},
+        **_SCOPE,
     )
     assert cr2.status == ReqStatus.MET
 
@@ -351,28 +392,19 @@ async def test_final_type_artifact_fulfilled_by_rubric(tmp_path, clock):
         ),
     )
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E0")
-    assert task.outcome in (TaskOutcome.SUCCESS, TaskOutcome.PARTIAL) or (
-        getattr(task.outcome, "value", None) in ("SUCCESS", "PARTIAL")
-    )
-    # Advance to close study.
-    await rt.start_attempt("REPORT")
-    # cancel report if started
-    for t in list(rt.tasks.values()):
-        if t.spec.task_key == "REPORT" and t.state.value != "DONE":
-            await rt.cancel_task("REPORT", reason="cancelled")
-    await rt.ensure_lease(ttl_s=10_000)
-    rt.clock.advance(timedelta(hours=2))
-    await rt.tick()
+    assert task.outcome in (TaskOutcome.SUCCESS, TaskOutcome.PARTIAL)
+    await _complete_report_and_finalize(rt, tmp_path)
     fin = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
-    assert fin, "study must close with StudyFinalized (totality)"
+    assert len(fin) == 1
     payload = fin[-1].payload
-    assert payload.get("report_artifact_id") or payload.get("minimal_report")
+    assert payload.get("report_artifact_id") is not None or payload.get("minimal_report") is not None
     qdisp = payload.get("question_dispositions") or {}
     assert qdisp.get("Q1", {}).get("disposition") == "answered"
     assert qdisp.get("Q1", {}).get("reason") == "rubric_met"
     view = rt.view()
     assert view.phase == "closed"
-    assert view.verdict in ("fulfilled", "partial", "stubbed")
+    assert view.verdict == payload.get("verdict")
+    assert view.verdict in ("fulfilled", "partial")
 
 
 @pytest.mark.asyncio
@@ -420,9 +452,9 @@ async def test_rubric_change_only_via_expansion(tmp_path, clock):
         superseded_tasks=[],
         reason="edit rubric",
     )
-    assert refused is None or refused is False or (isinstance(refused, str) and "rubric" in refused.lower())
+    assert refused is None or refused is False
     events = await rt.store.read_all()
-    assert any(e.type == "ExpansionRefused" for e in events) or refused is None
+    assert any(e.type == "ExpansionRefused" for e in events)
     # With supersede → accepted.
     ok = await _record_hitl_expand(
         rt,
@@ -432,13 +464,9 @@ async def test_rubric_change_only_via_expansion(tmp_path, clock):
         superseded_tasks=["E0"],
         reason="replace rubric via expand",
     )
-    # expand_plan returns plan_id or None
     events2 = await rt.store.read_all()
-    if ok or any(e.type == "PlanExpanded" for e in events2):
-        assert any(e.type == "PlanExpanded" for e in events2)
-    else:
-        # Critic may refuse for other reasons; immutability path already covered above.
-        assert any(e.type == "ExpansionRefused" for e in events)
+    assert any(e.type == "PlanExpanded" for e in events2)
+    assert ok is not None
 
 
 @pytest.mark.asyncio
@@ -474,18 +502,10 @@ async def test_impossible_task_still_closes_with_report(tmp_path, clock):
     assert aid is not None
     ex, _arts = attach_executor(rt, tmp_path)
     await ex.record(aid, AgentTaskOutput(summary="cannot", outputs={}))
-    for t in list(rt.tasks.values()):
-        if t.spec.task_key == "REPORT" and getattr(t.state, "value", t.state) != "DONE":
-            try:
-                await rt.cancel_task("REPORT", reason="cancelled")
-            except Exception:  # noqa: BLE001
-                pass
-    await rt.ensure_lease(ttl_s=10_000)
-    rt.clock.advance(timedelta(hours=2))
-    await rt.tick()
+    await _complete_report_and_finalize(rt, tmp_path)
     fin = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
     assert len(fin) == 1
-    assert fin[0].payload.get("report_artifact_id") or fin[0].payload.get("minimal_report")
+    assert fin[0].payload.get("report_artifact_id") is not None or fin[0].payload.get("minimal_report") is not None
     # Failed rubric → distinct RUBRIC_NOT_MET + RU report line.
     qdisp = fin[0].payload.get("question_dispositions") or {}
     assert "Q1" in qdisp
@@ -493,6 +513,7 @@ async def test_impossible_task_still_closes_with_report(tmp_path, clock):
     assert qdisp["Q1"].get("report_line") == "не выполнено: рубрика не принята"
     contrib = fin[0].payload.get("contributing_reasons") or []
     assert "не выполнено: рубрика не принята" in contrib
+    assert rt.view().verdict == fin[0].payload.get("verdict")
 
 
 @pytest.mark.asyncio
@@ -594,16 +615,7 @@ async def test_judge_rubric_e2e_met_failed_retry(tmp_path, clock):
     assert item_effect.get("ok") == "MET"
     assert item_effect.get("bad") == "FAILED"
     assert item_effect.get("flaky") == "MET"
-    # Finalize + report line for failed rubric.
-    for t in list(rt.tasks.values()):
-        if t.spec.task_key == "REPORT" and getattr(t.state, "value", t.state) != "DONE":
-            try:
-                await rt.cancel_task("REPORT", reason="cancelled")
-            except Exception:  # noqa: BLE001
-                pass
-    await rt.ensure_lease(ttl_s=10_000)
-    rt.clock.advance(timedelta(hours=2))
-    await rt.tick()
+    await _complete_report_and_finalize(rt, tmp_path)
     fin = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
     assert len(fin) == 1
     qdisp = fin[0].payload.get("question_dispositions") or {}
@@ -611,11 +623,12 @@ async def test_judge_rubric_e2e_met_failed_retry(tmp_path, clock):
     assert qdisp.get("Q1", {}).get("report_line") == "не выполнено: рубрика не принята"
     contrib = fin[0].payload.get("contributing_reasons") or []
     assert "не выполнено: рубрика не принята" in contrib
+    assert rt.view().verdict == fin[0].payload.get("verdict")
 
 
 @pytest.mark.asyncio
 async def test_judge_restart_after_review_scheduled(tmp_path, clock):
-    """Kill after ReviewScheduled → reopen → record_review completes (no hang)."""
+    """Kill after ReviewScheduled → reopen state == live; record_review completes."""
     sid = "st_pr13_judge_restart"
     rt = await _boot(tmp_path, clock, sid)
     rub = freeze_rubric(
@@ -655,18 +668,85 @@ async def test_judge_restart_after_review_scheduled(tmp_path, clock):
     )
     assert pending.reason == "required_checks_pending"
     assert any(e.type == "ReviewScheduled" for e in await rt.store.read_all())
+    live_statuses = dict(ex.review_statuses)
+    live_retries = dict(ex.judge_retry)
+    live_kinds = dict(ex.failure_kinds)
+    live_digests = dict(ex._output_digests)
     await close_runtime(rt)
 
-    # Reopen — judge state rebuilt from journal; no KeyError / hang.
     rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
     await rt2.ensure_lease(ttl_s=10_000)
     ex2, _ = attach_executor(rt2, tmp_path)
-    assert aid in ex2._pending_outputs or aid in ex2._output_digests
+    assert aid in ex2._pending_outputs
+    assert aid in ex2._output_digests
+    assert ex2.review_statuses == live_statuses
+    assert ex2.judge_retry == live_retries
+    assert ex2.failure_kinds == live_kinds
+    assert ex2._output_digests == live_digests
     final = await ex2.record_review(aid, "rubric_check#0", item_id="adequate", status=ReqStatus.MET)
-    assert final.outcome.value in ("SUCCESS", "PARTIAL")
+    assert final.outcome in (TaskOutcome.SUCCESS, TaskOutcome.PARTIAL)
     assert final.reason != "required_checks_pending"
     task = next(t for t in rt2.tasks.values() if t.spec.task_key == "E0")
     assert getattr(task.state, "value", task.state) == "DONE"
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_judge_restart_after_judge_failure(tmp_path, clock):
+    """Kill after judge failure (PENDING) → reopen statuses match live."""
+    sid = "st_pr13_judge_restart_fail"
+    rt = await _boot(tmp_path, clock, sid)
+    rub = freeze_rubric(
+        Rubric(
+            items=[RubricItem(id="adequate", text="ok?", required=True, check="judge")],
+            aggregate="all_required",
+        )
+    )
+    await rt.accept_plan(
+        [
+            _exp(
+                "E0",
+                addresses=["Q1"],
+                rubric=rub,
+                criteria=[RequirementRef(template_id="rubric_check")],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="lit", final_type="artifact")],
+    )
+    ex, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("E0")
+    assert aid is not None
+    art = arts.put(
+        b"# review\n",
+        make_tool_ref(f"{aid}:main"),
+        name="main",
+        media_type="text/markdown",
+    )
+    await ex.record(
+        aid,
+        AgentTaskOutput(
+            summary="draft",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+        ),
+    )
+    mid = await ex.record_review(aid, "rubric_check#0", item_id="adequate", failure_kind="timeout")
+    assert mid.reason == "required_checks_pending"
+    # Live + journal both store PENDING (unified).
+    assert any(st == ReqStatus.PENDING for st in ex.review_statuses.values())
+    live_statuses = dict(ex.review_statuses)
+    live_retries = dict(ex.judge_retry)
+    live_kinds = dict(ex.failure_kinds)
+    await close_runtime(rt)
+
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    await rt2.ensure_lease(ttl_s=10_000)
+    ex2, _ = attach_executor(rt2, tmp_path)
+    assert ex2.review_statuses == live_statuses
+    assert ex2.judge_retry == live_retries
+    assert ex2.failure_kinds == live_kinds
+    assert all(st == ReqStatus.PENDING for st in ex2.review_statuses.values())
+    final = await ex2.record_review(aid, "rubric_check#0", item_id="adequate", status=ReqStatus.MET)
+    assert final.outcome in (TaskOutcome.SUCCESS, TaskOutcome.PARTIAL)
     await close_runtime(rt2)
 
 
@@ -902,7 +982,6 @@ def test_study_fulfilled_wires_final_types():
 
 def test_review_key_scoped_no_cross_attempt():
     from coscientist.checks.kinds.rubric import evaluate_rubric
-    from coscientist.core.reviews import review_key
 
     rub = _judge_only_rubric()
     check = CodeCheck(kind="rubric", output="main", rubric=rub)
@@ -927,3 +1006,311 @@ def test_review_key_scoped_no_cross_attempt():
     )
     # Foreign MET must not apply — waiting for this attempt's judge.
     assert cr.status == ReqStatus.PENDING
+
+
+def test_review_key_empty_fields_fail_closed():
+    with pytest.raises(ValueError, match="non-empty"):
+        review_key(
+            task_id="",
+            attempt_id="a",
+            check_id="c",
+            item_id="i",
+            output_digest="d",
+        )
+    with pytest.raises(ValueError, match="non-empty"):
+        evaluate_rubric(
+            CodeCheck(kind="rubric", output="main", rubric=_judge_only_rubric()),
+            template_id="r",
+            check_id="r#0",
+            out=AgentTaskOutput(summary="x"),
+            artifacts=None,
+            role="validity",
+            task_id="",
+            attempt_id="a1",
+            output_digest="d",
+        )
+
+
+def test_plan_refused_idem_hashes_full_detail():
+    from coscientist.core.digest import sha256_hex
+    from coscientist.core.events import make_idem
+    from coscientist.core.plan_validate import refuse_detail
+    from coscientist.core.reviews import plan_refused_idem
+
+    long = "x" * 500
+    full = refuse_detail(long)
+    assert len(full) == 500
+    assert plan_refused_idem("s1", full) == make_idem("PlanRefused", "s1", sha256_hex(full.encode("utf-8")))
+    # Truncated snippet must not be what we hash.
+    truncated = refuse_detail(long, truncate=True)
+    assert len(truncated) == 200
+    assert plan_refused_idem("s1", truncated) != plan_refused_idem("s1", full)
+
+
+def test_both_rubric_pending_own_reason(clock):
+    """both + verdict present + rubric pending → reason rubric_pending (not no_counting_claims)."""
+    from unittest.mock import patch
+
+    from coscientist.core.claims import RuntimeClaim
+    from coscientist.core.dispositions import dispositions
+    from coscientist.core.domain import Task, TaskKind, TaskState
+
+    rub = _judge_only_rubric()
+    spec = _exp(
+        "E0",
+        addresses=["Q1"],
+        rubric=rub,
+        criteria=[RequirementRef(template_id="value_match")],
+    )
+    task = Task(
+        task_id="s/E0",
+        kind=TaskKind.EXPERIMENT,
+        spec=spec,
+        state=TaskState.DONE,
+        deadline=clock.now() + timedelta(hours=1),
+        attempts=["a1"],
+        outcome=TaskOutcome.SUCCESS,
+    )
+    plans = {
+        "p1": {
+            "questions": [{"id": "Q1", "text": "q", "final_type": "both"}],
+            "tasks": [spec.model_dump(mode="json")],
+        }
+    }
+    results = {
+        "a1": {
+            "attempt_id": "a1",
+            "check_results": [
+                {
+                    "check_id": f"rubric:{rub.digest}#out",
+                    "template_id": f"rubric:{rub.digest}",
+                    "status": "PENDING",
+                    "effect": {"rubric_digest": rub.digest, "rubric_kind": "rubric"},
+                }
+            ],
+        }
+    }
+    claim = RuntimeClaim(
+        criterion_status="met",
+        accepted=True,
+        provenance="real",
+        validity="valid",
+        claim_outcome="consistent",
+        check_role="prediction",
+        frozen=True,
+        evidence_kind="experimental",
+        target="Q1",
+        target_kind="question",
+        validity_ok=True,
+    )
+    assert claim.counts()
+    with (
+        patch(
+            "coscientist.core.dispositions.filtered_claims_by_target",
+            return_value={"Q1": [claim]},
+        ),
+        patch(
+            "coscientist.core.dispositions.claims_for_ref",
+            return_value=[claim],
+        ),
+    ):
+        disp = dispositions(
+            tasks={"s/E0": task},
+            plans=plans,
+            graph=None,
+            study=None,
+            results=results,
+        )
+    row = disp["Q1"]
+    assert row.get("reason") == "rubric_pending"
+    assert row.get("disposition") == "not_attempted"
+    assert row.get("reason") != NotAttemptedReason.NO_COUNTING_CLAIMS.value
+
+
+@pytest.mark.asyncio
+async def test_planner_validation_error_taskspec_dict_plan_refused(tmp_path, clock):
+    """Pydantic ValidationError building TaskSpec/OutputSpec → PlanRefused."""
+    rt = await _boot(tmp_path, clock, "st_pr13_pval")
+    # Invalid: empty rubric items (Rubric validator) nested in OutputSpec via dict.
+    bad = {
+        "task_key": "E0",
+        "title": "E0",
+        "goal": "g",
+        "route": "experiment",
+        "depends_on": ["PLAN"],
+        "addresses": ["Q1"],
+        "criteria": [],
+        "expected_outputs": [
+            {
+                "name": "main",
+                "media_type": "text/markdown",
+                "role": "report",
+                "rubric": {"items": [], "aggregate": "all_required"},
+            }
+        ],
+    }
+    pid = await rt.accept_plan(
+        [bad],  # type: ignore[list-item]
+        questions=[QuestionSpec(id="Q1", text="q", final_type="artifact")],
+    )
+    assert pid == ""
+    events = await rt.store.read_all()
+    assert any(e.type == "PlanRefused" for e in events)
+    assert any(e.type == "StudyFinalized" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_corrupt_judge_cas_finalizes_internal_error(tmp_path, clock):
+    """Corrupt pending CAS on reopen → JudgeCasCorrupt + StudyFinalized (no hang)."""
+    sid = "st_pr13_cas_corrupt"
+    rt = await _boot(tmp_path, clock, sid)
+    rub = freeze_rubric(
+        Rubric(
+            items=[RubricItem(id="adequate", text="ok?", required=True, check="judge")],
+            aggregate="all_required",
+        )
+    )
+    await rt.accept_plan(
+        [
+            _exp(
+                "E0",
+                addresses=["Q1"],
+                rubric=rub,
+                criteria=[RequirementRef(template_id="rubric_check")],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="lit", final_type="artifact")],
+    )
+    ex, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("E0")
+    assert aid is not None
+    art = arts.put(
+        b"# review\n",
+        make_tool_ref(f"{aid}:main"),
+        name="main",
+        media_type="text/markdown",
+    )
+    await ex.record(
+        aid,
+        AgentTaskOutput(
+            summary="draft",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+        ),
+    )
+    dig = ex._output_digests[aid]
+    await close_runtime(rt)
+    # Corrupt the CAS blob for the pending digest (study-local arts/cas/<digest>).
+    cas_path = tmp_path / sid / "arts" / "cas" / dig
+    assert cas_path.exists(), cas_path
+    cas_path.write_bytes(b"NOT-JSON{{{")
+
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    events = await rt2.store.read_all()
+    assert any(e.type == "JudgeCasCorrupt" for e in events)
+    fin = [e for e in events if e.type == "StudyFinalized"]
+    assert len(fin) == 1
+    contrib = fin[0].payload.get("contributing_reasons") or []
+    assert any("judge CAS" in str(x) for x in contrib)
+    assert rt2.view().phase == "closed"
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
+    """final_type=both: failed rubric must not set claim validity_failed (PR 8b)."""
+    from coscientist.core.domain import CheckResult, Task, TaskKind, TaskState
+    from coscientist.core.executor import _derive_claim_core_attrs, _is_rubric_check
+
+    rub = _judge_only_rubric()
+    cr = CheckResult(
+        check_id=f"rubric:{rub.digest}#out",
+        template_id=f"rubric:{rub.digest}",
+        status=ReqStatus.FAILED,
+        is_code=False,
+        required=True,
+        role="validity",
+        effect={"rubric_kind": "rubric", "rubric_digest": rub.digest, "affects_stance": False},
+    )
+    assert _is_rubric_check(cr)
+    spec = _exp(
+        "E0",
+        addresses=["Q1"],
+        rubric=rub,
+        criteria=[RequirementRef(template_id="value_match")],
+    )
+    task = Task(
+        task_id="s/E0",
+        kind=TaskKind.EXPERIMENT,
+        spec=spec,
+        state=TaskState.DONE,
+        deadline=clock.now() + timedelta(hours=1),
+        outcome=TaskOutcome.FAILED,
+        attempts=["a1"],
+    )
+    attrs = _derive_claim_core_attrs(
+        task,
+        TaskOutcome.FAILED,
+        raw={"text": "c", "polarity": "supports"},
+        checks=[cr],
+        validated=True,
+        catalog=None,
+        graph=None,
+        study_id="s",
+        attempt_id="a1",
+    )
+    assert attrs.get("validity_ok") is True
+    assert attrs.get("exclusion_reason") != "validity_failed"
+
+
+def test_met_one_task_never_covers_another(clock):
+    """Documented invariant: MET on E0 does not satisfy E1's rubric."""
+    from coscientist.core.domain import Task, TaskKind, TaskState
+    from coscientist.core.rubric import task_rubric_status
+
+    rub = _judge_only_rubric()
+    t0 = Task(
+        task_id="s/E0",
+        kind=TaskKind.EXPERIMENT,
+        spec=_exp("E0", addresses=["Q1"], rubric=rub, criteria=[]),
+        state=TaskState.DONE,
+        deadline=clock.now() + timedelta(hours=1),
+        outcome=TaskOutcome.SUCCESS,
+        attempts=["a0"],
+    )
+    t1 = Task(
+        task_id="s/E1",
+        kind=TaskKind.EXPERIMENT,
+        spec=_exp("E1", addresses=["Q1"], rubric=rub, criteria=[]),
+        state=TaskState.DONE,
+        deadline=clock.now() + timedelta(hours=1),
+        outcome=TaskOutcome.SUCCESS,
+        attempts=["a1"],
+    )
+    results = {
+        "a0": {
+            "attempt_id": "a0",
+            "check_results": [
+                {
+                    "check_id": f"rubric:{rub.digest}#out",
+                    "template_id": f"rubric:{rub.digest}",
+                    "status": "MET",
+                    "effect": {"rubric_digest": rub.digest, "rubric_kind": "rubric"},
+                }
+            ],
+        },
+        "a1": {
+            "attempt_id": "a1",
+            "check_results": [
+                {
+                    "check_id": f"rubric:{rub.digest}#out",
+                    "template_id": f"rubric:{rub.digest}",
+                    "status": "FAILED",
+                    "effect": {"rubric_digest": rub.digest, "rubric_kind": "rubric"},
+                }
+            ],
+        },
+    }
+    assert task_rubric_status(task_keys={"E0"}, tasks={"s/E0": t0, "s/E1": t1}, results=results) == "met"
+    assert task_rubric_status(task_keys={"E1"}, tasks={"s/E0": t0, "s/E1": t1}, results=results) == "failed"
+    # Covering both: met wins if any covering task met (independent evaluation).
+    assert task_rubric_status(task_keys={"E0", "E1"}, tasks={"s/E0": t0, "s/E1": t1}, results=results) == "met"

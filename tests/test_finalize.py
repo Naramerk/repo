@@ -14,6 +14,7 @@ from coscientist.core.digest import canonical_json
 from coscientist.core.dispositions import dispositions
 from coscientist.core.domain import (
     QuestionSpec,
+    RequirementRef,
     Task,
     TaskKind,
     TaskOutcome,
@@ -93,6 +94,8 @@ def _spec(key, addresses=None, deps=None):
         route="experiment",
         depends_on=deps or ["PLAN"],
         addresses=addresses or [],
+        # Explicit criterion — PlanValidator does not credit catalog defaults.
+        criteria=[RequirementRef(template_id="artifact_present")] if addresses else [],
     )
 
 

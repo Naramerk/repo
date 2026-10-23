@@ -40,15 +40,9 @@ def _has_rubric(spec: TaskSpec) -> bool:
 
 
 def _has_criterion(spec: TaskSpec, catalog: Any | None = None) -> bool:
-    if spec.criteria:
-        return True
-    # Runtime applies catalog.defaults["experiment"] when criteria is empty —
-    # count that as plan-time coverage for final_type=verdict (compat with M1).
-    if catalog is not None:
-        defaults = getattr(catalog, "defaults", None) or {}
-        if defaults.get("experiment"):
-            return True
-    return False
+    """True iff the task declares ≥1 criterion. Catalog defaults do **not** count."""
+    del catalog  # explicit criteria only — defaults are runtime eval, not plan coverage
+    return bool(spec.criteria)
 
 
 def validate_final_types(
@@ -94,9 +88,17 @@ def validate_final_types(
 PLAN_REFUSED_LINE = "не выполнено: план отклонён (рубрика/final_type)"
 
 
-def refuse_detail(err: BaseException | str) -> str:
+def refuse_detail(err: BaseException | str, *, truncate: bool = False) -> str:
+    """Full detail string for PlanRefused idem hashing.
+
+    ``truncate=True`` only for human-facing report snippets — never before
+    ``plan_refused_idem`` (idem must hash the full detail).
+    """
     msg = str(err) if not isinstance(err, BaseException) else str(err)
-    return (msg or type(err).__name__)[:200]
+    full = msg or type(err).__name__
+    if truncate:
+        return full[:200]
+    return full
 
 
 async def apply_plan_refused(
@@ -211,7 +213,9 @@ def validate_plan_final_types_or_err(
     superseded_tasks: set[str] | None = None,
     catalog: Any | None = None,
 ) -> str | None:
-    """Expansion-friendly: return error string or None (never raise)."""
+    """Expansion-friendly: return error string or None (never raise to tick)."""
+    from pydantic import ValidationError
+
     try:
         qspecs: list[QuestionSpec] = []
         for q in questions:
@@ -233,7 +237,5 @@ def validate_plan_final_types_or_err(
             catalog=catalog,
         )
         return None
-    except ValueError as e:
+    except (ValueError, ValidationError) as e:
         return str(e) or "invalid_final_type"
-    except Exception as e:  # noqa: BLE001 — totality for expand path
-        return f"{type(e).__name__}:{e}"

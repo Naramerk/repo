@@ -236,6 +236,9 @@ def task_rubric_status(
 
     Evaluates only each task's **current** (latest) attempt. Timeout/infra FAILED
     counts as UNASSESSED (pending), not rubric rejection. Errors propagate.
+
+    A MET on one covering task never covers another task's rubric — each
+    ``task_key`` is evaluated independently against its own attempt results.
     """
     by_key: dict[str, Any] = {}
     for t in (tasks.values() if hasattr(tasks, "values") else tasks) or []:

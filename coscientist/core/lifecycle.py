@@ -275,7 +275,10 @@ class LifecycleMixin:
         from coscientist.core.shares import critic_plan_shares
 
         # All plan validation → PlanRefused (never raw ValueError to callers).
+        # Catch only expected validation failures — not TypeError (bugs).
         try:
+            # Planner may hand dicts; pydantic ValidationError → PlanRefused.
+            tasks = [t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t) for t in (tasks or [])]
             if questions is None and spec_output is not None:
                 questions = [QuestionSpec.model_validate(q) for q in questions_from_spec_output(spec_output)]
             questions = list(questions or [])
@@ -300,7 +303,7 @@ class LifecycleMixin:
             catalog = getattr(self, "catalog", None) or getattr(getattr(self, "executor", None), "catalog", None)
             validate_plan_criteria(tasks, catalog)
             tasks, questions = freeze_plan_rubrics(tasks, questions, catalog=catalog)
-        except (ValueError, ValidationError, TypeError) as e:
+        except (ValueError, ValidationError) as e:
             return await apply_plan_refused(self, detail=refuse_detail(e), report_line=PLAN_REFUSED_LINE)
         pid = plan_id()
         plan = Plan(
