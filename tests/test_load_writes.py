@@ -38,6 +38,8 @@ _PROJECTION_TABLES = (
     "hitl_requests",
     "graph_nodes",
     "graph_edges",
+    "question_disposals",
+    "disposal_rejects",
     "meta",
 )
 
@@ -124,11 +126,13 @@ async def _run_load(tmp_path: Path, runtime_cls: type):
 
 async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
     """Append AttemptTainted / SourceFetched / FetchIntegrityRaised / HitlOpened /
-    GraphNodeUpserted / GraphEdgeAdded(kind=decomposes).
+    GraphNodeUpserted / GraphEdgeAdded(kind=decomposes) /
+    QuestionDisposed / QuestionDisposeRejected.
 
     Exercises ``fetch_calls`` load for SourceFetched, ``fetch_integrity`` write set,
-    ``hitl_requests``, and dirty-key ``graph_nodes`` / ``graph_edges`` (PR16
-    decomposes) so the equivalence test covers non-empty sparse tables.
+    ``hitl_requests``, dirty-key ``graph_nodes`` / ``graph_edges`` (PR16), and PR15
+    ``question_disposals`` / ``disposal_rejects`` so the equivalence test covers
+    non-empty sparse tables.
     Uses a synthetic attempt id (no ``start_attempt``) so seeding works after the
     parallel load has already closed EXP tasks.
     """
@@ -221,6 +225,7 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
         )
     )
 
+<<<<<<< HEAD
     # PR16: GraphNodeUpserted + GraphEdgeAdded(kind=decomposes) must project via
     # #27 dirty-key apply_event (GraphEdgeAdded ∈ _affected_tables → graph_edges).
     q_root = f"{sid}:question:Q"
@@ -257,6 +262,39 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
                 "src_id": q_child,
                 "dst_id": q_root,
                 "attrs": {"origin": "explicit"},
+=======
+    # PR15: QuestionDisposed + QuestionDisposeRejected (dirty-key tables).
+    await rt.writer.append(
+        EventEnvelope(
+            study_id=sid,
+            type="QuestionDisposed",
+            entity_key="Qseed",
+            idem_key=make_idem("QuestionDisposed", sid, "Qseed"),
+            payload={
+                "question_id": "Qseed",
+                "disposition": "infeasible",
+                "reason": "seed",
+                "refs": ["hitl:h-seed"],
+                "design_artifact_id": None,
+            },
+            ts=now,
+            schema_version=1,
+        )
+    )
+    await rt.writer.append(
+        EventEnvelope(
+            study_id=sid,
+            type="QuestionDisposeRejected",
+            entity_key="Qrej",
+            idem_key=make_idem("QuestionDisposeRejected", sid, "Qrej", "deadbeefdeadbeef"),
+            payload={
+                "question_id": "Qrej",
+                "disposition": "needs_more_data",
+                "detail": "missing_experiment_design: seed",
+                "reason": "missing_experiment_design",
+                "report_line": "не выполнено: needs_more_data без дизайна эксперимента",
+                "row_key": "Qrej:deadbeefdeadbeef",
+>>>>>>> 71b2219 (fix(pr15): rebase on #27 dirty-key; soft missing-meta; private stamp)
             },
             ts=now,
             schema_version=1,
@@ -292,10 +330,16 @@ async def test_twenty_parallel_sqlite_projection_matches_fold(
     """After the full 20-parallel load, SQLite projections == fold_events (every table).
 
     Also seeds AttemptTainted / SourceFetched / FetchIntegrityRaised / HitlOpened /
+<<<<<<< HEAD
     GraphNodeUpserted / GraphEdgeAdded(kind=decomposes) so ``source_fetches``,
     ``fetch_calls``, ``fetch_integrity``, ``hitl_requests``, ``graph_nodes``, and
     ``graph_edges`` are non-empty (dirty-key load deps + #26 integrity + PR16
     decomposes).
+=======
+    QuestionDisposed / QuestionDisposeRejected so ``source_fetches``, ``fetch_calls``,
+    ``fetch_integrity``, ``hitl_requests``, ``question_disposals``, and
+    ``disposal_rejects`` are non-empty (dirty-key load deps + #26/#28 rows).
+>>>>>>> 71b2219 (fix(pr15): rebase on #27 dirty-key; soft missing-meta; private stamp)
     """
     rt = await _run_load(tmp_path, runtime_cls)
     await _seed_fetch_hitl_projection_events(rt)
@@ -308,8 +352,13 @@ async def test_twenty_parallel_sqlite_projection_matches_fold(
         "fetch_calls",
         "fetch_integrity",
         "hitl_requests",
+<<<<<<< HEAD
         "graph_nodes",
         "graph_edges",
+=======
+        "question_disposals",
+        "disposal_rejects",
+>>>>>>> 71b2219 (fix(pr15): rebase on #27 dirty-key; soft missing-meta; private stamp)
     ):
         assert folded.get(table), f"{table} must be non-empty after seed"
         assert sqlite_map.get(table), f"{table} missing from SQLite projection"

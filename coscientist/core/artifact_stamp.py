@@ -4,6 +4,8 @@ Agents must not import this module (import-linter). Core emits
 ``ArtifactRegistered(stamped=True)`` in the same append batch as
 ``ResultRecorded``; ``apply_kind_stamp`` mutates meta **only in fold** after a
 successful append. Pre-commit mutation is forbidden.
+
+``_stamp_kind`` is private (fold / apply_kind_stamp only).
 """
 
 from __future__ import annotations
@@ -20,17 +22,12 @@ VALID_ARTIFACT_KINDS: frozenset[str] = frozenset({"experiment_design", "contradi
 __all__ = [
     "VALID_ARTIFACT_KINDS",
     "kind_stamped_event",
-    "stamp_kind",
     "apply_kind_stamp",
 ]
 
 
-def stamp_kind(store: Any, artifact_id: str, kind: str | None) -> Artifact:
-    """Apply ``kind`` to artifact meta (fold/tests only; raises on invalid / missing).
-
-    Callers on the write path must emit ``kind_stamped_event`` and let fold
-    invoke this — never mutate before ``_commit_result`` succeeds.
-    """
+def _stamp_kind(store: Any, artifact_id: str, kind: str | None) -> Artifact:
+    """Apply ``kind`` to artifact meta (fold-internal only)."""
     if kind is not None and kind not in VALID_ARTIFACT_KINDS:
         raise ArtifactRejected(f"invalid artifact kind: {kind!r}")
     art = store.get_meta(artifact_id)
@@ -47,7 +44,7 @@ def stamp_kind(store: Any, artifact_id: str, kind: str | None) -> Artifact:
 
 
 def apply_kind_stamp(store: Any, artifact_id: str, kind: str | None) -> Artifact:
-    """Fold-time apply. Missing meta → fail-closed (never silent skip)."""
+    """Fold-time apply. Missing meta raises ``ArtifactRejected`` (caller may soften)."""
     if kind is not None and kind not in VALID_ARTIFACT_KINDS:
         raise ArtifactRejected(f"invalid artifact kind: {kind!r}")
     art = store.get_meta(artifact_id)
@@ -55,7 +52,7 @@ def apply_kind_stamp(store: Any, artifact_id: str, kind: str | None) -> Artifact
         raise ArtifactRejected(f"artifact missing for kind stamp on replay: {artifact_id!r}")
     if art.kind == kind:
         return art
-    return stamp_kind(store, artifact_id, kind)
+    return _stamp_kind(store, artifact_id, kind)
 
 
 def kind_stamped_event(

@@ -81,6 +81,9 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         self.artifact_kinds: dict[str, str] = {}
         # PR15: folded QuestionDisposeRejected rows (also in contributing_reasons).
         self._disposal_rejects: list[dict] = []
+        # PR15: stamped kind with missing meta on replay (tainted / internal_error).
+        self._stamp_meta_missing: list[dict] = []
+        self._pending_kind_stamps: list[tuple[str, str]] = []
         self._study_cancelled = False
         self._budget_exceeded = False
         self._intake_refusal: IntakeRefuse | None = None
@@ -163,6 +166,10 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         )
         self.artifacts = artifacts
         self.catalog = catalog
+        # Fold may have deferred kind stamps (open_runtime projects before bind).
+        flush = getattr(self, "_flush_pending_kind_stamps", None)
+        if callable(flush):
+            flush()
         self.bind_executor(ex)
         # Executor writes via writer (not StudyRuntime._append); wrap to run H-g.
         orig_append = ex._append

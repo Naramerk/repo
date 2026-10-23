@@ -579,6 +579,9 @@ async def _build_rich_payload(
         folded = fold_events(events)
         if folded.get("fetch_integrity"):
             contrib.append("internal_error")
+    # PR15: stamped ArtifactRegistered with missing meta on replay → tainted mark.
+    if "internal_error" not in contrib and getattr(runtime, "_stamp_meta_missing", None):
+        contrib.append("internal_error")
     # PR13: disposition report_line (e.g. «не выполнено: рубрика не принята»).
     for d in qdisp.values():
         line = d.get("report_line") if isinstance(d, dict) else None

@@ -4,16 +4,13 @@
 
 ### M1 PR15
 ### M1 PR15
-- `needs_more_data` + required `artifact(role=report, kind=experiment_design)` with rubric ids `hypothesis` / `variables` / `sample_size` / `success_criterion` (DESIGN_M1 §6.4). Event `QuestionDisposed` (v1; **first-wins** per question); rejected disposals → journaled `QuestionDisposeRejected` (fold + `contributing_reasons`); disposition stays `not_attempted` (`missing_experiment_design`).
-- Explicit `OutputSpec.kind: experiment_design | contradiction_map` and `OutputSpec.evidence_kind` (Literal; `derivation` requires role=code|report). PlanValidator enforces both; rubric item ids never imply evidence_kind.
-- Core stamps `Artifact.kind` via journaled `ArtifactRegistered(stamped=True)`; **fold-only** meta mutation (`apply_kind_stamp`); `design_artifact_ok` never trusts `meta.kind` alone; missing meta on replay → tainted/`internal_error` (study still opens).
-- Upcasters (after #29 / main `bd413e0`): TaskCreated **v13** (v12 kind → v13 evidence_kind); PlanAccepted **v11** / PlanExpanded **v5** apply kind+evidence_kind in one continuous step after PR16 PA10/PE4. StudyCreated **v10**. No duplicate `register_upcaster`.
-- Honest terminals (`needs_more_data` / `infeasible` / `ill_posed`) stamp `verdict` for PR16 rollup clamp (`disposition != not_attempted` or `verdict is not None`).
-- Edge `contradicts: claim → claim` (unordered pair min/max; Idempotent). Contradiction map JSON helper for `final_type=artifact`.
-- Evidence kind `derivation`: **review-only never counts** toward k_sup/k_ref (only the claim-bound executable CodeCheck MET lifts). Verdict mark `by_theory` («теоретически»).
-- Import-linter: agents must not import `core.dispose` or `core.artifact_stamp`.
-- **PR8 debt:** `all_done` → `terminal_reason=infeasible` still needs computed `ill_posed` from PR8.
-- Tests: dispose reject restart/replay, stamp commit-failure + e2e replay, explicit evidence_kind, bound executable check, honest-terminal verdict, termination XOR.
+- `needs_more_data` + required `artifact(role=report, kind=experiment_design)` with rubric ids `hypothesis` / `variables` / `sample_size` / `success_criterion` (DESIGN_M1 §6.4). Event `QuestionDisposed` (v1; **first-wins**); rejected disposals → journaled `QuestionDisposeRejected` (`_note_reject` only after successful append; fold + `contributing_reasons`).
+- Explicit `OutputSpec.kind` + `OutputSpec.evidence_kind` (PlanValidator; rubric ids never imply evidence_kind). Writers: TaskCreated **v13** / PlanAccepted **v11** / PlanExpanded **v5** continuous after #29 PA10/PE4 (`bd413e0`). StudyCreated **v10**. No duplicate `register_upcaster`.
+- Fold-only `apply_kind_stamp` (`_stamp_kind` private); missing meta on replay → `_stamp_meta_missing` tainted/internal_error (study still opens → StudyFinalized). `design_artifact_ok` never trusts `meta.kind` alone.
+- Honest terminals (`needs_more_data` / `infeasible` / `ill_posed`) stamp `verdict` for PR16 rollup clamp.
+- Projections: dirty-key `_put` for `question_disposals` / `disposal_rejects`; equivalence seed covers decomposes + dispose tables.
+- Derivation: review-only never counts; only claim-bound executable CodeCheck MET lifts. `by_theory`. Import-linter: agents ↛ dispose / artifact_stamp.
+- **PR8 debt:** `terminal_reason=infeasible` still needs PR8 ill_posed wiring.
 
 ### M1 PR16
 - `decomposes` acyclicity (self-loop + cycle) on accept/expand writes; `Plan.rollup` (`all|any|majority|rubric`) + `Plan.subquestions` / `QuestionSpec.origin` (`explicit` = PlanOut.subquestions; `implicit` = parent_id without subquestions listing; `emergent` = PlanExpanded origin=emergent).
@@ -21,6 +18,7 @@
 - Parent disposition via `apply_rollup` in `dispositions()` (after PR11 loop-cap tagging). Strict majority `n//2+1` (1:1 / 2:2 → no majority). Rollup never **raises** a parent above its PR 8b claims-based verdict (may lower/keep); `expand_graph` cycle check uses the full existing decomposes tree. Report section «Дерево подзадач».
 - Upcasters: PlanAccepted **v10** (after loops v9); PlanExpanded **v4** (after loop fields v3). StudyCreated unchanged (v10; #23 takes v11). `#28` stacks PlanAccepted **v11** / PlanExpanded **v5**. `GraphEdgeAdded` → `graph_edges` in `_affected_tables` for #27 dirty-key projection; load-writes seed covers decomposes edges. No duplicate `register_upcaster`.
 - Rollup clamp: terminal own = ``disposition != not_attempted`` or ``verdict is not None`` (covers PR11 ``iteration_cap`` without ``verdict``); incomplete/no-majority/cycle never wipe own terminal; cyclic decomposes localized to subtree (not study-wide wipe).
+
 
 ### M1 PR14 follow-up
 - `append_source_fetched`: try/finally releases write permit if append fails after verify; `release_source_fetched_write_permit` raises when no handler is registered.

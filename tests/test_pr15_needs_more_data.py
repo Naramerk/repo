@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from coscientist.core.artifact_stamp import stamp_kind
+from coscientist.core.artifact_stamp import apply_kind_stamp
 from coscientist.core.artifacts import make_tool_ref
 from coscientist.core.claims import RuntimeClaim
 from coscientist.core.contradicts import (
@@ -242,7 +242,7 @@ def test_design_artifact_ok_ignores_meta_kind_without_journal(tmp_path):
         media_type="text/markdown",
         role="report",
     )
-    stamp_kind(arts, art.artifact_id, ARTIFACT_KIND_EXPERIMENT_DESIGN)
+    apply_kind_stamp(arts, art.artifact_id, ARTIFACT_KIND_EXPERIMENT_DESIGN)
     assert arts.get_meta(art.artifact_id).kind == ARTIFACT_KIND_EXPERIMENT_DESIGN
     # Without journal_kinds / pending / covering-task → False.
     assert design_artifact_ok(
@@ -262,15 +262,11 @@ def test_design_artifact_ok_ignores_meta_kind_without_journal(tmp_path):
     ) is True
 
 
-def test_stamp_kind_rejects_invalid():
-    with pytest.raises(ArtifactRejected):
-        stamp_kind(object(), "art_x", "nope")
-
-
-def test_apply_kind_stamp_fail_closed_missing_meta(tmp_path):
-    from coscientist.core.artifact_stamp import apply_kind_stamp
+def test_apply_kind_stamp_rejects_invalid_and_missing(tmp_path):
     from coscientist.core.artifacts import LocalArtifactStore
 
+    with pytest.raises(ArtifactRejected):
+        apply_kind_stamp(object(), "art_x", "nope")
     arts = LocalArtifactStore(tmp_path / "arts")
     with pytest.raises(ArtifactRejected, match="missing"):
         apply_kind_stamp(arts, "art_missing", ARTIFACT_KIND_EXPERIMENT_DESIGN)
@@ -841,10 +837,11 @@ async def test_stamp_kind_not_applied_before_commit_failure(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_stamp_kind_e2e_replay_and_missing_meta_fail_closed(tmp_path, clock):
-    """Successful stamp folds; replay restores kind; missing meta file fails closed."""
-    from coscientist.core.artifact_stamp import apply_kind_stamp
+async def test_stamp_kind_e2e_replay_and_missing_meta_marks_internal_error(tmp_path, clock):
+    """Successful stamp folds; missing meta on reopen marks tainted/internal_error.
 
+    Study must still open and reach StudyFinalized (no ArtifactRejected in fold).
+    """
     rt = await _boot(tmp_path, clock, "st_stamp_ok")
     await rt.accept_plan(
         tasks=[_exp_design("E0", addresses=["Q1"])],
@@ -880,17 +877,20 @@ async def test_stamp_kind_e2e_replay_and_missing_meta_fail_closed(tmp_path, cloc
     assert rt.artifact_kinds.get(art.artifact_id) == ARTIFACT_KIND_EXPERIMENT_DESIGN
     assert arts.get_meta(art.artifact_id).kind == ARTIFACT_KIND_EXPERIMENT_DESIGN
     assert "Q1" in rt.question_disposals
+    # Drop meta before reopen so fold hits missing-meta path.
+    meta_path = arts.meta / f"{art.artifact_id}.json"
+    meta_path.unlink()
+    arts._index.pop(art.artifact_id, None)  # noqa: SLF001
     await close_runtime(rt)
 
     rt2 = await open_runtime(tmp_path, "st_stamp_ok", clock=clock, owner="t1")
-    arts2 = rt2.artifacts
-    assert arts2 is not None
     assert rt2.artifact_kinds.get(art.artifact_id) == ARTIFACT_KIND_EXPERIMENT_DESIGN
-    assert arts2.get_meta(art.artifact_id).kind == ARTIFACT_KIND_EXPERIMENT_DESIGN
-    # Missing meta on replay → fail-closed.
-    meta_path = arts2.meta / f"{art.artifact_id}.json"
-    meta_path.unlink()
-    arts2._index.pop(art.artifact_id, None)  # noqa: SLF001
-    with pytest.raises(ArtifactRejected, match="missing"):
-        apply_kind_stamp(arts2, art.artifact_id, ARTIFACT_KIND_EXPERIMENT_DESIGN)
+    miss = getattr(rt2, "_stamp_meta_missing", None) or []
+    assert miss and miss[0].get("internal_error") is True and miss[0].get("tainted") is True
+    await rt2.ensure_lease(ttl_s=10_000)
+    await _complete_report_and_finalize(rt2, tmp_path)
+    assert rt2.view().phase == "closed"
+    fin = _assert_terminated(await rt2.store.read_all())
+    contrib = list(fin.payload.get("contributing_reasons") or [])
+    assert "internal_error" in contrib
     await close_runtime(rt2)

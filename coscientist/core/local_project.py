@@ -46,6 +46,41 @@ class LocalProjectMixin:
     question_disposals: dict[str, dict[str, Any]]
     artifact_kinds: dict[str, str]
     _disposal_rejects: list[dict[str, Any]]
+    _stamp_meta_missing: list[dict[str, Any]]
+    _pending_kind_stamps: list[tuple[str, str]]
+
+    def _apply_kind_stamp_soft(self, artifact_id: str, kind: str) -> None:
+        """Apply journaled kind; missing meta → tainted/internal_error (never abort open)."""
+        arts = getattr(self, "artifacts", None)
+        if arts is None:
+            return
+        from coscientist.core.artifact_stamp import apply_kind_stamp
+        from coscientist.core.errors import ArtifactRejected
+
+        try:
+            apply_kind_stamp(arts, artifact_id, kind)
+        except ArtifactRejected:
+            miss = getattr(self, "_stamp_meta_missing", None)
+            if not isinstance(miss, list):
+                self._stamp_meta_missing = []
+                miss = self._stamp_meta_missing
+            miss.append(
+                {
+                    "artifact_id": artifact_id,
+                    "kind": kind,
+                    "tainted": True,
+                    "internal_error": True,
+                }
+            )
+
+    def _flush_pending_kind_stamps(self) -> None:
+        """Apply stamps deferred because fold ran before artifacts were bound."""
+        pending = getattr(self, "_pending_kind_stamps", None)
+        if not pending:
+            return
+        self._pending_kind_stamps = []
+        for art_id, kind in pending:
+            self._apply_kind_stamp_soft(art_id, kind)
 
     def _clear_expand_request(
         self, *, after_task: str | None = None, plan_key: str | None = None
@@ -196,11 +231,15 @@ class LocalProjectMixin:
                     kinds = self.artifact_kinds
                 kinds[art_id] = str(kind)
                 arts = getattr(self, "artifacts", None)
-                if arts is not None:
-                    from coscientist.core.artifact_stamp import apply_kind_stamp
-
-                    # Missing meta file → fail-closed (never silent skip).
-                    apply_kind_stamp(arts, art_id, str(kind))
+                if arts is None:
+                    # open_runtime folds before make_executor — defer stamp apply.
+                    pending = getattr(self, "_pending_kind_stamps", None)
+                    if not isinstance(pending, list):
+                        self._pending_kind_stamps = []
+                        pending = self._pending_kind_stamps
+                    pending.append((art_id, str(kind)))
+                else:
+                    self._apply_kind_stamp_soft(art_id, str(kind))
         elif ev.type == "QuestionDisposed":
             from coscientist.core.dispose import fold_question_disposed
 

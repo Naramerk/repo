@@ -311,8 +311,6 @@ async def _journal_reject(
         question_id=question_id,
         disposition=disposition,
     )
-    # Live mirror for same-tick callers; fold re-applies on replay.
-    _note_reject(runtime, detail, report_line=ev.payload.get("report_line"))
     if getattr(runtime, "_finalized", False):
         return
     append = getattr(runtime, "_append", None)
@@ -324,6 +322,8 @@ async def _journal_reject(
         raise
     except StudyClosedError:
         return
+    # Live mirror only after durable append; fold re-applies on replay.
+    _note_reject(runtime, detail, report_line=ev.payload.get("report_line"))
 
 
 def _note_reject(
@@ -332,14 +332,20 @@ def _note_reject(
     *,
     report_line: str | None = None,
 ) -> None:
+    """Mirror a reject into live memory (idempotent by detail digest)."""
     notes = getattr(runtime, "_disposal_rejects", None)
     if not isinstance(notes, list):
         runtime._disposal_rejects = []
         notes = runtime._disposal_rejects
+    detail_s = str(detail)[:200]
+    dig = sha256_hex(detail_s)[:16]
+    for existing in notes:
+        if sha256_hex(str(existing.get("detail") or ""))[:16] == dig:
+            return
     notes.append(
         {
             "reason": MISSING_DESIGN_REASON,
-            "detail": str(detail)[:200],
+            "detail": detail_s,
             "report_line": report_line or dispose_reject_report_line(detail),
         }
     )
