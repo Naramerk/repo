@@ -38,6 +38,7 @@ class StudyRuntime(CoreStudyRuntime, HitlForkMixin):
                 )
             return
         if ev.type == "BudgetDebited":
+            super()._project_local(ev)  # study spent / llm_calls for BudgetExceeded
             if p.get("budget"):
                 self.delegated_budget = DelegatedBudget.from_state(p["budget"])
             spent = float(p.get("spent_rub") or 0.0)

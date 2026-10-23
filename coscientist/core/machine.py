@@ -73,6 +73,8 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         self._study_cancelled = False
         self._budget_exceeded = False
         self._intake_refusal: IntakeRefuse | None = None
+        self._study_spent_rub = 0.0
+        self._study_llm_calls = 0
 
     async def _append(self, events: list[EventEnvelope]) -> None:
         if self._lease_lost:
@@ -159,6 +161,26 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             ]
         )
 
+    def _study_budget_exhausted(self) -> bool:
+        """True when folded spend/calls hit ``Budget.max_cost_rub`` / ``max_llm_calls``."""
+        if self.study is None or self.study.budget is None:
+            return False
+        bud = self.study.budget
+        if bud.max_cost_rub is not None and self._study_spent_rub >= float(
+            bud.max_cost_rub
+        ):
+            return True
+        if bud.max_llm_calls > 0 and self._study_llm_calls >= bud.max_llm_calls:
+            return True
+        return False
+
+    async def _emit_study_budget_if_exhausted(self) -> None:
+        """Production producer: spend via BudgetDebited → BudgetExceeded(study)."""
+        if self._budget_exceeded or self._finalized:
+            return
+        if self._study_budget_exhausted():
+            await self.note_budget_exceeded()
+
     async def finalize(self, *, trigger: FinalizeTrigger) -> None:
         await _finalize(self, trigger=trigger)
 
@@ -187,6 +209,10 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
 
         # P5 first: tasks with deadline < ed and now > deadline → FAILED(deadline)
         await self._apply_p5(now, ed)
+        if self._finalized:
+            return
+
+        await self._emit_study_budget_if_exhausted()
         if self._finalized:
             return
 

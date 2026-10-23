@@ -82,6 +82,10 @@ class CostlyHitlMixin:
             ]
         )
         self._pending_costly_events.pop(request_id, None)
+        # Study-level Budget.max_cost_rub: costly spend counts toward the study.
+        emit = getattr(self, "_emit_study_budget_if_exhausted", None)
+        if emit is not None:
+            await emit()
         return settled
 
     async def _apply_costly_or_nonreal(
