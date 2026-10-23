@@ -3,11 +3,14 @@
 ## Unreleased
 
 ### M1 PR8b
-- Hypothesis verdict model (`docs/DESIGN_HYP_DELTA.md`): claim `validity`/`outcome`/`severe`/`independence_key` (+ optional effect/p_value/power); stub|partial|lit|invalid excluded **before** counting (provenance ceiling removed).
-- Study: `aggregate` (`count`|`evalue`), `evalue_alpha`; support threshold reuses **`confirmations_needed`** (no duplicate field); StudyCreated schema_version=5 + v4→v5 upcaster.
-- `supported` needs ≥ confirmations_needed severe consistent with ≥1 `intent=refute`; single severe → `survived`; ≥ k_ref inconsistent → `refuted` (priority) or conflict inconclusive.
-- Report: `minimal_report.hypotheses[]` + StudyFinalized v3; excluded stub/partial confirmations noted on refuted.
-- Keeps PR8 mechanics: check roles, per-experiment `validity_failed` / `unknown_role`, `VerdictSnapshotsRecorded` (not projection-only).
+- Hypothesis verdict model (`docs/DESIGN_HYP_DELTA.md`): claim `validity`/`outcome`/`severe`/`independence_key`; stub|partial|lit|invalid excluded **before** counting.
+- `independence_key` from InputBinding digests (data/code) + method; fallback `experiment_id` (not attempt id). Agent cannot set it.
+- `severe` only when frozen criterion has sesoi or min_power>0 (no transitional `min_power=0` stamp). TOST: `predicts_null` + effect from criterion/checks, not agent raw.
+- Study: **`supported_needed`** (default 2, ≥2) is the severe-support gate; `confirmations_needed` restored as PR8 snapshot `k`. StudyCreated **v6**.
+- `aggregate='evalue'` rejected at create (deferred until core computes p-values).
+- Capable refute intent required for `supported` (frozen ∧ threshold ∧ prediction role).
+- Report: `hypothesis_report_row` wired into finalize / `minimal_report.hypotheses[]`; PR8 stub note wording restored.
+- Keeps PR8: check roles, per-experiment `validity_failed` / `unknown_role`, `VerdictSnapshotsRecorded` (wins on replay).
 
 ### M1 PR8
 - Runtime `verdict()` wired into `dispositions()` / finalize (Study `confirmations_needed` / `refutations_needed` / `refutation_priority`); supported → answered; hypothesis verdicts in StudyFinalized.

@@ -96,6 +96,34 @@ class LocalProjectMixin:
         elif ev.type == "ResultRecorded":
             self.results[p["result_id"]] = dict(p)
             self.results[p["attempt_id"]] = dict(p)
+            # Populate dep_outputs from named outputs for InputSpec.bind.
+            dep_outputs = getattr(self, "dep_outputs", None)
+            dep_provenance = getattr(self, "dep_provenance", None)
+            aid = p.get("attempt_id")
+            att = self.attempts.get(aid or "", {})
+            tid = att.get("task_id") or p.get("task_id")
+            if (
+                isinstance(dep_outputs, dict)
+                and tid
+                and tid in self.tasks
+            ):
+                tkey = self.tasks[tid].spec.task_key
+                omap = p.get("output_map")
+                if isinstance(omap, dict) and omap:
+                    dep_outputs[tkey] = {
+                        str(k): str(v) for k, v in omap.items() if v
+                    }
+                elif p.get("artifacts"):
+                    arts = list(p.get("artifacts") or [])
+                    if arts:
+                        dep_outputs.setdefault(tkey, {})
+                        dep_outputs[tkey].setdefault("main", str(arts[0]))
+                prov = p.get("provenance", "real")
+                if (
+                    isinstance(dep_provenance, dict)
+                    and prov in ("real", "partial", "stub")
+                ):
+                    dep_provenance[tkey] = prov
         elif ev.type == "TaskDone":
             t = self.tasks[p["task_id"]]
             reason = p.get("reason")

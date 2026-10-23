@@ -167,18 +167,74 @@ def _role_for_claim_key(
     return "unknown"
 
 
-def _criterion_is_frozen(graph: Any, study_id: str, template_id: Any) -> bool:
-    """True when plan-accept freeze marked the criterion node (keyed by template_id)."""
+def _criterion_node(graph: Any, study_id: str, template_id: Any) -> Any | None:
     if not template_id or graph is None:
-        return False
+        return None
     key = str(template_id)
     node = graph.get_node(criterion_node_id(study_id, key))
     if node is None:
         node = graph.get_node(key)
-    if node is None or node.kind != "criterion":
+    if node is None or getattr(node, "kind", None) != "criterion":
+        return None
+    return node
+
+
+def _criterion_is_frozen(graph: Any, study_id: str, template_id: Any) -> bool:
+    """True when plan-accept freeze marked the criterion node (keyed by template_id)."""
+    node = _criterion_node(graph, study_id, template_id)
+    if node is None:
         return False
     attrs = node.attrs or {}
     return attrs.get("frozen_at_seq") is not None or bool(attrs.get("frozen"))
+
+
+def _criterion_freeze_attrs(
+    graph: Any, study_id: str, template_id: Any
+) -> dict[str, Any]:
+    """sesoi / min_power / alpha / predicts_null from the frozen criterion only."""
+    node = _criterion_node(graph, study_id, template_id)
+    attrs = (node.attrs or {}) if node is not None else {}
+    out: dict[str, Any] = {}
+    for key in ("sesoi", "min_power", "alpha"):
+        if attrs.get(key) is None:
+            continue
+        try:
+            out[key] = float(attrs[key])
+        except (TypeError, ValueError):
+            pass
+    if "predicts_null" in attrs:
+        out["predicts_null"] = bool(attrs.get("predicts_null"))
+    return out
+
+
+def _effect_from_checks(checks: list[Any]) -> dict[str, Any] | None:
+    """Core-computed effect from prediction check detail (never agent raw)."""
+    import json
+
+    for c in checks or ():
+        if _check_role(c) != "prediction":
+            continue
+        detail = _check_field(c, "detail")
+        data: Any = None
+        if isinstance(detail, dict):
+            data = detail
+        elif isinstance(detail, str) and detail.strip().startswith("{"):
+            try:
+                data = json.loads(detail)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                data = None
+        if not isinstance(data, dict):
+            continue
+        if "ci_low" in data and "ci_high" in data:
+            try:
+                return {
+                    "est": float(data["est"]) if data.get("est") is not None else None,
+                    "ci_low": float(data["ci_low"]),
+                    "ci_high": float(data["ci_high"]),
+                }
+            except (TypeError, ValueError):
+                continue
+    return None
 
 
 def _derive_claim_core_attrs(
@@ -191,6 +247,7 @@ def _derive_claim_core_attrs(
     study_id: str,
     validated: bool,
     catalog: Any | None = None,
+    bindings: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Core-owned counting fields from plan/checks/freeze — never agent attrs.
 
@@ -222,7 +279,6 @@ def _derive_claim_core_attrs(
         status = "unassessed"
         exclusion_reason = "validity_failed"
     elif role == "unknown":
-        # Unknown role never refutes and never validates (own exclusion reason).
         validity_ok = False
         status = "unassessed"
         exclusion_reason = "unknown_role"
@@ -233,28 +289,34 @@ def _derive_claim_core_attrs(
     from coscientist.core.verdict import (
         claim_is_severe,
         classify_outcome,
+        digests_from_bindings,
         independence_key_for,
         outcome_to_status,
     )
 
     frozen = _criterion_is_frozen(graph, study_id, key)
+    crit = _criterion_freeze_attrs(graph, study_id, key)
+    sesoi = crit.get("sesoi")
+    min_power = crit.get("min_power")
+    predicts_null = bool(crit.get("predicts_null", False))
     pred_statuses: list[str] = []
+    has_prediction_check = False
     for c in checks or ():
         if _check_role(c) == "prediction":
+            has_prediction_check = True
             st = getattr(getattr(c, "status", None), "value", getattr(c, "status", None))
             pred_statuses.append(str(st or ""))
     if not pred_statuses and status in ("met", "not_met", "unassessed"):
         pred_statuses = [
             "PASSED" if status == "met" else ("FAILED" if status == "not_met" else "")
         ]
-    raw_effect = raw.get("effect") if isinstance(raw, dict) else None
-    effect = raw_effect if isinstance(raw_effect, dict) else None
-    predicts_null = bool(raw.get("predicts_null")) if isinstance(raw, dict) else False
+    # Effect from check results only — never agent raw claim fields.
+    effect = _effect_from_checks(list(checks or []))
     validity_s, claim_outcome, _ = classify_outcome(
         validity_ok=validity_ok,
         prediction_statuses=pred_statuses,
         predicts_null=predicts_null,
-        sesoi=None,
+        sesoi=sesoi if isinstance(sesoi, float) else None,
         effect=effect,
         r17_ok=True,  # R17 runtime metadata still deferred (PR8)
     )
@@ -264,7 +326,6 @@ def _derive_claim_core_attrs(
             exclusion_reason = "validity_failed"
     elif claim_outcome == "indeterminate" and exclusion_reason is None:
         exclusion_reason = "indeterminate"
-    # Keep criterion_status in sync with outcome for stance / legacy readers.
     status = outcome_to_status(
         claim_outcome,  # type: ignore[arg-type]
         validity="valid" if validity_ok else "invalid",
@@ -274,16 +335,40 @@ def _derive_claim_core_attrs(
         exp_id = str(getattr(task, "task_id", None) or "")
     except Exception:  # noqa: BLE001
         exp_id = ""
-    method_s = str(method) if method is not None else None
-    indep = independence_key_for(method=method_s, experiment_id=exp_id or None)
-    # Stamp min_power=0.0 so severe gate's (sesoi|min_power) requirement holds
-    # for M1 catalogs that omit SESOI (documented transitional deviation).
-    probe = type("P", (), {"claim_outcome": claim_outcome, "validity_ok": validity_ok,
-                           "frozen": frozen, "sesoi": None, "min_power": 0.0,
-                           "power": None, "severe": None,
-                           "criterion_frozen_at_seq": None,
-                           "first_cited_evidence_seq": None})()
+    method_s = str(method.value) if isinstance(method, ExperimentMethod) else (
+        str(method) if method is not None else None
+    )
+    dataset_digest, code_digest = digests_from_bindings(bindings)
+    indep = independence_key_for(
+        dataset_digest=dataset_digest,
+        method=method_s,
+        code_digest=code_digest,
+        experiment_id=exp_id or None,
+    )
+    probe = type(
+        "P",
+        (),
+        {
+            "claim_outcome": claim_outcome,
+            "validity_ok": validity_ok,
+            "frozen": frozen,
+            "sesoi": sesoi if isinstance(sesoi, float) else None,
+            "min_power": min_power if isinstance(min_power, float) else None,
+            "power": None,
+            "severe": None,
+            "criterion_frozen_at_seq": None,
+            "first_cited_evidence_seq": None,
+        },
+    )()
     severe = claim_is_severe(probe)
+    refute_capable = bool(
+        frozen
+        and has_prediction_check
+        and (
+            (isinstance(sesoi, float))
+            or (isinstance(min_power, float) and float(min_power) > 0.0)
+        )
+    )
     out: dict[str, Any] = {
         "criterion_status": status,
         "evidence_kind": "literature" if lit else "computational",
@@ -297,8 +382,15 @@ def _derive_claim_core_attrs(
         "outcome": claim_outcome,
         "severe": severe,
         "independence_key": indep,
-        "min_power": 0.0,
+        "experiment_id": exp_id,
+        "refute_capable": refute_capable,
     }
+    if isinstance(sesoi, float):
+        out["sesoi"] = sesoi
+    if isinstance(min_power, float):
+        out["min_power"] = min_power
+    if isinstance(crit.get("alpha"), float):
+        out["alpha"] = crit["alpha"]
     if effect is not None:
         out["effect"] = effect
     if lit and exclusion_reason is None:
@@ -487,6 +579,10 @@ class Executor:
             "check_results": [c.model_dump(mode="json") for c in checks],
             "unassessed": unassessed,
             "artifacts": [h.artifact_id for h in out.outputs.values()],
+            # name → artifact_id for InputSpec.bind / independence_key digests.
+            "output_map": {
+                name: h.artifact_id for name, h in (out.outputs or {}).items()
+            },
             "agent_claim": claim.value if claim else None,
             "downgrade": (
                 downgrade.model_dump(mode="json", by_alias=True) if downgrade else None
@@ -580,6 +676,23 @@ class Executor:
         now = self.clock.now()
         graph = self.get_graph() if self.get_graph is not None else None
         task = self.get_task(task_id)
+        attempt = self.get_attempt(attempt_id)
+        if attempt is not None and hasattr(attempt, "inputs"):
+            bindings = list(attempt.inputs or [])
+        elif isinstance(attempt, dict):
+            bindings = list(attempt.get("inputs") or [])
+        else:
+            bindings = []
+        # Journal ResultRecorded.inputs from the attempt's P2 bindings.
+        if bindings and not payload.get("inputs"):
+            payload = {
+                **payload,
+                "inputs": [
+                    b.model_dump(mode="json") if hasattr(b, "model_dump") else dict(b)
+                    for b in bindings
+                ],
+            }
+            payload["payload_digest"] = payload_digest(payload)
         # PR7/PR8: claim nodes carry producing-attempt provenance (H-b);
         # re-upsert keeps worst provenance; about edges + attr whitelist.
         # Scientific FAILED/PARTIAL keep claims (not_met → refute); infra drops.
@@ -601,6 +714,7 @@ class Executor:
                 study_id=study_id,
                 validated=validated,
                 catalog=self.catalog,
+                bindings=bindings,
             ),
         )
         if drops:

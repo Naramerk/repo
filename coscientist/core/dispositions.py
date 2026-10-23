@@ -7,7 +7,6 @@ from typing import Any
 
 from coscientist.core.claims import (
     claims_for_ref,
-    disposition_from_verdict,
     excluded_claims_report,
     filtered_claims_by_target,
     hypothesis_verdicts,
@@ -131,8 +130,7 @@ def _dispositions_inner(
         if k is not None
         else (study.confirmations_needed if study is not None else 1)
     )
-    aggregate = study.aggregate if study is not None else "count"
-    e_alpha = study.evalue_alpha if study is not None else 0.05
+    supp_k = study.supported_needed if study is not None else 2
 
     result: dict[str, dict[str, Any]] = {}
     for qid, text in qmap.items():
@@ -151,11 +149,16 @@ def _dispositions_inner(
                 conf_k,
                 refutations_needed=k_ref,
                 refutation_priority=priority,
-                aggregate=aggregate,  # type: ignore[arg-type]
-                evalue_alpha=e_alpha,
+                supported_needed=supp_k,
             )
-            disp = disposition_from_verdict(v)
-            if disp is not None:
+            from coscientist.core.verdict import disposition_for_question
+
+            disp = disposition_for_question(
+                hypothesis_verdicts={},
+                question_verdict=v,
+                has_hypotheses=False,
+            )
+            if disp != "not_attempted":
                 row: dict[str, Any] = {
                     "disposition": disp,
                     "reason": None,
@@ -169,8 +172,7 @@ def _dispositions_inner(
                     conf_k,
                     refutations_needed=k_ref,
                     refutation_priority=priority,
-                    aggregate=aggregate,  # type: ignore[arg-type]
-                    evalue_alpha=e_alpha,
+                    supported_needed=supp_k,
                 )
                 if note is not None:
                     row["note"] = note
@@ -210,7 +212,10 @@ def report_hypothesis_verdicts(
     results: Mapping[str, Mapping[str, Any]] | None,
     tasks: Mapping[str, Task],
 ) -> dict[str, dict[str, Any]]:
-    """Hypothesis verdicts for StudyFinalized / minimal_report (PR8)."""
+    """Hypothesis verdicts for StudyFinalized / minimal_report (PR8/PR8b).
+
+    Each entry is a ``hypothesis_report_row`` (hypotheses[] schema).
+    """
     if graph is None or study is None:
         return {}
     any_exp = any(
@@ -219,7 +224,12 @@ def report_hypothesis_verdicts(
         for t in tasks.values()
     )
     try:
-        return hypothesis_verdicts(
+        from coscientist.core.verdict import (
+            hypothesis_report_row,
+            hypothesis_verdict,
+        )
+
+        snaps = hypothesis_verdicts(
             graph,
             study_id=study.study_id,
             study=study,
@@ -227,5 +237,63 @@ def report_hypothesis_verdicts(
             k=study.confirmations_needed,
             any_experiment_done=any_exp,
         )
+        by_target = filtered_claims_by_target(
+            graph, study_id=study.study_id, results=results
+        )
+        out: dict[str, dict[str, Any]] = {}
+        for hid, snap in snaps.items():
+            claims = claims_for_ref(by_target, hid, prefer="hypothesis")
+            v = str(snap.get("verdict") or "untested")
+            _v, _b, rule = hypothesis_verdict(
+                claims,
+                any_exp,
+                refutations_needed=study.refutations_needed,
+                refutation_priority=study.refutation_priority,
+                supported_needed=study.supported_needed,
+                confirmations_needed=study.confirmations_needed,
+            )
+            legacy = sum(
+                1
+                for c in claims
+                if getattr(c, "severe", None) is False
+                and c.claim_outcome == "consistent"
+            )
+            # question_id: first addresses edge from hypothesis, else ""
+            qid = ""
+            hid_node = f"{study.study_id}:hypothesis:{hid}"
+            if graph.get_node(hid_node) is not None:
+                for e in graph.edges_from(hid_node):
+                    if e.kind == "addresses":
+                        dst = graph.get_node(e.dst_id)
+                        if dst is not None and dst.kind == "question":
+                            qid = dst.ref_id or e.dst_id.split(":")[-1]
+                            break
+            row = hypothesis_report_row(
+                hypothesis_id=hid,
+                question_id=qid,
+                claims=claims,
+                verdict_value=v,
+                rule=rule or snap.get("rule"),
+                legacy_claims=legacy,
+            )
+            # Keep PR8 snapshot fields used by bind/digest consumers.
+            row.update(
+                {
+                    "ref": snap.get("ref", hid),
+                    "target_kind": "hypothesis",
+                    "by_literature": snap.get("by_literature", False),
+                    "provenance": snap.get("provenance", "real"),
+                    "k": snap.get("k", study.confirmations_needed),
+                    "supported_needed": study.supported_needed,
+                    "refutations_needed": study.refutations_needed,
+                    "refutation_priority": study.refutation_priority,
+                }
+            )
+            if snap.get("note"):
+                row["note"] = snap["note"]
+            if snap.get("excluded_claims"):
+                row.setdefault("excluded_claims", snap["excluded_claims"])
+            out[hid] = row
+        return out
     except Exception:  # noqa: BLE001
         return {}

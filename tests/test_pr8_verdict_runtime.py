@@ -46,6 +46,11 @@ _DERIVED_OK = {
     "lit_own_criterion": False,
     "accepted": True,
     "artifact_id": "A1",
+    # Fail-able prediction threshold (from frozen criterion in the live path).
+    # Do not stamp claim_outcome/severe here — derived from criterion_status.
+    "sesoi": 0.5,
+    "check_role": "prediction",
+    "refute_capable": True,
 }
 
 
@@ -735,7 +740,12 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="value_match")],
+                criteria=[
+                    RequirementRef(
+                        template_id="value_match",
+                        params={"sesoi": 0.5},
+                    )
+                ],
                 addresses=["Q1"],
             )
         ],
@@ -762,8 +772,9 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
         study=rt.study,
         results=rt.results,
     )
-    # PR8b: single real confirm → survived disposition (not answered).
+    # PR8b: single severe confirm → survived (supported_needed=2).
     assert d["Q1"]["disposition"] == "survived"
+    assert d["Q1"]["verdict"] == "survived"
     await close_runtime(rt)
 
 
@@ -1328,6 +1339,7 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
             validity_ok=True,
             check_role="prediction",
             target="Q1",
+            sesoi=0.5,
         )
         for i in range(3)
     ]
@@ -1481,7 +1493,8 @@ def test_unknown_role_exclusion_never_forces_verdict():
         any_experiment_done=True,
         refs=["Q1"],
     )
-    assert snaps["Q1"]["verdict"] == "untested"
+    # Only-excluded claims → inconclusive (not untested).
+    assert snaps["Q1"]["verdict"] == "inconclusive"
     assert snaps["Q1"]["excluded_claims"][0]["reason"] == "unknown_role"
     assert snaps["Q1"].get("reason") != "validity_failed"
 

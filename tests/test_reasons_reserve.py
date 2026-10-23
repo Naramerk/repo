@@ -324,11 +324,12 @@ def test_upcast_study_created_sets_reserve_zero():
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     )
-    # v1→v2 reserve → v3 k_ref → v4 confirmations_needed → v5 PR8b fields.
-    assert v == 5
+    # v1→v2 reserve → … → v6 supported_needed.
+    assert v == 6
     assert p["finalize_reserve_s"] == 0
     assert p["refutations_needed"] == 1
     assert p["refutation_priority"] is False
+    assert p["supported_needed"] == 2
     assert p["confirmations_needed"] == 1
     assert p["aggregate"] == "count"
     # Explicit value must not be overwritten

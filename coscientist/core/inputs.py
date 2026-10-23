@@ -403,28 +403,30 @@ def claim_nodes_from_attempt(
         if oc in ("consistent", "inconsistent", "indeterminate"):
             attrs["claim_outcome"] = oc
             attrs["outcome"] = oc
-        # Transitional M1: catalogs without SESOI stamp min_power=0.0.
-        if core.get("min_power") is not None:
-            try:
-                attrs["min_power"] = float(core["min_power"])
-            except (TypeError, ValueError):
-                attrs["min_power"] = 0.0
-        else:
-            attrs.setdefault("min_power", 0.0)
-        for num_key in ("p_value", "power", "sesoi"):
+        # sesoi / min_power only from core (frozen criterion) — never stamp 0.0.
+        for num_key in ("p_value", "power", "sesoi", "min_power", "alpha"):
             if core.get(num_key) is not None:
                 try:
                     attrs[num_key] = float(core[num_key])
                 except (TypeError, ValueError):
                     pass
+        if core.get("experiment_id"):
+            attrs["experiment_id"] = str(core["experiment_id"])
+        else:
+            # attempt_id = "{task_id}#{n}" → experiment_id = task_id
+            attrs["experiment_id"] = (
+                attempt_id.rsplit("#", 1)[0] if attempt_id else ""
+            )
         if core.get("independence_key"):
             attrs["independence_key"] = str(core["independence_key"])
         else:
             from coscientist.core.verdict import independence_key_for
 
             attrs["independence_key"] = independence_key_for(
-                experiment_id=attempt_id
+                experiment_id=str(attrs.get("experiment_id") or "")
             )
+        if "refute_capable" in core:
+            attrs["refute_capable"] = bool(core.get("refute_capable"))
         if "severe" in core:
             attrs["severe"] = bool(core.get("severe"))
         elif not attrs.get("validity_ok", True):
@@ -440,7 +442,7 @@ def claim_nodes_from_attempt(
                     "validity_ok": attrs.get("validity_ok", True),
                     "frozen": attrs.get("frozen", False),
                     "sesoi": attrs.get("sesoi"),
-                    "min_power": attrs.get("min_power", 0.0),
+                    "min_power": attrs.get("min_power"),
                     "power": attrs.get("power"),
                     "severe": None,
                     "criterion_frozen_at_seq": None,
@@ -450,6 +452,8 @@ def claim_nodes_from_attempt(
             attrs["severe"] = claim_is_severe(probe)
         if core.get("artifact_id"):
             attrs["artifact_id"] = core["artifact_id"]
+        if isinstance(core.get("effect"), dict):
+            attrs["effect"] = dict(core["effect"])
 
         node = GraphNode(
             node_id=cid,

@@ -176,10 +176,25 @@ def _study_created_v3_to_v4(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _study_created_v4_to_v5(payload: dict[str, Any]) -> dict[str, Any]:
-    """PR8b: aggregate / evalue_alpha (support k = confirmations_needed, already on v4)."""
+    """PR8b early: aggregate / evalue_alpha (e-value deferred; keep fields for replay)."""
     out = dict(payload)
     out.setdefault("aggregate", "count")
     out.setdefault("evalue_alpha", 0.05)
+    # Old journals that stored evalue still replay as count (no softer verdict).
+    if out.get("aggregate") == "evalue":
+        out["aggregate"] = "count"
+    return out
+
+
+def _study_created_v5_to_v6(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR8b: supported_needed (≥2); confirmations_needed stays PR8 snapshot k."""
+    out = dict(payload)
+    out.setdefault("supported_needed", 2)
+    try:
+        if int(out.get("supported_needed", 2)) < 2:
+            out["supported_needed"] = 2
+    except (TypeError, ValueError):
+        out["supported_needed"] = 2
     return out
 
 
@@ -278,6 +293,7 @@ register_upcaster("StudyCreated", 1, _study_created_v1_to_v2)
 register_upcaster("StudyCreated", 2, _study_created_v2_to_v3)
 register_upcaster("StudyCreated", 3, _study_created_v3_to_v4)
 register_upcaster("StudyCreated", 4, _study_created_v4_to_v5)
+register_upcaster("StudyCreated", 5, _study_created_v5_to_v6)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)

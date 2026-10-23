@@ -108,6 +108,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                     "provenance": d.get("provenance", "real"),
                     "task_id": d["task_id"],
                     "study_id": d["study_id"],
+                    "inputs": list(d.get("inputs") or []),
                 },
             )()
 

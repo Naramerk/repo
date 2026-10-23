@@ -7,13 +7,31 @@ HITL costly gate / DelegatedBudget live in ``coscientist.experimental.costly`` (
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Literal, Protocol
+from typing import Protocol
 
 from coscientist.core.graph import load_schema
 from coscientist.core.r17 import claim_counts_under_r17
+from coscientist.core.stance import (  # re-export
+    DEFAULT_TESTS_INTENT,
+    STANCE,
+    TestsIntent,
+    claim_stance,
+)
 
 SCHEMA = load_schema()
 PAIRS = {e["name"]: {tuple(p) for p in e["pairs"]} for e in SCHEMA["edges"]}
+
+__all__ = [
+    "DEFAULT_TESTS_INTENT",
+    "STANCE",
+    "TestsIntent",
+    "claim_stance",
+    "edge_allowed",
+    "priority_refuted_support_note",
+    "study_fulfilled",
+    "validate_plan",
+    "verdict",
+]
 
 
 def edge_allowed(name: str, src_kind: str, dst_kind: str) -> bool:
@@ -46,17 +64,6 @@ def validate_plan(gr: _GraphLike, plan_id: str) -> None:
     missing = set(gr.of("question")) - covered
     if missing:
         raise PlanInvalid(f"questions not covered by LIT/EXP: {sorted(missing)}")
-
-
-STANCE = {"met": "supports", "not_met": "refutes", "unassessed": "inconclusive"}
-
-
-def claim_stance(criterion_status: str) -> Literal["supports", "refutes", "inconclusive"]:
-    return STANCE[criterion_status]  # type: ignore[return-value]
-
-
-TestsIntent = Literal["confirm", "refute"]
-DEFAULT_TESTS_INTENT: TestsIntent = "confirm"
 
 
 class _ClaimLike(Protocol):
@@ -126,14 +133,13 @@ def verdict(
     *,
     refutations_needed: int = 1,
     refutation_priority: bool = False,
-    aggregate: Literal["count", "evalue"] = "count",
-    evalue_alpha: float = 0.05,
+    supported_needed: int = 2,
 ):
     """Hypothesis/question verdict (PR8b / DESIGN_HYP_DELTA).
 
     Stubs/partial/lit/invalid are excluded **before** counting. ``supported``
-    needs ≥ ``confirmations_needed`` (``k``) severe consistent claims with ≥1
-    ``intent=refute``. Runtime calls via ``dispositions()``.
+    needs ≥ ``supported_needed`` severe consistent claims with ≥1 capable
+    ``intent=refute``. ``k`` is PR8 ``confirmations_needed`` (snapshot field).
     """
     from coscientist.core.verdict import verdict as _hyp_verdict
 
@@ -143,8 +149,7 @@ def verdict(
         k,
         refutations_needed=refutations_needed,
         refutation_priority=refutation_priority,
-        aggregate=aggregate,
-        evalue_alpha=evalue_alpha,
+        supported_needed=supported_needed,
     )
 
 
@@ -155,14 +160,9 @@ def priority_refuted_support_note(
     *,
     refutations_needed: int = 1,
     refutation_priority: bool = False,
-    aggregate: Literal["count", "evalue"] = "count",
-    evalue_alpha: float = 0.05,
+    supported_needed: int = 2,
 ) -> str | None:
-    """Report note when refuted and stub/partial confirmations were excluded.
-
-    PR8b: stubs never count; note lists excluded supporting stubs/partials
-    (merges the old PR8 priority-win stub note).
-    """
+    """PR8 note when refuted and stub/partial confirmations were excluded."""
     from coscientist.core.verdict import excluded_confirmations_note
 
     v, _ = verdict(
@@ -171,29 +171,11 @@ def priority_refuted_support_note(
         k,
         refutations_needed=refutations_needed,
         refutation_priority=refutation_priority,
-        aggregate=aggregate,
-        evalue_alpha=evalue_alpha,
+        supported_needed=supported_needed,
     )
     if v != "refuted":
         return None
-    note = excluded_confirmations_note(claims, verdict_value=v)
-    if note is not None:
-        return note
-    # Fall through to legacy distinct stub/partial supports among non-counting.
-    acc = [c for c in claims if c.accepted]
-    q = [c for c in acc if _claim_counts(c)]
-    supports = [c for c in q if c.stance == "supports"]
-    stub_partial = [c for c in supports if c.provenance in ("stub", "partial")]
-    if not stub_partial:
-        return None
-    # Distinct supporting results (same metric as verdict counts).
-    n = min(
-        len({c.attempt_id for c in stub_partial}),
-        len({c.artifact_id for c in stub_partial}),
-    )
-    if n < 1:
-        n = len(stub_partial)
-    return f"refuted; {n} supporting results were stub/partial"
+    return excluded_confirmations_note(claims, verdict_value=v)
 
 
 def study_fulfilled(question_verdicts: dict[str, str], all_required_success: bool) -> bool:

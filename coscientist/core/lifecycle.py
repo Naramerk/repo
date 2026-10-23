@@ -65,6 +65,7 @@ class LifecycleMixin:
         confirmations_needed: int = 1,
         refutations_needed: int = 1,
         refutation_priority: bool = False,
+        supported_needed: int = 2,
         aggregate: str = "count",
         evalue_alpha: float = 0.05,
         inputs: list[Any] | None = None,
@@ -84,8 +85,17 @@ class LifecycleMixin:
             raise ValueError(
                 f"refutations_needed must be >= 1, got {refutations_needed}"
             )
-        if aggregate not in ("count", "evalue"):
-            raise ValueError(f"aggregate must be count|evalue, got {aggregate!r}")
+        if supported_needed < 2:
+            raise ValueError(
+                f"supported_needed must be >= 2, got {supported_needed}"
+            )
+        if aggregate == "evalue":
+            raise ValueError(
+                "aggregate='evalue' is deferred past M1 "
+                "(core does not yet compute p-values); use aggregate='count'"
+            )
+        if aggregate != "count":
+            raise ValueError(f"aggregate must be 'count', got {aggregate!r}")
         if not (0.0 < float(evalue_alpha) <= 1.0):
             raise ValueError(f"evalue_alpha out of range: {evalue_alpha}")
         validate_budget_for_create(budget)
@@ -114,7 +124,8 @@ class LifecycleMixin:
             confirmations_needed=confirmations_needed,
             refutations_needed=refutations_needed,
             refutation_priority=refutation_priority,
-            aggregate=aggregate,  # type: ignore[arg-type]
+            supported_needed=supported_needed,
+            aggregate="count",
             evalue_alpha=float(evalue_alpha),
         )
         effective = study.effective_deadline()
@@ -126,7 +137,7 @@ class LifecycleMixin:
                 idem_key=make_idem("StudyCreated", sid),
                 payload=study.model_dump(mode="json"),
                 ts=now,
-                schema_version=5,
+                schema_version=6,
             ),
             EventEnvelope(
                 study_id=sid,
@@ -300,6 +311,19 @@ class LifecycleMixin:
                         or bool((existing.attrs or {}).get("frozen"))
                     ):
                         continue
+                params = dict(getattr(ref, "params", None) or {})
+                cattrs: dict[str, Any] = {"frozen": True, "template_id": key}
+                for num_key in ("sesoi", "min_power", "alpha"):
+                    if params.get(num_key) is None:
+                        continue
+                    try:
+                        cattrs[num_key] = float(params[num_key])
+                    except (TypeError, ValueError):
+                        pass
+                if "alpha" not in cattrs:
+                    cattrs["alpha"] = 0.05
+                if "predicts_null" in params:
+                    cattrs["predicts_null"] = bool(params.get("predicts_null"))
                 events.append(
                     EventEnvelope(
                         study_id=sid,
@@ -311,7 +335,7 @@ class LifecycleMixin:
                             kind="criterion",
                             study_id=sid,
                             ref_id=key,
-                            attrs={"frozen": True, "template_id": key},
+                            attrs=cattrs,
                             created_at=now,
                         ).model_dump(mode="json"),
                         ts=now,

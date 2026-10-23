@@ -78,6 +78,11 @@ def test_question_disposition_computed_from_verdict():
             "lit_own_criterion": False,
             "accepted": True,
             "artifact_id": "A1",
+            "sesoi": 0.5,
+            "claim_outcome": "consistent",
+            "severe": True,
+            "check_role": "prediction",
+            "refute_capable": True,
         },
     )
     assert drops == []

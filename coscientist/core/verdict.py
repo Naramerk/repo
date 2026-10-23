@@ -1,16 +1,15 @@
 """Hypothesis verdict model (M1 PR8b / DESIGN_HYP_DELTA).
 
-Pure functions: claim classification helpers, counting filter, hypothesis
-``verdict()``, optional e-value aggregation, and report payload builders.
+Pure functions: claim classification, counting filter, hypothesis ``verdict()``,
+and report payload builders.
 
-Deviations from the written SPEC (see PR body / CHANGELOG):
+Deviations (see PR body / CHANGELOG):
 - ``VerdictSnapshotsRecorded`` kept (not projection-only).
-- StudyCreated is v5 (SPEC said v4; confirmations_needed already took v4).
+- StudyCreated is v6 (``supported_needed``; confirmations_needed remains PR8 ``k``).
 - validity_failed / unknown_role per-experiment exclusion from PR8 kept.
 - Real journal events use GraphNodeUpserted (claims), not ClaimRecorded.
-- When criterion has neither sesoi nor min_power, severe uses a transitional
-  gate (frozen + consistent + valid) so M1 catalogs without SESOI still work;
-  R17 runtime metadata remains deferred (PR8).
+- E-value aggregation deferred (``aggregate='evalue'`` rejected at StudyCreated).
+- R17 runtime metadata still deferred (PR8).
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Literal, Protocol
 
 from coscientist.core.digest import canonical_json
-from coscientist.core.rules import DEFAULT_TESTS_INTENT, TestsIntent, claim_stance
+from coscientist.core.stance import DEFAULT_TESTS_INTENT, TestsIntent, claim_stance
 
 ClaimOutcome = Literal["consistent", "inconsistent", "indeterminate"]
 ClaimValidity = Literal["valid", "invalid"]
@@ -76,6 +75,44 @@ def outcome_to_status(outcome: ClaimOutcome | None, *, validity: ClaimValidity) 
     return "unassessed"
 
 
+def digests_from_bindings(
+    bindings: Sequence[Any] | None,
+) -> tuple[str | None, str | None]:
+    """Fold InputBinding digests into (dataset_digest, code_digest).
+
+    Artifact inputs whose name suggests code/script/program/model → code;
+    other artifact bindings → dataset. Non-artifact bindings are ignored.
+    """
+    data: list[str] = []
+    code: list[str] = []
+    for b in bindings or ():
+        if isinstance(b, Mapping):
+            kind = b.get("kind", "artifact")
+            name = str(b.get("input") or "")
+            digest = b.get("digest")
+        else:
+            kind = getattr(b, "kind", "artifact")
+            name = str(getattr(b, "input", "") or "")
+            digest = getattr(b, "digest", None)
+        if kind != "artifact" or not digest:
+            continue
+        d = str(digest)
+        lower = name.lower()
+        if any(tok in lower for tok in ("code", "script", "program", "model", "source")):
+            code.append(d)
+        else:
+            data.append(d)
+
+    def _fold(parts: list[str]) -> str | None:
+        if not parts:
+            return None
+        if len(parts) == 1:
+            return parts[0]
+        return hashlib.sha256(canonical_json(sorted(parts))).hexdigest()
+
+    return _fold(data), _fold(code)
+
+
 def independence_key_for(
     *,
     dataset_digest: str | None = None,
@@ -83,14 +120,18 @@ def independence_key_for(
     code_digest: str | None = None,
     experiment_id: str | None = None,
 ) -> str:
-    """sha256 of JCS({dataset_digest, method, code_digest}); fallback experiment_id."""
+    """sha256(JCS({dataset_digest, method, code_digest})); else experiment_id.
+
+    ``method=None`` becomes ``""`` so omitting method cannot inflate independence.
+    Fallback uses ``experiment_id`` (task id), never attempt id.
+    """
     payload = {
         "dataset_digest": dataset_digest or "",
         "method": method or "",
         "code_digest": code_digest or "",
     }
-    if not any(payload.values()) and experiment_id:
-        payload = {"experiment_id": experiment_id}
+    if not any(payload.values()):
+        payload = {"experiment_id": experiment_id or ""}
     return hashlib.sha256(canonical_json(payload)).hexdigest()
 
 
@@ -126,14 +167,25 @@ def tost_holds(*, sesoi: float | None, effect: Mapping[str, Any] | None) -> bool
     return (-s) < lo and hi < s
 
 
+def _threshold_set(*, sesoi: float | None, min_power: float | None) -> bool:
+    """sesoi set, or min_power > 0 (zero / absent does not qualify)."""
+    if sesoi is not None:
+        return True
+    if min_power is not None and float(min_power) > 0.0:
+        return True
+    return False
+
+
 def claim_is_severe(claim: Any) -> bool:
-    """SPEC §3 severe: consistent ∧ R17 freeze ∧ power gate ∧ (sesoi|min_power set)."""
+    """Severe: consistent ∧ valid ∧ frozen ∧ (sesoi|min_power>0) ∧ power gate."""
     if effective_outcome(claim) != "consistent":
         return False
     if effective_validity(claim) != "valid":
         return False
     # Legacy / explicit non-severe stamp is definitive (V5).
     if getattr(claim, "severe", None) is False:
+        return False
+    if not bool(getattr(claim, "frozen", False)):
         return False
     sesoi = getattr(claim, "sesoi", None)
     min_power = getattr(claim, "min_power", None)
@@ -142,13 +194,35 @@ def claim_is_severe(claim: Any) -> bool:
     first_ev = getattr(claim, "first_cited_evidence_seq", None)
     if frozen_at is not None and first_ev is not None and not (frozen_at < first_ev):
         return False
-    if min_power is not None and (power if power is not None else 0.0) < float(min_power):
+    if not _threshold_set(sesoi=sesoi, min_power=min_power):
         return False
-    # SPEC: sesoi or min_power must be set. Transitional M1: executor stamps
-    # min_power=0.0 so catalogs without SESOI still allow severe when frozen.
-    if sesoi is None and min_power is None:
+    if min_power is not None and float(min_power) > 0.0:
+        if (power if power is not None else 0.0) < float(min_power):
+            return False
+    return True
+
+
+def refute_intent_counts(claim: Any) -> bool:
+    """Refute intent counts toward supported only if the prediction could fail.
+
+    Requires: intent=refute, frozen criterion, sesoi|min_power>0, prediction role.
+    A planner label alone is not enough.
+    """
+    if _intent(claim) != "refute":
         return False
-    return bool(getattr(claim, "frozen", False))
+    if getattr(claim, "refute_capable", None) is False:
+        return False
+    if getattr(claim, "refute_capable", None) is True:
+        return True
+    # Derive when stamp absent (unit tests / legacy).
+    if not bool(getattr(claim, "frozen", False)):
+        return False
+    if getattr(claim, "check_role", "unknown") != "prediction":
+        return False
+    return _threshold_set(
+        sesoi=getattr(claim, "sesoi", None),
+        min_power=getattr(claim, "min_power", None),
+    )
 
 
 def classify_outcome(
@@ -160,10 +234,7 @@ def classify_outcome(
     effect: Mapping[str, Any] | None = None,
     r17_ok: bool = True,
 ) -> tuple[str, str | None, bool]:
-    """Return (validity, outcome|None, severe_hint_inputs_ok).
-
-    ``severe`` itself still needs freeze/power gates via ``claim_is_severe``.
-    """
+    """Return (validity, outcome|None, severe_hint_inputs_ok)."""
     if not validity_ok or not r17_ok:
         return "invalid", None, False
     preds = [s for s in prediction_statuses if s]
@@ -216,13 +287,14 @@ def exclusion_reason(claim: Any) -> ExclusionReason | None:
 
 
 def distinct_by_key(claims: Sequence[Any]) -> list[Any]:
-    """Keep first claim per independence_key (or attempt_id fallback)."""
+    """Keep first claim per independence_key (experiment_id fallback)."""
     seen: set[str] = set()
     out: list[Any] = []
     for c in claims:
-        key = (
-            getattr(c, "independence_key", None)
-            or independence_key_for(experiment_id=getattr(c, "attempt_id", "") or "x")
+        key = getattr(c, "independence_key", None) or independence_key_for(
+            experiment_id=getattr(c, "experiment_id", None)
+            or getattr(c, "attempt_id", "")
+            or "x"
         )
         if key in seen:
             continue
@@ -238,74 +310,27 @@ def _intent(claim: Any) -> TestsIntent:
     return intent  # type: ignore[return-value]
 
 
-def _calibrate_e(p: float, kappa: float = 0.5) -> float:
-    if p <= 0:
-        return 1.0 / kappa  # large
-    return kappa * (p ** (kappa - 1.0))
-
-
-def evalue_verdict(
-    claims: Sequence[Any],
-    *,
-    evalue_alpha: float = 0.05,
-) -> str:
-    """POPPER-style product of calibrated p-values (SPEC §3.4)."""
-    by_key_support: dict[str, float] = {}
-    by_key_refute: dict[str, float] = {}
-    any_severe = False
-    for c in claims:
-        if not c.counts():
-            continue
-        p = getattr(c, "p_value", None)
-        key = str(
-            getattr(c, "independence_key", None) or getattr(c, "attempt_id", None) or "x"
-        )
-        oc = effective_outcome(c)
-        if claim_is_severe(c):
-            any_severe = True
-        if p is None:
-            continue
-        e = _calibrate_e(float(p))
-        if oc == "consistent":
-            by_key_support[key] = max(by_key_support.get(key, 0.0), e)
-        elif oc == "inconsistent":
-            by_key_refute[key] = max(by_key_refute.get(key, 0.0), e)
-    e_sup = 1.0
-    for v in by_key_support.values():
-        e_sup *= v
-    e_ref = 1.0
-    for v in by_key_refute.values():
-        e_ref *= v
-    thr = 1.0 / float(evalue_alpha)
-    if e_ref >= thr:
-        return "refuted"
-    if e_sup >= thr and len(by_key_support) >= 2:
-        return "supported"
-    if any_severe:
-        return "survived"
-    return "inconclusive"
-
-
 def hypothesis_verdict(
     claims: Sequence[Any],
     any_experiment_done: bool = False,
     *,
     refutations_needed: int = 1,
     refutation_priority: bool = True,
+    supported_needed: int = 2,
     confirmations_needed: int = 1,
-    aggregate: Literal["count", "evalue"] = "count",
-    evalue_alpha: float = 0.05,
 ) -> tuple[str, bool, str | None]:
     """Hypothesis/question verdict (SPEC §5).
 
-    ``confirmations_needed`` is the support threshold (|con| ≥ k with ≥1
-    ``intent=refute``). Returns ``(verdict, by_literature, rule)``.
+    ``supported_needed`` (≥2) is the severe-support threshold. ``confirmations_needed``
+    is retained for PR8 snapshot ``k`` compat and is not the support gate.
+    Returns ``(verdict, by_literature, rule)``.
     """
+    del confirmations_needed  # PR8 k — not used for supported gate
+    del any_experiment_done
     about = list(claims)
     if not about:
         return "untested", False, "no_counted"
 
-    # Prefer R17-aware counts when available (refmodel.counts_under_r17 / rules).
     def _counts(c: Any) -> bool:
         fn = getattr(c, "counts_under_r17", None)
         if callable(fn):
@@ -315,9 +340,6 @@ def hypothesis_verdict(
         return bool(_claim_counts(c))
 
     counted = [c for c in about if _counts(c)]
-    if aggregate == "evalue":
-        v = evalue_verdict(counted, evalue_alpha=evalue_alpha)
-        return v, False, "evalue"
 
     inconsistent = distinct_by_key(
         [c for c in counted if effective_outcome(c) == "inconsistent"]
@@ -330,7 +352,7 @@ def hypothesis_verdict(
         ]
     )
     k_ref = max(1, int(refutations_needed))
-    k_sup = max(1, int(confirmations_needed))
+    k_sup = max(2, int(supported_needed))
     n_inc = len(inconsistent)
     n_con = len(consistent_severe)
 
@@ -342,15 +364,15 @@ def hypothesis_verdict(
         return "refuted", False, "k_ref"
     if n_inc > 0:
         return "inconclusive", False, "inc_below_k_ref"
-    if n_con >= k_sup and any(_intent(c) == "refute" for c in consistent_severe):
+    if n_con >= k_sup and any(refute_intent_counts(c) for c in consistent_severe):
         return "supported", False, "support_min"
     if n_con >= 1:
         return "survived", False, "single_severe"
     if counted:
         return "inconclusive", False, "no_counted"
-    # Only invalid / excluded claims present.
     if any(effective_validity(c) == "invalid" for c in about):
         return "inconclusive", False, "validity_failed"
+    # Only excluded (stub/partial/lit/…) claims — inconclusive, not untested.
     return "inconclusive", False, "no_counted"
 
 
@@ -361,19 +383,20 @@ def verdict(
     *,
     refutations_needed: int = 1,
     refutation_priority: bool = False,
-    aggregate: Literal["count", "evalue"] = "count",
-    evalue_alpha: float = 0.05,
+    supported_needed: int = 2,
 ) -> tuple[str, bool]:
-    """Compat wrapper matching ``rules.verdict`` return shape."""
-    del any_experiment_done  # unused: empty claims → untested per SPEC §5
+    """Compat wrapper matching ``rules.verdict`` return shape.
+
+    ``k`` is PR8 ``confirmations_needed`` (snapshot field); support gate uses
+    ``supported_needed``.
+    """
     v, by_lit, _rule = hypothesis_verdict(
         claims,
-        False,
+        any_experiment_done,
         refutations_needed=refutations_needed,
         refutation_priority=refutation_priority,
+        supported_needed=supported_needed,
         confirmations_needed=k,
-        aggregate=aggregate,
-        evalue_alpha=evalue_alpha,
     )
     return v, by_lit
 
@@ -383,19 +406,22 @@ def excluded_confirmations_note(
     *,
     verdict_value: str,
 ) -> str | None:
-    """Report note when refuted and stub/partial/etc. confirmations were excluded."""
+    """PR8 priority-refuted note: stub/partial supporting results excluded."""
     if verdict_value != "refuted":
         return None
-    excluded = [c for c in claims if not c.counts()]
     stub_partial = []
-    for c in excluded:
+    for c in claims:
         if getattr(c, "provenance", "") not in ("stub", "partial"):
             continue
         oc = effective_outcome(c)
-        stance = claim_stance(str(getattr(c, "criterion_status", "unassessed")))
+        try:
+            stance = claim_stance(str(getattr(c, "criterion_status", "unassessed")))
+        except KeyError:
+            stance = "inconclusive"
         if oc == "consistent" or stance == "supports":
             stub_partial.append(c)
-    # Prefer distinct attempt ids among excluded supporting stubs/partials.
+    if not stub_partial:
+        return None
     keys = {
         getattr(c, "attempt_id", "") or getattr(c, "artifact_id", "") or id(c)
         for c in stub_partial
@@ -403,15 +429,7 @@ def excluded_confirmations_note(
     keys.discard("")
     n = len(keys) if keys else len(stub_partial)
     if n <= 0:
-        # Generic excluded count when no stub supports but other exclusions exist.
-        reasons: dict[str, int] = {}
-        for c in excluded:
-            r = exclusion_reason(c) or "invalid"
-            reasons[r] = reasons.get(r, 0) + 1
-        if not reasons:
-            return None
-        parts = ", ".join(f"{r} {m}" for r, m in sorted(reasons.items()))
-        return f"refuted; {sum(reasons.values())} claims excluded ({parts})"
+        return None
     return f"refuted; {n} supporting results were stub/partial"
 
 
@@ -424,11 +442,12 @@ def hypothesis_report_row(
     rule: str | None,
     legacy_claims: int = 0,
 ) -> dict[str, Any]:
-    """SPEC §5 hypotheses[] item."""
+    """SPEC hypotheses[] item (also used as hypothesis_row)."""
     counted_rows: list[dict[str, Any]] = []
     excluded_rows: list[dict[str, Any]] = []
     supporting: list[str] = []
     refuting: list[str] = []
+    aux: list[str] = []
     for c in claims:
         cid = getattr(c, "node_id", None) or getattr(c, "attempt_id", "") or "?"
         if c.counts():
@@ -446,6 +465,11 @@ def hypothesis_report_row(
                 supporting.append(cid)
             elif oc == "inconsistent":
                 refuting.append(cid)
+            role = getattr(c, "check_role", None)
+            if role == "validity" and getattr(c, "validity_ok", True):
+                tid = getattr(c, "template_id", None) or "validity"
+                if tid not in aux:
+                    aux.append(str(tid))
         else:
             excluded_rows.append(
                 {"claim_id": cid, "reason": exclusion_reason(c) or "invalid"}
@@ -453,6 +477,31 @@ def hypothesis_report_row(
     conflict = None
     if verdict_value == "refuted" and supporting and refuting:
         conflict = {"supporting": supporting, "refuting": refuting}
+    severity_note = None
+    if verdict_value in ("survived", "supported"):
+        severity_note = (
+            "survived != proven; tests that could have refuted: "
+            + ", ".join(
+                r["claim_id"]
+                for r in counted_rows
+                if r.get("intent") == "refute" or r.get("severe")
+            )
+        )
+    elif verdict_value == "refuted" and supporting:
+        severity_note = (
+            f"refuted despite {len(supporting)} supporting claims (conflict)"
+        )
+    if excluded_rows:
+        reasons: dict[str, int] = {}
+        for row in excluded_rows:
+            r = str(row.get("reason") or "invalid")
+            reasons[r] = reasons.get(r, 0) + 1
+        excl_txt = (
+            f"{sum(reasons.values())} claims excluded ("
+            + ", ".join(f"{r} {n}" for r, n in sorted(reasons.items()))
+            + ")"
+        )
+        severity_note = f"{severity_note}; {excl_txt}" if severity_note else excl_txt
     return {
         "hypothesis_id": hypothesis_id,
         "question_id": question_id,
@@ -461,15 +510,14 @@ def hypothesis_report_row(
         "counted": counted_rows,
         "excluded": excluded_rows,
         "conflict": conflict,
-        "severity_note": (
-            "survived ≠ proven; tests that could have refuted are listed in counted"
-            if verdict_value in ("survived", "supported")
-            else None
-        ),
-        "auxiliary_assumptions": [],
+        "severity_note": severity_note,
+        "auxiliary_assumptions": aux,
         "legacy_claims": legacy_claims,
-        "e_values": None,
     }
+
+
+# Alias required by review wording.
+hypothesis_row = hypothesis_report_row
 
 
 def disposition_for_question(
@@ -478,7 +526,7 @@ def disposition_for_question(
     question_verdict: str | None,
     has_hypotheses: bool,
 ) -> str:
-    """SPEC §3.5 disposition mapping."""
+    """SPEC disposition mapping (with/without hypotheses)."""
     if not has_hypotheses:
         mapping = {
             "supported": "answered",

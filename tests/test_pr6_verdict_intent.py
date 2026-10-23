@@ -19,14 +19,13 @@ from tests.helpers import close_runtime, open_runtime
 
 
 def test_refute_intent_met_is_survived(impl):
-    """tests.intent=refute + met → stance supports; k=1 + refute → supported."""
+    """tests.intent=refute + met → stance supports; defaults → survived."""
     c = impl.Claim("met", intent="refute")
     assert c.stance == "supports"
-    # Default confirmations_needed=1: one severe refute-intent claim → supported.
-    assert impl.verdict([c], True)[0] == "supported"
-    # With k=2, a single severe is only survived.
-    assert impl.verdict([c], True, k=2)[0] == "survived"
-    # Confirm alone never reaches supported (needs intent=refute).
+    # supported_needed default 2: one severe refute-intent claim → survived.
+    assert impl.verdict([c], True)[0] == "survived"
+    assert impl.verdict([c], True, supported_needed=2)[0] == "survived"
+    # Confirm alone never reaches supported (needs capable intent=refute).
     assert impl.verdict([impl.Claim("met", intent="confirm")], True)[0] == "survived"
 
 
@@ -239,12 +238,13 @@ def test_upcast_study_created_k_ref_defaults():
             "finalize_reserve_s": 30,
         },
     )
-    # v2→v3 (k_ref) → v3→v4 (confirmations_needed) → v4→v5 (PR8b fields)
-    assert v == 5
+    # v2→…→v6 (supported_needed)
+    assert v == 6
     assert p["refutations_needed"] == 1
     assert p["refutation_priority"] is False
     assert p["confirmations_needed"] == 1
     assert p["aggregate"] == "count"
+    assert p["supported_needed"] == 2
 
 
 def test_upcast_study_created_confirmations_needed_v3_to_v4():
@@ -259,11 +259,12 @@ def test_upcast_study_created_confirmations_needed_v3_to_v4():
             "refutation_priority": True,
         },
     )
-    assert v == 5
+    assert v == 6
     assert p["confirmations_needed"] == 1
     assert p["refutations_needed"] == 2
     assert p["refutation_priority"] is True
     assert p["aggregate"] == "count"
+    assert p["supported_needed"] == 2
 
 
 @pytest.mark.asyncio
@@ -286,10 +287,11 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
     assert rt.study.refutations_needed == 3
     assert rt.study.refutation_priority is True
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 5
+    assert created.schema_version == 6
     assert created.payload["refutations_needed"] == 3
     assert created.payload["confirmations_needed"] == 1
     assert created.payload["aggregate"] == "count"
+    assert created.payload["supported_needed"] == 2
     await close_runtime(rt)
 
 

@@ -20,13 +20,8 @@ from coscientist.core.ids import (
     hypothesis_node_id,
     question_node_id,
 )
-from coscientist.core.rules import (
-    DEFAULT_TESTS_INTENT,
-    TestsIntent,
-    claim_stance,
-    priority_refuted_support_note,
-    verdict,
-)
+from coscientist.core.rules import priority_refuted_support_note, verdict
+from coscientist.core.stance import DEFAULT_TESTS_INTENT, TestsIntent, claim_stance
 
 # Agent-supplied fields only. Counting controls (criterion_status, frozen,
 # evidence_kind, lit_own_criterion, intent, R17, accepted) are core-derived.
@@ -57,10 +52,14 @@ _CORE_CLAIM_ATTRS: frozenset[str] = frozenset(
         "claim_outcome",
         "severe",
         "independence_key",
+        "experiment_id",
+        "refute_capable",
         "p_value",
         "power",
         "sesoi",
         "min_power",
+        "effect",
+        "alpha",
     }
 )
 
@@ -101,10 +100,12 @@ class RuntimeClaim:
     claim_outcome: str | None = None  # consistent|inconsistent|indeterminate|None
     severe: bool | None = None
     independence_key: str = ""
+    experiment_id: str = ""
+    refute_capable: bool | None = None
     p_value: float | None = None
     power: float | None = None
     sesoi: float | None = None
-    min_power: float | None = 0.0  # transitional stamp so severe gate can pass
+    min_power: float | None = None  # only from frozen criterion; never stamped 0
     effect: dict[str, Any] | None = None
     validity: str | None = None  # valid|invalid (mirrors validity_ok)
 
@@ -423,13 +424,23 @@ def runtime_claim_from_node(
         independence_key = (
             _coerce_str(attrs.get("independence_key"), allow_empty=True) or ""
         )
+        experiment_id = (
+            _coerce_str(attrs.get("experiment_id"), allow_empty=True) or ""
+        )
         if not independence_key:
             from coscientist.core.verdict import independence_key_for
 
-            independence_key = independence_key_for(
-                experiment_id=_coerce_str(attrs.get("attempt_id"), allow_empty=True)
-                or node.node_id
-            )
+            # Legacy: key from experiment_id (task), never attempt_id (retries).
+            legacy_exp = experiment_id
+            if not legacy_exp:
+                aid = _coerce_str(attrs.get("attempt_id"), allow_empty=True) or ""
+                legacy_exp = aid.rsplit("#", 1)[0] if aid else node.node_id
+            independence_key = independence_key_for(experiment_id=legacy_exp)
+        refute_capable_raw = attrs.get("refute_capable")
+        if refute_capable_raw is None:
+            refute_capable: bool | None = None
+        else:
+            refute_capable = bool(refute_capable_raw)
         p_value = attrs.get("p_value")
         if p_value is not None:
             try:
@@ -538,8 +549,9 @@ def runtime_claim_from_node(
                 p_value=p_value if isinstance(p_value, float) else None,
                 power=power if isinstance(power, float) else None,
                 sesoi=sesoi if isinstance(sesoi, float) else None,
-                # Absent min_power → transitional 0.0 (matches executor stamp).
-                min_power=min_power if isinstance(min_power, float) else 0.0,
+                min_power=min_power if isinstance(min_power, float) else None,
+                experiment_id=experiment_id,
+                refute_capable=refute_capable,
             ),
             None,
         )
@@ -655,8 +667,7 @@ def compute_verdict_snapshots(
         if k is not None
         else (study.confirmations_needed if study is not None else 1)
     )
-    aggregate = study.aggregate if study is not None else "count"
-    e_alpha = study.evalue_alpha if study is not None else 0.05
+    supp_k = study.supported_needed if study is not None else 2
     by_target = filtered_claims_by_target(
         graph, study_id=study_id, results=results
     )
@@ -682,16 +693,13 @@ def compute_verdict_snapshots(
             conf_k,
             refutations_needed=k_ref,
             refutation_priority=priority,
-            aggregate=aggregate,  # type: ignore[arg-type]
-            evalue_alpha=e_alpha,
+            supported_needed=supp_k,
         )
         validity_excl = [e for e in excluded if e["reason"] == "validity_failed"]
         # Only when no valid claims remain: inconclusive + validity_failed.
-        # unknown_role alone never forces a verdict (align with dispositions).
-        if not counting and validity_excl:
+        # Only-excluded (stub/partial/lit) → inconclusive, not untested.
+        if not counting and (validity_excl or excluded):
             v = "inconclusive"
-        elif not counting and excluded:
-            v = "untested"
         provs: list[Provenance] = [
             c.provenance  # type: ignore[misc]
             for c in counting
@@ -707,6 +715,7 @@ def compute_verdict_snapshots(
             "refutations_needed": k_ref,
             "refutation_priority": priority,
             "k": conf_k,
+            "supported_needed": supp_k,
         }
         if excluded:
             snap["excluded_claims"] = excluded
@@ -718,8 +727,7 @@ def compute_verdict_snapshots(
             conf_k,
             refutations_needed=k_ref,
             refutation_priority=priority,
-            aggregate=aggregate,  # type: ignore[arg-type]
-            evalue_alpha=e_alpha,
+            supported_needed=supp_k,
         )
         if note is not None:
             snap["note"] = note

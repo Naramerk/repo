@@ -81,16 +81,23 @@ class Claim:
     claim_outcome: str | None = None
     severe: bool | None = None
     independence_key: str = ""
+    experiment_id: str = ""
+    refute_capable: bool | None = None
     p_value: float | None = None
     power: float | None = None
-    sesoi: float | None = None
-    min_power: float | None = 0.0
+    sesoi: float | None = 0.5  # oracle default: fail-able threshold (sesoi)
+    min_power: float | None = None
+    check_role: str = "prediction"
 
     def __post_init__(self):
         if self.intent not in ("confirm", "refute"):
             raise ValueError(f"invalid tests.intent: {self.intent!r}")
+        if not self.experiment_id:
+            self.experiment_id = (
+                self.attempt_id.rsplit("#", 1)[0] if self.attempt_id else ""
+            )
         if not self.independence_key:
-            self.independence_key = self.attempt_id
+            self.independence_key = self.experiment_id or self.attempt_id
         if self.claim_outcome is None and self.validity_ok:
             self.claim_outcome = {
                 "met": "consistent",
@@ -98,11 +105,24 @@ class Claim:
                 "unassessed": "indeterminate",
             }.get(self.criterion_status)
         if self.severe is None:
+            has_thr = self.sesoi is not None or (
+                self.min_power is not None and float(self.min_power) > 0.0
+            )
             self.severe = (
                 self.claim_outcome == "consistent"
                 and self.frozen
                 and self.validity_ok
                 and self.provenance == "real"
+                and has_thr
+            )
+        if self.refute_capable is None:
+            self.refute_capable = bool(
+                self.frozen
+                and self.check_role == "prediction"
+                and (
+                    self.sesoi is not None
+                    or (self.min_power is not None and float(self.min_power) > 0.0)
+                )
             )
 
     @property
@@ -163,15 +183,13 @@ def verdict(
     *,
     refutations_needed=1,
     refutation_priority=False,
-    aggregate="count",
-    evalue_alpha=0.05,
+    supported_needed=2,
 ):
+    del k  # PR8 confirmations_needed — not the severe-support gate
     about = list(claims)
     if not about:
         return "untested", False
     counted = [c for c in about if c.counts_under_r17()]
-    if aggregate == "evalue":
-        return _evalue_verdict(counted, evalue_alpha=evalue_alpha), False
     inconsistent = _distinct_by_key(
         [c for c in counted if c.claim_outcome == "inconsistent"]
     )
@@ -179,57 +197,37 @@ def verdict(
         [c for c in counted if c.claim_outcome == "consistent" and c.severe]
     )
     k_ref = max(1, int(refutations_needed))
-    k_sup = max(1, int(k))
+    k_sup = max(2, int(supported_needed))
     n_inc = len(inconsistent)
     n_con = len(consistent_severe)
+
+    def _refute_ok(c):
+        if c.intent != "refute":
+            return False
+        if c.refute_capable is False:
+            return False
+        if c.refute_capable is True:
+            return True
+        return bool(
+            c.frozen
+            and c.check_role == "prediction"
+            and (
+                c.sesoi is not None
+                or (c.min_power is not None and float(c.min_power) > 0.0)
+            )
+        )
+
     if n_inc >= k_ref and refutation_priority:
         return "refuted", False
     if n_inc >= k_ref and not refutation_priority:
         return ("inconclusive" if consistent_severe else "refuted"), False
     if n_inc > 0:
         return "inconclusive", False
-    if n_con >= k_sup and any(c.intent == "refute" for c in consistent_severe):
+    if n_con >= k_sup and any(_refute_ok(c) for c in consistent_severe):
         return "supported", False
     if n_con >= 1:
         return "survived", False
     return "inconclusive", False
-
-
-def _calibrate_e(p, kappa=0.5):
-    if p <= 0:
-        return 1.0 / kappa
-    return kappa * (p ** (kappa - 1.0))
-
-
-def _evalue_verdict(claims, evalue_alpha=0.05):
-    by_sup, by_ref = {}, {}
-    any_severe = False
-    for c in claims:
-        if not c.counts():
-            continue
-        key = c.independence_key or c.attempt_id
-        if c.severe and c.claim_outcome == "consistent":
-            any_severe = True
-        if c.p_value is None:
-            continue
-        e = _calibrate_e(float(c.p_value))
-        if c.claim_outcome == "consistent":
-            by_sup[key] = max(by_sup.get(key, 0.0), e)
-        elif c.claim_outcome == "inconsistent":
-            by_ref[key] = max(by_ref.get(key, 0.0), e)
-    e_sup = e_ref = 1.0
-    for v in by_sup.values():
-        e_sup *= v
-    for v in by_ref.values():
-        e_ref *= v
-    thr = 1.0 / float(evalue_alpha)
-    if e_ref >= thr:
-        return "refuted"
-    if e_sup >= thr and len(by_sup) >= 2:
-        return "supported"
-    if any_severe:
-        return "survived"
-    return "inconclusive"
 
 def study_fulfilled(question_verdicts, all_required_success):
     return all_required_success and all(v != "untested" for v in question_verdicts.values())
