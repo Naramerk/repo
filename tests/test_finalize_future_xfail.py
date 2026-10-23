@@ -87,6 +87,7 @@ def test_question_disposition_computed_from_verdict():
                 "ci_low": 1.5,
                 "ci_high": 1.5,
                 "trusted": True,
+                "producer": "sandbox",
             },
             "claim_outcome": "consistent",
             "severe": True,
