@@ -142,6 +142,10 @@ class LocalProjectMixin:
             from coscientist.core.loop import fold_loop_capped
 
             fold_loop_capped(self, p)
+        elif ev.type == "LoopCompleted":
+            from coscientist.core.loop import fold_loop_completed
+
+            fold_loop_completed(self, p)
         elif ev.type == "ExpansionRefused":
             refusals = getattr(self, "_expansion_refusals", None)
             if isinstance(refusals, list):

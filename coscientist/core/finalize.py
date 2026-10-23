@@ -214,6 +214,8 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
             _append_foreach_report_lines(seen, ev.payload)
         elif ev.type == "LoopCapped":
             _append_loop_capped_report_line(seen, ev.payload)
+        elif ev.type == "LoopCompleted":
+            _append_loop_completed_report_line(seen, ev.payload)
         elif ev.type == "SideEffectDenied":
             tool = str(ev.payload.get("tool") or "?")
             reason = str(ev.payload.get("reason") or "")
@@ -256,12 +258,33 @@ def _append_loop_capped_report_line(seen: list[str], p: dict[str, Any]) -> None:
         m = int(raw_m) if raw_m is not None else 0  # type: ignore[arg-type]
     except (TypeError, ValueError):
         m = 0
-    line = f"цикл остановлен лимитом после {i} итераций, осталось {m}"
+    detail = str(p.get("refuse_detail") or "")
+    if detail.startswith("loop_exception:"):
+        line = f"цикл остановлен ошибкой после {i} итераций: {detail}"
+    else:
+        line = f"цикл остановлен лимитом после {i} итераций, осталось {m}"
     if line not in seen:
         seen.append(line)
     # Also surface as contributing TaskReason token for ordered reasons.
     if "iteration_cap" not in seen:
         seen.append("iteration_cap")
+
+
+def _append_loop_completed_report_line(seen: list[str], p: dict[str, Any]) -> None:
+    """Until-met completion line (journaled LoopCompleted)."""
+    try:
+        i = int(p.get("iter") or 0)
+    except (TypeError, ValueError):
+        i = 0
+    try:
+        raw_m = p.get("survivors")
+        m = int(raw_m) if raw_m is not None else 0  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        m = 0
+    line = f"цикл завершён после {i} итераций, осталось {m}"
+    if line not in seen:
+        seen.append(line)
+
 
 def _append_foreach_report_lines(seen: list[str], p: dict[str, Any]) -> None:
     items, added = p.get("foreach_items") or [], p.get("added_tasks") or []

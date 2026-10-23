@@ -54,10 +54,14 @@ def eval_loop_predicate(
     iter_n: int,
     ctx: Mapping[str, Any] | None = None,
 ) -> bool:
-    """Evaluate ``loop.until``; unknown name → False (caller should have validated)."""
+    """Evaluate ``loop.until``.
+
+    Unknown name raises (fail-closed — never silently ``False``). Predicate
+    body exceptions propagate to the caller (honest refuse / study fallback).
+    """
     fn = _REGISTRY.get(loop.until.name)
     if fn is None:
-        return False
+        raise UnknownLoopPredicateError(f"unknown loop predicate: {loop.until.name!r}")
     return bool(fn(runtime, loop, iter_n=iter_n, ctx=ctx or {}))
 
 

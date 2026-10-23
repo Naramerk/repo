@@ -117,16 +117,50 @@ async def _open_study(
     return rt, arts
 
 
-async def _finalize_study(rt) -> Any:
+async def _finalize_study(rt, arts=None) -> Any:
+    """Drive remaining dispatchable work, then finalize via tick (no clock rewind).
+
+    Leftover stage REPORT (required=False) is cancelled only when still PENDING
+    after dispatchable scientific tasks are done — same harness pattern as PR10.
+    """
+    # Complete any still-PENDING loop / plan experiment tasks first.
+    for _ in range(32):
+        pending = [
+            t
+            for t in rt.tasks.values()
+            if t.state == TaskState.PENDING
+            and t.spec.foreach is None
+            and t.spec.task_key not in ("SPEC", "HYP", "LIT", "PLAN", "REPORT")
+        ]
+        if not pending:
+            break
+        progressed = False
+        for t in pending:
+            if not rt._deps_done(t):  # noqa: SLF001 — harness: skip not-yet-ready
+                continue
+            aid = await rt.start_attempt(t.spec.task_key)
+            if arts is not None:
+                await _ok(rt, arts, aid)
+            else:
+                await rt.cancel_task(t.task_id, reason="cancelled")
+            progressed = True
+        if not progressed:
+            break
     for t in list(rt.tasks.values()):
         if t.state != TaskState.DONE:
             await rt.cancel_task(t.task_id, reason="cancelled")
     await rt.tick()
-    assert rt._finalized
+    assert rt._finalized is True
     events = await rt.store.read_all()
     fins = [e for e in events if e.type == "StudyFinalized"]
     assert len(fins) == 1
-    return fins[0]
+    fin = fins[0]
+    # Honest StudyFinalized: rich artifact XOR minimal fallback (never both/neither).
+    has_art = fin.payload.get("report_artifact_id") is not None
+    has_min = fin.payload.get("minimal_report") is not None
+    assert has_art ^ has_min
+    assert fin.payload.get("terminal_reason") is not None
+    return fin
 
 
 @pytest.mark.asyncio
@@ -258,18 +292,27 @@ async def test_loop_until_one_survivor(tmp_path, clock, runtime_cls, monkeypatch
         aid = await rt.start_attempt(t.spec.task_key)
         await _ok(rt, arts, aid)
     assert loop_status(rt, "L1") == "done"
-    assert "L1" not in (getattr(rt, "_loop_capped", {}) or {})
+    assert "L1" not in getattr(rt, "_loop_capped", {})
+
+    events = await rt.store.read_all()
+    completed = [e for e in events if e.type == "LoopCompleted"]
+    assert len(completed) == 1
+    assert completed[0].payload["loop_id"] == "L1"
+    assert completed[0].payload["iter"] == 2
+    assert completed[0].payload["reason"] == "until_met"
+    assert not any(e.type == "LoopCapped" for e in events)
+    assert getattr(rt, "_agent_expansions", 0) == 0
 
     aid = await rt.start_attempt("POST")
     await _ok(rt, arts, aid)
 
-    events = await rt.store.read_all()
-    assert not any(e.type == "LoopCapped" for e in events)
-    assert getattr(rt, "_agent_expansions", 0) == 0
-
-    fin = await _finalize_study(rt)
-    assert fin.payload.get("terminal_reason") != "iteration_cap"
-    assert fin.payload.get("report_artifact_id") or fin.payload.get("minimal_report")
+    fin = await _finalize_study(rt, arts)
+    assert fin.payload["terminal_reason"] == "completed"
+    # Rich finalize path: artifact report; minimal_report only on fallback.
+    assert fin.payload["report_artifact_id"] is not None
+    assert fin.payload.get("minimal_report") is None
+    contrib = fin.payload["contributing_reasons"]
+    assert any(str(c).startswith("цикл завершён после 2") for c in contrib)
     await close_runtime(rt)
 
 
@@ -322,22 +365,23 @@ async def test_loop_iteration_cap_honest_final(tmp_path, clock, runtime_cls, mon
     aid = await rt.start_attempt("POST")
     await _ok(rt, arts, aid)
 
-    fin = await _finalize_study(rt)
+    fin = await _finalize_study(rt, arts)
     events = await rt.store.read_all()
     lc = [e for e in events if e.type == "LoopCapped"]
     assert len(lc) == 1
     assert lc[0].payload["loop_id"] == "L1"
     assert lc[0].payload["iter"] == 2
+    assert fin.payload["terminal_reason"] == "completed"
     assert fin.payload["terminal_reason"] != TerminalReason.EXPANSION_LIMIT.value
-    assert fin.payload.get("terminal_reason") != "iteration_cap"
-    contrib = fin.payload.get("contributing_reasons") or []
-    assert any("цикл остановлен лимитом" in str(x) for x in contrib) or any(
-        x == "iteration_cap" for x in contrib
+    contrib = list(fin.payload["contributing_reasons"])
+    assert "iteration_cap" in contrib
+    assert any(
+        str(x).startswith("цикл остановлен лимитом после 2 итераций") for x in contrib
     )
-    qdisp = fin.payload.get("question_dispositions") or {}
-    assert "Q1" in qdisp
-    assert qdisp["Q1"].get("reason") == TaskReason.ITERATION_CAP.value
-    assert fin.payload.get("report_artifact_id") or fin.payload.get("minimal_report")
+    qdisp = fin.payload["question_dispositions"]
+    assert qdisp["Q1"]["reason"] == TaskReason.ITERATION_CAP.value
+    assert fin.payload["report_artifact_id"] is not None
+    assert fin.payload.get("minimal_report") is None
     await close_runtime(rt)
 
 
@@ -367,8 +411,70 @@ async def test_loop_infinite_guard_max_iter(tmp_path, clock, runtime_cls, monkey
             await _ok(rt, arts, aid)
     assert not current_loop_iter_tasks(rt, "L1", 4)
     assert loop_status(rt, "L1") == "capped"
-    await _finalize_study(rt)
+    await _finalize_study(rt, arts)
     await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_loop_completed_survives_restart(tmp_path, clock, runtime_cls, monkeypatch):
+    """Kill after LoopCompleted → reopen restores done; POST starts without re-eval."""
+    import coscientist.core.loop_predicates as lp
+
+    def fake_survivors(runtime, loop, *, upto_iter):
+        return 1 if int(upto_iter) >= 1 else 3
+
+    monkeypatch.setattr(lp, "count_survivors", fake_survivors)
+
+    rt, arts = await _open_study(
+        tmp_path, clock, "st_loop_done_re", runtime_cls=runtime_cls
+    )
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="POST",
+                title="after",
+                goal="g",
+                route="experiment",
+                depends_on=["loop:L1"],
+                addresses=["Q1"],
+                criteria=[RequirementRef(template_id="value_match")],
+                required=False,
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="q")],
+        loops=[
+            _loop(
+                max_iter=5,
+                until=LoopPredicate(name="survivors_le", params={"n": 1}),
+            )
+        ],
+    )
+    for t in current_loop_iter_tasks(rt, "L1", 1):
+        aid = await rt.start_attempt(t.spec.task_key)
+        await _ok(rt, arts, aid)
+    assert loop_status(rt, "L1") == "done"
+    events = await rt.store.read_all()
+    assert sum(1 for e in events if e.type == "LoopCompleted") == 1
+    assert not any(e.type == "LoopCapped" for e in events)
+
+    await close_runtime(rt)
+    # Reopen: LoopCompleted must fold status=done (no until re-eval required).
+    rt2 = await open_runtime(
+        tmp_path, "st_loop_done_re", clock=clock, owner="t2", runtime_cls=runtime_cls
+    )
+    attach_executor(rt2, tmp_path)
+    await recover(rt2)
+    assert loop_status(rt2, "L1") == "done"
+    assert "L1" in getattr(rt2, "_loop_done", set())
+    # POST barrier open from journal alone.
+    aid = await rt2.start_attempt("POST")
+    await _ok(rt2, arts, aid)
+    events2 = await rt2.store.read_all()
+    assert sum(1 for e in events2 if e.type == "LoopCompleted") == 1
+    assert sum(1 for e in events2 if e.type == "LoopCapped") == 0
+    fin = await _finalize_study(rt2, arts)
+    assert fin.payload["terminal_reason"] == "completed"
+    await close_runtime(rt2)
 
 
 @pytest.mark.asyncio
@@ -397,13 +503,20 @@ async def test_loop_no_change_stops_on_stable_scope(tmp_path, clock, runtime_cls
         await _ok(rt, arts, aid)
     assert loop_status(rt, "L1") == "done"
     assert not current_loop_iter_tasks(rt, "L1", 3)
-    await _finalize_study(rt)
+    events = await rt.store.read_all()
+    assert sum(1 for e in events if e.type == "LoopCompleted") == 1
+    await _finalize_study(rt, arts)
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
-async def test_loop_criterion_met(tmp_path, clock, runtime_cls):
-    """criterion_met: MET check_results on a loop body attempt stops the loop."""
+async def test_loop_criterion_met(tmp_path, clock, runtime_cls, monkeypatch):
+    """criterion_met: when a loop-body check is MET, until fires → LoopCompleted."""
+    import coscientist.core.loop_predicates as lp
+
+    # Integration: bind until name to a true stub; unit test covers real MET scan.
+    monkeypatch.setitem(lp._REGISTRY, "criterion_met", lambda *a, **k: True)
+
     rt, arts = await _open_study(
         tmp_path, clock, "st_loop_crit", runtime_cls=runtime_cls
     )
@@ -424,25 +537,62 @@ async def test_loop_criterion_met(tmp_path, clock, runtime_cls):
     for t in current_loop_iter_tasks(rt, "L1", 1):
         aid = await rt.start_attempt(t.spec.task_key)
         await _ok(rt, arts, aid)
-    status = loop_status(rt, "L1")
-    if status != "done":
-        for _ in range(5):
-            if loop_is_complete(rt, "L1"):
-                break
-            pending = [
-                t
-                for t in rt.tasks.values()
-                if t.spec.loop_id == "L1" and t.state == TaskState.PENDING
-            ]
-            if not pending:
-                await rt.tick()
-                continue
-            for t in pending:
-                aid = await rt.start_attempt(t.spec.task_key)
-                await _ok(rt, arts, aid)
-    assert loop_is_complete(rt, "L1")
-    await _finalize_study(rt)
+    assert loop_status(rt, "L1") == "done"
+    events = await rt.store.read_all()
+    assert sum(1 for e in events if e.type == "LoopCompleted") == 1
+    assert not current_loop_iter_tasks(rt, "L1", 2)
+    await _finalize_study(rt, arts)
     await close_runtime(rt)
+
+
+def test_pred_criterion_met_reads_check_results():
+    """Unit: criterion_met true only when loop task check_results status=MET."""
+    from coscientist.core.domain import ReqStatus, Task, TaskKind, TaskState
+    from coscientist.core.loop_predicates import _pred_criterion_met
+
+    class RT:
+        def __init__(self):
+            self.tasks = {
+                "t1": Task(
+                    task_id="t1",
+                    kind=TaskKind.EXPERIMENT,
+                    spec=TaskSpec(
+                        task_key="EXP-0",
+                        title="t",
+                        goal="g",
+                        route="experiment",
+                        loop_id="L1",
+                        loop_iter=1,
+                    ),
+                    state=TaskState.DONE,
+                    deadline=__import__("datetime").datetime.now(
+                        __import__("datetime").timezone.utc
+                    ),
+                )
+            }
+            self.attempts = {"a1": {"task_id": "t1"}}
+            self.results = {
+                "a1": {
+                    "check_results": [
+                        {
+                            "template_id": "value_match",
+                            "status": ReqStatus.MET.value,
+                        }
+                    ]
+                }
+            }
+
+    loop = _loop(
+        until=LoopPredicate(
+            name="criterion_met", params={"criterion_id": "value_match"}
+        ),
+        scope_hypotheses=[],
+        scope_questions=[],
+    )
+    assert _pred_criterion_met(RT(), loop, iter_n=1, ctx={}) is True
+    rt2 = RT()
+    rt2.results["a1"]["check_results"][0]["status"] = ReqStatus.FAILED.value
+    assert _pred_criterion_met(rt2, loop, iter_n=1, ctx={}) is False
 
 
 @pytest.mark.asyncio
@@ -483,7 +633,7 @@ async def test_loop_restart_idempotent(tmp_path, clock, runtime_cls, monkeypatch
             await _ok(rt2, arts, aid)
     events = await rt2.store.read_all()
     assert sum(1 for e in events if e.type == "LoopCapped") == 1
-    await _finalize_study(rt2)
+    await _finalize_study(rt2, arts)
     await close_runtime(rt2)
 
 

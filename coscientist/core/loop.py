@@ -53,7 +53,10 @@ def loop_plan_id(study_id: str, loop_id: str, iter_n: int, rev: int) -> str:
 
 
 def _loops_from_plans(runtime: StudyRuntime) -> list[LoopSpec]:
-    """Active LoopSpecs from the latest plan blob that carries ``loops``."""
+    """Active LoopSpecs from the latest plan blob that carries ``loops``.
+
+    Invalid journal rows raise (fail-closed) — never silently drop a loop.
+    """
     seen: dict[str, LoopSpec] = {}
     # Prefer highest revision that defines loops.
     plans = list(getattr(runtime, "plans", {}).values())
@@ -63,10 +66,10 @@ def _loops_from_plans(runtime: StudyRuntime) -> list[LoopSpec]:
         if not raw:
             continue
         for item in raw:
-            try:
-                ls = item if isinstance(item, LoopSpec) else LoopSpec.model_validate(item)
-            except Exception:  # noqa: BLE001
-                continue
+            if isinstance(item, LoopSpec):
+                ls = item
+            else:
+                ls = LoopSpec.model_validate(item)
             seen[ls.loop_id] = ls
     return list(seen.values())
 
@@ -447,7 +450,11 @@ async def materialize_loop_iter(
 
 
 async def _emit_loop_capped(
-    runtime: StudyRuntime, loop: LoopSpec, *, iter_n: int
+    runtime: StudyRuntime,
+    loop: LoopSpec,
+    *,
+    iter_n: int,
+    refuse_detail: str | None = None,
 ) -> None:
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return
@@ -455,9 +462,11 @@ async def _emit_loop_capped(
     capped = getattr(runtime, "_loop_capped", None) or {}
     if isinstance(capped, dict) and loop.loop_id in capped:
         return
+    if loop_status(runtime, loop.loop_id) == "capped":
+        return
     survivors = count_survivors(runtime, loop, upto_iter=iter_n)
     now = runtime.clock.now()
-    payload = {
+    payload: dict[str, Any] = {
         "loop_id": loop.loop_id,
         "iter": iter_n,
         "max_iter": int(loop.max_iter),
@@ -466,6 +475,8 @@ async def _emit_loop_capped(
         "scope_questions": list(loop.scope_questions),
         "until": loop.until.model_dump(mode="json"),
     }
+    if refuse_detail:
+        payload["refuse_detail"] = refuse_detail[:200]
     ev = EventEnvelope(
         study_id=sid,
         type="LoopCapped",
@@ -478,40 +489,61 @@ async def _emit_loop_capped(
     await runtime._append([ev])  # noqa: SLF001
 
 
-async def _mark_loop_done(runtime: StudyRuntime, loop: LoopSpec, *, iter_n: int) -> None:
-    """Record completion in fold state without a dedicated event (until met)."""
-    st = _loop_state(runtime)
-    row = dict(st.get(loop.loop_id) or {})
-    row["status"] = "done"
-    row["iter"] = iter_n
-    st[loop.loop_id] = row
-    # Persist via a tiny marker on a synthetic PlanExpanded? Prefer journaled
-    # LoopCapped-like completion for replay. Use LoopCapped only for cap;
-    # for success, fold from last PlanExpanded + until-true recomputation on resume.
-    done = getattr(runtime, "_loop_done", None)
-    if not isinstance(done, set):
-        runtime._loop_done = set()  # noqa: SLF001
-        done = runtime._loop_done  # noqa: SLF001
-    done.add(loop.loop_id)
+async def _emit_loop_completed(
+    runtime: StudyRuntime, loop: LoopSpec, *, iter_n: int
+) -> None:
+    """Journal until-met completion so reopen restores status without re-eval."""
+    if runtime.study is None or getattr(runtime, "_finalized", False):
+        return
+    done_map = getattr(runtime, "_loop_done", None) or set()
+    if isinstance(done_map, set) and loop.loop_id in done_map:
+        return
+    if loop_status(runtime, loop.loop_id) == "done":
+        return
+    sid = runtime.study.study_id
+    survivors = count_survivors(runtime, loop, upto_iter=iter_n)
+    now = runtime.clock.now()
+    payload = {
+        "loop_id": loop.loop_id,
+        "iter": iter_n,
+        "max_iter": int(loop.max_iter),
+        "survivors": survivors,
+        "scope_hypotheses": list(loop.scope_hypotheses),
+        "scope_questions": list(loop.scope_questions),
+        "until": loop.until.model_dump(mode="json"),
+        "reason": "until_met",
+    }
+    ev = EventEnvelope(
+        study_id=sid,
+        type="LoopCompleted",
+        entity_key=f"{sid}:loop:{loop.loop_id}",
+        idem_key=make_idem("LoopCompleted", sid, loop.loop_id),
+        payload=payload,
+        ts=now,
+        schema_version=1,
+    )
+    await runtime._append([ev])  # noqa: SLF001
 
 
 async def _refuse_loop(
     runtime: StudyRuntime, loop: LoopSpec, *, detail: str
 ) -> None:
-    """Mark loop capped/refused so dependents can proceed; report line via detail."""
+    """Journal ExpansionRefused + LoopCapped so dependents proceed after reopen."""
     from coscientist.core.expand_trigger import refuse_expansion
 
     after = loop.depends_on[0] if loop.depends_on else loop.loop_id
     await refuse_expansion(runtime, after, reason="invalid", detail=detail[:200])
-    st = _loop_state(runtime)
-    row = dict(st.get(loop.loop_id) or {})
-    row["status"] = "capped"
-    row["refuse_detail"] = detail[:200]
-    st[loop.loop_id] = row
+    # Cap in the journal (not memory-only) so live ≡ replay after crash.
+    cur = current_iter(runtime, loop.loop_id) or 0
+    await _emit_loop_capped(runtime, loop, iter_n=max(cur, 1), refuse_detail=detail[:200])
 
 
 async def _advance_one(runtime: StudyRuntime, loop: LoopSpec) -> str | None:
-    """Start next iter or emit LoopCapped / mark done. Returns plan_id if any."""
+    """Start next iter or emit LoopCapped / LoopCompleted. Returns plan_id if any.
+
+    Predicate evaluation exceptions propagate (fail-closed) to ``maybe_advance_loops``,
+    which journals an honest refuse — never masked as ``until=False``.
+    """
     if loop_is_complete(runtime, loop.loop_id):
         return None
     cur = current_iter(runtime, loop.loop_id)
@@ -523,14 +555,10 @@ async def _advance_one(runtime: StudyRuntime, loop: LoopSpec) -> str | None:
     if not _iter_all_done(runtime, loop.loop_id, cur):
         return None
 
-    # Evaluate until after completed iter.
-    try:
-        met = eval_loop_predicate(runtime, loop, iter_n=cur, ctx={})
-    except Exception:  # noqa: BLE001 — never crash StudyFinalized path
-        met = False
+    met = eval_loop_predicate(runtime, loop, iter_n=cur, ctx={})
 
     if met:
-        await _mark_loop_done(runtime, loop, iter_n=cur)
+        await _emit_loop_completed(runtime, loop, iter_n=cur)
         return None
 
     if cur >= int(loop.max_iter):
@@ -541,7 +569,11 @@ async def _advance_one(runtime: StudyRuntime, loop: LoopSpec) -> str | None:
 
 
 async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
-    """Advance all loops that can take a step (start / next iter / cap)."""
+    """Advance all loops that can take a step (start / next iter / cap / complete).
+
+    Unexpected errors → ExpansionRefused + LoopCapped (reportable), never a crash
+    that blocks StudyFinalized. Predicate bugs are not treated as until=False.
+    """
     done: list[str] = []
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return done
@@ -550,11 +582,11 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
             pid = await _advance_one(runtime, loop)
             if pid:
                 done.append(pid)
-        except Exception as e:  # noqa: BLE001 — totality
+        except Exception as e:  # noqa: BLE001 — study-level honesty via refuse+cap
             await _refuse_loop(
                 runtime,
                 loop,
-                detail=f"loop_exception:{type(e).__name__}",
+                detail=f"loop_exception:{type(e).__name__}:{e}"[:200],
             )
     return done
 
@@ -615,12 +647,36 @@ def fold_loop_capped(runtime: Any, payload: dict[str, Any]) -> None:
     except (TypeError, ValueError):
         pass
     row["survivors"] = payload.get("survivors")
+    if payload.get("refuse_detail"):
+        row["refuse_detail"] = payload.get("refuse_detail")
     st[lid] = row
     capped = getattr(runtime, "_loop_capped", None)
     if not isinstance(capped, dict):
         runtime._loop_capped = {}
         capped = runtime._loop_capped
     capped[lid] = dict(payload)
+
+
+def fold_loop_completed(runtime: Any, payload: dict[str, Any]) -> None:
+    """Rebuild until-met completion from journal (live ≡ replay)."""
+    lid = str(payload.get("loop_id") or "")
+    if not lid:
+        return
+    st = _loop_state(runtime)
+    row = dict(st.get(lid) or {})
+    row["status"] = "done"
+    try:
+        row["iter"] = int(payload.get("iter") or row.get("iter") or 0)
+    except (TypeError, ValueError):
+        pass
+    row["survivors"] = payload.get("survivors")
+    row["complete_reason"] = str(payload.get("reason") or "until_met")
+    st[lid] = row
+    done = getattr(runtime, "_loop_done", None)
+    if not isinstance(done, set):
+        runtime._loop_done = set()
+        done = runtime._loop_done
+    done.add(lid)
 
 
 def capped_scope_questions(runtime: Any) -> dict[str, dict[str, Any]]:

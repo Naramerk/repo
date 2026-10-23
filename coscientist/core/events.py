@@ -38,6 +38,7 @@ EventType = Literal[
     "PlanExpanded",
     "ExpansionRefused",
     "LoopCapped",
+    "LoopCompleted",
     "HitlOpened",
     "HitlDecided",
     "HitlTimedOut",
