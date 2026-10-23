@@ -485,10 +485,9 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
 ):
     """~60ms sleep in real ``SqliteEventStore.append_many`` trips max-of-3.
 
-    One measured round (core runtime only — cheap) + two clean synthetic
+    One measured round (default API runtime — cheap) + two clean synthetic
     rounds through ``_assert_max_round_p99``.
     """
-    from coscientist.core.machine import StudyRuntime
     from coscientist.core.store import SqliteEventStore
 
     real_append_many = SqliteEventStore.append_many
@@ -500,9 +499,8 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
     monkeypatch.setattr(SqliteEventStore, "append_many", _slow_append_many)
 
     clock = SystemClock()
-    rt = await open_runtime(
-        tmp_path, "st_delay", clock=clock, runtime_cls=StudyRuntime
-    )
+    # helpers.open_runtime defaults to api.StudyRuntime (create_study mixin).
+    rt = await open_runtime(tmp_path, "st_delay", clock=clock)
     await rt.create_study(
         profile="research",
         request="delay-gate",
