@@ -13,8 +13,10 @@ from typing import Any
 import pytest
 
 from coscientist.core.clock import SystemClock
-from coscientist.core.events import EventEnvelope
+from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.projections import _row_key, fold_events
+from coscientist.core.source_fetch import verify_fetch_capability
+from coscientist.tools.effects import _mint_fetch_capability_for_tests
 from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success
 
 # DESIGN §3.5a absolute SLO — do not raise; no retries/skips.
@@ -41,7 +43,8 @@ _PROJECTION_TABLES = (
 
 
 def _canon_row(row: dict[str, Any]) -> str:
-    return json.dumps(row, sort_keys=True, default=str)
+    """Strict JSON canon — no ``default=str``; type mismatches must fail."""
+    return json.dumps(row, sort_keys=True, allow_nan=False)
 
 
 async def _sqlite_projection_map(store: Any) -> dict[str, dict[str, dict[str, Any]]]:
@@ -119,6 +122,104 @@ async def _run_load(tmp_path: Path, runtime_cls: type):
     return rt
 
 
+async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
+    """Append AttemptTainted / SourceFetched / FetchIntegrityRaised / HitlOpened.
+
+    Exercises ``fetch_calls`` load for SourceFetched, ``fetch_integrity`` write set,
+    and ``hitl_requests`` so the equivalence test covers non-empty sparse tables.
+    Uses a synthetic attempt id (no ``start_attempt``) so seeding works after the
+    parallel load has already closed EXP tasks.
+    """
+    sid = "st_load"
+    now = rt.clock.now()
+    aid = "st_load/EXP-seed:1"
+    call_id = f"{aid}:fetch1"
+    tool = "papers_get"
+    digest = "a" * 64
+
+    await rt.writer.append(
+        EventEnvelope(
+            study_id=sid,
+            type="AttemptTainted",
+            entity_key=aid,
+            idem_key=make_idem("AttemptTainted", aid, call_id),
+            payload={
+                "attempt_id": aid,
+                "reason": "source_fetch",
+                "call_id": call_id,
+                "tool": tool,
+                "is_fetch": True,
+            },
+            ts=now,
+            schema_version=1,
+        )
+    )
+
+    cap = _mint_fetch_capability_for_tests(
+        tool=tool, call_id=call_id, study_id=sid, attempt_id=aid
+    )
+    verify_fetch_capability(
+        cap,
+        tool=tool,
+        call_id=call_id,
+        study_id=sid,
+        attempt_id=aid,
+    )
+    await rt.writer.append(
+        EventEnvelope(
+            study_id=sid,
+            type="SourceFetched",
+            entity_key=digest,
+            idem_key=make_idem("SourceFetched", digest),
+            payload={
+                "call_id": call_id,
+                "tool": tool,
+                "digest": digest,
+                "url": "https://example.org/p",
+                "attempt_id": aid,
+            },
+            ts=now,
+            schema_version=1,
+        ),
+        _source_fetched_cap_id=cap.id,
+    )
+
+    await rt.writer.append(
+        EventEnvelope(
+            study_id=sid,
+            type="FetchIntegrityRaised",
+            entity_key="integrity-seed",
+            idem_key=make_idem("FetchIntegrityRaised", "integrity-seed"),
+            payload={
+                "kind": "fetch_tool_reclassified",
+                "tool": "legacy_fetch",
+                "call_id": "integrity-seed",
+                "internal_error": True,
+            },
+            ts=now,
+            schema_version=1,
+        )
+    )
+
+    rid = "hitl-seed-1"
+    await rt.writer.append(
+        EventEnvelope(
+            study_id=sid,
+            type="HitlOpened",
+            entity_key=rid,
+            idem_key=make_idem("HitlOpened", rid),
+            payload={
+                "request_id": rid,
+                "kind": "plan_approval",
+                "task_id": f"{sid}/PLAN",
+                "open": True,
+                "cost_rub": 0.0,
+            },
+            ts=now,
+        )
+    )
+
+
 @pytest.mark.slow
 @pytest.mark.serial
 @pytest.mark.asyncio
@@ -144,12 +245,26 @@ async def test_twenty_parallel_attempts_fsync(tmp_path: Path, runtime_cls: type)
 async def test_twenty_parallel_sqlite_projection_matches_fold(
     tmp_path: Path, runtime_cls: type
 ):
-    """After the full 20-parallel load, SQLite projections == fold_events (every table)."""
+    """After the full 20-parallel load, SQLite projections == fold_events (every table).
+
+    Also seeds AttemptTainted / SourceFetched / FetchIntegrityRaised / HitlOpened so
+    ``source_fetches``, ``fetch_calls``, ``fetch_integrity``, and ``hitl_requests``
+    are non-empty (covers dirty-key load deps + #26 integrity rows).
+    """
     rt = await _run_load(tmp_path, runtime_cls)
+    await _seed_fetch_hitl_projection_events(rt)
     events = await rt.store.read_all()
     folded = fold_events(events)
     sqlite_map = await _sqlite_projection_map(rt.store)
     _assert_projection_equiv(sqlite_map, folded)
+    for table in (
+        "source_fetches",
+        "fetch_calls",
+        "fetch_integrity",
+        "hitl_requests",
+    ):
+        assert folded.get(table), f"{table} must be non-empty after seed"
+        assert sqlite_map.get(table), f"{table} missing from SQLite projection"
     await close_runtime(rt)
 
 
