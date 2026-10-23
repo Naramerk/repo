@@ -19,11 +19,14 @@ from tests.helpers import close_runtime, open_runtime
 
 
 def test_refute_intent_met_is_survived(impl):
-    """tests.intent=refute + met → stance supports; PR8b single severe → survived."""
+    """tests.intent=refute + met → stance supports; k=1 + refute → supported."""
     c = impl.Claim("met", intent="refute")
     assert c.stance == "supports"
-    assert impl.verdict([c], True)[0] == "survived"
-    # Confirm alone is also survived (not supported) under PR8b.
+    # Default confirmations_needed=1: one severe refute-intent claim → supported.
+    assert impl.verdict([c], True)[0] == "supported"
+    # With k=2, a single severe is only survived.
+    assert impl.verdict([c], True, k=2)[0] == "survived"
+    # Confirm alone never reaches supported (needs intent=refute).
     assert impl.verdict([impl.Claim("met", intent="confirm")], True)[0] == "survived"
 
 
@@ -241,7 +244,7 @@ def test_upcast_study_created_k_ref_defaults():
     assert p["refutations_needed"] == 1
     assert p["refutation_priority"] is False
     assert p["confirmations_needed"] == 1
-    assert p["min_independent_support"] == 2
+    assert p["aggregate"] == "count"
 
 
 def test_upcast_study_created_confirmations_needed_v3_to_v4():
@@ -286,7 +289,7 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
     assert created.schema_version == 5
     assert created.payload["refutations_needed"] == 3
     assert created.payload["confirmations_needed"] == 1
-    assert created.payload["min_independent_support"] == 2
+    assert created.payload["aggregate"] == "count"
     await close_runtime(rt)
 
 

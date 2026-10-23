@@ -176,9 +176,8 @@ def _study_created_v3_to_v4(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _study_created_v4_to_v5(payload: dict[str, Any]) -> dict[str, Any]:
-    """PR8b: min_independent_support / aggregate / evalue_alpha."""
+    """PR8b: aggregate / evalue_alpha (support k = confirmations_needed, already on v4)."""
     out = dict(payload)
-    out.setdefault("min_independent_support", 2)
     out.setdefault("aggregate", "count")
     out.setdefault("evalue_alpha", 0.05)
     return out

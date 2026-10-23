@@ -261,11 +261,11 @@ class Study(Frozen):
     budget: Budget | None = None
     finalize_reserve_s: int = Field(default=30, ge=0)
     # PR 6 / DESIGN_M1 §3: fixed at create (like catalog_version); change only via fork.
-    confirmations_needed: int = Field(default=1, ge=1)  # legacy k; PR8b uses min_independent_support
+    # PR8b: confirmations_needed is the support threshold (|con| ≥ k with ≥1 refute intent).
+    confirmations_needed: int = Field(default=1, ge=1)
     refutations_needed: int = Field(default=1, ge=1)  # k_ref
     refutation_priority: bool = False
     # PR8b hypothesis verdict model (DESIGN_HYP_DELTA).
-    min_independent_support: int = Field(default=2, ge=1)
     aggregate: Literal["count", "evalue"] = "count"
     evalue_alpha: float = Field(default=0.05, gt=0.0, le=1.0)
 

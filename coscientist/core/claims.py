@@ -104,7 +104,9 @@ class RuntimeClaim:
     p_value: float | None = None
     power: float | None = None
     sesoi: float | None = None
-    min_power: float | None = None
+    min_power: float | None = 0.0  # transitional stamp so severe gate can pass
+    effect: dict[str, Any] | None = None
+    validity: str | None = None  # valid|invalid (mirrors validity_ok)
 
     def __post_init__(self) -> None:
         if self.intent not in ("confirm", "refute"):
@@ -411,10 +413,23 @@ def runtime_claim_from_node(
             if claim_outcome_raw in ("consistent", "inconsistent", "indeterminate")
             else None
         )
-        severe_coerced = _coerce_bool(attrs.get("severe"))
+        # Absent severe ⇒ legacy claim (never severe / never supported — V5).
+        severe_coerced: bool
+        if "severe" not in attrs:
+            severe_coerced = False
+        else:
+            coerced = _coerce_bool(attrs.get("severe"))
+            severe_coerced = False if coerced is None else bool(coerced)
         independence_key = (
             _coerce_str(attrs.get("independence_key"), allow_empty=True) or ""
         )
+        if not independence_key:
+            from coscientist.core.verdict import independence_key_for
+
+            independence_key = independence_key_for(
+                experiment_id=_coerce_str(attrs.get("attempt_id"), allow_empty=True)
+                or node.node_id
+            )
         p_value = attrs.get("p_value")
         if p_value is not None:
             try:
@@ -523,7 +538,8 @@ def runtime_claim_from_node(
                 p_value=p_value if isinstance(p_value, float) else None,
                 power=power if isinstance(power, float) else None,
                 sesoi=sesoi if isinstance(sesoi, float) else None,
-                min_power=min_power if isinstance(min_power, float) else None,
+                # Absent min_power → transitional 0.0 (matches executor stamp).
+                min_power=min_power if isinstance(min_power, float) else 0.0,
             ),
             None,
         )
@@ -639,7 +655,6 @@ def compute_verdict_snapshots(
         if k is not None
         else (study.confirmations_needed if study is not None else 1)
     )
-    min_sup = study.min_independent_support if study is not None else 2
     aggregate = study.aggregate if study is not None else "count"
     e_alpha = study.evalue_alpha if study is not None else 0.05
     by_target = filtered_claims_by_target(
@@ -667,7 +682,6 @@ def compute_verdict_snapshots(
             conf_k,
             refutations_needed=k_ref,
             refutation_priority=priority,
-            min_independent_support=min_sup,
             aggregate=aggregate,  # type: ignore[arg-type]
             evalue_alpha=e_alpha,
         )
@@ -693,7 +707,6 @@ def compute_verdict_snapshots(
             "refutations_needed": k_ref,
             "refutation_priority": priority,
             "k": conf_k,
-            "min_independent_support": min_sup,
         }
         if excluded:
             snap["excluded_claims"] = excluded
@@ -705,7 +718,6 @@ def compute_verdict_snapshots(
             conf_k,
             refutations_needed=k_ref,
             refutation_priority=priority,
-            min_independent_support=min_sup,
             aggregate=aggregate,  # type: ignore[arg-type]
             evalue_alpha=e_alpha,
         )

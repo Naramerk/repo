@@ -131,7 +131,6 @@ def _dispositions_inner(
         if k is not None
         else (study.confirmations_needed if study is not None else 1)
     )
-    min_sup = study.min_independent_support if study is not None else 2
     aggregate = study.aggregate if study is not None else "count"
     e_alpha = study.evalue_alpha if study is not None else 0.05
 
@@ -152,7 +151,6 @@ def _dispositions_inner(
                 conf_k,
                 refutations_needed=k_ref,
                 refutation_priority=priority,
-                min_independent_support=min_sup,
                 aggregate=aggregate,  # type: ignore[arg-type]
                 evalue_alpha=e_alpha,
             )
@@ -171,7 +169,6 @@ def _dispositions_inner(
                     conf_k,
                     refutations_needed=k_ref,
                     refutation_priority=priority,
-                    min_independent_support=min_sup,
                     aggregate=aggregate,  # type: ignore[arg-type]
                     evalue_alpha=e_alpha,
                 )

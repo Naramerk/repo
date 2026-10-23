@@ -113,34 +113,70 @@ def effective_validity(claim: Any) -> ClaimValidity:
     return "valid"
 
 
+def tost_holds(*, sesoi: float | None, effect: Mapping[str, Any] | None) -> bool:
+    """Equivalence / null claim: CI strictly inside (−sesoi, +sesoi)."""
+    if sesoi is None or effect is None:
+        return False
+    try:
+        lo = float(effect["ci_low"])  # type: ignore[index]
+        hi = float(effect["ci_high"])  # type: ignore[index]
+        s = float(sesoi)
+    except (KeyError, TypeError, ValueError):
+        return False
+    return (-s) < lo and hi < s
+
+
 def claim_is_severe(claim: Any) -> bool:
-    """SPEC §3.1 severe gate (+ M1 transitional when no SESOI/power on criterion)."""
+    """SPEC §3 severe: consistent ∧ R17 freeze ∧ power gate ∧ (sesoi|min_power set)."""
     if effective_outcome(claim) != "consistent":
         return False
     if effective_validity(claim) != "valid":
         return False
-    if getattr(claim, "severe", None) is True:
-        return True
-    if getattr(claim, "severe", None) is False and (
-        getattr(claim, "claim_outcome", None) is not None
-        or getattr(claim, "outcome", None) is not None
-    ):
-        # Explicitly classified non-severe.
+    # Legacy / explicit non-severe stamp is definitive (V5).
+    if getattr(claim, "severe", None) is False:
         return False
     sesoi = getattr(claim, "sesoi", None)
     min_power = getattr(claim, "min_power", None)
     power = getattr(claim, "power", None)
     frozen_at = getattr(claim, "criterion_frozen_at_seq", None)
     first_ev = getattr(claim, "first_cited_evidence_seq", None)
-    # R17: when metadata present, require freeze-before-evidence.
     if frozen_at is not None and first_ev is not None and not (frozen_at < first_ev):
         return False
     if min_power is not None and (power if power is not None else 0.0) < float(min_power):
         return False
+    # SPEC: sesoi or min_power must be set. Transitional M1: executor stamps
+    # min_power=0.0 so catalogs without SESOI still allow severe when frozen.
     if sesoi is None and min_power is None:
-        # Transitional: catalogs without SESOI/power still allow severe when frozen.
-        return bool(getattr(claim, "frozen", False))
-    return True
+        return False
+    return bool(getattr(claim, "frozen", False))
+
+
+def classify_outcome(
+    *,
+    validity_ok: bool,
+    prediction_statuses: Sequence[str],
+    predicts_null: bool = False,
+    sesoi: float | None = None,
+    effect: Mapping[str, Any] | None = None,
+    r17_ok: bool = True,
+) -> tuple[str, str | None, bool]:
+    """Return (validity, outcome|None, severe_hint_inputs_ok).
+
+    ``severe`` itself still needs freeze/power gates via ``claim_is_severe``.
+    """
+    if not validity_ok or not r17_ok:
+        return "invalid", None, False
+    preds = [s for s in prediction_statuses if s]
+    if any(s == "FAILED" or s == "not_met" for s in preds):
+        outcome: str | None = "inconsistent"
+    elif preds and all(s in ("PASSED", "MET", "met") for s in preds):
+        outcome = "consistent"
+    else:
+        outcome = "indeterminate"
+    if predicts_null and outcome == "consistent":
+        if not tost_holds(sesoi=sesoi, effect=effect):
+            outcome = "indeterminate"
+    return "valid", outcome, outcome == "consistent"
 
 
 def exclusion_reason(claim: Any) -> ExclusionReason | None:
@@ -256,21 +292,16 @@ def hypothesis_verdict(
     *,
     refutations_needed: int = 1,
     refutation_priority: bool = True,
-    min_independent_support: int = 2,
+    confirmations_needed: int = 1,
     aggregate: Literal["count", "evalue"] = "count",
     evalue_alpha: float = 0.05,
-    confirmations_needed: int = 1,  # retained for API compat; unused in count path
 ) -> tuple[str, bool, str | None]:
-    """Hypothesis/question verdict (SPEC §3.3).
+    """Hypothesis/question verdict (SPEC §5).
 
-    Returns ``(verdict, by_literature, rule)``. ``by_literature`` is always
-    False under the new filter (lit never counts). ``confirmations_needed`` is
-    accepted for call-site compat but support uses ``min_independent_support``.
+    ``confirmations_needed`` is the support threshold (|con| ≥ k with ≥1
+    ``intent=refute``). Returns ``(verdict, by_literature, rule)``.
     """
-    del confirmations_needed
     about = list(claims)
-    if not about and not any_experiment_done:
-        return "untested", False, "no_counted"
     if not about:
         return "untested", False, "no_counted"
 
@@ -299,6 +330,7 @@ def hypothesis_verdict(
         ]
     )
     k_ref = max(1, int(refutations_needed))
+    k_sup = max(1, int(confirmations_needed))
     n_inc = len(inconsistent)
     n_con = len(consistent_severe)
 
@@ -310,14 +342,15 @@ def hypothesis_verdict(
         return "refuted", False, "k_ref"
     if n_inc > 0:
         return "inconclusive", False, "inc_below_k_ref"
-    if n_con >= max(1, int(min_independent_support)) and any(
-        _intent(c) == "refute" for c in consistent_severe
-    ):
+    if n_con >= k_sup and any(_intent(c) == "refute" for c in consistent_severe):
         return "supported", False, "support_min"
     if n_con >= 1:
         return "survived", False, "single_severe"
     if counted:
         return "inconclusive", False, "no_counted"
+    # Only invalid / excluded claims present.
+    if any(effective_validity(c) == "invalid" for c in about):
+        return "inconclusive", False, "validity_failed"
     return "inconclusive", False, "no_counted"
 
 
@@ -328,20 +361,19 @@ def verdict(
     *,
     refutations_needed: int = 1,
     refutation_priority: bool = False,
-    min_independent_support: int = 2,
     aggregate: Literal["count", "evalue"] = "count",
     evalue_alpha: float = 0.05,
 ) -> tuple[str, bool]:
     """Compat wrapper matching ``rules.verdict`` return shape."""
+    del any_experiment_done  # unused: empty claims → untested per SPEC §5
     v, by_lit, _rule = hypothesis_verdict(
         claims,
-        any_experiment_done,
+        False,
         refutations_needed=refutations_needed,
         refutation_priority=refutation_priority,
-        min_independent_support=min_independent_support,
+        confirmations_needed=k,
         aggregate=aggregate,
         evalue_alpha=evalue_alpha,
-        confirmations_needed=k,
     )
     return v, by_lit
 

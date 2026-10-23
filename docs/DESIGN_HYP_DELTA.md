@@ -1,186 +1,131 @@
-# DESIGN_HYP_DELTA — hypothesis verdict model (PR 20, after PR 8)
+# DESIGN_HYP_DELTA — hypothesis verdict model (M1 PR 8b)
 
-Base: DESIGN_M1.md (rev 5) with PR 1–8 merged. Rationale: HYPOTHESIS_LIT.md. Scope: claim classification, the hypothesis verdict, question disposition mapping, and the report payload. No change to the task/attempt lifecycle.
+Base: DESIGN_M1.md with PR 1–8 merged. Rationale: [`HYPOTHESIS_LIT.md`](HYPOTHESIS_LIT.md).
+Scope: claim classification, the hypothesis verdict, question disposition mapping, and the report payload. No change to the task/attempt lifecycle.
 
-**Assumed from PR 8** (this spec relies on them and does not redefine them):
-- `check.role: prediction | validity`;
-- failed prediction → criterion `not_met` (refute evidence);
-- failed validity → claim `invalid`, which caps the verdict at inconclusive;
-- the stub note in the report.
+## Reconciliation with merged PR 8 (code wins on mechanics)
 
-**Assumed from PR 6/7:**
-- `tests.intent`;
-- `Study.refutations_needed` (k_ref) and `Study.refutation_priority`;
-- the `survived` verdict, R17 and `uses_claim`.
+| Written SPEC | Merged code / this PR |
+|---|---|
+| Named PR 20; projection-only / no new events | **PR 8b**; **keep `VerdictSnapshotsRecorded`** |
+| StudyCreated v3→v4 for study fields | **v4→v5** (`confirmations_needed` already took v4) |
+| Separate `min_independent_support` | **Reuse `confirmations_needed`** as the support threshold (do not duplicate) |
+| validity failure caps the question | **Per-experiment** `excluded_claims` / `validity_failed`; `inconclusive(validity_failed)` only when nothing valid remains; keep **`unknown_role`** |
+| Event names `ClaimRecorded` / `CriterionFrozen` | Real journal: claim/criterion attrs on **`GraphNodeUpserted`** (and freeze attrs when the freeze path writes them) |
+| PR 8 stub note dropped | **Kept** and merged with excluded stub/partial confirmation wording |
 
-Event and attr names that RM v0.4 owns (`ClaimRecorded`, `CriterionFrozen`, `counts()`) are referred to by their role. The implementing agent must confirm the exact names against `graph_schema.yaml` and `core/events.py` before coding.
+**Assumed from PR 8** (not redefined): check `role` prediction|validity|unknown; failed prediction → refute evidence; validity / unknown exclusions; stub note.
 
-## 1. Graph schema deltas (`graph_schema.yaml`)
+**Assumed from PR 6/7:** `tests.intent`; `refutations_needed` / `refutation_priority`; `survived`; R17; `uses_claim`.
 
-No new node kinds and no new edge kinds. The count stays at 19 edge kinds.
+## 1. Graph attrs (no new node or edge kinds)
 
-| Element | Attr | Type | Default / rule |
+| Element | Attr | Type | Rule |
 |---|---|---|---|
-| node `claim` | `validity` | `valid \| invalid` | computed from validity checks (PR 8); stored for replay |
-| node `claim` | `outcome` | `consistent \| inconsistent \| indeterminate \| null` | null iff validity=invalid; computed (§3.1) |
-| node `claim` | `severe` | bool | computed (§3.1) |
-| node `claim` | `independence_key` | str | sha256(JCS({dataset_digest, method, code_digest})) of the producing experiment; computed |
-| node `criterion` | `sesoi` | float \| null | smallest effect size of interest, same unit as `metric`; frozen with criterion (R17) |
-| node `criterion` | `min_power` | float \| null | e.g. 0.8; frozen with criterion |
-| node `criterion` | `alpha` | float | default 0.05; frozen |
-| node `hypothesis` | `verdict` | `supported \| survived \| refuted \| inconclusive \| untested` | projection-only (not written as an attr event) |
-| edge `tests` (experiment→hypothesis) | `intent` | `confirm \| refute` | exists (PR 6); unchanged |
-| node `claim` | `stance` | computed (RM §2) | unchanged; derived: consistent→supports, inconsistent→refutes, else none |
+| claim | `validity` | `valid \| invalid` | from validity checks (PR 8); stored for replay |
+| claim | `outcome` | `consistent \| inconsistent \| indeterminate \| null` | null iff invalid |
+| claim | `severe` | bool | §3 classify |
+| claim | `independence_key` | str | `sha256(JCS({dataset_digest, method, code_digest}))` of producing experiment |
+| claim | `p_value`, `effect{est,ci_low,ci_high}`, `power` | nullable | optional numerics |
+| criterion | `sesoi`, `min_power`, `alpha` | float\|null / float\|null / float | frozen under R17; alpha default 0.05 |
+| study | `confirmations_needed` | int | **support threshold** (was also legacy k); profile default may be 2 |
+| study | `aggregate` | `count \| evalue` | default `count` |
+| study | `evalue_alpha` | float | default 0.05 |
+| hypothesis | `verdict` | enum | projection (+ persisted via `VerdictSnapshotsRecorded`) |
 
-Removed semantics: `met/not_met/unassessed` is no longer read by `verdict()`. It is still stored for backward compatibility and derived as:
-- `met ⇔ outcome=consistent`
-- `not_met ⇔ outcome=inconsistent`
-- `unassessed ⇔ outcome ∈ {indeterminate, null}`
+Legacy `met/not_met/unassessed` is **derived** for storage/compat only; `verdict()` does **not** read it:
+- met ⇔ outcome=consistent
+- not_met ⇔ outcome=inconsistent
+- unassessed ⇔ outcome ∈ {indeterminate, null}
 
-Study (frozen at `StudyCreated`, as with k_ref):
-- `Study.min_independent_support: int = 2`
-- `Study.aggregate: "count" | "evalue"`, default `"count"`
-- `Study.evalue_alpha: float = 0.05`
-
-## 2. Journal events
+## 2. Events
 
 | Event | Version | Change | Upcaster |
 |---|---|---|---|
-| `StudyCreated` | v3 → v4 | + `min_independent_support`, `aggregate`, `evalue_alpha` | v3→v4: `2`, `"count"`, `0.05` |
-| `CriterionFrozen` (RM name) | vN → vN+1 | + `sesoi`, `min_power`, `alpha` | old: `sesoi=null, min_power=null, alpha=0.05` |
-| `ClaimRecorded` (RM name) | vN → vN+1 | + `validity`, `outcome`, `severe`, `independence_key`, `p_value: float\|null`, `effect: {est, ci_low, ci_high}\|null`, `power: float\|null` | old: `validity` from PR 8 checks (if absent → `valid`); `outcome` from status (`met→consistent`, `not_met→inconsistent`, `unassessed→indeterminate`); `severe=false`; `independence_key=sha256(experiment_id)`; numerics `null` |
-| `StudyFinalized` | v2 → v3 | `minimal_report.questions[]` + `hypotheses[]` (§5); `question_dispositions` unchanged in shape | old: `hypotheses=[]` |
+| `StudyCreated` | v4 → **v5** | + `aggregate`, `evalue_alpha` (confirmations_needed already on v4) | `count`, `0.05` |
+| Criterion freeze write | attrs | + `sesoi`, `min_power`, `alpha` | old: null / null / 0.05 |
+| Claim write (`GraphNodeUpserted`) | attrs | + `validity`, `outcome`, `severe`, `independence_key`, numerics | old: validity from PR8 checks (absent→valid); outcome from status; severe=false; independence_key=sha256(experiment_id); numerics null |
+| `StudyFinalized` | v2 → **v3** | + `hypotheses[]` / minimal_report.hypotheses | old: `[]` |
 
-Rules:
-- Upcasters live in `core/upcasters.py` and are pure.
-- Unknown enum values raise `ValueError` on replay.
-- Upcasted old claims are never `severe`, so an old study cannot be upgraded to `supported` by replay. It can only stay at `survived` or below, and the report says `legacy_claims: n`.
-- No new event types. Verdicts stay projection-computed: the same pure function serves `StudyView`, `StudyFinalized` and replay (test in §6).
+Unknown enum values raise on replay. Legacy (upcasted) claims are never `severe` → never `supported` (V5).
 
-## 3. Algorithm
+## 3. `classify(claim, criterion, checks)`
 
-### 3.1 Claim classification (at claim write time, deterministic)
+1. If a validity check FAILED or R17 is violated → `validity=invalid`, `outcome=null`, `severe=false`.
+2. Over prediction checks: any FAILED → `inconsistent`; all PASSED and ≥1 → `consistent`; else `indeterminate`.
+3. Null / “no effect” prediction is consistent only if TOST holds: `sesoi` set, `effect` set, and `-sesoi < ci_low` and `ci_high < sesoi`; else `indeterminate`.
+4. `severe` = consistent ∧ criterion frozen before first evidence ∧ (`min_power` is null ∨ power ≥ min_power) ∧ (`sesoi` or `min_power` is set).
 
-```
-classify(claim, criterion, checks):
-  if any(c.role == validity and c.status == FAILED for c in checks) or violates_R17(claim):
-      return validity=invalid, outcome=null, severe=false
-  pred = [c for c in checks if c.role == prediction]
-  if any(c.status == FAILED for c in pred):            # PR 8 semantics
-      outcome = inconsistent
-  elif all(c.status == PASSED for c in pred) and pred:
-      outcome = consistent
-  else:
-      outcome = indeterminate
-  # Equivalence/null claims: "no effect" is consistent only if TOST holds
-  if claim.predicts_null and outcome == consistent:
-      if criterion.sesoi is null or claim.effect is null
-         or not (-sesoi < effect.ci_low and effect.ci_high < sesoi):
-          outcome = indeterminate
-  severe = outcome == consistent
-           and criterion.frozen_at_seq < first_evidence_seq(claim)   # R17
-           and (criterion.min_power is null or (claim.power or 0) >= criterion.min_power)
-           and (criterion.sesoi is not null or criterion.min_power is not null)
-  return valid, outcome, severe
-```
-
-### 3.2 Counting filter (extends RM §4.1 `counts`)
+## 4. Counting filter
 
 ```
-counts(c) = RM_counts(c)                     # accepted, not superseded (§11), etc.
-            and c.provenance == real          # stub/partial excluded BEFORE counting
-            and c.validity == valid
-            and c.outcome in {consistent, inconsistent}
-            and not c.is_lit                  # literature sets thresholds/priors only
-excluded(c) = reason in {stub, partial, invalid, indeterminate, lit, r17, superseded}
+counts(c) = existing_counts(c)
+            and provenance == real
+            and validity == valid
+            and outcome in {consistent, inconsistent}
+            and not literature
 ```
-`partial` is excluded from counts but listed. This is stricter than the old ceiling and simpler: there is a single filter and no ceiling.
 
-### 3.3 Hypothesis verdict
+Excluded reasons: `stub`, `partial`, `invalid` (keep `validity_failed` and `unknown_role`), `indeterminate`, `lit`, `r17`, `superseded`.
 
-```
-verdict(h, study):
-  C   = [c for c in claims_about(h) if counts(c)]
-  if not claims_about(h): return untested
-  inc = distinct_by(independence_key, [c for c in C if c.outcome == inconsistent])
-  con = distinct_by(independence_key, [c for c in C if c.outcome == consistent and c.severe])
-  if study.aggregate == "evalue":
-      return evalue_verdict(h, C, study)        # §3.4
-  if len(inc) >= study.k_ref and study.refutation_priority:
-      return refuted                            # conflict listed if con non-empty
-  if len(inc) >= study.k_ref and not study.refutation_priority:
-      return refuted if not con else inconclusive
-  if inc:                                       # 0 < inc < k_ref
-      return inconclusive
-  if len(con) >= study.min_independent_support
-     and any(intent(c) == refute for c in con):
-      return supported
-  if len(con) >= 1:
-      return survived
-  return inconclusive
-```
-`intent(c)` is the `tests.intent` of the edge (experiment(c) → h). Duplicate runs with the same `independence_key` count once.
+## 5. `verdict(h)`
 
-### 3.4 Optional e-value aggregation (POPPER, arXiv:2502.09858)
+- No claims at all → `untested`.
+- `inc` = inconsistent counted, distinct by `independence_key`; `con` = consistent ∧ severe counted, distinct by key.
+- `aggregate=evalue` → §6.
+- `|inc| ≥ k_ref`: `refuted` if `refutation_priority`; else `refuted` if `con` empty, otherwise `inconclusive`.
+- `0 < |inc| < k_ref` → `inconclusive`.
+- `|con| ≥ confirmations_needed` ∧ ≥1 con from `tests.intent=refute` → `supported`.
+- `|con| ≥ 1` → `survived`.
+- Else `inconclusive`; and `inconclusive(validity_failed)` if only invalid claims exist (PR 8).
 
-```
-evalue_verdict(h, C, study):
-  # H0 = "h's implication is false" for confirm intent; "h holds" for refute intent
-  E_support = Π calibrate(c.p_value) for c in C if c.p_value is not null and supports_h(c)
-  E_refute  = Π calibrate(c.p_value) for c in C if c.p_value is not null and refutes_h(c)
-  calibrate(p) = κ·p^(κ−1), κ = 0.5            # Vovk & Wang 2021 p-to-e calibrator
-  if E_refute  >= 1/alpha: return refuted
-  if E_support >= 1/alpha and distinct(independence_key) >= 2: return supported
-  return survived if any consistent severe else inconclusive
-```
-Product validity assumes independent tests (sequential e-process). Claims sharing an `independence_key` contribute only the max e-value.
+## 6. E-value mode (POPPER)
 
-### 3.5 Disposition mapping (replaces DESIGN_M1 §2 rule 1)
+- `calibrate(p) = κ·p^(κ−1)`, κ=0.5 (Vovk & Wang 2021).
+- Product over supporting / refuting claims; shared `independence_key` → max only.
+- `E_refute ≥ 1/α` → `refuted`. `E_support ≥ 1/α` and ≥2 distinct keys → `supported`. Else `survived` if any consistent severe, else `inconclusive`.
 
-- Question without hypotheses: supported → answered, survived → survived, refuted → refuted, otherwise inconclusive.
-- Question with hypotheses: answered if ≥1 h is supported; survived if ≥1 h survived and none is supported; refuted if all h are refuted; otherwise inconclusive.
-- `based_on` (DESIGN_M1 §1) = all counted claims of the deciding hypotheses.
-- Premises (§2.1): a premise is refuted ⇒ the question is ill_posed (unchanged).
-- Loop predicate `survivors_le` (§4) counts h with verdict ∉ {refuted} (unchanged).
+## 7. Question disposition
 
-## 4. Invariants
+- Without hypotheses: supported→answered, survived→survived, refuted→refuted, else inconclusive.
+- With hypotheses: answered if ≥1 h supported; survived if ≥1 survived and none supported; refuted if all refuted; else inconclusive.
+- `based_on` = counted claims of deciding hypotheses.
+- Refuted premise → ill_posed (unchanged). `survivors_le` counts h with verdict ≠ refuted (unchanged).
 
-- V1: `verdict` is a pure function of the projection. Replay gives an identical result.
-- V2: a stub, partial, invalid or lit claim never changes a verdict. Removing it from the graph leaves every verdict unchanged.
-- V3: `supported ⇒ ∃ ≥ min_independent_support distinct keys, all severe, and ≥1 with intent=refute`.
-- V4: `refuted ⇒ ≥ k_ref distinct counted inconsistent claims`. A validity failure alone never yields refuted.
-- V5: legacy (upcasted) claims never give `supported`.
+## 8. Invariants
 
-## 5. Report payload (main report + `minimal_report`)
+- **V1** Deterministic; replay equals persisted snapshot.
+- **V2** Removing stub/partial/invalid/lit changes no verdict.
+- **V3** supported ⇒ ≥ confirmations_needed distinct severe keys, ≥1 intent=refute.
+- **V4** refuted ⇒ ≥ k_ref distinct counted inconsistent; validity failure alone never refutes.
+- **V5** Legacy claims never give supported.
 
-`hypotheses[]` items. Schema, JCS-serialized; they count toward the 10 KB limit, with truncation order after `questions`:
+## 9. Report `hypotheses[]`
+
+Count toward the 10 KB `minimal_report` limit; truncate after `questions`:
+
 ```json
-{"hypothesis_id": "...", "question_id": "...",
- "verdict": "supported|survived|refuted|inconclusive|untested",
- "rule": "k_ref|support_min|single_severe|inc_below_k_ref|no_counted|evalue",
- "counted": [{"claim_id": "...", "outcome": "...", "intent": "...", "severe": true, "independence_key": "..."}],
- "excluded": [{"claim_id": "...", "reason": "stub|partial|invalid|indeterminate|lit|r17|superseded"}],
- "conflict": {"supporting": ["claim_id"], "refuting": ["claim_id"]} | null,
- "severity_note": "string | null",
- "auxiliary_assumptions": ["validity check names that passed"],
- "legacy_claims": 0,
- "e_values": {"support": 1.0, "refute": 1.0} | null}
+{"hypothesis_id","question_id","verdict",
+ "rule":"k_ref|support_min|single_severe|inc_below_k_ref|no_counted|evalue|validity_failed",
+ "counted":[{"claim_id","outcome","intent","severe","independence_key"}],
+ "excluded":[{"claim_id","reason"}],
+ "conflict":{"supporting":[],"refuting":[]}|null,
+ "severity_note","auxiliary_assumptions","legacy_claims","e_values"|null}
 ```
-Deterministic text the renderer must emit:
-- for `survived` and `supported`: "survived ≠ proven; tests that could have refuted: …";
-- for `refuted` with confirmations: "refuted despite n supporting claims (conflict)";
-- when `excluded` is non-empty: "n claims excluded (stub a, invalid b, …)", which merges with the PR 8 stub note;
-- for every `indeterminate`: "underpowered or no SESOI".
 
-`sections.real/stub/human` are unchanged.
+Renderer fixed text:
 
-## 6. Tests
+- survived/supported: `survived ≠ proven; tests that could have refuted: …`
+- refuted with confirmations: `refuted despite n supporting claims (conflict)`
+- excluded non-empty: `n claims excluded (stub a, invalid b, …)` — merge with PR 8 stub note
+- indeterminate: `underpowered or no SESOI`
 
-`test_verdict_untested_no_claims`, `test_validity_failure_never_refutes`, `test_stub_partial_excluded_before_counting` (V2 property), `test_lit_not_counted`, `test_r17_violation_invalid`, `test_null_claim_requires_tost`, `test_underpowered_is_indeterminate`, `test_severe_requires_frozen_sesoi_or_power`, `test_duplicate_runs_count_once`, `test_refuted_k_ref_1`, `test_refuted_k_ref_2_needs_independent`, `test_inc_below_k_ref_inconclusive`, `test_refutation_priority_false_conflict_inconclusive`, `test_refuted_with_confirmations_reports_conflict`, `test_survived_single_severe`, `test_supported_needs_two_independent_one_refute_intent`, `test_disposition_mapping_with_hypotheses`, `test_evalue_product_threshold`, `test_evalue_shared_key_max_only`, `test_upcaster_claim_status_to_outcome`, `test_upcaster_studycreated_v4_defaults`, `test_legacy_claims_never_supported` (V5), `test_verdict_replay_equals_finalized` (V1), `test_report_hypotheses_payload_schema`, `test_minimal_report_hypotheses_truncation_le_10kb`. Add rule `record_claim(validity, outcome, provenance, key)` to the property test (§13) with invariants V1–V5. Update `refmodel.verdict`.
+## 10. Tests
 
-## 7. PR placement
+`untested_no_claims`, `validity_failure_never_refutes`, `stub_partial_excluded_before_counting` (V2), `lit_not_counted`, `r17_violation_invalid`, `null_claim_requires_tost`, `underpowered_is_indeterminate`, `severe_requires_frozen_sesoi_or_power`, `duplicate_runs_count_once`, `refuted_k_ref_1`, `refuted_k_ref_2_needs_independent`, `inc_below_k_ref_inconclusive`, `refutation_priority_false_conflict_inconclusive`, `refuted_with_confirmations_reports_conflict`, `survived_single_severe`, `supported_needs_two_independent_one_refute_intent`, `disposition_mapping_with_hypotheses`, `evalue_product_threshold`, `evalue_shared_key_max_only`, upcasters, `legacy_claims_never_supported`, `verdict_replay_equals_finalized`, `report_hypotheses_payload_schema`, `minimal_report_hypotheses_truncation_le_10kb`. Add `record_claim` to the property test with V1–V5. Update `refmodel.verdict`.
 
-PR 20: depends on 6, 7, 8 (and 11, if `survivors_le` is used). It touches `core/verdict.py`, `core/upcasters.py`, `graph_schema.yaml`, `core/report.py`, and refmodel. Change to DESIGN_M1:
-- §3: drop "provenance ceiling" wording in favour of the §3.2 filter;
-- §2 rule 1: replace with §3.5;
-- §14: add the PR 20 row.
+## 11. DESIGN_M1 edits
+
+- §3: replace provenance-ceiling wording with the §4 counting filter.
+- §2 rule 1: replace with §7 disposition mapping.
+- §14: PR **8b** row (this document).

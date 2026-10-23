@@ -1345,7 +1345,7 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
     )
     claims = [*valid, bad]
     # PR8b: three confirms without refute intent → survived; invalid excluded.
-    assert verdict(claims, True, k=3, min_independent_support=2)[0] == "survived"
+    assert verdict(claims, True, k=3)[0] == "survived"
     excl = excluded_claims_report(claims)
     assert len(excl) == 1 and excl[0]["reason"] == "validity_failed"
     # Snapshot path: same rule — no force to inconclusive.

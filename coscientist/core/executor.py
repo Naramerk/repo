@@ -231,36 +231,59 @@ def _derive_claim_core_attrs(
         status = "unassessed"
         exclusion_reason = "validity_failed"
     from coscientist.core.verdict import (
+        claim_is_severe,
+        classify_outcome,
         independence_key_for,
         outcome_to_status,
-        status_to_outcome,
     )
 
     frozen = _criterion_is_frozen(graph, study_id, key)
-    # PR8b classification: map prediction status → outcome; validity → invalid.
-    if not validity_ok:
-        claim_outcome = None
-        severe = False
+    pred_statuses: list[str] = []
+    for c in checks or ():
+        if _check_role(c) == "prediction":
+            st = getattr(getattr(c, "status", None), "value", getattr(c, "status", None))
+            pred_statuses.append(str(st or ""))
+    if not pred_statuses and status in ("met", "not_met", "unassessed"):
+        pred_statuses = [
+            "PASSED" if status == "met" else ("FAILED" if status == "not_met" else "")
+        ]
+    raw_effect = raw.get("effect") if isinstance(raw, dict) else None
+    effect = raw_effect if isinstance(raw_effect, dict) else None
+    predicts_null = bool(raw.get("predicts_null")) if isinstance(raw, dict) else False
+    validity_s, claim_outcome, _ = classify_outcome(
+        validity_ok=validity_ok,
+        prediction_statuses=pred_statuses,
+        predicts_null=predicts_null,
+        sesoi=None,
+        effect=effect,
+        r17_ok=True,  # R17 runtime metadata still deferred (PR8)
+    )
+    if validity_s == "invalid":
+        validity_ok = False
         if exclusion_reason is None:
             exclusion_reason = "validity_failed"
-    else:
-        claim_outcome = status_to_outcome(status)
-        # Transitional severe: frozen consistent without SESOI still counts.
-        severe = claim_outcome == "consistent" and frozen
-        if claim_outcome == "indeterminate" and exclusion_reason is None:
-            exclusion_reason = "indeterminate"
+    elif claim_outcome == "indeterminate" and exclusion_reason is None:
+        exclusion_reason = "indeterminate"
     # Keep criterion_status in sync with outcome for stance / legacy readers.
-    if claim_outcome is not None or not validity_ok:
-        status = outcome_to_status(
-            claim_outcome, validity="valid" if validity_ok else "invalid"
-        )
-    exp_id = None
+    status = outcome_to_status(
+        claim_outcome,  # type: ignore[arg-type]
+        validity="valid" if validity_ok else "invalid",
+    )
+    exp_id = ""
     try:
         exp_id = str(getattr(task, "task_id", None) or "")
     except Exception:  # noqa: BLE001
         exp_id = ""
-    method = str(method) if method is not None else None
-    indep = independence_key_for(method=method, experiment_id=exp_id or None)
+    method_s = str(method) if method is not None else None
+    indep = independence_key_for(method=method_s, experiment_id=exp_id or None)
+    # Stamp min_power=0.0 so severe gate's (sesoi|min_power) requirement holds
+    # for M1 catalogs that omit SESOI (documented transitional deviation).
+    probe = type("P", (), {"claim_outcome": claim_outcome, "validity_ok": validity_ok,
+                           "frozen": frozen, "sesoi": None, "min_power": 0.0,
+                           "power": None, "severe": None,
+                           "criterion_frozen_at_seq": None,
+                           "first_cited_evidence_seq": None})()
+    severe = claim_is_severe(probe)
     out = {
         "criterion_status": status,
         "evidence_kind": "literature" if lit else "computational",
@@ -268,12 +291,16 @@ def _derive_claim_core_attrs(
         "lit_own_criterion": bool(lit and criteria),
         "accepted": bool(validated),
         "validity_ok": validity_ok,
+        "validity": validity_s,
         "check_role": role,
         "claim_outcome": claim_outcome,
+        "outcome": claim_outcome,
         "severe": severe,
         "independence_key": indep,
-        "min_power": 0.0,  # transitional default so severe gate can pass
+        "min_power": 0.0,
     }
+    if effect is not None:
+        out["effect"] = effect
     if lit and exclusion_reason is None:
         exclusion_reason = "lit"
     if exclusion_reason is not None:

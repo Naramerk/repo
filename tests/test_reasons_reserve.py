@@ -330,7 +330,7 @@ def test_upcast_study_created_sets_reserve_zero():
     assert p["refutations_needed"] == 1
     assert p["refutation_priority"] is False
     assert p["confirmations_needed"] == 1
-    assert p["min_independent_support"] == 2
+    assert p["aggregate"] == "count"
     # Explicit value must not be overwritten
     v2, p2 = upcast("StudyCreated", 1, {**p, "finalize_reserve_s": 30})
     assert p2["finalize_reserve_s"] == 30

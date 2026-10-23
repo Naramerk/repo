@@ -126,15 +126,14 @@ def verdict(
     *,
     refutations_needed: int = 1,
     refutation_priority: bool = False,
-    min_independent_support: int = 2,
     aggregate: Literal["count", "evalue"] = "count",
     evalue_alpha: float = 0.05,
 ):
     """Hypothesis/question verdict (PR8b / DESIGN_HYP_DELTA).
 
-    Stubs/partial/lit/invalid are excluded **before** counting (no provenance
-    ceiling). ``supported`` needs ≥ ``min_independent_support`` severe consistent
-    claims with ≥1 ``intent=refute``. Runtime calls via ``dispositions()``.
+    Stubs/partial/lit/invalid are excluded **before** counting. ``supported``
+    needs ≥ ``confirmations_needed`` (``k``) severe consistent claims with ≥1
+    ``intent=refute``. Runtime calls via ``dispositions()``.
     """
     from coscientist.core.verdict import verdict as _hyp_verdict
 
@@ -144,7 +143,6 @@ def verdict(
         k,
         refutations_needed=refutations_needed,
         refutation_priority=refutation_priority,
-        min_independent_support=min_independent_support,
         aggregate=aggregate,
         evalue_alpha=evalue_alpha,
     )
@@ -157,7 +155,6 @@ def priority_refuted_support_note(
     *,
     refutations_needed: int = 1,
     refutation_priority: bool = False,
-    min_independent_support: int = 2,
     aggregate: Literal["count", "evalue"] = "count",
     evalue_alpha: float = 0.05,
 ) -> str | None:
@@ -174,7 +171,6 @@ def priority_refuted_support_note(
         k,
         refutations_needed=refutations_needed,
         refutation_priority=refutation_priority,
-        min_independent_support=min_independent_support,
         aggregate=aggregate,
         evalue_alpha=evalue_alpha,
     )

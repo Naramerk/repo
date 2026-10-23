@@ -66,15 +66,15 @@ def test_stance_computed_from_criterion(impl):
 
 
 def test_k_confirmations_need_distinct_attempts_and_artifacts(impl):
-    """PR8b: supported needs min_independent_support severe + ≥1 refute intent."""
+    """PR8b: supported needs confirmations_needed (k) severe + ≥1 refute intent."""
     same = [impl.Claim("met", intent="refute"), impl.Claim("met", intent="refute")]
     # Same independence_key (default attempt_id) → one key → survived.
-    assert impl.verdict(same, True, min_independent_support=2)[0] == "survived"
+    assert impl.verdict(same, True, k=2)[0] == "survived"
     two = [
         impl.Claim("met", intent="refute", attempt_id="X1#1", artifact_id="A1"),
         impl.Claim("met", intent="confirm", attempt_id="X2#1", artifact_id="A2"),
     ]
-    assert impl.verdict(two, True, min_independent_support=2)[0] == "supported"
+    assert impl.verdict(two, True, k=2)[0] == "supported"
 
 
 def test_conflict_and_caps(impl):

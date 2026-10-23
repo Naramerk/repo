@@ -163,20 +163,15 @@ def verdict(
     *,
     refutations_needed=1,
     refutation_priority=False,
-    min_independent_support=2,
     aggregate="count",
     evalue_alpha=0.05,
 ):
-    del k  # support uses min_independent_support (PR8b)
     about = list(claims)
-    if not about and not any_experiment_done:
-        return "untested", False
     if not about:
         return "untested", False
     counted = [c for c in about if c.counts_under_r17()]
     if aggregate == "evalue":
-        # Minimal e-value path for oracle parity with core.
-        return "inconclusive", False
+        return _evalue_verdict(counted, evalue_alpha=evalue_alpha), False
     inconsistent = _distinct_by_key(
         [c for c in counted if c.claim_outcome == "inconsistent"]
     )
@@ -184,6 +179,7 @@ def verdict(
         [c for c in counted if c.claim_outcome == "consistent" and c.severe]
     )
     k_ref = max(1, int(refutations_needed))
+    k_sup = max(1, int(k))
     n_inc = len(inconsistent)
     n_con = len(consistent_severe)
     if n_inc >= k_ref and refutation_priority:
@@ -192,13 +188,48 @@ def verdict(
         return ("inconclusive" if consistent_severe else "refuted"), False
     if n_inc > 0:
         return "inconclusive", False
-    if n_con >= max(1, int(min_independent_support)) and any(
-        c.intent == "refute" for c in consistent_severe
-    ):
+    if n_con >= k_sup and any(c.intent == "refute" for c in consistent_severe):
         return "supported", False
     if n_con >= 1:
         return "survived", False
     return "inconclusive", False
+
+
+def _calibrate_e(p, kappa=0.5):
+    if p <= 0:
+        return 1.0 / kappa
+    return kappa * (p ** (kappa - 1.0))
+
+
+def _evalue_verdict(claims, evalue_alpha=0.05):
+    by_sup, by_ref = {}, {}
+    any_severe = False
+    for c in claims:
+        if not c.counts():
+            continue
+        key = c.independence_key or c.attempt_id
+        if c.severe and c.claim_outcome == "consistent":
+            any_severe = True
+        if c.p_value is None:
+            continue
+        e = _calibrate_e(float(c.p_value))
+        if c.claim_outcome == "consistent":
+            by_sup[key] = max(by_sup.get(key, 0.0), e)
+        elif c.claim_outcome == "inconsistent":
+            by_ref[key] = max(by_ref.get(key, 0.0), e)
+    e_sup = e_ref = 1.0
+    for v in by_sup.values():
+        e_sup *= v
+    for v in by_ref.values():
+        e_ref *= v
+    thr = 1.0 / float(evalue_alpha)
+    if e_ref >= thr:
+        return "refuted"
+    if e_sup >= thr and len(by_sup) >= 2:
+        return "supported"
+    if any_severe:
+        return "survived"
+    return "inconclusive"
 
 def study_fulfilled(question_verdicts, all_required_success):
     return all_required_success and all(v != "untested" for v in question_verdicts.values())

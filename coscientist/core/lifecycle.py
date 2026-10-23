@@ -65,7 +65,6 @@ class LifecycleMixin:
         confirmations_needed: int = 1,
         refutations_needed: int = 1,
         refutation_priority: bool = False,
-        min_independent_support: int = 2,
         aggregate: str = "count",
         evalue_alpha: float = 0.05,
         inputs: list[Any] | None = None,
@@ -84,10 +83,6 @@ class LifecycleMixin:
         if refutations_needed < 1:
             raise ValueError(
                 f"refutations_needed must be >= 1, got {refutations_needed}"
-            )
-        if min_independent_support < 1:
-            raise ValueError(
-                f"min_independent_support must be >= 1, got {min_independent_support}"
             )
         if aggregate not in ("count", "evalue"):
             raise ValueError(f"aggregate must be count|evalue, got {aggregate!r}")
@@ -119,7 +114,6 @@ class LifecycleMixin:
             confirmations_needed=confirmations_needed,
             refutations_needed=refutations_needed,
             refutation_priority=refutation_priority,
-            min_independent_support=min_independent_support,
             aggregate=aggregate,  # type: ignore[arg-type]
             evalue_alpha=float(evalue_alpha),
         )
