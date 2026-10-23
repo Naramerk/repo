@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 
-from coscientist.core.domain import Provenance, Task, TaskOutcome, TaskState
+from coscientist.core.domain import Provenance, Task, TaskKind, TaskOutcome, TaskState
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.ids import attempt_id, task_id
 from coscientist.core.inputs import InputUnavailable, bind_inputs
@@ -16,6 +16,18 @@ from coscientist.core.reasons import CloseReason, TaskReason, coerce_close_reaso
 RETRY_BACKOFF_S = 0.05
 
 _VALID_PROVENANCE = frozenset({"real", "partial", "stub"})
+
+# Stage DAG (SPEC→…→REPORT): H-c must not cascade — DESIGN §7.5: failed SPEC
+# → plan is built from the raw request; later stages still run.
+_STAGE_KINDS = frozenset(
+    {
+        TaskKind.SPEC,
+        TaskKind.HYPOTHESES,
+        TaskKind.LITERATURE,
+        TaskKind.PLAN,
+        TaskKind.REPORT,
+    }
+)
 
 
 class AttemptsMixin:
@@ -35,19 +47,50 @@ class AttemptsMixin:
     async def _append(self, events: list[EventEnvelope]) -> None:
         raise NotImplementedError
 
+    def _lookup_dep(self, key: str) -> Task | None:
+        dep_id = task_id(self.study.study_id, key) if self.study else key
+        dep = self.tasks.get(dep_id) or self.tasks.get(key)
+        if dep is None:
+            matches = [t for t in self.tasks.values() if t.spec.task_key == key]
+            dep = matches[0] if matches else None
+        return dep
+
     def _deps_done(self, task: Task) -> bool:
         for d in task.spec.depends_on:
-            dep_id = task_id(self.study.study_id, d) if self.study else d
-            dep = self.tasks.get(dep_id) or self.tasks.get(d)
-            if dep is None:
-                matches = [t for t in self.tasks.values() if t.spec.task_key == d]
-                dep = matches[0] if matches else None
+            dep = self._lookup_dep(d)
             if dep is None or dep.state != TaskState.DONE:
                 return False
         return True
 
     def _dep_map(self) -> dict[str, Task]:
         return {t.spec.task_key: t for t in self.tasks.values()}
+
+    async def _skip_unavailable_dep_children(self) -> None:
+        """H-c: FAILED/SKIPPED parent without InputSpec → SKIPPED(input_unavailable).
+
+        Stage tasks are excluded (failed SPEC must not wipe PLAN/REPORT). Skipped
+        when ``tolerate_failed_dep`` is set. Parents covered by an ``InputSpec``
+        are left to ``bind_inputs`` on start_attempt.
+        """
+        for task in list(self.tasks.values()):
+            if task.state == TaskState.DONE:
+                continue
+            if task.kind in _STAGE_KINDS:
+                continue
+            if task.spec.tolerate_failed_dep:
+                continue
+            covered = {inp.from_task for inp in task.spec.inputs}
+            for d in task.spec.depends_on:
+                if d in covered:
+                    continue
+                dep = self._lookup_dep(d)
+                if dep is None or dep.state != TaskState.DONE:
+                    continue
+                if dep.outcome in (TaskOutcome.FAILED, TaskOutcome.SKIPPED):
+                    await self.cancel_task(
+                        task.task_id, reason=TaskReason.INPUT_UNAVAILABLE
+                    )
+                    break
 
     def _resolve_task(self, key_or_id: str) -> Task:
         if key_or_id in self.tasks:
@@ -88,7 +131,9 @@ class AttemptsMixin:
             await self.cancel_task(task.task_id, reason=TaskReason.INPUT_UNAVAILABLE)
             raise
 
-        prov: Provenance = provenance if provenance is not None else derived
+        # method=simulation is scientific metadata (not a stub by itself); input
+        # provenance from bind_inputs still downgrades (H-b / DESIGN §6.7).
+        prov = provenance if provenance is not None else derived
         if prov not in _VALID_PROVENANCE:
             raise ValueError(f"invalid provenance: {prov}")
 

@@ -80,7 +80,8 @@ class TaskSpec(BaseModel):
 
 class InputSpec(BaseModel):
     from_task: str; output: str; schema_ref: str | None
-    simulate: Literal["schema_stub","llm_stub","forbid"] = "schema_stub"
+    # code field ``mode``: use_partial|simulate|forbid; default forbid (M1 PR5; was schema_stub)
+    simulate: Literal["schema_stub","llm_stub","forbid"] = "forbid"
 
 class OutputSpec(BaseModel):
     name: str; media_type: str; schema_ref: str | None; required: bool = True

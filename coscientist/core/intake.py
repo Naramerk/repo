@@ -32,7 +32,13 @@ class SafetyPort(Protocol):
     """Safety/scope classifier behind a port (may time out)."""
 
     def classify(self, request: str, inputs: list[Any]) -> RefusalKind | None:
-        """Return SAFETY / OUT_OF_SCOPE, or None if the request is allowed."""
+        """Return SAFETY / OUT_OF_SCOPE, or None if the request is allowed.
+
+        The port **must bound its own runtime**. Intake runs ``classify`` in a
+        worker thread under ``asyncio.wait_for``; on timeout the await returns
+        but the thread is not killed, so an unbounded ``classify`` keeps
+        consuming resources after refusal.
+        """
 
 
 def _clip_reason(reason: str) -> str:
