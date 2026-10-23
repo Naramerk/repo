@@ -189,24 +189,55 @@ def _cache_note(writer: StudyWriter, ev: EventEnvelope) -> None:
         writer._pr18_effect_seq = seq  # type: ignore[attr-defined]
 
 
+def _note_attempt_taint(cache: dict[str, bool], ev: Any) -> None:
+    if getattr(ev, "type", None) != "AttemptStarted":
+        return
+    p = getattr(ev, "payload", None) or {}
+    if not isinstance(p, dict):
+        return
+    aid = str(p.get("attempt_id") or getattr(ev, "entity_key", "") or "")
+    if aid:
+        cache[aid] = bool(p.get("tainted_context"))
+
+
 async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
-    """Read ``AttemptStarted.tainted_context`` for this attempt from the journal."""
+    """Read ``AttemptStarted.tainted_context`` for this attempt from the journal.
+
+    Incremental fold cached on the writer (same pattern as the effect index) so
+    each ``invoke_tool`` is O(Δ) rather than a full ``read_all``.
+    """
     store = getattr(writer, "store", None)
     if store is None or not hasattr(store, "read_all"):
         return False
-    # Prefer projection cache on writer if present.
-    attempts = getattr(getattr(writer, "store", None), "attempts", None)
-    # Fall back to scanning events (cached after-seq not needed — rare path).
-    events = await store.read_all()
-    for ev in reversed(events):
-        if getattr(ev, "type", None) != "AttemptStarted":
-            continue
-        p = getattr(ev, "payload", None) or {}
-        aid = str(p.get("attempt_id") or getattr(ev, "entity_key", "") or "")
-        if aid == attempt_id:
-            return bool(p.get("tainted_context"))
-    _ = attempts
-    return False
+    cache: dict[str, bool] | None = getattr(writer, "_pr18_taint_by_attempt", None)
+    after = int(getattr(writer, "_pr18_taint_seq", 0) or 0)
+    if cache is None:
+        cache = {}
+        events = await store.read_all()
+        max_seq = 0
+        for ev in events:
+            seq = int(getattr(ev, "seq", 0) or 0)
+            if seq > max_seq:
+                max_seq = seq
+            _note_attempt_taint(cache, ev)
+        after = max_seq
+    elif attempt_id not in cache:
+        if hasattr(store, "read_after"):
+            events = await store.read_after(after)
+        else:
+            events = [
+                e
+                for e in await store.read_all()
+                if int(getattr(e, "seq", 0) or 0) > after
+            ]
+        for ev in events:
+            seq = int(getattr(ev, "seq", 0) or 0)
+            if seq > after:
+                after = seq
+            _note_attempt_taint(cache, ev)
+    writer._pr18_taint_by_attempt = cache  # type: ignore[attr-defined]
+    writer._pr18_taint_seq = after  # type: ignore[attr-defined]
+    return bool(cache.get(attempt_id, False))
 
 
 def _restore_output(

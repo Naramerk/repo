@@ -6,7 +6,7 @@
 - Frozen closed `core.tool_registry` (no replace; unregistered → `external_effect`); `invoke_tool` only (import-linter); `ToolSpec.effect` advisory.
 - Exactly-once: in-doubt Intended-without-Done spans all attempts by fingerprint; completed keys keep `attempt_id`; read not indexed.
 - Taint from journal `AttemptStarted.tainted_context`; per-attempt `ContextVar` for sandbox puts (foreach-safe); taint/side_effect deny → `SideEffectDenied` + report lines.
-- Journal effect index cached incrementally on the writer; artifact store required before write call.
+- Journal effect index + AttemptStarted taint map cached incrementally on the writer (no per-invoke ``read_all``); artifact store required before write call.
 - `POST /studies` Idempotency-Key: deterministic id, `O_EXCL`, empty-file recover, fsync+rename; takeover + multi-process race tests.
 
 ### M1 PR12
@@ -61,7 +61,7 @@
 - `aggregate='evalue'` rejected at create (deferred until core computes p-values).
 - Report: `hypothesis_report_row` in finalize; failures set dedicated `hypotheses_unavailable` (not a fake hypothesis id). Bind snapshots win on replay; finalize recomputes report rows.
 - Keeps PR8: check roles, per-experiment `validity_failed` / `unknown_role`, `VerdictSnapshotsRecorded`.
-- Load write test: serial/slow; p99 budget scales with median (CI-tolerant) without weakening correctness asserts.
+- Load write test: serial/slow; absolute p99 ≤ 50ms SLO in the dedicated perf job.
 
 ### M1 PR8
 - Runtime `verdict()` wired into `dispositions()` / finalize (Study `confirmations_needed` / `refutations_needed` / `refutation_priority`); supported → answered; hypothesis verdicts in StudyFinalized.
