@@ -109,6 +109,9 @@ class LocalProjectMixin:
             # BudgetExceeded (folded above).
         elif ev.type == "GraphNodeUpserted":
             self.graph.upsert_node(GraphNode.model_validate(p))
+        elif ev.type == "GraphEdgeAdded":
+            # Fail loudly: missing endpoints / illegal pairs are journal bugs.
+            self.graph.add_edge(GraphEdge.model_validate(p))
 
     def _fold_finalized_graph(
         self, study_id: str, payload: dict[str, Any], *, created_at: datetime

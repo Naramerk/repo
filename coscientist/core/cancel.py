@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from coscientist.core import finalize as finalize_mod
 from coscientist.core.domain import TaskOutcome, TaskState
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.reasons import CloseReason, TaskReason
@@ -14,9 +15,7 @@ if TYPE_CHECKING:
 
 async def cancel_study(runtime: StudyRuntime, by: str = "user") -> None:
     """Emit StudyCancelled, close open work as cancelled, then finalize(trigger=cancel)."""
-    from coscientist.core.finalize import finalize, is_finalized
-
-    if runtime.study is None or is_finalized(runtime):
+    if runtime.study is None or finalize_mod.is_finalized(runtime):
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
@@ -38,7 +37,8 @@ async def cancel_study(runtime: StudyRuntime, by: str = "user") -> None:
     )
     await runtime._append(events)  # noqa: SLF001
     runtime._study_cancelled = True  # noqa: SLF001
-    await finalize(runtime, trigger="cancel")
+    # Module attribute — tests patch ``finalize_mod.finalize`` reliably.
+    await finalize_mod.finalize(runtime, trigger="cancel")
 
 
 def _close_open_work(

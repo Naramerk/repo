@@ -61,6 +61,7 @@ class ReqStatus(StrEnum):
 
 
 Provenance = Literal["real", "partial", "stub"]
+VALID_PROVENANCE: frozenset[str] = frozenset({"real", "partial", "stub"})
 OnTimeout = Literal["delegate", "delegate_capped", "fail"]
 HitlGateKind = Literal[
     "spec_approval",
@@ -142,11 +143,22 @@ class OutputSpec(Frozen):
 
 
 class InputSpec(Frozen):
-    from_task: str
-    output: str
+    """Dependency input (DESIGN §3.4 + M1 PR7 scientific kinds).
+
+    ``kind=artifact`` (default): ``from_task`` + ``output`` resolve an artifact.
+    ``kind=claim``: ``ref`` is a claim node id; core adds ``uses_claim`` at P2.
+    ``kind=verdict``: kept in the enum for forward compat but **rejected at
+    accept_plan** until PR 8 wires runtime ``verdict()`` (then P2 snapshots into
+    ``InputBinding.digest``).
+    """
+
+    from_task: str = ""
+    output: str = ""
     schema_ref: str | None = None
     # M1 PR5: default forbid (was use_partial). Old journals restored via upcaster.
     mode: Literal["use_partial", "simulate", "forbid"] = "forbid"
+    kind: Literal["artifact", "claim", "verdict"] = "artifact"
+    ref: str | None = None
 
 
 class RequirementRef(Frozen):
@@ -261,8 +273,12 @@ class Task(Frozen):
 
 class InputBinding(Frozen):
     input: str
-    artifact_id: str
+    artifact_id: str = ""
     source: Provenance
+    kind: Literal["artifact", "claim", "verdict"] = "artifact"
+    ref: str | None = None
+    # Verdict snapshot at P2 (sha256 of canonical JSON); claim/artifact unused.
+    digest: str | None = None
 
 
 class ToolCallRef(Frozen):

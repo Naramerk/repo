@@ -32,8 +32,16 @@ def claim_counts_under_r17(
     first_cited_evidence_seq: int | None,
     confirming_evidence_ids: set[str],
     threshold_source_evidence_ids: set[str],
+    stance: str | None = None,
 ) -> bool:
-    """Whether a claim may count toward verdict under R17 constraints."""
+    """Whether a claim may count toward verdict under R17 constraints.
+
+    DESIGN_M1 §12 is about **confirmation**: empty / threshold-only confirming
+    evidence must not drop a ``refutes`` claim. When ``stance == "refutes"``,
+    R17 is skipped (base ``counts()`` already decided).
+    """
+    if stance == "refutes":
+        return True
     if criterion_frozen_at_seq is None or first_cited_evidence_seq is None:
         return False
     if not r17_criterion_before_evidence(

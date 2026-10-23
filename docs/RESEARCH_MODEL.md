@@ -88,9 +88,10 @@ class SourceQuote(BaseModel):    # literature
 | `measured_by` | study → criterion, constraint → criterion, experiment → criterion | 1..n (experiment: 0..n) / 1..1 | spec/plan | experiment: ≥1 если required |
 | `addresses` | hypothesis → question, experiment → question | 0..n (hypothesis: 1..n) / 0..n | HYP-n/plan (TaskSpec.addresses) | hypothesis ≥1; ref обязателен, умолчания нет |
 | `plans` | plan → experiment | 1..n / 1..1 | PLAN-n |  |
-| `tests` | experiment → hypothesis | 0..n / 0..n | plan | у experiment ≥1 из tests/addresses; refute+met → survived |
+| `tests` | experiment → hypothesis | 0..n / 0..n | plan | у experiment ≥1 из tests/addresses; refute+met → survived; attrs.intent: enum(confirm\|refute) (default confirm) |
 | `depends_on` | experiment → experiment | 0..n / 0..n | plan | ацикл. |
 | `uses_input` | experiment → artifact | 0..n / 0..n | ядро (P2) | provenance на ребре |
+| `uses_claim` | experiment → claim | 0..n / 0..n | ядро (P2, InputSpec.kind=claim) | M1 PR7; научный вход claim |
 | `produced` | experiment → artifact | 0..n / 1..1 | слой инструментов | attempt_n на ребре; повторно найденная paper — то же ребро |
 | `derived_from` | evidence → artifact | 1..1 / 0..n | код по EvidenceRef/SourceQuote |  |
 | `about` | claim → hypothesis, claim → question | 1..1 / 0..n | код |  |

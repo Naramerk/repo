@@ -1,6 +1,8 @@
 """Independent RESEARCH_MODEL oracle (no coscientist.* imports). Compared via impl=[refmodel,core]."""
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
+
 import yaml
 
 S = yaml.safe_load((Path(__file__).resolve().parents[1] / "coscientist/schema/graph_schema.yaml").read_text())
@@ -53,6 +55,10 @@ def validate_plan(gr, plan_id):
 def claim_stance(s):
     return {"met": "supports", "not_met": "refutes", "unassessed": "inconclusive"}[s]
 
+TestsIntent = Literal["confirm", "refute"]
+DEFAULT_TESTS_INTENT: TestsIntent = "confirm"
+
+
 @dataclass
 class Claim:
     criterion_status: str
@@ -65,12 +71,17 @@ class Claim:
     artifact_id: str = "A1"
     lit_own_criterion: bool = False
     # tests.intent on the experiment→hypothesis edge (default confirm).
-    intent: str = "confirm"
+    intent: TestsIntent = DEFAULT_TESTS_INTENT
     # R17 (DESIGN_M1 §12); None = not supplied → base counts() only.
     criterion_frozen_at_seq: int | None = None
     first_cited_evidence_seq: int | None = None
     confirming_evidence_ids: frozenset | None = None
     threshold_source_evidence_ids: frozenset | None = None
+
+    def __post_init__(self):
+        if self.intent not in ("confirm", "refute"):
+            raise ValueError(f"invalid tests.intent: {self.intent!r}")
+
     @property
     def stance(self):
         return claim_stance(self.criterion_status)
@@ -82,9 +93,14 @@ class Claim:
         return self.accepted and ok and self.frozen and self.attempt_outcome == "SUCCESS"
 
     def counts_under_r17(self):
-        """Base counts() plus R17 when freeze/evidence metadata is present."""
+        """Base counts() plus R17 when freeze/evidence metadata is present.
+
+        §12 is confirmation-only: refuting claims skip the confirming-evidence gate.
+        """
         if not self.counts():
             return False
+        if self.stance == "refutes":
+            return True
         if (
             self.criterion_frozen_at_seq is None
             and self.first_cited_evidence_seq is None

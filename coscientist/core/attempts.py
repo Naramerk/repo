@@ -6,16 +6,25 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 
-from coscientist.core.domain import Provenance, Task, TaskKind, TaskOutcome, TaskState
+from coscientist.core.domain import (
+    VALID_PROVENANCE,
+    Provenance,
+    Task,
+    TaskKind,
+    TaskOutcome,
+    TaskState,
+)
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.ids import attempt_id, task_id
-from coscientist.core.inputs import InputUnavailable, bind_inputs
+from coscientist.core.inputs import (
+    InputUnavailable,
+    bind_inputs,
+    uses_claim_graph_events,
+)
 from coscientist.core.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
 
 # Persisted on AttemptClosed.retry_at; fired by StudyRuntime.tick vs injected Clock.
 RETRY_BACKOFF_S = 0.05
-
-_VALID_PROVENANCE = frozenset({"real", "partial", "stub"})
 
 # Stage DAG (SPEC→…→REPORT): H-c must not cascade — DESIGN §7.5: failed SPEC
 # → plan is built from the raw request; later stages still run.
@@ -120,12 +129,28 @@ class AttemptsMixin:
         if n > self.max_attempts:
             raise RuntimeError("max_attempts exceeded")
 
+        graph = getattr(self, "graph", None)
+        known_claims: set[str] = set()
+        claim_provenance: dict[str, Provenance] = {}
+        if graph is not None:
+            try:
+                for node in graph.nodes_by_kind("claim"):
+                    known_claims.add(node.node_id)
+                    # Producing-attempt provenance on claim node attrs (H-b).
+                    # Invalid/missing → omitted; bind_inputs defaults to stub.
+                    p = (node.attrs or {}).get("provenance")
+                    if p in VALID_PROVENANCE:
+                        claim_provenance[node.node_id] = p  # type: ignore[assignment]
+            except KeyError:
+                known_claims = set()
         try:
-            _bindings, derived = bind_inputs(
+            bindings, derived = bind_inputs(
                 task,
                 dep_tasks=self._dep_map(),
                 dep_outputs=self.dep_outputs,
                 dep_provenance=self.dep_provenance,
+                known_claim_ids=known_claims,
+                claim_provenance=claim_provenance,
             )
         except InputUnavailable:
             await self.cancel_task(task.task_id, reason=TaskReason.INPUT_UNAVAILABLE)
@@ -134,12 +159,13 @@ class AttemptsMixin:
         # method=simulation is scientific metadata (not a stub by itself); input
         # provenance from bind_inputs still downgrades (H-b / DESIGN §6.7).
         prov = provenance if provenance is not None else derived
-        if prov not in _VALID_PROVENANCE:
+        if prov not in VALID_PROVENANCE:
             raise ValueError(f"invalid provenance: {prov}")
 
         aid = attempt_id(task.task_id, n)
         now = self.clock.now()
         assert self.study is not None
+        sid = self.study.study_id
         deadline = min(task.deadline, self.study.effective_deadline())
         payload = {
             "attempt_id": aid,
@@ -152,21 +178,32 @@ class AttemptsMixin:
             "agent_output_digest": None,
             "deadline": deadline.isoformat(),
             "task_id": task.task_id,
-            "study_id": self.study.study_id,
+            "study_id": sid,
+            # PR7: P2 bindings (+ digest) live in the journal for replay.
+            "inputs": [b.model_dump(mode="json") for b in bindings],
         }
-        await self._append(
-            [
-                EventEnvelope(
-                    study_id=self.study.study_id,
-                    type="AttemptStarted",
-                    entity_key=aid,
-                    idem_key=make_idem("AttemptStarted", aid),
-                    payload=payload,
-                    ts=now,
-                    schema_version=2,
-                )
-            ]
+        events: list[EventEnvelope] = [
+            EventEnvelope(
+                study_id=sid,
+                type="AttemptStarted",
+                entity_key=aid,
+                idem_key=make_idem("AttemptStarted", aid),
+                payload=payload,
+                ts=now,
+                schema_version=3,
+            )
+        ]
+        # PR7: uses_claim edges for kind=claim inputs (DESIGN_M1 §3).
+        events.extend(
+            uses_claim_graph_events(
+                study_id=sid,
+                task=task,
+                bindings=bindings,
+                now=now,
+                graph=graph,
+            )
         )
+        await self._append(events)
         return aid
 
     async def fail_attempt(
@@ -244,7 +281,7 @@ class AttemptsMixin:
             att = self.attempts.get(aid, {})
             if att.get("closed"):
                 prov = att.get("provenance", "real")
-                if prov in _VALID_PROVENANCE:
+                if prov in VALID_PROVENANCE:
                     return prov  # type: ignore[return-value]
         return "real"
 

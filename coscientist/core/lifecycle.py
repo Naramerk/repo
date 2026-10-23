@@ -23,6 +23,7 @@ from coscientist.core.domain import (
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.graph import GraphNode
 from coscientist.core.ids import plan_id, study_id, task_id
+from coscientist.core.inputs import validate_input_specs
 from coscientist.core.intake import IntakeRefuse, SafetyPort, intake
 from coscientist.core.ports import EventStore
 
@@ -182,7 +183,7 @@ class LifecycleMixin:
                     idem_key=make_idem("TaskCreated", tid),
                     payload=task.model_dump(mode="json"),
                     ts=now,
-                    schema_version=4,
+                    schema_version=5,
                 )
             )
             # Graph nodes for stages: only schema kinds. SPEC/HYP/LIT are DAG
@@ -220,6 +221,7 @@ class LifecycleMixin:
         self._validate_questions(questions, known_texts)
         known_texts = {**known_texts, **{q.id: q.text for q in questions}}
         self._validate_addresses(tasks, set(known_texts))
+        validate_input_specs(tasks)
         pid = plan_id()
         plan = Plan(
             plan_id=pid,
@@ -275,7 +277,7 @@ class LifecycleMixin:
                     idem_key=make_idem("TaskCreated", tid),
                     payload=task.model_dump(mode="json"),
                     ts=now,
-                    schema_version=4,
+                    schema_version=5,
                 )
             )
         await self._append(events)

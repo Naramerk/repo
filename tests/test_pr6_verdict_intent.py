@@ -136,7 +136,7 @@ def test_r17_threshold_source_not_counted():
 
 
 def test_r17_claim_excluded_from_verdict(impl):
-    """R17 failure → claim does not count in verdict() (counts path)."""
+    """R17 failure → confirming claim does not count; refutes still count (§12)."""
     bad = impl.Claim(
         "met",
         attempt_id="B1",
@@ -172,6 +172,24 @@ def test_r17_claim_excluded_from_verdict(impl):
     )
     assert good.counts() is True
     assert impl.verdict([good], True)[0] == "supported"
+
+    # Refuting claim with empty confirming set still counts (R17 is confirm-only).
+    ref_empty = impl.Claim(
+        "not_met",
+        attempt_id="R1",
+        artifact_id="AR",
+        criterion_frozen_at_seq=20,
+        first_cited_evidence_seq=10,
+        confirming_evidence_ids=frozenset(),
+        threshold_source_evidence_ids=frozenset(),
+    )
+    assert ref_empty.stance == "refutes"
+    assert impl.verdict([ref_empty], True)[0] == "refuted"
+
+
+def test_invalid_intent_raises(impl):
+    with pytest.raises(ValueError, match="invalid tests.intent"):
+        impl.Claim("met", intent="maybe")  # type: ignore[arg-type]
 
 
 def test_tests_edge_declares_intent_attr():
@@ -273,7 +291,7 @@ async def test_cancel_study_tick_closes_remaining(
 ):
     """cancel_study then tick: _close_remaining(CANCELLED) when close was skipped."""
     import coscientist.core.cancel as cancel_mod
-    import coscientist.core.finalize as finalize_mod
+    from coscientist.core import finalize as finalize_mod
     from coscientist.core.domain import TaskState
 
     sid = "st_cx_tick"
@@ -303,7 +321,7 @@ async def test_cancel_study_tick_closes_remaining(
         questions=[],
     )
     await rt.start_attempt("P")
-    # cancel_study normally closes + finalizes; skip both so tick owns close.
+    # cancel_study uses finalize_mod.finalize (module attr) — patch that path.
     real_close = cancel_mod._close_open_work
     real_finalize = finalize_mod.finalize
     monkeypatch.setattr(cancel_mod, "_close_open_work", lambda *a, **k: [])
@@ -317,7 +335,6 @@ async def test_cancel_study_tick_closes_remaining(
     assert "StudyCancelled" in types
     assert "StudyFinalized" not in types
     assert rt.tasks[f"{sid}/P"].state != TaskState.DONE
-    # Restore so reopen tick can _close_remaining(CANCELLED).
     monkeypatch.setattr(cancel_mod, "_close_open_work", real_close)
     monkeypatch.setattr(finalize_mod, "finalize", real_finalize)
     await close_runtime(rt)
@@ -330,3 +347,30 @@ async def test_cancel_study_tick_closes_remaining(
     fins = [e for e in await rt2.store.read_all() if e.type == "StudyFinalized"]
     assert len(fins) == 1 and fins[0].payload["trigger"] == "cancel"
     await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_cancel_study_then_tick_plain(tmp_path, clock, runtime_cls):
+    """Plain cancel_study → tick: already finalized; tick is a no-op."""
+    sid = "st_cx_plain"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=120),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    for key in ("SPEC", "HYP", "LIT", "PLAN", "REPORT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.cancel_study(by="user")
+    fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    assert len(fins) == 1 and fins[0].payload["trigger"] == "cancel"
+    await rt.tick()
+    fins2 = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    assert len(fins2) == 1
+    await close_runtime(rt)

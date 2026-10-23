@@ -69,8 +69,9 @@ def test_upcast_input_mode_keeps_old_default():
             },
         },
     )
-    assert v == 4
+    assert v == 5
     assert p["spec"]["inputs"][0]["mode"] == "use_partial"
+    assert p["spec"]["inputs"][0]["kind"] == "artifact"
 
 
 def test_experiment_method_enum_matches_graph():

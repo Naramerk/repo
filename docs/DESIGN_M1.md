@@ -205,7 +205,9 @@ class Disposition(StrEnum):
 
 ## 3. Передача научного состояния, intent опровержения, k_ref (S1–S3, H-c)
 
-- `InputSpec.kind: artifact | claim | verdict` (+ `ref`). Для claim ядро добавляет ребро `uses_claim: experiment → claim` (новое, 17-е ребро); для verdict — снимок вердикта на момент P2 в `InputBinding.digest`. PLAN-n и report читают проекцию напрямую, им это не нужно (поправка ревью принята).
+- `InputSpec.kind: artifact | claim | verdict` (+ `ref`). Для claim ядро добавляет ребро `uses_claim: experiment → claim` (новое, 17-е ребро). Claim-узлы пишет `Executor.record` из `AgentTaskOutput.claims[]` с **`attrs.provenance` = provenance производящей попытки** (H-b); если provenance на узле неизвестен — bind считает `stub`, никогда `real`. Для verdict — снимок вердикта на момент P2 в `InputBinding.digest`. PLAN-n и report читают проекцию напрямую, им это не нужно (поправка ревью принята).
+- **PR 7 vs PR 8 (verdict input):** `kind=verdict` остаётся в enum, но **`accept_plan` отклоняет его** до PR 8: без runtime `verdict()` снимок нечем заполнять (`verdict_snapshots` не населяется). В PR 7 журналируются P2 bindings (`AttemptStarted.inputs[]` + `digest`) для artifact/claim.
+- **`InputBinding.digest` (P2):** хеш **метаданных привязки** (kind, input/ref, artifact_id, source, at=P2), не тела claim/артефакта. Содержимое claim живёт на graph-узле; смена содержимого — отдельные `GraphNodeUpserted`.
 - `tests` получает атрибут `intent: confirm | refute` (по умолчанию confirm) — объявлен в `graph_schema.yaml` как `edges.tests.attrs.intent`, не только в note.
 - Атрибут ребра `tests.intent` — изменение схемы рёбер (атрибут, не новое ребро; учтён в подсчёте §10).
 - Stance остаётся вычисляемым (RM §2), меняется только интерпретация в вердикте: при `intent=refute` met → claim.stance `supports`, а вердикт гипотезы — **`survived`** (одно имя везде: вердикт `survived` = disposition `survived`; имя `corroborated` не используется). not_met → refutes.
@@ -357,8 +359,8 @@ CodeCheck kinds: `exec_runs` (команда в sandbox, exit 0, лимиты в
 | 4 | Intake + refuse (budget=0, пустой, duration ≤ reserve, safety/scope за портом) | X3, K3, K12 | 2 |
 | 5 | `simulate=forbid` по умолчанию; H-c (`tolerate_failed_dep`); `method=simulation` | S5, H-c | 1 |
 | 6 | R17 в `counts()`/`verdict()`; `tests.intent`, `survived`, k_ref + refutation_priority на Study (правила + модель; **runtime wiring → PR 8**) | S2, S3, H-e | 1 |
-| 7 | `InputSpec.kind` + ребро `uses_claim` | S1 | 6 |
-| 8 | Вшивка `verdict()` в runtime finalize/report (k_ref / intent / survived начинают действовать в проде); `QuestionDisposed` (needs_more_data/infeasible), premises + premise_idx (ill_posed вычисляемый), конфликт в отчёте, PlanValidator с частичным покрытием | K8, H-f, S2/S3 runtime | 2, 6 |
+| 7 | `InputSpec.kind` artifact\|claim + ребро `uses_claim` (P2); bindings+digest в AttemptStarted; **`kind=verdict` → PR 8** | S1 | 6 |
+| 8 | Вшивка `verdict()` в runtime finalize/report + `InputSpec.kind=verdict` (digest на P2); k_ref / intent / survived в проде; `QuestionDisposed` (needs_more_data/infeasible), premises + premise_idx (ill_posed вычисляемый), конфликт в отчёте, PlanValidator с частичным покрытием | K8, H-f, S2/S3 runtime | 2, 6, 7 |
 | 9 | `PlanExpanded` + триггер + квоты агента/человека + replan_reserve + question add/supersede + фильтр k | S6, H-d, H-g, C10 | 8 |
 | 10 | foreach + quorum fan-in | S9 | 9 |
 | 11 | LoopSpec (scope, 3 предиката, обязательный max_iter, LoopCapped) | S10 | 9 |

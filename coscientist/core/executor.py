@@ -9,6 +9,7 @@ from coscientist.checks.evaluate import evaluate_task_checks
 from coscientist.core.artifacts import LocalArtifactStore
 from coscientist.core.digest import canonical_json, payload_digest
 from coscientist.core.domain import (
+    VALID_PROVENANCE,
     AgentTaskOutput,
     Catalog,
     Outcome,
@@ -20,6 +21,7 @@ from coscientist.core.domain import (
 from coscientist.core.errors import AttemptClosedError, CatalogError
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.ids import result_id
+from coscientist.core.inputs import claim_nodes_from_attempt
 from coscientist.core.outcome import compute_outcome
 from coscientist.core.reasons import CloseReason, TaskReason
 from coscientist.core.writer import StudyWriter
@@ -31,7 +33,7 @@ def _provenance(attempt: Any) -> Provenance:
     p = getattr(attempt, "provenance", None)
     if p is None and isinstance(attempt, dict):
         p = attempt.get("provenance")
-    if p not in ("real", "partial", "stub"):
+    if p not in VALID_PROVENANCE:
         raise ValueError(f"invalid attempt provenance: {p!r}")
     return p  # type: ignore[return-value]
 
@@ -221,7 +223,13 @@ class Executor:
         }
         payload["payload_digest"] = payload_digest(payload)
         return await self._commit_result(
-            attempt_id, study_id, task_id, payload, TaskOutcome(final.value), None
+            attempt_id,
+            study_id,
+            task_id,
+            payload,
+            TaskOutcome(final.value),
+            None,
+            claims=list(out.claims or []),
         )
 
     async def _commit_failure(
@@ -265,7 +273,13 @@ class Executor:
             ]
         )
         return await self._commit_result(
-            attempt_id, study_id, task_id, payload, TaskOutcome.FAILED, reason
+            attempt_id,
+            study_id,
+            task_id,
+            payload,
+            TaskOutcome.FAILED,
+            reason,
+            claims=list(out.claims or []),
         )
 
     async def _commit_result(
@@ -276,10 +290,21 @@ class Executor:
         payload: dict[str, Any],
         task_outcome: TaskOutcome,
         reason: str | None,
+        *,
+        claims: list[dict[str, Any]] | None = None,
     ) -> Result:
         # Attempt-open check runs inside the write transaction (_append_many_sync).
         now = self.clock.now()
+        # PR7: claim nodes carry producing-attempt provenance (H-b).
+        claim_events = claim_nodes_from_attempt(
+            study_id=study_id,
+            attempt_id=attempt_id,
+            provenance=payload["provenance"],
+            claims=list(claims or []),
+            now=now,
+        )
         events = [
+            *claim_events,
             EventEnvelope(
                 study_id=study_id,
                 type="ResultRecorded",

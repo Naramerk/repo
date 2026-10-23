@@ -169,6 +169,7 @@ edges:
     note: "у experiment ≥1 из tests/addresses; refute+met → survived"
   - {name: depends_on, pairs: [[experiment, experiment]], card: {out: "0..n", in: "0..n"}, by: plan, note: ацикл.}
   - {name: uses_input, pairs: [[experiment, artifact]], card: {out: "0..n", in: "0..n"}, by: ядро (P2), note: "provenance на ребре"}
+  - {name: uses_claim, pairs: [[experiment, claim]], card: {out: "0..n", in: "0..n"}, by: "ядро (P2, InputSpec.kind=claim)", note: "M1 PR7; научный вход claim"}
   - {name: produced, pairs: [[experiment, artifact]], card: {out: "0..n", in: "1..1"}, by: слой инструментов, note: "attempt_n на ребре; повторно найденная paper — то же ребро"}
   - {name: derived_from, pairs: [[evidence, artifact]], card: {out: "1..1", in: "0..n"}, by: код по EvidenceRef/SourceQuote}
   - {name: about, pairs: [[claim, hypothesis], [claim, question]], card: {out: "1..1", in: "0..n"}, by: код}
