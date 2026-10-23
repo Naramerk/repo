@@ -8,19 +8,20 @@ from typing import Any
 
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import (
+    VALID_PROVENANCE,
     InputBinding,
     InputSpec,
     Provenance,
     Task,
     TaskOutcome,
+    TaskSpec,
     TaskState,
 )
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.graph import GraphEdge, GraphNode
-from coscientist.core.ids import experiment_node_id
+from coscientist.core.ids import claim_node_id, experiment_node_id
 
 PROVENANCE_RANK = {"real": 0, "partial": 1, "stub": 2}
-_VALID_PROV = frozenset({"real", "partial", "stub"})
 
 
 class InputMode(StrEnum):
@@ -52,7 +53,12 @@ def input_binding_digest(
     source: str,
     ref: str | None,
 ) -> str:
-    """P2 snapshot digest for a binding (journaled on AttemptStarted)."""
+    """P2 snapshot digest of **binding metadata** (journaled on AttemptStarted).
+
+    Covers which input was bound and at what provenance — not claim/artifact
+    body bytes. Claim content lives on the graph node; content changes are
+    separate ``GraphNodeUpserted`` revisions (DESIGN_M1 §3).
+    """
     return sha256_hex(
         canonical_json(
             {
@@ -72,10 +78,13 @@ def _claim_source(
     *,
     claim_provenance: dict[str, Provenance],
 ) -> Provenance:
-    """Provenance of the producing attempt (H-b); default real if unknown."""
-    prov = claim_provenance.get(ref, "real")
-    if prov not in _VALID_PROV:
-        return "real"
+    """Provenance of the producing attempt (H-b).
+
+    Unknown / missing attrs → ``stub`` (never treat as real).
+    """
+    prov = claim_provenance.get(ref)
+    if prov not in VALID_PROVENANCE:
+        return "stub"
     return prov  # type: ignore[return-value]
 
 
@@ -175,6 +184,53 @@ def bind_inputs(
     return bindings, worst_provenance(*provs)
 
 
+def claim_nodes_from_attempt(
+    *,
+    study_id: str,
+    attempt_id: str,
+    provenance: Provenance,
+    claims: list[dict[str, Any]],
+    now: datetime,
+) -> list[EventEnvelope]:
+    """Emit ``GraphNodeUpserted`` for agent claims; provenance = producing attempt.
+
+    Production path (Executor.record): every claim node carries
+    ``attrs.provenance`` from the attempt that produced it (H-b).
+    """
+    if provenance not in VALID_PROVENANCE:
+        provenance = "stub"  # type: ignore[assignment]
+    events: list[EventEnvelope] = []
+    for i, raw in enumerate(claims):
+        if not isinstance(raw, dict):
+            continue
+        key = str(raw.get("id") or raw.get("claim_id") or f"{attempt_id}:{i}")
+        # Allow full node ids or short keys.
+        cid = key if key.startswith(f"{study_id}:claim:") else claim_node_id(study_id, key)
+        attrs = {k: v for k, v in raw.items() if k not in ("id", "claim_id")}
+        attrs["provenance"] = provenance
+        attrs["attempt_id"] = attempt_id
+        node = GraphNode(
+            node_id=cid,
+            kind="claim",
+            study_id=study_id,
+            ref_id=cid,
+            attrs=attrs,
+            created_at=now,
+        )
+        events.append(
+            EventEnvelope(
+                study_id=study_id,
+                type="GraphNodeUpserted",
+                entity_key=cid,
+                idem_key=make_idem("GraphNodeUpserted", cid, attempt_id),
+                payload=node.model_dump(mode="json"),
+                ts=now,
+                schema_version=1,
+            )
+        )
+    return events
+
+
 def uses_claim_graph_events(
     *,
     study_id: str,
@@ -240,26 +296,24 @@ def uses_claim_graph_events(
     return events
 
 
-def validate_input_specs(tasks: list[Any]) -> None:
+def validate_input_specs(tasks: list[TaskSpec]) -> None:
     """Reject invalid InputSpec at accept_plan (kind-specific fields; verdict→PR8)."""
     for t in tasks:
         for inp in t.inputs:
-            kind = getattr(inp, "kind", "artifact")
+            kind = inp.kind
             if kind == "verdict":
                 raise ValueError(
                     "InputSpec.kind=verdict is deferred to PR 8 "
                     "(runtime verdict() wiring); use artifact or claim"
                 )
             if kind == "claim":
-                if not getattr(inp, "ref", None):
+                if not inp.ref:
                     raise ValueError(
                         f"InputSpec.kind=claim requires ref "
                         f"(task {t.task_key!r})"
                     )
             elif kind == "artifact":
-                if not getattr(inp, "from_task", None) or not getattr(
-                    inp, "output", None
-                ):
+                if not inp.from_task or not inp.output:
                     raise ValueError(
                         f"InputSpec.kind=artifact requires from_task and output "
                         f"(task {t.task_key!r})"

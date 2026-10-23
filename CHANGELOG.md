@@ -3,9 +3,10 @@
 ## Unreleased
 
 ### M1 PR7
-- `InputSpec.kind: artifact | claim` (+ `ref`); `uses_claim` edge (17th) at P2; claim provenance from producing attempt (H-b).
-- P2 bindings (+ `digest`) persisted on `AttemptStarted` (v3 + upcaster); `GraphEdgeAdded` fails loudly on bad endpoints.
-- **`kind=verdict` deferred to PR 8** (rejected at `accept_plan` until runtime `verdict()` wiring); enum kept for forward compat.
+- `InputSpec.kind: artifact | claim` (+ `ref`); `uses_claim` edge (17th) at P2.
+- `Executor.record` writes claim nodes with `attrs.provenance` from the producing attempt; unknown → bind as `stub` (never real).
+- P2 bindings (+ metadata `digest`) on `AttemptStarted` (v3 + upcaster); `GraphEdgeAdded` fails loudly.
+- **`kind=verdict` deferred to PR 8** (rejected at `accept_plan`); enum kept for forward compat.
 - TaskCreated v4→v5 upcaster defaults `kind=artifact`.
 - #12 leftovers: R17 confirm-only; refmodel `intent` Literal; gen edge attrs; cancel `finalize_mod`; r17 module-level import.
 

@@ -40,6 +40,7 @@ def test_bind_claim_input_requires_known_ref():
         dep_outputs={},
         dep_provenance={},
         known_claim_ids={"cl_1"},
+        claim_provenance={"cl_1": "real"},
     )
     assert prov == "real"
     assert bindings[0].kind == "claim"
@@ -67,6 +68,25 @@ def test_claim_provenance_from_producing_attempt():
         dep_provenance={},
         known_claim_ids={"cl_stub"},
         claim_provenance={"cl_stub": "stub"},
+    )
+    assert bindings[0].source == "stub"
+    assert prov == "stub"
+
+
+def test_claim_unknown_provenance_defaults_to_stub():
+    """Missing claim provenance attrs must not look real."""
+    child = _task(
+        "B",
+        None,
+        inputs=[InputSpec(kind="claim", ref="cl_unk")],
+    )
+    bindings, prov = bind_inputs(
+        child,
+        dep_tasks={},
+        dep_outputs={},
+        dep_provenance={},
+        known_claim_ids={"cl_unk"},
+        claim_provenance={},
     )
     assert bindings[0].source == "stub"
     assert prov == "stub"
@@ -267,7 +287,13 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
 
 
 @pytest.mark.asyncio
-async def test_stub_claim_caps_attempt_provenance(tmp_path, clock, runtime_cls):
+async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls):
+    """Production path: Executor.record writes claim provenance; no manual attrs."""
+    from coscientist.core.artifacts import make_tool_ref
+    from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
+    from coscientist.core.ids import claim_node_id
+    from tests.helpers import attach_executor
+
     sid = "st_stub_cl"
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
@@ -280,44 +306,53 @@ async def test_stub_claim_caps_attempt_provenance(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
     )
+    _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
-    claim_id = f"{sid}:claim:Cs"
-    await rt._append(
-        [
-            EventEnvelope(
-                study_id=sid,
-                type="GraphNodeUpserted",
-                entity_key=claim_id,
-                idem_key=make_idem("GraphNodeUpserted", claim_id),
-                payload=GraphNode(
-                    node_id=claim_id,
-                    kind="claim",
-                    study_id=sid,
-                    ref_id="Cs",
-                    attrs={"provenance": "stub"},
-                ).model_dump(mode="json"),
-                ts=clock.now(),
-            )
-        ]
-    )
+    claim_id = claim_node_id(sid, "from_E0")
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="E1",
-                title="e",
+                task_key="E0",
+                title="producer",
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="value_match")],
+            ),
+            TaskSpec(
+                task_key="E1",
+                title="consumer",
+                goal="g",
+                route="experiment",
+                depends_on=["E0"],
                 inputs=[InputSpec(kind="claim", ref=claim_id)],
-            )
+            ),
         ],
         questions=[],
     )
-    aid = await rt.start_attempt("E1")
-    assert rt.attempts[aid]["provenance"] == "stub"
-    assert rt.attempts[aid]["inputs"][0]["source"] == "stub"
+    aid0 = await rt.start_attempt("E0", provenance="stub")
+    content = b'{"count": 225}'
+    art = arts.put(
+        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
+    )
+    await rt.executor.record(
+        aid0,
+        AgentTaskOutput(
+            summary="ok",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            values={"count": 225},
+            claims=[{"id": claim_id, "target": "H1"}],
+        ),
+    )
+    node = rt.graph.get_node(claim_id)
+    assert node is not None
+    assert node.attrs.get("provenance") == "stub"
+    assert node.attrs.get("attempt_id") == aid0
+    aid1 = await rt.start_attempt("E1")
+    assert rt.attempts[aid1]["provenance"] == "stub"
+    assert rt.attempts[aid1]["inputs"][0]["source"] == "stub"
     await close_runtime(rt)
 
 
@@ -419,4 +454,72 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
     task = rt2.tasks[tid]
     assert task.spec.inputs[0].kind == "artifact"
     assert task.spec.inputs[0].from_task == "A"
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
+    """Old AttemptStarted schema_version=2 (no inputs) upcasts to [] on reopen."""
+    sid = "st_as_v2"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=60),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    # Seed a task, then inject a pre-PR7 AttemptStarted (v2, no inputs field).
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E1",
+                title="e",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+            )
+        ],
+        questions=[],
+    )
+    tid = f"{sid}/E1"
+    aid = f"{tid}#1"
+    await rt._append(
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="AttemptStarted",
+                entity_key=aid,
+                idem_key=make_idem("AttemptStarted", aid),
+                payload={
+                    "attempt_id": aid,
+                    "n": 1,
+                    "dispatch_id": f"dispatch:{aid}",
+                    "route_returned": False,
+                    "closed": False,
+                    "close_reason": None,
+                    "provenance": "real",
+                    "agent_output_digest": None,
+                    "deadline": (clock.now() + timedelta(seconds=30)).isoformat(),
+                    "task_id": tid,
+                    "study_id": sid,
+                },
+                ts=clock.now(),
+                schema_version=2,
+            )
+        ]
+    )
+    await close_runtime(rt)
+
+    rt2 = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
+    )
+    assert "inputs" in rt2.attempts[aid]
+    assert rt2.attempts[aid]["inputs"] == []
     await close_runtime(rt2)

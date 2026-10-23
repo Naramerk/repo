@@ -6,7 +6,14 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 
-from coscientist.core.domain import Provenance, Task, TaskKind, TaskOutcome, TaskState
+from coscientist.core.domain import (
+    VALID_PROVENANCE,
+    Provenance,
+    Task,
+    TaskKind,
+    TaskOutcome,
+    TaskState,
+)
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.ids import attempt_id, task_id
 from coscientist.core.inputs import (
@@ -18,8 +25,6 @@ from coscientist.core.reasons import CloseReason, TaskReason, coerce_close_reaso
 
 # Persisted on AttemptClosed.retry_at; fired by StudyRuntime.tick vs injected Clock.
 RETRY_BACKOFF_S = 0.05
-
-_VALID_PROVENANCE = frozenset({"real", "partial", "stub"})
 
 # Stage DAG (SPEC→…→REPORT): H-c must not cascade — DESIGN §7.5: failed SPEC
 # → plan is built from the raw request; later stages still run.
@@ -132,8 +137,9 @@ class AttemptsMixin:
                 for node in graph.nodes_by_kind("claim"):
                     known_claims.add(node.node_id)
                     # Producing-attempt provenance on claim node attrs (H-b).
+                    # Invalid/missing → omitted; bind_inputs defaults to stub.
                     p = (node.attrs or {}).get("provenance")
-                    if p in _VALID_PROVENANCE:
+                    if p in VALID_PROVENANCE:
                         claim_provenance[node.node_id] = p  # type: ignore[assignment]
             except KeyError:
                 known_claims = set()
@@ -153,7 +159,7 @@ class AttemptsMixin:
         # method=simulation is scientific metadata (not a stub by itself); input
         # provenance from bind_inputs still downgrades (H-b / DESIGN §6.7).
         prov = provenance if provenance is not None else derived
-        if prov not in _VALID_PROVENANCE:
+        if prov not in VALID_PROVENANCE:
             raise ValueError(f"invalid provenance: {prov}")
 
         aid = attempt_id(task.task_id, n)
@@ -275,7 +281,7 @@ class AttemptsMixin:
             att = self.attempts.get(aid, {})
             if att.get("closed"):
                 prov = att.get("provenance", "real")
-                if prov in _VALID_PROVENANCE:
+                if prov in VALID_PROVENANCE:
                     return prov  # type: ignore[return-value]
         return "real"
 

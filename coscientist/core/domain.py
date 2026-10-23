@@ -61,6 +61,7 @@ class ReqStatus(StrEnum):
 
 
 Provenance = Literal["real", "partial", "stub"]
+VALID_PROVENANCE: frozenset[str] = frozenset({"real", "partial", "stub"})
 OnTimeout = Literal["delegate", "delegate_capped", "fail"]
 HitlGateKind = Literal[
     "spec_approval",

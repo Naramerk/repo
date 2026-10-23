@@ -44,3 +44,8 @@ def plan_id() -> str:
 def experiment_node_id(study_id: str, task_key: str) -> str:
     """Stable graph node id for an experiment task (``{study}:experiment:{key}``)."""
     return f"{study_id}:experiment:{task_key}"
+
+
+def claim_node_id(study_id: str, claim_key: str) -> str:
+    """Stable graph node id for a claim (``{study}:claim:{key}``)."""
+    return f"{study_id}:claim:{claim_key}"

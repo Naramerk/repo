@@ -205,8 +205,9 @@ class Disposition(StrEnum):
 
 ## 3. Передача научного состояния, intent опровержения, k_ref (S1–S3, H-c)
 
-- `InputSpec.kind: artifact | claim | verdict` (+ `ref`). Для claim ядро добавляет ребро `uses_claim: experiment → claim` (новое, 17-е ребро); provenance claim берётся с attrs производящей попытки (H-b). Для verdict — снимок вердикта на момент P2 в `InputBinding.digest`. PLAN-n и report читают проекцию напрямую, им это не нужно (поправка ревью принята).
+- `InputSpec.kind: artifact | claim | verdict` (+ `ref`). Для claim ядро добавляет ребро `uses_claim: experiment → claim` (новое, 17-е ребро). Claim-узлы пишет `Executor.record` из `AgentTaskOutput.claims[]` с **`attrs.provenance` = provenance производящей попытки** (H-b); если provenance на узле неизвестен — bind считает `stub`, никогда `real`. Для verdict — снимок вердикта на момент P2 в `InputBinding.digest`. PLAN-n и report читают проекцию напрямую, им это не нужно (поправка ревью принята).
 - **PR 7 vs PR 8 (verdict input):** `kind=verdict` остаётся в enum, но **`accept_plan` отклоняет его** до PR 8: без runtime `verdict()` снимок нечем заполнять (`verdict_snapshots` не населяется). В PR 7 журналируются P2 bindings (`AttemptStarted.inputs[]` + `digest`) для artifact/claim.
+- **`InputBinding.digest` (P2):** хеш **метаданных привязки** (kind, input/ref, artifact_id, source, at=P2), не тела claim/артефакта. Содержимое claim живёт на graph-узле; смена содержимого — отдельные `GraphNodeUpserted`.
 - `tests` получает атрибут `intent: confirm | refute` (по умолчанию confirm) — объявлен в `graph_schema.yaml` как `edges.tests.attrs.intent`, не только в note.
 - Атрибут ребра `tests.intent` — изменение схемы рёбер (атрибут, не новое ребро; учтён в подсчёте §10).
 - Stance остаётся вычисляемым (RM §2), меняется только интерпретация в вердикте: при `intent=refute` met → claim.stance `supports`, а вердикт гипотезы — **`survived`** (одно имя везде: вердикт `survived` = disposition `survived`; имя `corroborated` не используется). not_met → refutes.
