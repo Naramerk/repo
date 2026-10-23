@@ -104,18 +104,21 @@ def _weakening_parts(cfg: PerfGateConfig) -> list[str]:
 
 
 def _emit_perf_gate_weakened(cfg: PerfGateConfig) -> str | None:
-    """Warn + print a visible marker when the gate is looser than defaults."""
+    """Warn when the gate is looser than defaults (marker for reports/properties)."""
     parts = _weakening_parts(cfg)
     if not parts:
         return None
     marker = "PERF GATE WEAKENED: " + "; ".join(parts)
     warnings.warn(marker, UserWarning, stacklevel=2)
-    print(marker)
     return marker
 
 
 def assert_ci_perf_gate_not_weakened(cfg: PerfGateConfig) -> None:
-    """CI must fail if any COSCI_PERF_* is weaker than the DESIGN defaults."""
+    """CI must fail if the gate is off or any COSCI_PERF_* is weaker than defaults."""
+    if not cfg.enabled:
+        raise ValueError(
+            "CI forbids COSCI_PERF_GATE=off (perf gate must stay enabled)"
+        )
     parts = _weakening_parts(cfg)
     if parts:
         raise ValueError(
@@ -576,7 +579,10 @@ async def test_twenty_parallel_attempts_fsync_p99_slo(
     cfg = resolve_perf_gate_config()
     weakened = _weakening_parts(cfg)
     if weakened:
-        record_property("perf_gate_weakened", "; ".join(weakened))
+        # Visible in the junit/terminal report — not a captured stdout print.
+        record_property(
+            "perf_gate_weakened", "PERF GATE WEAKENED: " + "; ".join(weakened)
+        )
     _skip_if_perf_gate_disabled(cfg)
     round_p99: list[float] = []
     for r in range(cfg.rounds):
@@ -604,12 +610,26 @@ async def test_twenty_parallel_attempts_fsync_p99_slo(
     _assert_max_round_p99(round_p99, p99_slo=cfg.p99_ms, rounds=cfg.rounds)
 
 
-def test_p99_gate_max_of_rounds_trips_on_one_bad_round():
+def _clear_perf_gate_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Demos must not inherit host COSCI_PERF_* overrides."""
+    for key in (
+        "COSCI_PERF_GATE",
+        "COSCI_PERF_P99_MS",
+        "COSCI_PERF_ROUNDS",
+        "COSCI_PERF_SAMPLES",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_p99_gate_max_of_rounds_trips_on_one_bad_round(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """max-of-N must fail when one round has ~60ms p99 (best-of would hide it).
 
     Builds round p99s via ``_p99_ms`` (same path as the perf job) using the
     resolved gate config and asserts through ``_assert_max_round_p99``.
     """
+    _clear_perf_gate_env(monkeypatch)
     cfg = resolve_perf_gate_config()
     n = cfg.samples
     clean = [1.0] * n
@@ -654,6 +674,7 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
     """
     from coscientist.core.store import SqliteEventStore
 
+    _clear_perf_gate_env(monkeypatch)
     cfg = resolve_perf_gate_config()
     real_append_many = SqliteEventStore.append_many
 
@@ -746,9 +767,13 @@ def test_perf_gate_config_env_override():
     assert len(parts) == 2
 
 
-def test_perf_gate_weakened_emits_marker(capsys: pytest.CaptureFixture[str]):
-    """Loosening prints a visible PERF GATE WEAKENED marker (never silent)."""
-    with pytest.warns(UserWarning, match=r"PERF GATE WEAKENED"):
+def test_perf_gate_weakened_emits_marker():
+    """Loosening emits PERF GATE WEAKENED via warnings (never silent)."""
+    marker = (
+        "PERF GATE WEAKENED: p99_ms=100.0 > default 50.0; "
+        "rounds=1 < default 3; samples=100 < default 1000"
+    )
+    with pytest.warns(UserWarning, match=r"^PERF GATE WEAKENED:") as caught:
         cfg = resolve_perf_gate_config(
             environ={
                 "COSCI_PERF_P99_MS": "100",
@@ -759,22 +784,47 @@ def test_perf_gate_weakened_emits_marker(capsys: pytest.CaptureFixture[str]):
     assert cfg.p99_ms == 100.0
     assert cfg.rounds == 1
     assert cfg.samples == 100
-    out = capsys.readouterr().out
-    assert "PERF GATE WEAKENED:" in out
-    assert "p99_ms=100.0 > default 50.0" in out
+    assert str(caught[0].message) == marker
 
 
-def test_perf_gate_ci_rejects_weakened():
-    """CI helper fails when any COSCI_PERF_* is weaker than defaults."""
-    cfg = PerfGateConfig(
-        enabled=True, p99_ms=50.0, rounds=3, samples=1000
-    )
-    assert_ci_perf_gate_not_weakened(cfg)
-    weak = PerfGateConfig(
-        enabled=True, p99_ms=60.0, rounds=3, samples=1000
-    )
-    with pytest.raises(ValueError, match=r"CI forbids weakened"):
-        assert_ci_perf_gate_not_weakened(weak)
+@pytest.mark.parametrize(
+    ("environ", "match"),
+    [
+        (
+            {"COSCI_PERF_P99_MS": "51"},
+            r"^CI forbids weakened COSCI_PERF_\* overrides: "
+            r"p99_ms=51\.0 > default 50\.0$",
+        ),
+        (
+            {"COSCI_PERF_ROUNDS": "1"},
+            r"^CI forbids weakened COSCI_PERF_\* overrides: "
+            r"rounds=1 < default 3$",
+        ),
+        (
+            {"COSCI_PERF_ROUNDS": "2"},
+            r"^CI forbids weakened COSCI_PERF_\* overrides: "
+            r"rounds=2 < default 3$",
+        ),
+        (
+            {"COSCI_PERF_SAMPLES": "999"},
+            r"^CI forbids weakened COSCI_PERF_\* overrides: "
+            r"samples=999 < default 1000$",
+        ),
+        (
+            {"COSCI_PERF_GATE": "off"},
+            r"^CI forbids COSCI_PERF_GATE=off \(perf gate must stay enabled\)$",
+        ),
+    ],
+)
+def test_perf_gate_ci_rejects_weakened(
+    environ: dict[str, str], match: str
+):
+    """CI helper fails via env→resolve for each weaker-than-default lever."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        cfg = resolve_perf_gate_config(environ=environ)
+    with pytest.raises(ValueError, match=match):
+        assert_ci_perf_gate_not_weakened(cfg)
 
 
 def test_perf_gate_off_skips_with_reason():
