@@ -394,6 +394,10 @@ class Study(Frozen):
     max_loop_iter: int = Field(default=8, ge=1)
     # PR12: plan critic — no single task may claim more than this budget_share.
     max_task_budget_share: float = Field(default=1.0, ge=0.0, le=1.0)
+    # PR19 (#23) StudyCreated v11 bridge: time-sensitive as_of; user input artifact ids.
+    # Full ingest/API lands in #23; fields required here so v10→v11 upcast projects.
+    as_of: datetime | None = None
+    user_input_ids: list[str] = Field(default_factory=list)
     # PR20: max agent CheckProposed per study (default 3); excess → proposal_quota.
     max_proposals: int = Field(default=3, ge=0)
 
