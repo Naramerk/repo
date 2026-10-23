@@ -9,7 +9,12 @@ from typing import TYPE_CHECKING, Any, Literal
 from coscientist.core.digest import canonical_json
 from coscientist.core.dispositions import dispositions, report_hypothesis_verdicts
 from coscientist.core.domain import Task, TaskOutcome, TaskState
-from coscientist.core.errors import CASUnavailable, Conflict, LeaseLost
+from coscientist.core.errors import (
+    CASUnavailable,
+    Conflict,
+    LeaseLost,
+    StudyClosedError,
+)
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.finalize_nodes import conclusion_ids_for
 from coscientist.core.minimal_report import build_minimal_report, render_markdown_report
@@ -404,9 +409,10 @@ def last_resort_payload(
 async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     """Write StudyFinalized (idempotent). Always attempts a write; LeaseLost propagates.
 
-    Conflict on the StudyFinalized idem key is success only when that event is
-    already in the store (commit succeeded, fold/local project failed). Otherwise
-    the Conflict is re-raised — never mark finalized without the event.
+    Conflict / StudyClosedError on the StudyFinalized write is success only when
+    that event is already in the store (commit succeeded, fold/local project
+    failed, or a peer finalized first). Otherwise the error is re-raised —
+    never mark finalized without the event.
     """
     if runtime.study is None or is_finalized(runtime):
         return
@@ -428,8 +434,8 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
         await _append_finalized(runtime, sid=sid, payload=payload)
     except LeaseLost:
         raise
-    except Conflict as err:
-        await _sync_finalized_from_store(runtime, sid=sid, conflict=err)
+    except (Conflict, StudyClosedError) as err:
+        await _sync_finalized_from_store(runtime, sid=sid, err=err)
     except Exception as e:  # noqa: BLE001 — retry once with last-resort
         log.warning("finalize append failed: %s; retrying last-resort", e, exc_info=True)
         try:
@@ -445,20 +451,22 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
             )
         except LeaseLost:
             raise
-        except Conflict as err:
-            await _sync_finalized_from_store(runtime, sid=sid, conflict=err)
+        except (Conflict, StudyClosedError) as err:
+            await _sync_finalized_from_store(runtime, sid=sid, err=err)
     runtime._finalized = True  # noqa: SLF001
 
 
-async def _sync_finalized_from_store(runtime: StudyRuntime, *, sid: str, conflict: Conflict) -> None:
-    """On Conflict: succeed only if StudyFinalized idem event exists; else re-raise."""
+async def _sync_finalized_from_store(
+    runtime: StudyRuntime, *, sid: str, err: BaseException
+) -> None:
+    """On Conflict/StudyClosedError: succeed only if StudyFinalized idem exists."""
     expected = make_idem("StudyFinalized", sid)
     for ev in await runtime.store.read_all():
         if ev.idem_key == expected:
             if not is_finalized(runtime):
                 runtime._project_local(ev)  # noqa: SLF001
             return
-    raise conflict
+    raise err
 
 
 async def _append_finalized(runtime: StudyRuntime, *, sid: str, payload: dict[str, Any]) -> None:

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from contextvars import ContextVar
 from typing import Any
 
 from coscientist.core.events import EventEnvelope
 from coscientist.core.reasons import TaskReason
+
+log = logging.getLogger(__name__)
 
 # table -> row_key -> data
 ProjectionMap = dict[str, dict[str, dict[str, Any]]]
@@ -56,6 +59,17 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         )
     elif t == "StudyFinalized":
         study = _get(proj, "studies", event.study_id) or {}
+        meta = _get(proj, "meta", event.study_id) or {}
+        # First-wins: legacy journals may contain a second StudyFinalized; keep
+        # the first payload/graph and ignore subsequent ones.
+        if study.get("finalized") or meta.get("finalized"):
+            log.warning(
+                "ignoring duplicate StudyFinalized study_id=%s seq=%s "
+                "(first-wins; payload not applied)",
+                event.study_id,
+                getattr(event, "seq", None),
+            )
+            return
         _put(
             proj,
             "studies",

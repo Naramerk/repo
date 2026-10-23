@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -11,6 +12,8 @@ from coscientist.core.events import EventEnvelope
 from coscientist.core.graph import GraphEdge, GraphNode, GraphStore
 from coscientist.core.intake import IntakeRefuse
 from coscientist.core.reasons import RefusalKind, TaskReason
+
+log = logging.getLogger(__name__)
 
 
 class LocalProjectMixin:
@@ -272,8 +275,17 @@ class LocalProjectMixin:
                 notes = self._disposal_rejects
             fold_question_dispose_rejected(notes, p if isinstance(p, dict) else {})
         elif ev.type == "StudyFinalized":
-            self._finalized = True
-            self._fold_finalized_graph(ev.study_id, p, created_at=ev.ts)
+            # First-wins: ignore duplicate StudyFinalized on replay (legacy journals).
+            if self._finalized:
+                log.warning(
+                    "ignoring duplicate StudyFinalized study_id=%s seq=%s "
+                    "(first-wins; local fold skipped)",
+                    ev.study_id,
+                    getattr(ev, "seq", None),
+                )
+            else:
+                self._finalized = True
+                self._fold_finalized_graph(ev.study_id, p, created_at=ev.ts)
         elif ev.type in ("TaskCreated", "TaskInherited"):
             # Task model forbids extras; strip expansion bookkeeping before validate.
             drop = ("pending_expansion", "expand_after_task", "replan_allocated_s")
