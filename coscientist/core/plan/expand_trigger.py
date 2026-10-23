@@ -184,11 +184,7 @@ async def ensure_plan_n_task(
         await refuse_expansion(runtime, after_task, reason="expansion_limit", detail="replan_reserve")
         return None
     sid = runtime.study.study_id
-    existing_plan_n = sum(
-        1
-        for t in runtime.tasks.values()
-        if t.kind == TaskKind.PLAN and str(t.spec.task_key).startswith("PLAN-")
-    )
+    existing_plan_n = sum(1 for t in runtime.tasks.values() if t.kind == TaskKind.PLAN)
     n = int(getattr(runtime, "_agent_expansions", 0)) + existing_plan_n + 1
     key = f"PLAN-{n}"
     tid = task_id(sid, key)
@@ -205,7 +201,7 @@ async def ensure_plan_n_task(
             task_key=key,
             title=f"Replan after {after_task}",
             goal="expand plan (M1 deterministic critic gate)",
-            route="planner",
+            route=TaskKind.PLAN.value,
             required=False,
             depends_on=[after_task],
             criteria=list(PLAN_N_CRITIC_CRITERIA),
@@ -281,8 +277,8 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
     task = runtime.tasks.get(task_id_full)
     if task is None or task.state != TaskState.DONE:
         return None
-    # PLAN-n completion → M1 deterministic critic, then apply (or refuse).
-    if task.kind == TaskKind.PLAN and task.spec.task_key.startswith("PLAN-"):
+    # PLAN task completion → M1 deterministic critic, then apply (or refuse).
+    if task.kind == TaskKind.PLAN:
         plan_key = task.spec.task_key
         if plan_n_already_closed(runtime, plan_key):
             return None
@@ -290,9 +286,11 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
             from coscientist.core.plan.expand import apply_pending_expansion
 
             return await apply_pending_expansion(runtime, plan_key)
-        # MJ-c: non-SUCCESS PLAN-n must not vanish.
+        # MJ-c: non-SUCCESS expansion PLAN must not vanish (stage PLAN has no request).
         meta = (getattr(runtime, "_expand_requests", None) or {}).get(plan_key)
-        after = str((meta or {}).get("after_task") or plan_key)
+        if not isinstance(meta, dict):
+            return None
+        after = str(meta.get("after_task") or plan_key)
         oc = getattr(task.outcome, "value", task.outcome) or "unknown"
         await refuse_expansion(
             runtime,
@@ -385,8 +383,8 @@ async def resume_pending_expansions(runtime: StudyRuntime) -> int:
     for tid, task in list(runtime.tasks.items()):
         if task.state != TaskState.DONE:
             continue
-        # PLAN-n: resume critic/apply or refuse non-SUCCESS.
-        if task.kind == TaskKind.PLAN and task.spec.task_key.startswith("PLAN-"):
+        # PLAN task: resume critic/apply or refuse non-SUCCESS.
+        if task.kind == TaskKind.PLAN:
             plan_key = task.spec.task_key
             if plan_n_already_closed(runtime, plan_key):
                 continue

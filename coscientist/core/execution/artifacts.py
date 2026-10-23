@@ -20,26 +20,17 @@ from coscientist.core.execution.domain import (
 )
 from coscientist.core.execution.taint import derived_tainted
 
+_VALID_ROLES: frozenset[str] = frozenset(
+    {"paper", "data", "code", "figure", "table", "log", "report"}
+)
 
-def _infer_artifact_role(media_type: str) -> ArtifactRole:
-    """Fallback media_type → role when OutputSpec.role is absent."""
-    mt = (media_type or "").lower()
-    if any(
-        tok in mt
-        for tok in (
-            "python",
-            "javascript",
-            "typescript",
-            "x-sh",
-            "x-shellscript",
-            "x-script",
-            "x-bytecode",
-        )
-    ):
-        return "code"
-    if mt.startswith("text/x-"):
-        return "code"
-    return "data"
+
+def _require_role(role: str | ArtifactRole | None) -> ArtifactRole:
+    if role is None:
+        raise ArtifactRejected("artifact_role_required")
+    if role not in _VALID_ROLES:
+        raise ArtifactRejected(f"unknown_artifact_role:{role!r}")
+    return cast(ArtifactRole, role)
 
 
 class LocalArtifactStore:
@@ -81,8 +72,8 @@ class LocalArtifactStore:
         name: str,
         media_type: str,
         producer: ArtifactProducer,
+        role: ArtifactRole,
         schema_ref: str | None = None,
-        role: str | None = None,
         kind: str | None = None,
         attempt_closed: bool = False,
         net_isolation: NetIsolation | None = None,
@@ -105,20 +96,7 @@ class LocalArtifactStore:
         digest = self.put_cas(content, tmp_name=produced_by.call_id)
         call_part = sha256_hex(produced_by.call_id)[:8]
         artifact_id = f"art_{digest[:16]}_{call_part}"
-        media_role = _infer_artifact_role(media_type)
-        # Display role: paper/figure/… honored; code|data only from core/sandbox
-        # writers (OutputSpec). Agent ``put`` ignores code|data role args.
-        if role in ("paper", "figure", "table", "log", "report"):
-            inferred = role
-        elif role in ("code", "data") and producer in (
-            "core",
-            "sandbox",
-            "tool",
-            "user",
-        ):
-            inferred = role
-        else:
-            inferred = media_role
+        stamped_role = _require_role(role)
         # kind is core-stamped only (experiment_design / contradiction_map).
         stamped_kind = cast(
             ArtifactKind | None,
@@ -133,7 +111,7 @@ class LocalArtifactStore:
             uri=f"file://{self.cas / digest}",
             produced_by=produced_by,
             schema_ref=schema_ref,
-            role=inferred,  # type: ignore[arg-type]
+            role=stamped_role,
             kind=stamped_kind,
             producer=producer,
             net_isolation=net_isolation if producer == "sandbox" else None,
@@ -154,8 +132,8 @@ class LocalArtifactStore:
         *,
         name: str,
         media_type: str,
+        role: ArtifactRole,
         schema_ref: str | None = None,
-        role: str | None = None,
         kind: str | None = None,
         attempt_closed: bool = False,
         tainted: bool = False,
@@ -164,7 +142,7 @@ class LocalArtifactStore:
         """Agent-controlled path — always ``producer=agent`` (never trusted).
 
         ``kind`` is ignored here (agent cannot stamp experiment_design); use
-        ``put_core`` / executor OutputSpec stamping.
+        ``put_core`` / executor OutputSpec stamping. ``role`` is required.
         """
         del kind  # agent cannot forge artifact.kind
         return self._store(
@@ -188,13 +166,13 @@ class LocalArtifactStore:
         *,
         name: str,
         media_type: str,
+        role: ArtifactRole,
         schema_ref: str | None = None,
-        role: str | None = None,
         attempt_closed: bool = False,
         context_tainted: bool = False,
     ) -> Artifact:
         """Web/tool output — always ``tainted=True`` (DESIGN_M1 §8)."""
-        return self.put(
+        return self._store(
             content,
             produced_by,
             name=name,
@@ -202,6 +180,7 @@ class LocalArtifactStore:
             schema_ref=schema_ref,
             role=role,
             attempt_closed=attempt_closed,
+            producer="tool",
             tainted=True,
             context_tainted=context_tainted,
         )
@@ -213,9 +192,9 @@ class LocalArtifactStore:
         *,
         name: str,
         media_type: str,
+        role: ArtifactRole,
         capability: object,
         schema_ref: str | None = None,
-        role: str | None = None,
         attempt_closed: bool = False,
         context_tainted: bool = False,
         expected_tool: str,
@@ -261,8 +240,8 @@ class LocalArtifactStore:
         *,
         name: str,
         media_type: str,
+        role: ArtifactRole,
         schema_ref: str | None = None,
-        role: str | None = None,
         kind: str | None = None,
         attempt_closed: bool = False,
         context_tainted: bool = False,
@@ -290,8 +269,8 @@ class LocalArtifactStore:
         *,
         name: str,
         media_type: str,
+        role: ArtifactRole,
         schema_ref: str | None = None,
-        role: str | None = None,
         attempt_closed: bool = False,
         net_isolation: NetIsolation = "none",
         fs_isolation: FsIsolation = "none",
@@ -351,7 +330,10 @@ def artifact_producer_trusted(
     """True when producer is core, or sandbox with both net and fs isolation hard."""
     if meta is None:
         return False
-    producer = getattr(meta, "producer", "agent")
+    try:
+        producer = meta.producer  # type: ignore[attr-defined]
+    except AttributeError as e:
+        raise ValueError("artifact meta missing required producer") from e
     if producer == "core":
         return True
     if producer == "sandbox":
@@ -364,12 +346,11 @@ def artifact_producer_trusted(
 
 def output_kind_from_spec(
     *,
-    role: str | None,
-    media_type: str | None,
+    role: ArtifactRole,
 ) -> Literal["code", "data"]:
-    """Core kind from plan OutputSpec (role preferred; else media_type)."""
+    """Core kind from plan OutputSpec.role (required; never inferred from media_type)."""
     if role == "code":
         return "code"
     if role in ("data", "paper", "figure", "table", "log", "report"):
         return "data"
-    return "code" if _infer_artifact_role(media_type or "") == "code" else "data"
+    raise ValueError(f"unknown OutputSpec.role: {role!r}")

@@ -141,10 +141,7 @@ class RuntimeClaim:
 
     @property
     def stance(self) -> str:
-        try:
-            return claim_stance(self.criterion_status)
-        except KeyError:
-            return "inconclusive"
+        return claim_stance(self.criterion_status)
 
     @property
     def is_lit(self) -> bool:
@@ -304,7 +301,8 @@ def intent_from_producing_experiment(
     exp_id = experiment_node_id(study_id, task_key)
     hid = (
         target_logical
-        if target_logical.startswith(f"{study_id}:hypothesis:")
+        if target_kind == "hypothesis"
+        and target_logical.startswith(f"{study_id}:hypothesis:")
         else hypothesis_node_id(study_id, target_logical)
     )
     for e in graph.edges_from(exp_id):
@@ -354,25 +352,31 @@ def resolve_existing_target(
     study_id: str,
     target: str,
     graph: GraphStore | None,
+    *,
+    target_kind: Literal["question", "hypothesis"],
 ) -> tuple[str, Literal["question", "hypothesis"]] | None:
-    """Map ``target`` to an **existing** graph node; never create / never H* guess."""
+    """Map ``target`` to an **existing** graph node; never create / never kind-guess."""
     if not target or graph is None:
         return None
-    if target.startswith(f"{study_id}:question:"):
-        if graph.get_node(target) is not None:
-            return target, "question"
+    if target_kind == "question":
+        nid = (
+            target
+            if target.startswith(f"{study_id}:question:")
+            else question_node_id(study_id, target)
+        )
+        if graph.get_node(nid) is not None:
+            return nid, "question"
         return None
-    if target.startswith(f"{study_id}:hypothesis:"):
-        if graph.get_node(target) is not None:
-            return target, "hypothesis"
+    if target_kind == "hypothesis":
+        nid = (
+            target
+            if target.startswith(f"{study_id}:hypothesis:")
+            else hypothesis_node_id(study_id, target)
+        )
+        if graph.get_node(nid) is not None:
+            return nid, "hypothesis"
         return None
-    qid = question_node_id(study_id, target)
-    if graph.get_node(qid) is not None:
-        return qid, "question"
-    hid = hypothesis_node_id(study_id, target)
-    if graph.get_node(hid) is not None:
-        return hid, "hypothesis"
-    return None
+    raise ValueError(f"unknown target_kind: {target_kind!r}")
 
 
 def namespaced_claim_id(study_id: str, attempt_id: str, agent_key: str) -> str | None:
@@ -435,9 +439,9 @@ def runtime_claim_from_node(
             if coerced_vok is None:
                 return None, "bad_validity_ok"
             validity_ok = coerced_vok
-        check_role = _coerce_str(attrs.get("check_role"), allow_empty=True) or "unknown"
-        if check_role not in ("prediction", "validity", "unknown"):
-            check_role = "unknown"
+        check_role = _coerce_str(attrs.get("check_role"), allow_empty=True)
+        if check_role is None or check_role not in ("prediction", "validity", "unknown"):
+            return None, "bad_check_role"
         excl_raw = _coerce_str(attrs.get("exclusion_reason"), allow_empty=True)
         _EXCL = (
             "validity_failed",
@@ -939,7 +943,7 @@ def hypothesis_verdicts(
     hyp_refs = [
         key.split(":", 1)[-1]
         for key in by_target
-        if key.startswith("hypothesis:")
+        if key.split(":", 1)[0] == "hypothesis"
     ]
     # Also include hypothesis nodes that may lack claims yet.
     for node in graph.nodes_by_kind("hypothesis"):
@@ -962,8 +966,14 @@ def hypothesis_verdicts(
         snap = snaps.get(ref) or snaps.get(f"hypothesis:{ref}")
         if snap is None:
             continue
-        hid = hypothesis_node_id(study_id, ref)
-        if graph.get_node(hid) is not None or ref.startswith(f"{study_id}:hypothesis:"):
+        if snap.get("target_kind") != "hypothesis":
+            continue
+        hid = (
+            ref
+            if ref.startswith(f"{study_id}:hypothesis:")
+            else hypothesis_node_id(study_id, ref)
+        )
+        if graph.get_node(hid) is not None:
             out[ref] = snap
             continue
         for c in claims_for_ref(by_target, ref, prefer="hypothesis"):

@@ -205,7 +205,7 @@ def study_fulfilled(
     for qid, v in question_verdicts.items():
         if v in _FULFILLMENT_BLOCKING:
             return False
-        ft = ftypes.get(qid, "verdict")
+        ft = ftypes[qid]
         if ft == "artifact":
             if v != "answered":
                 return False

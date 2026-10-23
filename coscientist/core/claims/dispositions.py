@@ -256,7 +256,7 @@ def _dispositions_inner(
     for qid, text in qmap.items():
         keys = cover.get(qid, set())
         covering = [by_key[kk] for kk in sorted(keys) if kk in by_key]
-        ft = final_types.get(qid, "verdict")
+        ft = final_types[qid]
         claims = claims_for_ref(by_target, qid, prefer="question")  # explicit kind
         counting = [c for c in claims if c.counts()]
         excluded = excluded_claims_report(claims)
@@ -665,7 +665,7 @@ def report_hypothesis_verdicts(
                     "target_kind": "hypothesis",
                     "by_literature": snap.get("by_literature", False),
                     "by_theory": snap.get("by_theory", False),
-                    "provenance": snap.get("provenance", "real"),
+                    "provenance": snap["provenance"],
                     "k": snap.get("k", study.confirmations_needed),
                     "supported_needed": study.supported_needed,
                     "refutations_needed": study.refutations_needed,

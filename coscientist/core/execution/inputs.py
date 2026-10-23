@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from coscientist.core.claims.claims import (
     namespaced_claim_id,
@@ -97,9 +97,9 @@ def verdict_binding_digest(*, ref: str, snapshot: dict[str, Any]) -> str:
                 "ref": ref,
                 "verdict": snapshot.get("verdict"),
                 "by_literature": bool(snapshot.get("by_literature")),
-                "provenance": snapshot.get("provenance", "real"),
-                "refutations_needed": snapshot.get("refutations_needed", 1),
-                "refutation_priority": bool(snapshot.get("refutation_priority")),
+                "provenance": snapshot["provenance"],
+                "refutations_needed": snapshot["refutations_needed"],
+                "refutation_priority": bool(snapshot["refutation_priority"]),
                 "at": "P2",
             }
         )
@@ -111,13 +111,10 @@ def _claim_source(
     *,
     claim_provenance: dict[str, Provenance],
 ) -> Provenance:
-    """Provenance of the producing attempt (H-b).
-
-    Unknown / missing attrs → ``stub`` (never treat as real).
-    """
-    prov = claim_provenance.get(ref)
+    """Provenance of the producing attempt (H-b). Required; never coerced."""
+    prov = claim_provenance[ref]
     if prov not in VALID_PROVENANCE:
-        return "stub"
+        raise ValueError(f"invalid claim provenance for {ref!r}: {prov!r}")
     return prov  # type: ignore[return-value]
 
 
@@ -151,10 +148,10 @@ def bind_inputs(
             snap = snapshots.get(spec.ref)
             if snap is None:
                 raise InputUnavailable("verdict_unavailable")
-            source_raw = snap.get("provenance", "real")
-            source: Provenance = (
-                source_raw if source_raw in VALID_PROVENANCE else "stub"
-            )  # type: ignore[assignment]
+            source_raw = snap["provenance"]
+            if source_raw not in VALID_PROVENANCE:
+                raise InputUnavailable("verdict_provenance_invalid")
+            source: Provenance = source_raw  # type: ignore[assignment]
             digest = verdict_binding_digest(ref=spec.ref, snapshot=snap)
             bindings.append(
                 InputBinding(
@@ -203,7 +200,7 @@ def bind_inputs(
             raise InputUnavailable()
         arts = dep_outputs.get(spec.from_task, {})
         aid = arts.get(spec.output)
-        dep_prov: Provenance = dep_provenance.get(spec.from_task, "real")
+        dep_prov: Provenance = dep_provenance[spec.from_task]
 
         if dep.outcome == TaskOutcome.FAILED and mode == InputMode.FORBID:
             raise InputUnavailable()
@@ -290,7 +287,7 @@ def claim_nodes_from_attempt(
     if infra_failure:
         return [], drops
     if provenance not in VALID_PROVENANCE:
-        provenance = "stub"  # type: ignore[assignment]
+        raise ValueError(f"invalid claim attempt provenance: {provenance!r}")
     events: list[EventEnvelope] = []
     for i, raw in enumerate(claims):
         if not isinstance(raw, dict):
@@ -306,7 +303,14 @@ def claim_nodes_from_attempt(
         if not target:
             drops.append({"key": agent_key, "reason": "target_missing"})
             continue
-        resolved = resolve_existing_target(study_id, str(target), graph)
+        tk_raw = raw.get("target_kind")
+        if tk_raw not in ("question", "hypothesis"):
+            drops.append({"key": agent_key, "reason": "target_kind_missing"})
+            continue
+        target_kind: Literal["question", "hypothesis"] = tk_raw  # type: ignore[assignment]
+        resolved = resolve_existing_target(
+            study_id, str(target), graph, target_kind=target_kind
+        )
         if resolved is None:
             drops.append({"key": agent_key, "reason": "target_unknown"})
             continue
@@ -368,18 +372,21 @@ def claim_nodes_from_attempt(
         attrs["provenance"] = new_prov
         attrs["attempt_id"] = attempt_id
         attrs["attempt_outcome"] = attempt_outcome
-        attrs["criterion_status"] = core.get("criterion_status", "unassessed")
-        attrs["evidence_kind"] = core.get("evidence_kind", "computational")
-        attrs["frozen"] = bool(core.get("frozen", False))
-        attrs["lit_own_criterion"] = bool(core.get("lit_own_criterion", False))
+        status = core["criterion_status"]
+        if status not in ("met", "not_met", "unassessed"):
+            raise ValueError(f"unknown criterion_status: {status!r}")
+        attrs["criterion_status"] = status
+        attrs["evidence_kind"] = core["evidence_kind"]
+        attrs["frozen"] = bool(core["frozen"])
+        attrs["lit_own_criterion"] = bool(core["lit_own_criterion"])
         if "derivation_executable" in core:
-            attrs["derivation_executable"] = bool(core.get("derivation_executable"))
-        attrs["accepted"] = bool(core.get("accepted", False))
-        attrs["validity_ok"] = bool(core.get("validity_ok", True))
-        role = core.get("check_role", "unknown")
-        attrs["check_role"] = (
-            role if role in ("prediction", "validity", "unknown") else "unknown"
-        )
+            attrs["derivation_executable"] = bool(core["derivation_executable"])
+        attrs["accepted"] = bool(core["accepted"])
+        attrs["validity_ok"] = bool(core["validity_ok"])
+        role = core["check_role"]
+        if role not in ("prediction", "validity", "unknown"):
+            raise ValueError(f"unknown check_role: {role!r}")
+        attrs["check_role"] = role
         excl = core.get("exclusion_reason")
         if excl in (
             "validity_failed",
@@ -395,20 +402,18 @@ def claim_nodes_from_attempt(
             "output_not_submitted",
             "artifact_missing",
             "pointer_empty",
+            "unapproved_check",
         ):
             attrs["exclusion_reason"] = excl
         oc = core.get("claim_outcome") or core.get("outcome")
         if oc not in ("consistent", "inconsistent", "indeterminate"):
-            # Derive from criterion_status when static derived= omits PR8b fields.
-            status = str(attrs.get("criterion_status") or "unassessed")
             oc = {
                 "met": "consistent",
                 "not_met": "inconsistent",
                 "unassessed": "indeterminate",
-            }.get(status)
-        if oc in ("consistent", "inconsistent", "indeterminate"):
-            attrs["claim_outcome"] = oc
-            attrs["outcome"] = oc
+            }[str(attrs["criterion_status"])]
+        attrs["claim_outcome"] = oc
+        attrs["outcome"] = oc
         # sesoi only from core (catalog-frozen criterion) — never stamp 0.0 freely.
         for num_key in ("p_value", "power", "sesoi", "alpha"):
             if core.get(num_key) is not None:
@@ -450,7 +455,7 @@ def claim_nodes_from_attempt(
             attrs["refute_capable"] = bool(core.get("refute_capable"))
         if "severe" in core:
             attrs["severe"] = bool(core.get("severe"))
-        elif not attrs.get("validity_ok", True):
+        elif not attrs["validity_ok"]:
             attrs["severe"] = False
         else:
             from coscientist.core.claims.verdict import claim_is_severe
@@ -460,12 +465,12 @@ def claim_nodes_from_attempt(
                 (),
                 {
                     "claim_outcome": attrs.get("claim_outcome"),
-                    "validity_ok": attrs.get("validity_ok", True),
-                    "frozen": attrs.get("frozen", False),
+                    "validity_ok": attrs["validity_ok"],
+                    "frozen": attrs["frozen"],
                     "sesoi": attrs.get("sesoi"),
                     "uses_sesoi": attrs.get("uses_sesoi"),
                     "used_sesoi": attrs.get("used_sesoi"),
-                    "predicts_null": attrs.get("predicts_null", False),
+                    "predicts_null": bool(attrs.get("predicts_null")),
                     "predicted_direction": attrs.get(
                         "predicted_direction", "two_sided"
                     ),

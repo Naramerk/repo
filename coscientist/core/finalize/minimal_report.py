@@ -16,8 +16,8 @@ def _task_provenance(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> s
     for aid in reversed(task.attempts):
         att = attempts.get(aid, {})
         if att.get("closed"):
-            return str(att.get("provenance", "real"))
-    return "real"
+            return str(att["provenance"])
+    raise ValueError(f"no closed attempt provenance for task {task.spec.task_key!r}")
 
 
 def _summary(

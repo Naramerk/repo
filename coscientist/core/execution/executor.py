@@ -79,50 +79,35 @@ def _normalize_to_template_id(key: str, checks: list[Any], criteria: list[Any]) 
     return key
 
 
-def _criterion_key_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any]) -> str | None:
-    """Resolve checked_against → template_id, else sole check / sole plan criterion."""
+def _criterion_key_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any]) -> str:
+    """Resolve checked_against → template_id. Requires checked_against (no sole-item inference)."""
     checked = raw.get("checked_against")
-    if checked:
-        return _normalize_to_template_id(str(checked), checks, criteria)
-    if len(checks) == 1:
-        tid = _check_field(checks[0], "template_id")
-        return str(tid) if tid else None
-    if len(criteria) == 1:
-        tid = _check_field(criteria[0], "template_id")
-        return str(tid) if tid else None
-    return None
+    if not checked:
+        raise ValueError("claim missing required checked_against")
+    return _normalize_to_template_id(str(checked), checks, criteria)
 
 
 def _criterion_status_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any] | None = None) -> str:
     """Map claim.checked_against → ReqStatus of that criterion's check."""
     crit = list(criteria or [])
     key = _criterion_key_for_claim(raw, checks, crit)
-    if key:
-        for c in checks:
-            tid = _check_field(c, "template_id")
-            cid = _check_field(c, "check_id")
-            st = _check_field(c, "status")
-            # Exact match only (no endswith — avoids C11 matching ``1``).
-            if (tid is not None and str(tid) == key) or (cid is not None and str(cid) == key):
-                if isinstance(st, ReqStatus):
-                    return _req_to_criterion_status(st)
-                try:
-                    return _req_to_criterion_status(ReqStatus(str(st)))
-                except ValueError:
-                    return "unassessed"
-        return "unassessed"
-    if len(checks) == 1:
-        st = _check_field(checks[0], "status")
-        if isinstance(st, ReqStatus):
-            return _req_to_criterion_status(st)
-    return "unassessed"
+    for c in checks:
+        tid = _check_field(c, "template_id")
+        cid = _check_field(c, "check_id")
+        st = _check_field(c, "status")
+        # Exact match only (no endswith — avoids C11 matching ``1``).
+        if (tid is not None and str(tid) == key) or (cid is not None and str(cid) == key):
+            if isinstance(st, ReqStatus):
+                return _req_to_criterion_status(st)
+            return _req_to_criterion_status(ReqStatus(str(st)))
+    raise ValueError(f"no check status for criterion key {key!r}")
 
 
 def _check_role(c: Any) -> str:
     role = _check_field(c, "role")
     if role in ("prediction", "validity", "unknown"):
         return str(role)
-    return "unknown"
+    raise ValueError(f"unknown check role: {role!r}")
 
 
 def _is_rubric_check(c: Any) -> bool:
@@ -206,17 +191,13 @@ def _role_for_claim_key(
 ) -> str:
     """Role of the check this claim is checked_against (catalog / CheckResult only)."""
     key = _criterion_key_for_claim(raw, checks, criteria)
-    if key:
-        for c in checks:
-            tid = _check_field(c, "template_id")
-            cid = _check_field(c, "check_id")
-            if (tid is not None and str(tid) == key) or (cid is not None and str(cid) == key):
-                return _check_role(c)
-        # Fall back to catalog by template_id (never plan RequirementRef.role).
-        return role_from_catalog(str(key), catalog)
-    if len(checks) == 1:
-        return _check_role(checks[0])
-    return "unknown"
+    for c in checks:
+        tid = _check_field(c, "template_id")
+        cid = _check_field(c, "check_id")
+        if (tid is not None and str(tid) == key) or (cid is not None and str(cid) == key):
+            return _check_role(c)
+    # Fall back to catalog by template_id (never plan RequirementRef.role).
+    return role_from_catalog(str(key), catalog)
 
 
 def _criterion_node(graph: Any, study_id: str, template_id: Any) -> Any | None:
@@ -279,10 +260,13 @@ def _effect_from_checks(
         if not isinstance(data, dict):
             continue
         try:
+            producer = data["producer"]
+            if producer not in ("agent", "core", "sandbox"):
+                raise ValueError(f"unknown effect producer: {producer!r}")
             effect: dict[str, Any] = {
                 "est": float(data["est"]) if data.get("est") is not None else None,
                 "kind": str(data.get("kind") or "point"),
-                "producer": str(data.get("producer") or "agent"),
+                "producer": str(producer),
                 "core_evaluated": bool(data.get("core_evaluated", False)),
                 "produced_by_call_id": str(data.get("produced_by_call_id") or ""),
                 "artifact_id": str(data.get("artifact_id") or ""),
@@ -365,12 +349,6 @@ def _derive_claim_core_attrs(
     for c in checks or ():
         eff = getattr(c, "effect", None)
         if isinstance(eff, dict) and eff.get("exclusion_reason") == "unapproved_check":
-            exclusion_reason = "unapproved_check"
-            validity_ok = False
-            status = "unassessed"
-            break
-        detail = str(getattr(c, "detail", "") or "")
-        if detail.startswith("unapproved_check"):
             exclusion_reason = "unapproved_check"
             validity_ok = False
             status = "unassessed"
@@ -466,11 +444,7 @@ def _derive_claim_core_attrs(
         claim_outcome,  # type: ignore[arg-type]
         validity="valid" if validity_ok else "invalid",
     )
-    exp_id = ""
-    try:
-        exp_id = str(getattr(task, "task_id", None) or "")
-    except Exception:  # noqa: BLE001
-        exp_id = ""
+    exp_id = str(getattr(task, "task_id", None) or "")
     lookup = None
     arts = artifact_store
     if arts is not None and hasattr(arts, "get_meta"):
@@ -774,7 +748,6 @@ class Executor:
                 # attempt stays charged=False so a later reopen/retry budget is intact.
                 # Transient attach failures may retry without consuming charged slots.
                 detail = e.reason
-                transient = "cgroup_attach" in detail or detail.endswith(":attach")
                 provenance = _provenance(self.get_attempt(attempt_id))
                 return await self._commit_failure(
                     attempt_id,
@@ -788,7 +761,7 @@ class Executor:
                     event_type="SandboxInfraRaised",
                     result_class="infra",
                     charge_attempt=False,
-                    allow_retry=transient,
+                    allow_retry=e.transient,
                 )
             except CoreBugError as e:
                 # Own result_class (not infra); reported; never counts.
@@ -1417,12 +1390,18 @@ class Executor:
             if aid == attempt_id:
                 continue
             row = results.get(aid) if isinstance(results, dict) else None
-            if isinstance(row, dict):
-                if row.get("charged", True):
+            if isinstance(row, dict) and "charged" in row:
+                if row["charged"]:
+                    n += 1
+                continue
+            # Cancel/fail paths stamp charged on AttemptClosed (no ResultRecorded).
+            att = self.get_attempt(aid)
+            if isinstance(att, dict):
+                if att["charged"]:
                     n += 1
             else:
-                # Prior closed attempt without a row — assume charged.
-                n += 1
+                if getattr(att, "charged"):
+                    n += 1
         return n
 
     async def _commit_result(

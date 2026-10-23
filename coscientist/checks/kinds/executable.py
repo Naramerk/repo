@@ -233,7 +233,7 @@ def evaluate_exec_runs(
 ) -> CheckResult:
     argv = _argv_for(check)
     if not argv:
-        raise SandboxInfraError("sandbox_unavailable:missing_command")
+        raise SandboxInfraError("sandbox_unavailable:missing_command", transient=False)
     allow = _input_allowlist(check)
     slots = [check.output] if check.output else None
     inputs, _ev = _collect_declared_outputs(
@@ -261,6 +261,7 @@ def evaluate_exec_runs(
         net_isolation=result.net_isolation,
         fs_isolation=result.fs_isolation,
         note=result.note,
+        transient=result.infra_transient,
     )
     log_body = (
         b"exit="
@@ -487,6 +488,7 @@ def evaluate_tests_pass(
         net_isolation=result.net_isolation,
         fs_isolation=result.fs_isolation,
         note=result.note,
+        transient=result.infra_transient,
     )
     timed = guest_timeout_result(
         check_id=check_id,
@@ -629,7 +631,7 @@ def evaluate_metric_on_holdout(
     predictions = out.outputs.get(pred_slot)
     # Agent-supplied holdout slots are ignored — labels come from the catalog only.
     if check.holdout is None:
-        raise SandboxInfraError("sandbox_unavailable:holdout_missing")
+        raise SandboxInfraError("sandbox_unavailable:holdout_missing", transient=False)
     frozen = check.holdout_digest
     if not frozen:
         raise CatalogError("metric_on_holdout: holdout_digest missing")
@@ -664,7 +666,8 @@ def evaluate_metric_on_holdout(
         pred_bytes = artifacts.read(predictions.artifact_id)
     except OSError as e:
         raise SandboxInfraError(
-            f"sandbox_unavailable:host_io:{e.__class__.__name__}"
+            f"sandbox_unavailable:host_io:{e.__class__.__name__}",
+            transient=False,
         ) from e
 
     try:
@@ -727,6 +730,7 @@ def evaluate_metric_on_holdout(
         net_isolation=result.net_isolation,
         fs_isolation=result.fs_isolation,
         note=result.note,
+        transient=result.infra_transient,
     )
     timed = guest_timeout_result(
         check_id=check_id,
@@ -873,7 +877,7 @@ def evaluate_reproducible_rerun(
     _ = prov_fields  # unused: never copy agent-derived est into a countable effect
     argv = _ensure_python_isolated(_argv_for(check))
     if not argv:
-        raise SandboxInfraError("sandbox_unavailable:missing_command")
+        raise SandboxInfraError("sandbox_unavailable:missing_command", transient=False)
     tol = float(check.tolerance) if check.tolerance is not None else float(
         check.rerun_tol if check.rerun_tol is not None else 0.0
     )
@@ -904,6 +908,7 @@ def evaluate_reproducible_rerun(
             net_isolation=result.net_isolation,
             fs_isolation=result.fs_isolation,
             note=result.note,
+            transient=result.infra_transient,
         )
         net_i = cast(NetIsolation, str(result.net_isolation))
         fs_i = cast(FsIsolation, str(result.fs_isolation))
@@ -1083,4 +1088,7 @@ def evaluate_executable(
             attempt_id=attempt_id,
             prov_fields=prov_fields,
         )
-    raise SandboxInfraError(f"sandbox_unavailable:unknown_kind:{check.kind}")
+    raise SandboxInfraError(
+        f"sandbox_unavailable:unknown_kind:{check.kind}",
+        transient=False,
+    )

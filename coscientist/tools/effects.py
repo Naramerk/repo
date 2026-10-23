@@ -801,6 +801,7 @@ async def invoke_tool(
         ref,
         name=f"effect:{name}",
         media_type="application/json",
+        role="data",
         context_tainted=tainted,
     )
     result_ref = art.artifact_id

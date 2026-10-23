@@ -30,11 +30,12 @@ def raise_if_infra(
     net_isolation: NetIsolation = "none",
     fs_isolation: FsIsolation = "none",
     note: str | None = None,
+    transient: bool = False,
 ) -> None:
     if status in INFRA_STATUSES:
         n = note or soft_isolation_note(net_isolation, fs_isolation)
         full = f"{reason}; {n}" if n else reason
-        raise SandboxInfraError(full)
+        raise SandboxInfraError(full, transient=transient)
 
 
 def store_log(

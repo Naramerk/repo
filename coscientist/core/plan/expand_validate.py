@@ -17,16 +17,21 @@ if TYPE_CHECKING:
 
 _KIND_KEY = re.compile(r"^(EXP|LIT|HYP|PLAN)-(\d+)$")
 
+_PREFIX_FOR_KIND = {
+    "literature": "LIT",
+    "hypotheses": "HYP",
+    "plan": "PLAN",
+    "experiment": "EXP",
+    "spec": "EXP",
+    "report": "EXP",
+}
+
 
 def _prefix_for_route(route: str) -> str:
-    r = (route or "").lower()
-    if r in ("literature", "lit"):
-        return "LIT"
-    if r in ("hypotheses", "hypothesis", "hyp"):
-        return "HYP"
-    if r in ("planner", "plan"):
-        return "PLAN"
-    return "EXP"
+    from coscientist.core.execution.domain import TaskKind
+
+    kind = TaskKind(route)
+    return _PREFIX_FOR_KIND[kind.value]
 
 
 def next_kind_index(runtime: StudyRuntime, prefix: str, tasks: list[TaskSpec]) -> int:
@@ -134,7 +139,7 @@ def _validate(
     stage = {"SPEC", "HYP", "LIT", "PLAN"}
     for t in merged:
         for d in t.depends_on:
-            if d in keys or d in stage or d.startswith("PLAN-"):
+            if d in keys or d in stage:
                 continue
             return f"unknown dependency {d}"
     by = {t.task_key: list(t.depends_on) for t in merged}
@@ -187,15 +192,15 @@ def _validate(
         qs = plan.get("questions") if isinstance(plan, dict) else getattr(plan, "questions", None)
         for q in qs or []:
             if isinstance(q, dict) and q.get("id"):
-                prev_final[str(q["id"])] = str(q.get("final_type") or "verdict")
+                prev_final[str(q["id"])] = str(q["final_type"])
             elif hasattr(q, "id"):
-                prev_final[str(q.id)] = str(getattr(q, "final_type", None) or "verdict")
+                prev_final[str(q.id)] = str(q.final_type)
     q_for_validate: list[QuestionSpec] = list(added_questions)
     seen_q = {q.id for q in q_for_validate}
     for qid, text in texts.items():
         if qid in seen_q or qid not in active_qs:
             continue
-        ft = prev_final.get(qid, "verdict")
+        ft = prev_final[qid]
         q_for_validate.append(
             QuestionSpec(id=qid, text=text, final_type=ft)  # type: ignore[arg-type]
         )
@@ -214,7 +219,7 @@ def _validate(
     from coscientist.core.plan.decomposes import assert_decomposes_acyclic, max_decomposes_depth
     from coscientist.core.plan.plan_validate import validate_decomposes
 
-    max_depth = int(getattr(study, "max_depth", 8) or 8)
+    max_depth = int(study.max_depth)
     parent_of: dict[str, str | None] = {
         q.id: getattr(q, "parent_id", None) for q in added_questions
     }
@@ -265,7 +270,7 @@ def _validate(
                         id=qid,
                         text=texts.get(qid, ""),
                         parent_id=parent,
-                        final_type=prev_final.get(qid, "verdict"),  # type: ignore[arg-type]
+                        final_type=prev_final[qid],  # type: ignore[arg-type]
                     )
                 )
         rollup = "all"
@@ -278,7 +283,7 @@ def _validate(
             q_all,
             rollup=rollup,
             max_depth=max_depth,
-            max_tasks=int(getattr(study, "max_tasks", 64) or 64),
+            max_tasks=int(study.max_tasks),
         )
     except ValueError as e:
         return str(e) or "invalid_decomposes"

@@ -425,7 +425,7 @@ class LifecycleMixin:
             loop_specs = validate_loop_specs(
                 raw_loops,
                 known_keys=known_keys,
-                max_loop_iter=int(getattr(self.study, "max_loop_iter", 8) or 8),
+                max_loop_iter=int(self.study.max_loop_iter),
                 known_questions=set(known_texts),
                 known_hypotheses=known_hyps,
             )
@@ -447,8 +447,8 @@ class LifecycleMixin:
                 catalog=catalog,
                 subquestions=named_subs,
                 rollup=rollup,
-                max_depth=int(getattr(self.study, "max_depth", 8) or 8),
-                max_tasks=int(getattr(self.study, "max_tasks", 64) or 64),
+                max_depth=int(self.study.max_depth),
+                max_tasks=int(self.study.max_tasks),
             )
             assert_decomposes_acyclic(parent_map_from_questions(questions))
             loop_ids = {ls.loop_id for ls in loop_specs}
@@ -529,7 +529,7 @@ class LifecycleMixin:
                 continue  # never clobber existing attrs
             q_attrs: dict[str, Any] = {
                 "formulation": q.text,
-                "final_type": getattr(q, "final_type", None) or "verdict",
+                "final_type": q.final_type,
             }
             if getattr(q, "parent_id", None):
                 q_attrs["parent_id"] = q.parent_id
@@ -766,12 +766,7 @@ class LifecycleMixin:
                 # Expand revisions may depend on keys that only exist as runtime
                 # tasks (already DONE) — callers pass those via merged still_kept.
                 # PR11: loop:<id> barriers resolved by core after LoopCapped/until.
-                if (
-                    d in keys
-                    or d in stage
-                    or d.startswith("PLAN-")
-                    or d.startswith("loop:")
-                ):
+                if d in keys or d in stage or d.startswith("loop:"):
                     continue
                 raise ValueError(f"unknown dependency {d}")
         by = {t.task_key: t.depends_on for t in tasks}

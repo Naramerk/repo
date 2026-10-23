@@ -32,15 +32,12 @@ def contradicts_edge_id(study_id: str, a: str, b: str) -> str:
 
 
 def _stance_of(attrs: dict[str, Any]) -> str:
-    status = str(attrs.get("criterion_status") or "unassessed")
-    try:
-        return claim_stance(status)
-    except KeyError:
-        return "inconclusive"
+    status = attrs["criterion_status"]
+    return claim_stance(str(status))
 
 
 def _accepted(attrs: dict[str, Any]) -> bool:
-    return bool(attrs.get("accepted")) and bool(attrs.get("frozen", True))
+    return bool(attrs["accepted"]) and bool(attrs["frozen"])
 
 
 def contradiction_pairs(

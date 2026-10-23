@@ -97,29 +97,8 @@ def outcome_to_status(outcome: ClaimOutcome | None, *, validity: ClaimValidity) 
 _MAX_PROVENANCE_DEPTH = 64
 
 
-def _media_type_is_code(media_type: str | None) -> bool:
-    mt = (media_type or "").lower()
-    if any(
-        tok in mt
-        for tok in (
-            "python",
-            "javascript",
-            "typescript",
-            "x-sh",
-            "x-shellscript",
-            "x-script",
-            "x-bytecode",
-        )
-    ):
-        return True
-    return mt.startswith("text/x-")
-
-
 def artifact_is_code(meta: Any | None) -> bool:
-    """Legacy meta heuristic (role / media_type). Prefer ``output_kinds``.
-
-    Unknown → DATA. Never uses InputBinding slot names.
-    """
+    """True when artifact meta.role is ``code`` (required; never inferred from media_type)."""
     if meta is None:
         return False
     role = getattr(meta, "role", None)
@@ -127,7 +106,7 @@ def artifact_is_code(meta: Any | None) -> bool:
         return True
     if role in ("data", "paper", "figure", "table", "log", "report"):
         return False
-    return _media_type_is_code(getattr(meta, "media_type", None))
+    raise ValueError(f"artifact meta missing/unknown role: {role!r}")
 
 
 # Back-compat name used by older imports/tests.
@@ -592,7 +571,7 @@ def effective_outcome(claim: Any) -> ClaimOutcome | None:
         return stored  # type: ignore[return-value]
     if getattr(claim, "validity_ok", True) is False:
         return None
-    return status_to_outcome(str(getattr(claim, "criterion_status", "unassessed")))
+    return status_to_outcome(str(getattr(claim, "criterion_status")))
 
 
 def effective_validity(claim: Any) -> ClaimValidity:
@@ -643,7 +622,7 @@ def recompute_effect_provenance(
     if not isinstance(effect, Mapping):
         return None
     out = dict(effect)
-    producer = out.get("producer", "agent")
+    producer = out.get("producer")
     call_id = str(out.get("produced_by_call_id") or "")
     # Isolation + core_evaluated: journal effect only (never artifact meta).
     net_isolation = out.get("net_isolation")
@@ -651,7 +630,7 @@ def recompute_effect_provenance(
     observation_only = bool(out.get("observation_only"))
     if artifact_meta is not None:
         meta_prod = getattr(artifact_meta, "producer", None)
-        if meta_prod in ("agent", "core", "sandbox"):
+        if meta_prod is not None:
             producer = meta_prod
         produced = getattr(artifact_meta, "produced_by", None)
         meta_call = str(getattr(produced, "call_id", "") or "")
@@ -662,7 +641,7 @@ def recompute_effect_provenance(
         if aid:
             out["artifact_id"] = str(aid)
     if producer not in ("agent", "core", "sandbox"):
-        producer = "agent"
+        raise ValueError(f"effect missing/unknown producer: {producer!r}")
     out["producer"] = producer
     if net_isolation in ("hard", "soft", "none"):
         out["net_isolation"] = net_isolation
@@ -855,7 +834,7 @@ def refute_intent_counts(claim: Any) -> bool:
         return False
     if not bool(getattr(claim, "frozen", False)):
         return False
-    if getattr(claim, "check_role", "unknown") != "prediction":
+    if getattr(claim, "check_role") != "prediction":
         return False
     uses = getattr(claim, "uses_sesoi", None)
     if uses is not True:
@@ -926,7 +905,7 @@ def exclusion_reason(claim: Any) -> ExclusionReason | None:
         "unapproved_check",
     ):
         return stored  # type: ignore[return-value]
-    if getattr(claim, "check_role", "unknown") == "unknown" and not getattr(
+    if getattr(claim, "check_role") == "unknown" and not getattr(
         claim, "validity_ok", True
     ):
         return "unknown_role"
@@ -966,10 +945,7 @@ def claim_counts_for_verdict(claim: Any) -> bool:
             return False
     else:
         return False
-    try:
-        stance = claim_stance(str(getattr(claim, "criterion_status", "unassessed")))
-    except KeyError:
-        stance = "inconclusive"
+    stance = claim_stance(str(getattr(claim, "criterion_status")))
     if stance == "refutes":
         return True
     frozen_at = getattr(claim, "criterion_frozen_at_seq", None)
@@ -1046,8 +1022,8 @@ def hypothesis_verdict(
     # PR20: delegated proposed_check counts, but must not tip a catalog tie.
     catalog_inc = [c for c in inconsistent if not _is_delegated_proposed(c)]
     catalog_con = [c for c in consistent_severe if not _is_delegated_proposed(c)]
-    k_ref = max(1, int(refutations_needed))
-    k_sup = max(2, int(supported_needed))
+    k_ref = int(refutations_needed)
+    k_sup = int(supported_needed)
     n_inc = len(inconsistent)
     n_con = len(consistent_severe)
     n_inc_cat = len(catalog_inc)
@@ -1166,10 +1142,7 @@ def excluded_confirmations_note(
         if getattr(c, "provenance", "") not in ("stub", "partial"):
             continue
         oc = effective_outcome(c)
-        try:
-            stance = claim_stance(str(getattr(c, "criterion_status", "unassessed")))
-        except KeyError:
-            stance = "inconclusive"
+        stance = claim_stance(str(getattr(c, "criterion_status")))
         if oc == "consistent" or stance == "supports":
             stub_partial.append(c)
     if not stub_partial:
@@ -1293,7 +1266,8 @@ def disposition_for_question(
             "inconclusive": "inconclusive",
             "untested": "not_attempted",
         }
-        return mapping.get(question_verdict or "untested", "inconclusive")
+        key = question_verdict if question_verdict is not None else "untested"
+        return mapping[key]
     vals = list(hypothesis_verdicts.values())
     if any(v == "supported" for v in vals):
         return "answered"

@@ -8,7 +8,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.claims.rubric_types import FinalType, Rubric
@@ -92,31 +92,38 @@ HitlGateKind = Literal[
 ]
 
 
+# DESIGN.md §7.3: spec 120, plan 180, other gates 1800 (human response window).
+DEFAULT_GATE_TIMEOUT_S = 1800
+_PLAN_GATE_TIMEOUT_S = 180
+_SPEC_GATE_TIMEOUT_S = 120
+
+
 class GateConfig(Frozen):
     """Per-gate HITL config (DESIGN §7.3 / RESEARCH_MODEL §5.2)."""
 
     enabled: bool = True
-    timeout_s: int = 1800
+    timeout_s: int = DEFAULT_GATE_TIMEOUT_S
     # costly_or_nonreal defaults to fail; others to delegate (via HitlPolicy.gate).
     on_timeout: OnTimeout = "delegate"
 
 
 def _default_gates() -> dict[str, GateConfig]:
+    # Canonical gate keys only (no plan ↔ plan_approval alias).
     return {
-        "spec_approval": GateConfig(timeout_s=120, on_timeout="delegate"),
-        "plan": GateConfig(timeout_s=180, on_timeout="delegate"),
-        "plan_approval": GateConfig(timeout_s=180, on_timeout="delegate"),
-        "plan_expansion": GateConfig(timeout_s=180, on_timeout="delegate"),
-        "hypotheses": GateConfig(timeout_s=1800, on_timeout="delegate"),
-        "costly_or_nonreal": GateConfig(timeout_s=1800, on_timeout="fail"),
-        "report": GateConfig(timeout_s=1800, on_timeout="delegate"),
-        "result_acceptance": GateConfig(timeout_s=1800, on_timeout="delegate"),
-        "skip_task": GateConfig(timeout_s=1800, on_timeout="delegate"),
-        "budget": GateConfig(timeout_s=1800, on_timeout="delegate"),
+        "spec_approval": GateConfig(timeout_s=_SPEC_GATE_TIMEOUT_S, on_timeout="delegate"),
+        "plan": GateConfig(timeout_s=_PLAN_GATE_TIMEOUT_S, on_timeout="delegate"),
+        "plan_approval": GateConfig(timeout_s=_PLAN_GATE_TIMEOUT_S, on_timeout="delegate"),
+        "plan_expansion": GateConfig(timeout_s=_PLAN_GATE_TIMEOUT_S, on_timeout="delegate"),
+        "hypotheses": GateConfig(timeout_s=DEFAULT_GATE_TIMEOUT_S, on_timeout="delegate"),
+        "costly_or_nonreal": GateConfig(timeout_s=DEFAULT_GATE_TIMEOUT_S, on_timeout="fail"),
+        "report": GateConfig(timeout_s=DEFAULT_GATE_TIMEOUT_S, on_timeout="delegate"),
+        "result_acceptance": GateConfig(timeout_s=DEFAULT_GATE_TIMEOUT_S, on_timeout="delegate"),
+        "skip_task": GateConfig(timeout_s=DEFAULT_GATE_TIMEOUT_S, on_timeout="delegate"),
+        "budget": GateConfig(timeout_s=DEFAULT_GATE_TIMEOUT_S, on_timeout="delegate"),
         # Headless default decision is deny (HitlPolicy.defaults); gate itself stays enabled.
-        "side_effect": GateConfig(timeout_s=1800, on_timeout="fail"),
+        "side_effect": GateConfig(timeout_s=DEFAULT_GATE_TIMEOUT_S, on_timeout="fail"),
         # PR20: HITL timeout ≡ reject (DESIGN_M1 §16); never auto-approve.
-        "proposed_check": GateConfig(timeout_s=1800, on_timeout="fail"),
+        "proposed_check": GateConfig(timeout_s=DEFAULT_GATE_TIMEOUT_S, on_timeout="fail"),
     }
 
 
@@ -126,10 +133,10 @@ class HitlPolicy(Frozen):
     # Legacy flat map kept for callers/tests; gate() prefers gates then these.
     timeout_s: dict[str, int] = Field(
         default_factory=lambda: {
-            "spec_approval": 120,
-            "plan_approval": 180,
-            "result_acceptance": 1800,
-            "skip_task": 1800,
+            "spec_approval": _SPEC_GATE_TIMEOUT_S,
+            "plan_approval": _PLAN_GATE_TIMEOUT_S,
+            "result_acceptance": DEFAULT_GATE_TIMEOUT_S,
+            "skip_task": DEFAULT_GATE_TIMEOUT_S,
         }
     )
     # Policy-level default for gates not listed; costly_or_nonreal still defaults to fail.
@@ -147,17 +154,11 @@ class HitlPolicy(Frozen):
     )
 
     def gate(self, kind: str) -> GateConfig:
-        if kind in self.gates:
+        """Return config for a canonical gate kind; unknown kind raises."""
+        try:
             return self.gates[kind]
-        alias = {"plan": "plan_approval", "plan_approval": "plan"}.get(kind)
-        if alias and alias in self.gates:
-            return self.gates[alias]
-        default_ot: OnTimeout = "fail" if kind == "costly_or_nonreal" else self.on_timeout
-        return GateConfig(
-            enabled=True,
-            timeout_s=self.timeout_s.get(kind, 1800),
-            on_timeout=default_ot,
-        )
+        except KeyError as e:
+            raise KeyError(f"unknown HITL gate kind: {kind!r}") from e
 
 
 ArtifactRole = Literal["paper", "data", "code", "figure", "table", "log", "report"]
@@ -186,10 +187,10 @@ FsIsolation = Literal["hard", "soft", "none"]
 class OutputSpec(Frozen):
     name: str
     media_type: str
+    # Plan-accepted role (core-owned after accept_plan); never inferred from media_type.
+    role: ArtifactRole
     schema_ref: str | None = None
     required: bool = True
-    # Plan-accepted role (core-owned after accept_plan); independence code-vs-data.
-    role: ArtifactRole | None = None
     # M1 PR13: qualitative acceptance (literature review, design, …). Frozen at PLAN.
     rubric: Rubric | None = None
     # M1 PR15: explicit deliverable kind (PlanValidator-enforced; not inferred).
@@ -209,6 +210,7 @@ class InputSpec(Frozen):
     ``quorum`` (M1 PR10 fan-in): task starts when ≥ quorum inputs bind as
     real/partial; unbound / failed / stub inputs become experiment limitations.
     ``None`` = require every input (legacy). ``"all"`` = same as len(inputs).
+    Int quorum must be ≥ 1 (validated at construction; never clamped at bind).
     """
 
     from_task: str = ""
@@ -219,6 +221,13 @@ class InputSpec(Frozen):
     kind: Literal["artifact", "claim", "verdict"] = "artifact"
     ref: str | None = None
     quorum: int | Literal["all"] | None = None
+
+    @model_validator(mode="after")
+    def _quorum_ge_one(self) -> InputSpec:
+        q = self.quorum
+        if isinstance(q, int) and q < 1:
+            raise ValueError(f"InputSpec.quorum must be >= 1, got {q}")
+        return self
 
 
 class ForEachSpec(Frozen):
@@ -268,7 +277,8 @@ class QuestionSpec(Frozen):
     # M1 PR16: decomposes edge attrs.origin (explicit|implicit|emergent).
     origin: DecomposeOrigin | None = None
     # M1 PR13: verdict (claims) | artifact (rubric) | both (DESIGN_M1 §6.1).
-    final_type: FinalType = "verdict"
+    # Required — never silently defaulted to verdict.
+    final_type: FinalType
 
 
 class ExperimentMethod(StrEnum):
@@ -489,7 +499,8 @@ class Attempt(Frozen):
     route_returned: bool = False
     closed: bool = False
     close_reason: CloseReason | None = None
-    provenance: Provenance = "real"
+    # Required — writers always stamp; missing journal field is an error.
+    provenance: Provenance
     agent_output_digest: str | None = None
     deadline: datetime
     task_id: str
@@ -557,7 +568,8 @@ class Result(Frozen):
     attempt_id: str
     outcome: Outcome
     inputs: list[InputBinding] = Field(default_factory=list)
-    provenance: Provenance = "real"
+    # Required — writers always stamp; missing journal field is an error.
+    provenance: Provenance
     agent_claim: Outcome | None = None
     downgrade: Downgrade | None = None
     computed_outcome: Outcome
@@ -576,13 +588,14 @@ class Artifact(Frozen):
     size: int
     uri: str
     produced_by: ToolCallRef
+    # Required — never inferred from media_type.
+    role: ArtifactRole
+    # Core-stamped producer; every put path sets it explicitly.
+    producer: ArtifactProducer
     schema_ref: str | None = None
-    role: ArtifactRole | None = None
     # M1 PR15: subtype stamped by core from OutputSpec.kind
     # (experiment_design | contradiction_map); not agent-settable.
     kind: ArtifactKind | None = None
-    # Core-stamped; agent ``put`` always ``agent``. Never settable by AgentTaskOutput.
-    producer: ArtifactProducer = "agent"
     # Sandbox only: isolation actually achieved (PR17). trusted only if both hard.
     net_isolation: NetIsolation | None = None
     fs_isolation: FsIsolation | None = None

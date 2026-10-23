@@ -28,7 +28,40 @@ from coscientist.core.execution.inputs import (
 from coscientist.core.execution.quorum import bind_input_groups
 
 # Persisted on AttemptClosed.retry_at; fired by StudyRuntime.tick vs injected Clock.
+# Source: DESIGN P3 retry backoff — short intentional delay before tick restarts
+# the next attempt; not a domain default guessed from data.
 RETRY_BACKOFF_S = 0.05
+
+# TaskReason → CloseReason for cancel_task AttemptClosed (explicit; no silent CANCELLED).
+_CANCEL_CLOSE_REASON: dict[str, CloseReason] = {
+    CloseReason.RESULT.value: CloseReason.RESULT,
+    CloseReason.FAILED.value: CloseReason.FAILED,
+    CloseReason.CRASHED.value: CloseReason.CRASHED,
+    CloseReason.DEADLINE.value: CloseReason.DEADLINE,
+    CloseReason.STUDY_DEADLINE.value: CloseReason.STUDY_DEADLINE,
+    CloseReason.CANCELLED.value: CloseReason.CANCELLED,
+    CloseReason.INPUT_UNAVAILABLE.value: CloseReason.INPUT_UNAVAILABLE,
+    CloseReason.HUMAN_TIMEOUT.value: CloseReason.HUMAN_TIMEOUT,
+    CloseReason.BUDGET.value: CloseReason.BUDGET,
+    # TaskReason-only values used on cancel paths (AttemptClosed vocabulary).
+    TaskReason.HUMAN.value: CloseReason.CANCELLED,
+    TaskReason.HUMAN_REJECTED.value: CloseReason.CANCELLED,
+    TaskReason.CRITIC_REJECTED.value: CloseReason.CANCELLED,
+    TaskReason.REFUSED.value: CloseReason.CANCELLED,
+    TaskReason.SUPERSEDED.value: CloseReason.CANCELLED,
+    TaskReason.EXPANSION_LIMIT.value: CloseReason.CANCELLED,
+    TaskReason.ITERATION_CAP.value: CloseReason.CANCELLED,
+    TaskReason.PROPOSAL_QUOTA.value: CloseReason.CANCELLED,
+    TaskReason.CATALOG_ERROR.value: CloseReason.FAILED,
+    TaskReason.SANDBOX_INFRA.value: CloseReason.FAILED,
+    TaskReason.SANDBOX_TIMEOUT.value: CloseReason.FAILED,
+    TaskReason.IDLE_TIMEOUT.value: CloseReason.FAILED,
+    TaskReason.CORE_BUG.value: CloseReason.CRASHED,
+    TaskReason.SCHEMA_INVALID.value: CloseReason.FAILED,
+    TaskReason.INVALID_STATUS.value: CloseReason.FAILED,
+    TaskReason.SAME_DIGEST_RETRY.value: CloseReason.CANCELLED,
+    TaskReason.RETRY_SCHEDULED.value: CloseReason.CANCELLED,
+}
 
 
 def _attempt_role_from_reviews(runtime: Any, task_id: str) -> str:
@@ -223,7 +256,7 @@ class AttemptsMixin:
         charged = 0
         for aid in task.attempts:
             att = self.attempts.get(aid) or {}
-            if att.get("charged", True):
+            if att["charged"]:
                 charged += 1
         if charged + 1 > self.max_attempts:
             raise RuntimeError("max_attempts exceeded")
@@ -484,6 +517,8 @@ class AttemptsMixin:
         cr = coerce_close_reason(close_reason)
         assert cr is not None
         cr_s = cr.value
+        # fail_attempt always charges (crash/recover path; not sandbox infra).
+        closing_charged = True
         events = [
             EventEnvelope(
                 study_id=sid,
@@ -496,20 +531,21 @@ class AttemptsMixin:
                     "close_reason": cr_s,
                     "retryable": retryable,
                     "task_id": tid,
+                    "charged": closing_charged,
                 },
                 ts=now,
                 schema_version=2,
             )
         ]
-        # Budget uses charged attempts (current defaults charged=True until stamped).
+        # Budget uses charged attempts (required on each closed attempt row).
         charged = 0
         for a in task.attempts:
-            row = self.attempts.get(a) or {}
             if a == aid:
-                # Closing now; treat as charged unless already stamped False.
-                if row.get("charged", True):
+                if closing_charged:
                     charged += 1
-            elif row.get("charged", True):
+                continue
+            row = self.attempts.get(a) or {}
+            if row["charged"]:
                 charged += 1
         can_retry = (
             retryable and charged < self.max_attempts and now < task.deadline
@@ -548,14 +584,15 @@ class AttemptsMixin:
         """Last closed attempt's provenance (survives crash/reopen via the journal)."""
         task = self.tasks.get(tid)
         if task is None:
-            return "real"
+            raise ValueError(f"unknown task for retry provenance: {tid!r}")
         for aid in reversed(task.attempts):
             att = self.attempts.get(aid, {})
             if att.get("closed"):
-                prov = att.get("provenance", "real")
-                if prov in VALID_PROVENANCE:
-                    return prov  # type: ignore[return-value]
-        return "real"
+                prov = att["provenance"]
+                if prov not in VALID_PROVENANCE:
+                    raise ValueError(f"invalid closed attempt provenance: {prov!r}")
+                return prov  # type: ignore[return-value]
+        raise ValueError(f"no closed attempt provenance for task: {tid!r}")
 
     async def cancel_task(
         self,
@@ -572,11 +609,8 @@ class AttemptsMixin:
         tr = coerce_task_reason(reason)
         assert tr is not None
         reason_s = tr.value
-        # Attempt close uses CloseReason; TaskReason-only values (e.g. human) map to cancelled.
-        try:
-            cr_s = CloseReason(reason_s).value
-        except ValueError:
-            cr_s = CloseReason.CANCELLED.value
+        # Attempt close uses CloseReason via full table (KeyError if unmapped).
+        cr_s = _CANCEL_CLOSE_REASON[reason_s].value
         events: list[EventEnvelope] = []
         for aid in task.attempts:
             if not self.attempts.get(aid, {}).get("closed"):
@@ -591,6 +625,7 @@ class AttemptsMixin:
                             "closed": True,
                             "close_reason": cr_s,
                             "task_id": task.task_id,
+                            "charged": True,
                         },
                         ts=now,
                         schema_version=2,

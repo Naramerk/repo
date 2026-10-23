@@ -822,6 +822,7 @@ async def _primary_report_path(
         make_tool_ref(f"finalize:{sid}"),
         name="report.md",
         media_type="text/markdown",
+        role="report",
     )
     return art.artifact_id
 

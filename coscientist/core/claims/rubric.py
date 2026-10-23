@@ -160,13 +160,10 @@ def question_final_types(plans: Any) -> dict[str, FinalType]:
             qid = str(q.get("id", ""))
             if not qid or qid in found:
                 continue
-            raw = q.get("final_type")
-            if raw is None or raw == "":
-                found[qid] = "verdict"
-                continue
+            raw = q["final_type"]
             ft = str(raw)
             if ft not in VALID_FINAL_TYPES:
-                continue  # unknown — not silently coerced
+                raise ValueError(f"question {qid!r}: unknown final_type {ft!r}")
             found[qid] = ft  # type: ignore[assignment]
     return found
 
@@ -212,17 +209,6 @@ def _row_is_timeout_or_infra(row: dict[str, Any], cr: dict[str, Any]) -> bool:
         return True
     if cr.get("timeout_kind"):
         return True
-    detail = str(cr.get("detail") or "")
-    if detail.startswith("sandbox_") or "timeout" in detail.lower():
-        reason = str(row.get("reason") or "")
-        if reason in {
-            "sandbox_infra",
-            "sandbox_timeout",
-            "idle_timeout",
-            "catalog_error",
-            "core_bug",
-        }:
-            return True
     return False
 
 

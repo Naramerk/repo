@@ -92,10 +92,7 @@ def select_foreach_items(
     graph = getattr(runtime, "graph", None)
     if graph is None:
         return [], []
-    try:
-        nodes = list(graph.nodes_by_kind(fe.kind))
-    except KeyError:
-        return [], []
+    nodes = list(graph.nodes_by_kind(fe.kind))
     scored: list[tuple[tuple, str]] = []
     notes: list[str] = []
     for node in nodes:
@@ -223,7 +220,7 @@ async def materialize_foreach(
 
     fe = template.spec.foreach
     after = fe.of_task if fe else tkey
-    cap = int(getattr(study, "max_foreach_children", 32) or 32)
+    cap = int(study.max_foreach_children)
     # ``items`` arrive rank-ordered; cap keeps head (missing rank already last).
     foreach_total = len(items)
     dropped: list[str] = []
@@ -256,7 +253,7 @@ async def materialize_foreach(
             TaskSpec.model_validate(t) if isinstance(t, dict) else t
             for t in (prev0.get("tasks") or [])
         ]
-        share_cap = 1.0 - float(getattr(study, "replan_reserve", 0.0) or 0.0)
+        share_cap = 1.0 - float(study.replan_reserve)
         added = apply_foreach_parent_shares(
             template.spec, list(keyed), plan_tasks=plan_specs, share_cap=share_cap
         )
@@ -339,16 +336,7 @@ async def materialize_foreach(
             continue
         frozen_spec = freeze_task_sandbox_limits(spec, catalog)
         tid = task_id(sid, frozen_spec.task_key)
-        route = (frozen_spec.route or "").lower()
-        kind = {
-            "literature": TaskKind.LITERATURE,
-            "lit": TaskKind.LITERATURE,
-            "hypotheses": TaskKind.HYPOTHESES,
-            "hypothesis": TaskKind.HYPOTHESES,
-            "hyp": TaskKind.HYPOTHESES,
-            "planner": TaskKind.PLAN,
-            "plan": TaskKind.PLAN,
-        }.get(route, TaskKind.EXPERIMENT)
+        kind = TaskKind(frozen_spec.route)
         task = Task(
             task_id=tid,
             kind=kind,

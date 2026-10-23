@@ -86,7 +86,7 @@ def group_needed(orig: InputSpec, n_members: int) -> int:
     q = orig.quorum
     if q is None or q == "all":
         return n_members
-    return max(1, int(q))
+    return int(q)
 
 
 def _try_bind_one(
@@ -108,10 +108,10 @@ def _try_bind_one(
             snap = verdict_snapshots.get(spec.ref)
             if snap is None:
                 raise InputUnavailable("verdict_unavailable")
-            source_raw = snap.get("provenance", "real")
-            source: Provenance = (
-                source_raw if source_raw in VALID_PROVENANCE else "stub"
-            )  # type: ignore[assignment]
+            source_raw = snap["provenance"]
+            if source_raw not in VALID_PROVENANCE:
+                raise InputUnavailable("verdict_provenance_invalid")
+            source: Provenance = source_raw  # type: ignore[assignment]
             digest = verdict_binding_digest(ref=spec.ref, snapshot=snap)
             binding = InputBinding(
                 input=spec.ref,
@@ -161,7 +161,7 @@ def _try_bind_one(
             )
         arts = dep_outputs.get(spec.from_task, {})
         aid = arts.get(spec.output)
-        dep_prov: Provenance = dep_provenance.get(spec.from_task, "real")
+        dep_prov: Provenance = dep_provenance[spec.from_task]
 
         if dep.outcome == TaskOutcome.FAILED and mode == InputMode.FORBID:
             return (
@@ -379,7 +379,7 @@ def bind_input_groups(
             q0: Any = "all"
         else:
             q0 = sorted(v for v in qs if isinstance(v, int))[0]
-        needed = len(flat) if q0 == "all" else max(1, int(q0))
+        needed = len(flat) if q0 == "all" else int(q0)
         if isinstance(q0, int) and q0 > len(flat):
             raise InputUnavailable("quorum")
         if not flat:

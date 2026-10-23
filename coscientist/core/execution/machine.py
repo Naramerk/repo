@@ -144,12 +144,13 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 {
                     "attempt_id": d["attempt_id"],
                     "closed": d.get("closed", False),
-                    "provenance": d.get("provenance", "real"),
+                    "provenance": d["provenance"],
                     "task_id": d["task_id"],
                     "study_id": d["study_id"],
                     "inputs": list(d.get("inputs") or []),
                     "agent_output_digest": d.get("agent_output_digest"),
-                    "charged": d.get("charged", True),
+                    # charged may be absent on open attempts; only stamp when present.
+                    **({"charged": d["charged"]} if "charged" in d else {}),
                     "n": d.get("n"),
                     "allocated_budget_rub": d.get("allocated_budget_rub"),
                     "budget_limit_rub": d.get("budget_limit_rub"),

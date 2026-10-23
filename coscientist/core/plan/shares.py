@@ -189,19 +189,18 @@ def critic_plan_shares(
     max_task_share: float | None = None,
 ) -> str | None:
     """Return error detail, or None if shares pass the plan critic."""
-    reserve = (
-        float(replan_reserve)
-        if replan_reserve is not None
-        else float(getattr(study, "replan_reserve", 0.0) or 0.0)
-    )
-    mx = (
-        float(max_task_share)
-        if max_task_share is not None
-        else float(
-            getattr(study, "max_task_budget_share", DEFAULT_MAX_TASK_BUDGET_SHARE)
-            or DEFAULT_MAX_TASK_BUDGET_SHARE
-        )
-    )
+    if replan_reserve is not None:
+        reserve = float(replan_reserve)
+    elif study is None:
+        raise ValueError("critic_plan_shares requires study or replan_reserve")
+    else:
+        reserve = float(study.replan_reserve)
+    if max_task_share is not None:
+        mx = float(max_task_share)
+    elif study is None:
+        raise ValueError("critic_plan_shares requires study or max_task_share")
+    else:
+        mx = float(study.max_task_budget_share)
     try:
         validate_plan_shares(tasks, replan_reserve=reserve, max_task_share=mx)
     except ValueError as e:

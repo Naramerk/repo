@@ -10,7 +10,7 @@ from typing import Any
 from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore
 from coscientist.core.claims.reasons import RefusalKind, TaskReason
 from coscientist.core.events.events import EventEnvelope
-from coscientist.core.execution.domain import Study, Task, TaskOutcome, TaskState
+from coscientist.core.execution.domain import Study, Task, TaskKind, TaskOutcome, TaskState
 from coscientist.core.plan.intake import IntakeRefuse
 
 log = logging.getLogger(__name__)
@@ -326,7 +326,7 @@ class LocalProjectMixin:
             pending_exp = p.get("pending_expansion")
             after = p.get("expand_after_task")
             tkey = str((clean.get("spec") or {}).get("task_key") or "")
-            if after and tkey.startswith("PLAN-"):
+            if after and clean.get("kind") == TaskKind.PLAN.value:
                 reqs = getattr(self, "_expand_requests", None)
                 if not isinstance(reqs, dict):
                     self._expand_requests = {}
@@ -428,7 +428,7 @@ class LocalProjectMixin:
                     if arts:
                         dep_outputs.setdefault(tkey, {})
                         dep_outputs[tkey].setdefault("main", str(arts[0]))
-                prov = p.get("provenance", "real")
+                prov = p["provenance"]
                 if isinstance(dep_provenance, dict) and prov in ("real", "partial", "stub"):
                     dep_provenance[tkey] = prov
         elif ev.type == "TaskDone":

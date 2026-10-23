@@ -174,6 +174,8 @@ class SandboxResult:
     # True when a stdout/stderr drain thread was still alive after the join budget
     # (e.g. grandchild still holding the write end) — do not trust empty sinks.
     output_drain_failed: bool = False
+    # True when private-channel kind is cgroup_attach (transient; may retry).
+    infra_transient: bool = False
 
     @property
     def limits_fully_held(self) -> bool:
@@ -816,6 +818,7 @@ def _classify(
             status=SandboxStatus.UNAVAILABLE,
             exit_code=proc.returncode,
             reason=f"sandbox_unavailable:{kind or 'wrapper'}",
+            infra_transient=(kind == "cgroup_attach"),
         )
     if overflow:
         # Guest-caused output flood — scientific, not infra (even if drain stuck).

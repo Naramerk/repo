@@ -409,14 +409,7 @@ async def _expand_plan(
             continue
         frozen_spec = freeze_task_sandbox_limits(spec, catalog)
         tid = task_id(sid, frozen_spec.task_key)
-        kind = TaskKind.EXPERIMENT
-        route = (frozen_spec.route or "").lower()
-        if route in ("literature", "lit"):
-            kind = TaskKind.LITERATURE
-        elif route in ("hypotheses", "hypothesis", "hyp"):
-            kind = TaskKind.HYPOTHESES
-        elif route in ("planner", "plan"):
-            kind = TaskKind.PLAN
+        kind = TaskKind(frozen_spec.route)
         task = Task(
             task_id=tid,
             kind=kind,
