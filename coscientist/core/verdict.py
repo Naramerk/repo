@@ -634,7 +634,7 @@ def recompute_effect_provenance(
     written at eval from that same meta (``producer``, ``produced_by_call_id``,
     ``core_evaluated``). Journal ``trusted``/``countable`` bits are never trusted.
 
-    ``trusted`` = producer ∈ {core, sandbox} (sandbox producer not wired in M1).
+    ``trusted`` = producer ∈ {core, sandbox} (executable CodeChecks use put_sandbox).
     ``countable`` = core-evaluated catalog check on an artifact bound to the attempt.
     """
     if not isinstance(effect, Mapping):

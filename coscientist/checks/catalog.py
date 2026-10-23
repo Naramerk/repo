@@ -24,6 +24,10 @@ KNOWN_CODE_KINDS = frozenset(
         "source_link",
         "metric_threshold",
         "value_matches",
+        "exec_runs",
+        "tests_pass",
+        "metric_on_holdout",
+        "reproducible_rerun",
     }
 )
 KNOWN_REVIEW_ROLES = frozenset({"reviewer", "critic", "human"})

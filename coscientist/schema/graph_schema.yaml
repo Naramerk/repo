@@ -8,7 +8,8 @@ version: 0.4
 # Provenance on attempts / input bindings (DESIGN §3.4): real | partial | stub
 provenance: [real, partial, stub]
 code_check_kinds: [artifact_exists, schema_valid, json_pointer, source_link, metric_threshold, value_matches,
-  graph_shape, quote_in_source, min_sources, question_coverage, recency]
+  graph_shape, quote_in_source, min_sources, question_coverage, recency,
+  exec_runs, tests_pass, metric_on_holdout, reproducible_rerun]
 nodes:
   - kind: study
     prefix: ST

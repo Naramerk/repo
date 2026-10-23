@@ -1983,7 +1983,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
 async def test_e2e_sandbox_metric_trusted_tag_and_countable(
     tmp_path, clock, runtime_cls
 ):
-    """Sandbox put stamps trusted=True (API only); still countable for verdicts."""
+    """Sandbox put stamps trusted=True; still countable for verdicts (PR17 path)."""
     from datetime import UTC, datetime
 
     from coscientist.core.artifacts import make_tool_ref

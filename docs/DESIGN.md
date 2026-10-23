@@ -393,10 +393,18 @@ class MethodSource(BaseModel):     # Том Б
 class CodeCheck(BaseModel):
     kind: Literal["artifact_exists","schema_valid","json_pointer","source_link",
                   "metric_threshold","value_matches","graph_shape","quote_in_source",
-                  "min_sources","question_coverage","recency"]   # = schema/graph_schema.yaml code_check_kinds
+                  "min_sources","question_coverage","recency",
+                  "exec_runs","tests_pass","metric_on_holdout","reproducible_rerun"]  # = schema/graph_schema.yaml code_check_kinds
     output: str | None; schema_ref: str | None; pointer: str | None
     metric: str | None; op: Literal["<","<=","==",">=",">","in"] | None; target: Any = None
     tolerance: float | None = None
+    # M1 PR17 executable kinds (sandbox limits)
+    command: str | None = None; argv: list[str] | None = None
+    timeout_s: float | None = None; memory_mb: int | None = None
+    max_output_bytes: int | None = None; allow_network: bool = False
+    min_tests: int | None = None
+    holdout_output: str | None = None; holdout_digest: str | None = None
+    rerun_tol: float | None = None
 
 class ReviewCheck(BaseModel):
     reviewer_role: Literal["reviewer","critic","human"]

@@ -24,7 +24,7 @@ from coscientist.core.domain import (
     ReviewCheck,
     TaskSpec,
 )
-from coscientist.core.errors import ArtifactCorrupt
+from coscientist.core.errors import ArtifactCorrupt, SandboxInfraError
 
 
 def role_from_template(tmpl: RequirementTemplate | None) -> CheckRole:
@@ -132,7 +132,7 @@ def _effect_provenance_fields(
 ) -> dict[str, Any]:
     """Core-stamped producer/trusted/countable from artifact meta (agent cannot set).
 
-    ``trusted`` = producer core|sandbox (sandbox not wired in M1 production).
+    ``trusted`` = producer core|sandbox (executable kinds stamp via put_sandbox).
     ``countable`` = core catalog evaluation on an artifact bound to this attempt.
     """
     meta = artifacts.get_meta(artifact_id) if artifact_id else None
@@ -427,6 +427,31 @@ def evaluate_code_check(
                 role=role,
             )
 
+        if check.kind in (
+            "exec_runs",
+            "tests_pass",
+            "metric_on_holdout",
+            "reproducible_rerun",
+        ):
+            from coscientist.checks.kinds.executable import evaluate_executable
+
+            prov = _effect_provenance_fields(
+                artifacts, None, attempt_id=attempt_id
+            )
+            # Executable kinds always write via put_sandbox; override agent default.
+            prov["producer"] = "sandbox"
+            prov["trusted"] = True
+            return evaluate_executable(
+                check,
+                template_id=template_id,
+                check_id=check_id,
+                out=out,
+                artifacts=artifacts,
+                role=role,
+                attempt_id=attempt_id,
+                prov_fields=prov,
+            )
+
     except ArtifactCorrupt as e:
         return CheckResult(
             check_id=check_id,
@@ -437,6 +462,8 @@ def evaluate_code_check(
             role=role,
             detail=str(e),
         )
+    except SandboxInfraError:
+        raise
     except Exception as e:
         return CheckResult(
             check_id=check_id,

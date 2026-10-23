@@ -147,7 +147,8 @@ class HitlPolicy(Frozen):
 
 ArtifactRole = Literal["paper", "data", "code", "figure", "table", "log", "report"]
 # Who stored the artifact bytes. Sets effect.trusted (reporting tag); M1
-# verdicts gate on countable core catalog eval, not trusted. Sandbox not wired.
+# verdicts gate on countable core catalog eval, not trusted. Catalog sandbox
+# checks store via put_sandbox (producer=sandbox → trusted=True).
 ArtifactProducer = Literal["agent", "core", "sandbox"]
 
 
@@ -496,6 +497,11 @@ class CodeCheck(Frozen):
         "source_link",
         "metric_threshold",
         "value_matches",
+        # M1 PR17 executable kinds (DESIGN_M1 §7)
+        "exec_runs",
+        "tests_pass",
+        "metric_on_holdout",
+        "reproducible_rerun",
     ]
     output: str | None = None
     schema_ref: str | None = None
@@ -504,6 +510,20 @@ class CodeCheck(Frozen):
     op: Literal["<", "<=", "==", ">=", ">", "in"] | None = None
     target: Any = None
     tolerance: float | None = None
+    # exec_runs / reproducible_rerun
+    command: str | None = None
+    argv: list[str] | None = None
+    timeout_s: float | None = None
+    memory_mb: int | None = None
+    max_output_bytes: int | None = None
+    allow_network: bool = False
+    # tests_pass
+    min_tests: int | None = None
+    # metric_on_holdout
+    holdout_output: str | None = None
+    holdout_digest: str | None = None
+    # reproducible_rerun (alias of tolerance when set)
+    rerun_tol: float | None = None
 
 
 class ReviewCheck(Frozen):

@@ -63,6 +63,19 @@ class ArtifactRejected(CoreError):
         super().__init__(reason)
 
 
+class SandboxInfraError(CoreError):
+    """Sandbox timeout/OOM/crash/unavailable — close attempt as infra failure.
+
+    Never a host crash: the sandbox runner always returns a terminal status;
+    executable CodeCheck kinds raise this so ``Executor.record`` can commit
+    ``result_class=infra`` with a stable ``reason`` string.
+    """
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
 class InvalidStatus(CoreError):
     """Value outside the allowed status enum."""
 

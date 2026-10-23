@@ -83,12 +83,13 @@ A prediction check that yields **no numeric effect** is **indeterminate** (never
 
 Study disposition / `StudyFinalized.question_dispositions[].reason` and `excluded_claims[].reason` carry that code. Claim `outcome=indeterminate`; severity and `k_ref` counting skip it.
 
-### Sandbox producer not wired in M1
+### Sandbox producer wired (M1 PR 17)
 
-`put_core` / `put_sandbox` exist and stamp `Artifact.producer`, but **no production executor path calls them**. Live metrics use agent `put` + core catalog evaluation. Until sandbox/catalog-check execution is wired to `put_sandbox`:
+Executable catalog CodeCheck kinds (`exec_runs`, `tests_pass`, `metric_on_holdout`, `reproducible_rerun`) run in a **core-owned** local sandbox (`coscientist.checks.sandbox`) and store logs/metrics via `put_sandbox` (`Artifact.producer=sandbox` → `effect.trusted=true`). Agent `put` + non-executable catalog eval still yields `trusted=false`.
 
-- `effect.trusted` stays **false** on the production path
-- trusted remains a stronger severity **tag** for reporting; when wired, core/sandbox-produced data will set `trusted=true` without changing the countable gate
+- **trusted** remains a severity **tag** for reporting only — it does **not** gate `refuted` / `supported` (countable does).
+- Sandbox infra failures (timeout, OOM, crash, output exceeded, unavailable, blocked) close the attempt as `result_class=infra` with a stable reason; they never hang or crash the host. `StudyFinalized` still holds.
+- Enforced limits: time, memory (`RLIMIT_AS`), output size, no network unless the catalog check sets `allow_network=True` (user+net `unshare`).
 
 ### M1 limits (call_id + catalog kinds)
 
@@ -167,7 +168,7 @@ Unit + property (`record_claim` V1–V5) + executor e2e:
 
 - Independence: slot-rename, catalog kinds (planner `role=code` ignored), goal reword, intermediate step, all-code upstream, media_type spoof, diamond DFS.
 - Structural: share-any templates; empty criteria → catalog defaults.
-- Countable: agent `put` + core eval → not_met refutes; two independent SESOI mets → live `supported`; foreign / missing-output finalize with specific reason; sandbox `trusted` tagged separately (producer API not wired in production).
+- Countable: agent `put` + core eval → not_met refutes; two independent SESOI mets → live `supported`; foreign / missing-output finalize with specific reason; executable kinds → `put_sandbox` stamps `trusted=true` without changing the countable gate.
 - TOST / non-null SESOI; `value_matches` never `used_sesoi`.
 - Forged journal `severe`/`refute_capable`/`trusted`/`countable` recomputed on replay.
 - Provenance walk safe; ResultRecorded v2→v3 upcaster for `output_kinds`.

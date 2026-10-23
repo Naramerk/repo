@@ -20,7 +20,7 @@ from coscientist.core.domain import (
     Result,
     TaskOutcome,
 )
-from coscientist.core.errors import AttemptClosedError, CatalogError
+from coscientist.core.errors import AttemptClosedError, CatalogError, SandboxInfraError
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.ids import criterion_node_id, result_id
 from coscientist.core.inputs import claim_nodes_from_attempt
@@ -575,16 +575,30 @@ class Executor:
             raise AttemptClosedError(attempt_id)
 
         task = self.get_task(task_id)
-        checks = evaluate_task_checks(
-            self.catalog,
-            task.spec,
-            out,
-            self.artifacts,
-            review_statuses=self.review_statuses,
-            attempt_id=attempt_id,
-            task_kind=str(getattr(task.kind, "value", task.kind)),
-            task_key=task.spec.task_key,
-        )
+        try:
+            checks = evaluate_task_checks(
+                self.catalog,
+                task.spec,
+                out,
+                self.artifacts,
+                review_statuses=self.review_statuses,
+                attempt_id=attempt_id,
+                task_kind=str(getattr(task.kind, "value", task.kind)),
+                task_key=task.spec.task_key,
+            )
+        except SandboxInfraError as e:
+            # Timeout/OOM/crash/unavailable → infra failure; StudyFinalized still holds.
+            provenance = _provenance(self.get_attempt(attempt_id))
+            return await self._commit_failure(
+                attempt_id,
+                study_id,
+                task_id,
+                out,
+                provenance,
+                out.claim,
+                reason=TaskReason.FAILED.value,
+                detail=e.reason,
+            )
         for c in checks:
             if not c.is_code and c.status == ReqStatus.UNASSESSED:
                 self._scheduled_reviews.append(c.check_id)
