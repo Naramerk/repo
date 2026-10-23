@@ -3,20 +3,76 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 import statistics
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from coscientist.core.clock import SystemClock
 from coscientist.core.events import EventEnvelope
-from coscientist.core.projections import fold_events
+from coscientist.core.projections import _row_key, fold_events
 from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success
 
 # DESIGN §3.5a absolute SLO — do not raise; no retries/skips.
 _P99_SLO_MS = 50.0
+
+# Tables ``fold_events`` / ``apply_event`` may populate (compare SQLite ↔ fold).
+_PROJECTION_TABLES = (
+    "studies",
+    "plans",
+    "tasks",
+    "attempts",
+    "results",
+    "artifacts",
+    "effects",
+    "source_fetches",
+    "fetch_calls",
+    "fetch_integrity",
+    "requirements",
+    "hitl_requests",
+    "graph_nodes",
+    "graph_edges",
+    "meta",
+)
+
+
+def _canon_row(row: dict[str, Any]) -> str:
+    return json.dumps(row, sort_keys=True, default=str)
+
+
+async def _sqlite_projection_map(store: Any) -> dict[str, dict[str, dict[str, Any]]]:
+    out: dict[str, dict[str, dict[str, Any]]] = {}
+    for table in _PROJECTION_TABLES:
+        rows = await store.get_projection(table)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            key = _row_key(table, row)
+            if key:
+                out.setdefault(table, {})[key] = row
+    return out
+
+
+def _assert_projection_equiv(
+    sqlite_map: dict[str, dict[str, dict[str, Any]]],
+    folded: dict[str, dict[str, dict[str, Any]]],
+) -> None:
+    """Every table: same keys and same canonical row payloads."""
+    tables = sorted(set(sqlite_map) | set(folded) | set(_PROJECTION_TABLES))
+    for table in tables:
+        left = sqlite_map.get(table) or {}
+        right = folded.get(table) or {}
+        assert set(left) == set(right), (
+            f"{table}: key mismatch sqlite={sorted(left)} fold={sorted(right)}"
+        )
+        for key in sorted(left):
+            assert _canon_row(left[key]) == _canon_row(right[key]), (
+                f"{table}[{key}] sqlite!=fold"
+            )
 
 
 async def _run_load(tmp_path: Path, runtime_cls: type):
@@ -79,6 +135,21 @@ async def test_twenty_parallel_attempts_fsync(tmp_path: Path, runtime_cls: type)
         f"load writes n={len(lat)} mean={statistics.mean(lat):.2f}ms "
         f"events={len(events)} (latency SLO asserted in perf job)"
     )
+    await close_runtime(rt)
+
+
+@pytest.mark.slow
+@pytest.mark.serial
+@pytest.mark.asyncio
+async def test_twenty_parallel_sqlite_projection_matches_fold(
+    tmp_path: Path, runtime_cls: type
+):
+    """After the full 20-parallel load, SQLite projections == fold_events (every table)."""
+    rt = await _run_load(tmp_path, runtime_cls)
+    events = await rt.store.read_all()
+    folded = fold_events(events)
+    sqlite_map = await _sqlite_projection_map(rt.store)
+    _assert_projection_equiv(sqlite_map, folded)
     await close_runtime(rt)
 
 

@@ -380,4 +380,6 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         "GraphEdgeAdded": ("graph_edges",),
         "RequirementUpserted": ("requirements",),
         "ReviewScheduled": ("requirements",),
+        # PR15 (#28): apply_to_map handler lands with that PR; keep the write set ready.
+        "QuestionDisposed": ("question_disposals",),
     }.get(event_type, ())

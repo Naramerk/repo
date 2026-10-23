@@ -9,7 +9,8 @@
 
 ### Perf / journal write SLO
 - Restored honest DESIGN §3.5a measurement: 20 parallel attempts on real-disk `tmp_path`, full `StudyWriter` path (queue → `to_thread` → fence/insert/commit), `writer.latency_samples_ms`, 50ms p99, no retries/skips.
-- **Root cause:** `projections.apply_event` rewrote *every* row in affected tables on each append (thousands of upserts per load) on the fsync-critical path. Now loads only needed tables and upserts keys ``_put`` marks dirty (ContextVar set — not `id(row)`). After durable append, yield before in-memory `_project_local` so the writer can start the next fsync.
+- **Root cause (why only rt_exp tailed):** `projections.apply_event` rewrote *every* row in affected tables on each append (thousands of upserts per load) on the fsync-critical path. Experimental `_project_local` (HITL fold) made the writer queue wait longer between commits, so the O(n²) upsert tax showed up as rt_exp p99 spikes (165–356ms) while rt_core stayed ~6ms. Fix: load only needed tables and upsert keys ``_put`` marks dirty (ContextVar — not `id(row)`). Local measure: dirty-keys alone → p99 ~2–3ms for both runtimes; `asyncio.sleep(0)` after append was **not** required and is omitted so in-memory projection stays seq-ordered with the durable batch.
+- **Behavior:** `SourceFetched` `apply_event` now loads `fetch_calls` so journaled pairs land in the SQLite projection (previously the truncated table list left pairs invisible on the write path). Equivalence: after the 20-parallel load, SQLite projections match `fold_events` over the journal.
 - Removed store commit-only / shm / wal-autocheckpoint / GC test knobs (those hollowed the SLO).
 
 ### Sandbox (host CPU sample order)

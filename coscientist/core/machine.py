@@ -201,9 +201,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         except LeaseLost:
             self._lease_lost = True
             raise
-        # Yield after durable append so the writer can start the next fsync
-        # before in-memory projection (experimental fold is heavier).
-        await asyncio.sleep(0)
+        # Project in durable append order (no ``asyncio.sleep(0)`` — see Executor._append).
         done_ids: list[str] = []
         for ev in events:
             self._project_local(ev)
