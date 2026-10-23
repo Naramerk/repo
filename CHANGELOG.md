@@ -9,10 +9,11 @@
 ### M1 PR11
 - `LoopSpec` on `Plan.loops` (body templates, `scope_*`, mandatory `max_iter` ≤ `Study.max_loop_iter`, `until` predicate).
 - Built-in predicates: `survivors_le`, `criterion_met`, `no_change` (scope-restricted); plugins via `register_loop_predicate` (built-ins + existing plugins non-overridable; NFKC names; `survivors_le.n` exact int `0..10000`, never `float()`).
-- Invalid LoopSpec → typed **`PlanInvalid`** → **`PlanRefused` + immediate `StudyFinalized`** via **`plan_validate.apply_plan_refused`** (PR13-canonical; drop local `plan_refuse`). Fail-closed: unknown predicate / unparsable spec / unknown `scope_*`.
+- Invalid LoopSpec → typed **`PlanInvalid`** → **`PlanRefused` + immediate `StudyFinalized`** via **`plan_validate.apply_plan_refused`**. Fail-closed: unknown predicate / unparsable spec / unknown `scope_*`.
 - Core materializes each iter as `PlanExpanded(loop=true)` at `PLAN_EXPANDED_SCHEMA_VERSION` / `TASK_CREATED_SCHEMA_VERSION`; `depends_on=["loop:<id>"]` NFKC-normalized; orphan barriers → SKIPPED refuse.
 - Until-met → **`LoopCompleted`**. True cap → **`LoopCapped{reason=iteration_cap}`**. Expected eval failures → **`LoopRefused` + `LoopCapped{reason=error}`** (no survivor recompute; never disguised as iteration_cap). Real bugs propagate. Disposition `iteration_cap` only for unresolved questions after a true ≥1-iter cap (answered/outside-loop/infeasible preserved).
-- Upcasters: StudyCreated **v10**, PlanAccepted **v8**, TaskCreated **v10**; duplicate/continuous guards. **Renumber to v11/v11/v9 only after #21/#22/#23 merge.**
+- Upcasters (pre-rebase): StudyCreated **v10**, PlanAccepted **v8**, TaskCreated **v10**; duplicate/continuous guards. Both upcaster registrations stay in the chain.
+- **Rebase after #21 (reviewer-confirmed):** delete any local `plan_refuse.py` and this PR's own finalize `PlanRefused` branch; call **#21's** `plan_validate.apply_plan_refused`; take **TaskCreated v11** / **PlanAccepted v9** (and **StudyCreated v11** after #23). Never merge from this agent.
 
 ### M1 PR14
 - `quote_in_source` (K9): token-boundary + digit-edge; CJK/Thai; super/sub before NFKC; norm cache; presence≠polarity.

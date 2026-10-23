@@ -274,11 +274,7 @@ class LifecycleMixin:
         from coscientist.core.foreach import validate_foreach_specs
         from coscientist.core.loop import is_loop_dep, normalize_loop_id, validate_loop_specs
         from coscientist.core.plan_validate import (
-<<<<<<< HEAD
             PLAN_REFUSED_LINE,
-=======
-            LOOP_PLAN_REFUSED_LINE,
->>>>>>> 10b3315 (fix(pr11): LoopCapped after LoopRefused; int n; fail-closed eval)
             apply_plan_refused,
             freeze_plan_rubrics,
             refuse_detail,
