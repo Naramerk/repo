@@ -44,6 +44,7 @@ from coscientist.core.proposed_check import (
     assert_proposal_preregistered_for_eval,
     bind_proposed_check_reviewer,
     compute_proposal_digest,
+    consume_proposed_check_review,
     fold_proposed_check_event,
     propose_check,
     reject_check,
@@ -285,10 +286,11 @@ async def test_propose_preregisters_digest_before_result(tmp_path: Path) -> None
         digest = row["proposal_digest"]
         assert digest == compute_proposal_digest(row)
         assert row["status"] == "proposed"
-        assert not any(
-            (isinstance(r, dict) and r.get("proposal_id") == pid)
+        assert [
+            r
             for r in (rt.results or {}).values()
-        )
+            if isinstance(r, dict) and r.get("proposal_id") == pid
+        ] == []
         events = await rt.store.read_all()
         proposed = [e for e in events if e.type == "CheckProposed"]
         assert len(proposed) == 1
@@ -2662,10 +2664,11 @@ async def test_approve_already_rejected_raises_for_external(
                 reviewer_attempt_id=ok,
             )
         assert rt._check_proposals[pid]["status"] == "rejected"
-        assert not any(
-            e.type == "CheckApproved" and e.entity_key == pid
+        assert [
+            e
             for e in await rt.store.read_all()
-        )
+            if e.type == "CheckApproved" and e.entity_key == pid
+        ] == []
     finally:
         await close_runtime(rt)
 
@@ -2704,10 +2707,76 @@ async def test_reject_already_approved_raises_except_timeout(
             rt, pid, source="timeout", reason="human_timeout", hitl_request_id_s=rid
         )
         assert rt._check_proposals[pid]["status"] == "approved"
-        assert not any(
-            e.type == "CheckRejected" and e.entity_key == pid
+        assert [
+            e
             for e in await rt.store.read_all()
+            if e.type == "CheckRejected" and e.entity_key == pid
+        ] == []
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_consume_reject_between_bind_and_lock_raises(
+    tmp_path: Path,
+) -> None:
+    """Timeout/reject between consume bind and lock → ValueError (not silent)."""
+    from coscientist.core.proposed_check import hold_proposed_check_decision_lock
+
+    rt = await open_runtime(tmp_path, "st_pr20_consume_race")
+    try:
+        await _create(rt, "consume race")
+        proposer_aid = await _boot_plan(
+            rt,
+            [_exp_spec(task_key="EXP"), _exp_spec(task_key="REV", title="rev")],
         )
+        exp_tid = _task_id(rt, "EXP")
+        rev_tid = _task_id(rt, "REV")
+        pid = await propose_check(
+            rt,
+            target="study",
+            role="prediction",
+            measures="m",
+            justification="j",
+            rejected_templates=_rejected(),
+            check=_value_check(target=1),
+            task_id=exp_tid,
+            attempt_id=proposer_aid,
+            open_hitl=False,
+        )
+        assert pid
+        await schedule_proposed_check_review(
+            rt, pid, timeout_s=60, reviewer_task_id=rev_tid
+        )
+        ok = await rt.start_attempt("REV")
+        assert ok
+        # Bind succeeds first (as consume does before the lock). Hold the lock so
+        # consume's re-bind is a no-op and it parks on acquire — then reject.
+        await bind_proposed_check_reviewer(rt, pid, ok)
+        assert rt._proposed_check_reviews[pid].get("reviewer_attempt_id") == ok
+
+        async with hold_proposed_check_decision_lock(rt, pid):
+            consumer = asyncio.create_task(
+                consume_proposed_check_review(
+                    rt,
+                    pid,
+                    decision="approve",
+                    reviewer_attempt_id=ok,
+                )
+            )
+            await asyncio.sleep(0)
+            assert not consumer.done()
+            # Internal timeout/stale path settles while consumer waits on the lock.
+            await reject_check(rt, pid, source="timeout", reason="human_timeout")
+            assert rt._check_proposals[pid]["status"] == "rejected"
+        with pytest.raises(ValueError, match="already rejected"):
+            await consumer
+        assert [
+            e
+            for e in await rt.store.read_all()
+            if e.type == "CheckApproved" and e.entity_key == pid
+        ] == []
+        assert rt._check_proposals[pid]["status"] == "rejected"
     finally:
         await close_runtime(rt)
 
@@ -2728,16 +2797,22 @@ async def test_proposed_check_decision_lock_reentry_and_child(
         pid = "prop_lock_test"
         lock = proposed_check_decision_lock(rt, pid)
 
+        def owners() -> dict:
+            return getattr(rt, "_hitl_decision_lock_owners", {}) or {}
+
         # Re-entry in the same task.
         nested = 0
         async with hold_proposed_check_decision_lock(rt, pid):
             assert lock.locked()
+            assert owners().get(pid) is asyncio.current_task()
             async with hold_proposed_check_decision_lock(rt, pid):
                 nested += 1
                 assert lock.locked()
+                assert owners().get(pid) is asyncio.current_task()
             nested += 1
         assert nested == 2
         assert not lock.locked()
+        assert owners() == {}
 
         # Exception inside the section still releases.
         with pytest.raises(RuntimeError, match="boom"):
@@ -2745,10 +2820,10 @@ async def test_proposed_check_decision_lock_reentry_and_child(
                 assert lock.locked()
                 raise RuntimeError("boom")
         assert not lock.locked()
+        assert owners() == {}
 
         # Child task must not false-reenter; it waits until parent releases.
         child_entered = asyncio.Event()
-        parent_release = asyncio.Event()
 
         async def _child() -> str:
             async with hold_proposed_check_decision_lock(rt, pid):
@@ -2760,11 +2835,12 @@ async def test_proposed_check_decision_lock_reentry_and_child(
             await asyncio.sleep(0)
             assert not child_entered.is_set()
             assert not child.done()
-            parent_release.set()
-        await parent_release.wait()
+            assert owners().get(pid) is asyncio.current_task()
+        # Exiting the parent section releases; child may now acquire.
         assert await child == "child"
         assert child_entered.is_set()
         assert not lock.locked()
+        assert owners() == {}
 
         # Cancellation while waiting to acquire.
         hold = asyncio.Event()
@@ -2777,6 +2853,7 @@ async def test_proposed_check_decision_lock_reentry_and_child(
         holder = asyncio.create_task(_holder())
         await hold.wait()
         assert lock.locked()
+        assert owners().get(pid) is holder
 
         async def _waiter() -> None:
             async with hold_proposed_check_decision_lock(rt, pid):
@@ -2791,6 +2868,7 @@ async def test_proposed_check_decision_lock_reentry_and_child(
         with pytest.raises(asyncio.CancelledError):
             await holder
         assert not lock.locked()
+        assert owners() == {}
     finally:
         await close_runtime(rt)
 

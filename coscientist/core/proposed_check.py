@@ -1131,12 +1131,27 @@ async def consume_proposed_check_review(
     reviewer_attempt_id: str,
     reason: str = "reviewer_decision",
 ) -> None:
-    """Consumer of ReviewScheduled(kind=proposed_check_review): reviewer decides."""
+    """Consumer of ReviewScheduled(kind=proposed_check_review): reviewer decides.
+
+    Bind runs before the lock (needs a pending proposal). Under the lock the
+    status is re-checked fail-closed: a concurrent timeout/stale reject between
+    bind and acquire must raise (never silent success for the external reviewer).
+    """
     await bind_proposed_check_reviewer(runtime, proposal_id_s, reviewer_attempt_id)
     async with hold_proposed_check_decision_lock(runtime, proposal_id_s):
         row = get_proposal(runtime, proposal_id_s)
-        if row is None or row.get("status") != "proposed":
-            return
+        if row is None:
+            raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
+        status = row.get("status")
+        if status != "proposed":
+            # External reviewer path — same fail-closed contract as approve/reject.
+            if status == "rejected":
+                raise ValueError(f"proposal already rejected: {proposal_id_s!r}")
+            if status == "approved":
+                raise ValueError(f"proposal already approved: {proposal_id_s!r}")
+            raise ValueError(
+                f"proposal not pending review: {proposal_id_s!r} status={status!r}"
+            )
         if decision == "approve":
             await approve_check(
                 runtime,
