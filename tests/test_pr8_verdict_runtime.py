@@ -51,7 +51,13 @@ _DERIVED_OK = {
     "uses_sesoi": True,
     "used_sesoi": True,
     "predicted_direction": "positive",
-    "effect": {"est": 1.5, "ci_low": 1.5, "ci_high": 1.5, "trusted": True},
+    "effect": {
+        "est": 1.5,
+        "ci_low": 1.5,
+        "ci_high": 1.5,
+        "trusted": True,
+        "producer": "sandbox",
+    },
     "check_role": "prediction",
     "refute_capable": True,
     "severe": True,
@@ -876,6 +882,13 @@ def test_criterion_status_not_met_from_failed_check():
             is_code=True,
             required=False,
             role="prediction",
+            # Trusted metric evidence required for inconsistent / not_met.
+            effect={
+                "est": 0.0,
+                "kind": "point",
+                "producer": "sandbox",
+                "trusted": True,
+            },
         )
     ]
     attrs = _derive_claim_core_attrs(
@@ -1034,7 +1047,8 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
     assert any(n.kind == "criterion" for n in rt.graph.nodes_by_kind("criterion"))
     aid0 = await rt.start_attempt("E0", provenance="real")
     # value_match required, target 225 — wrong count ⇒ FAILED/PARTIAL scientific.
-    art = arts.put(
+    # Sandbox producer required for trusted refute (agent put cannot refute).
+    art = arts.put_sandbox(
         b'{"count": 999}',
         make_tool_ref(f"{aid0}:1"),
         name="main",
@@ -1062,6 +1076,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
     assert claim.attrs["check_role"] == "prediction"
     assert claim.attrs["frozen"] is True
     assert claim.attrs["attempt_outcome"] in ("FAILED", "PARTIAL")
+    assert (claim.attrs.get("effect") or {}).get("trusted") is True
     res = rt.results[aid0]
     assert res.get("result_class") == "scientific"
     d = dispositions(
@@ -1271,7 +1286,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
     )
     aid = await rt.start_attempt("E_ref", provenance="real")
     await rt.record_budget_debit(spent_rub=Decimal("1.00"), request_id="debit-1")
-    art = arts.put(
+    art = arts.put_sandbox(
         b'{"count": 999}',
         make_tool_ref(f"{aid}:1"),
         name="main",
@@ -1345,7 +1360,13 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
             uses_sesoi=True,
             used_sesoi=True,
             predicted_direction="positive",
-            effect={"est": 1.5, "ci_low": 1.5, "ci_high": 1.5, "trusted": True},
+            effect={
+                "est": 1.5,
+                "ci_low": 1.5,
+                "ci_high": 1.5,
+                "trusted": True,
+                "producer": "sandbox",
+            },
             claim_outcome="consistent",
             severe=True,
         )

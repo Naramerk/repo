@@ -116,17 +116,23 @@ class Claim:
         if self.used_sesoi is None:
             self.used_sesoi = bool(self.uses_sesoi)
         if self.effect is None and self.sesoi is not None:
-            # Default effect exceeds sesoi; trusted=True so oracle unit tests
-            # can exercise severe gates (live Executor keeps trusted=False).
+            # Default effect exceeds sesoi; sandbox producer so oracle unit tests
+            # can exercise severe / refute gates (agent put stays untrusted).
             est = float(self.sesoi) + 1.0
             self.effect = {
                 "est": est,
                 "ci_low": est,
                 "ci_high": est,
                 "trusted": True,
+                "producer": "sandbox",
             }
-        elif isinstance(self.effect, dict) and "trusted" not in self.effect:
-            self.effect = {**self.effect, "trusted": True}
+        elif isinstance(self.effect, dict):
+            patched = dict(self.effect)
+            if "trusted" not in patched:
+                patched["trusted"] = True
+            if "producer" not in patched and patched.get("trusted") is True:
+                patched["producer"] = "sandbox"
+            self.effect = patched
         trusted = bool(
             isinstance(self.effect, dict) and self.effect.get("trusted") is True
         )

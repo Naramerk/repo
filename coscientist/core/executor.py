@@ -217,6 +217,8 @@ def _criterion_freeze_attrs(
 
 def _effect_from_checks(checks: list[Any]) -> tuple[dict[str, Any] | None, bool]:
     """Core-computed effect from CheckResult.effect (never agent detail / claims)."""
+    from coscientist.core.verdict import recompute_effect_trusted
+
     for c in checks or ():
         if _check_role(c) != "prediction":
             continue
@@ -227,11 +229,14 @@ def _effect_from_checks(checks: list[Any]) -> tuple[dict[str, Any] | None, bool]
             effect: dict[str, Any] = {
                 "est": float(data["est"]) if data.get("est") is not None else None,
                 "kind": str(data.get("kind") or "point"),
-                "trusted": bool(data.get("trusted")),
+                "producer": str(data.get("producer") or "agent"),
             }
             if data.get("ci_low") is not None and data.get("ci_high") is not None:
                 effect["ci_low"] = float(data["ci_low"])
                 effect["ci_high"] = float(data["ci_high"])
+            recomputed = recompute_effect_trusted(effect)
+            if recomputed is not None:
+                effect = recomputed
         except (TypeError, ValueError, KeyError):
             continue
         used = bool(_check_field(c, "used_sesoi"))
@@ -352,6 +357,7 @@ def _derive_claim_core_attrs(
         results=results_map,
     )
     # Plan order (deduped); shared-any structural merge uses the set.
+    # Empty plan criteria → catalog.defaults["experiment"] (same as evaluate_task_checks).
     criterion_template_ids: list[str] = []
     seen_tmpl: set[str] = set()
     for r in criteria:
@@ -359,6 +365,12 @@ def _derive_claim_core_attrs(
         if tid and tid not in seen_tmpl:
             seen_tmpl.add(tid)
             criterion_template_ids.append(tid)
+    if not criterion_template_ids and catalog is not None:
+        for tid in getattr(catalog, "defaults", {}).get("experiment", []) or []:
+            stid = str(tid)
+            if stid and stid not in seen_tmpl:
+                seen_tmpl.add(stid)
+                criterion_template_ids.append(stid)
     # Base key is experiment_id; overlap / structural merge happens at count time.
     indep = independence_key_for(experiment_id=exp_id or None)
     probe = type(
@@ -606,6 +618,10 @@ class Executor:
         unassessed = [c.check_id for c in checks if c.status == ReqStatus.UNASSESSED]
         rid = result_id(attempt_id)
         final = downgrade.to if downgrade else computed
+        from coscientist.core.verdict import output_kinds_from_task_spec
+
+        # Core-owned code|data from plan OutputSpec (ignore agent media_type).
+        output_kinds = output_kinds_from_task_spec(getattr(task, "spec", None))
         payload = {
             "result_id": rid,
             "attempt_id": attempt_id,
@@ -620,6 +636,7 @@ class Executor:
             "output_map": {
                 name: h.artifact_id for name, h in (out.outputs or {}).items()
             },
+            "output_kinds": output_kinds,
             "agent_claim": claim.value if claim else None,
             "downgrade": (
                 downgrade.model_dump(mode="json", by_alias=True) if downgrade else None

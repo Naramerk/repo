@@ -144,6 +144,8 @@ class HitlPolicy(Frozen):
 
 
 ArtifactRole = Literal["paper", "data", "code", "figure", "table", "log", "report"]
+# Who stored the artifact bytes. Agent paths are never trusted for verdicts.
+ArtifactProducer = Literal["agent", "core", "sandbox"]
 
 
 class OutputSpec(Frozen):
@@ -151,7 +153,7 @@ class OutputSpec(Frozen):
     media_type: str
     schema_ref: str | None = None
     required: bool = True
-    # Core artifact role (graph_schema); used for independence data-vs-code.
+    # Plan-accepted role (core-owned after accept_plan); independence code-vs-data.
     role: ArtifactRole | None = None
 
 
@@ -394,6 +396,8 @@ class Artifact(Frozen):
     produced_by: ToolCallRef
     schema_ref: str | None = None
     role: ArtifactRole | None = None
+    # Core-stamped; agent ``put`` always ``agent``. Never settable by AgentTaskOutput.
+    producer: ArtifactProducer = "agent"
 
 
 class Clarification(Frozen):
@@ -492,8 +496,8 @@ class Catalog(Frozen):
     rules: list[RuleRef] = Field(default_factory=list)
     templates: list[RequirementTemplate] = Field(default_factory=list)
     defaults: dict[str, list[str]] = Field(default_factory=dict)  # node_kind -> template ids
-    # Independence: input artifacts are DATA unless listed here (catalog-authored).
-    # Planner OutputSpec.role / media_type are ignored for this decision.
+    # Legacy catalog hint; independence code-vs-data uses plan OutputSpec /
+    # ResultRecorded.output_kinds (core-owned), not this list or agent media_type.
     code_output_names: list[str] = Field(default_factory=list)
 
 

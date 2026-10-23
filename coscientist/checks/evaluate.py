@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from coscientist.core.artifacts import LocalArtifactStore
+from coscientist.core.artifacts import (
+    LocalArtifactStore,
+    artifact_producer_trusted,
+)
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import (
     AgentTaskOutput,
@@ -76,6 +79,20 @@ def _cmp(op: str, left: Any, right: Any, tolerance: float | None) -> bool:
         ">": lambda a, b: a > b,
     }
     return ops[op](left, right)
+
+
+def _effect_trust_fields(
+    artifacts: LocalArtifactStore, artifact_id: str | None
+) -> dict[str, Any]:
+    """Core-stamped producer + trusted from artifact meta (agent cannot set)."""
+    meta = artifacts.get_meta(artifact_id) if artifact_id else None
+    producer = getattr(meta, "producer", "agent") if meta is not None else "agent"
+    if producer not in ("agent", "core", "sandbox"):
+        producer = "agent"
+    return {
+        "producer": producer,
+        "trusted": artifact_producer_trusted(meta),
+    }
 
 
 def _extract_ci(doc: Any, left: Any) -> dict[str, float] | None:
@@ -183,6 +200,7 @@ def evaluate_code_check(
 
             effect: dict[str, Any] | None = None
             used_sesoi = False
+            trust = _effect_trust_fields(artifacts, handle.artifact_id)
             if check.kind == "json_pointer":
                 ok = left is not None
             elif check.kind == "value_matches":
@@ -190,11 +208,7 @@ def evaluate_code_check(
                 ok = left == check.target
                 if isinstance(left, (int, float)):
                     est = float(left)
-                    effect = {
-                        "est": est,
-                        "kind": "point",
-                        "trusted": False,
-                    }
+                    effect = {"est": est, "kind": "point", **trust}
             else:
                 # metric_threshold — point-estimate exceedance or TOST with real CI.
                 op = check.op or "=="
@@ -211,8 +225,7 @@ def evaluate_code_check(
                             "ci_low": ci["ci_low"],
                             "ci_high": ci["ci_high"],
                             "kind": "interval",
-                            # AgentTaskOutput artifacts are agent-written (see DESIGN).
-                            "trusted": False,
+                            **trust,
                         }
                         used_sesoi = True
                         ok = (-float(sesoi)) < ci["ci_low"] and ci["ci_high"] < float(
@@ -227,7 +240,7 @@ def evaluate_code_check(
                     # Honest point-estimate check (not TOST).
                     used_sesoi = True
                     est = float(left)
-                    effect = {"est": est, "kind": "point", "trusted": False}
+                    effect = {"est": est, "kind": "point", **trust}
                     if predicted_direction == "positive":
                         ok = est > float(sesoi)
                     elif predicted_direction == "negative":
@@ -237,11 +250,7 @@ def evaluate_code_check(
                 else:
                     ok = _cmp(op, left, check.target, check.tolerance)
                     if isinstance(left, (int, float)):
-                        effect = {
-                            "est": float(left),
-                            "kind": "point",
-                            "trusted": False,
-                        }
+                        effect = {"est": float(left), "kind": "point", **trust}
 
             return CheckResult(
                 check_id=check_id,

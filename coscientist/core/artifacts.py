@@ -5,14 +5,20 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from coscientist.core.digest import sha256_hex
-from coscientist.core.domain import Artifact, ArtifactRole, ToolCallRef
+from coscientist.core.domain import (
+    Artifact,
+    ArtifactProducer,
+    ArtifactRole,
+    ToolCallRef,
+)
 from coscientist.core.errors import ArtifactCorrupt, ArtifactRejected
 
 
 def _infer_artifact_role(media_type: str) -> ArtifactRole:
-    """Core media_type → role (never planner input name)."""
+    """Fallback media_type → role when OutputSpec.role is absent."""
     mt = (media_type or "").lower()
     if any(
         tok in mt
@@ -63,13 +69,14 @@ class LocalArtifactStore:
             raise ArtifactCorrupt(f"sha256 mismatch for cas/{digest}")
         return data
 
-    def put(
+    def _store(
         self,
         content: bytes,
         produced_by: ToolCallRef,
         *,
         name: str,
         media_type: str,
+        producer: ArtifactProducer,
         schema_ref: str | None = None,
         role: str | None = None,
         attempt_closed: bool = False,
@@ -79,10 +86,12 @@ class LocalArtifactStore:
         digest = self.put_cas(content, tmp_name=produced_by.call_id)
         call_part = sha256_hex(produced_by.call_id)[:8]
         artifact_id = f"art_{digest[:16]}_{call_part}"
-        # code|data are core-owned via media_type (planner role= ignored for those).
-        # Explicit paper/figure/table/log/report roles remain caller-set.
         media_role = _infer_artifact_role(media_type)
+        # Display role: paper/figure/… honored; code|data only from core/sandbox
+        # writers (OutputSpec). Agent ``put`` ignores code|data role args.
         if role in ("paper", "figure", "table", "log", "report"):
+            inferred = role
+        elif role in ("code", "data") and producer in ("core", "sandbox"):
             inferred = role
         else:
             inferred = media_role
@@ -96,12 +105,82 @@ class LocalArtifactStore:
             produced_by=produced_by,
             schema_ref=schema_ref,
             role=inferred,  # type: ignore[arg-type]
+            producer=producer,
         )
         self._index[artifact_id] = art
         (self.meta / f"{artifact_id}.json").write_text(
             art.model_dump_json(), encoding="utf-8"
         )
         return art
+
+    def put(
+        self,
+        content: bytes,
+        produced_by: ToolCallRef,
+        *,
+        name: str,
+        media_type: str,
+        schema_ref: str | None = None,
+        role: str | None = None,
+        attempt_closed: bool = False,
+    ) -> Artifact:
+        """Agent-controlled path — always ``producer=agent`` (never trusted)."""
+        return self._store(
+            content,
+            produced_by,
+            name=name,
+            media_type=media_type,
+            schema_ref=schema_ref,
+            role=role,
+            attempt_closed=attempt_closed,
+            producer="agent",
+        )
+
+    def put_core(
+        self,
+        content: bytes,
+        produced_by: ToolCallRef,
+        *,
+        name: str,
+        media_type: str,
+        schema_ref: str | None = None,
+        role: str | None = None,
+        attempt_closed: bool = False,
+    ) -> Artifact:
+        """Core-owned write (trusted for verdict evidence)."""
+        return self._store(
+            content,
+            produced_by,
+            name=name,
+            media_type=media_type,
+            schema_ref=schema_ref,
+            role=role,
+            attempt_closed=attempt_closed,
+            producer="core",
+        )
+
+    def put_sandbox(
+        self,
+        content: bytes,
+        produced_by: ToolCallRef,
+        *,
+        name: str,
+        media_type: str,
+        schema_ref: str | None = None,
+        role: str | None = None,
+        attempt_closed: bool = False,
+    ) -> Artifact:
+        """Sandbox execution of catalog/check code (trusted for verdict evidence)."""
+        return self._store(
+            content,
+            produced_by,
+            name=name,
+            media_type=media_type,
+            schema_ref=schema_ref,
+            role=role,
+            attempt_closed=attempt_closed,
+            producer="sandbox",
+        )
 
     def get_meta(self, artifact_id: str) -> Artifact | None:
         if artifact_id in self._index:
@@ -132,3 +211,25 @@ def make_tool_ref(call_id: str, tool: str = "local", args: str = "") -> ToolCall
         started_at=datetime.now(UTC),
         ended_at=datetime.now(UTC),
     )
+
+
+def artifact_producer_trusted(
+    meta: object | None,
+) -> bool:
+    """True when core stamped producer=core|sandbox."""
+    if meta is None:
+        return False
+    return getattr(meta, "producer", "agent") in ("core", "sandbox")
+
+
+def output_kind_from_spec(
+    *,
+    role: str | None,
+    media_type: str | None,
+) -> Literal["code", "data"]:
+    """Core kind from plan OutputSpec (role preferred; else media_type)."""
+    if role == "code":
+        return "code"
+    if role in ("data", "paper", "figure", "table", "log", "report"):
+        return "data"
+    return "code" if _infer_artifact_role(media_type or "") == "code" else "data"

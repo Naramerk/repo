@@ -486,7 +486,10 @@ def runtime_claim_from_node(
         effect_raw = attrs.get("effect")
         effect: dict[str, Any] | None
         if isinstance(effect_raw, dict):
-            effect = dict(effect_raw)
+            from coscientist.core.verdict import recompute_effect_trusted
+
+            # MN2: recompute trusted from core producer; never trust journal bit.
+            effect = recompute_effect_trusted(dict(effect_raw))
         else:
             effect = None
         frozen = _coerce_bool(attrs.get("frozen"))

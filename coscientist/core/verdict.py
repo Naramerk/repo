@@ -100,10 +100,9 @@ def _media_type_is_code(media_type: str | None) -> bool:
 
 
 def artifact_is_code(meta: Any | None) -> bool:
-    """True when the **artifact** is core-recorded as code. Unknown → DATA.
+    """Legacy meta heuristic (role / media_type). Prefer ``output_kinds``.
 
-    Uses ``Artifact.role`` from the store (code|data owned by core via media_type
-    at ``put`` time). Never uses InputBinding slot names. Planner OutputSpec ignored.
+    Unknown → DATA. Never uses InputBinding slot names.
     """
     if meta is None:
         return False
@@ -124,6 +123,62 @@ def binding_is_code(
 ) -> bool:
     """Deprecated: use ``artifact_is_code(meta)``. Slot names are ignored."""
     del input_name, code_output_names
+    return artifact_is_code(meta)
+
+
+def output_kinds_from_task_spec(spec: Any | None) -> dict[str, str]:
+    """name → code|data from plan ``OutputSpec`` (core-owned at record time)."""
+    from coscientist.core.artifacts import output_kind_from_spec
+
+    out: dict[str, str] = {}
+    if spec is None:
+        return out
+    for ospec in getattr(spec, "expected_outputs", None) or ():
+        name = str(getattr(ospec, "name", "") or "")
+        if not name:
+            continue
+        out[name] = output_kind_from_spec(
+            role=getattr(ospec, "role", None),
+            media_type=getattr(ospec, "media_type", None),
+        )
+    return out
+
+
+def _kind_from_producer(
+    artifact_id: str,
+    producer: Mapping[str, Any] | None,
+) -> Literal["code", "data"] | None:
+    """Core ``output_kinds`` for this artifact if the producer recorded them."""
+    if producer is None:
+        return None
+    kinds = producer.get("output_kinds")
+    if not isinstance(kinds, Mapping) or not kinds:
+        return None
+    omap = producer.get("output_map")
+    if not isinstance(omap, Mapping):
+        return None
+    for name, aid in omap.items():
+        if aid and str(aid) == artifact_id and name in kinds:
+            k = kinds[name]
+            return "code" if k == "code" else "data"
+    # Produced but no OutputSpec entry → DATA (never agent media_type).
+    return "data"
+
+
+def _walk_artifact_is_code(
+    artifact_id: str,
+    *,
+    producers: Mapping[str, Mapping[str, Any]],
+    artifact_lookup: Callable[[str], Any] | None,
+    notes: list[str],
+) -> bool:
+    """Code vs data: ``ResultRecorded.output_kinds`` wins; else legacy meta."""
+    kind = _kind_from_producer(artifact_id, producers.get(artifact_id))
+    if kind is not None:
+        return kind == "code"
+    meta = _safe_get_meta(
+        artifact_id, artifact_lookup=artifact_lookup, notes=notes
+    )
     return artifact_is_code(meta)
 
 
@@ -179,26 +234,35 @@ def _content_digest(
 
 def _producer_index(
     results: Mapping[str, Mapping[str, Any]] | None,
+    *,
+    notes: list[str] | None = None,
 ) -> dict[str, Mapping[str, Any]]:
-    """artifact_id → ResultRecorded payload (first writer wins)."""
+    """artifact_id → ResultRecorded payload (first writer wins). Never raises."""
     idx: dict[str, Mapping[str, Any]] = {}
+    note_buf = notes if notes is not None else []
     if not results:
         return idx
-    seen_payloads: set[int] = set()
-    for _key, payload in results.items():
-        if not isinstance(payload, Mapping):
-            continue
-        pid = id(payload)
-        if pid in seen_payloads:
-            continue
-        seen_payloads.add(pid)
-        for aid in payload.get("artifacts") or ():
-            idx.setdefault(str(aid), payload)
-        omap = payload.get("output_map")
-        if isinstance(omap, Mapping):
-            for aid in omap.values():
-                if aid:
+    try:
+        seen_payloads: set[int] = set()
+        for _key, payload in results.items():
+            try:
+                if not isinstance(payload, Mapping):
+                    continue
+                pid = id(payload)
+                if pid in seen_payloads:
+                    continue
+                seen_payloads.add(pid)
+                for aid in payload.get("artifacts") or ():
                     idx.setdefault(str(aid), payload)
+                omap = payload.get("output_map")
+                if isinstance(omap, Mapping):
+                    for aid in omap.values():
+                        if aid:
+                            idx.setdefault(str(aid), payload)
+            except Exception as exc:  # noqa: BLE001 — never crash StudyFinalized
+                note_buf.append(f"producer_index:{type(exc).__name__}")
+    except Exception as exc:  # noqa: BLE001
+        note_buf.append(f"producer_index:{type(exc).__name__}")
     return idx
 
 
@@ -211,110 +275,118 @@ def root_data_digests_from_bindings(
 ) -> tuple[list[str], list[str]]:
     """Content digests of **root** data artifacts reachable from bindings.
 
-    Walks InputBinding → producer ResultRecorded.inputs iteratively (depth/cycle
-    guarded). Code vs data from **artifact** metadata (never slot names). An
-    artifact with no upstream producer, or whose upstream inputs are all code
-    (generation/simulation), is itself a root. Unknown meta → DATA.
+    Walks InputBinding → producer ResultRecorded.inputs (depth-guarded DFS).
+    Code vs data from core ``ResultRecorded.output_kinds`` (plan OutputSpec);
+    agent ``media_type`` is ignored when kinds are present. Diamonds reuse a
+    ``done`` set; only true cycles (``on_stack``) are noted. An artifact with
+    no upstream producer, or whose upstream inputs are all code, is a root.
+    Unknown kind → DATA.
 
     Returns ``(sorted_root_digests, error_notes)``. Never raises.
     """
     del code_output_names  # slot-name catalog lists are not used for this decision
-    producers = _producer_index(results)
-    roots: set[str] = set()
     notes: list[str] = []
+    producers = _producer_index(results, notes=notes)
+    roots: set[str] = set()
 
-    # Stack entries: (artifact_id, fallback_digest, depth)
-    stack: list[tuple[str, str | None, int]] = []
+    def _walk(artifact_id: str, fallback: str | None, depth: int,
+              on_stack: set[str], done: set[str]) -> None:
+        if not artifact_id:
+            return
+        if artifact_id in done:
+            return
+        if artifact_id in on_stack:
+            notes.append(f"cycle:{artifact_id}")
+            return
+        if depth > _MAX_PROVENANCE_DEPTH:
+            notes.append(f"depth:{artifact_id}")
+            d = _content_digest(
+                artifact_id,
+                artifact_lookup=artifact_lookup,
+                fallback=fallback,
+                notes=notes,
+            )
+            if d:
+                roots.add(d)
+            done.add(artifact_id)
+            return
+
+        on_stack.add(artifact_id)
+        try:
+            if _walk_artifact_is_code(
+                artifact_id,
+                producers=producers,
+                artifact_lookup=artifact_lookup,
+                notes=notes,
+            ):
+                return
+
+            producer = producers.get(artifact_id)
+            if producer is None:
+                d = _content_digest(
+                    artifact_id,
+                    artifact_lookup=artifact_lookup,
+                    fallback=fallback,
+                    notes=notes,
+                )
+                if d:
+                    roots.add(d)
+                return
+
+            upstream = [
+                b
+                for b in (producer.get("inputs") or ())
+                if _binding_fields(b)[0] == "artifact" and _binding_fields(b)[2]
+            ]
+            if not upstream:
+                d = _content_digest(
+                    artifact_id,
+                    artifact_lookup=artifact_lookup,
+                    fallback=fallback,
+                    notes=notes,
+                )
+                if d:
+                    roots.add(d)
+                return
+
+            data_children: list[tuple[str, str | None]] = []
+            for b in upstream:
+                _k, _n, child, cdig = _binding_fields(b)
+                if not child:
+                    continue
+                if _walk_artifact_is_code(
+                    child,
+                    producers=producers,
+                    artifact_lookup=artifact_lookup,
+                    notes=notes,
+                ):
+                    continue
+                data_children.append((child, cdig))
+
+            if not data_children:
+                d = _content_digest(
+                    artifact_id,
+                    artifact_lookup=artifact_lookup,
+                    fallback=fallback,
+                    notes=notes,
+                )
+                if d:
+                    roots.add(d)
+                return
+
+            for child, cdig in data_children:
+                _walk(child, cdig, depth + 1, on_stack, done)
+        finally:
+            on_stack.discard(artifact_id)
+            done.add(artifact_id)
+
+    on_stack: set[str] = set()
+    done: set[str] = set()
     for b in bindings or ():
         kind, _iname, aid, bdig = _binding_fields(b)
         if kind != "artifact" or not aid:
             continue
-        stack.append((aid, bdig, 0))
-
-    seen: set[str] = set()
-    while stack:
-        artifact_id, fallback, depth = stack.pop()
-        if not artifact_id:
-            continue
-        if artifact_id in seen:
-            notes.append(f"cycle:{artifact_id}")
-            continue
-        if depth > _MAX_PROVENANCE_DEPTH:
-            notes.append(f"depth:{artifact_id}")
-            # Conservative: treat as data root using best-available digest.
-            d = _content_digest(
-                artifact_id,
-                artifact_lookup=artifact_lookup,
-                fallback=fallback,
-                notes=notes,
-            )
-            if d:
-                roots.add(d)
-            continue
-        seen.add(artifact_id)
-
-        meta = _safe_get_meta(
-            artifact_id, artifact_lookup=artifact_lookup, notes=notes
-        )
-        if artifact_is_code(meta):
-            # Code hop — skip (not a data root, do not walk through).
-            continue
-
-        producer = producers.get(artifact_id)
-        if producer is None:
-            d = _content_digest(
-                artifact_id,
-                artifact_lookup=artifact_lookup,
-                fallback=fallback,
-                notes=notes,
-            )
-            if d:
-                roots.add(d)
-            continue
-
-        upstream = [
-            b
-            for b in (producer.get("inputs") or ())
-            if _binding_fields(b)[0] == "artifact" and _binding_fields(b)[2]
-        ]
-        if not upstream:
-            d = _content_digest(
-                artifact_id,
-                artifact_lookup=artifact_lookup,
-                fallback=fallback,
-                notes=notes,
-            )
-            if d:
-                roots.add(d)
-            continue
-
-        # Partition upstream into data vs code via artifact meta (not slot names).
-        data_children: list[tuple[str, str | None]] = []
-        for b in upstream:
-            _k, _n, child, cdig = _binding_fields(b)
-            if not child:
-                continue
-            child_meta = _safe_get_meta(
-                child, artifact_lookup=artifact_lookup, notes=notes
-            )
-            if artifact_is_code(child_meta):
-                continue
-            data_children.append((child, cdig))
-
-        if not data_children:
-            # All upstream inputs are code (generation/simulation) → this is a root.
-            d = _content_digest(
-                artifact_id,
-                artifact_lookup=artifact_lookup,
-                fallback=fallback,
-                notes=notes,
-            )
-            if d:
-                roots.add(d)
-            continue
-
-        for child, cdig in data_children:
-            stack.append((child, cdig, depth + 1))
+        _walk(aid, bdig, 0, on_stack, done)
 
     return sorted(roots), notes
 
@@ -508,11 +580,41 @@ def effect_has_interval(effect: Mapping[str, Any] | None) -> bool:
     return lo < hi
 
 
+def recompute_effect_trusted(
+    effect: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Recompute ``trusted`` from core ``producer``; ignore journal ``trusted``."""
+    if not isinstance(effect, Mapping):
+        return None
+    out = dict(effect)
+    producer = out.get("producer", "agent")
+    if producer not in ("agent", "core", "sandbox"):
+        producer = "agent"
+    out["producer"] = producer
+    out["trusted"] = producer in ("core", "sandbox")
+    return out
+
+
 def effect_producer_trusted(effect: Mapping[str, Any] | None) -> bool:
-    """True when effect.trusted is core/sandbox (not agent-written)."""
+    """True when metric producer is core/sandbox (symmetric trust gate)."""
     if not isinstance(effect, Mapping):
         return False
+    producer = effect.get("producer")
+    if producer in ("core", "sandbox"):
+        return True
+    if producer == "agent":
+        return False
+    # Hand-built unit effects may stamp trusted=True without producer.
     return effect.get("trusted") is True
+
+
+def evidence_trusted_for_verdict(claim: Any) -> bool:
+    """Trusted evidence required for both refuted and supported counting."""
+    effect = getattr(claim, "effect", None)
+    if effect_producer_trusted(effect):
+        return True
+    # Explicit evidence_trusted for unit tests without a full effect blob.
+    return getattr(claim, "evidence_trusted", None) is True
 
 
 def effect_is_trusted(effect: Mapping[str, Any] | None) -> bool:
@@ -647,12 +749,20 @@ def classify_outcome(
     effect: Mapping[str, Any] | None = None,
     r17_ok: bool = True,
 ) -> tuple[str, str | None, bool]:
-    """Return (validity, outcome|None, severe_hint_inputs_ok)."""
+    """Return (validity, outcome|None, severe_hint_inputs_ok).
+
+    Untrusted failing metrics are indeterminate (never refutation). Trusted
+    evidence is required symmetrically for inconsistent and severe/consistent.
+    """
     if not validity_ok or not r17_ok:
         return "invalid", None, False
     preds = [s for s in prediction_statuses if s]
     if any(s == "FAILED" or s == "not_met" for s in preds):
-        outcome: str | None = "inconsistent"
+        # Agent-written / untrusted failing metric → never a counting refute.
+        if not effect_producer_trusted(effect):
+            outcome: str | None = "indeterminate"
+        else:
+            outcome = "inconsistent"
     elif preds and all(s in ("PASSED", "MET", "met") for s in preds):
         outcome = "consistent"
     else:
@@ -765,8 +875,14 @@ def hypothesis_verdict(
 
     counted = [c for c in about if claim_counts_for_verdict(c)]
 
+    # Symmetric trust: untrusted inconsistent never counts toward k_ref.
     inconsistent = distinct_by_key(
-        [c for c in counted if effective_outcome(c) == "inconsistent"]
+        [
+            c
+            for c in counted
+            if effective_outcome(c) == "inconsistent"
+            and evidence_trusted_for_verdict(c)
+        ]
     )
     consistent_severe = distinct_by_key(
         [

@@ -63,8 +63,14 @@ def _c(**kw) -> RuntimeClaim:
         used_sesoi=True,
         predicts_null=False,
         predicted_direction="positive",
-        # Unit tests stamp trusted=True to exercise gates; live Executor keeps False.
-        effect={"est": 1.5, "ci_low": 1.5, "ci_high": 1.5, "trusted": True},
+        # Unit tests stamp trusted sandbox producer to exercise gates.
+        effect={
+            "est": 1.5,
+            "ci_low": 1.5,
+            "ci_high": 1.5,
+            "trusted": True,
+            "producer": "sandbox",
+        },
         refute_capable=True,
     )
     base.update(kw)
@@ -572,10 +578,17 @@ def test_all_code_upstream_intermediate_is_root():
         "GEN#1": {
             "artifacts": [mid_id],
             "output_map": {"out": mid_id},
+            "output_kinds": {"out": "data"},
             "inputs": [
                 {"kind": "artifact", "input": "script", "artifact_id": code_id},
             ],
-        }
+        },
+        "CODE#1": {
+            "artifacts": [code_id],
+            "output_map": {"script": code_id},
+            "output_kinds": {"script": "code"},
+            "inputs": [],
+        },
     }
     digs, notes = root_data_digests_from_bindings(
         [{"kind": "artifact", "input": "out", "artifact_id": mid_id}],
@@ -585,6 +598,201 @@ def test_all_code_upstream_intermediate_is_root():
     assert digs == [mid_sha]
     assert code_sha not in digs
     assert isinstance(notes, list)
+
+
+def test_diamond_provenance_not_flagged_as_cycle():
+    """Shared ancestor (diamond) must not emit cycle: notes."""
+    root_sha = "11" * 32
+    a_sha, b_sha, top_sha = "22" * 32, "33" * 32, "44" * 32
+    root_id, a_id, b_id, top_id = "art_r", "art_a", "art_b", "art_t"
+
+    class _Meta:
+        def __init__(self, sha: str) -> None:
+            self.sha256 = sha
+            self.role = "data"
+            self.media_type = "application/json"
+
+    metas = {
+        root_id: _Meta(root_sha),
+        a_id: _Meta(a_sha),
+        b_id: _Meta(b_sha),
+        top_id: _Meta(top_sha),
+    }
+    results = {
+        "A#1": {
+            "artifacts": [a_id],
+            "output_map": {"a": a_id},
+            "output_kinds": {"a": "data"},
+            "inputs": [{"kind": "artifact", "input": "r", "artifact_id": root_id}],
+        },
+        "B#1": {
+            "artifacts": [b_id],
+            "output_map": {"b": b_id},
+            "output_kinds": {"b": "data"},
+            "inputs": [{"kind": "artifact", "input": "r", "artifact_id": root_id}],
+        },
+        "T#1": {
+            "artifacts": [top_id],
+            "output_map": {"t": top_id},
+            "output_kinds": {"t": "data"},
+            "inputs": [
+                {"kind": "artifact", "input": "a", "artifact_id": a_id},
+                {"kind": "artifact", "input": "b", "artifact_id": b_id},
+            ],
+        },
+    }
+    digs, notes = root_data_digests_from_bindings(
+        [{"kind": "artifact", "input": "t", "artifact_id": top_id}],
+        results=results,
+        artifact_lookup=lambda a: metas.get(a),
+    )
+    assert digs == [root_sha]
+    assert not any(n.startswith("cycle:") for n in notes)
+
+
+def test_agent_media_type_spoof_does_not_drop_data_root():
+    """Re-saving a dataset as text/x-python must not hide it when OutputSpec is data."""
+    sha = "55" * 32
+    aid = "art_spoof"
+
+    class _Meta:
+        sha256 = sha
+        role = "code"  # agent put inferred code from media_type
+        media_type = "text/x-python"
+        producer = "agent"
+
+    results = {
+        "P#1": {
+            "artifacts": [aid],
+            "output_map": {"dataset": aid},
+            "output_kinds": {"dataset": "data"},  # core OutputSpec wins
+            "inputs": [],
+        }
+    }
+    digs, _n = root_data_digests_from_bindings(
+        [{"kind": "artifact", "input": "dataset", "artifact_id": aid}],
+        results=results,
+        artifact_lookup=lambda _a: _Meta(),
+    )
+    assert digs == [sha]
+
+
+@pytest.mark.asyncio
+async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls):
+    """Agent put with text/x-python on a data OutputSpec stays in root digests."""
+    from coscientist.core.artifacts import make_tool_ref
+
+    sid = "st_spoof"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=180),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="P0",
+                title="raw",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                expected_outputs=[
+                    OutputSpec(
+                        name="dataset", media_type="application/json", role="data"
+                    )
+                ],
+                criteria=[RequirementRef(template_id="artifact_present")],
+                addresses=["Q1"],
+            ),
+            TaskSpec(
+                task_key="E0",
+                title="use",
+                goal="g",
+                route="experiment",
+                depends_on=["P0"],
+                inputs=[InputSpec(from_task="P0", output="dataset")],
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            ),
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    aid_p = await rt.start_attempt("P0")
+    # Spoof: agent labels bytes as python though OutputSpec says data.
+    raw = arts.put(
+        b'{"count": 225}',
+        make_tool_ref(f"{aid_p}:1"),
+        name="dataset",
+        media_type="text/x-python",
+    )
+    assert raw.role == "code"  # media_type heuristic at put
+    await rt.executor.record(
+        aid_p,
+        AgentTaskOutput(
+            summary="raw",
+            outputs={
+                "main": ArtifactHandle(artifact_id=raw.artifact_id, name="main"),
+                "dataset": ArtifactHandle(artifact_id=raw.artifact_id, name="dataset"),
+            },
+            claims=[],
+        ),
+    )
+    assert rt.results[aid_p].get("output_kinds", {}).get("dataset") == "data"
+    aid_e = await rt.start_attempt("E0")
+    art = arts.put(
+        b'{"count": 225}',
+        make_tool_ref(f"{aid_e}:1"),
+        name="main",
+        media_type="application/json",
+    )
+    await rt.executor.record(
+        aid_e,
+        AgentTaskOutput(
+            summary="ok",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            values={"count": 225},
+            claims=[{"id": "c1", "target": "Q1"}],
+        ),
+    )
+    by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
+    c = by["question:Q1"][0]
+    assert raw.sha256 in (c.data_digests or [])
+    await close_runtime(rt)
+
+
+def test_untrusted_fail_is_indeterminate_not_refutation():
+    from coscientist.core.verdict import classify_outcome
+
+    v, oc, _ = classify_outcome(
+        validity_ok=True,
+        prediction_statuses=["FAILED"],
+        effect={"est": 0.0, "kind": "point", "trusted": False, "producer": "agent"},
+    )
+    assert v == "valid" and oc == "indeterminate"
+    v2, oc2, _ = classify_outcome(
+        validity_ok=True,
+        prediction_statuses=["FAILED"],
+        effect={"est": 0.0, "kind": "point", "trusted": True, "producer": "sandbox"},
+    )
+    assert v2 == "valid" and oc2 == "inconsistent"
+    agent_fail = _c(
+        criterion_status="unassessed",
+        claim_outcome="indeterminate",
+        severe=False,
+        effect={"est": 0.0, "kind": "point", "trusted": False, "producer": "agent"},
+        exclusion_reason="indeterminate",
+    )
+    assert hypothesis_verdict([agent_fail], True)[0] == "inconclusive"
 
 
 def test_tost_requires_real_ci_and_trusted():
@@ -895,8 +1103,14 @@ class VerdictPropertyMachine(RuleBasedStateMachine):
         # Without artifact metas, both bindings classify as data — use data only.
         digests = [data]
         effect = (
-            {"est": 1.5, "ci_low": 1.5, "ci_high": 1.5, "trusted": True}
-            if with_threshold and not legacy
+            {
+                "est": 1.5,
+                "ci_low": 1.5,
+                "ci_high": 1.5,
+                "trusted": True,
+                "producer": "sandbox",
+            }
+            if (with_threshold and not legacy) or outcome == "inconsistent"
             else None
         )
         c = _c(
@@ -1111,9 +1325,9 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 expected_outputs=[
-                    # Slot-rename attack: planner names data output "script".
+                    # Slot-rename: data OutputSpec named "script" (core-owned kind).
                     OutputSpec(
-                        name="script", media_type="application/json", role="code"
+                        name="script", media_type="application/json", role="data"
                     ),
                     OutputSpec(
                         name="data_b", media_type="application/json", role="data"
@@ -1221,7 +1435,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
         make_tool_ref(f"{aid_p}:da"),
         name="script",
         media_type="application/json",
-        role="code",  # planner role ignored for code|data; media_type → data
+        role="code",  # agent code|data role ignored at put
     )
     db = arts.put(
         b'{"count": 2}',
@@ -1237,7 +1451,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
         media_type="text/x-python",
         role="code",
     )
-    assert da.role == "data"  # core owns code|data via media_type
+    assert da.role == "data"  # agent code|data role ignored; OutputSpec owns kind
     await rt.executor.record(
         aid_p,
         AgentTaskOutput(
@@ -1314,8 +1528,8 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
-async def test_e2e_agent_metric_not_severe_m1_limitation(tmp_path, clock, runtime_cls):
-    """M1: agent-written metrics are untrusted → never severe (even if est >> sesoi)."""
+async def test_e2e_agent_metric_cannot_support(tmp_path, clock, runtime_cls):
+    """Agent-written passing metric is untrusted → never severe / supported."""
     from coscientist.core.artifacts import make_tool_ref
     from coscientist.core.dispositions import dispositions
 
@@ -1370,6 +1584,7 @@ async def test_e2e_agent_metric_not_severe_m1_limitation(tmp_path, clock, runtim
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
     c = by["question:Q1"][0]
     assert (c.effect or {}).get("trusted") is False
+    assert (c.effect or {}).get("producer") == "agent"
     assert c.severe is False
     assert c.refute_capable is False
     d = dispositions(
@@ -1377,6 +1592,296 @@ async def test_e2e_agent_metric_not_severe_m1_limitation(tmp_path, clock, runtim
     )
     assert d["Q1"]["verdict"] == "inconclusive"
     await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_e2e_agent_failing_metric_cannot_refute(tmp_path, clock, runtime_cls):
+    """Agent-written failing metric → indeterminate, never refuted."""
+    from coscientist.core.artifacts import make_tool_ref
+    from coscientist.core.dispositions import dispositions
+
+    sid = "st_agent_fail"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=180),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E0",
+                title="falsify",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="value_match", required=True)],
+                addresses=["Q1"],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    aid0 = await rt.start_attempt("E0", provenance="real")
+    art = arts.put(
+        b'{"count": 999}',
+        make_tool_ref(f"{aid0}:1"),
+        name="main",
+        media_type="application/json",
+    )
+    await rt.executor.record(
+        aid0,
+        AgentTaskOutput(
+            summary="falsified",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            values={"count": 999},
+            claims=[{"id": "ref", "target": "Q1", "checked_against": "value_match"}],
+        ),
+    )
+    by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
+    c = by["question:Q1"][0]
+    assert (c.effect or {}).get("trusted") is False
+    assert c.claim_outcome == "indeterminate"
+    d = dispositions(
+        tasks=rt.tasks, plans=rt.plans, graph=rt.graph, study=rt.study, results=rt.results
+    )
+    assert d["Q1"].get("verdict") != "refuted"
+    assert d["Q1"]["disposition"] != "refuted"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_e2e_sandbox_metric_supported_and_refuted(tmp_path, clock, runtime_cls):
+    """Sandbox-produced metrics can reach supported (k_sup≥2) and refuted."""
+    from datetime import UTC, datetime
+
+    from coscientist.core.artifacts import make_tool_ref
+    from coscientist.core.dispositions import dispositions
+    from coscientist.core.graph import GraphEdge, GraphNode
+    from coscientist.core.ids import experiment_node_id, hypothesis_node_id
+    from coscientist.core.verdict import hypothesis_verdict
+
+    sid = "st_sandbox"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        supported_needed=2,
+        refutations_needed=1,
+        refutation_priority=True,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="P1",
+                title="raw1",
+                goal="d1",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="artifact_present")],
+                addresses=["Q1"],
+                expected_outputs=[
+                    OutputSpec(name="main", media_type="application/json", role="data")
+                ],
+            ),
+            TaskSpec(
+                task_key="P2",
+                title="raw2",
+                goal="d2",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="artifact_present")],
+                addresses=["Q1"],
+                expected_outputs=[
+                    OutputSpec(name="main", media_type="application/json", role="data")
+                ],
+            ),
+            TaskSpec(
+                task_key="E1",
+                title="s1",
+                goal="g1",
+                route="experiment",
+                depends_on=["P1"],
+                inputs=[InputSpec(from_task="P1", output="main")],
+                criteria=[RequirementRef(template_id="value_match_sesoi")],
+                addresses=["Q1"],
+                expected_outputs=[
+                    OutputSpec(name="main", media_type="application/json", role="data")
+                ],
+            ),
+            TaskSpec(
+                task_key="E2",
+                title="s2",
+                goal="g2",
+                route="experiment",
+                depends_on=["P2"],
+                inputs=[InputSpec(from_task="P2", output="main")],
+                criteria=[RequirementRef(template_id="value_match_sesoi")],
+                addresses=["Q1"],
+                expected_outputs=[
+                    OutputSpec(name="main", media_type="application/json", role="data")
+                ],
+            ),
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    # Hypothesis + tests.intent=refute so capable refute counts toward supported.
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    hid = hypothesis_node_id(sid, "H1")
+    rt.graph.upsert_node(
+        GraphNode(node_id=hid, kind="hypothesis", study_id=sid, ref_id="H1", attrs={})
+    )
+    for tk in ("E1", "E2"):
+        eid = experiment_node_id(sid, tk)
+        if rt.graph.get_node(eid) is None:
+            rt.graph.upsert_node(
+                GraphNode(
+                    node_id=eid,
+                    kind="experiment",
+                    study_id=sid,
+                    ref_id=tk,
+                    attrs={"task_key": tk},
+                )
+            )
+        rt.graph.add_edge(
+            GraphEdge(
+                edge_id=f"tests:{eid}:{hid}",
+                kind="tests",
+                study_id=sid,
+                src_id=eid,
+                dst_id=hid,
+                attrs={"intent": "refute"},
+                created_at=now,
+            )
+        )
+
+    for tk, blob in (("P1", b'{"raw": 1}'), ("P2", b'{"raw": 2}')):
+        aid = await rt.start_attempt(tk)
+        art = arts.put_sandbox(
+            blob,
+            make_tool_ref(f"{aid}:1"),
+            name="main",
+            media_type="application/json",
+            role="data",
+        )
+        await rt.executor.record(
+            aid,
+            AgentTaskOutput(
+                summary="raw",
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+                claims=[],
+            ),
+        )
+
+    for tk, est in (("E1", 2.0), ("E2", 3.0)):
+        aid = await rt.start_attempt(tk)
+        payload = f'{{"effect": {est}}}'.encode()
+        art = arts.put_sandbox(
+            payload,
+            make_tool_ref(f"{aid}:1"),
+            name="main",
+            media_type="application/json",
+            role="data",
+        )
+        assert art.producer == "sandbox"
+        await rt.executor.record(
+            aid,
+            AgentTaskOutput(
+                summary="ok",
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+                values={"effect": est},
+                claims=[{"id": f"c_{tk}", "target": "H1"}],
+            ),
+        )
+    by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
+    hyps = by["hypothesis:H1"]
+    assert len(hyps) == 2
+    assert all((c.effect or {}).get("trusted") is True for c in hyps)
+    assert all(c.severe for c in hyps)
+    v, _, rule = hypothesis_verdict(
+        hyps, True, supported_needed=2, refutations_needed=1, refutation_priority=True
+    )
+    assert v == "supported" and rule == "support_min"
+
+    # Separate study path: sandbox failing metric → refuted.
+    sid2 = "st_sandbox_ref"
+    rt2 = await open_runtime(
+        tmp_path / "ref", sid2, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt2.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=180),
+        sid=sid2,
+        finalize_reserve_s=5,
+    )
+    _, arts2 = attach_executor(rt2, tmp_path / "ref")
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt2.start_attempt(key)
+        await rt2.cancel_task(key, reason="cancelled")
+    await rt2.accept_plan(
+        [
+            TaskSpec(
+                task_key="E0",
+                title="falsify",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="value_match", required=True)],
+                addresses=["Q1"],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    aid_f = await rt2.start_attempt("E0", provenance="real")
+    art_f = arts2.put_sandbox(
+        b'{"count": 999}',
+        make_tool_ref(f"{aid_f}:1"),
+        name="main",
+        media_type="application/json",
+    )
+    await rt2.executor.record(
+        aid_f,
+        AgentTaskOutput(
+            summary="falsified",
+            outputs={"main": ArtifactHandle(artifact_id=art_f.artifact_id, name="main")},
+            values={"count": 999},
+            claims=[{"id": "ref", "target": "Q1", "checked_against": "value_match"}],
+        ),
+    )
+    by2 = filtered_claims_by_target(rt2.graph, study_id=sid2, results=rt2.results)
+    c_fail = by2["question:Q1"][0]
+    assert (c_fail.effect or {}).get("trusted") is True
+    assert c_fail.claim_outcome == "inconsistent"
+    d2 = dispositions(
+        tasks=rt2.tasks,
+        plans=rt2.plans,
+        graph=rt2.graph,
+        study=rt2.study,
+        results=rt2.results,
+    )
+    assert d2["Q1"]["verdict"] == "refuted"
+    await close_runtime(rt)
+    await close_runtime(rt2)
 
 
 @pytest.mark.asyncio
@@ -1445,7 +1950,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
     # Bind E1 → records VerdictSnapshotsRecorded for Q1.
     await rt.start_attempt("E1")
     snap1 = dict(rt.verdict_snapshots.get("Q1") or {})
-    # M1: agent metrics untrusted → not severe → inconclusive (still journaled).
+    # Agent metrics untrusted → not severe → inconclusive (still journaled).
     assert snap1.get("verdict") == "inconclusive"
     await close_runtime(rt)
 
@@ -1547,6 +2052,16 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
                         "refute_capable": True,
                         "independence_key": "forged-key",
                         "experiment_id": f"{sid}/E0",
+                        # Forged trusted without core producer → recomputed False.
+                        "effect": {
+                            "est": 9.0,
+                            "kind": "point",
+                            "trusted": True,
+                            "producer": "agent",
+                        },
+                        "uses_sesoi": True,
+                        "used_sesoi": True,
+                        "sesoi": 0.5,
                     },
                 ).model_dump(mode="json"),
                 ts=clock.now(),
@@ -1571,6 +2086,8 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
     claim = by["question:Q1"][0]
     assert claim.severe is False
     assert claim.refute_capable is False
+    assert (claim.effect or {}).get("trusted") is False
+    assert (claim.effect or {}).get("producer") == "agent"
     assert claim_is_severe(claim) is False
     assert refute_intent_counts(claim) is False
 
@@ -1582,6 +2099,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
     claim2 = by2["question:Q1"][0]
     assert claim2.severe is False
     assert claim2.refute_capable is False
+    assert (claim2.effect or {}).get("trusted") is False
     await close_runtime(rt2)
 
 

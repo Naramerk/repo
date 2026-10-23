@@ -4,10 +4,9 @@
 
 ### M1 PR8b
 - Hypothesis verdict model (`docs/DESIGN_HYP_DELTA.md`): claim `validity`/`outcome`/`severe`/`independence_key`; stub|partial|lit|invalid excluded **before** counting.
-- `independence_key` base = `experiment_id`; count-time merge by **transitive root-data** digest overlap (code vs data from **artifact** meta — never InputBinding slot names; all-code upstream → intermediate is a root) or **structural** share-any criterion template (same target, empty roots). No TaskSpec/goal/title/plan_id hash. Method is not in the key.
-- `severe` / capable refute (null **and** non-null): require `effect.trusted`. TOST also needs a real CI. Agent-written metrics stay `trusted=false`.
-- **Known M1 limitation:** no core/sandbox producer path stamps `trusted=true` yet, so live Executor.record cannot mint severe/refute-capable claims (`supported`/`survived` via severity unreachable e2e). Follow-up when sandbox/catalog-check provenance exists.
-- On journal read/replay: **never trust** stored `severe`/`refute_capable=True` — recompute or reset to False.
+- `independence_key` base = `experiment_id`; count-time merge by **transitive root-data** digest overlap (code vs data from core **`ResultRecorded.output_kinds`** / plan **OutputSpec** — never agent `media_type` or InputBinding slot names; all-code upstream → intermediate is a root; diamond DFS uses on_stack vs done) or **structural** share-any criterion template (same target, empty roots; empty plan criteria → `catalog.defaults["experiment"]`). No TaskSpec/goal/title/plan_id hash. Method is not in the key.
+- **Symmetric trust:** `Artifact.producer` stamped by write path (`put`→agent, `put_core`→core, `put_sandbox`→sandbox). `effect.trusted` from producer; agent cannot set it. Trusted evidence required for **both** `refuted` (`k_ref`) and severe/`supported`. Untrusted failing metrics → indeterminate, never refutation.
+- On journal read/replay: **never trust** stored `severe`/`refute_capable`/`effect.trusted=True` — recompute (`trusted` from `effect.producer`).
 - Study: **`supported_needed`** (default 2, ≥2); `confirmations_needed` = PR8 snapshot `k`. StudyCreated **v6**.
 - `aggregate='evalue'` rejected at create (deferred until core computes p-values).
 - Report: `hypothesis_report_row` in finalize; failures set dedicated `hypotheses_unavailable` (not a fake hypothesis id). Bind snapshots win on replay; finalize recomputes report rows.
