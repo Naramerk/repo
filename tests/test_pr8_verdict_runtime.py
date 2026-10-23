@@ -362,7 +362,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
-    """Criteria FAILED is a scientific result — claims kept with not_met."""
+    """Validity FAILED is still scientific — claim kept but not counted."""
     from coscientist.core.domain import AgentTaskOutput
 
     sid = "st_fail_cl"
@@ -396,7 +396,7 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid0 = await rt.start_attempt("E0")
-    # No artifact → default artifact_present FAILED → scientific FAILED/PARTIAL.
+    # No artifact → default artifact_present (validity) FAILED → scientific.
     result = await ex.record(
         aid0,
         AgentTaskOutput(
@@ -409,8 +409,10 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
     assert result.outcome.value in ("FAILED", "PARTIAL")
     claims = list(rt.graph.nodes_by_kind("claim"))
     assert len(claims) == 1
-    assert claims[0].attrs["criterion_status"] == "not_met"
+    assert claims[0].attrs["criterion_status"] == "unassessed"
     assert claims[0].attrs["accepted"] is True
+    assert claims[0].attrs["validity_ok"] is False
+    assert claims[0].attrs["check_role"] == "validity"
     assert rt.results[aid0].get("result_class") == "scientific"
     await close_runtime(rt)
 
@@ -856,6 +858,7 @@ def test_criterion_status_not_met_from_failed_check():
             status=ReqStatus.FAILED,
             is_code=True,
             required=False,
+            role="prediction",
         )
     ]
     attrs = _derive_claim_core_attrs(
@@ -869,6 +872,8 @@ def test_criterion_status_not_met_from_failed_check():
     )
     assert attrs["criterion_status"] == "not_met"
     assert attrs["accepted"] is True  # optional failure → stance, not rejection
+    assert attrs["validity_ok"] is True
+    assert attrs["check_role"] == "prediction"
     assert attrs["frozen"] is False  # no freeze node
 
 
@@ -912,6 +917,7 @@ def test_frozen_normalizes_check_id_to_template_id():
             status=ReqStatus.MET,
             is_code=True,
             required=True,
+            role="prediction",
         )
     ]
     attrs = _derive_claim_core_attrs(
@@ -966,7 +972,7 @@ def test_criterion_match_is_exact_not_endswith():
 
 @pytest.mark.asyncio
 async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cls):
-    """Falsification: required check FAILED → scientific result, not_met, refuted.
+    """(a) Failed required prediction check → scientific, not_met, refuted e2e.
 
     accepted stays True (result recorded + structurally valid). Outcome may be
     FAILED/PARTIAL; claims are kept (not infra). graph_schema invariant 10.
@@ -1000,7 +1006,9 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[
-                    RequirementRef(template_id="value_match", required=True),
+                    RequirementRef(
+                        template_id="value_match", required=True, role="prediction"
+                    ),
                 ],
                 addresses=["Q1"],
             )
@@ -1034,6 +1042,8 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
     claim = next(iter(rt.graph.nodes_by_kind("claim")))
     assert claim.attrs["criterion_status"] == "not_met"
     assert claim.attrs["accepted"] is True
+    assert claim.attrs["validity_ok"] is True
+    assert claim.attrs["check_role"] == "prediction"
     assert claim.attrs["frozen"] is True
     assert claim.attrs["attempt_outcome"] in ("FAILED", "PARTIAL")
     res = rt.results[aid0]
@@ -1047,6 +1057,83 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
     )
     assert d["Q1"]["disposition"] == "refuted"
     assert d["Q1"]["verdict"] == "refuted"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_validity_failed_claim_invalid_inconclusive(
+    tmp_path, clock, runtime_cls
+):
+    """(b) Failed required validity check → invalid claim, inconclusive (never refuted)."""
+    from coscientist.core.domain import AgentTaskOutput, RequirementRef
+
+    sid = "st_val"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=180),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E0",
+                title="validity",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[
+                    RequirementRef(
+                        template_id="artifact_present", required=True, role="validity"
+                    ),
+                ],
+                addresses=["Q1"],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    aid0 = await rt.start_attempt("E0", provenance="real")
+    # No artifact → artifact_present FAILED (validity).
+    await rt.executor.record(
+        aid0,
+        AgentTaskOutput(
+            summary="broken aux",
+            outputs={},
+            values={},
+            claims=[
+                {
+                    "id": "c",
+                    "target": "Q1",
+                    "checked_against": "artifact_present",
+                }
+            ],
+        ),
+    )
+    claim = next(iter(rt.graph.nodes_by_kind("claim")))
+    assert claim.attrs["accepted"] is True
+    assert claim.attrs["validity_ok"] is False
+    assert claim.attrs["criterion_status"] == "unassessed"
+    assert claim.attrs["check_role"] == "validity"
+    assert rt.results[aid0].get("result_class") == "scientific"
+    d = dispositions(
+        tasks=rt.tasks,
+        plans=rt.plans,
+        graph=rt.graph,
+        study=rt.study,
+        results=rt.results,
+    )
+    # Invalid claim is not counted → not refuted; disposition inconclusive or
+    # not_attempted (no counting claims).
+    assert d["Q1"]["disposition"] in ("inconclusive", "not_attempted")
+    assert d["Q1"].get("verdict") != "refuted"
     await close_runtime(rt)
 
 

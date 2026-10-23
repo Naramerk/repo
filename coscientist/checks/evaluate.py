@@ -11,6 +11,7 @@ from coscientist.core.domain import (
     AgentTaskOutput,
     Catalog,
     CheckResult,
+    CheckRole,
     CodeCheck,
     EvidenceRef,
     NodeRequirement,
@@ -21,6 +22,30 @@ from coscientist.core.domain import (
     TaskSpec,
 )
 from coscientist.core.errors import ArtifactCorrupt
+
+# Prediction-style CodeCheck kinds (hypothesis/question prediction tests).
+_PREDICTION_KINDS = frozenset({"value_matches", "metric_threshold"})
+
+
+def resolve_check_role(
+    ref: RequirementRef,
+    tmpl: RequirementTemplate | None = None,
+) -> CheckRole:
+    """Duhem–Quine role: explicit on ref, else kind-based default.
+
+    ``value_matches`` / ``metric_threshold`` → prediction (hypothesis criterion);
+    all other checks (artifact_exists, schema, review, …) → validity.
+    """
+    if ref.role in ("prediction", "validity"):
+        return ref.role
+    if tmpl is not None and isinstance(tmpl.check, CodeCheck):
+        if tmpl.check.kind in _PREDICTION_KINDS:
+            return "prediction"
+    # Heuristic when template unavailable (upcasters / journal replay).
+    tid = (ref.template_id or "").lower()
+    if any(k in tid for k in ("value_match", "metric", "threshold", "prediction")):
+        return "prediction"
+    return "validity"
 
 
 def _pointer_get(doc: Any, pointer: str | None) -> Any:
@@ -249,6 +274,7 @@ def evaluate_task_checks(
     for i, ref in enumerate(refs):
         tmpl = by_id[ref.template_id]
         cid = f"{ref.template_id}#{i}"
+        role = resolve_check_role(ref, tmpl)
         if isinstance(tmpl.check, ReviewCheck):
             st = review_statuses.get(cid, ReqStatus.UNASSESSED)
             results.append(
@@ -259,6 +285,7 @@ def evaluate_task_checks(
                     is_code=False,
                     required=ref.required and tmpl.required,
                     detail=tmpl.check.question,
+                    role=role,
                 )
             )
         else:
@@ -280,6 +307,7 @@ def evaluate_task_checks(
                     required=ref.required and tmpl.required,
                     evidence=cr.evidence,
                     detail=cr.detail,
+                    role=role,
                 )
             )
     return results

@@ -168,10 +168,25 @@ class InputSpec(Frozen):
     ref: str | None = None
 
 
+CheckRole = Literal["prediction", "validity"]
+
+
 class RequirementRef(Frozen):
+    """Plan criterion reference.
+
+    ``role`` (Duhem–Quine / DESIGN_M1):
+    - ``prediction`` — tests the hypothesis/question prediction; FAILED →
+      ``criterion_status=not_met`` → counting refutation.
+    - ``validity`` — sanity / controls / integrity / code-ran; FAILED → claim
+      invalid (not counted); that experiment's verdict capped at inconclusive.
+    Default when omitted: resolved from check kind (``value_matches`` /
+    ``metric_threshold`` → prediction; otherwise validity).
+    """
+
     template_id: str
     params: dict[str, Any] = Field(default_factory=dict)
     required: bool = True
+    role: CheckRole | None = None
 
 
 class QuestionSpec(Frozen):
@@ -339,6 +354,7 @@ class CheckResult(Frozen):
     required: bool
     evidence: list[EvidenceRef] = Field(default_factory=list)
     detail: str | None = None
+    role: CheckRole = "validity"
 
 
 class Result(Frozen):

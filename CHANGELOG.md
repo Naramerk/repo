@@ -7,7 +7,8 @@
 - `InputSpec.kind=verdict` enabled; `VerdictSnapshotsRecorded` persists full snapshots (not digest-only); invalidated on claim/`about` changes (scoped to affected target).
 - Claim carry-overs: worst provenance; no FAILED claims; tight whitelist (`target`/`checked_against`/`reason`/`premise_idx`); core-derived counting fields (`criterion_status` from checked_against ReqStatus; `frozen` from plan-accept criterion nodes; `accepted` = SUCCESS ∧ validated); intent from producing experiment's `tests` edge; namespaced claim ids; unknown targets rejected; `about` required.
 - `open_runtime` (core + experimental) builds Executor via `make_executor` (live `get_graph`); `catalog=` required (no test-catalog fallback); one `k`=`confirmations_needed` everywhere.
-- `accepted` = recorded scientific result ∧ structural claim validation (not criteria pass). Required-check FAILED → `not_met` → refute; infra failures only drop claims (`result_class`).
+- `accepted` = recorded scientific result ∧ structural claim validation (not criteria pass). Infra failures only drop claims (`result_class`).
+- Check `role` (Duhem–Quine): `prediction` FAILED → `not_met` → refute; required `validity` FAILED → claim invalid (`validity_ok=false`), experiment capped at inconclusive. Defaults by check kind; upcasters TaskCreated v6 / PlanAccepted v3.
 - `hypothesis_verdicts` kept separate from bind `verdict_snapshots` cache; Q/H grouping keys are kind-prefixed.
 - StudyCreated schema_version=4 + v3→v4 upcaster for `confirmations_needed` (no longer piggybacked on v2→v3).
 - R17 runtime metadata wiring deferred (DESIGN note + xfail); pure-rule path remains in PR 6.

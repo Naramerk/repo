@@ -181,8 +181,8 @@ def test_questions_from_spec_output_wired():
 
 def test_upcast_taskcreated_addresses_default():
     v, p = upcast("TaskCreated", 2, {"task_id": "t", "spec": {"task_key": "E1"}})
-    # v2→v3 addresses, v3→v4 input-mode, v4→v5 kind=artifact.
-    assert v == 5 and p["spec"]["addresses"] == []
+    # v2→v3 addresses … v5→v6 check role.
+    assert v == 6 and p["spec"]["addresses"] == []
 
 
 def test_upcast_taskcreated_input_mode_old_default():
@@ -198,14 +198,36 @@ def test_upcast_taskcreated_input_mode_old_default():
             },
         },
     )
-    assert v == 5
+    assert v == 6
     assert p["spec"]["inputs"][0]["mode"] == "use_partial"
     assert p["spec"]["inputs"][0]["kind"] == "artifact"
 
 
 def test_upcast_planaccepted_questions_default():
     v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
-    assert v == 2 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
+    assert v == 3 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
+
+
+def test_upcast_taskcreated_check_role_defaults():
+    v, p = upcast(
+        "TaskCreated",
+        5,
+        {
+            "task_id": "t",
+            "spec": {
+                "task_key": "E1",
+                "addresses": [],
+                "criteria": [
+                    {"template_id": "value_match", "required": True},
+                    {"template_id": "artifact_present", "required": True},
+                ],
+            },
+        },
+    )
+    assert v == 6
+    roles = {c["template_id"]: c["role"] for c in p["spec"]["criteria"]}
+    assert roles["value_match"] == "prediction"
+    assert roles["artifact_present"] == "validity"
 
 
 def test_upcast_study_finalized_v1_adds_counts_and_refusal():

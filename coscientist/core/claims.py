@@ -51,6 +51,8 @@ _CORE_CLAIM_ATTRS: frozenset[str] = frozenset(
         "lit_own_criterion",
         "accepted",
         "artifact_id",
+        "validity_ok",
+        "check_role",
     }
 )
 
@@ -83,6 +85,9 @@ class RuntimeClaim:
     target: str = ""
     target_kind: Literal["question", "hypothesis"] = "question"
     node_id: str = ""
+    # Duhem–Quine: False when a required validity check failed on this attempt.
+    validity_ok: bool = True
+    check_role: str = "prediction"
 
     def __post_init__(self) -> None:
         if self.intent not in ("confirm", "refute"):
@@ -108,12 +113,13 @@ class RuntimeClaim:
         """Counting set q (RM §4.1 + PR8): accepted scientific result.
 
         Attempt outcome may be SUCCESS / PARTIAL / FAILED when failure is
-        criteria-not-met (scientific). Infra failures never set ``accepted``.
+        prediction not_met (scientific). Validity failures set ``validity_ok``
+        False so the claim never counts. Infra failures never set ``accepted``.
         """
         ok = self.evidence_kind in ("computational", "experimental") or (
             self.is_lit and self.lit_own_criterion
         )
-        return self.accepted and ok and self.frozen
+        return self.accepted and self.validity_ok and ok and self.frozen
 
 
 def whitelist_claim_attrs(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -351,6 +357,17 @@ def runtime_claim_from_node(
         accepted = _coerce_bool(attrs.get("accepted"))
         if accepted is None:
             return None, "bad_accepted"
+        # Absent on pre-role journals → treat as ok (prediction-era claims).
+        validity_ok_raw = attrs.get("validity_ok")
+        if validity_ok_raw is None:
+            validity_ok = True
+        else:
+            validity_ok = _coerce_bool(validity_ok_raw)
+            if validity_ok is None:
+                return None, "bad_validity_ok"
+        check_role = _coerce_str(attrs.get("check_role"), allow_empty=True) or "prediction"
+        if check_role not in ("prediction", "validity"):
+            check_role = "prediction"
         frozen = _coerce_bool(attrs.get("frozen"))
         if frozen is None:
             return None, "bad_frozen"
@@ -426,6 +443,8 @@ def runtime_claim_from_node(
                 target=target,
                 target_kind=target_kind,  # type: ignore[arg-type]
                 node_id=node.node_id,
+                validity_ok=bool(validity_ok),
+                check_role=check_role,
             ),
             None,
         )

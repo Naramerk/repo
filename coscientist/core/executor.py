@@ -116,6 +116,66 @@ def _criterion_status_for_claim(
     return "unassessed"
 
 
+def _check_role(c: Any) -> str:
+    role = _check_field(c, "role")
+    if role in ("prediction", "validity"):
+        return str(role)
+    return "validity"
+
+
+def _required_validity_failed(checks: list[Any]) -> bool:
+    """True when a required validity check FAILED (Duhem–Quine cap)."""
+    for c in checks:
+        if _check_role(c) != "validity":
+            continue
+        if not bool(_check_field(c, "required")):
+            continue
+        st = _check_field(c, "status")
+        if isinstance(st, ReqStatus):
+            failed = st in (ReqStatus.FAILED, ReqStatus.MIGRATION_ERROR)
+        else:
+            failed = str(st) in (
+                ReqStatus.FAILED.value,
+                ReqStatus.MIGRATION_ERROR.value,
+            )
+        if failed:
+            return True
+    return False
+
+
+def _role_for_claim_key(
+    raw: dict[str, Any], checks: list[Any], criteria: list[Any]
+) -> str:
+    """Role of the check this claim is checked_against (default validity)."""
+    key = _criterion_key_for_claim(raw, checks, criteria)
+    if key:
+        for c in checks:
+            tid = _check_field(c, "template_id")
+            cid = _check_field(c, "check_id")
+            if (tid is not None and str(tid) == key) or (
+                cid is not None and str(cid) == key
+            ):
+                return _check_role(c)
+        for ref in criteria:
+            tid = _check_field(ref, "template_id")
+            if tid is not None and str(tid) == key:
+                role = _check_field(ref, "role")
+                if role in ("prediction", "validity"):
+                    return str(role)
+                # Kind heuristic when CheckResult role missing.
+                from coscientist.checks.evaluate import resolve_check_role
+                from coscientist.core.domain import RequirementRef
+
+                if isinstance(ref, RequirementRef):
+                    return resolve_check_role(ref)
+                return resolve_check_role(
+                    RequirementRef(template_id=str(tid), role=role)
+                )
+    if len(checks) == 1:
+        return _check_role(checks[0])
+    return "validity"
+
+
 def _criterion_is_frozen(graph: Any, study_id: str, template_id: Any) -> bool:
     """True when plan-accept freeze marked the criterion node (keyed by template_id)."""
     if not template_id or graph is None:
@@ -143,9 +203,12 @@ def _derive_claim_core_attrs(
     """Core-owned counting fields from plan/checks/freeze — never agent attrs.
 
     ``accepted`` means the result was recorded and the claim is structurally
-    valid — **not** that criteria passed (graph_schema invariant 10: stance /
-    ``criterion_status`` come from ReqStatus; failed required → ``not_met`` →
-    refutes). Criteria outcomes are SUCCESS / PARTIAL / FAILED equally.
+    valid — **not** that criteria passed (graph_schema invariant 10).
+
+    Check ``role`` (Duhem–Quine):
+    - ``prediction`` FAILED → ``criterion_status=not_met`` → counting refute.
+    - required ``validity`` FAILED → claim not counted (``validity_ok=False``);
+      criterion_status stays ``unassessed`` (never refuted from that experiment).
     """
     del task_outcome  # outcome is scientific whenever we derive; criteria ≠ accepted
     spec = getattr(task, "spec", None)
@@ -155,12 +218,24 @@ def _derive_claim_core_attrs(
     )
     criteria = list(getattr(spec, "criteria", None) or []) if spec is not None else []
     key = _criterion_key_for_claim(raw, checks, criteria)
+    role = _role_for_claim_key(raw, checks, criteria)
+    status = _criterion_status_for_claim(raw, checks, criteria)
+    validity_ok = True
+    # Any required validity failure caps this experiment: no counting refutation.
+    if _required_validity_failed(checks):
+        validity_ok = False
+        status = "unassessed"
+    elif role == "validity" and status == "not_met":
+        validity_ok = False
+        status = "unassessed"
     return {
-        "criterion_status": _criterion_status_for_claim(raw, checks, criteria),
+        "criterion_status": status,
         "evidence_kind": "literature" if lit else "computational",
         "frozen": _criterion_is_frozen(graph, study_id, key),
         "lit_own_criterion": bool(lit and criteria),
         "accepted": bool(validated),
+        "validity_ok": validity_ok,
+        "check_role": role,
     }
 
 

@@ -345,6 +345,11 @@ def claim_nodes_from_attempt(
         attrs["frozen"] = bool(core.get("frozen", False))
         attrs["lit_own_criterion"] = bool(core.get("lit_own_criterion", False))
         attrs["accepted"] = bool(core.get("accepted", False))
+        attrs["validity_ok"] = bool(core.get("validity_ok", True))
+        role = core.get("check_role", "prediction")
+        attrs["check_role"] = (
+            role if role in ("prediction", "validity") else "prediction"
+        )
         if core.get("artifact_id"):
             attrs["artifact_id"] = core["artifact_id"]
 
