@@ -5,12 +5,16 @@ agent wiring lands later. Effect is taken from this registry — never from a
 caller-supplied ``ToolSpec.effect``. Unknown / unregistered names resolve to
 ``external_effect`` (fail-closed).
 
-After ``freeze_registry()``, registration is forbidden (no silent replace).
+Only ``coscientist.core.tool_loader`` may call ``register_tool`` (loader gate).
+After ``freeze_registry()``, ``_REGISTRY`` is a ``MappingProxyType`` and further
+registration is forbidden.
 """
 
 from __future__ import annotations
 
-from typing import Literal
+from contextlib import contextmanager
+from types import MappingProxyType
+from typing import Iterator, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -18,8 +22,10 @@ ToolEffect = Literal["read", "write", "external_effect"]
 
 DEFAULT_UNREGISTERED_EFFECT: ToolEffect = "external_effect"
 
-_REGISTRY: dict[str, RegisteredToolSpec] = {}
+_REGISTRY_MUTABLE: dict[str, RegisteredToolSpec] = {}
+_REGISTRY: Mapping[str, RegisteredToolSpec] = _REGISTRY_MUTABLE
 _FROZEN: bool = False
+_LOADER_GATE: bool = False
 
 
 class RegisteredToolSpec(BaseModel):
@@ -46,28 +52,61 @@ class RegistryDuplicateError(ValueError):
     """Raised when registering a name that already exists (no silent replace)."""
 
 
+class RegistryUnauthorizedError(RuntimeError):
+    """Raised when ``register_tool`` is called outside the loader gate."""
+
+
+@contextmanager
+def _loader_registration_gate() -> Iterator[None]:
+    """Open the gate so only ``tool_loader`` can register built-ins."""
+    global _LOADER_GATE
+    _LOADER_GATE = True
+    try:
+        yield
+    finally:
+        _LOADER_GATE = False
+
+
 def freeze_registry() -> None:
-    """Seal the registry — further ``register_tool`` calls raise."""
-    global _FROZEN
+    """Seal the registry — further ``register_tool`` calls raise; expose read-only map."""
+    global _FROZEN, _REGISTRY
     _FROZEN = True
+    _REGISTRY = MappingProxyType(_REGISTRY_MUTABLE)
 
 
 def is_registry_frozen() -> bool:
     return _FROZEN
 
 
-def register_tool(spec: RegisteredToolSpec) -> RegisteredToolSpec:
-    """Register a tool. Fails if frozen or if ``name`` is already registered."""
+def _put(spec: RegisteredToolSpec) -> RegisteredToolSpec:
     if _FROZEN:
         raise RegistryFrozenError(
             f"tool registry is frozen; cannot register {spec.name!r}"
         )
-    if spec.name in _REGISTRY:
+    if spec.name in _REGISTRY_MUTABLE:
         raise RegistryDuplicateError(
             f"tool already registered: {spec.name!r} (replacement forbidden)"
         )
-    _REGISTRY[spec.name] = spec
+    _REGISTRY_MUTABLE[spec.name] = spec
     return spec
+
+
+def register_tool(spec: RegisteredToolSpec) -> RegisteredToolSpec:
+    """Register a tool. Production: only via ``tool_loader`` while the gate is open."""
+    if _FROZEN:
+        raise RegistryFrozenError(
+            f"tool registry is frozen; cannot register {spec.name!r}"
+        )
+    if not _LOADER_GATE:
+        raise RegistryUnauthorizedError(
+            "register_tool is only allowed from coscientist.core.tool_loader"
+        )
+    return _put(spec)
+
+
+def _register_tool_for_tests(spec: RegisteredToolSpec) -> RegisteredToolSpec:
+    """Test-only registration (AST-banned outside ``tests/``)."""
+    return _put(spec)
 
 
 def get_registered(name: str) -> RegisteredToolSpec | None:
@@ -91,7 +130,9 @@ def resolve_spec(name: str) -> RegisteredToolSpec:
 
 
 def _reset_registry_for_tests() -> None:
-    """Test-only: unfreeze and clear. Not part of the public production API."""
-    global _FROZEN
+    """Test-only: unfreeze and clear. AST-banned outside ``tests/``."""
+    global _FROZEN, _REGISTRY, _REGISTRY_MUTABLE, _LOADER_GATE
     _FROZEN = False
-    _REGISTRY.clear()
+    _LOADER_GATE = False
+    _REGISTRY_MUTABLE = {}
+    _REGISTRY = _REGISTRY_MUTABLE

@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import secrets
+import socket
 import time
 from datetime import datetime
 from pathlib import Path
@@ -53,6 +54,11 @@ def _idem_path(data_root: Path, key: str) -> Path:
     return Path(data_root) / "idempotency" / "studies" / digest
 
 
+def _owner_sidecar_path(path: Path) -> Path:
+    """Sidecar written before the mapping body so owner is reachable mid-write."""
+    return Path(str(path) + ".owner")
+
+
 def _request_digest(body: CreateStudyBody) -> str:
     return sha256_hex(canonical_json(body.model_dump(mode="json")))
 
@@ -67,6 +73,50 @@ def _read_mapping(path: Path) -> dict[str, Any] | None:
         return json.loads(raw)
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return None
+
+
+def _read_owner_sidecar(path: Path) -> tuple[str, int] | None:
+    """Return ``(hostname, pid)`` from the sidecar, if present and parseable."""
+    side = _owner_sidecar_path(path)
+    try:
+        raw = side.read_text(encoding="utf-8").strip()
+        data = json.loads(raw)
+        host = str(data.get("hostname") or "")
+        pid = data.get("owner_pid")
+        if host and isinstance(pid, int) and pid > 0:
+            return host, pid
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        return None
+    return None
+
+
+def _write_owner_sidecar(path: Path, *, hostname: str, owner_pid: int) -> None:
+    side = _owner_sidecar_path(path)
+    payload = {"hostname": hostname, "owner_pid": owner_pid, "created_at": time.time()}
+    tmp = side.parent / f".{side.name}.{os.getpid()}.{secrets.token_hex(6)}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, sort_keys=True))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, side)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def _unlink_reservation(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    try:
+        _owner_sidecar_path(path).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _pid_alive(pid: int) -> bool:
@@ -86,6 +136,8 @@ def _pid_alive(pid: int) -> bool:
 def _reservation_reclaimable(path: Path) -> bool:
     """True only for empty crash stubs or provably stale/dead-owner reservations.
 
+    Owner identity lives in a ``.owner`` sidecar so mid-write corrupt mapping
+    bodies still expose hostname+pid. Cross-host: reclaim by age only (never pid).
     Never unlink a recent non-empty file — it may be a live neighbour mid-write.
     """
     try:
@@ -97,13 +149,22 @@ def _reservation_reclaimable(path: Path) -> bool:
     age = time.time() - st.st_mtime
     if age >= _STALE_RESERVATION_S:
         return True
-    existing = _read_mapping(path)
-    if existing is not None:
+    owner = _read_owner_sidecar(path)
+    if owner is None:
+        # Fall back to mapping body if sidecar missing (legacy / complete rewrite).
+        existing = _read_mapping(path)
+        if existing is None:
+            return False
+        host = str(existing.get("hostname") or "")
         pid = existing.get("owner_pid")
-        if isinstance(pid, int) and not _pid_alive(pid):
-            return True
-        return False  # readable live mapping — not a reclaim candidate here
-    return False
+        if not host or not isinstance(pid, int):
+            return False
+        owner = (host, pid)
+    host, pid = owner
+    local = socket.gethostname()
+    if host != local:
+        return False  # different host — only age may reclaim (already checked)
+    return not _pid_alive(pid)
 
 
 def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
@@ -141,14 +202,20 @@ async def _reserve_key(
     Returns ``(mapping, created)``. Empty crash stubs (O_EXCL then die) and
     *provably stale* unreadable files may be reclaimed. A recent non-empty
     unreadable file is treated as a live neighbour write → ``Conflict`` (retry).
+
+    Owner ``hostname``+``pid`` are written to a ``.owner`` sidecar immediately
+    after O_EXCL so reclaim can see them even when the mapping body is corrupt.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    hostname = socket.gethostname()
+    owner_pid = os.getpid()
     payload = {
         "study_id": study_id,
         "request_digest": request_digest,
         "idempotency_key": key,
         "status": "pending",
-        "owner_pid": os.getpid(),
+        "hostname": hostname,
+        "owner_pid": owner_pid,
         "created_at": time.time(),
     }
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
@@ -164,10 +231,7 @@ async def _reserve_key(
                 existing = _read_mapping(path)
             if existing is None:
                 if _reservation_reclaimable(path):
-                    try:
-                        path.unlink(missing_ok=True)
-                    except OSError:
-                        pass
+                    _unlink_reservation(path)
                     await asyncio.sleep(0)
                     continue
                 raise Conflict(
@@ -181,6 +245,8 @@ async def _reserve_key(
                 ) from None
             return existing, False
         try:
+            # Sidecar first so a crash mid-body still leaves reclaimable owner info.
+            _write_owner_sidecar(path, hostname=hostname, owner_pid=owner_pid)
             data = json.dumps(payload, sort_keys=True).encode("utf-8")
             os.write(fd, data)
             os.fsync(fd)
@@ -288,6 +354,9 @@ async def post_studies(
         raise Conflict(f"create_study produced no study_id for {sid}")
 
     if idempotency_key and path is not None:
+        host = socket.gethostname()
+        pid = os.getpid()
+        _write_owner_sidecar(path, hostname=host, owner_pid=pid)
         _atomic_write(
             path,
             {
@@ -295,7 +364,8 @@ async def post_studies(
                 "request_digest": req_digest,
                 "idempotency_key": idempotency_key,
                 "status": "complete",
-                "owner_pid": os.getpid(),
+                "hostname": host,
+                "owner_pid": pid,
                 "created_at": time.time(),
             },
         )

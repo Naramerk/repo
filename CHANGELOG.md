@@ -3,7 +3,8 @@
 ## Unreleased
 
 ### M1 PR18
-- Frozen closed `core.tool_registry` (no replace; unregistered → `external_effect`); `open_runtime` calls `ensure_core_tools_ready` then freezes; `invoke_tool` only (import-linter + agents AST); `ToolSpec.effect` advisory.
+- Frozen closed `core.tool_registry` (loader-gated `register_tool` only; freeze at end of `tool_loader` → `MappingProxyType`; unregistered → `external_effect`); `invoke_tool` only (import-linter + agents AST); `ToolSpec.effect` advisory.
+- **M2 follow-up:** AST gate misses aliases/`getattr`/indirect calls; non-agents packages may still import `tool_registry`; agents contract is meaningful once `coscientist.agents` has code.
 - Exactly-once: in-doubt Intended-without-Done spans all attempts by fingerprint; completed keys keep `attempt_id`; read not indexed.
 - Taint from journal `AttemptStarted.tainted_context`; per-attempt `ContextVar` for sandbox puts (foreach-safe); taint/side_effect deny → `SideEffectDenied` + report lines.
 - Journal effect index + AttemptStarted taint map cached incrementally on the writer (no per-invoke ``read_all``); artifact store required before write call.

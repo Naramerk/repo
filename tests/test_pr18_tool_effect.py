@@ -5,9 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import multiprocessing as mp
+import os
+import socket
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import pytest
@@ -16,6 +20,7 @@ from coscientist.api.studies import (
     CreateStudyBody,
     _idem_path,
     _request_digest,
+    _write_owner_sidecar,
     post_studies,
     study_id_from_idempotency_key,
 )
@@ -35,6 +40,8 @@ from coscientist.core.tool_registry import (
     RegisteredToolSpec,
     RegistryDuplicateError,
     RegistryFrozenError,
+    RegistryUnauthorizedError,
+    _register_tool_for_tests,
     _reset_registry_for_tests,
     freeze_registry,
     is_registry_frozen,
@@ -67,7 +74,7 @@ def _registry():
         ("flaky_idem", "write"),
         ("net_write", "write"),
     ):
-        register_tool(
+        _register_tool_for_tests(
             RegisteredToolSpec(
                 name=name,
                 effect=effect,  # type: ignore[arg-type]
@@ -87,29 +94,43 @@ def test_default_effect_read_advisory_only():
     assert side_effect_allowed(HitlPolicy()) is False
 
 
+def test_register_tool_rejects_non_loader_callers():
+    """Production register_tool is loader-gated (pre-freeze spoof cannot stick)."""
+    with pytest.raises(RegistryUnauthorizedError):
+        register_tool(RegisteredToolSpec(name="spoof", effect="read"))
+
+
 def test_registry_freeze_forbids_replace_and_spoof():
     freeze_registry()
     assert is_registry_frozen()
+    from coscientist.core import tool_registry as tr
+
+    assert isinstance(tr._REGISTRY, MappingProxyType)
     with pytest.raises(RegistryFrozenError):
         register_tool(RegisteredToolSpec(name="mutate", effect="read"))
     with pytest.raises(RegistryFrozenError):
-        register_tool(RegisteredToolSpec(name="brand_new", effect="read"))
+        _register_tool_for_tests(RegisteredToolSpec(name="brand_new", effect="read"))
     # Unfrozen duplicate also forbidden.
     _reset_registry_for_tests()
-    register_tool(RegisteredToolSpec(name="x", effect="write"))
+    _register_tool_for_tests(RegisteredToolSpec(name="x", effect="write"))
     with pytest.raises(RegistryDuplicateError):
-        register_tool(RegisteredToolSpec(name="x", effect="read"))
+        _register_tool_for_tests(RegisteredToolSpec(name="x", effect="read"))
     assert resolve_effect("x") == "write"
 
 
 @pytest.mark.asyncio
 async def test_register_tool_after_runtime_start_raises(tmp_path: Path):
-    """open_runtime freezes the registry after built-ins (B2)."""
+    """open_runtime freezes via loader — late register_tool / test-register raise."""
     rt = await open_runtime(tmp_path, "st_freeze")
     try:
         assert is_registry_frozen()
+        from coscientist.core import tool_registry as tr
+
+        assert isinstance(tr._REGISTRY, MappingProxyType)
         with pytest.raises(RegistryFrozenError):
             register_tool(RegisteredToolSpec(name="late_tool", effect="read"))
+        with pytest.raises(RegistryFrozenError):
+            _register_tool_for_tests(RegisteredToolSpec(name="late_test", effect="read"))
     finally:
         await close_runtime(rt)
 
@@ -561,15 +582,13 @@ async def test_post_studies_empty_reservation_recoverable(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_post_studies_recent_corrupt_reservation_conflict(tmp_path: Path):
     """Fresh non-empty unreadable file may be a live neighbour — Conflict, do not unlink."""
-    import os
-    import time
-
     catalog = minimal_test_catalog()
     body = CreateStudyBody(request="live neighbour", profile="research")
     key = "live-corrupt-key"
     path = _idem_path(Path(tmp_path), key)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"{not-json-yet")
+    _write_owner_sidecar(path, hostname=socket.gethostname(), owner_pid=os.getpid())
     os.utime(path, (time.time(), time.time()))
     with pytest.raises(Conflict, match="not yet stale"):
         await post_studies(tmp_path, body, idempotency_key=key, catalog=catalog)
@@ -579,9 +598,6 @@ async def test_post_studies_recent_corrupt_reservation_conflict(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_post_studies_stale_corrupt_reservation_reclaimed(tmp_path: Path):
     """Old unreadable reservation is reclaimable (crash mid-write, owner gone)."""
-    import os
-    import time
-
     catalog = minimal_test_catalog()
     body = CreateStudyBody(request="stale corrupt", profile="research")
     key = "stale-corrupt-key"
@@ -593,6 +609,38 @@ async def test_post_studies_stale_corrupt_reservation_reclaimed(tmp_path: Path):
     r = await post_studies(tmp_path, body, idempotency_key=key, catalog=catalog)
     assert r["study_id"] == study_id_from_idempotency_key(key)
     assert json.loads(path.read_text())["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_post_studies_dead_owner_sidecar_reclaimed(tmp_path: Path):
+    """Corrupt body + same-host dead pid in .owner sidecar → reclaim (pid branch)."""
+    catalog = minimal_test_catalog()
+    body = CreateStudyBody(request="dead owner sidecar", profile="research")
+    key = "dead-owner-key"
+    path = _idem_path(Path(tmp_path), key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"{partial")
+    _write_owner_sidecar(path, hostname=socket.gethostname(), owner_pid=2_147_483_646)
+    os.utime(path, (time.time(), time.time()))  # recent — age alone would not reclaim
+    r = await post_studies(tmp_path, body, idempotency_key=key, catalog=catalog)
+    assert r["study_id"] == study_id_from_idempotency_key(key)
+    assert json.loads(path.read_text())["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_post_studies_foreign_hostname_no_pid_reclaim(tmp_path: Path):
+    """Different hostname: never reclaim by pid — only by age."""
+    catalog = minimal_test_catalog()
+    body = CreateStudyBody(request="foreign host", profile="research")
+    key = "foreign-host-key"
+    path = _idem_path(Path(tmp_path), key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"{partial")
+    _write_owner_sidecar(path, hostname="other-host.example", owner_pid=2_147_483_646)
+    os.utime(path, (time.time(), time.time()))
+    with pytest.raises(Conflict, match="not yet stale"):
+        await post_studies(tmp_path, body, idempotency_key=key, catalog=catalog)
+    assert path.exists()
 
 
 @pytest.mark.asyncio

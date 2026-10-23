@@ -9,12 +9,16 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 COSI = ROOT / "coscientist"
+TESTS = ROOT / "tests"
 
 # Production modules allowed to *call* register_tool / define it.
 _REGISTER_ALLOWED = {
     COSI / "core" / "tool_registry.py",
     COSI / "core" / "tool_loader.py",
 }
+
+# Test-only APIs — must not appear under coscientist/.
+_TEST_ONLY_NAMES = ("_reset_registry_for_tests", "_register_tool_for_tests")
 
 
 def _py_files(base: Path) -> list[Path]:
@@ -60,6 +64,22 @@ def test_register_tool_only_in_loader_and_registry():
     assert not offenders, f"register_tool called outside loader: {offenders}"
 
 
+def test_test_only_registry_helpers_banned_outside_tests():
+    """``_reset_registry_for_tests`` / ``_register_tool_for_tests`` only in tests/."""
+    offenders: list[str] = []
+    for path in _py_files(COSI):
+        # Definitions live in tool_registry; everything else under coscientist is banned.
+        if path == COSI / "core" / "tool_registry.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for name in _TEST_ONLY_NAMES:
+            if _calls_name(tree, name) or _imports_name(
+                tree, module_suffix="tool_registry", name=name
+            ):
+                offenders.append(f"{path.relative_to(ROOT)}: {name}")
+    assert not offenders, f"test-only registry helpers in production: {offenders}"
+
+
 def test_agents_forbid_registry_and_direct_tool_call():
     """``coscientist.agents`` must not import registry/contract or call Tool.call."""
     agents = COSI / "agents"
@@ -76,13 +96,11 @@ def test_agents_forbid_registry_and_direct_tool_call():
             offenders.append(f"{path.name}: imports Tool from contract")
         if _imports_name(tree, module_suffix="tools.contract", name="Tool"):
             offenders.append(f"{path.name}: imports tools.contract.Tool")
-        # Direct tool invocation: some_tool.call(...) or Tool.call — not invoke_tool.
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             f = node.func
             if isinstance(f, ast.Attribute) and f.attr == "call":
-                # Allow invoke_tool; forbid *.call on tools.
                 if isinstance(f.value, ast.Name) and f.value.id == "invoke_tool":
                     continue
                 offenders.append(f"{path.name}: direct .call() (use invoke_tool)")

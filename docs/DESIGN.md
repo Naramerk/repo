@@ -501,8 +501,9 @@ class Tool(Protocol):
 class ToolOutput(BaseModel):
     data: Any; artifacts: list[Artifact]    # обёртка сама регистрирует артефакты и считает sha256
 ```
-- **Единственный путь вызова:** `coscientist.tools.invoke_tool` (агентский wiring — позже). Прямой `Tool.call` обходит гейты — запрещён вне тестов; import-linter: api/checks/experimental не импортируют `tools.contract` / `tools.effects` напрямую.
-- Класс эффекта — **закрытый** `core.tool_registry` (после `freeze_registry` замена запрещена); незарегистрированное имя → `external_effect`. `ToolSpec.effect` — advisory only.
+- **Единственный путь вызова:** `coscientist.tools.invoke_tool` (агентский wiring — позже). Прямой `Tool.call` обходит гейты — запрещён вне тестов; import-linter: api/checks/experimental не импортируют `tools.contract` / `tools.effects` напрямую; `coscientist.agents` — без `tools.contract` / `core.tool_registry`.
+- Класс эффекта — **закрытый** `core.tool_registry`: регистрирует только `core.tool_loader` (gate), затем `freeze_registry` → `_REGISTRY` = `MappingProxyType`; незарегистрированное имя → `external_effect`. `ToolSpec.effect` — advisory only.
+- **M2 follow-up (границы AST / import-linter):** AST-тест не ловит aliases / `getattr` / вызовы через переменную; импорт `core.tool_registry` из других non-agents пакетов пока не запрещён; контракт `agents` станет содержательным, когда в `coscientist.agents` появится код.
 - `write` / `external_effect` только через HITL-гейт `side_effect` (headless default `deny` → `SideEffectDenied` + строка в отчёте). Taint deny — тоже `SideEffectDenied(reason=taint_deny)`.
 - `effect_idem_key` включает `attempt_id` для завершённых эффектов; **read не индексируется**. Перед вызовом: любой `EffectIntended` без `EffectDone` с тем же `(study, task_key, tool, args_digest)` на **любой** attempt → opaque/unknown, повтор запрещён (exactly-once). `transport_unsent` → `EffectDone(failed)`.
 - Taint: `AttemptStarted.tainted_context` из журнала (не от вызывающего); наследование на derived/sandbox через per-attempt `ContextVar` (не shared store).
