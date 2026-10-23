@@ -91,6 +91,8 @@ def test_refutation_priority_k_ref(impl):
 
 def test_priority_refuted_not_capped_by_stub_supports(impl):
     """≥ k_ref real refs stay refuted; stub/partial supports must not provenance-cap."""
+    from coscientist.core.rules import priority_refuted_support_note
+
     stub_sup = impl.Claim(
         "met", provenance="stub", attempt_id="S1", artifact_id="AS"
     )
@@ -108,6 +110,22 @@ def test_priority_refuted_not_capped_by_stub_supports(impl):
     )
     # Without priority, stub support + real ref → inconclusive (ceiling).
     assert impl.verdict([stub_sup, real_ref], True)[0] == "inconclusive"
+    note = priority_refuted_support_note(
+        [stub_sup, real_ref],
+        True,
+        refutations_needed=1,
+        refutation_priority=True,
+    )
+    assert note == "refuted; 1 supporting results were stub/partial"
+    assert (
+        priority_refuted_support_note(
+            [stub_sup, real_ref],
+            True,
+            refutations_needed=1,
+            refutation_priority=False,
+        )
+        is None
+    )
 
 
 def test_r17_criterion_after_lit_valid():

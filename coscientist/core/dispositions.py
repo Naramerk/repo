@@ -15,7 +15,7 @@ from coscientist.core.domain import Study, Task, TaskOutcome, TaskState
 from coscientist.core.graph import GraphStore
 from coscientist.core.question_tasks import known_questions, question_tasks
 from coscientist.core.reasons import Disposition, NotAttemptedReason, TaskReason
-from coscientist.core.rules import verdict
+from coscientist.core.rules import priority_refuted_support_note, verdict
 
 
 def _task_by_key(tasks: Mapping[str, Task]) -> dict[str, Task]:
@@ -148,13 +148,23 @@ def _dispositions_inner(
             )
             disp = disposition_from_verdict(v)
             if disp is not None:
-                result[qid] = {
+                row: dict[str, Any] = {
                     "disposition": disp,
                     "reason": None,
                     "reason_detail": [],
                     "formulation": text,
                     "verdict": v,
                 }
+                note = priority_refuted_support_note(
+                    claims,
+                    any_exp,
+                    conf_k,
+                    refutations_needed=k_ref,
+                    refutation_priority=priority,
+                )
+                if note is not None:
+                    row["note"] = note
+                result[qid] = row
                 continue
         reason, detail = _not_attempted_for_covering(covering)
         result[qid] = {

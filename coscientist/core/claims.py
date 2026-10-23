@@ -24,6 +24,7 @@ from coscientist.core.rules import (
     DEFAULT_TESTS_INTENT,
     TestsIntent,
     claim_stance,
+    priority_refuted_support_note,
     verdict,
 )
 
@@ -568,7 +569,7 @@ def compute_verdict_snapshots(
             if c.counts() and c.provenance in VALID_PROVENANCE
         ]
         source = worst_provenance(*provs) if provs else "stub"
-        snap = {
+        snap: dict[str, Any] = {
             "ref": logical,
             "target_kind": kind,
             "verdict": v,
@@ -578,6 +579,15 @@ def compute_verdict_snapshots(
             "refutation_priority": priority,
             "k": conf_k,
         }
+        note = priority_refuted_support_note(
+            claims,
+            any_experiment_done,
+            conf_k,
+            refutations_needed=k_ref,
+            refutation_priority=priority,
+        )
+        if note is not None:
+            snap["note"] = note
         # Bind (refs set): key by InputSpec.ref logical id.
         # Full dump (refs None): kind-prefixed keys so Q/H cannot collide.
         if refs is None:

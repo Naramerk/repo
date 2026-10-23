@@ -192,6 +192,47 @@ def verdict(
     return v, bool(decisive) and all(c.is_lit for c in decisive)
 
 
+def priority_refuted_support_note(
+    claims: Sequence[_ClaimLike],
+    any_experiment_done: bool,
+    k: int = 1,
+    *,
+    refutations_needed: int = 1,
+    refutation_priority: bool = False,
+) -> str | None:
+    """Report note when priority-win keeps ``refuted`` despite stub/partial supports.
+
+    Returns e.g. ``\"refuted; 2 supporting results were stub/partial\"``, or
+    ``None`` when the exception does not apply (no priority-win, or no
+    stub/partial counting supports).
+    """
+    if not refutation_priority:
+        return None
+    v, _ = verdict(
+        claims,
+        any_experiment_done,
+        k,
+        refutations_needed=refutations_needed,
+        refutation_priority=refutation_priority,
+    )
+    if v != "refuted":
+        return None
+    acc = [c for c in claims if c.accepted]
+    q = [c for c in acc if _claim_counts(c)]
+    supports = [c for c in q if c.stance == "supports"]
+    stub_partial = [c for c in supports if c.provenance in ("stub", "partial")]
+    if not stub_partial:
+        return None
+    # Distinct supporting results (same metric as verdict counts).
+    n = min(
+        len({c.attempt_id for c in stub_partial}),
+        len({c.artifact_id for c in stub_partial}),
+    )
+    if n < 1:
+        n = len(stub_partial)
+    return f"refuted; {n} supporting results were stub/partial"
+
+
 def study_fulfilled(question_verdicts: dict[str, str], all_required_success: bool) -> bool:
     return all_required_success and all(v != "untested" for v in question_verdicts.values())
 

@@ -1116,6 +1116,97 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
         await close_runtime(rt)
 
 
+def test_priority_refuted_stub_support_note_in_report_payload():
+    """Priority-win refuted + stub supports → note on hypothesis_verdicts snapshot."""
+    from coscientist.core.claims import compute_verdict_snapshots, hypothesis_verdicts
+    from coscientist.core.ids import hypothesis_node_id
+
+    g = GraphStore(default_execution_registry())
+    sid = "st_prio_note"
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    hid = hypothesis_node_id(sid, "H1")
+    g.upsert_node(
+        GraphNode(
+            node_id=hid,
+            kind="hypothesis",
+            study_id=sid,
+            ref_id="H1",
+            attrs={"formulation": "h"},
+        )
+    )
+    aid_sup = f"{sid}/E_sup#1"
+    aid_ref = f"{sid}/E_ref#1"
+    evs_sup, drops_sup = claim_nodes_from_attempt(
+        study_id=sid,
+        attempt_id=aid_sup,
+        provenance="stub",
+        claims=[{"id": "sup", "target": "H1"}],
+        now=now,
+        graph=g,
+        derived={**_DERIVED_OK, "criterion_status": "met"},
+    )
+    assert drops_sup == []
+    _apply_events(g, evs_sup)
+    evs_ref, drops_ref = claim_nodes_from_attempt(
+        study_id=sid,
+        attempt_id=aid_ref,
+        provenance="real",
+        claims=[{"id": "ref", "target": "H1"}],
+        now=now,
+        graph=g,
+        derived={**_DERIVED_OK, "criterion_status": "not_met"},
+    )
+    assert drops_ref == []
+    _apply_events(g, evs_ref)
+    study = Study(
+        study_id=sid,
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        hitl_policy=HitlPolicy(),
+        deadline=now + timedelta(seconds=60),
+        created_at=now,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=True,
+    )
+    results = {
+        aid_sup: {"outcome": "SUCCESS"},
+        aid_ref: {"outcome": "SUCCESS"},
+    }
+    snaps = compute_verdict_snapshots(
+        g,
+        study_id=sid,
+        study=study,
+        results=results,
+        any_experiment_done=True,
+        refs=["hypothesis:H1"],
+    )
+    assert snaps["H1"]["verdict"] == "refuted"
+    assert snaps["H1"]["note"] == "refuted; 1 supporting results were stub/partial"
+    hyp = hypothesis_verdicts(
+        g,
+        study_id=sid,
+        study=study,
+        results=results,
+        any_experiment_done=True,
+    )
+    assert hyp["H1"]["verdict"] == "refuted"
+    assert hyp["H1"]["note"] == "refuted; 1 supporting results were stub/partial"
+    # Without priority: ceiling → inconclusive, no note.
+    study_off = study.model_copy(update={"refutation_priority": False})
+    snaps_off = compute_verdict_snapshots(
+        g,
+        study_id=sid,
+        study=study_off,
+        results=results,
+        any_experiment_done=True,
+        refs=["hypothesis:H1"],
+    )
+    assert snaps_off["H1"]["verdict"] == "inconclusive"
+    assert "note" not in snaps_off["H1"]
+
+
 def test_intent_from_producing_experiment_two_opposite():
     """Two experiments, opposite tests.intent → claims pick their producer."""
     from coscientist.core.claims import intent_from_producing_experiment, runtime_claim_from_node

@@ -12,7 +12,7 @@
 - StudyCreated schema_version=4 + v3→v4 upcaster for `confirmations_needed` (no longer piggybacked on v2→v3).
 - R17 runtime metadata wiring deferred (DESIGN note + xfail); pure-rule path remains in PR 6.
 - Totality: garbage claim attrs dropped (never raise into finalize/view/start_attempt).
-- Priority-refuted provenance exception unchanged.
+- Priority-refuted provenance exception unchanged; report/snapshot `note` when stub/partial supports accompany priority-win (`refuted; N supporting results were stub/partial`).
 - Compat: `view()` with graph/study uses PR8 dispositions; PR7 journals without counting claims stay `not_attempted`.
 
 ### M1 PR7

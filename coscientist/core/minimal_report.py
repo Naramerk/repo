@@ -173,8 +173,10 @@ def render_markdown_report(
     if not question_dispositions:
         lines.append("_No questions._")
     for qid, d in sorted(question_dispositions.items()):
+        extra = f"; note={d['note']}" if d.get("note") else ""
         lines.append(
-            f"- `{qid}`: {d.get('disposition')} ({d.get('reason')}) — {d.get('formulation', '')}"
+            f"- `{qid}`: {d.get('disposition')} ({d.get('reason')}) — "
+            f"{d.get('formulation', '')}{extra}"
         )
     lines.extend(["", "## Tasks"])
     for t in sorted(tasks.values(), key=lambda x: x.spec.task_key):
