@@ -219,6 +219,7 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
         elif ev.type == "LoopCompleted":
             _append_loop_completed_report_line(seen, ev.payload)
         elif ev.type == "PlanRefused":
+            # Temporary until rebase on #21 — then drop this branch and use PR13's.
             line = (ev.payload or {}).get("report_line") or (
                 "не выполнено: план отклонён"
             )
