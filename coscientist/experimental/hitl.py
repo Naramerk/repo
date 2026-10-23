@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import timedelta
 from typing import Any, Self
 
@@ -22,13 +21,11 @@ class HitlForkMixin(CostlyHitlMixin):
     def _resolve_task(self, task_key_or_id: str) -> Task:
         raise NotImplementedError
 
-    def _proposed_check_decision_lock(self, proposal_id: str) -> asyncio.Lock:
-        """Per-proposal lock: accept/delegate/reject/timeout serialize side effects."""
-        locks = getattr(self, "_hitl_decision_locks", None)
-        if not isinstance(locks, dict):
-            locks = {}
-            self._hitl_decision_locks = locks
-        return locks.setdefault(str(proposal_id), asyncio.Lock())
+    def _proposed_check_decision_lock(self, proposal_id: str):
+        """Per-proposal lock: accept/delegate/reject/timeout/stale serialize side effects."""
+        from coscientist.core.proposed_check import hold_proposed_check_decision_lock
+
+        return hold_proposed_check_decision_lock(self, proposal_id)
 
     async def open_hitl(
         self,

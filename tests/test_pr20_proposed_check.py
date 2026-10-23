@@ -47,6 +47,7 @@ from coscientist.core.proposed_check import (
     fold_proposed_check_event,
     propose_check,
     reject_check,
+    reject_stale_proposed_check_reviews,
     requirement_ref_for_proposal,
     schedule_proposed_check_review,
     validate_proposal_content,
@@ -2491,14 +2492,119 @@ async def test_hitl_timeout_vs_accept_serialized(
         rejected = [
             e for e in events if e.type == "CheckRejected" and e.entity_key == pid
         ]
-        assert len(approved) + len(rejected) == 1
+        decided = [
+            e
+            for e in events
+            if e.type == "HitlDecided" and e.entity_key == rid
+        ]
+        timed_out = [
+            e
+            for e in events
+            if e.type == "HitlTimedOut" and e.entity_key == rid
+        ]
         status = rt._check_proposals[pid]["status"]
-        if approved:
+        if first == "accept":
+            assert len(approved) == 1
+            assert len(rejected) == 0
             assert status == "approved"
-            assert not rejected
+            assert len(decided) == 1
+            assert decided[0].payload.get("decision") == "accept"
+            assert len(timed_out) == 0
         else:
-            assert status == "rejected"
+            assert len(rejected) == 1
             assert rejected[0].payload.get("reason") == "human_timeout"
+            assert len(approved) == 0
+            assert status == "rejected"
+            assert len(timed_out) == 1
+            assert len(decided) == 0
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first", ["approve", "timeout"])
+async def test_stale_review_timeout_vs_approve_serialized(
+    tmp_path: Path, first: str
+) -> None:
+    """Delegated review timeout must share the lock with reviewer approve_check.
+
+    Without the lock in ``reject_stale_proposed_check_reviews``, tick-timeout
+    can write ``CheckRejected`` while ``approve_check`` is mid-append — gather
+    would see both events (or a raised loser). Must fail on that old code.
+    """
+    clock = FakeClock(datetime(2026, 1, 1, tzinfo=timezone.utc))
+    rt = await open_runtime(tmp_path, f"st_pr20_stale_vs_appr_{first}", clock=clock)
+    try:
+        await _create(rt, f"stale vs approve {first}")
+        proposer_aid = await _boot_plan(
+            rt,
+            [_exp_spec(task_key="EXP"), _exp_spec(task_key="REV", title="rev")],
+        )
+        exp_tid = _task_id(rt, "EXP")
+        rev_tid = _task_id(rt, "REV")
+        pid = await propose_check(
+            rt,
+            target="study",
+            role="prediction",
+            measures="m",
+            justification="j",
+            rejected_templates=_rejected(),
+            check=_value_check(target=1),
+            task_id=exp_tid,
+            attempt_id=proposer_aid,
+            open_hitl=False,
+        )
+        assert pid
+        await schedule_proposed_check_review(
+            rt, pid, timeout_s=5, reviewer_task_id=rev_tid
+        )
+        ok = await rt.start_attempt("REV")
+        assert ok
+        assert rt.attempts[ok].get("attempt_role") == "reviewer"
+        await bind_proposed_check_reviewer(rt, pid, ok)
+        # Past deadline so reject_stale will fire.
+        clock.advance(timedelta(seconds=10))
+
+        async def _approve() -> None:
+            await approve_check(
+                rt,
+                pid,
+                source="reviewer",
+                delegated=True,
+                reviewer_attempt_id=ok,
+            )
+
+        async def _timeout() -> None:
+            await reject_stale_proposed_check_reviews(rt)
+
+        if first == "approve":
+            a = asyncio.create_task(_approve())
+            await asyncio.sleep(0)
+            b = asyncio.create_task(_timeout())
+        else:
+            a = asyncio.create_task(_timeout())
+            await asyncio.sleep(0)
+            b = asyncio.create_task(_approve())
+        results = await asyncio.gather(a, b, return_exceptions=True)
+        assert results == [None, None]
+
+        events = await rt.store.read_all()
+        approved = [
+            e for e in events if e.type == "CheckApproved" and e.entity_key == pid
+        ]
+        rejected = [
+            e for e in events if e.type == "CheckRejected" and e.entity_key == pid
+        ]
+        status = rt._check_proposals[pid]["status"]
+        if first == "approve":
+            assert len(approved) == 1
+            assert len(rejected) == 0
+            assert status == "approved"
+        else:
+            assert len(rejected) == 1
+            assert rejected[0].payload.get("reason") == "human_timeout"
+            assert len(approved) == 0
+            assert status == "rejected"
     finally:
         await close_runtime(rt)
 

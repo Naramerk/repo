@@ -23,10 +23,13 @@ Unicode / digests:
 
 from __future__ import annotations
 
+import asyncio
 import math
 import unicodedata
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from datetime import timedelta
-from typing import Any, Literal, Mapping
+from typing import Any, AsyncIterator, Literal, Mapping
 
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import (
@@ -525,6 +528,43 @@ async def propose_check(
     return pid
 
 
+def proposed_check_decision_lock(runtime: Any, proposal_id: str) -> asyncio.Lock:
+    """Per-proposal lock shared by HITL answer/timeout, consume, and stale reject.
+
+    Same storage key as ``HitlForkMixin._proposed_check_decision_lock`` so all
+    approve/reject side effects serialize on one lock per proposal.
+    """
+    locks = getattr(runtime, "_hitl_decision_locks", None)
+    if not isinstance(locks, dict):
+        locks = {}
+        runtime._hitl_decision_locks = locks
+    return locks.setdefault(str(proposal_id), asyncio.Lock())
+
+
+# Re-entrancy for nested holders (HITL critical section → approve/reject).
+_decision_locks_held: ContextVar[frozenset[str]] = ContextVar(
+    "proposed_check_decision_locks_held", default=frozenset()
+)
+
+
+@asynccontextmanager
+async def hold_proposed_check_decision_lock(
+    runtime: Any, proposal_id: str
+) -> AsyncIterator[None]:
+    """Acquire the per-proposal lock, or nest if this task already holds it."""
+    pid = str(proposal_id)
+    held = _decision_locks_held.get()
+    if pid in held:
+        yield
+        return
+    async with proposed_check_decision_lock(runtime, pid):
+        token = _decision_locks_held.set(held | {pid})
+        try:
+            yield
+        finally:
+            _decision_locks_held.reset(token)
+
+
 async def _append_events(runtime: Any, events: list[EventEnvelope]) -> None:
     append = getattr(runtime, "_append", None)
     if callable(append):
@@ -844,66 +884,68 @@ async def approve_check(
         raise ValueError("delegated approval requires source='reviewer'")
     if not delegated and source == "reviewer":
         raise ValueError("source='reviewer' requires delegated=True")
-    row = get_proposal(runtime, proposal_id_s)
-    if row is None:
-        raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
-    if row.get("status") == "approved":
-        return
-    if row.get("status") == "rejected":
-        raise ValueError(f"proposal already rejected: {proposal_id_s!r}")
+    async with hold_proposed_check_decision_lock(runtime, proposal_id_s):
+        row = get_proposal(runtime, proposal_id_s)
+        if row is None:
+            raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
+        if row.get("status") == "approved":
+            return
+        # Lost race with timeout/reject — settle no-op (do not raise under gather).
+        if row.get("status") == "rejected":
+            return
 
-    by: Literal["human", "reviewer"]
-    principal: str | None = None
-    if source in ("hitl", "api"):
-        by = "human"
-        delegated = False
-        reviewer_attempt_id = None
-        principal = _verify_human_principal(
-            runtime,
-            source=source,
-            proposal_id_s=str(proposal_id_s),
-            hitl_request_id_s=hitl_request_id_s,
-            human_principal=human_principal,
-        )
-    else:
-        by = "reviewer"
-        _validate_reviewer_attempt(
-            runtime, row=row, reviewer_attempt_id=str(reviewer_attempt_id or "")
-        )
+        by: Literal["human", "reviewer"]
+        principal: str | None = None
+        if source in ("hitl", "api"):
+            by = "human"
+            delegated = False
+            reviewer_attempt_id = None
+            principal = _verify_human_principal(
+                runtime,
+                source=source,
+                proposal_id_s=str(proposal_id_s),
+                hitl_request_id_s=hitl_request_id_s,
+                human_principal=human_principal,
+            )
+        else:
+            by = "reviewer"
+            _validate_reviewer_attempt(
+                runtime, row=row, reviewer_attempt_id=str(reviewer_attempt_id or "")
+            )
 
-    study = runtime.study
-    assert study is not None
-    now = runtime.clock.now()
-    bound_task_id = str(row.get("bound_task_id") or row.get("task_id") or "")
-    bound_target = str(row.get("bound_target") or row.get("target") or "")
-    if not bound_task_id or not bound_target:
-        raise ValueError("approval requires bound_task_id and bound_target on proposal")
-    payload = {
-        "proposal_id": str(proposal_id_s),
-        "proposal_digest": row.get("proposal_digest"),
-        "by": by,
-        "approved_by": by,
-        "source": source,
-        "delegated": bool(delegated),
-        "reviewer_attempt_id": reviewer_attempt_id,
-        "hitl_request_id": hitl_request_id_s,
-        "human_principal": principal,
-        "bound_task_id": bound_task_id,
-        "bound_target": bound_target,
-    }
-    # Idem key = proposal id only (not payload hash) so retries are stable.
-    ev = EventEnvelope(
-        study_id=study.study_id,
-        type="CheckApproved",
-        entity_key=str(proposal_id_s),
-        idem_key=make_idem("CheckApproved", str(proposal_id_s)),
-        payload=payload,
-        ts=now,
-        schema_version=1,
-    )
-    # HitlDecided(by=human) must already be journaled (answer_hitl); do not mint it
-    # here — that would let source=api|hitl approve from propose_check's HitlOpened alone.
-    await _append_events(runtime, [ev])
+        study = runtime.study
+        assert study is not None
+        now = runtime.clock.now()
+        bound_task_id = str(row.get("bound_task_id") or row.get("task_id") or "")
+        bound_target = str(row.get("bound_target") or row.get("target") or "")
+        if not bound_task_id or not bound_target:
+            raise ValueError("approval requires bound_task_id and bound_target on proposal")
+        payload = {
+            "proposal_id": str(proposal_id_s),
+            "proposal_digest": row.get("proposal_digest"),
+            "by": by,
+            "approved_by": by,
+            "source": source,
+            "delegated": bool(delegated),
+            "reviewer_attempt_id": reviewer_attempt_id,
+            "hitl_request_id": hitl_request_id_s,
+            "human_principal": principal,
+            "bound_task_id": bound_task_id,
+            "bound_target": bound_target,
+        }
+        # Idem key = proposal id only (not payload hash) so retries are stable.
+        ev = EventEnvelope(
+            study_id=study.study_id,
+            type="CheckApproved",
+            entity_key=str(proposal_id_s),
+            idem_key=make_idem("CheckApproved", str(proposal_id_s)),
+            payload=payload,
+            ts=now,
+            schema_version=1,
+        )
+        # HitlDecided(by=human) must already be journaled (answer_hitl); do not mint it
+        # here — that would let source=api|hitl approve from propose_check's HitlOpened alone.
+        await _append_events(runtime, [ev])
 
 
 async def reject_check(
@@ -918,88 +960,90 @@ async def reject_check(
     human_principal: str | None = None,
 ) -> None:
     """Write CheckRejected (HITL timeout / human reject / reviewer reject)."""
-    row = get_proposal(runtime, proposal_id_s)
-    if row is None:
-        raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
-    if row.get("status") == "rejected":
-        return
-    if row.get("status") == "approved":
-        raise ValueError(f"proposal already approved: {proposal_id_s!r}")
-    # Race: HitlDecided(accept) already journaled but CheckApproved not yet —
-    # timeout must not clobber the in-flight human accept.
-    if source == "timeout" and hitl_request_id_s:
-        dec = _lookup_hitl_decision(runtime, str(hitl_request_id_s))
-        if isinstance(dec, dict):
-            d = str(dec.get("decision") or "").strip()
-            decided_by = str(dec.get("by") or dec.get("decided_by") or "").strip()
-            if decided_by == "human" and d in ("accept", "approve"):
-                return
-    principal: str | None = None
-    if source == "reviewer":
-        _validate_reviewer_attempt(
-            runtime, row=row, reviewer_attempt_id=str(reviewer_attempt_id or "")
-        )
-    elif source in ("hitl", "api"):
-        principal = _verify_human_principal(
-            runtime,
-            source=source,  # type: ignore[arg-type]
-            proposal_id_s=str(proposal_id_s),
-            hitl_request_id_s=hitl_request_id_s,
-            human_principal=human_principal,
-            expect_decisions=frozenset({"reject"}),
-        )
-    study = runtime.study
-    assert study is not None
-    now = runtime.clock.now()
-    by: str
-    if source == "timeout":
-        by = "timeout"
-    elif source in ("hitl", "api"):
-        by = "human"
-    else:
-        by = "reviewer"
-    payload = {
-        "proposal_id": str(proposal_id_s),
-        "proposal_digest": row.get("proposal_digest"),
-        "by": by,
-        "rejected_by": by,
-        "source": source,
-        "reason": str(reason),
-        "delegated": bool(delegated),
-        "hitl_request_id": hitl_request_id_s,
-        "reviewer_attempt_id": reviewer_attempt_id,
-        "human_principal": principal,
-    }
-    events = [
-        EventEnvelope(
-            study_id=study.study_id,
-            type="CheckRejected",
-            entity_key=str(proposal_id_s),
-            idem_key=make_idem("CheckRejected", str(proposal_id_s)),
-            payload=payload,
-            ts=now,
-            schema_version=1,
-        )
-    ]
-    if hitl_request_id_s and reason == "human_timeout":
-        events.append(
+    async with hold_proposed_check_decision_lock(runtime, proposal_id_s):
+        row = get_proposal(runtime, proposal_id_s)
+        if row is None:
+            raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
+        if row.get("status") == "rejected":
+            return
+        # Lost race with approve — settle no-op.
+        if row.get("status") == "approved":
+            return
+        # Race: HitlDecided(accept) already journaled but CheckApproved not yet —
+        # timeout must not clobber the in-flight human accept.
+        if source == "timeout" and hitl_request_id_s:
+            dec = _lookup_hitl_decision(runtime, str(hitl_request_id_s))
+            if isinstance(dec, dict):
+                d = str(dec.get("decision") or "").strip()
+                decided_by = str(dec.get("by") or dec.get("decided_by") or "").strip()
+                if decided_by == "human" and d in ("accept", "approve"):
+                    return
+        principal: str | None = None
+        if source == "reviewer":
+            _validate_reviewer_attempt(
+                runtime, row=row, reviewer_attempt_id=str(reviewer_attempt_id or "")
+            )
+        elif source in ("hitl", "api"):
+            principal = _verify_human_principal(
+                runtime,
+                source=source,  # type: ignore[arg-type]
+                proposal_id_s=str(proposal_id_s),
+                hitl_request_id_s=hitl_request_id_s,
+                human_principal=human_principal,
+                expect_decisions=frozenset({"reject"}),
+            )
+        study = runtime.study
+        assert study is not None
+        now = runtime.clock.now()
+        by: str
+        if source == "timeout":
+            by = "timeout"
+        elif source in ("hitl", "api"):
+            by = "human"
+        else:
+            by = "reviewer"
+        payload = {
+            "proposal_id": str(proposal_id_s),
+            "proposal_digest": row.get("proposal_digest"),
+            "by": by,
+            "rejected_by": by,
+            "source": source,
+            "reason": str(reason),
+            "delegated": bool(delegated),
+            "hitl_request_id": hitl_request_id_s,
+            "reviewer_attempt_id": reviewer_attempt_id,
+            "human_principal": principal,
+        }
+        events = [
             EventEnvelope(
                 study_id=study.study_id,
-                type="HitlTimedOut",
-                entity_key=hitl_request_id_s,
-                idem_key=make_idem("HitlTimedOut", hitl_request_id_s),
-                payload={
-                    "request_id": hitl_request_id_s,
-                    "reason": "human_timeout",
-                    "proposal_id": str(proposal_id_s),
-                    "spent_rub": 0.0,
-                },
+                type="CheckRejected",
+                entity_key=str(proposal_id_s),
+                idem_key=make_idem("CheckRejected", str(proposal_id_s)),
+                payload=payload,
                 ts=now,
+                schema_version=1,
             )
-        )
-    # Human reject: HitlDecided(by=human, decision=reject) must already be journaled
-    # (answer_hitl); do not mint a decision here.
-    await _append_events(runtime, events)
+        ]
+        if hitl_request_id_s and reason == "human_timeout":
+            events.append(
+                EventEnvelope(
+                    study_id=study.study_id,
+                    type="HitlTimedOut",
+                    entity_key=hitl_request_id_s,
+                    idem_key=make_idem("HitlTimedOut", hitl_request_id_s),
+                    payload={
+                        "request_id": hitl_request_id_s,
+                        "reason": "human_timeout",
+                        "proposal_id": str(proposal_id_s),
+                        "spent_rub": 0.0,
+                    },
+                    ts=now,
+                )
+            )
+        # Human reject: HitlDecided(by=human, decision=reject) must already be journaled
+        # (answer_hitl); do not mint a decision here.
+        await _append_events(runtime, events)
 
 
 async def schedule_proposed_check_review(
@@ -1074,23 +1118,27 @@ async def consume_proposed_check_review(
 ) -> None:
     """Consumer of ReviewScheduled(kind=proposed_check_review): reviewer decides."""
     await bind_proposed_check_reviewer(runtime, proposal_id_s, reviewer_attempt_id)
-    if decision == "approve":
-        await approve_check(
-            runtime,
-            proposal_id_s,
-            source="reviewer",
-            delegated=True,
-            reviewer_attempt_id=reviewer_attempt_id,
-        )
-    else:
-        await reject_check(
-            runtime,
-            proposal_id_s,
-            source="reviewer",
-            reason=reason,
-            delegated=True,
-            reviewer_attempt_id=reviewer_attempt_id,
-        )
+    async with hold_proposed_check_decision_lock(runtime, proposal_id_s):
+        row = get_proposal(runtime, proposal_id_s)
+        if row is None or row.get("status") != "proposed":
+            return
+        if decision == "approve":
+            await approve_check(
+                runtime,
+                proposal_id_s,
+                source="reviewer",
+                delegated=True,
+                reviewer_attempt_id=reviewer_attempt_id,
+            )
+        else:
+            await reject_check(
+                runtime,
+                proposal_id_s,
+                source="reviewer",
+                reason=reason,
+                delegated=True,
+                reviewer_attempt_id=reviewer_attempt_id,
+            )
 
 
 async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
@@ -1114,15 +1162,35 @@ async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
             dl = datetime.fromisoformat(str(dl_raw))
         if now <= dl:
             continue
-        await reject_check(
-            runtime,
-            pid,
-            source="timeout",
-            reason="human_timeout",
-            delegated=True,
-            hitl_request_id_s=str(rev.get("hitl_request_id") or "") or None,
-        )
-        rejected.append(pid)
+        # Same per-proposal lock as HITL / consume — re-check under the lock so a
+        # concurrent reviewer approve_check cannot race CheckRejected.
+        async with hold_proposed_check_decision_lock(runtime, pid):
+            rev_live = _reviews_map(runtime).get(pid)
+            if not isinstance(rev_live, dict):
+                continue
+            if str(rev_live.get("status") or "pending") != "pending":
+                continue
+            row_live = get_proposal(runtime, pid)
+            if row_live is None or row_live.get("status") != "proposed":
+                continue
+            dl_raw2 = rev_live.get("deadline")
+            if not dl_raw2:
+                continue
+            if isinstance(dl_raw2, datetime):
+                dl2 = dl_raw2
+            else:
+                dl2 = datetime.fromisoformat(str(dl_raw2))
+            if now <= dl2:
+                continue
+            await reject_check(
+                runtime,
+                pid,
+                source="timeout",
+                reason="human_timeout",
+                delegated=True,
+                hitl_request_id_s=str(rev_live.get("hitl_request_id") or "") or None,
+            )
+            rejected.append(pid)
     return rejected
 
 
