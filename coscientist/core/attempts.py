@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 
+from coscientist.core.claims import compute_verdict_snapshots
 from coscientist.core.domain import (
     VALID_PROVENANCE,
     Provenance,
@@ -19,6 +20,7 @@ from coscientist.core.ids import attempt_id, task_id
 from coscientist.core.inputs import (
     InputUnavailable,
     bind_inputs,
+    collect_bindable_claims,
     uses_claim_graph_events,
 )
 from coscientist.core.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
@@ -130,19 +132,25 @@ class AttemptsMixin:
             raise RuntimeError("max_attempts exceeded")
 
         graph = getattr(self, "graph", None)
-        known_claims: set[str] = set()
-        claim_provenance: dict[str, Provenance] = {}
-        if graph is not None:
-            try:
-                for node in graph.nodes_by_kind("claim"):
-                    known_claims.add(node.node_id)
-                    # Producing-attempt provenance on claim node attrs (H-b).
-                    # Invalid/missing → omitted; bind_inputs defaults to stub.
-                    p = (node.attrs or {}).get("provenance")
-                    if p in VALID_PROVENANCE:
-                        claim_provenance[node.node_id] = p  # type: ignore[assignment]
-            except KeyError:
-                known_claims = set()
+        results = getattr(self, "results", None) or {}
+        known_claims, claim_provenance = collect_bindable_claims(
+            graph, results=results
+        )
+        verdict_snapshots: dict[str, dict] = {}
+        if graph is not None and self.study is not None:
+            any_exp = any(
+                t.state == TaskState.DONE
+                and t.outcome
+                in (TaskOutcome.SUCCESS, TaskOutcome.PARTIAL, TaskOutcome.FAILED)
+                for t in self.tasks.values()
+            )
+            verdict_snapshots = compute_verdict_snapshots(
+                graph,
+                study_id=self.study.study_id,
+                study=self.study,
+                results=results,
+                any_experiment_done=any_exp or bool(known_claims),
+            )
         try:
             bindings, derived = bind_inputs(
                 task,
@@ -151,6 +159,7 @@ class AttemptsMixin:
                 dep_provenance=self.dep_provenance,
                 known_claim_ids=known_claims,
                 claim_provenance=claim_provenance,
+                verdict_snapshots=verdict_snapshots,
             )
         except InputUnavailable:
             await self.cancel_task(task.task_id, reason=TaskReason.INPUT_UNAVAILABLE)

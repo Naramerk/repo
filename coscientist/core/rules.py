@@ -128,8 +128,9 @@ def verdict(
 ):
     """Hypothesis/question verdict (RM §4.1 + DESIGN_M1 PR 6).
 
-    Pure rule function — runtime wiring of Study.k_ref / intent into finalize
-    lands in PR 8 (DESIGN_M1). ``tests.intent=refute`` + met → stance supports,
+    Pure rule function. Runtime finalize/report calls this via
+    ``dispositions()`` (M1 PR 8) with Study ``refutations_needed`` /
+    ``refutation_priority``. ``tests.intent=refute`` + met → stance supports,
     verdict ``survived``. With ``refutation_priority``, distinct real non-lit
     refs ≥ k_ref → ``refuted`` even with supports; that outcome is **not** capped
     by stub/partial supports. Lit/non-real refs never override real supports.

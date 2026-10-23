@@ -1,4 +1,4 @@
-"""Minimal InputBinding / dependency resolution (DESIGN §3.4 + M1 PR7)."""
+"""Minimal InputBinding / dependency resolution (DESIGN §3.4 + M1 PR7/PR8)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,11 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from coscientist.core.claims import (
+    producer_attempt_failed,
+    resolve_about_target_id,
+    whitelist_claim_attrs,
+)
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import (
     VALID_PROVENANCE,
@@ -73,6 +78,24 @@ def input_binding_digest(
     )
 
 
+def verdict_binding_digest(*, ref: str, snapshot: dict[str, Any]) -> str:
+    """P2 digest of a persisted verdict snapshot (``InputSpec.kind=verdict``)."""
+    return sha256_hex(
+        canonical_json(
+            {
+                "kind": "verdict",
+                "ref": ref,
+                "verdict": snapshot.get("verdict"),
+                "by_literature": bool(snapshot.get("by_literature")),
+                "provenance": snapshot.get("provenance", "real"),
+                "refutations_needed": snapshot.get("refutations_needed", 1),
+                "refutation_priority": bool(snapshot.get("refutation_priority")),
+                "at": "P2",
+            }
+        )
+    )
+
+
 def _claim_source(
     ref: str,
     *,
@@ -96,22 +119,45 @@ def bind_inputs(
     dep_provenance: dict[str, Provenance],
     known_claim_ids: set[str] | None = None,
     claim_provenance: dict[str, Provenance] | None = None,
+    verdict_snapshots: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[InputBinding], Provenance]:
     """
-    Resolve TaskSpec.inputs (artifact | claim).
+    Resolve TaskSpec.inputs (artifact | claim | verdict).
 
-    ``kind=verdict`` is rejected at ``accept_plan`` (PR 8). Raises
-    InputUnavailable when mode=forbid and data missing / dep FAILED, or when
-    claim ``ref`` is missing / unknown.
+    Raises InputUnavailable when mode=forbid and data missing / dep FAILED, when
+    claim ``ref`` is missing / unknown / produced by a FAILED attempt, or when
+    a verdict snapshot for ``ref`` is unavailable.
     """
     bindings: list[InputBinding] = []
     provs: list[Provenance] = ["real"]
     claims = known_claim_ids or set()
     claim_prov = claim_provenance or {}
+    snapshots = verdict_snapshots or {}
     for spec in task.spec.inputs:
         kind = spec.kind
         if kind == "verdict":
-            raise InputUnavailable("verdict_kind_deferred_pr8")
+            if not spec.ref:
+                raise InputUnavailable("verdict_ref_missing")
+            snap = snapshots.get(spec.ref)
+            if snap is None:
+                raise InputUnavailable("verdict_unavailable")
+            source_raw = snap.get("provenance", "real")
+            source: Provenance = (
+                source_raw if source_raw in VALID_PROVENANCE else "stub"
+            )  # type: ignore[assignment]
+            digest = verdict_binding_digest(ref=spec.ref, snapshot=snap)
+            bindings.append(
+                InputBinding(
+                    input=spec.ref,
+                    artifact_id="",
+                    source=source,
+                    kind="verdict",
+                    ref=spec.ref,
+                    digest=digest,
+                )
+            )
+            provs.append(source)
+            continue
         if kind == "claim":
             if not spec.ref:
                 raise InputUnavailable("claim_ref_missing")
@@ -191,12 +237,20 @@ def claim_nodes_from_attempt(
     provenance: Provenance,
     claims: list[dict[str, Any]],
     now: datetime,
+    graph: Any | None = None,
+    attempt_outcome: str = "SUCCESS",
 ) -> list[EventEnvelope]:
-    """Emit ``GraphNodeUpserted`` for agent claims; provenance = producing attempt.
+    """Emit ``GraphNodeUpserted`` (+ ``about`` edges) for agent claims.
 
     Production path (Executor.record): every claim node carries
-    ``attrs.provenance`` from the attempt that produced it (H-b).
+    ``attrs.provenance`` from the producing attempt (H-b). On re-upsert of the
+    same agent-chosen id, provenance is the **worst** of existing and new
+    (stub claim cannot be laundered to real). Agent fields are whitelisted.
+    FAILED attempts should pass ``claims=[]`` (caller); ``attempt_outcome`` is
+    still recorded when claims are emitted.
     """
+    if attempt_outcome == "FAILED":
+        return []
     if provenance not in VALID_PROVENANCE:
         provenance = "stub"  # type: ignore[assignment]
     events: list[EventEnvelope] = []
@@ -206,9 +260,20 @@ def claim_nodes_from_attempt(
         key = str(raw.get("id") or raw.get("claim_id") or f"{attempt_id}:{i}")
         # Allow full node ids or short keys.
         cid = key if key.startswith(f"{study_id}:claim:") else claim_node_id(study_id, key)
-        attrs = {k: v for k, v in raw.items() if k not in ("id", "claim_id")}
-        attrs["provenance"] = provenance
+        attrs = whitelist_claim_attrs(raw)
+        # Core-owned fields (never agent-controlled wholesale).
+        new_prov: Provenance = provenance
+        if graph is not None:
+            existing = graph.get_node(cid)
+            if existing is not None:
+                old = (existing.attrs or {}).get("provenance")
+                if old in VALID_PROVENANCE:
+                    new_prov = worst_provenance(old, provenance)  # type: ignore[arg-type]
+        attrs["provenance"] = new_prov
         attrs["attempt_id"] = attempt_id
+        attrs["attempt_outcome"] = attempt_outcome
+        # Drop agent-supplied stance if it slipped past whitelist (defense).
+        attrs.pop("stance", None)
         node = GraphNode(
             node_id=cid,
             kind="claim",
@@ -228,6 +293,75 @@ def claim_nodes_from_attempt(
                 schema_version=1,
             )
         )
+        # Required about edge (claim → hypothesis|question), out 1..1.
+        target = attrs.get("target")
+        if target:
+            target_id, target_kind = resolve_about_target_id(
+                study_id, str(target), graph
+            )
+            have_about = False
+            if graph is not None:
+                have_about = any(
+                    e.kind == "about" for e in graph.edges_from(cid)
+                )
+                # Also treat edges we are about to emit in this batch.
+            if any(
+                ev.type == "GraphEdgeAdded"
+                and (ev.payload or {}).get("src_id") == cid
+                and (ev.payload or {}).get("kind") == "about"
+                for ev in events
+            ):
+                have_about = True
+            if not have_about:
+                if graph is None or graph.get_node(target_id) is None:
+                    # Ensure endpoint exists so GraphEdgeAdded does not fail.
+                    already = any(
+                        ev.type == "GraphNodeUpserted" and ev.entity_key == target_id
+                        for ev in events
+                    )
+                    if not already:
+                        tnode = GraphNode(
+                            node_id=target_id,
+                            kind=target_kind,
+                            study_id=study_id,
+                            ref_id=str(target),
+                            attrs={},
+                            created_at=now,
+                        )
+                        events.append(
+                            EventEnvelope(
+                                study_id=study_id,
+                                type="GraphNodeUpserted",
+                                entity_key=target_id,
+                                idem_key=make_idem(
+                                    "GraphNodeUpserted", target_id, attempt_id
+                                ),
+                                payload=tnode.model_dump(mode="json"),
+                                ts=now,
+                                schema_version=1,
+                            )
+                        )
+                eid = f"about:{cid}:{target_id}"
+                edge = GraphEdge(
+                    edge_id=eid,
+                    kind="about",
+                    study_id=study_id,
+                    src_id=cid,
+                    dst_id=target_id,
+                    attrs={},
+                    created_at=now,
+                )
+                events.append(
+                    EventEnvelope(
+                        study_id=study_id,
+                        type="GraphEdgeAdded",
+                        entity_key=eid,
+                        idem_key=make_idem("GraphEdgeAdded", eid),
+                        payload=edge.model_dump(mode="json"),
+                        ts=now,
+                        schema_version=1,
+                    )
+                )
     return events
 
 
@@ -297,16 +431,17 @@ def uses_claim_graph_events(
 
 
 def validate_input_specs(tasks: list[TaskSpec]) -> None:
-    """Reject invalid InputSpec at accept_plan (kind-specific fields; verdict→PR8)."""
+    """Reject invalid InputSpec at accept_plan (kind-specific fields)."""
     for t in tasks:
         for inp in t.inputs:
             kind = inp.kind
             if kind == "verdict":
-                raise ValueError(
-                    "InputSpec.kind=verdict is deferred to PR 8 "
-                    "(runtime verdict() wiring); use artifact or claim"
-                )
-            if kind == "claim":
+                if not inp.ref:
+                    raise ValueError(
+                        f"InputSpec.kind=verdict requires ref "
+                        f"(task {t.task_key!r})"
+                    )
+            elif kind == "claim":
                 if not inp.ref:
                     raise ValueError(
                         f"InputSpec.kind=claim requires ref "
@@ -320,3 +455,36 @@ def validate_input_specs(tasks: list[TaskSpec]) -> None:
                     )
             else:
                 raise ValueError(f"unknown InputSpec.kind: {kind!r}")
+
+
+def collect_bindable_claims(
+    graph: Any,
+    *,
+    results: dict[str, dict[str, Any]] | None = None,
+) -> tuple[set[str], dict[str, Provenance]]:
+    """Claim ids eligible as ``kind=claim`` inputs + their provenance.
+
+    Skips claims whose producing attempt is FAILED (carry-over #2).
+    """
+    known: set[str] = set()
+    claim_provenance: dict[str, Provenance] = {}
+    if graph is None:
+        return known, claim_provenance
+    try:
+        nodes = graph.nodes_by_kind("claim")
+    except KeyError:
+        return known, claim_provenance
+    for node in nodes:
+        attrs = node.attrs or {}
+        aid = attrs.get("attempt_id")
+        if producer_attempt_failed(
+            str(aid) if aid else None,
+            results=results,
+            attrs_outcome=str(attrs.get("attempt_outcome") or "") or None,
+        ):
+            continue
+        known.add(node.node_id)
+        p = attrs.get("provenance")
+        if p in VALID_PROVENANCE:
+            claim_provenance[node.node_id] = p  # type: ignore[assignment]
+    return known, claim_provenance

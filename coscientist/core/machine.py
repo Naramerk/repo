@@ -92,7 +92,13 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
 
         qdisp = None
         if self.plans:
-            qdisp = dispositions(tasks=self.tasks, plans=self.plans)
+            qdisp = dispositions(
+                tasks=self.tasks,
+                plans=self.plans,
+                graph=self.graph,
+                study=self.study,
+                results=self.results,
+            )
         ed = self.study.effective_deadline() if self.study else None
         return study_view(
             self.tasks.values(),

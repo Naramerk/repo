@@ -50,6 +50,7 @@ class Executor:
         get_task: Any,
         on_events: Any | None = None,
         review_statuses: dict[str, ReqStatus] | None = None,
+        get_graph: Any | None = None,
     ) -> None:
         self.writer = writer
         self.catalog = catalog
@@ -59,6 +60,7 @@ class Executor:
         self.get_task = get_task
         self.on_events = on_events  # callback after successful append (project local)
         self.review_statuses = review_statuses or {}
+        self.get_graph = get_graph
         self._scheduled_reviews: list[str] = []
 
     async def mark_route_returned(self, attempt_id: str, out: AgentTaskOutput) -> str:
@@ -272,6 +274,8 @@ class Executor:
                 )
             ]
         )
+        # Carry-over #2: do not emit claim nodes from a FAILED attempt —
+        # they must not become bindable inputs.
         return await self._commit_result(
             attempt_id,
             study_id,
@@ -279,7 +283,7 @@ class Executor:
             payload,
             TaskOutcome.FAILED,
             reason,
-            claims=list(out.claims or []),
+            claims=[],
         )
 
     async def _commit_result(
@@ -295,13 +299,17 @@ class Executor:
     ) -> Result:
         # Attempt-open check runs inside the write transaction (_append_many_sync).
         now = self.clock.now()
-        # PR7: claim nodes carry producing-attempt provenance (H-b).
+        graph = self.get_graph() if self.get_graph is not None else None
+        # PR7/PR8: claim nodes carry producing-attempt provenance (H-b);
+        # re-upsert keeps worst provenance; about edges + attr whitelist.
         claim_events = claim_nodes_from_attempt(
             study_id=study_id,
             attempt_id=attempt_id,
             provenance=payload["provenance"],
             claims=list(claims or []),
             now=now,
+            graph=graph,
+            attempt_outcome=task_outcome.value,
         )
         events = [
             *claim_events,

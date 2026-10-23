@@ -134,8 +134,9 @@ def test_upcast_attempt_started_inputs_default():
 
 
 @pytest.mark.asyncio
-async def test_accept_plan_rejects_verdict_kind(tmp_path, clock, runtime_cls):
-    sid = "st_no_verdict"
+async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cls):
+    """PR8: kind=verdict is accepted; missing ref still rejected."""
+    sid = "st_verdict_ref"
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
@@ -150,7 +151,7 @@ async def test_accept_plan_rejects_verdict_kind(tmp_path, clock, runtime_cls):
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
-    with pytest.raises(ValueError, match="verdict.*PR 8"):
+    with pytest.raises(ValueError, match="verdict requires ref"):
         await rt.accept_plan(
             [
                 TaskSpec(
@@ -159,7 +160,7 @@ async def test_accept_plan_rejects_verdict_kind(tmp_path, clock, runtime_cls):
                     goal="g",
                     route="experiment",
                     depends_on=["PLAN"],
-                    inputs=[InputSpec(kind="verdict", ref="H1")],
+                    inputs=[InputSpec(kind="verdict")],
                 )
             ],
             questions=[],

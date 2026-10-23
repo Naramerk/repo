@@ -256,7 +256,13 @@ async def _build_rich_payload(
     runtime: StudyRuntime, *, sid: str, trigger: FinalizeTrigger
 ) -> dict[str, Any]:
     plans = await _load_plans(runtime)
-    qdisp = dispositions(tasks=runtime.tasks, plans=plans)
+    qdisp = dispositions(
+        tasks=runtime.tasks,
+        plans=plans,
+        graph=getattr(runtime, "graph", None),
+        study=runtime.study,
+        results=getattr(runtime, "results", None),
+    )
     term = terminal_reason_for(
         trigger, tasks=runtime.tasks, question_dispositions=qdisp
     )

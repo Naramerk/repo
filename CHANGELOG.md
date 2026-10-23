@@ -2,11 +2,17 @@
 
 ## Unreleased
 
+### M1 PR8
+- Runtime `verdict()` wired into `dispositions()` / finalize (Study `refutations_needed` / `refutation_priority`); supported → answered.
+- `InputSpec.kind=verdict` enabled: P2 snapshot + persisted digest on `AttemptStarted`.
+- Claim carry-overs: re-upsert keeps **worst** provenance; FAILED attempts emit no claims (+ bind-time guard); claim attrs whitelisted; required `about` edge (cardinality checked).
+- Priority-refuted provenance exception unchanged.
+
 ### M1 PR7
 - `InputSpec.kind: artifact | claim` (+ `ref`); `uses_claim` edge (17th) at P2.
 - `Executor.record` writes claim nodes with `attrs.provenance` from the producing attempt; unknown → bind as `stub` (never real).
 - P2 bindings (+ metadata `digest`) on `AttemptStarted` (v3 + upcaster); `GraphEdgeAdded` fails loudly.
-- **`kind=verdict` deferred to PR 8** (rejected at `accept_plan`); enum kept for forward compat.
+- `kind=verdict` landed in **PR 8**.
 - TaskCreated v4→v5 upcaster defaults `kind=artifact`.
 - #12 leftovers: R17 confirm-only; refmodel `intent` Literal; gen edge attrs; cancel `finalize_mod`; r17 module-level import.
 

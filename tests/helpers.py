@@ -40,6 +40,7 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
         get_attempt=lambda aid: type("A", (), rt.attempts[aid])(),
         get_task=lambda tid: rt.tasks[tid],
         on_events=rt._project_local,
+        get_graph=lambda: rt.graph,
     )
 
     def get_attempt(aid: str):
