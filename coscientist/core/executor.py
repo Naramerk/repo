@@ -21,6 +21,7 @@ from coscientist.core.errors import AttemptClosedError, CatalogError
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.ids import result_id
 from coscientist.core.outcome import compute_outcome
+from coscientist.core.reasons import CloseReason, TaskReason
 from coscientist.core.writer import StudyWriter
 
 log = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ def _provenance(attempt: Any) -> Provenance:
     p = getattr(attempt, "provenance", None)
     if p is None and isinstance(attempt, dict):
         p = attempt.get("provenance")
-    if p not in ("real", "partial", "simulated"):
+    if p not in ("real", "partial", "stub"):
         raise ValueError(f"invalid attempt provenance: {p!r}")
     return p  # type: ignore[return-value]
 
@@ -158,7 +159,7 @@ class Executor:
                 out,
                 provenance,
                 claim,
-                reason="catalog_error",
+                reason=TaskReason.CATALOG_ERROR.value,
                 detail=str(e),
             )
 
@@ -286,19 +287,21 @@ class Executor:
                 idem_key=make_idem("ResultRecorded", payload["result_id"]),
                 payload=payload,
                 ts=now,
+                schema_version=2,
             ),
             EventEnvelope(
                 study_id=study_id,
                 type="AttemptClosed",
                 entity_key=attempt_id,
-                idem_key=make_idem("AttemptClosed", attempt_id, "result"),
+                idem_key=make_idem("AttemptClosed", attempt_id, CloseReason.RESULT.value),
                 payload={
                     "attempt_id": attempt_id,
                     "closed": True,
-                    "close_reason": "result",
+                    "close_reason": CloseReason.RESULT.value,
                     "task_id": task_id,
                 },
                 ts=now,
+                schema_version=2,
             ),
             EventEnvelope(
                 study_id=study_id,
@@ -311,6 +314,7 @@ class Executor:
                     "reason": reason,
                 },
                 ts=now,
+                schema_version=2,
             ),
         ]
         await self._append(events, require_open_attempt=attempt_id)

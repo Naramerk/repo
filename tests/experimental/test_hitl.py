@@ -18,6 +18,7 @@ async def _boot(tmp_path: Path, clock: FakeClock, seconds: int = 60, **kw):
     rt = await open_runtime(
         tmp_path, "st_tr", clock=clock, runtime_cls=ExpStudyRuntime
     )
+    kw.setdefault("finalize_reserve_s", 5 if seconds > 5 else 1)
     await rt.create_study(
         profile="research",
         request="q",

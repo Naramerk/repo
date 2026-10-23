@@ -87,7 +87,7 @@ def test_agent_claim_only_downgrades():
 
 def test_simulated_input_caps_at_partial():
     reqs = [_req(ReqStatus.MET, code=True)]
-    assert compute_outcome(reqs, None, None, "simulated")[0] == Outcome.PARTIAL
+    assert compute_outcome(reqs, None, None, "stub")[0] == Outcome.PARTIAL
     assert compute_outcome(reqs, None, None, "partial")[0] == Outcome.PARTIAL
 
 

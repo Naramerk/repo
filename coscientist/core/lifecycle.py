@@ -52,10 +52,19 @@ class LifecycleMixin:
         parent_study_id: str | None = None,
         sid: str | None = None,
         budget: Budget | None = None,
+        finalize_reserve_s: int = 30,
     ) -> str:
         sid = sid or self.store.study_id or study_id()
         now = self.clock.now()
         dl = deadline or (now + timedelta(hours=2))
+        if finalize_reserve_s < 0:
+            raise ValueError(f"finalize_reserve_s must be >= 0, got {finalize_reserve_s}")
+        duration_s = (dl - now).total_seconds()
+        if duration_s <= finalize_reserve_s:
+            raise ValueError(
+                f"study duration ({duration_s}s) must exceed finalize_reserve_s "
+                f"({finalize_reserve_s}s)"
+            )
         study = Study(
             study_id=sid,
             profile=profile,
@@ -66,7 +75,9 @@ class LifecycleMixin:
             created_at=now,
             parent_study_id=parent_study_id,
             budget=budget,
+            finalize_reserve_s=finalize_reserve_s,
         )
+        effective = study.effective_deadline()
         events: list[EventEnvelope] = [
             EventEnvelope(
                 study_id=sid,
@@ -75,6 +86,7 @@ class LifecycleMixin:
                 idem_key=make_idem("StudyCreated", sid),
                 payload=study.model_dump(mode="json"),
                 ts=now,
+                schema_version=2,
             ),
             EventEnvelope(
                 study_id=sid,
@@ -91,7 +103,7 @@ class LifecycleMixin:
                 ts=now,
             ),
         ]
-        plan_deadline = min(now + timedelta(seconds=600), dl)
+        plan_deadline = min(now + timedelta(seconds=600), effective)
         for key, kind in STAGE_KEYS:
             if kind == TaskKind.REPORT:
                 deps = ["PLAN"]
@@ -113,7 +125,7 @@ class LifecycleMixin:
                 kind=kind,
                 spec=spec,
                 state=TaskState.PENDING,
-                deadline=plan_deadline if kind != TaskKind.REPORT else dl,
+                deadline=plan_deadline if kind != TaskKind.REPORT else effective,
             )
             events.append(
                 EventEnvelope(
@@ -171,8 +183,10 @@ class LifecycleMixin:
                         "reason": None,
                     },
                     ts=now,
+                    schema_version=2,
                 )
             )
+        effective = self.study.effective_deadline()
         for spec in tasks:
             tid = task_id(sid, spec.task_key)
             task = Task(
@@ -180,7 +194,7 @@ class LifecycleMixin:
                 kind=TaskKind.EXPERIMENT,
                 spec=spec,
                 state=TaskState.PENDING,
-                deadline=self.study.deadline,
+                deadline=effective,
             )
             events.append(
                 EventEnvelope(

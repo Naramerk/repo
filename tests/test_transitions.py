@@ -26,6 +26,7 @@ from tests.helpers import attach_executor, exp_spec, record_success
 
 async def _boot(tmp_path: Path, clock: FakeClock, runtime_cls: type, seconds: int = 60, **kw):
     rt = await open_runtime(tmp_path, "st_tr", clock=clock, runtime_cls=runtime_cls)
+    kw.setdefault("finalize_reserve_s", 5 if seconds > 5 else 1)
     await rt.create_study(
         profile="research",
         request="q",

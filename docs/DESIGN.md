@@ -40,6 +40,7 @@ class Study(BaseModel):
     catalog_version: str       # фиксируется при создании
     hitl_policy: HitlPolicy    # §7.3
     deadline: datetime         # верхняя граница всего study (§3.3)
+    finalize_reserve_s: int = 30  # резерв под финализацию; effective_deadline = deadline − reserve (§0.5/M1)
     parent_study_id: str | None = None   # «продолжить сессию» (§3.6)
     goal: Goal                 # statement, research_form, trl (заполняет spec)
     constraints: list[Constraint] = []   # узел constraint — только для проверяемых
@@ -95,7 +96,7 @@ class Task(BaseModel):
 
 class InputBinding(BaseModel):        # как задача получила вход
     input: str; artifact_id: str
-    source: Literal["real","partial","simulated"]
+    source: Literal["real","partial","stub"]
 
 class Attempt(BaseModel):
     attempt_id: str            # = f"{task_id}#{n}"
@@ -103,7 +104,7 @@ class Attempt(BaseModel):
     dispatch_id: str           # ключ идемпотентности вызова маршрута
     route_returned: bool       # §3.4
     closed: bool; close_reason: str | None
-    provenance: Literal["real","partial","simulated"]   # max по входам (транзитивно по produced_by→attempt); не-real → outcome ≤ PARTIAL
+    provenance: Literal["real","partial","stub"]   # max по входам (транзитивно по produced_by→attempt); не-real → outcome ≤ PARTIAL
     config_digest: str         # sha256(JCS(resolved config)) — снимок конфигурации (Том Б п.7, R14)
     agent_output_digest: str | None
     deadline: datetime
@@ -113,7 +114,7 @@ class Result(BaseModel):
     attempt_id: str
     outcome: Outcome           # SUCCESS | PARTIAL | FAILED — ВЫЧИСЛЕН кодом (§4)
     inputs: list[InputBinding]
-    provenance: Literal["real","partial","simulated"]   # копия Attempt.provenance → не-real: outcome ≤ PARTIAL
+    provenance: Literal["real","partial","stub"]   # копия Attempt.provenance → не-real: outcome ≤ PARTIAL
     agent_claim: Outcome | None   # что заявил агент
     downgrade: Downgrade | None   # принят, только если claim < вычисленного и есть reason
     computed_outcome: Outcome     # до понижения, хранится всегда
@@ -164,15 +165,21 @@ class Outcome(StrEnum): SUCCESS; PARTIAL; FAILED                    # резул
 ### 3.2 Статус study — вычисляется, не хранится
 
 ```python
-def study_view(tasks) -> StudyView:
+def study_view(tasks, *, attempts=None) -> StudyView:
+    # stub_share = |DONE with provenance=stub| / |DONE|  (из projection/attempts; без simulated_done)
     if any(t.state != DONE for t in tasks):
-        return StudyView(phase="running", progress=done/total, awaiting_human=open_hitl > 0)
+        return StudyView(phase="running", progress=done/total, awaiting_human=open_hitl > 0, stub_share=...)
     req = [t for t in tasks if t.spec.required]
-    if all(t.outcome == SUCCESS for t in req) and all(question_verdict(q) != "untested" for q in questions):
-        verdict = "fulfilled"          # вердикт гипотезы или ответа на вопрос, RESEARCH_MODEL §4.1
-    elif plan_task.outcome in {FAILED, SKIPPED} or all(t.outcome in {FAILED, SKIPPED} for t in req): verdict = "failed"
+    # PR 1: вопросы не учитываются (до PR 2). fulfilled — только по required-задачам.
+    if not req: verdict = "partial"
+    elif all(t.outcome in {FAILED, SKIPPED} for t in req) or plan_task.outcome in {FAILED, SKIPPED}:
+        verdict = "failed"
+    elif all(t.outcome in {SUCCESS, PARTIAL} for t in req) and any(prov(t)=="stub" for t in req):
+        verdict = "stubbed"            # только required-stub; нерequired снижают stub_share, не verdict
+    elif all(t.outcome == SUCCESS for t in req):
+        verdict = "fulfilled"
     else: verdict = "partial"
-    return StudyView(phase="closed", verdict=verdict, stub_share=..., ...)   # verdict: fulfilled | partial | simulated | failed
+    return StudyView(phase="closed", verdict=verdict, stub_share=..., ...)   # fulfilled | partial | stubbed | failed
 ```
 B1 невозможен по построению: «closed» требует state=DONE у всех задач, а DONE всегда несёт outcome из enum. Тест: `test_b1_closed_only_when_all_tasks_done`.
 
@@ -206,7 +213,7 @@ DONE финален; повторный запуск — только через
 - DAG ацикличен (проверка при принятии плана), P2 требует только DONE зависимостей, а не их успеха.
 Тест (hypothesis `RuleBasedStateMachine`, инжектированные часы `FakeClock`): `test_every_study_closes_by_deadline`.
 - Правила: create_study, accept_plan(случайный DAG), start/finish/fail/hang attempt, advance_clock, open/answer HITL, recover_after_idle (HitlDeadlineExtended), cancel_task, fork, lose_lease (второй владелец получает lease), crash_and_recover.
-- Инварианты после каждого шага: ≤ 1 открытой попытки на задачу; replay журнала == проекция; каждый deadline (задача, попытка, HITL, job) ≤ study.deadline; писатель без актуального epoch ничего не записал.
+- Инварианты после каждого шага: ≤ 1 открытой попытки на задачу; replay журнала == проекция; каждый deadline (задача, попытка, HITL, job) ≤ study.effective_deadline(); писатель без актуального epoch ничего не записал.
 - Финал: при `now = study.deadline + tick` все задачи DONE.
 Интеграционный тест `test_llm_hang_past_deadline`: фейковый OpenAI-совместимый сервер не отвечает; к deadline+5 с попытка закрыта, корутина отменена, слот свободен, задача DONE(FAILED, deadline), поздний ответ отклонён.
 
@@ -215,15 +222,15 @@ DONE финален; повторный запуск — только через
 При P2 для каждого `InputSpec` ядро строит `InputBinding`:
 1. зависимость SUCCESS → `real`;
 2. зависимость PARTIAL/FAILED, но нужный выход есть и проходит schema_valid → `partial`;
-3. иначе, если `simulate != forbid` → заглушка (`schema_stub` — генерация по JSON-схеме; `llm_stub` — роль stubber, по умолчанию выключен, включается флагом профиля) → `simulated`;
+3. иначе, если `simulate != forbid` → заглушка (`schema_stub` — генерация по JSON-схеме; `llm_stub` — роль stubber, по умолчанию выключен, включается флагом профиля) → `stub`;
 4. `simulate=forbid` и данных нет → задача DONE(SKIPPED, reason=input_unavailable) без запуска.
 5. Зависимость закрыта с reason=human_timeout (гейт HITL, §7.3) → все потомки DONE(SKIPPED, input_unavailable), заглушки запрещены.
 - Дорогие маршруты (coder, alembic, FEDOT, GPU) по умолчанию `simulate=forbid`; разрешение — только с отдельным `Budget` для работы на заглушках (§7.4).
-- `provenance` (real < partial < simulated) хранится на попытке, не на артефакте: артефакт simulated ⇔ его `produced_by` ведёт к попытке с provenance=simulated. Перепаковка через MCP-инструмент (новый артефакт той же попытки) флаг не снимает. Входы `partial` ставят provenance=partial на попытке (потолок PARTIAL).
+- `provenance` (real < partial < stub) хранится на попытке, не на артефакте: артефакт stub ⇔ его `produced_by` ведёт к попытке с provenance=stub. Перепаковка через MCP-инструмент (новый артефакт той же попытки) флаг не снимает. Входы `partial` ставят provenance=partial на попытке (потолок PARTIAL).
 - `compute_outcome`: при Attempt.provenance ≠ real outcome = min(outcome, PARTIAL). SUCCESS на заглушках или частичных данных невозможен.
-- `StudyView` содержит `stub_share` (доля DONE-задач с simulated) и verdict `simulated`, если fulfilled невозможен только из-за потолка заглушек.
-- Отчёт (§10) обязательно содержит три раздела: «Сделано» (real), «Выполнено на заглушках» (задачи и входы simulated/partial), «Требует доработки человеком» (FAILED, SKIPPED, simulated-цепочки с причинами).
-Тесты: `test_failed_dep_runs_dependent_on_partial_data`, `test_simulated_input_caps_at_partial`, `test_simulated_flag_propagates`, `test_report_lists_stub_and_human_sections`.
+- `StudyView` содержит `stub_share` (доля DONE-задач с provenance=stub) и verdict `stubbed` ⇔ все required ∈ {SUCCESS, PARTIAL} ∧ ∃ required с provenance=stub. Нерequired-заглушки влияют только на stub_share. Вопросы в verdict не входят до PR 2.
+- Отчёт (§10) обязательно содержит три раздела: «Сделано» (real), «Выполнено на заглушках» (задачи и входы stub/partial), «Требует доработки человеком» (FAILED, SKIPPED, stub-цепочки с причинами).
+Тесты: `test_failed_dep_runs_dependent_on_partial_data`, `test_simulated_input_caps_at_partial` (provenance=stub), `test_simulated_flag_propagates`, `test_report_lists_stub_and_human_sections`.
 
 ### 3.5r Восстановление
 `recover(study_id)` идемпотентен:
@@ -685,7 +692,7 @@ web/           отдельно (M6)
 |---|---|---|---|
 | two_tasks (×3) | запрос эталона | 2/2 задачи DONE(SUCCESS), verdict fulfilled; артефакты dataset_overview и chemical_space_clustering по схеме; 2/2 tool_found | 3/3 прогона; 0 ложных статусов |
 | file_handoff (×3) | эталон | 4 задачи; артефакт задачи N читается задачей N+1 по artifact_id | 3/3 |
-| borshevik | эталон | 6 задач; verdict fulfilled только если все required SUCCESS; провалившиеся зависимости → потомки на partial/simulated, ≤ PARTIAL | 0 ложных fulfilled (B1) |
+| borshevik | эталон | 6 задач; verdict fulfilled только если все required SUCCESS; провалившиеся зависимости → потомки на partial/stub, ≤ PARTIAL | 0 ложных fulfilled (B1) |
 | article_small | эталон | 225 соединений = 225 → SUCCESS, verdict fulfilled | fulfilled (B2) |
 | microfluidics | эталон | старт без ошибки, задача выполнена | (R1) |
 | hypothesis_check (headless) | эталон | ревью без человека; вывод «гипотеза опровергнута» (медиана −6 vs −4) | (R2) |
@@ -764,12 +771,12 @@ web/           отдельно (M6)
 
 | # | Замечание | Статус |
 |---|---|---|
-| 1 | BLOCKED не терминален | устарело: BLOCKED удалён; зависимые запускаются на partial/simulated входах (§3.4) |
+| 1 | BLOCKED не терминален | устарело: BLOCKED удалён; зависимые запускаются на partial/stub входах (§3.4) |
 | 2 | пробелы таблицы переходов (FAILED со стадий, reject критика, выходы AWAITING_HUMAN, флаг HITL, таймаут ROUTE_RETURNED, review_deadline, T5, отмена задачи, гонка T8/S9) | устарело: стадии — задачи одного DAG с 3 состояниями; любой выход — P4/P5/P6/P7; у каждой не-DONE задачи deadline покрывает route_returned и ревью; DONE финален, гонки нет. Property-тест сохранён: `test_every_study_closes_by_deadline` |
 | 3 | InvalidStatus | сделано: попытка FAILED(retryable) (§3.1) |
 | 4 | пустой required | сделано (§4.2) |
-| 5a/5b | понижение с причиной; UNASSESSED не понижает | сделано (§4.2), + потолок PARTIAL для simulated |
-| 6 | артефакты | сделано (§3.8, §3.7); + флаг simulated |
+| 5a/5b | понижение с причиной; UNASSESSED не понижает | сделано (§4.2), + потолок PARTIAL для stub |
+| 6 | артефакты | сделано (§3.8, §3.7); + флаг stub |
 | 7 | писатель и журнал | сделано; пересчитано под ≥10 задач в одном study, тест на 20 (§3.5a) |
 | 8 | HITL | переопределено решениями пользователя (v0.3): шлюзы plan, hypotheses, costly_or_nonreal, report; «реши сам» → critic; on_timeout по умолчанию delegate («timeout→agent»), у costly_or_nonreal — fail (FAILED(human_timeout) + fork), опционально delegate_capped с Budget(delegated_costly) в ₽ или delegate; headless → critic (§7.3) |
 | 9 | убрать forced | сделано |
@@ -791,8 +798,8 @@ web/           отдельно (M6)
 | текст | artifact_id един (§2, §3.8); устаревшая строка UNASSESSED→PARTIAL исправлена; B1-тест одно имя `test_b1_closed_only_when_all_tasks_done`; где ловится CatalogError | сделано |
 | HITL | interactive → FAILED(human_timeout), fork; headless → critic; потомки без заглушек | сделано (решение пользователя) |
 | M1-1 | понижение ссылается на check id / EvidenceRef | записано (§4.2) |
-| M1-2 | provenance на попытке; partial тоже ограничивает; stub_share/verdict simulated; llm_stub выкл.; дорогие маршруты forbid или отдельный бюджет | записано (§3.4) |
-| M2-4 | fork: task_key+spec_digest; nonce; JCS; GC родителя; simulated/STALE при смене каталога | записано (§3.6) |
+| M1-2 | provenance на попытке; partial тоже ограничивает; stub_share/verdict stubbed; llm_stub выкл.; дорогие маршруты forbid или отдельный бюджет | записано (§3.4) |
+| M2-4 | fork: task_key+spec_digest; nonce; JCS; GC родителя; stub/STALE при смене каталога | записано (§3.6) |
 
 Несогласий нет. Уточнение: 10 мин ТЗ трактуются как бюджет от создания study до DONE задачи plan, включая HITL; если человек не уложился, план проваливается с human_timeout, а не продлевается.
 
@@ -807,7 +814,7 @@ web/           отдельно (M6)
 | 5 | Load test asserts ≥100 events in CI (p99 ≤ 50 ms, 20 parallel attempts, fsync); scale to ≥5000 locally by raising fake-tool sleep | Keeps CI fast; same code path as §3.5a. |
 | 6 | `StudyRuntime` split across `machine.py` / `attempts.py` / `local_project.py` / `lifecycle.py`; HITL/fork in `experimental/` | Honour ≤500 lines/file budget (§11); core API = M0 only. |
 | 7 | `test_llm_hang_past_deadline` uses a hanging asyncio task (no httpx/OpenAI server) | M0 forbids LLM/ADK/httpx in core; cancellation + late-write rejection still covered. |
-| 8 | `Attempt.provenance: real\|partial\|simulated`; `GateConfig.on_timeout: fail\|delegate_capped\|delegate` (costly_or_nonreal default fail); `Budget.delegated_costly` + `spent_rub` on HITL events | Aligns with RESEARCH_MODEL v0.3 / DESIGN §7.3; recovery + spent_rub report tests pass. |
+| 8 | `Attempt.provenance: real\|partial\|stub`; `GateConfig.on_timeout: fail\|delegate_capped\|delegate` (costly_or_nonreal default fail); `Budget.delegated_costly` + `spent_rub` on HITL events | Aligns with RESEARCH_MODEL v0.3 / DESIGN §7.3; recovery + spent_rub report tests pass. |
 | 9 | PR #1 review: all writes via StudyWriter; Result+Close+Done atomic; recover never re-runs after ResultRecorded; finish_attempt outcome removed; lease owner=uuid, BEGIN IMMEDIATE, fence uses ttl; P3 asyncio backoff (*replaced by #15*); InputBinding modes; delegate→critic | See commits after review. |
 | 10 | Structural cleanup after PR #1: `machine.py` split into `attempts` / `local_project` / `lifecycle` (each ≤500); HITL gates, `DelegatedBudget`/`costly_gate`, report moved to `coscientist.experimental/` (pre-M2/M5); catalog stays in `coscientist.checks` (M1). Core API = M0 state-core only. | PR #2. |
 | 11 | `costly_gate(..., critic_accepts=True)` is a **stub**: no real critic agent until M2; the bool simulates accept/reject. Documented on the function and in oracle `tests/refmodel.py`. | Explicit until M2 critic role. |

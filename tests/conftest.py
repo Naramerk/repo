@@ -88,7 +88,8 @@ def artifact_store(tmp_path: Path) -> LocalArtifactStore:
 
 @pytest.fixture
 def short_deadline(clock: FakeClock):
-    return clock.now() + timedelta(seconds=30)
+    # Must exceed default finalize_reserve_s (30).
+    return clock.now() + timedelta(seconds=60)
 
 
 async def open_runtime_for(

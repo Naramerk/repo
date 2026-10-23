@@ -4,6 +4,8 @@
 # edge.card: out = рёбер на один from-узел, in = рёбер на один to-узел (min..max, n = без предела); out_by_src уточняет out по виду from
 # field.computed: true — поле вычисляет код; во входной схеме роли его нет (extra=forbid)
 version: 0.4
+# Provenance on attempts / input bindings (DESIGN §3.4): real | partial | stub
+provenance: [real, partial, stub]
 code_check_kinds: [artifact_exists, schema_valid, json_pointer, source_link, metric_threshold, value_matches,
   graph_shape, quote_in_source, min_sources, question_coverage, recency]
 nodes:
@@ -92,7 +94,7 @@ nodes:
       - {name: costly, type: bool, required: false}
       - {name: baselines, type: list(str), required: false}
       - {name: tool_resolution, type: enum(tool_found|tool_built|coder|tool_missing), required: false}
-      - {name: attempts, type: list(obj(Attempt)), required: true, note: "n, outcome, close_reason, provenance, config_digest"}
+      - {name: attempts, type: list(obj(Attempt)), required: true, note: "n, outcome, close_reason, provenance=real|partial|stub, config_digest"}
       - {name: limitations, type: list(obj(Limitation)), required: false}
   - kind: artifact
     prefix: A

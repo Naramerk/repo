@@ -10,9 +10,12 @@ from coscientist.core.domain import Provenance, Task, TaskOutcome, TaskState
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.ids import attempt_id, task_id
 from coscientist.core.inputs import InputUnavailable, bind_inputs
+from coscientist.core.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
 
 # Persisted on AttemptClosed.retry_at; fired by StudyRuntime.tick vs injected Clock.
 RETRY_BACKOFF_S = 0.05
+
+_VALID_PROVENANCE = frozenset({"real", "partial", "stub"})
 
 
 class AttemptsMixin:
@@ -82,17 +85,17 @@ class AttemptsMixin:
                 dep_provenance=self.dep_provenance,
             )
         except InputUnavailable:
-            await self.cancel_task(task.task_id, reason="input_unavailable")
+            await self.cancel_task(task.task_id, reason=TaskReason.INPUT_UNAVAILABLE)
             raise
 
         prov: Provenance = provenance if provenance is not None else derived
-        if prov not in ("real", "partial", "simulated"):
+        if prov not in _VALID_PROVENANCE:
             raise ValueError(f"invalid provenance: {prov}")
 
         aid = attempt_id(task.task_id, n)
         now = self.clock.now()
         assert self.study is not None
-        deadline = min(task.deadline, self.study.deadline)
+        deadline = min(task.deadline, self.study.effective_deadline())
         payload = {
             "attempt_id": aid,
             "n": n,
@@ -115,13 +118,18 @@ class AttemptsMixin:
                     idem_key=make_idem("AttemptStarted", aid),
                     payload=payload,
                     ts=now,
+                    schema_version=2,
                 )
             ]
         )
         return aid
 
     async def fail_attempt(
-        self, aid: str, *, retryable: bool = True, close_reason: str = "failed"
+        self,
+        aid: str,
+        *,
+        retryable: bool = True,
+        close_reason: str | CloseReason = CloseReason.FAILED,
     ) -> None:
         att = self.attempts[aid]
         if att.get("closed"):
@@ -130,20 +138,24 @@ class AttemptsMixin:
         sid = att["study_id"]
         tid = att["task_id"]
         task = self.tasks[tid]
+        cr = coerce_close_reason(close_reason)
+        assert cr is not None
+        cr_s = cr.value
         events = [
             EventEnvelope(
                 study_id=sid,
                 type="AttemptClosed",
                 entity_key=aid,
-                idem_key=make_idem("AttemptClosed", aid, close_reason),
+                idem_key=make_idem("AttemptClosed", aid, cr_s),
                 payload={
                     "attempt_id": aid,
                     "closed": True,
-                    "close_reason": close_reason,
+                    "close_reason": cr_s,
                     "retryable": retryable,
                     "task_id": tid,
                 },
                 ts=now,
+                schema_version=2,
             )
         ]
         n = int(att["n"])
@@ -158,9 +170,10 @@ class AttemptsMixin:
                     payload={
                         "task_id": tid,
                         "outcome": TaskOutcome.FAILED.value,
-                        "reason": "failed",
+                        "reason": TaskReason.FAILED.value,
                     },
                     ts=now,
+                    schema_version=2,
                 )
             )
         else:
@@ -186,16 +199,28 @@ class AttemptsMixin:
             att = self.attempts.get(aid, {})
             if att.get("closed"):
                 prov = att.get("provenance", "real")
-                if prov in ("real", "partial", "simulated"):
+                if prov in _VALID_PROVENANCE:
                     return prov  # type: ignore[return-value]
         return "real"
 
-    async def cancel_task(self, task_key_or_id: str, reason: str = "cancelled") -> None:
+    async def cancel_task(
+        self,
+        task_key_or_id: str,
+        reason: str | TaskReason = TaskReason.CANCELLED,
+    ) -> None:
         task = self._resolve_task(task_key_or_id)
         if task.state == TaskState.DONE:
             return
         now = self.clock.now()
         assert self.study is not None
+        tr = coerce_task_reason(reason)
+        assert tr is not None
+        reason_s = tr.value
+        # Attempt close uses CloseReason; TaskReason-only values (e.g. human) map to cancelled.
+        try:
+            cr_s = CloseReason(reason_s).value
+        except ValueError:
+            cr_s = CloseReason.CANCELLED.value
         events: list[EventEnvelope] = []
         for aid in task.attempts:
             if not self.attempts.get(aid, {}).get("closed"):
@@ -204,14 +229,15 @@ class AttemptsMixin:
                         study_id=self.study.study_id,
                         type="AttemptClosed",
                         entity_key=aid,
-                        idem_key=make_idem("AttemptClosed", aid, reason),
+                        idem_key=make_idem("AttemptClosed", aid, cr_s),
                         payload={
                             "attempt_id": aid,
                             "closed": True,
-                            "close_reason": reason,
+                            "close_reason": cr_s,
                             "task_id": task.task_id,
                         },
                         ts=now,
+                        schema_version=2,
                     )
                 )
                 t = self._attempt_tasks.pop(aid, None)
@@ -226,9 +252,10 @@ class AttemptsMixin:
                 payload={
                     "task_id": task.task_id,
                     "outcome": TaskOutcome.SKIPPED.value,
-                    "reason": reason,
+                    "reason": reason_s,
                 },
                 ts=now,
+                schema_version=2,
             )
         )
         await self._append(events)

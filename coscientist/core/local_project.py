@@ -8,6 +8,7 @@ from typing import Any
 from coscientist.core.domain import Study, Task, TaskOutcome, TaskState
 from coscientist.core.events import EventEnvelope
 from coscientist.core.graph import GraphNode, GraphStore
+from coscientist.core.reasons import TaskReason
 
 
 class LocalProjectMixin:
@@ -50,7 +51,10 @@ class LocalProjectMixin:
                         retry_at = datetime.fromisoformat(retry_at)
                     self._retry_at[tid] = retry_at
                     self.tasks[tid] = t.model_copy(
-                        update={"state": TaskState.PENDING, "reason": "retry_scheduled"}
+                        update={
+                            "state": TaskState.PENDING,
+                            "reason": TaskReason.RETRY_SCHEDULED,
+                        }
                     )
         elif ev.type == "RouteReturned":
             aid = p.get("attempt_id") or ev.entity_key

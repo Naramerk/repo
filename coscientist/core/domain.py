@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from coscientist.core.reasons import CloseReason, TaskReason
 
 
 class Frozen(BaseModel):
@@ -58,7 +60,7 @@ class ReqStatus(StrEnum):
     STALE = "STALE"
 
 
-Provenance = Literal["real", "partial", "simulated"]
+Provenance = Literal["real", "partial", "stub"]
 OnTimeout = Literal["delegate", "delegate_capped", "fail"]
 HitlGateKind = Literal[
     "spec_approval",
@@ -185,6 +187,11 @@ class Study(Frozen):
     created_at: datetime
     parent_study_id: str | None = None
     budget: Budget | None = None
+    finalize_reserve_s: int = Field(default=30, ge=0)
+
+    def effective_deadline(self) -> datetime:
+        """Last instant usable by tasks/attempts/HITL (deadline − finalize reserve)."""
+        return self.deadline - timedelta(seconds=self.finalize_reserve_s)
 
 
 class Plan(Frozen):
@@ -201,7 +208,7 @@ class Task(Frozen):
     spec: TaskSpec
     state: TaskState
     outcome: TaskOutcome | None = None
-    reason: str | None = None
+    reason: TaskReason | None = None
     deadline: datetime
     attempts: list[str] = Field(default_factory=list)
     inherited_from: str | None = None
@@ -227,7 +234,7 @@ class Attempt(Frozen):
     dispatch_id: str
     route_returned: bool = False
     closed: bool = False
-    close_reason: str | None = None
+    close_reason: CloseReason | None = None
     provenance: Provenance = "real"
     agent_output_digest: str | None = None
     deadline: datetime
@@ -405,7 +412,7 @@ class StudyView(Frozen):
     phase: Literal["running", "closed"]
     progress: float = 0.0
     awaiting_human: bool = False
-    verdict: Literal["fulfilled", "partial", "simulated", "failed"] | None = None
+    verdict: Literal["fulfilled", "partial", "stubbed", "failed"] | None = None
     stub_share: float = 0.0
 
 
