@@ -147,19 +147,64 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
             if kept_reason is not None:
                 row["reason"] = kept_reason
             _put(proj, "attempts", aid, row)
-        # Pairing marker for SourceFetched ↔ fetch ToolCall (call_id + tool).
-        call_id = str(p.get("call_id") or "")
-        tool = str(p.get("tool") or "")
-        if call_id and tool and str(p.get("reason") or "") == "source_fetch":
-            from coscientist.core.tool_registry import resolve_is_fetch
+        # Pairing marker: trust journaled tool + is_fetch (see note_fetch_call…).
+        # Reclassified live registry → domain error caught here: do not brick fold.
+        from coscientist.core.errors import FetchToolReclassified
+        from coscientist.core.source_fetch import note_fetch_call_from_attempt_tainted
 
-            if bool(p.get("is_fetch")) and resolve_is_fetch(tool):
+        try:
+            marked = note_fetch_call_from_attempt_tainted(
+                p if isinstance(p, dict) else {}
+            )
+        except FetchToolReclassified as exc:
+            key = str(exc.call_id or exc.tool or "")
+            if key:
                 _put(
                     proj,
-                    "fetch_calls",
-                    call_id,
-                    {"call_id": call_id, "tool": tool, "attempt_id": aid},
+                    "fetch_integrity",
+                    key,
+                    {
+                        "kind": "fetch_tool_reclassified",
+                        "tool": exc.tool,
+                        # Persist the projection key even when call_id was empty
+                        # so ``_row_key`` can reload the row after a store round-trip.
+                        "call_id": exc.call_id or key,
+                        "tool_name": exc.tool,
+                        "attempt_id": aid,
+                        "row_key": key,
+                        "internal_error": True,
+                    },
                 )
+            marked = None
+        if marked is not None:
+            call_id, tool = marked
+            _put(
+                proj,
+                "fetch_calls",
+                call_id,
+                {"call_id": call_id, "tool": tool, "attempt_id": aid},
+            )
+    elif t == "FetchIntegrityRaised":
+        payload = p if isinstance(p, dict) else {}
+        key = str(
+            payload.get("call_id")
+            or event.entity_key
+            or payload.get("tool")
+            or payload.get("row_key")
+            or ""
+        )
+        if key:
+            _put(
+                proj,
+                "fetch_integrity",
+                key,
+                {
+                    **payload,
+                    "call_id": str(payload.get("call_id") or key),
+                    "row_key": key,
+                    "internal_error": True,
+                },
+            )
     elif t == "SourceFetched":
         # Only fold when paired with a journaled fetch ToolCall (AttemptTainted).
         from coscientist.core.source_fetch import source_fetched_paired_with_fetch_call
@@ -224,6 +269,8 @@ def apply_event(store: Any, event: EventEnvelope) -> None:
         "artifacts",
         "effects",
         "source_fetches",
+        "fetch_calls",
+        "fetch_integrity",
         "requirements",
         "hitl_requests",
         "graph_nodes",
@@ -251,12 +298,25 @@ def _row_key(table: str, row: dict[str, Any]) -> str | None:
         "artifacts": "artifact_id",
         "effects": "key",
         "source_fetches": "digest",
+        "fetch_calls": "call_id",
         "requirements": "id",
         "hitl_requests": "request_id",
         "graph_nodes": "node_id",
         "graph_edges": "edge_id",
         "meta": "study_id",
     }
+    if table == "fetch_integrity":
+        # Key order (first non-empty wins): call_id → tool → tool_name → row_key.
+        # call_id may be absent on tool-only integrity rows — never drop them.
+        for cand in (
+            row.get("call_id"),
+            row.get("tool"),
+            row.get("tool_name"),
+            row.get("row_key"),
+        ):
+            if cand:
+                return str(cand)
+        return None
     field = mapping.get(table)
     if table == "meta":
         return str(row["study_id"]) if row.get("study_id") else row.get("row_key")
@@ -284,7 +344,8 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         "EffectDone": ("effects",),
         "SideEffectDenied": ("effects",),
         "SourceFetched": ("source_fetches",),
-        "AttemptTainted": ("attempts", "fetch_calls"),
+        "AttemptTainted": ("attempts", "fetch_calls", "fetch_integrity"),
+        "FetchIntegrityRaised": ("fetch_integrity",),
         "HitlOpened": ("hitl_requests",),
         "HitlDecided": ("hitl_requests",),
         "HitlTimedOut": ("hitl_requests",),

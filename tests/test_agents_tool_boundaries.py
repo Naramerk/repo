@@ -35,6 +35,7 @@ _FETCH_MINT_NAMES = (
     "_IssuedFetchCap",
     "_SOURCE_FETCHED_WRITE_PERMITS",
     "_take_source_fetched_write_permit",
+    "_release_source_fetched_write_permit",
     # Removed bool-bypass APIs — must not reappear under coscientist/.
     "_source_fetched_permit_scope",
     "source_fetched_permitted",
@@ -135,6 +136,7 @@ def test_fetch_capability_mint_only_in_effects():
         "_IssuedFetchCap",
         "_SOURCE_FETCHED_WRITE_PERMITS",
         "_take_source_fetched_write_permit",
+        "_release_source_fetched_write_permit",
     )
     for path in _py_files(COSI):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

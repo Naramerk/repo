@@ -231,6 +231,9 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
                 line = f"отклонено: побочный эффект ({tool})"
             if line not in seen:
                 seen.append(line)
+        elif ev.type == "FetchIntegrityRaised":
+            if "internal_error" not in seen:
+                seen.append("internal_error")
         elif ev.type == "EffectIntended":
             # Track for unknown (Intended without Done) pass below.
             pass
@@ -521,8 +524,21 @@ def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
     lookup = getattr(arts, "get_meta", None)
     return lookup if callable(lookup) else None
 
+async def _build_rich_payload(
+    runtime: StudyRuntime, *, sid: str, trigger: FinalizeTrigger
+) -> dict[str, Any]:
+    # Reclassified fetch tools: journal diagnostic so contrib includes internal_error;
+    # paired SourceFetched stays uncounted (fold catches FetchToolReclassified).
+    from coscientist.core.projections import fold_events
+    from coscientist.core.source_fetch import reconcile_fetch_integrity
 
-async def _build_rich_payload(runtime: StudyRuntime, *, sid: str, trigger: FinalizeTrigger) -> dict[str, Any]:
+    try:
+        await reconcile_fetch_integrity(runtime.writer)
+    except LeaseLost:
+        raise
+    except Exception:  # noqa: BLE001 — finalize must remain total
+        log.warning("reconcile_fetch_integrity failed", exc_info=True)
+
     plans = await _load_plans(runtime)
     lookup = _artifact_lookup(runtime)
     from coscientist.core.loop import capped_scope_questions
@@ -546,6 +562,11 @@ async def _build_rich_payload(runtime: StudyRuntime, *, sid: str, trigger: Final
     term = terminal_reason_for(trigger, tasks=runtime.tasks, question_dispositions=qdisp)
     events = await runtime.store.read_all()
     contrib = contributing_reasons_ordered(events)
+    # If journaling failed/skipped, fold still surfaces fetch_integrity → reason.
+    if "internal_error" not in contrib:
+        folded = fold_events(events)
+        if folded.get("fetch_integrity"):
+            contrib.append("internal_error")
     # PR13: disposition report_line (e.g. «не выполнено: рубрика не принята»).
     for d in qdisp.values():
         line = d.get("report_line") if isinstance(d, dict) else None

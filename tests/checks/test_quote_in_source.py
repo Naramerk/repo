@@ -72,20 +72,26 @@ def _put_paper(
     tool: str = "papers_get",
     study_id: str = "st_test",
 ):
+    from coscientist.tools.effects import _invalidate_fetch_capability
+
     cap = _cap(call, tool, study_id=study_id)
     attempt_id = call.rsplit(":", 1)[0] if ":" in call else call
-    return arts.put_fetched(
-        content,
-        make_tool_ref(call, tool=tool),
-        name="paper.txt",
-        media_type="text/plain",
-        role="paper",
-        capability=cap,
-        expected_tool=tool,
-        expected_call_id=call,
-        expected_study_id=study_id,
-        expected_attempt_id=attempt_id,
-    )
+    try:
+        return arts.put_fetched(
+            content,
+            make_tool_ref(call, tool=tool),
+            name="paper.txt",
+            media_type="text/plain",
+            role="paper",
+            capability=cap,
+            expected_tool=tool,
+            expected_call_id=call,
+            expected_study_id=study_id,
+            expected_attempt_id=attempt_id,
+        )
+    finally:
+        # Unit helper: put only asserts (no consume) — drop the test mint.
+        _invalidate_fetch_capability(cap)
 
 
 def _catalog_quote() -> object:
@@ -587,6 +593,18 @@ def test_wrong_normalization_version_unassessed(tmp_path: Path):
     )
     assert cr.status is ReqStatus.UNASSESSED
     assert cr.detail == "normalization_version_mismatch"
+
+
+@pytest.fixture(autouse=True)
+def _clear_fetch_cap_registries():
+    """Keep effects issued/permit maps empty across tests (no manual .clear())."""
+    from coscientist.tools import effects as effects_mod
+
+    effects_mod._ISSUED_FETCH_CAPS.clear()
+    effects_mod._SOURCE_FETCHED_WRITE_PERMITS.clear()
+    yield
+    effects_mod._ISSUED_FETCH_CAPS.clear()
+    effects_mod._SOURCE_FETCHED_WRITE_PERMITS.clear()
 
 
 @pytest.fixture
@@ -1637,7 +1655,7 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
         writer=rt.writer,
         artifacts=arts,
     )
-    assert out.artifacts == [] or out.artifacts is None or not out.artifacts
+    assert not out.artifacts
     events = await rt.store.read_all()
     assert any(
         e.type == "AttemptTainted"
@@ -1652,6 +1670,7 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
 @pytest.mark.asyncio
 async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry):
     """Two tool-producer artifacts in one fetch → remint + both SourceFetched."""
+    from coscientist.tools import effects as effects_mod
 
     class _MultiFetch:
         def __init__(self, arts: LocalArtifactStore):
@@ -1738,6 +1757,9 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
         if e.type == "SourceFetched" and e.payload.get("digest") in digests
     ]
     assert len(sf) == 2
+    # Caps minted for this invoke_tool call must be gone (issued + write permits).
+    assert effects_mod._ISSUED_FETCH_CAPS == {}
+    assert effects_mod._SOURCE_FETCHED_WRITE_PERMITS == {}
     await close_runtime(rt)
 
 
@@ -1784,3 +1806,571 @@ def test_core_cannot_bypass_source_fetched_with_bool_flag(tmp_path: Path, clock)
         await close_runtime(rt)
 
     asyncio.run(_run())
+
+
+@pytest.mark.asyncio
+async def test_append_failure_on_second_digest_clears_permits(
+    tmp_path: Path, clock, fetch_registry, monkeypatch
+):
+    """Remint inside invoke_tool (effects.py) fails on 2nd SourceFetched → permits cleared."""
+    import coscientist.core.source_fetch as sf_mod
+    from coscientist.tools import effects as effects_mod
+
+    catalog = _catalog_quote()
+    sid = "st_append_fail"
+    rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0-pr14",
+        deadline=clock.now() + timedelta(seconds=60),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    _ex, arts = attach_executor(rt, tmp_path)
+    rt.artifacts = arts
+    for key in ("SPEC", "HYP", "LIT"):
+        await record_success(rt, await rt.start_attempt(key), arts)
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="LIT-0",
+                title="lit",
+                goal="g",
+                route="literature",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="quote_ok")],
+            )
+        ],
+        questions=[],
+    )
+    aid = await rt.start_attempt("LIT-0")
+    assert aid is not None
+
+    class _MultiFetch:
+        def __init__(self, store: LocalArtifactStore):
+            self.spec = ToolSpec(name="papers_get", effect="read", is_fetch=True)
+            self.arts = store
+
+        async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+            call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
+            arts_out = []
+            for i, body in enumerate(
+                (
+                    b"First paper has four word tokens right here now.",
+                    b"Second paper has four word tokens right here now.",
+                )
+            ):
+                arts_out.append(
+                    self.arts.put_fetched(
+                        body,
+                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name),
+                        name=f"p{i}.txt",
+                        media_type="text/plain",
+                        role="paper",
+                        capability=ctx.fetch_capability,
+                        expected_tool=self.spec.name,
+                        expected_call_id=call_id,
+                        expected_study_id=ctx.study_id,
+                        expected_attempt_id=ctx.attempt_id,
+                    )
+                )
+            return ToolOutput(
+                data={"url": "https://normalized.example/multi"},
+                artifacts=arts_out,
+            )
+
+    real_append = sf_mod.append_source_fetched
+    n = {"k": 0}
+
+    async def _boom_second(*a, **k):
+        n["k"] += 1
+        if n["k"] >= 2:
+            raise RuntimeError("simulated append failure")
+        return await real_append(*a, **k)
+
+    monkeypatch.setattr(sf_mod, "append_source_fetched", _boom_second)
+    with pytest.raises(RuntimeError, match="simulated append failure"):
+        await invoke_tool(
+            _MultiFetch(arts),
+            {"url": "https://agent.example/multi"},
+            CallCtx(
+                study_id=sid,
+                task_key="LIT-0",
+                attempt_id=aid,
+                hitl_policy=HitlPolicy(),
+                call_seq=1,
+            ),
+            writer=rt.writer,
+            artifacts=arts,
+        )
+    assert n["k"] >= 2  # remint path reached second append_source_fetched
+    assert effects_mod._ISSUED_FETCH_CAPS == {}
+    assert effects_mod._SOURCE_FETCHED_WRITE_PERMITS == {}
+    await close_runtime(rt)
+
+
+def test_attempt_tainted_without_is_fetch_does_not_pair():
+    """Negative: AttemptTainted missing is_fetch must not create fetch_calls."""
+    from coscientist.core.events import EventEnvelope
+    from coscientist.core.projections import apply_to_map
+    from coscientist.core.source_fetch import (
+        SourceFetchIndex,
+        apply_source_fetch_events,
+        note_fetch_call_from_attempt_tainted,
+    )
+
+    payload = {
+        "attempt_id": "att",
+        "reason": "source_fetch",
+        "call_id": "att:1",
+        "tool": "papers_get",
+        # is_fetch omitted
+    }
+    assert note_fetch_call_from_attempt_tainted(payload) is None
+    idx = SourceFetchIndex()
+    apply_source_fetch_events(
+        idx,
+        [
+            EventEnvelope(
+                study_id="s",
+                type="AttemptTainted",
+                entity_key="att",
+                idem_key="AttemptTainted:att:att:1",
+                payload=payload,
+                ts=datetime.now(UTC),
+                schema_version=1,
+                seq=1,
+            ),
+            EventEnvelope(
+                study_id="s",
+                type="SourceFetched",
+                entity_key="x",
+                idem_key="SourceFetched:x",
+                payload={
+                    "call_id": "att:1",
+                    "tool": "papers_get",
+                    "digest": "deadbeef",
+                    "url": "https://x",
+                },
+                ts=datetime.now(UTC),
+                schema_version=1,
+                seq=2,
+            ),
+        ],
+    )
+    assert "deadbeef" not in idx.digests()
+    proj: dict = {}
+    apply_to_map(
+        proj,
+        EventEnvelope(
+            study_id="s",
+            type="AttemptTainted",
+            entity_key="att",
+            idem_key="AttemptTainted:att:att:1b",
+            payload=payload,
+            ts=datetime.now(UTC),
+            schema_version=1,
+            seq=1,
+        ),
+    )
+    assert not proj.get("fetch_calls")
+
+
+def test_attempt_tainted_renamed_tool_still_pairs_from_journal(fetch_registry):
+    """Unregistered (renamed) tool with journaled is_fetch still pairs — no silent drop."""
+    from coscientist.core.source_fetch import note_fetch_call_from_attempt_tainted
+
+    marked = note_fetch_call_from_attempt_tainted(
+        {
+            "reason": "source_fetch",
+            "is_fetch": True,
+            "tool": "papers_get_old_name",
+            "call_id": "att:9",
+        }
+    )
+    assert marked == ("att:9", "papers_get_old_name")
+
+
+def test_attempt_tainted_reclassified_raises_domain(fetch_registry):
+    """Registered tool with is_fetch=False vs journaled True → FetchToolReclassified."""
+    from coscientist.core.errors import FetchToolReclassified
+    from coscientist.core.source_fetch import note_fetch_call_from_attempt_tainted
+
+    with pytest.raises(FetchToolReclassified) as ei:
+        note_fetch_call_from_attempt_tainted(
+            {
+                "reason": "source_fetch",
+                "is_fetch": True,
+                "tool": "catalog_read",
+                "call_id": "att:1",
+            }
+        )
+    assert ei.value.tool == "catalog_read"
+    assert ei.value.call_id == "att:1"
+
+
+_RECLASS_FIXTURE = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures"
+    / "journals"
+    / "reclassified_fetch_old"
+)
+
+# Raw schema_version values committed in events.db (before upcast on open).
+_RECLASS_RAW_SCHEMA_VERSIONS = (
+    ("StudyCreated", 2),
+    ("PlanAccepted", 1),
+    ("TaskCreated", 2),
+    ("AttemptStarted", 1),
+    ("AttemptTainted", 1),
+    ("SourceFetched", 1),
+)
+
+
+def _assert_raw_fixture_schema_versions(db_path: Path) -> None:
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT type, schema_version FROM events ORDER BY seq"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert [(t, int(sv)) for t, sv in rows] == list(_RECLASS_RAW_SCHEMA_VERSIONS)
+
+
+def _assert_single_study_finalized(events: list[Any]):
+    """Exactly one StudyFinalized; report XOR minimal_report; non-empty conclusions."""
+    fins = [e for e in events if e.type == "StudyFinalized"]
+    assert len(fins) == 1
+    fin = fins[0]
+    p = fin.payload if isinstance(fin.payload, dict) else {}
+    has_report = bool(p.get("report_artifact_id"))
+    has_minimal = bool(p.get("minimal_report"))
+    assert has_report ^ has_minimal, (
+        f"expected report XOR minimal_report, got report={has_report} "
+        f"minimal={has_minimal}"
+    )
+    cids = p.get("conclusion_ids")
+    assert isinstance(cids, list) and len(cids) > 0
+    return fin
+
+
+def _install_reclassified_papers_get() -> None:
+    _reset_registry_for_tests()
+    _register_tool_for_tests(
+        RegisteredToolSpec(name="papers_get", effect="read", is_fetch=False)
+    )
+    freeze_registry()
+
+
+def _copy_reclass_fixture(tmp_path: Path) -> tuple[str, str, str, Path]:
+    import shutil
+
+    meta = json.loads(
+        (_RECLASS_FIXTURE.parent / "reclassified_fetch_old.json").read_text()
+    )
+    sid = str(meta["study_id"])
+    digest = str(meta["digest"])
+    call_id = str(meta["call_id"])
+    dest = tmp_path / sid
+    dest.mkdir(parents=True)
+    db = dest / "events.db"
+    shutil.copy2(_RECLASS_FIXTURE / "events.db", db)
+    return sid, digest, call_id, db
+
+
+@pytest.mark.asyncio
+async def test_reclassified_tool_study_opens_finalizes_uncounted(
+    tmp_path: Path, clock
+):
+    """MAJOR: OLD-schema fixture opens under reclassified tool; natural finalize.
+
+    Committed journal (StudyCreated v2 / PlanAccepted v1 / TaskCreated v2 +
+    AttemptTainted is_fetch=True + SourceFetched). Upcasters run on open.
+    Finalization via tick/deadline — not finalize(trigger=...).
+    """
+    from coscientist.core.projections import fold_events
+    from coscientist.core.source_fetch import load_source_fetch_index_from_writer
+
+    sid, digest, call_id, db = _copy_reclass_fixture(tmp_path)
+    _assert_raw_fixture_schema_versions(db)
+
+    _install_reclassified_papers_get()
+
+    catalog = _catalog_quote()
+    rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog, owner="t2")
+    # Upcasters applied on read (StudyCreated lands at current schema).
+    events_open = await rt.store.read_all()
+    sc = next(e for e in events_open if e.type == "StudyCreated")
+    assert sc.schema_version >= 9
+    assert any(e.type == "FetchIntegrityRaised" for e in events_open)
+
+    folded = fold_events(events_open)
+    assert digest not in (folded.get("source_fetches") or {})
+    assert call_id in (folded.get("fetch_integrity") or {})
+
+    idx = await load_source_fetch_index_from_writer(rt.writer)
+    assert digest not in idx.digests()
+    assert digest not in idx.digests_for_attempt("att_lit")
+    # Read path must not append further integrity events.
+    n_integrity = sum(1 for e in events_open if e.type == "FetchIntegrityRaised")
+    await load_source_fetch_index_from_writer(rt.writer)
+    assert (
+        sum(1 for e in await rt.store.read_all() if e.type == "FetchIntegrityRaised")
+        == n_integrity
+    )
+
+    await rt.ensure_lease(ttl_s=300)
+    clock.advance(timedelta(seconds=120))
+    await rt.tick()
+    assert rt.view().phase == "closed"
+    events = await rt.store.read_all()
+    fin = _assert_single_study_finalized(events)
+    assert fin.payload.get("trigger") == "deadline"
+    assert "internal_error" in (fin.payload.get("contributing_reasons") or [])
+    assert digest not in (fold_events(events).get("source_fetches") or {})
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_reclassify_internal_error_survives_reconcile_failure(
+    tmp_path: Path, clock, monkeypatch
+):
+    """MAJOR: fold_events fallback keeps internal_error when reconcile raises."""
+    sid, _digest, _call_id, db = _copy_reclass_fixture(tmp_path)
+    _assert_raw_fixture_schema_versions(db)
+    _install_reclassified_papers_get()
+
+    async def boom(_writer):
+        raise RuntimeError("reconcile_boom")
+
+    monkeypatch.setattr(
+        "coscientist.core.source_fetch.reconcile_fetch_integrity", boom
+    )
+
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, catalog=_catalog_quote(), owner="t2"
+    )
+    await rt.ensure_lease(ttl_s=300)
+    clock.advance(timedelta(seconds=120))
+    await rt.tick()
+    fin = _assert_single_study_finalized(await rt.store.read_all())
+    assert "internal_error" in (fin.payload.get("contributing_reasons") or [])
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_open_reconcile_lease_lost_propagates(tmp_path: Path, clock, monkeypatch):
+    """LeaseLost from reconcile_fetch_integrity on open must not be swallowed."""
+    from coscientist.core.errors import LeaseLost
+
+    sid, _digest, _call_id, db = _copy_reclass_fixture(tmp_path)
+    _assert_raw_fixture_schema_versions(db)
+    _install_reclassified_papers_get()
+
+    async def boom_lease(_writer):
+        raise LeaseLost("reconcile lease lost")
+
+    monkeypatch.setattr(
+        "coscientist.core.source_fetch.reconcile_fetch_integrity", boom_lease
+    )
+    with pytest.raises(LeaseLost, match="reconcile lease lost"):
+        await open_runtime(
+            tmp_path, sid, clock=clock, catalog=_catalog_quote(), owner="t2"
+        )
+
+
+@pytest.mark.asyncio
+async def test_open_finalized_study_does_not_append_fetch_integrity(
+    tmp_path: Path, clock
+):
+    """MAJOR: reopen of StudyFinalized must not journal FetchIntegrityRaised after it."""
+    sid, _digest, _call_id, db = _copy_reclass_fixture(tmp_path)
+    _assert_raw_fixture_schema_versions(db)
+    _install_reclassified_papers_get()
+
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, catalog=_catalog_quote(), owner="t1"
+    )
+    await rt.ensure_lease(ttl_s=300)
+    clock.advance(timedelta(seconds=120))
+    await rt.tick()
+    events_closed = await rt.store.read_all()
+    fin = _assert_single_study_finalized(events_closed)
+    fin_seq = int(fin.seq or 0)
+    integrity_before = [
+        e for e in events_closed if e.type == "FetchIntegrityRaised"
+    ]
+    assert integrity_before
+    assert all(int(e.seq or 0) < fin_seq for e in integrity_before)
+    await close_runtime(rt)
+
+    _install_reclassified_papers_get()
+    rt2 = await open_runtime(
+        tmp_path, sid, clock=clock, catalog=_catalog_quote(), owner="t2"
+    )
+    assert rt2._finalized  # noqa: SLF001
+    events2 = await rt2.store.read_all()
+    assert len([e for e in events2 if e.type == "StudyFinalized"]) == 1
+    after_fin = [e for e in events2 if int(e.seq or 0) > fin_seq]
+    assert after_fin == [], f"events after StudyFinalized: {[e.type for e in after_fin]}"
+    assert [
+        e for e in events2 if e.type == "FetchIntegrityRaised"
+    ] == integrity_before
+    await close_runtime(rt2)
+
+
+def test_fetch_integrity_row_key_without_call_id():
+    """Projection must not drop fetch_integrity rows that lack call_id.
+
+    ``_row_key`` order for fetch_integrity (first non-empty wins):
+    ``call_id`` → ``tool`` → ``tool_name`` → ``row_key``.
+    """
+    from coscientist.core.events import EventEnvelope, make_idem
+    from coscientist.core.projections import _row_key, apply_to_map, fold_events
+
+    # Empty call_id → tool.
+    assert (
+        _row_key("fetch_integrity", {"tool": "papers_get", "call_id": ""})
+        == "papers_get"
+    )
+    # call_id wins over tool and row_key.
+    assert (
+        _row_key(
+            "fetch_integrity",
+            {
+                "call_id": "att:1",
+                "tool": "papers_get",
+                "tool_name": "other",
+                "row_key": "rk",
+            },
+        )
+        == "att:1"
+    )
+    # No call_id: tool wins over tool_name and row_key.
+    assert (
+        _row_key(
+            "fetch_integrity",
+            {
+                "call_id": "",
+                "tool": "papers_get",
+                "tool_name": "other",
+                "row_key": "rk",
+            },
+        )
+        == "papers_get"
+    )
+    # tool empty → tool_name before row_key.
+    assert (
+        _row_key(
+            "fetch_integrity",
+            {"call_id": "", "tool": "", "tool_name": "tn", "row_key": "rk"},
+        )
+        == "tn"
+    )
+
+    ev = EventEnvelope(
+        study_id="st",
+        type="FetchIntegrityRaised",
+        entity_key="papers_get",
+        idem_key=make_idem("FetchIntegrityRaised", "papers_get"),
+        payload={
+            "kind": "fetch_tool_reclassified",
+            "tool": "papers_get",
+            "call_id": "",
+            "internal_error": True,
+        },
+        ts=datetime.now(UTC),
+        schema_version=1,
+    )
+    folded = fold_events([ev])
+    assert "papers_get" in (folded.get("fetch_integrity") or {})
+    # Round-trip via _row_key after store-shaped row.
+    row = folded["fetch_integrity"]["papers_get"]
+    assert _row_key("fetch_integrity", row) == "papers_get"
+    proj: dict = {}
+    apply_to_map(proj, ev)
+    assert _row_key("fetch_integrity", proj["fetch_integrity"]["papers_get"])
+
+
+def test_fetch_capability_mismatch_on_wrong_bind(fetch_registry):
+    """verify/assert raise fetch_capability_mismatch on wrong tool/call/study."""
+    from coscientist.core.errors import ArtifactRejected
+    from coscientist.core.source_fetch import (
+        assert_fetch_capability_bound,
+        verify_fetch_capability,
+    )
+    from coscientist.tools import effects as effects_mod
+
+    cap = _cap("att:1", "papers_get", study_id="st_x")
+    with pytest.raises(ArtifactRejected, match="fetch_capability_mismatch"):
+        assert_fetch_capability_bound(
+            cap,
+            tool="wrong_tool",
+            call_id="att:1",
+            study_id="st_x",
+            attempt_id="att",
+        )
+    with pytest.raises(ArtifactRejected, match="fetch_capability_mismatch"):
+        verify_fetch_capability(
+            cap,
+            tool="papers_get",
+            call_id="att:99",
+            study_id="st_x",
+            attempt_id="att",
+        )
+    # Cap still issued (mismatch fails in lookup before consume).
+    assert cap.id in effects_mod._ISSUED_FETCH_CAPS
+    effects_mod._invalidate_fetch_capability(cap)
+    assert effects_mod._ISSUED_FETCH_CAPS == {}
+    assert effects_mod._SOURCE_FETCHED_WRITE_PERMITS == {}
+
+
+def test_take_source_fetched_write_permit_mismatches(fetch_registry):
+    """_take_source_fetched_write_permit rejects foreign tool / call / study."""
+    from coscientist.core.errors import ArtifactRejected
+    from coscientist.core.source_fetch import (
+        take_source_fetched_write_permit,
+        verify_fetch_capability,
+    )
+    from coscientist.tools import effects as effects_mod
+
+    cap = _cap("att:1", "papers_get", study_id="st_x")
+    verify_fetch_capability(
+        cap,
+        tool="papers_get",
+        call_id="att:1",
+        study_id="st_x",
+        attempt_id="att",
+    )
+    assert cap.id in effects_mod._SOURCE_FETCHED_WRITE_PERMITS
+    with pytest.raises(ArtifactRejected, match="fetch_capability_mismatch"):
+        take_source_fetched_write_permit(
+            cap.id, tool="foreign_tool", call_id="att:1", study_id="st_x"
+        )
+    # Mismatch must not consume the permit.
+    assert cap.id in effects_mod._SOURCE_FETCHED_WRITE_PERMITS
+    with pytest.raises(ArtifactRejected, match="fetch_capability_mismatch"):
+        take_source_fetched_write_permit(
+            cap.id, tool="papers_get", call_id="att:99", study_id="st_x"
+        )
+    with pytest.raises(ArtifactRejected, match="fetch_capability_mismatch"):
+        take_source_fetched_write_permit(
+            cap.id, tool="papers_get", call_id="att:1", study_id="st_other"
+        )
+    take_source_fetched_write_permit(
+        cap.id, tool="papers_get", call_id="att:1", study_id="st_x"
+    )
+    assert cap.id not in effects_mod._SOURCE_FETCHED_WRITE_PERMITS
+
+
+def test_release_without_handler_raises(monkeypatch):
+    """release must not silently no-op when no handler is registered."""
+    import coscientist.core.source_fetch as sf_mod
+
+    monkeypatch.setattr(sf_mod, "_release_write_permit_impl", None)
+    with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
+        sf_mod.release_source_fetched_write_permit("orphan-cap-id")

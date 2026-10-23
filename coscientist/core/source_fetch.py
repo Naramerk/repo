@@ -24,18 +24,20 @@ from datetime import UTC, datetime
 from typing import Any
 
 from coscientist.core.domain import Catalog, CodeCheck, RequirementRef, TaskSpec
-from coscientist.core.errors import ArtifactRejected
+from coscientist.core.errors import ArtifactRejected, FetchToolReclassified
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.writer import StudyWriter
 
 VerifyFetchCap = Callable[..., "FetchCapability"]
 AssertFetchCap = Callable[..., "FetchCapability"]
 TakeWritePermit = Callable[..., None]
+ReleaseWritePermit = Callable[[str], None]
 
 # Installed by coscientist.tools.effects at import (registry never lives here).
 _verify_impl: VerifyFetchCap | None = None
 _assert_impl: AssertFetchCap | None = None
 _take_write_permit_impl: TakeWritePermit | None = None
+_release_write_permit_impl: ReleaseWritePermit | None = None
 
 
 def register_fetch_capability_verifier(
@@ -43,9 +45,10 @@ def register_fetch_capability_verifier(
     *,
     assert_fn: AssertFetchCap | None = None,
     take_write_permit_fn: TakeWritePermit | None = None,
+    release_write_permit_fn: ReleaseWritePermit | None = None,
 ) -> None:
     """Called once from ``tools.effects`` — core never mints capabilities."""
-    global _verify_impl, _assert_impl, _take_write_permit_impl
+    global _verify_impl, _assert_impl, _take_write_permit_impl, _release_write_permit_impl
     if _verify_impl is not None and _verify_impl is not verify_fn:
         raise RuntimeError("fetch capability verifier already registered")
     _verify_impl = verify_fn
@@ -53,6 +56,8 @@ def register_fetch_capability_verifier(
         _assert_impl = assert_fn
     if take_write_permit_fn is not None:
         _take_write_permit_impl = take_write_permit_fn
+    if release_write_permit_fn is not None:
+        _release_write_permit_impl = release_write_permit_fn
 
 
 def take_source_fetched_write_permit(
@@ -68,6 +73,13 @@ def take_source_fetched_write_permit(
     _take_write_permit_impl(
         cap_id, tool=tool, call_id=call_id, study_id=study_id
     )
+
+
+def release_source_fetched_write_permit(cap_id: str) -> None:
+    """Drop a write permit without journaling (append failed after verify)."""
+    if _release_write_permit_impl is None:
+        raise ArtifactRejected("fetch_capability_required")
+    _release_write_permit_impl(cap_id)
 
 @dataclass(frozen=True, slots=True)
 class FetchCapability:
@@ -174,15 +186,27 @@ class SourceFetchIndex:
     by_digest: dict[str, dict[str, Any]]
     by_attempt: dict[str, set[str]]
     fetch_calls: dict[str, str]  # call_id → tool (from AttemptTainted)
+    # Reclassified same-name tools: do not count; journal FetchIntegrityRaised.
+    reclassified: list[dict[str, str]]
 
     def __init__(self) -> None:
         self.by_digest = {}
         self.by_attempt = {}
         self.fetch_calls = {}
+        self.reclassified = []
 
     def note_fetch_call(self, *, call_id: str, tool: str) -> None:
         if call_id and tool:
             self.fetch_calls[call_id] = tool
+
+    def note_reclassified(self, *, call_id: str, tool: str) -> None:
+        """Record integrity conflict; paired SourceFetched must not count."""
+        if not call_id and not tool:
+            return
+        for row in self.reclassified:
+            if row.get("call_id") == call_id and row.get("tool") == tool:
+                return
+        self.reclassified.append({"call_id": call_id, "tool": tool})
 
     def note(self, payload: dict[str, Any]) -> None:
         if not source_fetched_paired_with_fetch_call(payload, self.fetch_calls):
@@ -206,10 +230,40 @@ class SourceFetchIndex:
         return frozenset(self.by_attempt.get(attempt_id, ()))
 
 
+def note_fetch_call_from_attempt_tainted(payload: dict[str, Any]) -> tuple[str, str] | None:
+    """Resolve a fetch-call marker from ``AttemptTainted`` payload.
+
+    Pairing trusts the **journaled** ``tool`` + ``is_fetch`` identity so renamed
+    / removed tools do not silently drop old ``SourceFetched`` on replay.
+    If the live registry still has the same name with ``is_fetch=False``, raise
+    ``FetchToolReclassified`` (domain) — callers must catch, skip counting, and
+    journal ``FetchIntegrityRaised`` so open/finalize stay possible.
+    """
+    if str(payload.get("reason") or "") != "source_fetch":
+        return None
+    if not bool(payload.get("is_fetch")):
+        return None
+    tool = str(payload.get("tool") or "")
+    call_id = str(payload.get("call_id") or "")
+    if not tool or not call_id:
+        return None
+    from coscientist.core.tool_registry import get_registered
+
+    live = get_registered(tool)
+    if live is not None and not live.is_fetch:
+        raise FetchToolReclassified(tool, call_id)
+    # Unregistered (renamed away) or still is_fetch — trust journaled identity.
+    return call_id, tool
+
+
 def apply_source_fetch_events(
     idx: SourceFetchIndex, events: list[Any]
 ) -> int:
-    """Fold AttemptTainted fetch-calls then paired SourceFetched; return max seq."""
+    """Fold AttemptTainted fetch-calls then paired SourceFetched; return max seq.
+
+    Reclassified tools are recorded on ``idx.reclassified`` and do **not** create
+    fetch_calls, so subsequent ``SourceFetched`` for that call is not counted.
+    """
     max_seq = 0
     for ev in events:
         seq = int(getattr(ev, "seq", 0) or 0)
@@ -219,16 +273,15 @@ def apply_source_fetch_events(
         p = getattr(ev, "payload", None) or {}
         if not isinstance(p, dict):
             continue
-        if t == "AttemptTainted" and str(p.get("reason") or "") == "source_fetch":
-            tool = str(p.get("tool") or "")
-            # Marker must claim is_fetch; also cross-check the closed registry.
-            from coscientist.core.tool_registry import resolve_is_fetch
-
-            if tool and bool(p.get("is_fetch")) and resolve_is_fetch(tool):
-                idx.note_fetch_call(
-                    call_id=str(p.get("call_id") or ""),
-                    tool=tool,
-                )
+        if t == "AttemptTainted":
+            try:
+                marked = note_fetch_call_from_attempt_tainted(p)
+            except FetchToolReclassified as exc:
+                idx.note_reclassified(call_id=exc.call_id, tool=exc.tool)
+                continue
+            if marked is not None:
+                call_id, tool = marked
+                idx.note_fetch_call(call_id=call_id, tool=tool)
         elif t == "SourceFetched":
             idx.note(p)
     return max_seq
@@ -237,6 +290,93 @@ def apply_source_fetch_events(
 def load_source_fetch_index(events: list[Any]) -> SourceFetchIndex:
     idx = SourceFetchIndex()
     apply_source_fetch_events(idx, events)
+    return idx
+
+
+async def journal_fetch_integrity_raised(
+    writer: StudyWriter,
+    issues: list[dict[str, str]],
+    *,
+    study_id: str,
+    on_event: Any | None = None,
+) -> list[EventEnvelope]:
+    """Append idempotent ``FetchIntegrityRaised`` for each reclassified call."""
+    from coscientist.core.errors import Idempotent
+
+    out: list[EventEnvelope] = []
+    for issue in issues:
+        tool = str(issue.get("tool") or "")
+        call_id = str(issue.get("call_id") or "")
+        if not tool and not call_id:
+            continue
+        entity = call_id or tool
+        ev = EventEnvelope(
+            study_id=study_id,
+            type="FetchIntegrityRaised",
+            entity_key=entity,
+            idem_key=make_idem("FetchIntegrityRaised", entity, tool),
+            payload={
+                "kind": "fetch_tool_reclassified",
+                "tool": tool,
+                "call_id": call_id,
+                "internal_error": True,
+            },
+            ts=datetime.now(UTC),
+            schema_version=1,
+        )
+        try:
+            stored = await writer.append(ev)
+        except Idempotent:
+            continue
+        out.append(stored)
+        seq = int(getattr(stored, "seq", 0) or 0)
+        if seq > int(writer.source_fetch_seq or 0):
+            writer.source_fetch_seq = seq
+        if on_event is not None:
+            on_event(stored)
+    return out
+
+
+async def reconcile_fetch_integrity(writer: StudyWriter) -> SourceFetchIndex:
+    """Fold journal, journal any reclassified markers, return index (uncounted).
+
+    Does **not** append when the study is already finalized — ``FetchIntegrityRaised``
+    must not land after ``StudyFinalized``.
+    """
+    store = getattr(writer, "store", None)
+    if store is None or not hasattr(store, "read_all"):
+        return SourceFetchIndex()
+    events = await store.read_all()
+    idx = SourceFetchIndex()
+    apply_source_fetch_events(idx, events)
+    study_id = ""
+    if events:
+        study_id = str(getattr(events[0], "study_id", "") or "")
+    if not study_id:
+        study = getattr(getattr(writer, "store", None), "study_id", None)
+        study_id = str(study or "")
+    finalized = any(getattr(e, "type", None) == "StudyFinalized" for e in events)
+    if finalized:
+        # Fold only — never journal past StudyFinalized.
+        writer.source_fetch_idx = idx
+        if events:
+            writer.source_fetch_seq = max(
+                int(getattr(e, "seq", 0) or 0) for e in events
+            )
+        return idx
+    if idx.reclassified and study_id:
+        await journal_fetch_integrity_raised(
+            writer, idx.reclassified, study_id=study_id
+        )
+        # Refresh cache after diagnostic appends.
+        writer.source_fetch_idx = None
+        writer.source_fetch_seq = 0
+        return await load_source_fetch_index_from_writer(writer)
+    writer.source_fetch_idx = idx
+    if events:
+        writer.source_fetch_seq = max(
+            int(getattr(e, "seq", 0) or 0) for e in events
+        )
     return idx
 
 
@@ -265,6 +405,8 @@ async def load_source_fetch_index_from_writer(writer: StudyWriter) -> SourceFetc
             after = n
     writer.source_fetch_idx = idx
     writer.source_fetch_seq = after
+    # Read path only: never journal here (executor evaluate). Writes belong to
+    # ``reconcile_fetch_integrity`` on open/finalize.
     return idx
 
 
@@ -312,7 +454,12 @@ async def append_source_fetched(
         ts=datetime.now(UTC),
         schema_version=1,
     )
-    stored = await writer.append(ev, _source_fetched_cap_id=capability.id)
+    # verify granted a write permit — release it if append fails so it never leaks.
+    try:
+        stored = await writer.append(ev, _source_fetched_cap_id=capability.id)
+    except BaseException:
+        release_source_fetched_write_permit(capability.id)
+        raise
     _cache_note_fetch(writer, stored)
     if on_event is not None:
         on_event(stored)

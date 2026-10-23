@@ -164,18 +164,28 @@ def _take_source_fetched_write_permit(
     call_id: str,
     study_id: str,
 ) -> None:
-    """Consume the one-shot write permit granted by verify (effects-private)."""
-    entry = _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id, None)
+    """Consume the one-shot write permit granted by verify (effects-private).
+
+    Bind mismatches raise without consuming so a correct retry can still take.
+    """
+    entry = _SOURCE_FETCHED_WRITE_PERMITS.get(cap_id)
     if entry is None:
         raise ArtifactRejected("fetch_capability_required")
     if entry.tool != tool or entry.call_id != call_id or entry.study_id != study_id:
         raise ArtifactRejected("fetch_capability_mismatch")
+    _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id, None)
+
+
+def _release_source_fetched_write_permit(cap_id: str) -> None:
+    """Drop write permit without take (append failed after verify)."""
+    _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id, None)
 
 
 register_fetch_capability_verifier(
     _verify_fetch_capability,
     assert_fn=_assert_fetch_capability,
     take_write_permit_fn=_take_source_fetched_write_permit,
+    release_write_permit_fn=_release_source_fetched_write_permit,
 )
 
 
@@ -432,6 +442,12 @@ async def _journal_attempt_tainted(
     cache: dict[str, bool] | None = getattr(writer, "_pr18_taint_by_attempt", None)
     if cache is not None:
         cache[attempt_id] = True
+    # Keep SourceFetchIndex cache in sync when open/finalize warmed it — otherwise
+    # a later SourceFetched Δ fold can advance seq past this AttemptTainted and
+    # leave fetch_calls empty (quote_in_source would miss the digest).
+    from coscientist.core.source_fetch import _cache_note_fetch
+
+    _cache_note_fetch(writer, stored)
     if on_event is not None:
         on_event(stored)
     return stored
