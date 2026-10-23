@@ -400,6 +400,9 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
     await rt.tick()
     done = rt.tasks[f"{sid}/SPEC"]
     assert done.state == TaskState.DONE
-    # task.deadline == study.deadline → P5 (deadline) wins the or-branch
-    assert done.reason == TaskReason.DEADLINE
+    # PR2: now ≥ effective_deadline → study_deadline before P5 (even when
+    # task.deadline == effective_deadline / study.deadline with reserve=0).
+    assert done.reason == TaskReason.STUDY_DEADLINE
+    assert done.outcome == TaskOutcome.SKIPPED
+    assert rt.view().phase == "closed"
     await close_runtime(rt)

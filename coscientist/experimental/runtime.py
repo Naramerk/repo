@@ -69,9 +69,19 @@ class StudyRuntime(CoreStudyRuntime, HitlForkMixin):
         super()._project_local(ev)
 
     def view(self):
+        from coscientist.core.dispositions import dispositions
+
         open_hitl = sum(1 for h in self.hitl.values() if h.open)
+        qdisp = dispositions(tasks=self.tasks, plans=self.plans) if self.plans else None
+        ed = self.study.effective_deadline() if self.study else None
         return study_view(
-            self.tasks.values(), open_hitl=open_hitl, attempts=self.attempts
+            self.tasks.values(),
+            open_hitl=open_hitl,
+            attempts=self.attempts,
+            finalized=self._finalized,
+            now=self.clock.now(),
+            effective_deadline=ed,
+            question_dispositions=qdisp,
         )
 
     def invariant_deadlines(self) -> bool:

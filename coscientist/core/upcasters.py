@@ -38,6 +38,33 @@ def _task_created_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _ensure_spec_addresses(payload: dict[str, Any]) -> dict[str, Any]:
+    out = dict(payload)
+    spec = out.get("spec")
+    if isinstance(spec, dict):
+        spec = dict(spec)
+        spec.setdefault("addresses", [])
+        out["spec"] = spec
+    return out
+
+
+def _plan_accepted_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
+    out = dict(payload)
+    out.setdefault("questions", [])
+    tasks = out.get("tasks")
+    if isinstance(tasks, list):
+        rewritten: list[Any] = []
+        for t in tasks:
+            if isinstance(t, dict):
+                t = dict(t)
+                t.setdefault("addresses", [])
+                rewritten.append(t)
+            else:
+                rewritten.append(t)
+        out["tasks"] = rewritten
+    return out
+
+
 def _study_created_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
     """Old journals had no finalize_reserve_s; default 0 keeps pre-reserve deadlines."""
     out = dict(payload)
@@ -89,6 +116,8 @@ def _rename_simulated_provenance(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 register_upcaster("TaskCreated", 1, _task_created_v1_to_v2)
+register_upcaster("TaskCreated", 2, _ensure_spec_addresses)
+register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)
 register_upcaster("StudyCreated", 1, _study_created_v1_to_v2)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)

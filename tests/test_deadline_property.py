@@ -26,7 +26,7 @@ from hypothesis.stateful import (
 
 from coscientist.core.clock import FakeClock
 from coscientist.core.domain import Clarification, TaskSpec, TaskState
-from coscientist.core.errors import HitlUnsupported, LeaseLost
+from coscientist.core.errors import HitlUnsupported, LeaseLost, StudyClosedError
 from coscientist.core.hitl_guard import supports_hitl
 from coscientist.core.inputs import InputUnavailable
 from coscientist.core.projections import fold_events
@@ -35,7 +35,7 @@ from coscientist.core.runtime_factory import close_runtime, open_runtime
 
 # Expected failures when a random rule hits an invalid transition / missing key.
 # Do not include AssertionError — that would swallow production asserts.
-_RULE_ERR = (RuntimeError, KeyError, ValueError, InputUnavailable)
+_RULE_ERR = (RuntimeError, KeyError, ValueError, InputUnavailable, StudyClosedError)
 
 
 class StudyClosesMachine(RuleBasedStateMachine):
@@ -168,11 +168,13 @@ class StudyClosesMachine(RuleBasedStateMachine):
     @rule(delta=st.integers(min_value=1, max_value=30))
     def advance_clock(self, delta):
         self.clock.advance(timedelta(seconds=delta))
-        if self.rt and not self.lost_lease:
+        if self.rt and not self.lost_lease and not getattr(self.rt, "_finalized", False):
             try:
                 self._run(self.rt.tick())
             except LeaseLost:
                 self.lost_lease = True
+            except StudyClosedError:
+                pass
 
     @precondition(lambda self: self._hitl_ok())
     @rule(key=task_keys, target=hitl_ids)

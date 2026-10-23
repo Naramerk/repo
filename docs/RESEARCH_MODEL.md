@@ -52,11 +52,11 @@
 |---|---|---|---|---|---|
 | `study` | ST | **request**: str; **goal**: obj(Goal) (statement, research_form, trl); constraints: list(obj(Constraint)); **profile**: str; **catalog_version**: str; confirmations_needed: int (профиль, по умолч. 1); max_replans: int (профиль, по умолч. 2); parent_study_id: str | ядро (до DAG); goal/constraints заполняет spec | ResearchSpecOut.goal, .constraints[] | Корень графа; цель и ограничения — его поля |
 | `constraint` | C | **subtype**: enum(resource\|data\|norm\|ethics\|domain\|profile); **content**: str; limit: str | spec | ResearchSpecOut.constraints[] с проверкой | Узел только если на него направлен measured_by; иначе — поле study.constraints |
-| `question` | Q | **formulation**: str; gap: str; scope: str | spec | ResearchSpecOut.questions[] (≥1, иначе schema_invalid) | Исследовательский вопрос; без гипотез вердикт получает ответ на него |
+| `question` | Q | **formulation**: str; gap: str; scope: str | spec | ResearchSpecOut.questions[] (≥1, иначе schema_invalid); Plan.questions[] (core, PR 2) | Исследовательский вопрос; без гипотез вердикт получает ответ на него |
 | `criterion` | CR | **metric**: str; **op**: enum(<\|<=\|==\|>=\|>\|in); **target**: str; tolerance: float; **check**: enum(code\|review); frozen_at_seq: int | spec (study), plan (experiment) | ResearchSpecOut.success_metrics[], TaskSpec.criteria | Измеримая планка; статус = NodeRequirement (met/not_met/unassessed) |
 | `hypothesis` | H | **statement**: str; **prediction**: str; rationale: str; rank: int; **selected**: bool; approved_by: enum(human\|critic); delegated_by: enum(human\|timeout) | задача HYP-n (опционально) | HypothesesOut (+ правка в HITL-шлюзе hypotheses) | Проверяемое утверждение; вердикт вычисляется |
 | `plan` | PL | **revision**: int; **hypotheses**: obj(Need) ({needed, reason}); **literature**: obj(Need) ({needed, reason}); critic_decision: enum(accept\|revise\|reject); approved_by: enum(human\|critic); delegated_by: enum(human\|timeout) | задача PLAN-0 и перепланирования PLAN-1..n (n ≤ max_replans) | PlanOut + CriticVerdict + HitlDecision | Ревизия плана (маршрута); правка = новая ревизия + supersedes |
-| `experiment` | X | **task_key**: str (LIT-n \| EXP-n); **title**: str; **goal**: str; **method**: enum(computational\|statistical\|laboratory\|literature_search\|expert); query_plan: list(str) (для literature_search); **route**: str; **required**: bool; costly: bool; baselines: list(str); tool_resolution: enum(tool_found\|tool_built\|coder\|tool_missing); **attempts**: list(obj(Attempt)) (n, outcome, close_reason, provenance=real\|partial\|stub, config_digest); limitations: list(obj(Limitation)) | PLAN-n (при accept) | TaskSpec | Задача DAG (LIT-n/EXP-n) с попытками внутри |
+| `experiment` | X | **task_key**: str (LIT-n \| EXP-n); **title**: str; **goal**: str; **method**: enum(computational\|statistical\|laboratory\|literature_search\|expert); query_plan: list(str) (для literature_search); **route**: str; **required**: bool; costly: bool; baselines: list(str); tool_resolution: enum(tool_found\|tool_built\|coder\|tool_missing); addresses: list(str) (question id[]; by plan (TaskSpec.addresses)); **attempts**: list(obj(Attempt)) (n, outcome, close_reason, provenance=real\|partial\|stub, config_digest); limitations: list(obj(Limitation)) | PLAN-n (при accept) | TaskSpec | Задача DAG (LIT-n/EXP-n) с попытками внутри |
 | `artifact` | A | **artifact_id**: str; **role**: enum(paper\|data\|code\|figure\|table\|log\|report); media_type: str; sha256: digest; doi_or_url: str (обяз. для paper; идентичность); title: str; year: int; status: enum(parsed\|download_failed) (paper); version: str (обяз. для data); hash: digest (обяз. для data) | любая (слой инструментов) | ToolOutput; LiteratureOut.papers (только найденные инструментом) | Файл или статья (бывший source); paper дедуплицируется по DOI/URL |
 | `evidence` | E | **kind**: enum(literature\|computational\|experimental\|expert); **statement**: str; **ref**: obj(EvidenceRef\|SourceQuote); measured_on: str | experiment (LIT-n, EXP-n) | LiteratureOut.quotes, AgentTaskOutput.evidence | Адресуемое наблюдение |
 | `claim` | CL | **target**: ref(hypothesis\|question); **checked_against**: ref(criterion); **stance**: enum(supports\|refutes\|inconclusive) [computed] (вычисляет код: met→supports, not_met→refutes, unassessed→inconclusive; во входе роли запрещено); reason: str | experiment (LIT-n, EXP-n) | AgentTaskOutput.claims[], LiteratureOut.claims[] (target + cites + checked_against; stance вычисляет код) | Утверждение со ссылкой на доказательство и критерий |
@@ -86,7 +86,7 @@ class SourceQuote(BaseModel):    # literature
 | `asks` | study → question | 1..n / 1..1 | spec |  |
 | `constrained_by` | study → constraint | 0..n / 1..1 | spec |  |
 | `measured_by` | study → criterion, constraint → criterion, experiment → criterion | 1..n (experiment: 0..n) / 1..1 | spec/plan | experiment: ≥1 если required |
-| `addresses` | hypothesis → question, experiment → question | 0..n (hypothesis: 1..n) / 0..n | HYP-n/plan | hypothesis ≥1; ref обязателен, умолчания нет |
+| `addresses` | hypothesis → question, experiment → question | 0..n (hypothesis: 1..n) / 0..n | HYP-n/plan (TaskSpec.addresses) | hypothesis ≥1; ref обязателен, умолчания нет |
 | `plans` | plan → experiment | 1..n / 1..1 | PLAN-n |  |
 | `tests` | experiment → hypothesis | 0..n / 0..n | plan | у experiment ≥1 из tests/addresses |
 | `depends_on` | experiment → experiment | 0..n / 0..n | plan | ацикл. |
@@ -95,8 +95,8 @@ class SourceQuote(BaseModel):    # literature
 | `derived_from` | evidence → artifact | 1..1 / 0..n | код по EvidenceRef/SourceQuote |  |
 | `about` | claim → hypothesis, claim → question | 1..1 / 0..n | код |  |
 | `cites` | claim → evidence | 1..n / 0..n | код |  |
-| `answers` | conclusion → question | 1..n / 1..n | report |  |
-| `based_on` | conclusion → claim, conclusion → experiment | 1..n / 0..n | report | experiment может быть FAILED/inconclusive |
+| `answers` | conclusion → question, conclusion → study | 0..n / 0..n | finalize/report | после финала: question in 1..1; study in 0..1; код enforce |
+| `based_on` | conclusion → claim, conclusion → experiment | 0..n / 0..n | report | ≥1 based_on если disposition ∈ {answered,refuted,survived} — код; not_attempted → пусто |
 | `renders` | report → conclusion | 1..n / 0..1 | report |  |
 | `supersedes` | plan → plan, hypothesis → hypothesis, criterion → criterion | 0..1 / 0..1 | ревизия (PLAN-n |  |
 <!-- gen:edges:end -->

@@ -18,13 +18,23 @@ class LocalProjectMixin:
     tasks: dict[str, Task]
     attempts: dict[str, dict[str, Any]]
     results: dict[str, dict[str, Any]]
+    plans: dict[str, dict[str, Any]]
     graph: GraphStore
     _retry_at: dict[str, datetime]
+    _finalized: bool
+    _study_cancelled: bool
+    _budget_exceeded: bool
 
     def _project_local(self, ev: EventEnvelope) -> None:
         p = ev.payload
         if ev.type == "StudyCreated":
             self.study = Study.model_validate(p)
+        elif ev.type == "PlanAccepted":
+            self.plans[ev.entity_key] = dict(p)
+        elif ev.type == "StudyCancelled":
+            self._study_cancelled = True
+        elif ev.type == "StudyFinalized":
+            self._finalized = True
         elif ev.type in ("TaskCreated", "TaskInherited"):
             self.tasks[p["task_id"]] = Task.model_validate(p)
         elif ev.type == "AttemptStarted":

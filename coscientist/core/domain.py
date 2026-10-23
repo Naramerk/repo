@@ -154,6 +154,13 @@ class RequirementRef(Frozen):
     required: bool = True
 
 
+class QuestionSpec(Frozen):
+    """Research question carried in PlanAccepted (from SPEC output)."""
+
+    id: str
+    text: str
+
+
 class TaskSpec(Frozen):
     task_key: str
     title: str
@@ -165,6 +172,7 @@ class TaskSpec(Frozen):
     criteria: list[RequirementRef] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
     inputs: list[InputSpec] = Field(default_factory=list)
+    addresses: list[str] = Field(default_factory=list)
 
 
 class Budget(Frozen):
@@ -200,6 +208,7 @@ class Plan(Frozen):
     revision: int
     hypothesis_id: str | None
     tasks: list[TaskSpec]
+    questions: list[QuestionSpec] = Field(default_factory=list)
 
 
 class Task(Frozen):
@@ -409,7 +418,7 @@ class AgentTaskOutput(Frozen):
 
 
 class StudyView(Frozen):
-    phase: Literal["running", "closed"]
+    phase: Literal["running", "finalizing", "closed"]
     progress: float = 0.0
     awaiting_human: bool = False
     verdict: Literal["fulfilled", "partial", "stubbed", "failed"] | None = None

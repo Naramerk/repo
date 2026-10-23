@@ -1,8 +1,6 @@
-"""SQLite WAL EventStore: lease fencing, idempotency, projections (DESIGN §3.5 / §3.5a).
+"""SQLite WAL EventStore: lease fencing, idempotency, projections (DESIGN §3.5/§3.5a).
 
-Writes/leases run under ``threading.RLock`` via ``asyncio.to_thread``.
-Reads use a separate read-only connection (WAL-safe) under ``_read_lock``,
-also via ``to_thread``, so concurrent reads do not wait on a slow write.
+Writes under RLock via to_thread; reads use a separate WAL-safe connection.
 """
 
 from __future__ import annotations
@@ -11,57 +9,32 @@ import asyncio
 import json
 import sqlite3
 import threading
-import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar
 
+from coscientist.core import store_db as _db
 from coscientist.core.clock import Clock, SystemClock
 from coscientist.core.digest import payload_digest
-from coscientist.core.errors import AttemptClosedError, Conflict, Idempotent, LeaseLost
+from coscientist.core.errors import (
+    AttemptClosedError,
+    Conflict,
+    Idempotent,
+    LeaseLost,
+    StudyClosedError,
+)
 from coscientist.core.events import EventEnvelope
+from coscientist.core.metrics import bump_late_write_rejected
 from coscientist.core.upcasters import upcast
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS events(
-  seq INTEGER PRIMARY KEY, study_id TEXT NOT NULL, type TEXT NOT NULL,
-  entity_key TEXT NOT NULL, idem_key TEXT NOT NULL UNIQUE, payload JSON NOT NULL,
-  ts TEXT NOT NULL, schema_version INT NOT NULL, epoch INT NOT NULL,
-  payload_digest TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS lease(
-  study_id TEXT PRIMARY KEY, owner TEXT NOT NULL, owner_nonce TEXT NOT NULL,
-  epoch INT NOT NULL, expires_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS projections(
-  table_name TEXT NOT NULL, row_key TEXT NOT NULL, data JSON NOT NULL,
-  PRIMARY KEY (table_name, row_key));
-"""
+_iso = _db.iso
+_parse_iso = _db.parse_iso
+_open_conn = _db.open_conn
+_new_owner_nonce = _db.new_owner_nonce
+init_schema = _db.init_schema
 
 T = TypeVar("T")
-
-
-def _new_owner_nonce() -> str:
-    return str(uuid.uuid4())
-
-
-def _iso(dt: datetime) -> str:
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    return dt.astimezone(UTC).isoformat()
-
-
-def _parse_iso(s: str) -> datetime:
-    return datetime.fromisoformat(s)
-
-
-def _open_conn(path: Path, *, readonly: bool = False) -> sqlite3.Connection:
-    if readonly:
-        uri = f"file:{path.resolve().as_posix()}?mode=ro"
-        conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
-    else:
-        conn = sqlite3.connect(str(path), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 class SqliteEventStore:
@@ -94,7 +67,7 @@ class SqliteEventStore:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=FULL")
             self._conn.execute("PRAGMA busy_timeout=5000")
-            self._conn.executescript(_SCHEMA)
+            init_schema(self._conn)
             self._ensure_lease_nonce_column()
             self._conn.commit()
         self._read_conn = _open_conn(self.db_path, readonly=True)
@@ -301,9 +274,23 @@ class SqliteEventStore:
     async def append(self, event: EventEnvelope) -> EventEnvelope:
         return await self._to_thread(lambda: self._append_locked(event))
 
+    def _study_is_finalized(self) -> bool:
+        row = self._get_row_write("meta", self.study_id)
+        if row and row.get("finalized"):
+            return True
+        study = self._get_row_write("studies", self.study_id)
+        return bool(study and study.get("finalized"))
+
+    def _reject_if_finalized(self, event_type: str) -> None:
+        if self._study_is_finalized():
+            bump_late_write_rejected(event_type)
+            raise StudyClosedError(self.study_id, event_type)
+
     def _append_locked(self, event: EventEnvelope) -> EventEnvelope:
         try:
             self._fence()
+            if event.type != "StudyFinalized":
+                self._reject_if_finalized(event.type)
             stored, idem = self._insert_one(event)
             self._conn.commit()
         except Exception:
@@ -349,6 +336,9 @@ class SqliteEventStore:
                 if row is None or row.get("closed"):
                     raise AttemptClosedError(require_open_attempt)
             for ev in events:
+                # Allow the StudyFinalized write itself; reject anything after.
+                if ev.type != "StudyFinalized":
+                    self._reject_if_finalized(ev.type)
                 stored, idem = self._insert_one(ev)
                 if idem is not None:
                     out.append(self._fetch_by_idem(ev.idem_key))
@@ -492,8 +482,3 @@ class SqliteEventStore:
         from coscientist.core.projections import apply_event
 
         apply_event(self, event)
-
-    async def fold_from_events(self) -> dict[str, dict[str, dict[str, Any]]]:
-        from coscientist.core.projections import fold_events
-
-        return fold_events(await self.read_all())

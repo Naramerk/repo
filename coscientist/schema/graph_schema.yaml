@@ -35,7 +35,7 @@ nodes:
   - kind: question
     prefix: Q
     created_by: spec
-    from_output: ResearchSpecOut.questions[] (≥1, иначе schema_invalid)
+    from_output: ResearchSpecOut.questions[] (≥1, иначе schema_invalid); Plan.questions[] (core, PR 2)
     text_ru: Исследовательский вопрос; без гипотез вердикт получает ответ на него
     fields:
       - {name: formulation, type: str, required: true}
@@ -94,6 +94,7 @@ nodes:
       - {name: costly, type: bool, required: false}
       - {name: baselines, type: list(str), required: false}
       - {name: tool_resolution, type: enum(tool_found|tool_built|coder|tool_missing), required: false}
+      - {name: addresses, type: list(str), required: false, note: "question id[]; by plan (TaskSpec.addresses)"}
       - {name: attempts, type: list(obj(Attempt)), required: true, note: "n, outcome, close_reason, provenance=real|partial|stub, config_digest"}
       - {name: limitations, type: list(obj(Limitation)), required: false}
   - kind: artifact
@@ -156,7 +157,7 @@ edges:
   - {name: asks, pairs: [[study, question]], card: {out: "1..n", in: "1..1"}, by: spec}
   - {name: constrained_by, pairs: [[study, constraint]], card: {out: "0..n", in: "1..1"}, by: spec}
   - {name: measured_by, pairs: [[study, criterion], [constraint, criterion], [experiment, criterion]], card: {out: "1..n", in: "1..1", out_by_src: {experiment: "0..n"}}, by: spec/plan, note: "experiment: ≥1 если required"}
-  - {name: addresses, pairs: [[hypothesis, question], [experiment, question]], card: {out: "0..n", in: "0..n", out_by_src: {hypothesis: "1..n"}}, by: HYP-n/plan, note: "hypothesis ≥1; ref обязателен, умолчания нет"}
+  - {name: addresses, pairs: [[hypothesis, question], [experiment, question]], card: {out: "0..n", in: "0..n", out_by_src: {hypothesis: "1..n"}}, by: "HYP-n/plan (TaskSpec.addresses)", note: "hypothesis ≥1; ref обязателен, умолчания нет"}
   - {name: plans, pairs: [[plan, experiment]], card: {out: "1..n", in: "1..1"}, by: PLAN-n}
   - {name: tests, pairs: [[experiment, hypothesis]], card: {out: "0..n", in: "0..n"}, by: plan, note: "у experiment ≥1 из tests/addresses"}
   - {name: depends_on, pairs: [[experiment, experiment]], card: {out: "0..n", in: "0..n"}, by: plan, note: ацикл.}
@@ -165,8 +166,8 @@ edges:
   - {name: derived_from, pairs: [[evidence, artifact]], card: {out: "1..1", in: "0..n"}, by: код по EvidenceRef/SourceQuote}
   - {name: about, pairs: [[claim, hypothesis], [claim, question]], card: {out: "1..1", in: "0..n"}, by: код}
   - {name: cites, pairs: [[claim, evidence]], card: {out: "1..n", in: "0..n"}, by: код}
-  - {name: answers, pairs: [[conclusion, question]], card: {out: "1..n", in: "1..n"}, by: report}
-  - {name: based_on, pairs: [[conclusion, claim], [conclusion, experiment]], card: {out: "1..n", in: "0..n"}, by: report, note: "experiment может быть FAILED/inconclusive"}
+  - {name: answers, pairs: [[conclusion, question], [conclusion, study]], card: {out: "0..n", in: "0..n"}, by: finalize/report, note: "после финала: question in 1..1; study in 0..1; код enforce"}
+  - {name: based_on, pairs: [[conclusion, claim], [conclusion, experiment]], card: {out: "0..n", in: "0..n"}, by: report, note: "≥1 based_on если disposition ∈ {answered,refuted,survived} — код; not_attempted → пусто"}
   - {name: renders, pairs: [[report, conclusion]], card: {out: "1..n", in: "0..1"}, by: report}
   - {name: supersedes, pairs: [[plan, plan], [hypothesis, hypothesis], [criterion, criterion]], card: {out: "0..1", in: "0..1"}, by: ревизия (PLAN-n, HITL-правка)}
 volume_b:

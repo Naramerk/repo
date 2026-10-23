@@ -39,3 +39,11 @@ def hitl_request_id() -> str:
 
 def plan_id() -> str:
     return f"pl_{_ulid_like()}"
+
+
+def conclusion_id() -> str:
+    return f"cn_{_ulid_like()}"
+
+
+def report_node_id() -> str:
+    return f"rp_{_ulid_like()}"

@@ -28,6 +28,23 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         _put(proj, "tasks", event.entity_key, dict(p))
     elif t == "PlanAccepted":
         _put(proj, "plans", event.entity_key, dict(p))
+    elif t == "StudyCancelled":
+        study = _get(proj, "studies", event.study_id) or {}
+        _put(proj, "studies", event.study_id, {**study, "cancelled": True, **p})
+    elif t == "StudyFinalized":
+        study = _get(proj, "studies", event.study_id) or {}
+        _put(
+            proj,
+            "studies",
+            event.study_id,
+            {**study, "finalized": True, "finalized_payload": p},
+        )
+        _put(
+            proj,
+            "meta",
+            event.study_id,
+            {"study_id": event.study_id, "finalized": True},
+        )
     elif t == "AttemptStarted":
         _put(proj, "attempts", event.entity_key, dict(p))
         task = _get(proj, "tasks", p["task_id"])
@@ -132,6 +149,7 @@ def apply_event(store: Any, event: EventEnvelope) -> None:
         "hitl_requests",
         "graph_nodes",
         "graph_edges",
+        "meta",
     ):
         for row in get_rows(table):
             key = _row_key(table, row)
@@ -156,8 +174,11 @@ def _row_key(table: str, row: dict[str, Any]) -> str | None:
         "hitl_requests": "request_id",
         "graph_nodes": "node_id",
         "graph_edges": "edge_id",
+        "meta": "study_id",
     }
     field = mapping.get(table)
+    if table == "meta":
+        return str(row["study_id"]) if row.get("study_id") else row.get("row_key")
     return str(row[field]) if field and field in row else row.get("row_key")
 
 
@@ -167,6 +188,8 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         "TaskCreated": ("tasks",),
         "TaskInherited": ("tasks",),
         "PlanAccepted": ("plans",),
+        "StudyCancelled": ("studies",),
+        "StudyFinalized": ("studies", "meta"),
         "AttemptStarted": ("attempts", "tasks"),
         "AttemptClosed": ("attempts", "tasks"),
         "RouteReturned": ("attempts",),

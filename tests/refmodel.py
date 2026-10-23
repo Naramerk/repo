@@ -93,6 +93,79 @@ def verdict(claims, any_experiment_done, k=1):
 def study_fulfilled(question_verdicts, all_required_success):
     return all_required_success and all(v != "untested" for v in question_verdicts.values())
 
+
+# --- PR 2 finalize oracle (independent of coscientist.core) -----------------
+
+TERMINAL_BY_TRIGGER = {
+    "cancel": "cancelled",
+    "budget": "budget",
+    "deadline": "deadline",
+    "intake": "refused",
+}
+
+
+def pick_finalize_trigger(*, cancelled=False, budget=False, deadline=False, all_done=False):
+    """Same-tick priority: cancelled > budget > deadline > all_done."""
+    if cancelled:
+        return "cancel"
+    if budget:
+        return "budget"
+    if deadline:
+        return "deadline"
+    if all_done:
+        return "all_done"
+    return None
+
+
+def terminal_reason_for(trigger, *, tasks=None, question_dispositions=None):
+    if trigger in TERMINAL_BY_TRIGGER:
+        return TERMINAL_BY_TRIGGER[trigger]
+    # all_done: human_timeout > infeasible (not from not_attempted) > completed
+    for t in (tasks or {}).values():
+        if isinstance(t, dict):
+            spec, outcome, reason = t.get("spec") or {}, t.get("outcome"), t.get("reason")
+            required = spec.get("required", True) if isinstance(spec, dict) else True
+        else:
+            spec = getattr(t, "spec", None)
+            required = getattr(spec, "required", True) if spec is not None else True
+            outcome, reason = getattr(t, "outcome", None), getattr(t, "reason", None)
+        if not required:
+            continue
+        ov = getattr(outcome, "value", outcome)
+        rv = getattr(reason, "value", reason)
+        if ov == "FAILED" and rv == "human_timeout":
+            return "human_timeout"
+    _ = question_dispositions  # not_attempted must not yield infeasible
+    return "completed"
+
+
+def study_phase(*, finalized=False, all_done=False, past_effective=False):
+    if finalized:
+        return "closed"
+    if all_done or past_effective:
+        return "finalizing"
+    return "running"
+
+
+def not_attempted_reason(covering_outcomes):
+    """covering_outcomes: list of SUCCESS|PARTIAL|FAILED|SKIPPED|None."""
+    if not covering_outcomes:
+        return "no_task"
+    done = [o for o in covering_outcomes if o is not None]
+    if not done:
+        return "no_task"
+    if any(o in ("SUCCESS", "PARTIAL") for o in done):
+        return "no_counting_claims"
+    if all(o == "FAILED" for o in done):
+        return "tasks_failed"
+    return "tasks_skipped"
+
+
+def reject_write_after_finalized(finalized, event_type):
+    if finalized and event_type != "StudyFinalized":
+        return "StudyClosedError"
+    return None
+
 class DelegatedBudget:
     def __init__(self, limit_rub):
         self.limit_rub, self.spent_rub, self.blocked = float(limit_rub), 0.0, False
