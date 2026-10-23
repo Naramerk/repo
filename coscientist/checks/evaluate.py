@@ -24,7 +24,7 @@ from coscientist.core.domain import (
     ReviewCheck,
     TaskSpec,
 )
-from coscientist.core.errors import ArtifactCorrupt, SandboxInfraError
+from coscientist.core.errors import ArtifactCorrupt, CoreBugError, SandboxInfraError
 
 
 def role_from_template(tmpl: RequirementTemplate | None) -> CheckRole:
@@ -443,11 +443,8 @@ def evaluate_code_check(
         ):
             from coscientist.checks.kinds.executable import evaluate_executable
 
-            prov = _effect_provenance_fields(
-                artifacts, None, attempt_id=attempt_id
-            )
-            # Executable kinds stamp producer/trusted/net_isolation themselves.
-            prov["producer"] = "sandbox"
+            # Executable kinds stamp binding/trusted themselves — do not pass
+            # empty provenance (artifact_id="") that would overwrite countable.
             return evaluate_executable(
                 check,
                 template_id=template_id,
@@ -456,7 +453,7 @@ def evaluate_code_check(
                 artifacts=artifacts,
                 role=role,
                 attempt_id=attempt_id,
-                prov_fields=prov,
+                prov_fields={},
             )
 
     except ArtifactCorrupt as e:
@@ -471,9 +468,10 @@ def evaluate_code_check(
         )
     except SandboxInfraError:
         raise
-    except Exception as e:
-        # Host failures outside the guest (mkdtemp/read/put) on executable kinds
-        # are infra, not scientific FAILED (B3).
+    except CoreBugError:
+        raise
+    except OSError as e:
+        # Host I/O outside Popen on executable kinds → infra (B3).
         if check.kind in (
             "exec_runs",
             "tests_pass",
@@ -481,8 +479,26 @@ def evaluate_code_check(
             "reproducible_rerun",
         ):
             raise SandboxInfraError(
-                f"sandbox_unavailable:host:{e.__class__.__name__}"
+                f"sandbox_unavailable:host_io:{e.__class__.__name__}"
             ) from e
+        return CheckResult(
+            check_id=check_id,
+            template_id=template_id,
+            status=ReqStatus.FAILED,
+            is_code=True,
+            required=True,
+            role=role,
+            detail=str(e),
+        )
+    except Exception as e:
+        # Unexpected core bugs: neither infra nor scientific (B3).
+        if check.kind in (
+            "exec_runs",
+            "tests_pass",
+            "metric_on_holdout",
+            "reproducible_rerun",
+        ):
+            raise CoreBugError(f"core_bug:{e.__class__.__name__}:{e}") from e
         return CheckResult(
             check_id=check_id,
             template_id=template_id,

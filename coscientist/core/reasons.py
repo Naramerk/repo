@@ -22,6 +22,7 @@ class TaskReason(StrEnum):
     HUMAN_TIMEOUT = "human_timeout"
     CATALOG_ERROR = "catalog_error"
     SANDBOX_INFRA = "sandbox_infra"
+    CORE_BUG = "core_bug"
     SCHEMA_INVALID = "schema_invalid"
     INVALID_STATUS = "invalid_status"
     RETRY_SCHEDULED = "retry_scheduled"

@@ -21,7 +21,12 @@ from coscientist.core.domain import (
     Result,
     TaskOutcome,
 )
-from coscientist.core.errors import AttemptClosedError, CatalogError, SandboxInfraError
+from coscientist.core.errors import (
+    AttemptClosedError,
+    CatalogError,
+    CoreBugError,
+    SandboxInfraError,
+)
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.ids import criterion_node_id, result_id
 from coscientist.core.inputs import claim_nodes_from_attempt
@@ -594,7 +599,7 @@ class Executor:
                 task_key=task.spec.task_key,
             )
         except SandboxInfraError as e:
-            # Timeout/OOM/crash/unavailable → infra; own reason code (MJ4).
+            # Timeout/OOM/unavailable → infra; own reason code (MJ4).
             provenance = _provenance(self.get_attempt(attempt_id))
             return await self._commit_failure(
                 attempt_id,
@@ -606,6 +611,19 @@ class Executor:
                 reason=TaskReason.SANDBOX_INFRA.value,
                 detail=e.reason,
                 event_type="SandboxInfraRaised",
+            )
+        except CoreBugError as e:
+            provenance = _provenance(self.get_attempt(attempt_id))
+            return await self._commit_failure(
+                attempt_id,
+                study_id,
+                task_id,
+                out,
+                provenance,
+                out.claim,
+                reason=TaskReason.CORE_BUG.value,
+                detail=e.reason,
+                event_type="CatalogErrorRaised",
             )
         for c in checks:
             if not c.is_code and c.status == ReqStatus.UNASSESSED:

@@ -629,21 +629,19 @@ def recompute_effect_provenance(
 ) -> dict[str, Any] | None:
     """Recompute ``trusted`` / ``countable`` from provenance facts (not journal bits).
 
-    Prefer live ``artifact_meta`` (``producer``, ``produced_by.call_id``) when the
-    artifact store is available on replay. Otherwise use effect-stamped facts
-    written at eval from that same meta (``producer``, ``produced_by_call_id``,
-    ``core_evaluated``). Journal ``trusted``/``countable`` bits are never trusted.
+    Prefer live ``artifact_meta`` for ``producer`` / ``produced_by.call_id`` /
+    ``artifact_id`` when the store is available. Isolation (net/fs) for replay
+    comes from the core journal effect only — never from artifact meta (B2).
 
-    ``trusted`` = producer core, or sandbox with both net and fs isolation hard
-    (MJ3: ``== hard``, not ``!= soft``). Soft/none stays core_evaluated/countable
-    but not trusted. ``countable`` = core-evaluated catalog check on an artifact
-    bound to the attempt.
+    ``trusted`` = producer core, or sandbox with both isolations hard.
+    ``countable`` requires core_evaluated and attempt binding of call_id.
     """
     if not isinstance(effect, Mapping):
         return None
     out = dict(effect)
     producer = out.get("producer", "agent")
     call_id = str(out.get("produced_by_call_id") or "")
+    # Isolation: journal effect only (never artifact meta).
     net_isolation = out.get("net_isolation")
     fs_isolation = out.get("fs_isolation")
     if artifact_meta is not None:
@@ -658,12 +656,6 @@ def recompute_effect_provenance(
         aid = getattr(artifact_meta, "artifact_id", None)
         if aid:
             out["artifact_id"] = str(aid)
-        meta_ni = getattr(artifact_meta, "net_isolation", None)
-        if meta_ni in ("hard", "soft", "none"):
-            net_isolation = meta_ni
-        meta_fs = getattr(artifact_meta, "fs_isolation", None)
-        if meta_fs in ("hard", "soft", "none"):
-            fs_isolation = meta_fs
     if producer not in ("agent", "core", "sandbox"):
         producer = "agent"
     out["producer"] = producer
@@ -672,20 +664,24 @@ def recompute_effect_provenance(
     if fs_isolation in ("hard", "soft", "none"):
         out["fs_isolation"] = fs_isolation
     if producer == "core":
-        # Explicit effect.trusted=False (B1 fallback) must not be upgraded.
         out["trusted"] = out.get("trusted") is not False
     elif producer == "sandbox":
         out["trusted"] = net_isolation == "hard" and fs_isolation == "hard"
     else:
         out["trusted"] = False
     core_eval = bool(out.get("core_evaluated"))
-    if attempt_id and call_id:
-        out["countable"] = core_eval and call_id_belongs_to_attempt(
-            call_id, attempt_id
+    # Countable requires attempt binding when attempt_id is known.
+    # Never fall back to core_eval alone with a missing call_id (that was the
+    # legacy path that let unbound evidence count). Without attempt context
+    # (unit derive), honor an explicitly stamped countable ∧ core_eval.
+    if attempt_id:
+        out["countable"] = bool(
+            core_eval
+            and call_id
+            and call_id_belongs_to_attempt(call_id, attempt_id)
         )
     else:
-        # No binding facts (unit probe / legacy): core_evaluated is the fact.
-        out["countable"] = core_eval
+        out["countable"] = bool(out.get("countable")) and core_eval
     return out
 
 

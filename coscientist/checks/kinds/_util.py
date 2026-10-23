@@ -2,26 +2,25 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
+
+from defusedxml import ElementTree as ET
 
 from coscientist.checks.sandbox import (
     INFRA_STATUSES,
-    SOFT_ISOLATION_NOTE,
     FsIsolation,
     NetIsolation,
     SandboxStatus,
     limits_fully_held,
+    soft_isolation_note,
 )
 from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.domain import CheckResult, CheckRole, EvidenceRef, ReqStatus
 from coscientist.core.errors import SandboxInfraError
 
-_FLOAT_RE = re.compile(rb"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?")
-
-# Unified scientific failure for malformed guest/agent structured output (B3).
 MALFORMED_JUNIT = "malformed_output:junit"
 MALFORMED_METRICS = "malformed_output:metrics"
+MALFORMED_REWARD = "malformed_output:reward"
 
 
 def raise_if_infra(
@@ -30,10 +29,11 @@ def raise_if_infra(
     *,
     net_isolation: NetIsolation = "none",
     fs_isolation: FsIsolation = "none",
+    note: str | None = None,
 ) -> None:
     if status in INFRA_STATUSES:
-        note = soft_note(net_isolation, fs_isolation)
-        full = f"{reason}; {note}" if note else reason
+        n = note or soft_isolation_note(net_isolation, fs_isolation)
+        full = f"{reason}; {n}" if n else reason
         raise SandboxInfraError(full)
 
 
@@ -47,10 +47,6 @@ def store_log(
     net_isolation: NetIsolation = "none",
     fs_isolation: FsIsolation = "none",
 ) -> tuple[str, str, bool]:
-    """Write via put_sandbox; return (artifact_id, digest, trusted).
-
-    ``trusted`` only when both net and fs isolation are hard.
-    """
     call = f"{attempt_id or 'noattempt'}:sandbox:{check_id}"
     art = artifacts.put_sandbox(
         body,
@@ -68,9 +64,7 @@ def soft_note(
     net_isolation: NetIsolation,
     fs_isolation: FsIsolation = "none",
 ) -> str | None:
-    if limits_fully_held(net_isolation, fs_isolation):
-        return None
-    return SOFT_ISOLATION_NOTE
+    return soft_isolation_note(net_isolation, fs_isolation)
 
 
 def merge_detail(detail: str | None, note: str | None) -> str | None:
@@ -106,11 +100,6 @@ def base_result(
 
 
 def parse_junit(raw: bytes) -> tuple[int, int]:
-    """Parse junit XML; raises ValueError on malformed input."""
-    try:
-        from defusedxml import ElementTree as ET
-    except ImportError:  # pragma: no cover — defusedxml is a hard dep
-        import xml.etree.ElementTree as ET  # noqa: S405
     try:
         root = ET.fromstring(raw)
     except Exception as e:  # noqa: BLE001
@@ -171,13 +160,6 @@ def cmp(op: str, left: Any, right: Any, tolerance: float | None) -> bool:
     return ops[op](left, right)
 
 
-def first_float(data: bytes) -> float:
-    m = _FLOAT_RE.search(data)
-    if m is None:
-        raise ValueError("malformed_output:numeric_stdout")
-    return float(m.group(0))
-
-
 def slot_filename(slot: str) -> str:
     return slot.replace("/", "_") or "input.bin"
 
@@ -193,6 +175,7 @@ def sandbox_effect(
     note: str | None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    call = f"{attempt_id or 'noattempt'}:sandbox:{check_id}"
     effect: dict[str, Any] = {
         "producer": "sandbox",
         "trusted": trusted,
@@ -200,16 +183,56 @@ def sandbox_effect(
         "fs_isolation": fs_isolation,
         "core_evaluated": True,
         "countable": bool(attempt_id),
-        "produced_by_call_id": f"{attempt_id or 'noattempt'}:sandbox:{check_id}",
+        "produced_by_call_id": call,
         "artifact_id": art_id,
     }
     if note:
         effect["note"] = note
     if extra:
-        effect.update(extra)
+        # Never let empty prov_fields overwrite binding keys.
+        blocked = {
+            "countable",
+            "produced_by_call_id",
+            "artifact_id",
+            "trusted",
+            "producer",
+            "core_evaluated",
+            "net_isolation",
+            "fs_isolation",
+        }
+        for k, v in extra.items():
+            if k in blocked:
+                continue
+            if v is None or v == "":
+                continue
+            effect[k] = v
     return effect
 
 
-def protect_paths_for(artifacts: LocalArtifactStore) -> list[str]:
-    """Host CAS/meta paths the sandbox must not be able to rewrite."""
-    return [str(artifacts.meta), str(artifacts.cas), str(artifacts.root)]
+def merge_numeric_extra(
+    prov_fields: dict[str, Any] | None,
+    *,
+    est: float,
+) -> dict[str, Any]:
+    """Safe numeric extras from prov_fields (no binding overwrites)."""
+    out: dict[str, Any] = {"est": float(est), "kind": "point"}
+    if not prov_fields:
+        return out
+    for k, v in prov_fields.items():
+        if k in (
+            "countable",
+            "produced_by_call_id",
+            "artifact_id",
+            "trusted",
+            "producer",
+            "core_evaluated",
+            "net_isolation",
+            "fs_isolation",
+            "est",
+            "kind",
+        ):
+            continue
+        if v is None or v == "":
+            continue
+        out[k] = v
+    return out

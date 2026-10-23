@@ -64,11 +64,23 @@ class ArtifactRejected(CoreError):
 
 
 class SandboxInfraError(CoreError):
-    """Sandbox timeout/OOM/crash/unavailable — close attempt as infra failure.
+    """Sandbox timeout/OOM/unavailable — close attempt as infra failure.
 
     Never a host crash: the sandbox runner always returns a terminal status;
     executable CodeCheck kinds raise this so ``Executor.record`` can commit
     ``result_class=infra`` with a stable ``reason`` string.
+    """
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
+class CoreBugError(CoreError):
+    """Unexpected core failure — neither infra nor scientific.
+
+    Reported on the attempt/result path but does not count toward scientific
+    MET/FAILED criteria and is not classified as sandbox infra.
     """
 
     def __init__(self, reason: str):

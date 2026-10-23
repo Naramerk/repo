@@ -4,11 +4,10 @@
 
 ### M1 PR17
 - Executable CodeCheck kinds + sandbox limits (B7, B8, K5): `exec_runs`, `tests_pass`, `metric_on_holdout`, `reproducible_rerun`.
-- Core-owned local sandbox (`coscientist.checks.sandbox`) mirrors old CoScientist code-exec: subprocess + SIGKILL on timeout, **streaming** output cap, clean statuses; enforces time / memory (`RLIMIT_AS` via child wrapper) / output size; network policy via catalog `allow_network`.
-- **`net_isolation` / `fs_isolation` (`hard`|`soft`|`none`)** recorded on `SandboxResult` and sandbox `Artifact` meta / effect. Soft fallback (unshare forbidden) logs a warning — never a silent trusted downgrade. Soft note states network may be open (blocklist bypassable).
-- `tests_pass` / `metric_on_holdout` **run catalog argv inside the sandbox** and read only core-owned outputs (`work/core/*`); agent-submitted junit/metrics are not trusted.
-- `put_sandbox` stamps `producer=sandbox`; **`trusted=true` only when both net and fs isolation are hard** (`allow_network=True` ⇒ not trusted; still core-evaluated / countable).
-- Sandbox infra failures → `TaskReason.SANDBOX_INFRA` + `SandboxInfraRaised` (`result_class=infra`); StudyFinalized still holds. Infra classified by signal/timeout-kill/OOM marker only — positive exits (incl. 137) stay scientific.
+- **Separate verifier (B1):** collect agent declared outputs (sha256); catalog scorer in a second fresh bwrap jail (outputs/scorer/holdout RO; only results RW); read `reward.txt` — never stdout. No agent code during verification.
+- **bwrap hard isolation (B2):** `--clearenv`, system `--ro-bind`, `--tmpfs /tmp`, `--unshare-net`/`--unshare-pid`, `--die-with-parent`; journal/CAS never mounted. Hard only after a real probe; no bwrap → soft, `trusted=false`. CI installs `bubblewrap`.
+- **`trusted=true` only when both net and fs are hard** (never fake hard). Isolation for replay from journal effect, not artifact meta.
+- Infra: host-observed timeout (TERM→KILL) or cgroup OOM only; guest self-signals stay scientific. Unexpected host exceptions → `CoreBugError` / `TaskReason.CORE_BUG`.
 - Docs: `DESIGN_HYP_DELTA` / CHANGELOG no longer say “sandbox not wired in M1”.
 
 ### M1 PR10

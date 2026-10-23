@@ -509,8 +509,12 @@ def runtime_claim_from_node(
                     meta = artifact_lookup(str(art_id))
                 except Exception:  # noqa: BLE001 — totality
                     meta = None
+            stamped = dict(effect_raw)
+            # Bind missing call_id to this claim's attempt (never invent across attempts).
+            if aid and not stamped.get("produced_by_call_id"):
+                stamped["produced_by_call_id"] = aid
             effect = recompute_effect_provenance(
-                dict(effect_raw),
+                stamped,
                 attempt_id=aid or None,
                 artifact_meta=meta,
             )
