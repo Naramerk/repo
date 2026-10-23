@@ -1,0 +1,6 @@
+"""Agent wiring package (DESIGN_M1 §8).
+
+Agents must call tools only via ``coscientist.tools.invoke_tool``. Direct
+``Tool.call``, ``register_tool``, and imports of ``tools.contract`` /
+``core.tool_registry`` are forbidden (import-linter + AST tests).
+"""

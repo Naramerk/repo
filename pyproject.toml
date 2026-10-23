@@ -76,6 +76,7 @@ forbidden_modules = [
   "httpx",
   "fastapi",
   "coscientist.api",
+  "coscientist.tools",
   "coscientist.agents",
   "web",
 ]
@@ -85,3 +86,25 @@ name = "core must not import experimental"
 type = "forbidden"
 source_modules = ["coscientist.core"]
 forbidden_modules = ["coscientist.experimental"]
+
+[[tool.importlinter.contracts]]
+name = "invoke_tool is the only tools entry (no direct contract/effects import)"
+type = "forbidden"
+source_modules = ["coscientist.api", "coscientist.checks", "coscientist.experimental"]
+forbidden_modules = [
+  "coscientist.tools.contract",
+  "coscientist.tools.effects",
+  "coscientist.tools.gate",
+  "coscientist.tools.taint",
+]
+
+[[tool.importlinter.contracts]]
+name = "agents must use invoke_tool (no contract / registry / gate)"
+type = "forbidden"
+source_modules = ["coscientist.agents"]
+forbidden_modules = [
+  "coscientist.tools.contract",
+  "coscientist.tools.gate",
+  "coscientist.tools.taint",
+  "coscientist.core.tool_registry",
+]

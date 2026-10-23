@@ -116,6 +116,26 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         _put(proj, "tasks", event.entity_key, task)
     elif t == "ArtifactRegistered":
         _put(proj, "artifacts", event.entity_key, dict(p))
+    elif t == "EffectIntended":
+        row = {**p, "key": p.get("key") or event.entity_key, "intended": True}
+        _put(proj, "effects", event.entity_key, row)
+    elif t == "EffectDone":
+        prev = _get(proj, "effects", event.entity_key) or {}
+        row = {
+            **prev,
+            **p,
+            "key": p.get("key") or event.entity_key,
+            "intended": True,
+            "done": True,
+        }
+        _put(proj, "effects", event.entity_key, row)
+    elif t == "SideEffectDenied":
+        _put(
+            proj,
+            "effects",
+            event.entity_key,
+            {**p, "key": p.get("key") or event.entity_key, "denied": True},
+        )
     elif t == "HitlOpened":
         _put(proj, "hitl_requests", event.entity_key, {**p, "open": True})
     elif t in ("HitlDecided", "HitlTimedOut"):
@@ -163,6 +183,7 @@ def apply_event(store: Any, event: EventEnvelope) -> None:
         "attempts",
         "results",
         "artifacts",
+        "effects",
         "requirements",
         "hitl_requests",
         "graph_nodes",
@@ -188,6 +209,7 @@ def _row_key(table: str, row: dict[str, Any]) -> str | None:
         "attempts": "attempt_id",
         "results": "result_id",
         "artifacts": "artifact_id",
+        "effects": "key",
         "requirements": "id",
         "hitl_requests": "request_id",
         "graph_nodes": "node_id",
@@ -217,6 +239,9 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         "ResultRecorded": ("results",),
         "TaskDone": ("tasks",),
         "ArtifactRegistered": ("artifacts",),
+        "EffectIntended": ("effects",),
+        "EffectDone": ("effects",),
+        "SideEffectDenied": ("effects",),
         "HitlOpened": ("hitl_requests",),
         "HitlDecided": ("hitl_requests",),
         "HitlTimedOut": ("hitl_requests",),

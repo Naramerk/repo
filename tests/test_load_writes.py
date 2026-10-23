@@ -88,5 +88,10 @@ async def test_twenty_parallel_attempts_fsync_p99_slo(
     assert lat, "no write latencies recorded"
     lat_sorted = sorted(lat)
     p99 = lat_sorted[max(0, int(len(lat_sorted) * 0.99) - 1)]
+    med = statistics.median(lat_sorted)
+    print(
+        f"perf p99={p99:.2f}ms median={med:.2f}ms "
+        f"mean={statistics.mean(lat):.2f}ms n={len(lat)}"
+    )
     assert p99 <= 50.0, f"p99 write {p99:.2f}ms > 50ms (n={len(lat)})"
     await close_runtime(rt)

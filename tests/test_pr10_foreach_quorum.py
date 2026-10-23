@@ -1480,10 +1480,12 @@ def test_upcast_task_created_foreach_quorum():
 
 def test_upcast_attempt_limitations():
     v, p = upcast("AttemptStarted", 3, {"attempt_id": "a", "inputs": []})
-    assert v == 6
+    # …v4→v5 shares, v5→v6 budget_limit (PR12), v6→v7 tainted_context (PR18).
+    assert v == 7
     assert p["limitations"] == []
     assert p["allocated_budget_rub"] is None
     assert p["budget_limit_rub"] is None
+    assert p["tainted_context"] is False
 
 
 def test_upcast_study_foreach_cap():

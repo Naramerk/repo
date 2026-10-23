@@ -55,6 +55,9 @@ EventType = Literal[
     "VerdictSnapshotsRecorded",
     "GraphNodeUpserted",
     "GraphEdgeAdded",
+    "EffectIntended",
+    "EffectDone",
+    "SideEffectDenied",
 ]
 
 

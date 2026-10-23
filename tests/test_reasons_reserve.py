@@ -139,11 +139,12 @@ async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
 
 def test_upcast_provenance_simulated_to_stub():
     v, p = upcast("AttemptStarted", 1, {"provenance": "simulated", "attempt_id": "a"})
-    # v1→v2 stub … v3→v4 limitations … v4→v5 shares … v5→v6 budget_limit.
-    assert v == 6 and p["provenance"] == "stub" and p["inputs"] == []
+    # …v4→v5 shares, v5→v6 budget_limit (PR12), v6→v7 tainted_context (PR18).
+    assert v == 7 and p["provenance"] == "stub" and p["inputs"] == []
     assert p["limitations"] == []
     assert p["allocated_budget_rub"] is None
     assert p["budget_limit_rub"] is None
+    assert p["tainted_context"] is False
     v, p = upcast(
         "ResultRecorded",
         1,

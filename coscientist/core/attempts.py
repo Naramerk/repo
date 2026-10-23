@@ -300,6 +300,15 @@ class AttemptsMixin:
         if prov not in VALID_PROVENANCE:
             raise ValueError(f"invalid provenance: {prov}")
 
+        # PR18: taint is computed in core from input artifact metas (never caller).
+        from coscientist.core.taint import bindings_tainted
+
+        arts = getattr(self, "artifacts", None) or getattr(
+            getattr(self, "executor", None), "artifacts", None
+        )
+        get_meta = getattr(arts, "get_meta", None) if arts is not None else None
+        tainted_context = bindings_tainted(bindings, get_meta)
+
         aid = attempt_id(task.task_id, n)
         now = self.clock.now()
         assert self.study is not None
@@ -323,6 +332,9 @@ class AttemptsMixin:
             "task_id": task.task_id,
             "study_id": sid,
             "inputs": [b.model_dump(mode="json") for b in bindings],
+            # PR18: core-computed taint for tool gating / derived artifacts.
+            "tainted_context": tainted_context,
+            # PR10: fan-in gaps (inputs below quorum / failed deps).
             "limitations": lim_payload,
             **share_fields,
         }
@@ -334,7 +346,8 @@ class AttemptsMixin:
                 idem_key=make_idem("AttemptStarted", aid),
                 payload=payload,
                 ts=now,
-                schema_version=6,
+                # v6 = PR12 shares+budget_limit; v7 = PR18 tainted_context.
+                schema_version=7,
             )
         ]
         # Persist full verdict snapshots used at bind (not digest-only).

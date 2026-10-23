@@ -449,6 +449,16 @@ def _attempt_started_v3_to_v4_limitations(payload: dict[str, Any]) -> dict[str, 
     return out
 
 
+def _attempt_started_v6_to_v7_tainted(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR18: core-computed tainted_context on AttemptStarted; old → False.
+
+    Stacked after PR12 v5 shares / v6 budget_limit (both PRs bumped AttemptStarted).
+    """
+    out = dict(payload)
+    out.setdefault("tainted_context", False)
+    return out
+
+
 register_upcaster("TaskCreated", 1, _task_created_v1_to_v2)
 register_upcaster("TaskCreated", 2, _ensure_spec_addresses)
 register_upcaster("TaskCreated", 3, _task_created_v3_to_v4_input_mode)
@@ -478,6 +488,7 @@ register_upcaster("AttemptStarted", 2, _attempt_started_v2_to_v3_inputs)
 register_upcaster("AttemptStarted", 3, _attempt_started_v3_to_v4_limitations)
 register_upcaster("AttemptStarted", 4, _attempt_started_v4_to_v5_shares)
 register_upcaster("AttemptStarted", 5, _attempt_started_v5_to_v6_budget_limit)
+register_upcaster("AttemptStarted", 6, _attempt_started_v6_to_v7_tainted)
 
 
 def _result_recorded_v2_to_v3_output_kinds(payload: dict[str, Any]) -> dict[str, Any]:
