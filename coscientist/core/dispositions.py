@@ -29,6 +29,55 @@ def _task_by_key(tasks: Mapping[str, Task]) -> dict[str, Task]:
     return {t.spec.task_key: t for t in tasks.values()}
 
 
+# Dead covering tasks must not inflate skip_cap / loop-cap. Reasons come from
+# folded TaskDone.reason (projection / reopen rebuild) — not ephemeral status.
+_INACTIVE_COVER_REASONS: frozenset[str] = frozenset(
+    {
+        TaskReason.SUPERSEDED.value,
+        TaskReason.CANCELLED.value,
+    }
+)
+
+
+def _task_reason_value(t: Task) -> str | None:
+    r = getattr(t, "reason", None)
+    if r is None:
+        return None
+    if isinstance(r, TaskReason):
+        return r.value
+    try:
+        return TaskReason(str(r)).value
+    except ValueError:
+        return str(r)
+
+
+def _active_for_cover(t: Task) -> bool:
+    """True when the task still counts toward question cover / skip_cap."""
+    return _task_reason_value(t) not in _INACTIVE_COVER_REASONS
+
+
+def _prune_inactive_cover(
+    cover: dict[str, set[str]],
+    by_key: Mapping[str, Task],
+) -> dict[str, set[str]]:
+    """Drop superseded/cancelled keys; remove empty question sets.
+
+    Keys with no runtime Task yet stay (plan-only, not yet created). Fold
+    determinism: once TaskDone lands with SUPERSEDED/CANCELLED, reopen/replay
+    rebuilds the same Task.reason and the same pruned cover.
+    """
+    out: dict[str, set[str]] = {}
+    for qid, keys in cover.items():
+        live: set[str] = set()
+        for kk in keys:
+            t = by_key.get(kk)
+            if t is None or _active_for_cover(t):
+                live.add(kk)
+        if live:
+            out[str(qid)] = live
+    return out
+
+
 def _reasons_for(tasks: list[Task]) -> list[TaskReason]:
     out: list[TaskReason] = []
     for t in tasks:
@@ -173,7 +222,21 @@ def _dispositions_inner(
 ) -> dict[str, dict[str, Any]]:
     qmap = known_questions(plans)
     cover = question_tasks(plans)
+    # Foreach / expand / loop-iter tasks live in runtime.tasks and may be absent
+    # from plans[*].tasks that ``question_tasks`` reads — union their addresses
+    # so skip_cap and covering both see the parent's own work. Superseded /
+    # cancelled (fold TaskDone.reason) are excluded so dead tasks cannot keep
+    # a decomposes parent under loop-cap (false cap).
+    for t in tasks.values():
+        if not _active_for_cover(t):
+            continue
+        spec = getattr(t, "spec", None)
+        addrs = getattr(spec, "addresses", None) or []
+        key = str(getattr(spec, "task_key", "") or "")
+        for qid in addrs:
+            cover.setdefault(str(qid), set()).add(key or str(getattr(t, "task_id", "")))
     by_key = _task_by_key(tasks)
+    cover = _prune_inactive_cover(cover, by_key)
     by_target: dict[str, list] = {}
     if graph is not None and study is not None:
         by_target = filtered_claims_by_target(
@@ -449,13 +512,21 @@ def _dispositions_inner(
             row_na["excluded_claims"] = excluded
         result[qid] = row_na
 
-    # PR11: iteration_cap on unresolved loop-scoped questions (before rollup).
-    apply_loop_cap_dispositions(result, loop_capped_questions)
-    # Stamp honest terminals before rollup so clamp sees verdict.
-    _stamp_honest_terminals(result)
-    # PR16: parent disposition from frozen Plan.rollup (DESIGN_M1 §10).
+    # Order (#32 then #28): skip_cap/scoped_capped → loop-cap → honest
+    # terminals → rollup. Skip cap only for decomposes parents with *no own
+    # covering tasks* (plans[*].tasks AND runtime.tasks addresses).
+    from coscientist.core.decomposes import children_map, parent_map_from_plans
     from coscientist.core.rollup import apply_rollup
 
+    parent_ids = set(children_map(parent_map_from_plans(plans)))
+    skip_cap = {qid for qid in parent_ids if not cover.get(qid)}
+    scoped_capped = {
+        qid: meta
+        for qid, meta in (loop_capped_questions or {}).items()
+        if qid not in skip_cap
+    }
+    apply_loop_cap_dispositions(result, scoped_capped)
+    _stamp_honest_terminals(result)
     return apply_rollup(result, plans=plans)
 
 
