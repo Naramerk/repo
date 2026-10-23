@@ -184,13 +184,13 @@ class LocalProjectMixin:
             self._study_cancelled = True
         elif ev.type == "ArtifactRegistered":
             # PR15: core-stamped Artifact.kind (experiment_design / contradiction_map).
-            aid = str(p.get("artifact_id") or ev.entity_key or "")
+            art_id = str(p.get("artifact_id") or ev.entity_key or "")
             kind = p.get("kind")
             arts = getattr(self, "artifacts", None)
-            if aid and kind and arts is not None and bool(p.get("stamped")):
+            if art_id and kind and arts is not None and bool(p.get("stamped")):
                 from coscientist.core.artifact_stamp import apply_kind_stamp
 
-                apply_kind_stamp(arts, aid, str(kind))
+                apply_kind_stamp(arts, art_id, str(kind))
         elif ev.type == "QuestionDisposed":
             from coscientist.core.dispose import fold_question_disposed
 
