@@ -311,19 +311,26 @@ class LifecycleMixin:
                         or bool((existing.attrs or {}).get("frozen"))
                     ):
                         continue
-                params = dict(getattr(ref, "params", None) or {})
+                # SESOI / predicts_null from catalog template only — never params.
                 cattrs: dict[str, Any] = {"frozen": True, "template_id": key}
-                for num_key in ("sesoi", "min_power", "alpha"):
-                    if params.get(num_key) is None:
-                        continue
-                    try:
-                        cattrs[num_key] = float(params[num_key])
-                    except (TypeError, ValueError):
-                        pass
-                if "alpha" not in cattrs:
-                    cattrs["alpha"] = 0.05
-                if "predicts_null" in params:
-                    cattrs["predicts_null"] = bool(params.get("predicts_null"))
+                cattrs["alpha"] = 0.05
+                if catalog is not None:
+                    by_id = {
+                        t.id: t for t in getattr(catalog, "templates", []) or []
+                    }
+                    tmpl = by_id.get(key)
+                    if tmpl is not None:
+                        if getattr(tmpl, "uses_sesoi", False) and tmpl.sesoi is not None:
+                            cattrs["uses_sesoi"] = True
+                            cattrs["sesoi"] = float(tmpl.sesoi)
+                            cattrs["predicted_direction"] = str(
+                                getattr(tmpl, "predicted_direction", "two_sided")
+                            )
+                        else:
+                            cattrs["uses_sesoi"] = False
+                        cattrs["predicts_null"] = bool(
+                            getattr(tmpl, "predicts_null", False)
+                        )
                 events.append(
                     EventEnvelope(
                         study_id=sid,

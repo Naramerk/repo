@@ -86,7 +86,14 @@ class Claim:
     p_value: float | None = None
     power: float | None = None
     sesoi: float | None = 0.5  # oracle default: fail-able threshold (sesoi)
-    min_power: float | None = None
+    uses_sesoi: bool | None = None
+    used_sesoi: bool | None = None
+    predicts_null: bool = False
+    predicted_direction: str = "positive"
+    effect: dict | None = None
+    data_digests: list | None = None
+    spec_digest: str = ""
+    plan_id: str = ""
     check_role: str = "prediction"
 
     def __post_init__(self):
@@ -104,25 +111,37 @@ class Claim:
                 "not_met": "inconsistent",
                 "unassessed": "indeterminate",
             }.get(self.criterion_status)
+        if self.uses_sesoi is None:
+            self.uses_sesoi = self.sesoi is not None
+        if self.used_sesoi is None:
+            self.used_sesoi = bool(self.uses_sesoi)
+        if self.effect is None and self.sesoi is not None:
+            # Default effect exceeds sesoi in the positive direction.
+            est = float(self.sesoi) + 1.0
+            self.effect = {"est": est, "ci_low": est, "ci_high": est}
         if self.severe is None:
-            has_thr = self.sesoi is not None or (
-                self.min_power is not None and float(self.min_power) > 0.0
-            )
+            has_thr = bool(self.uses_sesoi) and self.sesoi is not None and self.used_sesoi
+            exceeds = False
+            if has_thr and self.effect is not None:
+                try:
+                    exceeds = float(self.effect["est"]) > float(self.sesoi)
+                except (KeyError, TypeError, ValueError):
+                    exceeds = False
             self.severe = (
                 self.claim_outcome == "consistent"
                 and self.frozen
                 and self.validity_ok
                 and self.provenance == "real"
                 and has_thr
+                and (self.predicts_null or exceeds)
             )
         if self.refute_capable is None:
             self.refute_capable = bool(
                 self.frozen
                 and self.check_role == "prediction"
-                and (
-                    self.sesoi is not None
-                    or (self.min_power is not None and float(self.min_power) > 0.0)
-                )
+                and self.uses_sesoi
+                and self.sesoi is not None
+                and self.used_sesoi
             )
 
     @property
@@ -211,10 +230,9 @@ def verdict(
         return bool(
             c.frozen
             and c.check_role == "prediction"
-            and (
-                c.sesoi is not None
-                or (c.min_power is not None and float(c.min_power) > 0.0)
-            )
+            and c.uses_sesoi
+            and c.sesoi is not None
+            and c.used_sesoi
         )
 
     if n_inc >= k_ref and refutation_priority:

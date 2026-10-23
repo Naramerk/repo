@@ -295,5 +295,19 @@ def report_hypothesis_verdicts(
                 row.setdefault("excluded_claims", snap["excluded_claims"])
             out[hid] = row
         return out
-    except Exception:  # noqa: BLE001
-        return {}
+    except Exception as exc:  # noqa: BLE001 — surface reason, do not swallow silently
+        return {
+            "_error": {
+                "hypothesis_id": "_error",
+                "question_id": "",
+                "verdict": "inconclusive",
+                "rule": "hypotheses_unavailable",
+                "counted": [],
+                "excluded": [],
+                "conflict": None,
+                "severity_note": f"hypotheses_unavailable:{type(exc).__name__}",
+                "auxiliary_assumptions": [],
+                "legacy_claims": 0,
+                "error_class": type(exc).__name__,
+            }
+        }

@@ -46,9 +46,12 @@ _DERIVED_OK = {
     "lit_own_criterion": False,
     "accepted": True,
     "artifact_id": "A1",
-    # Fail-able prediction threshold (from frozen criterion in the live path).
-    # Do not stamp claim_outcome/severe here — derived from criterion_status.
+    # Catalog-style SESOI threshold + core effect (exceeds sesoi).
     "sesoi": 0.5,
+    "uses_sesoi": True,
+    "used_sesoi": True,
+    "predicted_direction": "positive",
+    "effect": {"est": 1.5, "ci_low": 1.5, "ci_high": 1.5},
     "check_role": "prediction",
     "refute_capable": True,
 }
@@ -740,19 +743,14 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[
-                    RequirementRef(
-                        template_id="value_match",
-                        params={"sesoi": 0.5},
-                    )
-                ],
+                criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid0 = await rt.start_attempt("E0")
-    content = b'{"count": 225}'
+    content = b'{"effect": 2.0}'
     art = arts.put(
         content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
     )
@@ -761,7 +759,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
         AgentTaskOutput(
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
-            values={"count": 225},
+            values={"effect": 2.0},
             claims=[{"id": "ans", "target": "Q1"}],
         ),
     )
@@ -1340,6 +1338,12 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
             check_role="prediction",
             target="Q1",
             sesoi=0.5,
+            uses_sesoi=True,
+            used_sesoi=True,
+            predicted_direction="positive",
+            effect={"est": 1.5, "ci_low": 1.5, "ci_high": 1.5},
+            claim_outcome="consistent",
+            severe=True,
         )
         for i in range(3)
     ]

@@ -28,18 +28,20 @@ from coscientist.core.rules import verdict
 from coscientist.core.upcasters import upcast
 from coscientist.core.verdict import (
     claim_is_severe,
-    digests_from_bindings,
+    data_digests_from_bindings,
+    distinct_by_key,
     exclusion_reason,
     hypothesis_report_row,
     hypothesis_verdict,
     independence_key_for,
+    normalized_task_spec_digest,
     refute_intent_counts,
 )
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
 
 def _c(**kw) -> RuntimeClaim:
-    """Severe-capable claim helper (sesoi set → can be severe when frozen)."""
+    """Severe-capable claim helper (catalog sesoi + effect exceeding it)."""
     base = dict(
         criterion_status="met",
         accepted=True,
@@ -56,7 +58,11 @@ def _c(**kw) -> RuntimeClaim:
         experiment_id="A1",
         intent="confirm",
         sesoi=0.5,
-        min_power=None,
+        uses_sesoi=True,
+        used_sesoi=True,
+        predicts_null=False,
+        predicted_direction="positive",
+        effect={"est": 1.5, "ci_low": 1.5, "ci_high": 1.5},
         refute_capable=True,
     )
     base.update(kw)
@@ -301,16 +307,46 @@ def test_underpowered_is_indeterminate_exclusion():
     assert exclusion_reason(c) == "indeterminate"
 
 
-def test_severe_requires_frozen_sesoi_or_power():
-    """Without sesoi or min_power>0, severe is false (no transitional stamp)."""
-    bare = _c(severe=None, sesoi=None, min_power=None, frozen=True)
+def test_severe_requires_catalog_sesoi_and_effect():
+    """Severe needs uses_sesoi + used_sesoi + effect exceeding sesoi (no min_power)."""
+    bare = _c(
+        severe=None,
+        sesoi=None,
+        uses_sesoi=False,
+        used_sesoi=False,
+        effect=None,
+        frozen=True,
+    )
     assert claim_is_severe(bare) is False
-    zero = _c(severe=None, sesoi=None, min_power=0.0, power=1.0, frozen=True)
-    assert claim_is_severe(zero) is False
-    with_power = _c(severe=None, sesoi=None, min_power=0.8, power=0.9, frozen=True)
-    assert claim_is_severe(with_power) is True
-    with_sesoi = _c(severe=None, sesoi=0.1, min_power=None, frozen=True)
-    assert claim_is_severe(with_sesoi) is True
+    no_effect = _c(
+        severe=None,
+        sesoi=0.5,
+        uses_sesoi=True,
+        used_sesoi=True,
+        effect=None,
+        frozen=True,
+    )
+    assert claim_is_severe(no_effect) is False
+    below = _c(
+        severe=None,
+        sesoi=0.5,
+        uses_sesoi=True,
+        used_sesoi=True,
+        effect={"est": 0.1, "ci_low": 0.1, "ci_high": 0.1},
+        predicted_direction="positive",
+        frozen=True,
+    )
+    assert claim_is_severe(below) is False
+    ok = _c(
+        severe=None,
+        sesoi=0.5,
+        uses_sesoi=True,
+        used_sesoi=True,
+        effect={"est": 1.0, "ci_low": 1.0, "ci_high": 1.0},
+        predicted_direction="positive",
+        frozen=True,
+    )
+    assert claim_is_severe(ok) is True
 
 
 def test_duplicate_runs_count_once():
@@ -325,36 +361,109 @@ def test_duplicate_runs_count_once():
     assert hypothesis_verdict([a, b], True, supported_needed=2)[0] == "survived"
 
 
-def test_independence_key_from_bindings_not_method_alone():
-    d1, c1 = digests_from_bindings(
-        [
-            {"kind": "artifact", "input": "data", "digest": "D1"},
-            {"kind": "artifact", "input": "code", "digest": "C1"},
-        ]
-    )
-    d2, c2 = digests_from_bindings(
-        [
-            {"kind": "artifact", "input": "data", "digest": "D2"},
-            {"kind": "artifact", "input": "code", "digest": "C1"},
-        ]
-    )
-    k1 = independence_key_for(dataset_digest=d1, method="computational", code_digest=c1)
-    k2 = independence_key_for(dataset_digest=d2, method="computational", code_digest=c2)
-    k_reuse = independence_key_for(
-        dataset_digest=d1, method="computational", code_digest=c1
-    )
+def test_independence_key_base_is_experiment_id_no_method():
+    """Key base is experiment_id; method is not part of the key."""
+    k1 = independence_key_for(experiment_id="st/E1")
+    k2 = independence_key_for(experiment_id="st/E2")
     assert k1 != k2
-    assert k1 == k_reuse
-    # method=None must not inflate vs method=""
-    assert independence_key_for(
-        dataset_digest=d1, method=None, code_digest=c1
-    ) == independence_key_for(dataset_digest=d1, method="", code_digest=c1)
+    assert k1 == independence_key_for(experiment_id="st/E1")
+    # method kwargs rejected — signature is experiment_id only.
+    import inspect
+
+    assert list(inspect.signature(independence_key_for).parameters) == ["experiment_id"]
+
+
+def test_data_digest_overlap_merges_sources():
+    """Overlapping data digests → one source; method ignored."""
+    a = _c(
+        experiment_id="E1",
+        independence_key=independence_key_for(experiment_id="E1"),
+        data_digests=["D1", "D2"],
+        attempt_id="E1#1",
+    )
+    b = _c(
+        experiment_id="E2",
+        independence_key=independence_key_for(experiment_id="E2"),
+        data_digests=["D2", "D3"],
+        attempt_id="E2#1",
+        artifact_id="Art2",
+    )
+    c = _c(
+        experiment_id="E3",
+        independence_key=independence_key_for(experiment_id="E3"),
+        data_digests=["D9"],
+        attempt_id="E3#1",
+        artifact_id="Art3",
+    )
+    assert len(distinct_by_key([a, b, c])) == 2
+
+
+def test_no_input_identical_spec_one_source():
+    from coscientist.core.domain import ExperimentMethod
+
+    spec_a = TaskSpec(
+        task_key="E1",
+        title="t",
+        goal="g",
+        route="experiment",
+        method=ExperimentMethod.COMPUTATIONAL,
+        criteria=[RequirementRef(template_id="value_match")],
+        addresses=["Q1"],
+    )
+    spec_b = TaskSpec(
+        task_key="E2",
+        title="t",
+        goal="g",
+        route="experiment",
+        method=ExperimentMethod.COMPUTATIONAL,
+        criteria=[RequirementRef(template_id="value_match")],
+        addresses=["Q1"],
+    )
+    spec_c = TaskSpec(
+        task_key="E3",
+        title="other",
+        goal="g",
+        route="experiment",
+        method=ExperimentMethod.COMPUTATIONAL,
+        criteria=[RequirementRef(template_id="value_match")],
+        addresses=["Q1"],
+    )
+    sd = normalized_task_spec_digest(spec_a)
+    assert sd == normalized_task_spec_digest(spec_b)
+    assert sd != normalized_task_spec_digest(spec_c)
+    a = _c(
+        experiment_id="E1",
+        independence_key=independence_key_for(experiment_id="E1"),
+        data_digests=[],
+        spec_digest=sd,
+        plan_id="P1",
+        attempt_id="E1#1",
+    )
+    b = _c(
+        experiment_id="E2",
+        independence_key=independence_key_for(experiment_id="E2"),
+        data_digests=[],
+        spec_digest=sd,
+        plan_id="P1",
+        attempt_id="E2#1",
+        artifact_id="Art2",
+    )
+    c = _c(
+        experiment_id="E3",
+        independence_key=independence_key_for(experiment_id="E3"),
+        data_digests=[],
+        spec_digest=normalized_task_spec_digest(spec_c),
+        plan_id="P1",
+        attempt_id="E3#1",
+        artifact_id="Art3",
+    )
+    assert len(distinct_by_key([a, b])) == 1
+    assert len(distinct_by_key([a, b, c])) == 2
 
 
 def test_legacy_independence_key_uses_experiment_id():
     k = independence_key_for(experiment_id="st/E1")
     assert k == independence_key_for(experiment_id="st/E1")
-    # Different attempts of same experiment → same fallback key.
     assert k != independence_key_for(experiment_id="st/E2")
 
 
@@ -575,9 +684,22 @@ class VerdictPropertyMachine(RuleBasedStateMachine):
         sesoi = 0.5 if with_threshold and not legacy else None
         # Do not hand-stamp severe=True — claim_is_severe derives from threshold.
         severe = False if legacy else None
-        # Core-computed independence_key (bindings digests + method).
-        key = independence_key_for(
-            dataset_digest=data, method=method, code_digest=code
+        exp = f"A{self._n}"
+        key = independence_key_for(experiment_id=exp)
+        # method is ignored for independence; data digests drive merge.
+        del method
+        digests = data_digests_from_bindings(
+            [
+                {"kind": "artifact", "input": "data", "digest": data},
+                {"kind": "artifact", "input": "code", "digest": code},
+            ]
+        )
+        # Without artifact metas, both bindings classify as data — use data only.
+        digests = [data]
+        effect = (
+            {"est": 1.5, "ci_low": 1.5, "ci_high": 1.5}
+            if with_threshold and not legacy
+            else None
         )
         c = _c(
             criterion_status=status,
@@ -586,15 +708,19 @@ class VerdictPropertyMachine(RuleBasedStateMachine):
             validity=validity,
             provenance=provenance,
             independence_key=key,
-            attempt_id=f"A{self._n}#1",
-            experiment_id=f"A{self._n}",
+            attempt_id=f"{exp}#1",
+            experiment_id=exp,
             artifact_id=f"Art{self._n}",
             evidence_kind="literature" if lit else "computational",
             lit_own_criterion=lit,
             intent=intent,
             severe=severe,
             sesoi=sesoi,
-            min_power=None,
+            uses_sesoi=bool(with_threshold and not legacy),
+            used_sesoi=bool(with_threshold and not legacy),
+            effect=effect,
+            predicted_direction="positive",
+            data_digests=digests,
             check_role="prediction",
             refute_capable=bool(
                 with_threshold and not legacy and intent == "refute" and not lit
@@ -692,7 +818,7 @@ def test_verdict_property_record_claim_v1_v5():
 
 @pytest.mark.asyncio
 async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
-    """Catalog/plan without sesoi|min_power>0 → not severe → never supported."""
+    """Catalog without uses_sesoi → not severe → survived at most, never supported."""
     from coscientist.core.artifacts import make_tool_ref
     from coscientist.core.dispositions import dispositions
 
@@ -720,7 +846,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                # No sesoi / min_power in params → criterion freeze has no threshold.
+                # value_match has no uses_sesoi in catalog.
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             )
@@ -747,19 +873,17 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
     claim = by["question:Q1"][0]
     assert claim.severe is False
     assert claim.sesoi is None
-    assert claim.min_power is None
     d = dispositions(
         tasks=rt.tasks, plans=rt.plans, graph=rt.graph, study=rt.study, results=rt.results
     )
     assert d["Q1"]["verdict"] != "supported"
-    # No severe → cannot reach survived/supported; inconclusive.
     assert d["Q1"]["verdict"] == "inconclusive"
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
-async def test_e2e_independence_key_from_bound_inputs(tmp_path, clock, runtime_cls):
-    """Same method + different data → 2 keys; reused data+code → 1 key."""
+async def test_e2e_independence_sources(tmp_path, clock, runtime_cls):
+    """Data-overlap merge; no-input identical specs; method ignored."""
     from coscientist.core.artifacts import make_tool_ref
     from coscientist.core.domain import ExperimentMethod
 
@@ -780,7 +904,6 @@ async def test_e2e_independence_key_from_bound_inputs(tmp_path, clock, runtime_c
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
 
-    # Producer of two datasets + one code artifact.
     await rt.accept_plan(
         [
             TaskSpec(
@@ -790,9 +913,11 @@ async def test_e2e_independence_key_from_bound_inputs(tmp_path, clock, runtime_c
                 route="experiment",
                 depends_on=["PLAN"],
                 expected_outputs=[
-                    OutputSpec(name="data_a", media_type="application/json"),
-                    OutputSpec(name="data_b", media_type="application/json"),
-                    OutputSpec(name="code", media_type="text/plain"),
+                    OutputSpec(name="data_a", media_type="application/json", role="data"),
+                    OutputSpec(name="data_b", media_type="application/json", role="data"),
+                    OutputSpec(
+                        name="code", media_type="text/x-python", role="code"
+                    ),
                 ],
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
@@ -808,9 +933,7 @@ async def test_e2e_independence_key_from_bound_inputs(tmp_path, clock, runtime_c
                     InputSpec(from_task="P_DATA", output="data_a"),
                     InputSpec(from_task="P_DATA", output="code"),
                 ],
-                criteria=[
-                    RequirementRef(template_id="value_match", params={"sesoi": 0.1})
-                ],
+                criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
             TaskSpec(
@@ -819,14 +942,12 @@ async def test_e2e_independence_key_from_bound_inputs(tmp_path, clock, runtime_c
                 goal="g",
                 route="experiment",
                 depends_on=["P_DATA"],
-                method=ExperimentMethod.COMPUTATIONAL,
+                method=ExperimentMethod.STATISTICAL,  # different method, same data as E3
                 inputs=[
                     InputSpec(from_task="P_DATA", output="data_b"),
                     InputSpec(from_task="P_DATA", output="code"),
                 ],
-                criteria=[
-                    RequirementRef(template_id="value_match", params={"sesoi": 0.1})
-                ],
+                criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
             TaskSpec(
@@ -835,23 +956,71 @@ async def test_e2e_independence_key_from_bound_inputs(tmp_path, clock, runtime_c
                 goal="g",
                 route="experiment",
                 depends_on=["P_DATA"],
-                method=ExperimentMethod.COMPUTATIONAL,
+                method=ExperimentMethod.SIMULATION,  # different method, same data as E1
                 inputs=[
                     InputSpec(from_task="P_DATA", output="data_a"),
                     InputSpec(from_task="P_DATA", output="code"),
                 ],
-                criteria=[
-                    RequirementRef(template_id="value_match", params={"sesoi": 0.1})
-                ],
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            ),
+            # No-input: identical specs (different task_key) → 1 source.
+            TaskSpec(
+                task_key="N1",
+                title="same",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                method=ExperimentMethod.COMPUTATIONAL,
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            ),
+            TaskSpec(
+                task_key="N2",
+                title="same",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                method=ExperimentMethod.COMPUTATIONAL,
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            ),
+            # No-input: different spec → 2nd source.
+            TaskSpec(
+                task_key="N3",
+                title="different",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                method=ExperimentMethod.COMPUTATIONAL,
+                criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid_p = await rt.start_attempt("P_DATA")
-    da = arts.put(b'{"count": 1}', make_tool_ref(f"{aid_p}:da"), name="data_a", media_type="application/json")
-    db = arts.put(b'{"count": 2}', make_tool_ref(f"{aid_p}:db"), name="data_b", media_type="application/json")
-    code = arts.put(b"print(1)", make_tool_ref(f"{aid_p}:c"), name="code", media_type="text/plain")
+    da = arts.put(
+        b'{"count": 1}',
+        make_tool_ref(f"{aid_p}:da"),
+        name="data_a",
+        media_type="application/json",
+        role="data",
+    )
+    db = arts.put(
+        b'{"count": 2}',
+        make_tool_ref(f"{aid_p}:db"),
+        name="data_b",
+        media_type="application/json",
+        role="data",
+    )
+    code = arts.put(
+        b"print(1)",
+        make_tool_ref(f"{aid_p}:c"),
+        name="code",
+        media_type="text/x-python",
+        role="code",
+    )
     await rt.executor.record(
         aid_p,
         AgentTaskOutput(
@@ -866,14 +1035,15 @@ async def test_e2e_independence_key_from_bound_inputs(tmp_path, clock, runtime_c
         ),
     )
 
-    keys = []
-    for tk in ("E1", "E2", "E3"):
+    claims_by_tk: dict[str, object] = {}
+    for tk in ("E1", "E2", "E3", "N1", "N2", "N3"):
         aid = await rt.start_attempt(tk)
         art = arts.put(
             b'{"count": 225}',
             make_tool_ref(f"{aid}:1"),
             name="main",
             media_type="application/json",
+            role="data",
         )
         await rt.executor.record(
             aid,
@@ -885,13 +1055,27 @@ async def test_e2e_independence_key_from_bound_inputs(tmp_path, clock, runtime_c
             ),
         )
         by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
-        # latest claim for this attempt
         for c in by["question:Q1"]:
             if c.attempt_id == aid:
-                keys.append(c.independence_key)
+                claims_by_tk[tk] = c
                 break
-    assert keys[0] != keys[1], "different data → independent"
-    assert keys[0] == keys[2], "reused data+code → same key"
+
+    e1, e2, e3 = claims_by_tk["E1"], claims_by_tk["E2"], claims_by_tk["E3"]
+    # Stamped keys are experiment-based (distinct), merge is at count time.
+    assert e1.independence_key != e2.independence_key
+    assert e1.independence_key != e3.independence_key
+    # Different methods over same data → 1 source; different data → 2.
+    assert len(distinct_by_key([e1, e3])) == 1
+    assert len(distinct_by_key([e1, e2, e3])) == 2
+    # Code role ignored: data digests only.
+    assert da.sha256 in (e1.data_digests or [])
+    assert code.sha256 not in (e1.data_digests or [])
+
+    n1, n2, n3 = claims_by_tk["N1"], claims_by_tk["N2"], claims_by_tk["N3"]
+    assert n1.spec_digest and n1.spec_digest == n2.spec_digest
+    assert n1.spec_digest != n3.spec_digest
+    assert len(distinct_by_key([n1, n2])) == 1
+    assert len(distinct_by_key([n1, n2, n3])) == 2
     await close_runtime(rt)
 
 
@@ -927,17 +1111,16 @@ async def test_e2e_one_severe_defaults_survived(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[
-                    RequirementRef(template_id="value_match", params={"sesoi": 0.5})
-                ],
+                criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid0 = await rt.start_attempt("E0")
+    # effect 2.0 > sesoi 0.5 → severe
     art = arts.put(
-        b'{"count": 225}',
+        b'{"effect": 2.0}',
         make_tool_ref(f"{aid0}:1"),
         name="main",
         media_type="application/json",
@@ -947,10 +1130,12 @@ async def test_e2e_one_severe_defaults_survived(tmp_path, clock, runtime_cls):
         AgentTaskOutput(
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
-            values={"count": 225},
+            values={"effect": 2.0},
             claims=[{"id": "c1", "target": "Q1"}],
         ),
     )
+    by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
+    assert by["question:Q1"][0].severe is True
     d = dispositions(
         tasks=rt.tasks, plans=rt.plans, graph=rt.graph, study=rt.study, results=rt.results
     )
@@ -974,7 +1159,6 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
-        # Old-style soft k would have allowed supported at 1; supported_needed=2 frozen.
         confirmations_needed=1,
         supported_needed=2,
     )
@@ -990,9 +1174,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[
-                    RequirementRef(template_id="value_match", params={"sesoi": 0.5})
-                ],
+                criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
             ),
             TaskSpec(
@@ -1010,7 +1192,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
-        b'{"count": 225}',
+        b'{"effect": 2.0}',
         make_tool_ref(f"{aid0}:1"),
         name="main",
         media_type="application/json",
@@ -1020,7 +1202,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
         AgentTaskOutput(
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
-            values={"count": 225},
+            values={"effect": 2.0},
             claims=[{"id": "c1", "target": "Q1"}],
         ),
     )

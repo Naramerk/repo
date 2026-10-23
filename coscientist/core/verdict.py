@@ -4,21 +4,23 @@ Pure functions: claim classification, counting filter, hypothesis ``verdict()``,
 and report payload builders.
 
 Deviations (see PR body / CHANGELOG):
-- ``VerdictSnapshotsRecorded`` kept (not projection-only).
+- ``VerdictSnapshotsRecorded`` kept for bind; finalize recomputes report rows.
 - StudyCreated is v6 (``supported_needed``; confirmations_needed remains PR8 ``k``).
 - validity_failed / unknown_role per-experiment exclusion from PR8 kept.
 - Real journal events use GraphNodeUpserted (claims), not ClaimRecorded.
 - E-value aggregation deferred (``aggregate='evalue'`` rejected at StudyCreated).
 - R17 runtime metadata still deferred (PR8).
+- SESOI / predicts_null from catalog template only (not RequirementRef.params).
 """
 
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal, Protocol
 
-from coscientist.core.digest import canonical_json
+from coscientist.core.digest import canonical_json, spec_digest
+from coscientist.core.r17 import claim_counts_under_r17
 from coscientist.core.stance import DEFAULT_TESTS_INTENT, TestsIntent, claim_stance
 
 ClaimOutcome = Literal["consistent", "inconsistent", "indeterminate"]
@@ -34,6 +36,7 @@ ExclusionReason = Literal[
     "unknown_role",
     "validity_failed",
 ]
+PredictedDirection = Literal["positive", "negative", "two_sided"]
 
 
 class _HypClaim(Protocol):
@@ -75,64 +78,209 @@ def outcome_to_status(outcome: ClaimOutcome | None, *, validity: ClaimValidity) 
     return "unassessed"
 
 
-def digests_from_bindings(
-    bindings: Sequence[Any] | None,
-) -> tuple[str | None, str | None]:
-    """Fold InputBinding digests into (dataset_digest, code_digest).
+def artifact_is_data(*, role: str | None, media_type: str | None) -> bool:
+    """Classify artifact as data vs code from core role/media_type (not input name)."""
+    if role in ("code", "log", "report"):
+        return False
+    if role in ("data", "paper", "table", "figure"):
+        return True
+    mt = (media_type or "").lower()
+    if any(
+        tok in mt
+        for tok in (
+            "python",
+            "javascript",
+            "typescript",
+            "x-sh",
+            "x-shellscript",
+            "x-script",
+            "x-bytecode",
+        )
+    ):
+        return False
+    if mt.startswith("text/x-"):
+        return False
+    return True
 
-    Artifact inputs whose name suggests code/script/program/model → code;
-    other artifact bindings → dataset. Non-artifact bindings are ignored.
+
+def data_digests_from_bindings(
+    bindings: Sequence[Any] | None,
+    *,
+    artifact_lookup: Callable[[str], Any] | None = None,
+) -> list[str]:
+    """Content digests of **data** artifact bindings (code ignored).
+
+    Classification uses Artifact.role / media_type from the core store when
+    ``artifact_lookup`` is provided — never the planner-chosen input name.
     """
-    data: list[str] = []
-    code: list[str] = []
+    out: list[str] = []
     for b in bindings or ():
         if isinstance(b, Mapping):
             kind = b.get("kind", "artifact")
-            name = str(b.get("input") or "")
+            aid = str(b.get("artifact_id") or "")
             digest = b.get("digest")
         else:
             kind = getattr(b, "kind", "artifact")
-            name = str(getattr(b, "input", "") or "")
+            aid = str(getattr(b, "artifact_id", "") or "")
             digest = getattr(b, "digest", None)
-        if kind != "artifact" or not digest:
+        if kind != "artifact":
             continue
-        d = str(digest)
-        lower = name.lower()
-        if any(tok in lower for tok in ("code", "script", "program", "model", "source")):
-            code.append(d)
-        else:
-            data.append(d)
+        role: str | None = None
+        media_type: str | None = None
+        content: str | None = None
+        if aid and artifact_lookup is not None:
+            meta = artifact_lookup(aid)
+            if meta is not None:
+                role = getattr(meta, "role", None)
+                media_type = getattr(meta, "media_type", None)
+                content = getattr(meta, "sha256", None) or getattr(meta, "digest", None)
+        if content is None and digest:
+            # No store meta: treat binding digest as content; role unknown → data.
+            content = str(digest)
+        if not content:
+            continue
+        if artifact_is_data(role=role, media_type=media_type):
+            out.append(str(content))
+    return sorted(set(out))
 
-    def _fold(parts: list[str]) -> str | None:
-        if not parts:
-            return None
-        if len(parts) == 1:
-            return parts[0]
-        return hashlib.sha256(canonical_json(sorted(parts))).hexdigest()
 
-    return _fold(data), _fold(code)
-
-
-def independence_key_for(
+# Back-compat alias used by older tests/imports.
+def digests_from_bindings(
+    bindings: Sequence[Any] | None,
     *,
-    dataset_digest: str | None = None,
-    method: str | None = None,
-    code_digest: str | None = None,
-    experiment_id: str | None = None,
-) -> str:
-    """sha256(JCS({dataset_digest, method, code_digest})); else experiment_id.
+    artifact_lookup: Callable[[str], Any] | None = None,
+) -> tuple[str | None, str | None]:
+    """Deprecated shape: (folded_data, None). Prefer ``data_digests_from_bindings``."""
+    data = data_digests_from_bindings(bindings, artifact_lookup=artifact_lookup)
+    if not data:
+        return None, None
+    if len(data) == 1:
+        return data[0], None
+    return hashlib.sha256(canonical_json(data)).hexdigest(), None
 
-    ``method=None`` becomes ``""`` so omitting method cannot inflate independence.
-    Fallback uses ``experiment_id`` (task id), never attempt id.
+
+def normalized_task_spec_digest(spec: Any) -> str:
+    """Hash of TaskSpec excluding identity fields (task_key)."""
+    if hasattr(spec, "model_dump"):
+        raw = spec.model_dump(mode="json")
+    elif isinstance(spec, Mapping):
+        raw = dict(spec)
+    else:
+        raw = {}
+    raw.pop("task_key", None)
+    return spec_digest(raw)
+
+
+def independence_key_for(*, experiment_id: str | None = None) -> str:
+    """Base independence key: sha256(JCS({experiment_id})). Method is not in the key."""
+    return hashlib.sha256(
+        canonical_json({"experiment_id": experiment_id or ""})
+    ).hexdigest()
+
+
+def _claim_data_digests(claim: Any) -> frozenset[str]:
+    raw = getattr(claim, "data_digests", None) or ()
+    return frozenset(str(x) for x in raw if x)
+
+
+def _claim_spec_group(claim: Any) -> tuple[str, str] | None:
+    sd = getattr(claim, "spec_digest", None) or ""
+    if not sd:
+        return None
+    plan = str(getattr(claim, "plan_id", None) or getattr(claim, "study_id", None) or "")
+    return (plan, str(sd))
+
+
+def _union_find_parent(parent: dict[str, str], x: str) -> str:
+    while parent[x] != x:
+        parent[x] = parent[parent[x]]
+        x = parent[x]
+    return x
+
+
+def _union_find_merge(parent: dict[str, str], a: str, b: str) -> None:
+    ra, rb = _union_find_parent(parent, a), _union_find_parent(parent, b)
+    if ra != rb:
+        parent[rb] = ra
+
+
+def source_id_for_claim(claim: Any) -> str:
+    """Effective independence source after overlap / identical-spec merge rules.
+
+    - Base: ``independence_key`` (experiment_id-derived).
+    - Merge experiments whose bound **data** digests overlap.
+    - No-input experiments: same plan/study + identical normalized spec → one source.
     """
-    payload = {
-        "dataset_digest": dataset_digest or "",
-        "method": method or "",
-        "code_digest": code_digest or "",
-    }
-    if not any(payload.values()):
-        payload = {"experiment_id": experiment_id or ""}
-    return hashlib.sha256(canonical_json(payload)).hexdigest()
+    # distinct_by_key computes components; this helper is for single-claim fallback.
+    return str(
+        getattr(claim, "independence_key", None)
+        or independence_key_for(
+            experiment_id=getattr(claim, "experiment_id", None)
+            or getattr(claim, "attempt_id", "")
+            or "x"
+        )
+    )
+
+
+def distinct_by_key(claims: Sequence[Any]) -> list[Any]:
+    """Keep first claim per independence source (overlap-aware)."""
+    items = list(claims)
+    if not items:
+        return []
+
+    # Node id per claim for union-find.
+    ids = [f"c{i}" for i in range(len(items))]
+    parent = {i: i for i in ids}
+
+    # Index digests → claim ids for overlap unions.
+    digest_owners: dict[str, list[str]] = {}
+    spec_owners: dict[tuple[str, str], list[str]] = {}
+    for cid, c in zip(ids, items, strict=True):
+        dig_set = _claim_data_digests(c)
+        if dig_set:
+            for d in dig_set:
+                digest_owners.setdefault(d, []).append(cid)
+        else:
+            grp = _claim_spec_group(c)
+            if grp is not None:
+                spec_owners.setdefault(grp, []).append(cid)
+
+    for owners in digest_owners.values():
+        for other in owners[1:]:
+            _union_find_merge(parent, owners[0], other)
+    # Overlap across digests: if A has {d1,d2} and B has {d2,d3}, both listed under d2.
+    # Also connect claims that share any digest via transitive closure of per-digest unions.
+    for cid, c in zip(ids, items, strict=True):
+        dig_list = list(_claim_data_digests(c))
+        for i in range(1, len(dig_list)):
+            a = digest_owners[dig_list[0]][0]
+            b = digest_owners[dig_list[i]][0]
+            _union_find_merge(parent, a, b)
+            _union_find_merge(parent, cid, a)
+
+    for owners in spec_owners.values():
+        for other in owners[1:]:
+            _union_find_merge(parent, owners[0], other)
+
+    # Claims with neither digests nor spec_digest: singleton by independence_key.
+    key_owners: dict[str, list[str]] = {}
+    for cid, c in zip(ids, items, strict=True):
+        if _claim_data_digests(c) or _claim_spec_group(c) is not None:
+            continue
+        key_owners.setdefault(source_id_for_claim(c), []).append(cid)
+    for owners in key_owners.values():
+        for other in owners[1:]:
+            _union_find_merge(parent, owners[0], other)
+
+    seen: set[str] = set()
+    out: list[Any] = []
+    for cid, c in zip(ids, items, strict=True):
+        root = _union_find_parent(parent, cid)
+        if root in seen:
+            continue
+        seen.add(root)
+        out.append(c)
+    return out
 
 
 def effective_outcome(claim: Any) -> ClaimOutcome | None:
@@ -167,17 +315,35 @@ def tost_holds(*, sesoi: float | None, effect: Mapping[str, Any] | None) -> bool
     return (-s) < lo and hi < s
 
 
-def _threshold_set(*, sesoi: float | None, min_power: float | None) -> bool:
-    """sesoi set, or min_power > 0 (zero / absent does not qualify)."""
-    if sesoi is not None:
-        return True
-    if min_power is not None and float(min_power) > 0.0:
-        return True
-    return False
+def effect_exceeds_sesoi(
+    *,
+    sesoi: float | None,
+    effect: Mapping[str, Any] | None,
+    direction: PredictedDirection | str | None = "two_sided",
+) -> bool:
+    """Non-null prediction: core effect exceeds sesoi in the predicted direction."""
+    if sesoi is None or effect is None:
+        return False
+    try:
+        est = float(effect["est"])  # type: ignore[index]
+        s = float(sesoi)
+    except (KeyError, TypeError, ValueError):
+        return False
+    d = direction or "two_sided"
+    if d == "positive":
+        return est > s
+    if d == "negative":
+        return est < -s
+    return abs(est) > s
 
 
 def claim_is_severe(claim: Any) -> bool:
-    """Severe: consistent ∧ valid ∧ frozen ∧ (sesoi|min_power>0) ∧ power gate."""
+    """Severe: consistent ∧ valid ∧ frozen ∧ catalog uses_sesoi ∧ check used sesoi ∧ effect gate.
+
+    ``min_power`` removed (nothing computes power in M1). Explicit ``severe=False``
+    is definitive (V5 legacy). Explicit ``severe=True`` from the core stamp is
+    honored after the base gates (executor never stamps True without the gate).
+    """
     if effective_outcome(claim) != "consistent":
         return False
     if effective_validity(claim) != "valid":
@@ -187,25 +353,38 @@ def claim_is_severe(claim: Any) -> bool:
         return False
     if not bool(getattr(claim, "frozen", False)):
         return False
-    sesoi = getattr(claim, "sesoi", None)
-    min_power = getattr(claim, "min_power", None)
-    power = getattr(claim, "power", None)
     frozen_at = getattr(claim, "criterion_frozen_at_seq", None)
     first_ev = getattr(claim, "first_cited_evidence_seq", None)
     if frozen_at is not None and first_ev is not None and not (frozen_at < first_ev):
         return False
-    if not _threshold_set(sesoi=sesoi, min_power=min_power):
+    # Core-stamped True is authoritative (set only after the gate in executor).
+    if getattr(claim, "severe", None) is True:
+        return True
+    sesoi = getattr(claim, "sesoi", None)
+    uses = getattr(claim, "uses_sesoi", None)
+    if uses is False:
         return False
-    if min_power is not None and float(min_power) > 0.0:
-        if (power if power is not None else 0.0) < float(min_power):
-            return False
-    return True
+    if uses is not True and sesoi is None:
+        return False
+    if sesoi is None:
+        return False
+    used = getattr(claim, "used_sesoi", None)
+    if used is False:
+        return False
+    effect = getattr(claim, "effect", None)
+    predicts_null = bool(getattr(claim, "predicts_null", False))
+    if predicts_null:
+        return tost_holds(sesoi=float(sesoi), effect=effect)
+    direction = getattr(claim, "predicted_direction", None) or "two_sided"
+    return effect_exceeds_sesoi(
+        sesoi=float(sesoi), effect=effect, direction=direction
+    )
 
 
 def refute_intent_counts(claim: Any) -> bool:
     """Refute intent counts toward supported only if the prediction could fail.
 
-    Requires: intent=refute, frozen criterion, sesoi|min_power>0, prediction role.
+    Requires: intent=refute, catalog uses_sesoi, frozen, prediction role, check used sesoi.
     A planner label alone is not enough.
     """
     if _intent(claim) != "refute":
@@ -214,15 +393,19 @@ def refute_intent_counts(claim: Any) -> bool:
         return False
     if getattr(claim, "refute_capable", None) is True:
         return True
-    # Derive when stamp absent (unit tests / legacy).
     if not bool(getattr(claim, "frozen", False)):
         return False
     if getattr(claim, "check_role", "unknown") != "prediction":
         return False
-    return _threshold_set(
-        sesoi=getattr(claim, "sesoi", None),
-        min_power=getattr(claim, "min_power", None),
-    )
+    uses = getattr(claim, "uses_sesoi", None)
+    if uses is False:
+        return False
+    if getattr(claim, "sesoi", None) is None and uses is not True:
+        return False
+    used = getattr(claim, "used_sesoi", None)
+    if used is False:
+        return False
+    return True
 
 
 def classify_outcome(
@@ -286,28 +469,46 @@ def exclusion_reason(claim: Any) -> ExclusionReason | None:
     return "invalid"
 
 
-def distinct_by_key(claims: Sequence[Any]) -> list[Any]:
-    """Keep first claim per independence_key (experiment_id fallback)."""
-    seen: set[str] = set()
-    out: list[Any] = []
-    for c in claims:
-        key = getattr(c, "independence_key", None) or independence_key_for(
-            experiment_id=getattr(c, "experiment_id", None)
-            or getattr(c, "attempt_id", "")
-            or "x"
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(c)
-    return out
-
-
 def _intent(claim: Any) -> TestsIntent:
     intent = getattr(claim, "intent", None) or DEFAULT_TESTS_INTENT
     if intent not in ("confirm", "refute"):
         return DEFAULT_TESTS_INTENT
     return intent  # type: ignore[return-value]
+
+
+def claim_counts_for_verdict(claim: Any) -> bool:
+    """Base ``counts()`` plus R17 when freeze/evidence metadata is present.
+
+    Lives here (not ``rules``) so ``rules``↔``verdict`` has no import cycle.
+    """
+    fn = getattr(claim, "counts_under_r17", None)
+    if callable(fn):
+        return bool(fn())
+    base = getattr(claim, "counts", None)
+    if callable(base):
+        if not base():
+            return False
+    else:
+        return False
+    try:
+        stance = claim_stance(str(getattr(claim, "criterion_status", "unassessed")))
+    except KeyError:
+        stance = "inconclusive"
+    if stance == "refutes":
+        return True
+    frozen_at = getattr(claim, "criterion_frozen_at_seq", None)
+    first_ev = getattr(claim, "first_cited_evidence_seq", None)
+    confirming = getattr(claim, "confirming_evidence_ids", None)
+    threshold_src = getattr(claim, "threshold_source_evidence_ids", None)
+    if frozen_at is None and first_ev is None and confirming is None:
+        return True
+    return claim_counts_under_r17(
+        criterion_frozen_at_seq=frozen_at,
+        first_cited_evidence_seq=first_ev,
+        confirming_evidence_ids=set(confirming or ()),
+        threshold_source_evidence_ids=set(threshold_src or ()),
+        stance=stance,
+    )
 
 
 def hypothesis_verdict(
@@ -331,15 +532,7 @@ def hypothesis_verdict(
     if not about:
         return "untested", False, "no_counted"
 
-    def _counts(c: Any) -> bool:
-        fn = getattr(c, "counts_under_r17", None)
-        if callable(fn):
-            return bool(fn())
-        from coscientist.core.rules import _claim_counts
-
-        return bool(_claim_counts(c))
-
-    counted = [c for c in about if _counts(c)]
+    counted = [c for c in about if claim_counts_for_verdict(c)]
 
     inconsistent = distinct_by_key(
         [c for c in counted if effective_outcome(c) == "inconsistent"]
@@ -450,7 +643,7 @@ def hypothesis_report_row(
     aux: list[str] = []
     for c in claims:
         cid = getattr(c, "node_id", None) or getattr(c, "attempt_id", "") or "?"
-        if c.counts():
+        if claim_counts_for_verdict(c):
             oc = effective_outcome(c) or "indeterminate"
             counted_rows.append(
                 {

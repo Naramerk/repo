@@ -4,13 +4,12 @@
 
 ### M1 PR8b
 - Hypothesis verdict model (`docs/DESIGN_HYP_DELTA.md`): claim `validity`/`outcome`/`severe`/`independence_key`; stub|partial|lit|invalid excluded **before** counting.
-- `independence_key` from InputBinding digests (data/code) + method; fallback `experiment_id` (not attempt id). Agent cannot set it.
-- `severe` only when frozen criterion has sesoi or min_power>0 (no transitional `min_power=0` stamp). TOST: `predicts_null` + effect from criterion/checks, not agent raw.
-- Study: **`supported_needed`** (default 2, ≥2) is the severe-support gate; `confirmations_needed` restored as PR8 snapshot `k`. StudyCreated **v6**.
+- `independence_key` base = `experiment_id`; count-time merge when bound **data** digests overlap (Artifact.role/media_type, not input name) or no-input tasks share a normalized TaskSpec. Method is not in the key.
+- `severe` / TOST / capable refute: SESOI + `predicts_null` from **catalog template** only (`RequirementRef.params` rejected). Check must `used_sesoi`; effect from `CheckResult.effect`. `min_power` removed.
+- Study: **`supported_needed`** (default 2, ≥2); `confirmations_needed` = PR8 snapshot `k`. StudyCreated **v6**.
 - `aggregate='evalue'` rejected at create (deferred until core computes p-values).
-- Capable refute intent required for `supported` (frozen ∧ threshold ∧ prediction role).
-- Report: `hypothesis_report_row` wired into finalize / `minimal_report.hypotheses[]`; PR8 stub note wording restored.
-- Keeps PR8: check roles, per-experiment `validity_failed` / `unknown_role`, `VerdictSnapshotsRecorded` (wins on replay).
+- Report: `hypothesis_report_row` in finalize; failures record `hypotheses_unavailable` + error class. Bind snapshots win on replay; finalize recomputes report rows.
+- Keeps PR8: check roles, per-experiment `validity_failed` / `unknown_role`, `VerdictSnapshotsRecorded`.
 
 ### M1 PR8
 - Runtime `verdict()` wired into `dispositions()` / finalize (Study `confirmations_needed` / `refutations_needed` / `refutation_priority`); supported → answered; hypothesis verdicts in StudyFinalized.

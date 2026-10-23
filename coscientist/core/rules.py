@@ -10,13 +10,17 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from coscientist.core.graph import load_schema
-from coscientist.core.r17 import claim_counts_under_r17
 from coscientist.core.stance import (  # re-export
     DEFAULT_TESTS_INTENT,
     STANCE,
     TestsIntent,
     claim_stance,
 )
+from coscientist.core.verdict import (
+    claim_counts_for_verdict,
+    excluded_confirmations_note,
+)
+from coscientist.core.verdict import verdict as hyp_verdict
 
 SCHEMA = load_schema()
 PAIRS = {e["name"]: {tuple(p) for p in e["pairs"]} for e in SCHEMA["edges"]}
@@ -103,27 +107,9 @@ def _tests_intent(claim: _ClaimLike) -> TestsIntent:
 def _claim_counts(claim: _ClaimLike) -> bool:
     """Base ``counts()`` plus R17 when freeze/evidence metadata is present.
 
-    R17 (§12) applies only to confirming claims; ``refutes`` skip the
-    confirming-evidence gate.
+    Delegates to ``verdict.claim_counts_for_verdict`` (no reverse import cycle).
     """
-    if not claim.counts():
-        return False
-    if claim.stance == "refutes":
-        return True
-    frozen_at = claim.criterion_frozen_at_seq
-    first_ev = claim.first_cited_evidence_seq
-    confirming = claim.confirming_evidence_ids
-    threshold_src = claim.threshold_source_evidence_ids
-    # No R17 metadata → base counts() already decided.
-    if frozen_at is None and first_ev is None and confirming is None:
-        return True
-    return claim_counts_under_r17(
-        criterion_frozen_at_seq=frozen_at,
-        first_cited_evidence_seq=first_ev,
-        confirming_evidence_ids=set(confirming or ()),
-        threshold_source_evidence_ids=set(threshold_src or ()),
-        stance=claim.stance,
-    )
+    return claim_counts_for_verdict(claim)
 
 
 def verdict(
@@ -141,9 +127,7 @@ def verdict(
     needs ≥ ``supported_needed`` severe consistent claims with ≥1 capable
     ``intent=refute``. ``k`` is PR8 ``confirmations_needed`` (snapshot field).
     """
-    from coscientist.core.verdict import verdict as _hyp_verdict
-
-    return _hyp_verdict(
+    return hyp_verdict(
         claims,
         any_experiment_done,
         k,
@@ -163,8 +147,6 @@ def priority_refuted_support_note(
     supported_needed: int = 2,
 ) -> str | None:
     """PR8 note when refuted and stub/partial confirmations were excluded."""
-    from coscientist.core.verdict import excluded_confirmations_note
-
     v, _ = verdict(
         claims,
         any_experiment_done,

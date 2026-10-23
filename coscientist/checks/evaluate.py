@@ -87,6 +87,10 @@ def evaluate_code_check(
     artifacts: LocalArtifactStore,
     values: dict[str, Any],
     role: CheckRole,
+    uses_sesoi: bool = False,
+    sesoi: float | None = None,
+    predicts_null: bool = False,
+    predicted_direction: str = "two_sided",
 ) -> CheckResult:
     try:
         if check.kind == "artifact_exists":
@@ -109,7 +113,7 @@ def evaluate_code_check(
                 status=ReqStatus.MET,
                 is_code=True,
                 required=True,
-                    role=role,
+                role=role,
                 evidence=[
                     EvidenceRef(
                         artifact_id=art.artifact_id,
@@ -147,13 +151,45 @@ def evaluate_code_check(
                 left = _pointer_get(doc, pointer)
                 evid_digest = sha256_hex(canonical_json(left))
 
+            effect: dict[str, Any] | None = None
+            used_sesoi = False
             if check.kind == "json_pointer":
                 ok = left is not None
             elif check.kind == "value_matches":
-                ok = left == check.target
+                if uses_sesoi and sesoi is not None and isinstance(left, (int, float)):
+                    # SESOI as equality tolerance (null-style) or exact match otherwise.
+                    used_sesoi = True
+                    est = float(left) - float(check.target or 0)
+                    effect = {"est": est, "ci_low": est, "ci_high": est}
+                    if predicts_null:
+                        ok = abs(est) < float(sesoi)
+                    else:
+                        ok = left == check.target
+                else:
+                    ok = left == check.target
             else:
+                # metric_threshold — when uses_sesoi, threshold is catalog sesoi.
                 op = check.op or "=="
-                ok = _cmp(op, left, check.target, check.tolerance)
+                if uses_sesoi and sesoi is not None and isinstance(left, (int, float)):
+                    used_sesoi = True
+                    est = float(left)
+                    effect = {"est": est, "ci_low": est, "ci_high": est}
+                    if predicts_null:
+                        ok = abs(est) < float(sesoi)
+                    elif predicted_direction == "positive":
+                        ok = est > float(sesoi)
+                    elif predicted_direction == "negative":
+                        ok = est < -float(sesoi)
+                    else:
+                        ok = abs(est) > float(sesoi)
+                else:
+                    ok = _cmp(op, left, check.target, check.tolerance)
+                    if isinstance(left, (int, float)):
+                        effect = {
+                            "est": float(left),
+                            "ci_low": float(left),
+                            "ci_high": float(left),
+                        }
 
             return CheckResult(
                 check_id=check_id,
@@ -161,7 +197,7 @@ def evaluate_code_check(
                 status=ReqStatus.MET if ok else ReqStatus.FAILED,
                 is_code=True,
                 required=True,
-                    role=role,
+                role=role,
                 evidence=[
                     EvidenceRef(
                         artifact_id=handle.artifact_id,
@@ -170,6 +206,8 @@ def evaluate_code_check(
                     )
                 ],
                 detail=None if ok else f"{left!r} vs {check.target!r}",
+                effect=effect,
+                used_sesoi=used_sesoi,
             )
 
         if check.kind == "schema_valid":
@@ -316,6 +354,10 @@ def evaluate_task_checks(
                 artifacts=artifacts,
                 values=out.values,
                 role=role,
+                uses_sesoi=bool(tmpl.uses_sesoi),
+                sesoi=tmpl.sesoi,
+                predicts_null=bool(tmpl.predicts_null),
+                predicted_direction=str(tmpl.predicted_direction),
             )
             # respect required flag from ref
             results.append(
@@ -328,6 +370,8 @@ def evaluate_task_checks(
                     role=role,
                     evidence=cr.evidence,
                     detail=cr.detail,
+                    effect=cr.effect,
+                    used_sesoi=cr.used_sesoi,
                 )
             )
     return results

@@ -7,8 +7,29 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from coscientist.core.digest import sha256_hex
-from coscientist.core.domain import Artifact, ToolCallRef
+from coscientist.core.domain import Artifact, ArtifactRole, ToolCallRef
 from coscientist.core.errors import ArtifactCorrupt, ArtifactRejected
+
+
+def _infer_artifact_role(media_type: str) -> ArtifactRole:
+    """Core media_type → role (never planner input name)."""
+    mt = (media_type or "").lower()
+    if any(
+        tok in mt
+        for tok in (
+            "python",
+            "javascript",
+            "typescript",
+            "x-sh",
+            "x-shellscript",
+            "x-script",
+            "x-bytecode",
+        )
+    ):
+        return "code"
+    if mt.startswith("text/x-"):
+        return "code"
+    return "data"
 
 
 class LocalArtifactStore:
@@ -50,6 +71,7 @@ class LocalArtifactStore:
         name: str,
         media_type: str,
         schema_ref: str | None = None,
+        role: str | None = None,
         attempt_closed: bool = False,
     ) -> Artifact:
         if attempt_closed:
@@ -57,6 +79,7 @@ class LocalArtifactStore:
         digest = self.put_cas(content, tmp_name=produced_by.call_id)
         call_part = sha256_hex(produced_by.call_id)[:8]
         artifact_id = f"art_{digest[:16]}_{call_part}"
+        inferred = role or _infer_artifact_role(media_type)
         art = Artifact(
             artifact_id=artifact_id,
             name=name,
@@ -66,6 +89,7 @@ class LocalArtifactStore:
             uri=f"file://{self.cas / digest}",
             produced_by=produced_by,
             schema_ref=schema_ref,
+            role=inferred,  # type: ignore[arg-type]
         )
         self._index[artifact_id] = art
         (self.meta / f"{artifact_id}.json").write_text(

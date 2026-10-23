@@ -403,13 +403,26 @@ def claim_nodes_from_attempt(
         if oc in ("consistent", "inconsistent", "indeterminate"):
             attrs["claim_outcome"] = oc
             attrs["outcome"] = oc
-        # sesoi / min_power only from core (frozen criterion) — never stamp 0.0.
-        for num_key in ("p_value", "power", "sesoi", "min_power", "alpha"):
+        # sesoi only from core (catalog-frozen criterion) — never stamp 0.0 freely.
+        for num_key in ("p_value", "power", "sesoi", "alpha"):
             if core.get(num_key) is not None:
                 try:
                     attrs[num_key] = float(core[num_key])
                 except (TypeError, ValueError):
                     pass
+        for flag in ("uses_sesoi", "used_sesoi", "predicts_null"):
+            if flag in core:
+                attrs[flag] = bool(core.get(flag))
+        if core.get("predicted_direction") in ("positive", "negative", "two_sided"):
+            attrs["predicted_direction"] = str(core["predicted_direction"])
+        if isinstance(core.get("data_digests"), list):
+            attrs["data_digests"] = [str(x) for x in core["data_digests"]]
+        if core.get("spec_digest"):
+            attrs["spec_digest"] = str(core["spec_digest"])
+        if core.get("plan_id"):
+            attrs["plan_id"] = str(core["plan_id"])
+        if core.get("study_id"):
+            attrs["study_id"] = str(core["study_id"])
         if core.get("experiment_id"):
             attrs["experiment_id"] = str(core["experiment_id"])
         else:
@@ -442,8 +455,17 @@ def claim_nodes_from_attempt(
                     "validity_ok": attrs.get("validity_ok", True),
                     "frozen": attrs.get("frozen", False),
                     "sesoi": attrs.get("sesoi"),
-                    "min_power": attrs.get("min_power"),
-                    "power": attrs.get("power"),
+                    "uses_sesoi": attrs.get("uses_sesoi"),
+                    "used_sesoi": attrs.get("used_sesoi"),
+                    "predicts_null": attrs.get("predicts_null", False),
+                    "predicted_direction": attrs.get(
+                        "predicted_direction", "two_sided"
+                    ),
+                    "effect": (
+                        dict(core["effect"])
+                        if isinstance(core.get("effect"), dict)
+                        else None
+                    ),
                     "severe": None,
                     "criterion_frozen_at_seq": None,
                     "first_cited_evidence_seq": None,
@@ -602,11 +624,17 @@ def validate_input_specs(tasks: list[TaskSpec]) -> None:
                 raise ValueError(f"unknown InputSpec.kind: {kind!r}")
 
 
-def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
-    """Reject unknown templates and plan roles that disagree with the catalog.
+_FORBIDDEN_THRESHOLD_PARAMS = frozenset(
+    {"sesoi", "min_power", "predicts_null", "power", "uses_sesoi", "predicted_direction"}
+)
 
-    Role is catalog-authored; an explicit ``RequirementRef.role`` is accepted
-    only when it matches the template. Unknown ``template_id`` → reject.
+
+def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
+    """Reject unknown templates, role mismatches, and planner-set SESOI params.
+
+    Role / sesoi / predicts_null are catalog-authored. ``RequirementRef.params``
+    must not carry threshold fields; out-of-range catalog sesoi is rejected at
+    catalog load. Unknown ``template_id`` → reject.
     """
     if catalog is None:
         raise ValueError("accept_plan requires catalog to validate criteria")
@@ -620,6 +648,30 @@ def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
                     f"(task {spec.task_key!r})"
                 )
             tmpl = by_id[tid]
+            params = dict(getattr(ref, "params", None) or {})
+            bad = sorted(_FORBIDDEN_THRESHOLD_PARAMS & set(params))
+            if bad:
+                raise ValueError(
+                    f"criterion params {bad} must come from the catalog template "
+                    f"{tid!r}, not RequirementRef.params (task {spec.task_key!r})"
+                )
+            # Catalog sesoi already validated at load; re-check bounds here.
+            if getattr(tmpl, "uses_sesoi", False):
+                sesoi = getattr(tmpl, "sesoi", None)
+                lo = getattr(tmpl, "sesoi_min", None)
+                hi = getattr(tmpl, "sesoi_max", None)
+                if sesoi is None:
+                    raise ValueError(
+                        f"template {tid!r} uses_sesoi but sesoi is unset"
+                    )
+                if lo is not None and float(sesoi) < float(lo):
+                    raise ValueError(
+                        f"template {tid!r} sesoi {sesoi} < sesoi_min {lo}"
+                    )
+                if hi is not None and float(sesoi) > float(hi):
+                    raise ValueError(
+                        f"template {tid!r} sesoi {sesoi} > sesoi_max {hi}"
+                    )
             plan_role = getattr(ref, "role", None)
             if plan_role is None:
                 continue

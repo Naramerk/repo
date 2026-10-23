@@ -57,7 +57,14 @@ _CORE_CLAIM_ATTRS: frozenset[str] = frozenset(
         "p_value",
         "power",
         "sesoi",
-        "min_power",
+        "uses_sesoi",
+        "used_sesoi",
+        "predicts_null",
+        "predicted_direction",
+        "data_digests",
+        "spec_digest",
+        "plan_id",
+        "study_id",
         "effect",
         "alpha",
     }
@@ -105,7 +112,14 @@ class RuntimeClaim:
     p_value: float | None = None
     power: float | None = None
     sesoi: float | None = None
-    min_power: float | None = None  # only from frozen criterion; never stamped 0
+    uses_sesoi: bool | None = None
+    used_sesoi: bool | None = None
+    predicts_null: bool = False
+    predicted_direction: str = "two_sided"
+    data_digests: list[str] | None = None
+    spec_digest: str = ""
+    plan_id: str = ""
+    study_id: str = ""
     effect: dict[str, Any] | None = None
     validity: str | None = None  # valid|invalid (mirrors validity_ok)
 
@@ -459,12 +473,30 @@ def runtime_claim_from_node(
                 sesoi = float(sesoi)
             except (TypeError, ValueError):
                 sesoi = None
-        min_power = attrs.get("min_power")
-        if min_power is not None:
-            try:
-                min_power = float(min_power)
-            except (TypeError, ValueError):
-                min_power = None
+        uses_sesoi = _coerce_bool(attrs.get("uses_sesoi"))
+        used_sesoi = _coerce_bool(attrs.get("used_sesoi"))
+        predicts_null = bool(attrs.get("predicts_null", False))
+        pd_raw = attrs.get("predicted_direction")
+        predicted_direction = (
+            str(pd_raw)
+            if pd_raw in ("positive", "negative", "two_sided")
+            else "two_sided"
+        )
+        raw_digests = attrs.get("data_digests")
+        data_digests: list[str] | None
+        if isinstance(raw_digests, list):
+            data_digests = [str(x) for x in raw_digests if x]
+        else:
+            data_digests = None
+        spec_digest = _coerce_str(attrs.get("spec_digest"), allow_empty=True) or ""
+        plan_id_s = _coerce_str(attrs.get("plan_id"), allow_empty=True) or ""
+        study_id_attr = _coerce_str(attrs.get("study_id"), allow_empty=True) or ""
+        effect_raw = attrs.get("effect")
+        effect: dict[str, Any] | None
+        if isinstance(effect_raw, dict):
+            effect = dict(effect_raw)
+        else:
+            effect = None
         frozen = _coerce_bool(attrs.get("frozen"))
         if frozen is None:
             return None, "bad_frozen"
@@ -549,7 +581,15 @@ def runtime_claim_from_node(
                 p_value=p_value if isinstance(p_value, float) else None,
                 power=power if isinstance(power, float) else None,
                 sesoi=sesoi if isinstance(sesoi, float) else None,
-                min_power=min_power if isinstance(min_power, float) else None,
+                uses_sesoi=uses_sesoi,
+                used_sesoi=used_sesoi,
+                predicts_null=predicts_null,
+                predicted_direction=predicted_direction,
+                data_digests=data_digests,
+                spec_digest=spec_digest,
+                plan_id=plan_id_s,
+                study_id=study_id_attr or study_id,
+                effect=effect,
                 experiment_id=experiment_id,
                 refute_capable=refute_capable,
             ),

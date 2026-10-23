@@ -143,11 +143,16 @@ class HitlPolicy(Frozen):
         )
 
 
+ArtifactRole = Literal["paper", "data", "code", "figure", "table", "log", "report"]
+
+
 class OutputSpec(Frozen):
     name: str
     media_type: str
     schema_ref: str | None = None
     required: bool = True
+    # Core artifact role (graph_schema); used for independence data-vs-code.
+    role: ArtifactRole | None = None
 
 
 class InputSpec(Frozen):
@@ -358,6 +363,9 @@ class CheckResult(Frozen):
     role: CheckRole  # from catalog template; never defaulted to validity
     evidence: list[EvidenceRef] = Field(default_factory=list)
     detail: str | None = None
+    # Core-only numeric effect from evaluation (never agent claim attrs / free detail).
+    effect: dict[str, Any] | None = None
+    used_sesoi: bool = False
 
 
 class Result(Frozen):
@@ -385,6 +393,7 @@ class Artifact(Frozen):
     uri: str
     produced_by: ToolCallRef
     schema_ref: str | None = None
+    role: ArtifactRole | None = None
 
 
 class Clarification(Frozen):
@@ -444,12 +453,17 @@ class ReviewCheck(Frozen):
     max_calls: int = 1
 
 
+PredictedDirection = Literal["positive", "negative", "two_sided"]
+
+
 class RequirementTemplate(Frozen):
     """One source: human-readable text_ru + machine check together.
 
     ``role`` (Duhem–Quine) is catalog-authored only:
     - ``prediction`` — FAILED → ``not_met`` → counting refute
     - ``validity`` — FAILED → claim invalid; experiment capped at inconclusive
+
+    SESOI / ``predicts_null`` are catalog-only (never ``RequirementRef.params``).
     """
 
     id: str
@@ -462,6 +476,13 @@ class RequirementTemplate(Frozen):
     role: Literal["prediction", "validity"]
     required: bool = True
     version: str = "1"
+    # Severe / TOST threshold — catalog-authored only.
+    uses_sesoi: bool = False
+    sesoi: float | None = None
+    sesoi_min: float | None = None
+    sesoi_max: float | None = None
+    predicts_null: bool = False
+    predicted_direction: PredictedDirection = "two_sided"
 
 
 class Catalog(Frozen):

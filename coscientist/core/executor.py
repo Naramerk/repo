@@ -191,50 +191,52 @@ def _criterion_is_frozen(graph: Any, study_id: str, template_id: Any) -> bool:
 def _criterion_freeze_attrs(
     graph: Any, study_id: str, template_id: Any
 ) -> dict[str, Any]:
-    """sesoi / min_power / alpha / predicts_null from the frozen criterion only."""
+    """sesoi / predicts_null / uses_sesoi from the frozen criterion (catalog)."""
     node = _criterion_node(graph, study_id, template_id)
     attrs = (node.attrs or {}) if node is not None else {}
     out: dict[str, Any] = {}
-    for key in ("sesoi", "min_power", "alpha"):
-        if attrs.get(key) is None:
-            continue
+    if attrs.get("sesoi") is not None:
         try:
-            out[key] = float(attrs[key])
+            out["sesoi"] = float(attrs["sesoi"])
+        except (TypeError, ValueError):
+            pass
+    if attrs.get("alpha") is not None:
+        try:
+            out["alpha"] = float(attrs["alpha"])
         except (TypeError, ValueError):
             pass
     if "predicts_null" in attrs:
         out["predicts_null"] = bool(attrs.get("predicts_null"))
+    if "uses_sesoi" in attrs:
+        out["uses_sesoi"] = bool(attrs.get("uses_sesoi"))
+    if attrs.get("predicted_direction") in ("positive", "negative", "two_sided"):
+        out["predicted_direction"] = str(attrs["predicted_direction"])
     return out
 
 
-def _effect_from_checks(checks: list[Any]) -> dict[str, Any] | None:
-    """Core-computed effect from prediction check detail (never agent raw)."""
-    import json
-
+def _effect_from_checks(checks: list[Any]) -> tuple[dict[str, Any] | None, bool]:
+    """Core-computed effect from CheckResult.effect (never agent detail / claims)."""
     for c in checks or ():
         if _check_role(c) != "prediction":
             continue
-        detail = _check_field(c, "detail")
-        data: Any = None
-        if isinstance(detail, dict):
-            data = detail
-        elif isinstance(detail, str) and detail.strip().startswith("{"):
-            try:
-                data = json.loads(detail)
-            except (TypeError, ValueError, json.JSONDecodeError):
-                data = None
+        data = _check_field(c, "effect")
         if not isinstance(data, dict):
             continue
-        if "ci_low" in data and "ci_high" in data:
-            try:
-                return {
-                    "est": float(data["est"]) if data.get("est") is not None else None,
-                    "ci_low": float(data["ci_low"]),
-                    "ci_high": float(data["ci_high"]),
-                }
-            except (TypeError, ValueError):
-                continue
-    return None
+        try:
+            effect = {
+                "est": float(data["est"]) if data.get("est") is not None else None,
+                "ci_low": float(data["ci_low"])
+                if data.get("ci_low") is not None
+                else None,
+                "ci_high": float(data["ci_high"])
+                if data.get("ci_high") is not None
+                else None,
+            }
+        except (TypeError, ValueError, KeyError):
+            continue
+        used = bool(_check_field(c, "used_sesoi"))
+        return effect, used
+    return None, False
 
 
 def _derive_claim_core_attrs(
@@ -248,6 +250,8 @@ def _derive_claim_core_attrs(
     validated: bool,
     catalog: Any | None = None,
     bindings: list[Any] | None = None,
+    artifact_store: Any | None = None,
+    plan_id: str | None = None,
 ) -> dict[str, Any]:
     """Core-owned counting fields from plan/checks/freeze — never agent attrs.
 
@@ -289,16 +293,18 @@ def _derive_claim_core_attrs(
     from coscientist.core.verdict import (
         claim_is_severe,
         classify_outcome,
-        digests_from_bindings,
+        data_digests_from_bindings,
         independence_key_for,
+        normalized_task_spec_digest,
         outcome_to_status,
     )
 
     frozen = _criterion_is_frozen(graph, study_id, key)
     crit = _criterion_freeze_attrs(graph, study_id, key)
     sesoi = crit.get("sesoi")
-    min_power = crit.get("min_power")
+    uses_sesoi = bool(crit.get("uses_sesoi", False))
     predicts_null = bool(crit.get("predicts_null", False))
+    predicted_direction = str(crit.get("predicted_direction") or "two_sided")
     pred_statuses: list[str] = []
     has_prediction_check = False
     for c in checks or ():
@@ -310,8 +316,8 @@ def _derive_claim_core_attrs(
         pred_statuses = [
             "PASSED" if status == "met" else ("FAILED" if status == "not_met" else "")
         ]
-    # Effect from check results only — never agent raw claim fields.
-    effect = _effect_from_checks(list(checks or []))
+    # Effect from CheckResult.effect only — never agent detail / claim attrs.
+    effect, used_sesoi = _effect_from_checks(list(checks or []))
     validity_s, claim_outcome, _ = classify_outcome(
         validity_ok=validity_ok,
         prediction_statuses=pred_statuses,
@@ -335,16 +341,23 @@ def _derive_claim_core_attrs(
         exp_id = str(getattr(task, "task_id", None) or "")
     except Exception:  # noqa: BLE001
         exp_id = ""
-    method_s = str(method.value) if isinstance(method, ExperimentMethod) else (
-        str(method) if method is not None else None
+    lookup = None
+    arts = artifact_store
+    if arts is not None and hasattr(arts, "get_meta"):
+        lookup = arts.get_meta
+    data_digests = data_digests_from_bindings(bindings, artifact_lookup=lookup)
+    has_artifact_inputs = any(
+        (
+            (b.get("kind", "artifact") if isinstance(b, dict) else getattr(b, "kind", "artifact"))
+            == "artifact"
+        )
+        for b in (bindings or ())
     )
-    dataset_digest, code_digest = digests_from_bindings(bindings)
-    indep = independence_key_for(
-        dataset_digest=dataset_digest,
-        method=method_s,
-        code_digest=code_digest,
-        experiment_id=exp_id or None,
-    )
+    spec_dig = ""
+    if not data_digests and not has_artifact_inputs and spec is not None:
+        spec_dig = normalized_task_spec_digest(spec)
+    # Base key is experiment_id; overlap / identical-spec merge happens at count time.
+    indep = independence_key_for(experiment_id=exp_id or None)
     probe = type(
         "P",
         (),
@@ -353,21 +366,24 @@ def _derive_claim_core_attrs(
             "validity_ok": validity_ok,
             "frozen": frozen,
             "sesoi": sesoi if isinstance(sesoi, float) else None,
-            "min_power": min_power if isinstance(min_power, float) else None,
-            "power": None,
+            "uses_sesoi": uses_sesoi,
+            "used_sesoi": used_sesoi,
+            "predicts_null": predicts_null,
+            "predicted_direction": predicted_direction,
+            "effect": effect,
             "severe": None,
             "criterion_frozen_at_seq": None,
             "first_cited_evidence_seq": None,
         },
     )()
     severe = claim_is_severe(probe)
+    # Capable refute: catalog uses_sesoi + prediction check that applied sesoi.
     refute_capable = bool(
         frozen
         and has_prediction_check
-        and (
-            (isinstance(sesoi, float))
-            or (isinstance(min_power, float) and float(min_power) > 0.0)
-        )
+        and uses_sesoi
+        and isinstance(sesoi, float)
+        and used_sesoi
     )
     out: dict[str, Any] = {
         "criterion_status": status,
@@ -384,11 +400,19 @@ def _derive_claim_core_attrs(
         "independence_key": indep,
         "experiment_id": exp_id,
         "refute_capable": refute_capable,
+        "uses_sesoi": uses_sesoi,
+        "used_sesoi": used_sesoi,
+        "predicts_null": predicts_null,
+        "predicted_direction": predicted_direction,
+        "data_digests": data_digests,
+        "study_id": study_id,
     }
+    if spec_dig:
+        out["spec_digest"] = spec_dig
+    if plan_id:
+        out["plan_id"] = plan_id
     if isinstance(sesoi, float):
         out["sesoi"] = sesoi
-    if isinstance(min_power, float):
-        out["min_power"] = min_power
     if isinstance(crit.get("alpha"), float):
         out["alpha"] = crit["alpha"]
     if effect is not None:
@@ -413,6 +437,7 @@ class Executor:
         on_events: Any | None = None,
         review_statuses: dict[str, ReqStatus] | None = None,
         get_graph: Any | None = None,
+        get_plans: Any | None = None,
     ) -> None:
         self.writer = writer
         self.catalog = catalog
@@ -423,7 +448,24 @@ class Executor:
         self.on_events = on_events  # callback after successful append (project local)
         self.review_statuses = review_statuses or {}
         self.get_graph = get_graph
+        self.get_plans = get_plans
         self._scheduled_reviews: list[str] = []
+
+    def _latest_plan_id(self) -> str | None:
+        if self.get_plans is None:
+            return None
+        plans = self.get_plans() or {}
+        if not plans:
+            return None
+        # Prefer highest revision; fall back to any key.
+        best_id: str | None = None
+        best_rev = -1
+        for pid, row in plans.items():
+            rev = int((row or {}).get("revision") or 0)
+            if rev >= best_rev:
+                best_rev = rev
+                best_id = str(pid)
+        return best_id
 
     async def mark_route_returned(self, attempt_id: str, out: AgentTaskOutput) -> str:
         """Persist agent output in CAS and emit RouteReturned with its digest."""
@@ -715,6 +757,8 @@ class Executor:
                 validated=validated,
                 catalog=self.catalog,
                 bindings=bindings,
+                artifact_store=self.artifacts,
+                plan_id=self._latest_plan_id(),
             ),
         )
         if drops:

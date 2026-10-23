@@ -122,6 +122,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             on_events=on_events or self._project_local,
             review_statuses=review_statuses,
             get_graph=lambda: self.graph,
+            get_plans=lambda: self.plans,
         )
         self.artifacts = artifacts
         self.catalog = catalog
