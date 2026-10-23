@@ -160,6 +160,21 @@ def priority_refuted_support_note(
     return excluded_confirmations_note(claims, verdict_value=v)
 
 
+_BLOCKING_VERDICTS = frozenset({"untested", "not_attempted", "rubric_not_met"})
+# Disposition values that settle a question (not raw claim "supported").
+_SETTLED_DISPOSITIONS = frozenset(
+    {
+        "answered",
+        "refuted",
+        "survived",
+        "inconclusive",
+        "needs_more_data",
+        "infeasible",
+        "ill_posed",
+    }
+)
+
+
 def study_fulfilled(
     question_verdicts: dict[str, str],
     all_required_success: bool,
@@ -168,8 +183,8 @@ def study_fulfilled(
 ) -> bool:
     """Fulfilled when required tasks succeed and every question is settled.
 
-    ``final_type=artifact``: settled ⇔ disposition/verdict is answered (rubric MET).
-    ``final_type=both``: settled ⇔ answered (verdict + rubric); untested blocks.
+    ``final_type=artifact``: settled ⇔ disposition is answered (rubric MET).
+    ``final_type=both``: settled ⇔ disposition answered/refuted/… (verdict + rubric).
     ``final_type=verdict``: untested blocks (DESIGN_M1 §6.1).
     """
     if not all_required_success:
@@ -178,11 +193,11 @@ def study_fulfilled(
     for qid, v in question_verdicts.items():
         ft = ftypes.get(qid, "verdict")
         if ft == "artifact":
-            if v in ("untested", "not_attempted"):
+            if v != "answered":
                 return False
             continue
         if ft == "both":
-            if v in ("untested", "not_attempted"):
+            if v in _BLOCKING_VERDICTS or v not in _SETTLED_DISPOSITIONS:
                 return False
             continue
         if v == "untested":
@@ -190,9 +205,18 @@ def study_fulfilled(
     return True
 
 
-def study_view_verdict(all_required_success: bool, question_verdicts: dict[str, str]) -> str:
+def study_view_verdict(
+    all_required_success: bool,
+    question_verdicts: dict[str, str],
+    *,
+    question_final_types: dict[str, str] | None = None,
+) -> str:
     """Wrapper aligned with study_view(): fulfilled iff study_fulfilled(...)."""
-    if study_fulfilled(question_verdicts, all_required_success):
+    if study_fulfilled(
+        question_verdicts,
+        all_required_success,
+        question_final_types=question_final_types,
+    ):
         return "fulfilled"
     if not all_required_success:
         return "failed"

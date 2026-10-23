@@ -109,6 +109,10 @@ async def open_runtime(
         # Production path: Executor always via make_executor (live get_graph).
         arts = artifacts if artifacts is not None else LocalArtifactStore(root / "arts")
         rt.make_executor(catalog, arts)
+        # PR13: rebuild judge state from journal so reopen == live.
+        from coscientist.core.reviews import apply_judge_journal
+
+        apply_judge_journal(rt.executor, events)
         # PR18: seal tool registry after built-ins — no late register_tool at runtime.
         ensure_core_tools_ready()
         return rt
@@ -123,9 +127,7 @@ async def open_runtime(
             try:
                 await store.release_lease(owner, store.epoch)
             except BaseException:
-                log.warning(
-                    "release_lease failed during open_runtime cleanup", exc_info=True
-                )
+                log.warning("release_lease failed during open_runtime cleanup", exc_info=True)
         try:
             await store.close()
         except BaseException:

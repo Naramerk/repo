@@ -174,9 +174,7 @@ def test_claim_attrs_whitelisted_no_counting_controls():
     # Agent criterion_status must not stick from whitelist — core derived overwrites.
     assert attrs["reason"] == "ok"
     assert attrs["target"] == "Q1"
-    assert CLAIM_ATTR_WHITELIST == frozenset(
-        {"target", "checked_against", "reason", "premise_idx"}
-    )
+    assert CLAIM_ATTR_WHITELIST == frozenset({"target", "checked_against", "reason", "premise_idx"})
 
 
 def test_about_edge_emitted_unknown_target_dropped():
@@ -248,9 +246,7 @@ def test_garbage_attrs_dropped_not_raised():
             dst_id=question_node_id(sid, "Q1"),
         )
     )
-    rc, reason = runtime_claim_from_node(
-        g.get_node(cid), study_id=sid, graph=g, results={}
-    )
+    rc, reason = runtime_claim_from_node(g.get_node(cid), study_id=sid, graph=g, results={})
     assert rc is None
     assert reason == "bad_confirming_evidence_ids"
     study = Study(
@@ -340,9 +336,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
     from coscientist.core.ids import claim_node_id as cid_fn
 
     sid = "st_cfail"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -373,9 +367,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
     assert rt.graph.get_node(question_node_id(sid, "Q1")) is not None
     aid0 = await rt.start_attempt("E0")
     content = b'{"count": 225}'
-    art = arts.put(
-        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
-    )
+    art = arts.put(content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json")
 
     def boom(*_a, **_k):
         raise CatalogError("forced")
@@ -385,9 +377,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
             aid0,
             AgentTaskOutput(
                 summary="fail",
-                outputs={
-                    "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
-                },
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"count": 225},
                 claims=[{"id": claim_id, "target": "Q1"}],
             ),
@@ -403,9 +393,7 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
     from coscientist.core.domain import AgentTaskOutput
 
     sid = "st_fail_cl"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -458,9 +446,7 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
 async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime_cls):
     """Infra FAILED (result_class=infra) claims are not bindable."""
     sid = "st_bind_fail"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -572,9 +558,7 @@ def test_bind_verdict_snapshot_digest():
 @pytest.mark.asyncio
 async def test_accept_plan_allows_verdict_kind(tmp_path, clock, runtime_cls):
     sid = "st_verdict_ok"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -609,9 +593,7 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
     from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
 
     sid = "st_v_bind"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -649,9 +631,7 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
     )
     aid0 = await rt.start_attempt("E0", provenance="real")
     content = b'{"count": 225}'
-    art = arts.put(
-        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
-    )
+    art = arts.put(content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json")
     await rt.executor.record(
         aid0,
         AgentTaskOutput(
@@ -667,9 +647,7 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
     assert len(about) == 1
     aid1 = await rt.start_attempt("E1")
     evs = await rt.store.read_all()
-    started = next(
-        e for e in evs if e.type == "AttemptStarted" and e.entity_key == aid1
-    )
+    started = next(e for e in evs if e.type == "AttemptStarted" and e.entity_key == aid1)
     assert started.payload["inputs"][0]["kind"] == "verdict"
     snap_ev = next(e for e in evs if e.type == "VerdictSnapshotsRecorded")
     assert "Q1" in snap_ev.payload["snapshots"]
@@ -747,9 +725,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
     from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
 
     sid = "st_ans"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -778,9 +754,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
     )
     aid0 = await rt.start_attempt("E0")
     content = b'{"effect": 2.0}'
-    art = arts.put(
-        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
-    )
+    art = arts.put(content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json")
     await rt.executor.record(
         aid0,
         AgentTaskOutput(
@@ -799,9 +773,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
     )
     # Agent put + core SESOI eval → countable severe → survived (need 2 for supported).
     assert d["Q1"]["verdict"] == "survived"
-    by = filtered_claims_by_target(
-        rt.graph, study_id=sid, results=rt.results
-    )
+    by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
     assert by["question:Q1"][0].severe is True
     assert (by["question:Q1"][0].effect or {}).get("trusted") is False
     await close_runtime(rt)
@@ -862,15 +834,11 @@ def test_qh_logical_id_collision_does_not_merge():
     assert by["question:X1"][0].target_kind == "question"
     assert by["hypothesis:X1"][0].target_kind == "hypothesis"
     # Bind snapshot for bare "X1" uses question kind explicitly (not H's not_met).
-    snaps = compute_verdict_snapshots(
-        g, study_id=sid, any_experiment_done=True, refs=["X1"]
-    )
+    snaps = compute_verdict_snapshots(g, study_id=sid, any_experiment_done=True, refs=["X1"])
     assert snaps["X1"]["target_kind"] == "question"
     assert snaps["X1"]["verdict"] == "survived"
     # Explicit hypothesis bind does not get the question verdict.
-    snaps_h = compute_verdict_snapshots(
-        g, study_id=sid, any_experiment_done=True, refs=["hypothesis:X1"]
-    )
+    snaps_h = compute_verdict_snapshots(g, study_id=sid, any_experiment_done=True, refs=["hypothesis:X1"])
     assert snaps_h["X1"]["target_kind"] == "hypothesis"
     assert snaps_h["X1"]["verdict"] == "refuted"
 
@@ -995,9 +963,7 @@ def test_criterion_match_is_exact_not_endswith():
     task = Task(
         task_id="st/E0",
         kind=TaskKind.EXPERIMENT,
-        spec=TaskSpec(
-            task_key="E0", title="e", goal="g", route="experiment", criteria=[]
-        ),
+        spec=TaskSpec(task_key="E0", title="e", goal="g", route="experiment", criteria=[]),
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=now,
@@ -1035,9 +1001,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
     from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
 
     sid = "st_ref"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     assert rt.executor is not None and rt.executor.get_graph is not None
     arts = rt.artifacts
     await rt.create_study(
@@ -1116,16 +1080,12 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
 
 
 @pytest.mark.asyncio
-async def test_validity_failed_claim_invalid_inconclusive(
-    tmp_path, clock, runtime_cls
-):
+async def test_validity_failed_claim_invalid_inconclusive(tmp_path, clock, runtime_cls):
     """(b) Failed required validity check → invalid claim, inconclusive + excluded."""
     from coscientist.core.domain import AgentTaskOutput, RequirementRef
 
     sid = "st_val"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -1193,14 +1153,10 @@ async def test_validity_failed_claim_invalid_inconclusive(
 
 
 @pytest.mark.asyncio
-async def test_plan_rejects_role_disagreeing_with_catalog(
-    tmp_path, clock, runtime_cls
-):
+async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runtime_cls):
     """Plan claiming validity for a prediction template is rejected."""
     sid = "st_role_rej"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -1212,51 +1168,71 @@ async def test_plan_rejects_role_disagreeing_with_catalog(
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
-    with pytest.raises(ValueError, match="disagrees with template"):
-        await rt.accept_plan(
-            [
-                TaskSpec(
-                    task_key="E0",
-                    title="dodge",
-                    goal="g",
-                    route="experiment",
-                    depends_on=["PLAN"],
-                    criteria=[
-                        RequirementRef(
-                            template_id="value_match",
-                            required=True,
-                            role="validity",  # catalog says prediction
-                        ),
-                    ],
-                    addresses=["Q1"],
-                )
-            ],
-            questions=[QuestionSpec(id="Q1", text="why")],
-        )
-    with pytest.raises(ValueError, match="unknown criterion template"):
-        await rt.accept_plan(
-            [
-                TaskSpec(
-                    task_key="E0",
-                    title="unknown",
-                    goal="g",
-                    route="experiment",
-                    depends_on=["PLAN"],
-                    criteria=[
-                        RequirementRef(template_id="no_such_template", required=True),
-                    ],
-                    addresses=["Q1"],
-                )
-            ],
-            questions=[QuestionSpec(id="Q1", text="why")],
-        )
+    pid = await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E0",
+                title="dodge",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[
+                    RequirementRef(
+                        template_id="value_match",
+                        required=True,
+                        role="validity",  # catalog says prediction
+                    ),
+                ],
+                addresses=["Q1"],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    assert pid == ""
+    events = await rt.store.read_all()
+    refused = [e for e in events if e.type == "PlanRefused"]
+    assert refused and "disagrees with template" in str(refused[0].payload.get("detail") or "")
+    assert any(e.type == "StudyFinalized" for e in events)
     await close_runtime(rt)
+
+    sid2 = "st_role_rej2"
+    rt2 = await open_runtime(tmp_path, sid2, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt2.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=120),
+        sid=sid2,
+        finalize_reserve_s=5,
+    )
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt2.start_attempt(key)
+        await rt2.cancel_task(key, reason="cancelled")
+    pid2 = await rt2.accept_plan(
+        [
+            TaskSpec(
+                task_key="E0",
+                title="unknown",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[
+                    RequirementRef(template_id="no_such_template", required=True),
+                ],
+                addresses=["Q1"],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    assert pid2 == ""
+    events2 = await rt2.store.read_all()
+    refused2 = [e for e in events2 if e.type == "PlanRefused"]
+    assert refused2 and "unknown criterion template" in str(refused2[0].payload.get("detail") or "")
+    await close_runtime(rt2)
 
 
 @pytest.mark.asyncio
-async def test_scientific_failed_refute_no_retry_no_hc_cascade(
-    tmp_path, clock, runtime_cls
-):
+async def test_scientific_failed_refute_no_retry_no_hc_cascade(tmp_path, clock, runtime_cls):
     """Scientific FAILED refute: no retry, no H-c cascade, budget ok, finalize refuted."""
     from decimal import Decimal
 
@@ -1269,9 +1245,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
     )
 
     sid = "st_sci_hc"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     arts = rt.artifacts
     await rt.create_study(
         profile="research",
@@ -1503,9 +1477,7 @@ def test_unknown_role_exclusion_never_forces_verdict():
         node_id="n1",
     )
     excl = excluded_claims_report([bad])
-    assert excl == [
-        {"attempt_id": "U0", "node_id": "n1", "reason": "unknown_role"}
-    ]
+    assert excl == [{"attempt_id": "U0", "node_id": "n1", "reason": "unknown_role"}]
 
     # Snapshot: unknown_role alone → untested (never forces inconclusive).
     g = GraphStore(default_execution_registry())
@@ -1670,9 +1642,7 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
             aid0,
             AgentTaskOutput(
                 summary="ok",
-                outputs={
-                    "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
-                },
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"count": 225},
                 claims=[{"id": "c1", "target": "Q1"}],
             ),
@@ -1784,11 +1754,7 @@ def test_intent_from_producing_experiment_two_opposite():
     sid = "st_dual"
     now = datetime(2026, 1, 1, tzinfo=UTC)
     hid = hypothesis_node_id(sid, "H1")
-    g.upsert_node(
-        GraphNode(
-            node_id=hid, kind="hypothesis", study_id=sid, ref_id="H1", attrs={}
-        )
-    )
+    g.upsert_node(GraphNode(node_id=hid, kind="hypothesis", study_id=sid, ref_id="H1", attrs={}))
     for key, intent in (("E_confirm", "confirm"), ("E_refute", "refute")):
         eid = experiment_node_id(sid, key)
         g.upsert_node(
@@ -1858,9 +1824,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
     from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
 
     sid = "st_snap_replay"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -1917,9 +1881,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
     snap_before = dict(rt.verdict_snapshots["Q1"])
     await close_runtime(rt)
 
-    rt2 = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
-    )
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
     assert "Q1" in rt2.verdict_snapshots
     assert rt2.verdict_snapshots["Q1"]["verdict"] == snap_before["verdict"]
 
@@ -1970,9 +1932,7 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
     from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
 
     sid = "st_r17"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",

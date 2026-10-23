@@ -67,9 +67,7 @@ def freeze_rubric(rubric: Rubric) -> Rubric:
     """Return rubric with digest filled (idempotent if digest already matches)."""
     dig = rubric_digest(list(rubric.items), rubric.aggregate, rubric.k)
     if rubric.digest and rubric.digest != dig:
-        raise ValueError(
-            f"rubric digest mismatch: provided {rubric.digest!r} != computed {dig!r}"
-        )
+        raise ValueError(f"rubric digest mismatch: provided {rubric.digest!r} != computed {dig!r}")
     if rubric.digest == dig:
         return rubric
     return rubric.model_copy(update={"digest": dig})
@@ -87,9 +85,7 @@ def freeze_task_rubrics(spec: Any) -> Any:
         if rub is None:
             new_outs.append(o)
             continue
-        frozen = freeze_rubric(
-            rub if isinstance(rub, Rubric) else Rubric.model_validate(rub)
-        )
+        frozen = freeze_rubric(rub if isinstance(rub, Rubric) else Rubric.model_validate(rub))
         if frozen is not rub:
             changed = True
             new_outs.append(o.model_copy(update={"rubric": frozen}))
@@ -113,25 +109,15 @@ def aggregate_rubric_status(
     """
     required = [it for it in rubric.items if it.required]
     pool = required if required else list(rubric.items)
-    if any(
-        item_statuses.get(it.id, ReqStatus.PENDING) == ReqStatus.PENDING
-        for it in pool
-    ):
+    if any(item_statuses.get(it.id, ReqStatus.PENDING) == ReqStatus.PENDING for it in pool):
         return ReqStatus.PENDING
 
     def _ok(st: ReqStatus) -> bool:
         return st in {ReqStatus.MET, ReqStatus.WAIVED, ReqStatus.NOT_APPLICABLE}
 
-    unassessed_required = [
-        it
-        for it in required
-        if item_statuses.get(it.id) == ReqStatus.UNASSESSED
-    ]
+    unassessed_required = [it for it in required if item_statuses.get(it.id) == ReqStatus.UNASSESSED]
     failed_required = [
-        it
-        for it in required
-        if item_statuses.get(it.id)
-        in {ReqStatus.FAILED, ReqStatus.MIGRATION_ERROR}
+        it for it in required if item_statuses.get(it.id) in {ReqStatus.FAILED, ReqStatus.MIGRATION_ERROR}
     ]
     if failed_required:
         return ReqStatus.FAILED
@@ -139,29 +125,21 @@ def aggregate_rubric_status(
         return ReqStatus.UNASSESSED
 
     if rubric.aggregate == "all_required":
-        if required and all(
-            _ok(item_statuses.get(it.id, ReqStatus.PENDING)) for it in required
-        ):
+        if required and all(_ok(item_statuses.get(it.id, ReqStatus.PENDING)) for it in required):
             return ReqStatus.MET
         if not required:
-            opts = [
-                item_statuses.get(it.id, ReqStatus.PENDING) for it in rubric.items
-            ]
+            opts = [item_statuses.get(it.id, ReqStatus.PENDING) for it in rubric.items]
             if opts and all(_ok(s) for s in opts):
                 return ReqStatus.MET
             return ReqStatus.UNASSESSED
         return ReqStatus.FAILED
 
     # k_of_n: count only required items (optional never toward k).
-    met_n = sum(
-        1 for it in required if _ok(item_statuses.get(it.id, ReqStatus.PENDING))
-    )
+    met_n = sum(1 for it in required if _ok(item_statuses.get(it.id, ReqStatus.PENDING)))
     k = int(rubric.k or 0)
     if met_n >= k:
         return ReqStatus.MET
-    if any(
-        item_statuses.get(it.id) == ReqStatus.UNASSESSED for it in required
-    ):
+    if any(item_statuses.get(it.id) == ReqStatus.UNASSESSED for it in required):
         return ReqStatus.UNASSESSED
     return ReqStatus.FAILED
 
@@ -172,11 +150,7 @@ def question_final_types(plans: Any) -> dict[str, FinalType]:
     Unknown ``final_type`` values are skipped (caller/plan accept must refuse).
     """
     found: dict[str, FinalType] = {}
-    rows = (
-        plans.values()
-        if hasattr(plans, "values") and not isinstance(plans, list)
-        else plans
-    )
+    rows = plans.values() if hasattr(plans, "values") and not isinstance(plans, list) else plans
     for plan in rows or []:
         if not isinstance(plan, dict):
             continue
@@ -210,7 +184,7 @@ def _result_row(results: Any, aid: str) -> dict[str, Any] | None:
 
 
 def _is_rubric_check(cr: dict[str, Any], digests: set[str]) -> str | None:
-    """Return matching digest if this CheckResult is a rubric check for one of digests."""
+    """Return matching digest via structured identity (never substring match)."""
     raw_effect = cr.get("effect")
     effect: dict[str, Any] = raw_effect if isinstance(raw_effect, dict) else {}
     dig = str(effect.get("rubric_digest") or "")
@@ -219,11 +193,37 @@ def _is_rubric_check(cr: dict[str, Any], digests: set[str]) -> str | None:
     tid = str(cr.get("template_id") or "")
     cid = str(cr.get("check_id") or "")
     for d in digests:
-        if tid == f"rubric:{d}" or cid.startswith(f"rubric:{d}"):
+        if not d:
+            continue
+        if tid == f"rubric:{d}":
             return d
-        if effect.get("rubric_kind") == "rubric" and d and d in tid:
+        # Structured check_id forms: ``rubric:<digest>#out`` / ``rubric:<digest>#0``.
+        if cid == f"rubric:{d}#out" or cid.startswith(f"rubric:{d}#"):
             return d
+    if effect.get("rubric_kind") == "rubric" and dig and dig in digests:
+        return dig
     return None
+
+
+def _row_is_timeout_or_infra(row: dict[str, Any], cr: dict[str, Any]) -> bool:
+    """Timeout/infra failures are UNASSESSED for rubric acceptance, not not-met."""
+    rc = str(row.get("result_class") or "")
+    if rc in {"timeout", "infra", "core_bug", "sandbox_infra"}:
+        return True
+    if cr.get("timeout_kind"):
+        return True
+    detail = str(cr.get("detail") or "")
+    if detail.startswith("sandbox_") or "timeout" in detail.lower():
+        reason = str(row.get("reason") or "")
+        if reason in {
+            "sandbox_infra",
+            "sandbox_timeout",
+            "idle_timeout",
+            "catalog_error",
+            "core_bug",
+        }:
+            return True
+    return False
 
 
 def task_rubric_status(
@@ -234,7 +234,8 @@ def task_rubric_status(
 ) -> str | None:
     """Best rubric status across covering tasks: ``met`` | ``failed`` | ``pending`` | None.
 
-    ``None`` = no rubric on covering tasks. Errors propagate (no silent swallow).
+    Evaluates only each task's **current** (latest) attempt. Timeout/infra FAILED
+    counts as UNASSESSED (pending), not rubric rejection. Errors propagate.
     """
     by_key: dict[str, Any] = {}
     for t in (tasks.values() if hasattr(tasks, "values") else tasks) or []:
@@ -249,46 +250,55 @@ def task_rubric_status(
         t = by_key.get(key)
         if t is None:
             continue
-        rubrics = [
-            o.rubric
-            for o in (t.spec.expected_outputs or [])
-            if getattr(o, "rubric", None) is not None
-        ]
+        rubrics = [o.rubric for o in (t.spec.expected_outputs or []) if getattr(o, "rubric", None) is not None]
         if not rubrics:
             continue
-        digests = {
-            str(getattr(r, "digest", None) or "")
-            for r in rubrics
-            if getattr(r, "digest", None)
-        }
+        digests = {str(getattr(r, "digest", None) or "") for r in rubrics if getattr(r, "digest", None)}
         attempt_ids = list(getattr(t, "attempts", None) or [])
-        for aid in reversed(attempt_ids):
-            row = _result_row(res_map, aid)
-            if not isinstance(row, dict):
+        if not attempt_ids:
+            seen_pending = True
+            continue
+        # Current attempt only (latest).
+        aid = attempt_ids[-1]
+        row = _result_row(res_map, aid)
+        if not isinstance(row, dict):
+            seen_pending = True
+            continue
+        if str(row.get("result_class") or "") in {
+            "timeout",
+            "infra",
+            "core_bug",
+            "sandbox_infra",
+        }:
+            seen_pending = True
+            continue
+        found = False
+        for cr in row.get("check_results") or []:
+            if not isinstance(cr, dict):
                 continue
-            for cr in row.get("check_results") or []:
-                if not isinstance(cr, dict):
-                    continue
-                matched = _is_rubric_check(cr, digests) if digests else None
-                if matched is None and digests:
-                    continue
-                if not digests and not (
-                    isinstance(cr.get("effect"), dict)
-                    and cr["effect"].get("rubric_kind") == "rubric"
-                ):
-                    continue
-                st = cr.get("status")
-                if st in (ReqStatus.MET.value, ReqStatus.MET):
-                    return "met"
-                if st in (ReqStatus.FAILED.value, ReqStatus.FAILED):
-                    seen_failed = True
-                if st in (ReqStatus.PENDING.value, ReqStatus.PENDING, ReqStatus.UNASSESSED.value, ReqStatus.UNASSESSED):
+            matched = _is_rubric_check(cr, digests) if digests else None
+            if matched is None and digests:
+                continue
+            if not digests and not (isinstance(cr.get("effect"), dict) and cr["effect"].get("rubric_kind") == "rubric"):
+                continue
+            found = True
+            st = cr.get("status")
+            if st in (ReqStatus.MET.value, ReqStatus.MET):
+                return "met"
+            if st in (ReqStatus.FAILED.value, ReqStatus.FAILED):
+                if _row_is_timeout_or_infra(row, cr):
                     seen_pending = True
-            # Also infer from task outcome when checks present but not met.
-            outcome = getattr(t, "outcome", None)
-            ov = getattr(outcome, "value", outcome) if outcome is not None else None
-            if ov == "FAILED":
-                seen_failed = True
+                else:
+                    seen_failed = True
+            if st in (
+                ReqStatus.PENDING.value,
+                ReqStatus.PENDING,
+                ReqStatus.UNASSESSED.value,
+                ReqStatus.UNASSESSED,
+            ):
+                seen_pending = True
+        if not found:
+            seen_pending = True
     if seen_failed:
         return "failed"
     if seen_pending:

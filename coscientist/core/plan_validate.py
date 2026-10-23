@@ -6,6 +6,9 @@
 
 Also rejects in-place rubric digest changes on an already-frozen task_key
 unless that key is superseded (change only via PlanExpanded / HITL).
+
+Invalid plans → ``PlanRefused`` + immediate ``StudyFinalized`` (never raw
+``ValueError`` escaping ``accept_plan``).
 """
 
 from __future__ import annotations
@@ -74,10 +77,7 @@ def validate_final_types(
             continue
         ft = getattr(q, "final_type", None) or "verdict"
         if ft not in VALID_FINAL_TYPES:
-            raise ValueError(
-                f"question {qid!r}: unknown final_type {ft!r} "
-                f"(expected verdict|artifact|both)"
-            )
+            raise ValueError(f"question {qid!r}: unknown final_type {ft!r} (expected verdict|artifact|both)")
         covering = cover.get(qid) or []
         if not covering and ft in ("artifact", "both", "verdict"):
             # Unaddressed questions stay not_attempted; PlanValidator only
@@ -85,16 +85,10 @@ def validate_final_types(
             continue
         if ft in ("artifact", "both"):
             if not any(_has_rubric(t) for t in covering):
-                raise ValueError(
-                    f"question {qid!r} final_type={ft}: need OutputSpec with rubric "
-                    f"on an addressing task"
-                )
+                raise ValueError(f"question {qid!r} final_type={ft}: need OutputSpec with rubric on an addressing task")
         if ft in ("verdict", "both"):
             if not any(_has_criterion(t, catalog) for t in covering):
-                raise ValueError(
-                    f"question {qid!r} final_type={ft}: need ≥1 criterion "
-                    f"on an addressing task"
-                )
+                raise ValueError(f"question {qid!r} final_type={ft}: need ≥1 criterion on an addressing task")
 
 
 PLAN_REFUSED_LINE = "не выполнено: план отклонён (рубрика/final_type)"
@@ -111,17 +105,17 @@ async def apply_plan_refused(
     detail: str,
     report_line: str = PLAN_REFUSED_LINE,
 ) -> str:
-    """Emit PlanRefused, fail PLAN with schema_invalid; return '' (no plan_id).
-
-    StudyFinalized still happens via the normal deadline/totality path; the
-    report folds ``report_line`` from PlanRefused.
-    """
+    """Emit PlanRefused, fail PLAN, finalize immediately; return '' (no plan_id)."""
+    import coscientist.core.finalize as finalize_mod
     from coscientist.core.domain import TaskOutcome, TaskState
     from coscientist.core.events import EventEnvelope, make_idem
     from coscientist.core.reasons import TaskReason
+    from coscientist.core.reviews import plan_refused_idem
 
     study = getattr(runtime, "study", None)
     if study is None:
+        return ""
+    if getattr(runtime, "_finalized", False):
         return ""
     sid = study.study_id
     now = runtime.clock.now()
@@ -130,7 +124,7 @@ async def apply_plan_refused(
             study_id=sid,
             type="PlanRefused",
             entity_key=sid,
-            idem_key=make_idem("PlanRefused", sid, detail[:80]),
+            idem_key=plan_refused_idem(sid, detail),
             payload={
                 "reason": TaskReason.SCHEMA_INVALID.value,
                 "detail": detail,
@@ -140,23 +134,23 @@ async def apply_plan_refused(
             schema_version=1,
         )
     ]
-    # Close PLAN stage so the study can reach REPORT / finalize.
-    plan_task = None
-    for t in (getattr(runtime, "tasks", None) or {}).values():
-        spec = getattr(t, "spec", None)
-        if spec is not None and getattr(spec, "task_key", None) == "PLAN":
-            plan_task = t
-            break
-    if plan_task is not None and getattr(plan_task, "state", None) != TaskState.DONE:
+    # Close PLAN + any still-open stage tasks so finalize is immediate.
+    for t in list((getattr(runtime, "tasks", None) or {}).values()):
+        if getattr(t, "state", None) == TaskState.DONE:
+            continue
         events.append(
             EventEnvelope(
                 study_id=sid,
                 type="TaskDone",
-                entity_key=plan_task.task_id,
-                idem_key=make_idem("TaskDone", plan_task.task_id, "plan_refused"),
+                entity_key=t.task_id,
+                idem_key=make_idem("TaskDone", t.task_id, "plan_refused"),
                 payload={
-                    "task_id": plan_task.task_id,
-                    "outcome": TaskOutcome.FAILED.value,
+                    "task_id": t.task_id,
+                    "outcome": (
+                        TaskOutcome.FAILED.value
+                        if getattr(getattr(t, "spec", None), "task_key", None) == "PLAN"
+                        else TaskOutcome.SKIPPED.value
+                    ),
                     "reason": TaskReason.SCHEMA_INVALID.value,
                     "detail": detail,
                 },
@@ -165,6 +159,7 @@ async def apply_plan_refused(
             )
         )
     await runtime._append(events)  # noqa: SLF001
+    await finalize_mod.finalize(runtime, trigger="intake")
     return ""
 
 

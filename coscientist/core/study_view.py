@@ -50,9 +50,10 @@ def _compute_verdict(
     else:
         verdict = "partial"
 
-    # PR 2: ≥1 not_attempted → verdict not above partial
+    # PR 2 / PR13: ≥1 not_attempted or rubric_not_met → verdict not above partial
     if question_dispositions and any(
-        d.get("disposition") == "not_attempted" for d in question_dispositions.values()
+        d.get("disposition") in ("not_attempted", "rubric_not_met")
+        for d in question_dispositions.values()
     ):
         if verdict == "fulfilled":
             verdict = "partial"

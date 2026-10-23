@@ -145,9 +145,7 @@ def test_upcast_attempt_started_inputs_default():
 async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cls):
     """PR8: kind=verdict is accepted; missing ref still rejected."""
     sid = "st_verdict_ref"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -159,29 +157,31 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
-    with pytest.raises(ValueError, match="verdict requires ref"):
-        await rt.accept_plan(
-            [
-                TaskSpec(
-                    task_key="E1",
-                    title="e",
-                    goal="g",
-                    route="experiment",
-                    depends_on=["PLAN"],
-                    inputs=[InputSpec(kind="verdict")],
-                )
-            ],
-            questions=[],
-        )
+    pid = await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E1",
+                title="e",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                inputs=[InputSpec(kind="verdict")],
+            )
+        ],
+        questions=[],
+    )
+    assert pid == ""
+    events = await rt.store.read_all()
+    refused = [e for e in events if e.type == "PlanRefused"]
+    assert refused and "verdict requires ref" in str(refused[0].payload.get("detail") or "")
+    assert any(e.type == "StudyFinalized" for e in events)
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
 async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_cls):
     sid = "st_inp_val"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -193,44 +193,63 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
-    with pytest.raises(ValueError, match="artifact requires from_task"):
-        await rt.accept_plan(
-            [
-                TaskSpec(
-                    task_key="E1",
-                    title="e",
-                    goal="g",
-                    route="experiment",
-                    depends_on=["PLAN"],
-                    inputs=[InputSpec(kind="artifact")],
-                )
-            ],
-            questions=[],
-        )
-    with pytest.raises(ValueError, match="claim requires ref"):
-        await rt.accept_plan(
-            [
-                TaskSpec(
-                    task_key="E1",
-                    title="e",
-                    goal="g",
-                    route="experiment",
-                    depends_on=["PLAN"],
-                    inputs=[InputSpec(kind="claim")],
-                )
-            ],
-            questions=[],
-        )
+    pid = await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E1",
+                title="e",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                inputs=[InputSpec(kind="artifact")],
+            )
+        ],
+        questions=[],
+    )
+    assert pid == ""
+    events = await rt.store.read_all()
+    refused = [e for e in events if e.type == "PlanRefused"]
+    assert refused and "artifact requires from_task" in str(refused[0].payload.get("detail") or "")
     await close_runtime(rt)
+
+    sid2 = "st_inp_val2"
+    rt2 = await open_runtime(tmp_path, sid2, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt2.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=60),
+        sid=sid2,
+        finalize_reserve_s=5,
+    )
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt2.start_attempt(key)
+        await rt2.cancel_task(key, reason="cancelled")
+    pid2 = await rt2.accept_plan(
+        [
+            TaskSpec(
+                task_key="E1",
+                title="e",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                inputs=[InputSpec(kind="claim")],
+            )
+        ],
+        questions=[],
+    )
+    assert pid2 == ""
+    events2 = await rt2.store.read_all()
+    refused2 = [e for e in events2 if e.type == "PlanRefused"]
+    assert refused2 and "claim requires ref" in str(refused2[0].payload.get("detail") or "")
+    await close_runtime(rt2)
 
 
 @pytest.mark.asyncio
 async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_cls):
     """P2 claim input → uses_claim edge; bindings+digest on AttemptStarted."""
     sid = "st_uses_cl"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -290,9 +309,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
     await close_runtime(rt)
 
     # Replay: bindings survive reopen.
-    rt2 = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
-    )
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
     assert rt2.attempts[aid]["inputs"][0]["ref"] == claim_id
     assert rt2.attempts[aid]["inputs"][0]["digest"] == started.payload["inputs"][0]["digest"]
     await close_runtime(rt2)
@@ -307,9 +324,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
     from tests.helpers import attach_executor
 
     sid = "st_stub_cl"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -352,9 +367,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
     aid0 = await rt.start_attempt("E0", provenance="stub")
     assert aid0 == aid0_expected
     content = b'{"count": 225}'
-    art = arts.put(
-        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
-    )
+    art = arts.put(content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json")
     await rt.executor.record(
         aid0,
         AgentTaskOutput(
@@ -378,9 +391,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
 async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
     """GraphEdgeAdded with missing endpoints raises (no silent swallow)."""
     sid = "st_edge_loud"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -419,9 +430,7 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
     from coscientist.core.domain import Task, TaskKind, TaskState
 
     sid = "st_tc_v4"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -466,9 +475,7 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
     )
     await close_runtime(rt)
 
-    rt2 = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
-    )
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
     task = rt2.tasks[tid]
     assert task.spec.inputs[0].kind == "artifact"
     assert task.spec.inputs[0].from_task == "A"
@@ -479,9 +486,7 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
 async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
     """Old AttemptStarted schema_version=2 (no inputs) upcasts to [] on reopen."""
     sid = "st_as_v2"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -535,9 +540,7 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
     )
     await close_runtime(rt)
 
-    rt2 = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
-    )
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
     assert "inputs" in rt2.attempts[aid]
     assert rt2.attempts[aid]["inputs"] == []
     await close_runtime(rt2)

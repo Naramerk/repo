@@ -74,6 +74,8 @@ class Disposition(StrEnum):
     INFEASIBLE = "infeasible"
     ILL_POSED = "ill_posed"
     NOT_ATTEMPTED = "not_attempted"
+    # PR13: covering task ran but rubric rejected (not a true not-attempted).
+    RUBRIC_NOT_MET = "rubric_not_met"
 
 
 class NotAttemptedReason(StrEnum):

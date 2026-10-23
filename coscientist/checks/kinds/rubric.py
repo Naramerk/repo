@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from coscientist.core.domain import AgentTaskOutput, CheckResult, CodeCheck, ReqStatus
+from coscientist.core.reviews import review_key
 from coscientist.core.rubric import aggregate_rubric_status, freeze_rubric
 from coscientist.core.rubric_types import Rubric
 
@@ -29,8 +30,24 @@ def _as_rubric(raw: Any) -> Rubric:
     return freeze_rubric(Rubric.model_validate(raw))
 
 
-def judge_item_key(check_id: str, item_id: str) -> str:
-    """Stable key for review_statuses / ReviewScheduled / record_review."""
+def judge_item_key(
+    check_id: str,
+    item_id: str,
+    *,
+    task_id: str = "",
+    attempt_id: str = "",
+    output_digest: str = "",
+) -> str:
+    """Scoped review key (task, attempt, check, item, output digest)."""
+    if task_id and attempt_id and output_digest:
+        return review_key(
+            task_id=task_id,
+            attempt_id=attempt_id,
+            check_id=check_id,
+            item_id=item_id,
+            output_digest=output_digest,
+        )
+    # Unit-test helper path without attempt scope (never used in production eval).
     return f"{check_id}:{item_id}"
 
 
@@ -47,6 +64,8 @@ def evaluate_rubric(
     failure_kinds: dict[str, str] | None = None,
     output_rubric: Any | None = None,
     attempt_id: str | None = None,
+    task_id: str | None = None,
+    output_digest: str | None = None,
     evaluate_code_check: Any | None = None,
 ) -> CheckResult:
     """Evaluate a rubric check; never raises into the executor."""
@@ -63,6 +82,8 @@ def evaluate_rubric(
             failure_kinds=failure_kinds or {},
             output_rubric=output_rubric,
             attempt_id=attempt_id,
+            task_id=task_id,
+            output_digest=output_digest,
             evaluate_code_check=evaluate_code_check,
         )
     except Exception as e:  # noqa: BLE001 — totality
@@ -90,6 +111,8 @@ def _evaluate(
     failure_kinds: dict[str, str],
     output_rubric: Any | None,
     attempt_id: str | None,
+    task_id: str | None,
+    output_digest: str | None,
     evaluate_code_check: Any | None,
 ) -> CheckResult:
     # Plan-frozen OutputSpec.rubric wins over catalog placeholder rubric.
@@ -112,14 +135,19 @@ def _evaluate(
     has_code = False
 
     for item in rubric.items:
-        item_key = judge_item_key(check_id, item.id)
+        item_key = judge_item_key(
+            check_id,
+            item.id,
+            task_id=task_id or "",
+            attempt_id=attempt_id or "",
+            output_digest=output_digest or "",
+        )
         if item.check == "judge":
             has_judge = True
+            # Scoped lookup only — never fall back to bare item.id.
             st = review_statuses.get(item_key)
-            if st is None:
-                st = review_statuses.get(item.id)
-            fk = failure_kinds.get(item_key) or failure_kinds.get(item.id)
-            retries = int(judge_retry.get(item_key, 0) or judge_retry.get(item.id, 0))
+            fk = failure_kinds.get(item_key)
+            retries = int(judge_retry.get(item_key, 0))
             if st is None and fk is None:
                 # Waiting for judge — PENDING blocks compute_outcome.
                 st = ReqStatus.PENDING
@@ -138,14 +166,10 @@ def _evaluate(
                 ):
                     st = ReqStatus.PENDING
                     pending_items.append(item.id)
-                    details.append(
-                        f"{item.id}:judge_failure:{fk}:retry={retries}:waiting"
-                    )
+                    details.append(f"{item.id}:judge_failure:{fk}:retry={retries}:waiting")
                 else:
                     st = ReqStatus.UNASSESSED
-                    details.append(
-                        f"{item.id}:judge_failure:{fk}:retry={retries}"
-                    )
+                    details.append(f"{item.id}:judge_failure:{fk}:retry={retries}")
             elif st is None:
                 st = ReqStatus.UNASSESSED
                 details.append(f"{item.id}:judge_unassessed")
@@ -213,6 +237,8 @@ def evaluate_output_spec_rubrics(
     evaluate_code_check: Any | None = None,
     judge_retry: dict[str, int] | None = None,
     failure_kinds: dict[str, str] | None = None,
+    task_id: str | None = None,
+    output_digest: str | None = None,
 ) -> list[CheckResult]:
     """Evaluate each OutputSpec.rubric not already covered by a criterion."""
     extra: list[CheckResult] = []
@@ -250,6 +276,8 @@ def evaluate_output_spec_rubrics(
             failure_kinds=failure_kinds,
             output_rubric=rub,
             attempt_id=attempt_id,
+            task_id=task_id,
+            output_digest=output_digest,
             evaluate_code_check=evaluate_code_check,
         )
         extra.append(

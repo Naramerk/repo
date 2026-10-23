@@ -138,11 +138,7 @@ def _dispositions_inner(
 
     k_ref = study.refutations_needed if study is not None else 1
     priority = study.refutation_priority if study is not None else False
-    conf_k = (
-        k
-        if k is not None
-        else (study.confirmations_needed if study is not None else 1)
-    )
+    conf_k = k if k is not None else (study.confirmations_needed if study is not None else 1)
     supp_k = study.supported_needed if study is not None else 2
 
     final_types = question_final_types(plans)
@@ -156,15 +152,11 @@ def _dispositions_inner(
         excluded = excluded_claims_report(claims)
         validity_excl = [e for e in excluded if e["reason"] == "validity_failed"]
         any_exp = any(t.state == TaskState.DONE for t in covering)
-        # PR13: rubric status for artifact / both (§6.1).
+        # PR13: rubric status for artifact / both (§6.1). Errors propagate
+        # to the study-level dispositions() fallback (honest internal error).
         rub_st: str | None = None
         if ft in ("artifact", "both"):
-            try:
-                rub_st = task_rubric_status(
-                    task_keys=keys, tasks=tasks, results=results
-                )
-            except Exception:  # noqa: BLE001 — totality; explicit error reason
-                rub_st = "failed"
+            rub_st = task_rubric_status(task_keys=keys, tasks=tasks, results=results)
         if ft == "artifact":
             if rub_st == "met":
                 result[qid] = {
@@ -179,11 +171,12 @@ def _dispositions_inner(
                 continue
             if rub_st == "failed":
                 result[qid] = {
-                    "disposition": Disposition.NOT_ATTEMPTED.value,
+                    "disposition": Disposition.RUBRIC_NOT_MET.value,
                     "reason": RUBRIC_REJECTED_REASON,
                     "reason_detail": [RUBRIC_REJECTED_REASON],
                     "formulation": text,
                     "final_type": ft,
+                    "verdict": Disposition.RUBRIC_NOT_MET.value,
                     "report_line": RUBRIC_REJECTED_LINE,
                 }
                 continue
@@ -217,25 +210,26 @@ def _dispositions_inner(
                 # §6.1 both: verdict AND rubric required.
                 if ft == "both":
                     if rub_st != "met":
-                        result[qid] = {
-                            "disposition": Disposition.NOT_ATTEMPTED.value,
-                            "reason": (
-                                RUBRIC_REJECTED_REASON
-                                if rub_st == "failed"
-                                else NotAttemptedReason.NO_COUNTING_CLAIMS.value
-                            ),
-                            "reason_detail": [
-                                RUBRIC_REJECTED_REASON
-                                if rub_st == "failed"
-                                else "rubric_pending"
-                            ],
-                            "formulation": text,
-                            "final_type": ft,
-                            "verdict": v,
-                            "report_line": (
-                                RUBRIC_REJECTED_LINE if rub_st == "failed" else None
-                            ),
-                        }
+                        if rub_st == "failed":
+                            result[qid] = {
+                                "disposition": Disposition.RUBRIC_NOT_MET.value,
+                                "reason": RUBRIC_REJECTED_REASON,
+                                "reason_detail": [RUBRIC_REJECTED_REASON],
+                                "formulation": text,
+                                "final_type": ft,
+                                "verdict": v,
+                                "report_line": RUBRIC_REJECTED_LINE,
+                            }
+                        else:
+                            result[qid] = {
+                                "disposition": Disposition.NOT_ATTEMPTED.value,
+                                "reason": NotAttemptedReason.NO_COUNTING_CLAIMS.value,
+                                "reason_detail": ["rubric_pending"],
+                                "formulation": text,
+                                "final_type": ft,
+                                "verdict": v,
+                                "report_line": None,
+                            }
                         if excluded:
                             result[qid]["excluded_claims"] = excluded
                         continue
@@ -274,11 +268,12 @@ def _dispositions_inner(
             continue
         elif ft == "both" and rub_st == "failed":
             result[qid] = {
-                "disposition": Disposition.NOT_ATTEMPTED.value,
+                "disposition": Disposition.RUBRIC_NOT_MET.value,
                 "reason": RUBRIC_REJECTED_REASON,
                 "reason_detail": [RUBRIC_REJECTED_REASON],
                 "formulation": text,
                 "final_type": ft,
+                "verdict": Disposition.RUBRIC_NOT_MET.value,
                 "report_line": RUBRIC_REJECTED_LINE,
             }
             continue
@@ -296,9 +291,7 @@ def _dispositions_inner(
             continue
         # No-effect indeterminate (foreign / missing output / empty pointer):
         # inconclusive with the specific reason — never generic "unclear".
-        no_effect_excl = [
-            e for e in excluded if e.get("reason") in NO_EFFECT_EXCLUSION_REASONS
-        ]
+        no_effect_excl = [e for e in excluded if e.get("reason") in NO_EFFECT_EXCLUSION_REASONS]
         if no_effect_excl:
             reasons = sorted({str(e["reason"]) for e in no_effect_excl})
             primary = reasons[0]
@@ -341,8 +334,7 @@ def report_hypothesis_verdicts(
     if graph is None or study is None:
         return {}, None
     any_exp = any(
-        t.state == TaskState.DONE
-        and t.outcome in (TaskOutcome.SUCCESS, TaskOutcome.PARTIAL, TaskOutcome.FAILED)
+        t.state == TaskState.DONE and t.outcome in (TaskOutcome.SUCCESS, TaskOutcome.PARTIAL, TaskOutcome.FAILED)
         for t in tasks.values()
     )
     try:
@@ -377,12 +369,7 @@ def report_hypothesis_verdicts(
                 supported_needed=study.supported_needed,
                 confirmations_needed=study.confirmations_needed,
             )
-            legacy = sum(
-                1
-                for c in claims
-                if getattr(c, "severe", None) is False
-                and c.claim_outcome == "consistent"
-            )
+            legacy = sum(1 for c in claims if getattr(c, "severe", None) is False and c.claim_outcome == "consistent")
             # question_id: first addresses edge from hypothesis, else ""
             qid = ""
             hid_node = f"{study.study_id}:hypothesis:{hid}"

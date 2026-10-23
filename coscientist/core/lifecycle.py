@@ -37,6 +37,7 @@ STAGE_KEYS = [
     ("REPORT", TaskKind.REPORT),
 ]
 
+
 class LifecycleMixin:
     """Attribute stubs so mypy accepts mixin use on StudyRuntime."""
 
@@ -264,57 +265,43 @@ class LifecycleMixin:
         now = self.clock.now()
         from pydantic import ValidationError
 
+        from coscientist.core.foreach import validate_foreach_specs
         from coscientist.core.plan_validate import (
             PLAN_REFUSED_LINE,
             apply_plan_refused,
             freeze_plan_rubrics,
             refuse_detail,
         )
-
-        # Pydantic QuestionSpec / unknown final_type → honest PlanRefused.
-        try:
-            if questions is None and spec_output is not None:
-                questions = [
-                    QuestionSpec.model_validate(q)
-                    for q in questions_from_spec_output(spec_output)
-                ]
-            questions = list(questions or [])
-        except (ValidationError, ValueError, TypeError) as e:
-            return await apply_plan_refused(
-                self, detail=refuse_detail(e), report_line=PLAN_REFUSED_LINE
-            )
-        expand_after = list(expand_after or [])
-        self._validate_dag(tasks)
-        known_texts = await self._known_question_texts()
-        self._validate_questions(questions, known_texts)
-        known_texts = {**known_texts, **{q.id: q.text for q in questions}}
-        self._validate_addresses(tasks, set(known_texts))
-        task_keys = {t.task_key for t in tasks}
-        for k in expand_after:
-            if k not in task_keys:
-                raise ValueError(f"expand_after unknown task_key: {k!r}")
-        validate_input_specs(tasks)
-        from coscientist.core.foreach import validate_foreach_specs
         from coscientist.core.shares import critic_plan_shares
 
-        validate_foreach_specs(
-            tasks,
-            known_keys={t.spec.task_key for t in self.tasks.values()},
-        )
-        share_err = critic_plan_shares(tasks, study=self.study)
-        if share_err is not None:
-            raise ValueError(share_err)
-        catalog = getattr(self, "catalog", None) or getattr(
-            getattr(self, "executor", None), "catalog", None
-        )
-        validate_plan_criteria(tasks, catalog)
-        # PlanValidator / Rubric pydantic → PlanRefused (StudyFinalized still).
+        # All plan validation → PlanRefused (never raw ValueError to callers).
         try:
+            if questions is None and spec_output is not None:
+                questions = [QuestionSpec.model_validate(q) for q in questions_from_spec_output(spec_output)]
+            questions = list(questions or [])
+            expand_after = list(expand_after or [])
+            self._validate_dag(tasks)
+            known_texts = await self._known_question_texts()
+            self._validate_questions(questions, known_texts)
+            known_texts = {**known_texts, **{q.id: q.text for q in questions}}
+            self._validate_addresses(tasks, set(known_texts))
+            task_keys = {t.task_key for t in tasks}
+            for k in expand_after:
+                if k not in task_keys:
+                    raise ValueError(f"expand_after unknown task_key: {k!r}")
+            validate_input_specs(tasks)
+            validate_foreach_specs(
+                tasks,
+                known_keys={t.spec.task_key for t in self.tasks.values()},
+            )
+            share_err = critic_plan_shares(tasks, study=self.study)
+            if share_err is not None:
+                raise ValueError(share_err)
+            catalog = getattr(self, "catalog", None) or getattr(getattr(self, "executor", None), "catalog", None)
+            validate_plan_criteria(tasks, catalog)
             tasks, questions = freeze_plan_rubrics(tasks, questions, catalog=catalog)
         except (ValueError, ValidationError, TypeError) as e:
-            return await apply_plan_refused(
-                self, detail=refuse_detail(e), report_line=PLAN_REFUSED_LINE
-            )
+            return await apply_plan_refused(self, detail=refuse_detail(e), report_line=PLAN_REFUSED_LINE)
         pid = plan_id()
         plan = Plan(
             plan_id=pid,
