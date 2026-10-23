@@ -83,6 +83,7 @@ class LifecycleMixin:
         max_foreach_children: int = 32,
         max_loop_iter: int = 8,
         max_task_budget_share: float = 1.0,
+        max_proposals: int = 3,
         inputs: list[Any] | None = None,
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,
@@ -124,6 +125,8 @@ class LifecycleMixin:
             raise ValueError(f"max_loop_iter must be >= 1, got {max_loop_iter}")
         if not (0.0 <= float(max_task_budget_share) <= 1.0):
             raise ValueError(f"max_task_budget_share out of range: {max_task_budget_share}")
+        if max_proposals < 0:
+            raise ValueError(f"max_proposals must be >= 0, got {max_proposals}")
         validate_budget_for_create(budget)  # delegated_costly ≤ max_cost_rub
         duration_s = (dl - now).total_seconds()
         decision = await intake(
@@ -162,6 +165,7 @@ class LifecycleMixin:
             max_foreach_children=max_foreach_children,
             max_loop_iter=max_loop_iter,
             max_task_budget_share=float(max_task_budget_share),
+            max_proposals=max_proposals,
         )
         effective = study.effective_deadline()
         events: list[EventEnvelope] = [

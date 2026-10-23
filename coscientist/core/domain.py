@@ -86,6 +86,7 @@ HitlGateKind = Literal[
     "skip_task",
     "budget",  # M1 PR12: budget_share checkpoint («реши сам» → critic)
     "side_effect",  # PR18: write/external_effect tools (DESIGN_M1 §8)
+    "proposed_check",  # M1 PR20: approve agent-proposed catalog meta-check
 ]
 
 
@@ -112,6 +113,8 @@ def _default_gates() -> dict[str, GateConfig]:
         "budget": GateConfig(timeout_s=1800, on_timeout="delegate"),
         # Headless default decision is deny (HitlPolicy.defaults); gate itself stays enabled.
         "side_effect": GateConfig(timeout_s=1800, on_timeout="fail"),
+        # PR20: HITL timeout ≡ reject (DESIGN_M1 §16); never auto-approve.
+        "proposed_check": GateConfig(timeout_s=1800, on_timeout="fail"),
     }
 
 
@@ -136,6 +139,8 @@ class HitlPolicy(Frozen):
             "skip_task": "deny",
             # K4/K5: write|external_effect tools require an explicit allow (DESIGN_M1 §8).
             "side_effect": "deny",
+            # PR20: headless / timeout → reject proposed check (never counts).
+            "proposed_check": "reject",
         }
     )
 
@@ -389,6 +394,8 @@ class Study(Frozen):
     max_loop_iter: int = Field(default=8, ge=1)
     # PR12: plan critic — no single task may claim more than this budget_share.
     max_task_budget_share: float = Field(default=1.0, ge=0.0, le=1.0)
+    # PR20: max agent CheckProposed per study (default 3); excess → proposal_quota.
+    max_proposals: int = Field(default=3, ge=0)
 
     def effective_deadline(self) -> datetime:
         """Last instant usable by tasks/attempts/HITL (deadline − finalize reserve)."""
@@ -699,6 +706,46 @@ class NodeRequirement(Frozen):
 class ArtifactHandle(Frozen):
     artifact_id: str
     name: str
+
+
+# Catalog meta-template id for agent-proposed checks (DESIGN_M1 §16 / PR20).
+PROPOSED_CHECK_TEMPLATE_ID = "proposed_check"
+
+
+class RejectedTemplateNote(Frozen):
+    """Why a nearest catalog template does not fit (required on CheckProposal)."""
+
+    template_id: str
+    reason: str
+
+
+class CheckProposal(Frozen):
+    """Preregistered agent-proposed check (hash fixed before any result).
+
+    Exactly one of ``check`` (executable CodeCheck kinds) or ``rubric`` (text
+    qualitative) must be set. Role / SESOI / threshold are frozen at propose time.
+    """
+
+    proposal_id: str
+    target: str
+    target_kind: Literal["question", "hypothesis"] = "question"
+    role: Literal["prediction", "validity"]
+    measures: str
+    check: CodeCheck | None = None
+    rubric: Rubric | None = None
+    threshold: Any = None
+    sesoi: float | None = None
+    uses_sesoi: bool = False
+    predicts_null: bool = False
+    predicted_direction: PredictedDirection = "two_sided"
+    justification: str
+    rejected_templates: list[RejectedTemplateNote] = Field(default_factory=list)
+    # Filled by core at propose (sha256 of canonical preregistration body).
+    proposal_digest: str = ""
+    study_id: str = ""
+    task_id: str = ""
+    attempt_id: str = ""
+    proposer_attempt_id: str = ""
 
 
 class QuestionSupersede(Frozen):

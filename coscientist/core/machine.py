@@ -99,6 +99,9 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         self._loop_state: dict[str, dict[str, Any]] = {}
         self._loop_capped: dict[str, dict[str, Any]] = {}
         self._loop_done: set[str] = set()
+        # PR20: CheckProposed / Approved / Rejected (folded from journal).
+        self._check_proposals: dict[str, dict[str, Any]] = {}
+        self._observations: list[dict[str, Any]] = []
 
     def bind_executor(self, executor: Any) -> Any:
         """Wire production ``graph`` into Executor (laundering + about edges)."""
@@ -152,6 +155,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             review_statuses=review_statuses,
             get_graph=lambda: self.graph,
             get_results=lambda: self.results,
+            get_proposals=lambda: getattr(self, "_check_proposals", {}) or {},
             max_attempts=self.max_attempts,
             on_budget_debit=make_budget_debit_cb(self),
         )

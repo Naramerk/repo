@@ -29,7 +29,7 @@ class EventEnvelope(BaseModel):
 # this PR stacks TaskCreated v11 + PlanAccepted v9 + PlanExpanded v3 loop fields.
 # StudyCreated v10 (max_loop_iter) stays here — #24 merges before #23 (v11).
 PLAN_EXPANDED_SCHEMA_VERSION = 3
-STUDY_CREATED_SCHEMA_VERSION = 10
+STUDY_CREATED_SCHEMA_VERSION = 11  # PR20: max_proposals (after PR11 v10 max_loop_iter)
 PLAN_ACCEPTED_SCHEMA_VERSION = 9
 TASK_CREATED_SCHEMA_VERSION = 11
 
@@ -76,6 +76,10 @@ EventType = Literal[
     "SideEffectDenied",
     "SourceFetched",
     "AttemptTainted",
+    # M1 PR20: agent-proposed catalog meta-check (DESIGN_M1 §16).
+    "CheckProposed",
+    "CheckApproved",
+    "CheckRejected",
 ]
 
 

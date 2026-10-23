@@ -459,7 +459,7 @@ async def _append_finalized(runtime: StudyRuntime, *, sid: str, payload: dict[st
                 idem_key=make_idem("StudyFinalized", sid),
                 payload=payload,
                 ts=now,
-                schema_version=3,
+                schema_version=4,
             )
         ]
     )
@@ -669,6 +669,15 @@ async def _build_finalized_payload(
             )
         except Exception as e2:  # noqa: BLE001
             raise RuntimeError(f"minimal_report:{type(e2).__name__}") from e2
+    from coscientist.core.proposed_check import custom_checks_report
+
+    custom_checks = custom_checks_report(runtime)
+    # Findings outside the plan stay unverified observations (DESIGN_M1 §16).
+    observations = list(getattr(runtime, "_observations", None) or [])
+    if minimal is not None and isinstance(minimal, dict):
+        minimal = dict(minimal)
+        minimal.setdefault("custom_checks", custom_checks)
+        minimal.setdefault("observations", observations)
     return {
         "trigger": trigger,
         "terminal_reason": term.value,
@@ -682,6 +691,8 @@ async def _build_finalized_payload(
         "minimal_report": minimal,
         "fallback_reason": fallback,
         "refusal": refusal,
+        "custom_checks": custom_checks,
+        "observations": observations,
     }
 
 
@@ -696,6 +707,8 @@ async def _primary_report_path(
     qdisp: dict[str, dict[str, Any]],
     refusal: str | None = None,
 ) -> str:
+    from coscientist.core.proposed_check import custom_checks_report
+
     md = render_markdown_report(
         study_id=sid,
         terminal_reason=term.value,
@@ -705,6 +718,8 @@ async def _primary_report_path(
         question_dispositions=qdisp,
         tasks=runtime.tasks,
         refusal=refusal,
+        custom_checks=custom_checks_report(runtime),
+        observations=list(getattr(runtime, "_observations", None) or []),
     )
     # Surface infra details (sandbox reason + soft-isolation note) in report text.
     # Escape agent/host-provided strings so markdown/HTML injection cannot reshape

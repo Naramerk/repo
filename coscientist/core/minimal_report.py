@@ -123,6 +123,8 @@ def build_minimal_report(
         "hypotheses": h_rows,
         "hypotheses_unavailable": hypotheses_unavailable,
         "sections": _sections(task_list, attempts),
+        "custom_checks": [],
+        "observations": [],
         "truncated": False,
     }
     return truncate_minimal_report(report)
@@ -166,6 +168,8 @@ def render_markdown_report(
     question_dispositions: Mapping[str, Mapping[str, Any]],
     tasks: Mapping[str, Task],
     refusal: str | None = None,
+    custom_checks: list[Mapping[str, Any]] | None = None,
+    observations: list[Mapping[str, Any] | str] | None = None,
 ) -> str:
     """Deterministic MD report (no LLM)."""
     lines = [
@@ -201,4 +205,25 @@ def render_markdown_report(
             f"- `{t.spec.task_key}` [{t.kind.value}] "
             f"{t.state.value}/{t.outcome} reason={t.reason}"
         )
+    # PR20: non-catalog proposed checks + unverified out-of-plan observations.
+    lines.extend(["", "## Custom checks"])
+    if not custom_checks:
+        lines.append("_None._")
+    else:
+        for c in custom_checks:
+            who = c.get("approved_by") or c.get("rejected_by") or "?"
+            delg = "delegated" if c.get("delegated") else "human"
+            lines.append(
+                f"- `{c.get('proposal_id')}` status={c.get('status')} "
+                f"by={who}/{delg} — {c.get('measures')} (не каталожная)"
+            )
+    lines.extend(["", "## Observations"])
+    if not observations:
+        lines.append("_None._")
+    else:
+        for obs in observations:
+            if isinstance(obs, Mapping):
+                lines.append(f"- {obs.get('text') or obs}")
+            else:
+                lines.append(f"- {obs}")
     return "\n".join(lines) + "\n"

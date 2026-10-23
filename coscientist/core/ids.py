@@ -37,6 +37,11 @@ def hitl_request_id() -> str:
     return f"hitl_{_ulid_like()}"
 
 
+def proposal_id() -> str:
+    """Core-owned id for CheckProposed (never from the agent)."""
+    return f"prop_{_ulid_like()}"
+
+
 def plan_id() -> str:
     return f"pl_{_ulid_like()}"
 

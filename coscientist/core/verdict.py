@@ -40,6 +40,8 @@ ExclusionReason = Literal[
     "output_not_submitted",
     "artifact_missing",
     "pointer_empty",
+    # M1 PR20: proposed_check not yet CheckApproved (or rejected / timed out).
+    "unapproved_check",
 ]
 
 NO_EFFECT_EXCLUSION_REASONS = frozenset(
@@ -792,6 +794,9 @@ def claim_is_severe(claim: Any) -> bool:
     Explicit ``severe=False`` remains definitive (V5 legacy never supported).
     Requires **countable** core-evaluated evidence (not sandbox ``trusted``).
     ``effect.trusted`` is a separate stronger tag recorded for reporting.
+
+    PR20: proposed qualitative rubrics are never severe; proposed executable
+    checks are severe only when ``effect.trusted`` (sandbox hard isolation).
     """
     if effective_outcome(claim) != "consistent":
         return False
@@ -800,6 +805,14 @@ def claim_is_severe(claim: Any) -> bool:
     # Legacy / explicit non-severe stamp is definitive (V5).
     if getattr(claim, "severe", None) is False:
         return False
+    effect = getattr(claim, "effect", None)
+    if isinstance(effect, dict):
+        if effect.get("never_severe") or effect.get("qualitative"):
+            return False
+        if effect.get("proposed_check") and not effect.get("trusted"):
+            return False
+        if effect.get("severe_eligible") is False:
+            return False
     if not bool(getattr(claim, "frozen", False)):
         return False
     frozen_at = getattr(claim, "criterion_frozen_at_seq", None)
@@ -818,7 +831,6 @@ def claim_is_severe(claim: Any) -> bool:
     used = getattr(claim, "used_sesoi", None)
     if used is not True:
         return False
-    effect = getattr(claim, "effect", None)
     if not effect_is_countable(effect):
         return False
     predicts_null = bool(getattr(claim, "predicts_null", False))
@@ -911,6 +923,7 @@ def exclusion_reason(claim: Any) -> ExclusionReason | None:
         "output_not_submitted",
         "artifact_missing",
         "pointer_empty",
+        "unapproved_check",
     ):
         return stored  # type: ignore[return-value]
     if getattr(claim, "check_role", "unknown") == "unknown" and not getattr(
@@ -997,6 +1010,10 @@ def hypothesis_verdict(
 
     counted = [c for c in about if claim_counts_for_verdict(c)]
 
+    def _is_delegated_proposed(c: Any) -> bool:
+        eff = getattr(c, "effect", None)
+        return bool(isinstance(eff, dict) and eff.get("proposed_check") and eff.get("delegated"))
+
     # Symmetric countability: non-countable inconsistent never counts toward k_ref.
     inconsistent = distinct_by_key(
         [
@@ -1013,10 +1030,15 @@ def hypothesis_verdict(
             if effective_outcome(c) == "consistent" and claim_is_severe(c)
         ]
     )
+    # PR20: delegated proposed_check counts, but must not tip a catalog tie.
+    catalog_inc = [c for c in inconsistent if not _is_delegated_proposed(c)]
+    catalog_con = [c for c in consistent_severe if not _is_delegated_proposed(c)]
     k_ref = max(1, int(refutations_needed))
     k_sup = max(2, int(supported_needed))
     n_inc = len(inconsistent)
     n_con = len(consistent_severe)
+    n_inc_cat = len(catalog_inc)
+    n_con_cat = len(catalog_con)
 
     def _timeout_kind(c: Any) -> str | None:
         tk = getattr(c, "timeout_kind", None)
@@ -1036,22 +1058,39 @@ def hypothesis_verdict(
     unresolved = [c for c in about if _refute_unresolved(c)]
     idle_unresolved = any(_timeout_kind(c) == "idle_timeout" for c in unresolved)
 
-    if n_inc >= k_ref and refutation_priority:
+    # Prefer catalog-only counts when delegated proposals would tip a balanced catalog.
+    use_inc = n_inc
+    use_con = n_con
+    use_severe = consistent_severe
+    if n_inc_cat == n_con_cat and (n_inc != n_inc_cat or n_con != n_con_cat):
+        use_inc = n_inc_cat
+        use_con = n_con_cat
+        use_severe = catalog_con
+    elif n_inc >= k_ref and n_inc_cat < k_ref and n_inc_cat == n_con_cat:
+        use_inc = n_inc_cat
+        use_con = n_con_cat
+        use_severe = catalog_con
+    elif n_con >= k_sup and n_con_cat < k_sup and n_inc_cat == n_con_cat:
+        use_inc = n_inc_cat
+        use_con = n_con_cat
+        use_severe = catalog_con
+
+    if use_inc >= k_ref and refutation_priority:
         return "refuted", False, "k_ref"
-    if n_inc >= k_ref and not refutation_priority:
-        if consistent_severe:
+    if use_inc >= k_ref and not refutation_priority:
+        if use_severe:
             return "inconclusive", False, "k_ref"
         return "refuted", False, "k_ref"
-    if n_inc > 0:
+    if use_inc > 0:
         return "inconclusive", False, "inc_below_k_ref"
     # Guest timeout on a refute-role check hard-blocks supported (never k_sup).
     if unresolved and idle_unresolved:
         return "untestable_by_agent", False, "idle_timeout"
-    if n_con >= k_sup and any(refute_intent_counts(c) for c in consistent_severe):
+    if use_con >= k_sup and any(refute_intent_counts(c) for c in use_severe):
         if unresolved:
             return "inconclusive", False, "refute_unresolved"
         return "supported", False, "support_min"
-    if n_con >= 1:
+    if use_con >= 1:
         if unresolved and idle_unresolved:
             return "untestable_by_agent", False, "idle_timeout"
         return "survived", False, "single_severe"

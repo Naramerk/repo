@@ -12,6 +12,7 @@ from coscientist.core.artifacts import (
 )
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import (
+    PROPOSED_CHECK_TEMPLATE_ID,
     AgentTaskOutput,
     Catalog,
     CheckResult,
@@ -602,6 +603,199 @@ def template_to_requirement(
     )
 
 
+def _evaluate_proposed_check(
+    *,
+    ref: RequirementRef,
+    check_id: str,
+    out: AgentTaskOutput,
+    artifacts: LocalArtifactStore,
+    proposals: dict[str, dict[str, Any]],
+    attempt_id: str | None,
+    task_id: str | None,
+    output_digest: str | None,
+    review_statuses: dict[str, ReqStatus],
+    judge_retry: dict[str, int],
+    failure_kinds: dict[str, str],
+    fetched_digests: frozenset[str] | Collection[str] | None,
+    spec: TaskSpec,
+) -> CheckResult:
+    """Evaluate the ``proposed_check`` meta-template against a folded proposal.
+
+    Unapproved / missing → PENDING (await HITL) or FAILED after reject.
+    Claims never count until ``CheckApproved`` (exclusion ``unapproved_check``).
+    """
+    from coscientist.core.proposed_check import (
+        code_check_from_proposal,
+        rubric_from_proposal,
+    )
+
+    params = ref.params if isinstance(ref.params, dict) else {}
+    pid = str(params.get("proposal_id") or "")
+    base_effect: dict[str, Any] = {
+        "proposed_check": True,
+        "proposal_id": pid,
+        "core_evaluated": True,
+        "countable": False,
+        "trusted": False,
+    }
+    if not pid:
+        return CheckResult(
+            check_id=check_id,
+            template_id=PROPOSED_CHECK_TEMPLATE_ID,
+            status=ReqStatus.FAILED,
+            is_code=True,
+            required=ref.required,
+            role="unknown",
+            detail="unapproved_check:missing_proposal_id",
+            effect={**base_effect, "exclusion_reason": "unapproved_check"},
+        )
+    row = proposals.get(pid)
+    if row is None:
+        return CheckResult(
+            check_id=check_id,
+            template_id=PROPOSED_CHECK_TEMPLATE_ID,
+            status=ReqStatus.FAILED,
+            is_code=True,
+            required=ref.required,
+            role="unknown",
+            detail="unapproved_check:unknown_proposal",
+            effect={**base_effect, "exclusion_reason": "unapproved_check"},
+        )
+    status = str(row.get("status") or "proposed")
+    role: CheckRole = row.get("role") if row.get("role") in ("prediction", "validity") else "unknown"  # type: ignore[assignment]
+    base_effect["proposal_digest"] = row.get("proposal_digest")
+    base_effect["delegated"] = bool(row.get("delegated"))
+    if status == "rejected":
+        return CheckResult(
+            check_id=check_id,
+            template_id=PROPOSED_CHECK_TEMPLATE_ID,
+            status=ReqStatus.FAILED,
+            is_code=row.get("check") is not None,
+            required=ref.required,
+            role=role,
+            detail=f"unapproved_check:rejected:{row.get('reject_reason') or 'rejected'}",
+            effect={**base_effect, "exclusion_reason": "unapproved_check"},
+        )
+    if status != "approved":
+        # Awaiting HITL / reviewer — required checks keep the attempt open.
+        return CheckResult(
+            check_id=check_id,
+            template_id=PROPOSED_CHECK_TEMPLATE_ID,
+            status=ReqStatus.PENDING,
+            is_code=row.get("check") is not None,
+            required=ref.required,
+            role=role,
+            detail="unapproved_check:pending_approval",
+            effect={**base_effect, "exclusion_reason": "unapproved_check"},
+        )
+
+    # Approved: evaluate using the preregistered body (never mutate after propose).
+    delegated = bool(row.get("delegated"))
+    if row.get("rubric") is not None:
+        from coscientist.checks.kinds.rubric import evaluate_rubric
+        from coscientist.core.domain import CodeCheck as CC
+
+        rub = rubric_from_proposal(row)
+        # Qualitative proposed rubric — never severe (DESIGN_M1 §16).
+        sentinel = CC(kind="rubric", output="main", rubric=rub)
+        cr = evaluate_rubric(
+            sentinel,
+            template_id=PROPOSED_CHECK_TEMPLATE_ID,
+            check_id=check_id,
+            out=out,
+            artifacts=artifacts,
+            role="validity",
+            review_statuses=review_statuses,
+            judge_retry=judge_retry,
+            failure_kinds=failure_kinds,
+            output_rubric=rub,
+            attempt_id=attempt_id,
+            task_id=task_id,
+            output_digest=output_digest,
+            evaluate_code_check=evaluate_code_check,
+        )
+        effect = dict(cr.effect or {})
+        effect.update(
+            {
+                "proposed_check": True,
+                "proposal_id": pid,
+                "proposal_digest": row.get("proposal_digest"),
+                "delegated": delegated,
+                "qualitative": True,
+                "never_severe": True,
+            }
+        )
+        # Rubric proposed checks are never severe / never tip trusted severity.
+        effect["trusted"] = False
+        return CheckResult(
+            check_id=cr.check_id,
+            template_id=PROPOSED_CHECK_TEMPLATE_ID,
+            status=cr.status,
+            is_code=False,
+            required=ref.required,
+            role="validity",
+            evidence=cr.evidence,
+            detail=cr.detail,
+            effect=effect,
+            used_sesoi=False,
+        )
+
+    check = code_check_from_proposal(row)
+    if check is None:
+        return CheckResult(
+            check_id=check_id,
+            template_id=PROPOSED_CHECK_TEMPLATE_ID,
+            status=ReqStatus.FAILED,
+            is_code=True,
+            required=ref.required,
+            role=role,
+            detail="unapproved_check:empty_body",
+            effect={**base_effect, "exclusion_reason": "unapproved_check"},
+        )
+    from coscientist.checks.sandbox_limits import apply_frozen_limits
+
+    check = apply_frozen_limits(check, spec, template_id=PROPOSED_CHECK_TEMPLATE_ID)
+    cr = evaluate_code_check(
+        check,
+        template_id=PROPOSED_CHECK_TEMPLATE_ID,
+        check_id=check_id,
+        out=out,
+        artifacts=artifacts,
+        values=out.values,
+        role=role,
+        uses_sesoi=bool(row.get("uses_sesoi")),
+        sesoi=row.get("sesoi") if row.get("sesoi") is not None else row.get("threshold"),
+        predicts_null=bool(row.get("predicts_null")),
+        predicted_direction=str(row.get("predicted_direction") or "two_sided"),
+        attempt_id=attempt_id,
+        fetched_digests=fetched_digests,
+    )
+    effect = dict(cr.effect or {})
+    effect.update(
+        {
+            "proposed_check": True,
+            "proposal_id": pid,
+            "proposal_digest": row.get("proposal_digest"),
+            "delegated": delegated,
+        }
+    )
+    # Severe only when trusted (sandbox hard isolation) — DESIGN_M1 §16.
+    if not effect.get("trusted"):
+        effect["severe_eligible"] = False
+    return CheckResult(
+        check_id=cr.check_id,
+        template_id=PROPOSED_CHECK_TEMPLATE_ID,
+        status=cr.status,
+        is_code=True,
+        required=ref.required,
+        role=role,
+        evidence=cr.evidence,
+        detail=cr.detail,
+        effect=effect,
+        used_sesoi=cr.used_sesoi,
+    )
+
+
 def evaluate_task_checks(
     catalog: Catalog,
     spec: TaskSpec,
@@ -617,16 +811,20 @@ def evaluate_task_checks(
     task_kind: str | None = None,
     task_key: str | None = None,
     fetched_digests: frozenset[str] | Collection[str] | None = None,
+    proposals: dict[str, dict[str, Any]] | None = None,
 ) -> list[CheckResult]:
     """Evaluate criteria on the task; review checks become UNASSESSED unless overridden.
 
     Joint with PR14: ``fetched_digests`` forwarded to executable kinds.
     PR13: ``judge_retry`` / ``failure_kinds`` / ``task_id`` / ``output_digest``.
+    PR20: ``proposals`` — folded CheckProposed/Approved/Rejected rows for
+    ``proposed_check`` meta-template evaluation (core decides countability).
     """
     by_id = {t.id: t for t in catalog.templates}
     review_statuses = review_statuses or {}
     judge_retry = judge_retry or {}
     failure_kinds = failure_kinds or {}
+    proposals = proposals or {}
     results: list[CheckResult] = []
     refs = list(spec.criteria)
     if not refs:
@@ -643,6 +841,25 @@ def evaluate_task_checks(
         tmpl = by_id.get(ref.template_id)
         cid = f"{ref.template_id}#{i}"
         role = role_from_template(tmpl)
+        if str(ref.template_id) == PROPOSED_CHECK_TEMPLATE_ID:
+            results.append(
+                _evaluate_proposed_check(
+                    ref=ref,
+                    check_id=cid,
+                    out=out,
+                    artifacts=artifacts,
+                    proposals=proposals,
+                    attempt_id=attempt_id,
+                    task_id=task_id,
+                    output_digest=output_digest,
+                    review_statuses=review_statuses,
+                    judge_retry=judge_retry,
+                    failure_kinds=failure_kinds,
+                    fetched_digests=fetched_digests,
+                    spec=spec,
+                )
+            )
+            continue
         if str(ref.template_id or "").startswith("plan_expansion_"):
             if is_core_plan_n:
                 results.append(

@@ -34,6 +34,8 @@ class TaskReason(StrEnum):
     EXPANSION_LIMIT = "expansion_limit"
     ITERATION_CAP = "iteration_cap"
     REFUSED = "refused"
+    # M1 PR20: agent proposed_check quota exhausted (task still closes).
+    PROPOSAL_QUOTA = "proposal_quota"
 
 
 class CloseReason(StrEnum):

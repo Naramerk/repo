@@ -302,6 +302,15 @@ def _effect_from_checks(
                 "refute_unresolved",
                 "cpu_usage_s",
                 "wall_s",
+                # PR20 proposed_check stamps
+                "proposed_check",
+                "proposal_id",
+                "proposal_digest",
+                "delegated",
+                "qualitative",
+                "never_severe",
+                "severe_eligible",
+                "exclusion_reason",
             ):
                 if key in data:
                     effect[key] = data[key]
@@ -352,9 +361,25 @@ def _derive_claim_core_attrs(
     status = _criterion_status_for_claim(raw, checks, criteria)
     validity_ok = True
     exclusion_reason: str | None = None
+    # PR20: unapproved proposed_check never counts (even if evaluation ran).
+    for c in checks or ():
+        eff = getattr(c, "effect", None)
+        if isinstance(eff, dict) and eff.get("exclusion_reason") == "unapproved_check":
+            exclusion_reason = "unapproved_check"
+            validity_ok = False
+            status = "unassessed"
+            break
+        detail = str(getattr(c, "detail", "") or "")
+        if detail.startswith("unapproved_check"):
+            exclusion_reason = "unapproved_check"
+            validity_ok = False
+            status = "unassessed"
+            break
     # Required validity failure invalidates this experiment's claims only.
     # Rubric (even role=validity) never flips validity_ok — see _is_rubric_check.
-    if _required_validity_failed(checks):
+    if exclusion_reason == "unapproved_check":
+        pass
+    elif _required_validity_failed(checks):
         validity_ok = False
         status = "unassessed"
         exclusion_reason = "validity_failed"
@@ -561,6 +586,7 @@ class Executor:
         review_statuses: dict[str, ReqStatus] | None = None,
         get_graph: Any | None = None,
         get_results: Any | None = None,
+        get_proposals: Any | None = None,
         max_attempts: int = 3,
         on_budget_debit: Any | None = None,
     ) -> None:
@@ -579,6 +605,8 @@ class Executor:
         self._output_digests: dict[str, str] = {}
         self.get_graph = get_graph
         self.get_results = get_results
+        # PR20: folded CheckProposed/Approved/Rejected → evaluate proposed_check.
+        self.get_proposals = get_proposals
         self.max_attempts = int(max_attempts)
         # PR12: async (task_id, spent_rub, request_id) → record_budget_debit
         self.on_budget_debit = on_budget_debit
@@ -681,6 +709,9 @@ class Executor:
                     fetch_idx = SourceFetchIndex()
                 self._pending_outputs[attempt_id] = out
                 output_digest = self._ensure_output_digest(attempt_id, out)
+                proposals = (
+                    self.get_proposals() if self.get_proposals is not None else {}
+                )
                 checks = await asyncio.to_thread(
                     evaluate_task_checks,
                     self.catalog,
@@ -696,6 +727,7 @@ class Executor:
                     task_kind=str(getattr(task.kind, "value", task.kind)),
                     task_key=task.spec.task_key,
                     fetched_digests=fetch_idx.digests_for_attempt(attempt_id),
+                    proposals=proposals if isinstance(proposals, dict) else {},
                 )
             except SandboxInfraError as e:
                 # Host/private-FD infra — does NOT charge the retry budget.

@@ -98,6 +98,12 @@ class HitlForkMixin(CostlyHitlMixin):
                 h, answer=answer, critic_accepts=critic_accepts  # type: ignore[arg-type]
             )
             return
+        # PR20: proposed_check HITL — CheckApproved / CheckRejected (core decides counts).
+        if h.kind == "proposed_check":
+            await self._answer_proposed_check(
+                h, request_id, decision=decision, expansion=expansion
+            )
+            return
         # DESIGN §7.3 / PR12 budget gate: «реши сам» → critic; mark HITL node only.
         # Budget shares apply via _apply_budget_hitl (not plan expand).
         if decision == "delegate":
@@ -214,9 +220,111 @@ class HitlForkMixin(CostlyHitlMixin):
             assign_keys=bool(expansion.get("assign_keys", False)),
         )
 
+    async def _answer_proposed_check(
+        self,
+        h: HitlRequest,
+        request_id: str,
+        *,
+        decision: str,
+        expansion: dict[str, Any] | None = None,
+    ) -> None:
+        """HITL gate for proposed_check → core CheckApproved / CheckRejected.
+
+        ``delegate`` schedules a separate reviewer (``delegated=true``); the
+        reviewer must call ``approve_check`` / ``reject_check`` with a different
+        ``reviewer_attempt_id`` than the proposer (DESIGN_M1 §16).
+        """
+        from coscientist.core.proposed_check import approve_check, reject_check
+
+        pid = str(
+            getattr(h, "payload_ref", None)
+            or (expansion or {}).get("proposal_id")
+            or ""
+        )
+        if not pid:
+            opens = getattr(self, "_hitl_requests", {}) or {}
+            row = opens.get(request_id) if isinstance(opens, dict) else None
+            if isinstance(row, dict):
+                pid = str(row.get("proposal_id") or row.get("payload_ref") or "")
+        if decision in ("accept", "approve"):
+            await approve_check(
+                self,
+                pid,
+                by="human",
+                delegated=False,
+                hitl_request_id_s=request_id,
+            )
+            return
+        if decision == "delegate":
+            # Mark HITL answered as delegated; reviewer agent decides later.
+            # Do not CheckApproved yet — reviewer must approve with delegated=true.
+            now = self.clock.now()
+            await self._append(
+                [
+                    EventEnvelope(
+                        study_id=h.study_id,
+                        type="HitlDecided",
+                        entity_key=request_id,
+                        idem_key=make_idem("HitlDecided", request_id, "delegate"),
+                        payload={
+                            "request_id": request_id,
+                            "decision": "delegate",
+                            "by": "human",
+                            "delegated_by": "human",
+                            "reason": "delegate→reviewer",
+                            "proposal_id": pid,
+                            "spent_rub": 0.0,
+                            # Keep proposal pending until reviewer CheckApproved.
+                            "keep_open": False,
+                            "effect": "WAIT_REVIEWER",
+                        },
+                        ts=now,
+                    ),
+                    EventEnvelope(
+                        study_id=h.study_id,
+                        type="ReviewScheduled",
+                        entity_key=pid,
+                        idem_key=make_idem("ReviewScheduled", pid, "proposed_check"),
+                        payload={
+                            "kind": "proposed_check_review",
+                            "proposal_id": pid,
+                            "hitl_request_id": request_id,
+                            "task_id": h.task_id,
+                            "proposer_attempt_id": (
+                                (getattr(self, "_check_proposals", {}) or {})
+                                .get(pid, {})
+                                .get("proposer_attempt_id")
+                            ),
+                        },
+                        ts=now,
+                    ),
+                ]
+            )
+            return
+        await reject_check(
+            self,
+            pid,
+            by="human",
+            reason="rejected",
+            hitl_request_id_s=request_id,
+        )
+
     async def _hitl_timeout(self, h: HitlRequest) -> None:
         if h.kind == "costly_or_nonreal":
             await self._apply_costly_or_nonreal(h, answer=None)
+            return
+        # PR20: HITL timeout on proposed_check ≡ reject (StudyFinalized still runs).
+        if h.kind == "proposed_check":
+            from coscientist.core.proposed_check import reject_check
+
+            pid = str(getattr(h, "payload_ref", None) or "")
+            await reject_check(
+                self,
+                pid,
+                by="policy",
+                reason="human_timeout",
+                hitl_request_id_s=h.request_id,
+            )
             return
         now = self.clock.now()
         await self._append(

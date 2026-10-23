@@ -179,6 +179,10 @@ class LocalProjectMixin:
                 self._hitl_decisions = {}
                 decisions = self._hitl_decisions
             decisions[rid] = dict(p)
+        elif ev.type in ("CheckProposed", "CheckApproved", "CheckRejected"):
+            from coscientist.core.proposed_check import fold_proposed_check_event
+
+            fold_proposed_check_event(self, ev)
         elif ev.type == "StudyCancelled":
             self._study_cancelled = True
         elif ev.type == "StudyFinalized":

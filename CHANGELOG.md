@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### M1 PR20
+- Catalog meta-template `proposed_check`: agent proposes a check when no catalog template fits, with required justification + nearest rejected templates.
+- Preregistration: `CheckProposed` (v1) hashes the proposal body before any result; mutation after propose is a new proposal only.
+- Approval HITL: `CheckApproved` / `CheckRejected` (v1); timeout ≡ reject; `delegated=true` requires a reviewer attempt ≠ proposer (ReviewScheduled `proposed_check_review`).
+- Core-only counting: unapproved → exclusion `unapproved_check`; approved executable counts like catalog (severe only if trusted); approved rubric qualitative never-severe; delegated must not tip a catalog tie.
+- Quota: `Study.max_proposals` (default 3); excess closes the task with `TaskReason.PROPOSAL_QUOTA` (study still finalizes).
+- Report: `custom_checks[]` + `observations[]` on StudyFinalized / markdown / minimal_report.
+- Upcasters: StudyCreated **v11** (`max_proposals`, after PR11 `#24` v10 `max_loop_iter`); StudyFinalized **v4** (`custom_checks`/`observations`).
+- **Coordinator:** open PR #23 (PR19) may still bump StudyCreated — renumber if it lands first.
+
 ### Sandbox (host CPU sample order)
 - `_watch_process`: sample host-tree CPU via `/proc` **before** `poll()` (poll reaps the child and `/proc` vanishes). Keeps no-cgroup SIGXCPU classification accurate; retains the max sample while the guest is alive. Split out of PR14 so quote work stays focused.
 - **M2 notes:** `_host_tree_cpu_s` returns `0.0` (not `None`) when `/proc` is readable but idle; missing `CONFIG_PROC_CHILDREN` silently drops descendants; cgroup idle path untested on CI without delegation.

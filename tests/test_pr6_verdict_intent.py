@@ -238,14 +238,15 @@ def test_upcast_study_created_k_ref_defaults():
             "finalize_reserve_s": 30,
         },
     )
-    # v2→…→v8 (foreach cap) → v9 (max_task_budget_share)
-    assert v == 10
+    # v2→…→v10 max_loop_iter (PR11) → v11 max_proposals (PR20)
+    assert v == 11
     assert p["refutations_needed"] == 1
     assert p["refutation_priority"] is False
     assert p["confirmations_needed"] == 1
     assert p["aggregate"] == "count"
     assert p["supported_needed"] == 2
     assert p["max_expansions"] == 2
+    assert p["max_proposals"] == 3
 
 
 def test_upcast_study_created_confirmations_needed_v3_to_v4():
@@ -260,12 +261,13 @@ def test_upcast_study_created_confirmations_needed_v3_to_v4():
             "refutation_priority": True,
         },
     )
-    assert v == 10
+    assert v == 11
     assert p["confirmations_needed"] == 1
     assert p["refutations_needed"] == 2
     assert p["refutation_priority"] is True
     assert p["aggregate"] == "count"
     assert p["supported_needed"] == 2
+    assert p["max_proposals"] == 3
 
 
 @pytest.mark.asyncio
@@ -288,10 +290,11 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
     assert rt.study.refutations_needed == 3
     assert rt.study.refutation_priority is True
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 10
+    assert created.schema_version == 11
     assert created.payload["refutations_needed"] == 3
     assert created.payload["confirmations_needed"] == 1
     assert created.payload["aggregate"] == "count"
+    assert created.payload["max_proposals"] == 3
     assert created.payload["supported_needed"] == 2
     assert created.payload["max_expansions"] == 2
     await close_runtime(rt)
