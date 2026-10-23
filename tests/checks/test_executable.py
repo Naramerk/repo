@@ -1265,8 +1265,8 @@ def test_agent_facing_view_never_includes_holdout_or_scorer():
         agent_facing_template_view,
         template_to_requirement,
     )
-    from coscientist.core.domain import RequirementTemplate
     from coscientist.core.digest import canonical_json, sha256_hex
+    from coscientist.core.domain import RequirementTemplate
 
     holdout = {"y": [0, 1], "secret": "LABELS"}
     tmpl = RequirementTemplate(
