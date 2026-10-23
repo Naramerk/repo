@@ -73,6 +73,23 @@ def _assert_one_study_finalized(events: list) -> object:
     return fin
 
 
+def _assert_one_study_refused(
+    events: list,
+    *,
+    kind: str | None = None,
+    reason_contains: str | None = None,
+) -> object:
+    """Exactly one StudyRefused; optional kind / reason substring checks."""
+    refused = [e for e in events if e.type == "StudyRefused"]
+    assert len(refused) == 1
+    ev = refused[0]
+    if kind is not None:
+        assert ev.payload["kind"] == kind
+    if reason_contains is not None:
+        assert reason_contains in ev.payload["reason"]
+    return ev
+
+
 def _zip_with_declared_size(*, compress_size: int, file_size: int, name: str = "bomb.bin") -> bytes:
     """Zip whose ZipInfo declares ``file_size`` (may disagree with payload)."""
     buf2 = io.BytesIO()
@@ -525,7 +542,8 @@ def test_input_drift_forces_partial():
         previous_inputs_digest="bbb",
     )
     assert prov == "partial"
-    assert any(x.text == "input_drift" for x in lims2)
+    drift = [x for x in lims2 if x.text == "input_drift"]
+    assert len(drift) == 1
 
 
 def test_legacy_null_digest_drift_unknown_not_partial():
@@ -541,8 +559,9 @@ def test_legacy_null_digest_drift_unknown_not_partial():
         previous_bindings=prev,
     )
     assert prov == "real"
-    assert any(x.text == "input_drift_unknown" for x in lims)
-    assert not any(x.text == "input_drift" for x in lims)
+    unknown = [x for x in lims if x.text == "input_drift_unknown"]
+    assert len(unknown) == 1
+    assert len([x for x in lims if x.text == "input_drift"]) == 0
 
 
 def test_snapshot_bindings_uses_cas_sha(tmp_path):
@@ -656,13 +675,11 @@ async def test_zip_bomb_refused_ends_in_study_finalized(tmp_path, clock, runtime
         input_limits=InputLimits(max_unpack_ratio=5.0, max_bytes=50_000_000),
     )
     events = await rt.store.read_all()
-    assert any(e.type == "StudyRefused" for e in events)
+    _assert_one_study_refused(events, kind=RefusalKind.INPUT_TOO_LARGE.value)
     fin = _assert_one_study_finalized(events)
     assert fin.payload["terminal_reason"] == TerminalReason.REFUSED.value
     assert fin.payload["trigger"] == "intake"
     assert rt._finalized and rt.view().phase == "closed"
-    refused = next(e for e in events if e.type == "StudyRefused")
-    assert refused.payload["kind"] == RefusalKind.INPUT_TOO_LARGE.value
     await close_runtime(rt)
 
 
@@ -701,8 +718,10 @@ async def test_zip_bomb_refuse_survives_finalize_crash(
             ],
             input_limits=InputLimits(max_unpack_ratio=5.0, max_bytes=50_000_000),
         )
-    types = {e.type for e in await rt.store.read_all()}
-    assert "StudyCreated" in types and "StudyRefused" in types
+    events_crash = await rt.store.read_all()
+    types = {e.type for e in events_crash}
+    assert "StudyCreated" in types
+    _assert_one_study_refused(events_crash)
     assert "StudyFinalized" not in types
     await close_runtime(rt)
 
@@ -712,10 +731,10 @@ async def test_zip_bomb_refuse_survives_finalize_crash(
     assert rt2._intake_refusal is not None
     assert rt2._intake_refusal.kind == RefusalKind.INPUT_TOO_LARGE
     await rt2.tick()
-    fin = [e for e in await rt2.store.read_all() if e.type == "StudyFinalized"]
-    assert len(fin) == 1
-    assert fin[0].payload["trigger"] == "intake"
-    assert fin[0].payload["terminal_reason"] == TerminalReason.REFUSED.value
+    events2 = await rt2.store.read_all()
+    fin = _assert_one_study_finalized(events2)
+    assert fin.payload["trigger"] == "intake"
+    assert fin.payload["terminal_reason"] == TerminalReason.REFUSED.value
     await close_runtime(rt2)
 
 
@@ -738,8 +757,7 @@ async def test_client_raising_limits_refuses_input_invalid(
         client_input_limits={"max_bytes": 10_000_000},
     )
     events = await rt.store.read_all()
-    refused = next(e for e in events if e.type == "StudyRefused")
-    assert refused.payload["kind"] == RefusalKind.INPUT_INVALID.value
+    _assert_one_study_refused(events, kind=RefusalKind.INPUT_INVALID.value)
     _assert_one_study_finalized(events)
     await close_runtime(rt)
 
@@ -775,14 +793,18 @@ async def test_user_inputs_registered_before_spec(tmp_path, clock, runtime_cls):
     types = [e.type for e in events]
     assert "ArtifactRegistered" in types
     assert types.index("ArtifactRegistered") < types.index("TaskCreated")
-    reg = next(e for e in events if e.type == "ArtifactRegistered")
+    regs = [e for e in events if e.type == "ArtifactRegistered"]
+    assert len(regs) == 1
+    reg = regs[0]
     assert reg.entity_key == aid
     assert reg.payload.get("producer") == "user"
     assert reg.payload.get("role") == "data"
     # CAS uri retained; client URI only in source_uri.
-    assert str(reg.payload.get("uri") or "").startswith("file://")
+    uri = reg.payload.get("uri")
+    assert isinstance(uri, str) and uri.startswith("file://")
     assert reg.payload.get("source_uri") == "s3://bucket/data.csv"
-    assert any(t.spec.task_key == "SPEC" for t in rt.tasks.values())
+    specs = [t for t in rt.tasks.values() if t.spec.task_key == "SPEC"]
+    assert len(specs) == 1
     meta = rt.artifacts.get_meta(aid)
     assert meta is not None and meta.producer == "user"
     await close_runtime(rt)
@@ -818,11 +840,14 @@ async def test_user_input_ids_bound_into_attempt(tmp_path, clock, runtime_cls):
         for e in await rt.store.read_all()
         if e.type == "AttemptStarted" and e.entity_key == aid
     )
-    inputs = started.payload.get("inputs") or []
-    assert any(
-        (row.get("artifact_id") if isinstance(row, dict) else None) == uid
+    inputs = started.payload.get("inputs")
+    assert isinstance(inputs, list)
+    bound = [
+        row
         for row in inputs
-    )
+        if isinstance(row, dict) and row.get("artifact_id") == uid
+    ]
+    assert len(bound) == 1
     await close_runtime(rt)
 
 
@@ -938,12 +963,15 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
     dig2 = started2.payload["inputs_digest"]
     assert dig2 != dig1
     assert started2.payload["provenance"] == "partial"
-    lims = started2.payload.get("limitations") or []
-    assert any(
-        (x.get("text") if isinstance(x, dict) else getattr(x, "text", None))
-        == "input_drift"
+    lims = started2.payload.get("limitations")
+    assert isinstance(lims, list)
+    drift = [
+        x
         for x in lims
-    )
+        if (x.get("text") if isinstance(x, dict) else getattr(x, "text", None))
+        == "input_drift"
+    ]
+    assert len(drift) == 1
     await close_runtime(rt)
 
 
@@ -1068,7 +1096,8 @@ async def test_as_of_appears_in_report(tmp_path, clock, runtime_cls):
         if rt.tasks[tid].state.value != "DONE":
             await rt.cancel_task(tid, reason="cancelled")
     await rt.tick()
-    fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
+    events = await rt.store.read_all()
+    fin = _assert_one_study_finalized(events)
     rid = fin.payload.get("report_artifact_id")
     assert rid is not None
     assert rt.artifacts is not None
@@ -1166,12 +1195,16 @@ async def test_oversized_input_refused_via_create_study(tmp_path, clock, runtime
         input_limits=InputLimits(max_bytes=100),
     )
     events = await rt.store.read_all()
-    assert any(e.type == "StudyRefused" for e in events)
+    _assert_one_study_refused(events)
     _assert_one_study_finalized(events)
-    assert not any(
-        e.type == "TaskCreated" and (e.payload.get("spec") or {}).get("task_key") == "SPEC"
+    spec_created = [
+        e
         for e in events
-    )
+        if e.type == "TaskCreated"
+        and isinstance(e.payload.get("spec"), dict)
+        and e.payload["spec"].get("task_key") == "SPEC"
+    ]
+    assert len(spec_created) == 0
     await close_runtime(rt)
 
 
@@ -1195,11 +1228,13 @@ async def test_missing_artifact_store_refuses_user_inputs(
         inputs=[UserInput(name="d.bin", content=b"abc")],
     )
     events = await rt.store.read_all()
-    refused = next(e for e in events if e.type == "StudyRefused")
-    assert refused.payload["kind"] == RefusalKind.INPUT_INVALID.value
-    assert "artifact_store_unavailable" in refused.payload["reason"]
+    _assert_one_study_refused(
+        events,
+        kind=RefusalKind.INPUT_INVALID.value,
+        reason_contains="artifact_store_unavailable",
+    )
     _assert_one_study_finalized(events)
-    assert not any(e.type == "ArtifactRegistered" for e in events)
+    assert len([e for e in events if e.type == "ArtifactRegistered"]) == 0
     await close_runtime(rt)
 
 
@@ -1251,8 +1286,7 @@ async def test_api_validation_error_becomes_study_finalized(tmp_path, catalog):
     sid = out["study_id"]
     rt = await open_runtime(tmp_path, sid, catalog=catalog)
     events = await rt.store.read_all()
-    refused = next(e for e in events if e.type == "StudyRefused")
-    assert refused.payload["kind"] == RefusalKind.INPUT_INVALID.value
+    _assert_one_study_refused(events, kind=RefusalKind.INPUT_INVALID.value)
     _assert_one_study_finalized(events)
     await close_runtime(rt)
 
@@ -1375,8 +1409,7 @@ async def test_api_corrupt_deflate_study_finalized_not_500(tmp_path, catalog):
     sid = out["study_id"]
     rt = await open_runtime(tmp_path, sid, catalog=catalog)
     events = await rt.store.read_all()
-    refused = next(e for e in events if e.type == "StudyRefused")
-    assert refused.payload["kind"] == RefusalKind.INPUT_INVALID.value
+    _assert_one_study_refused(events, kind=RefusalKind.INPUT_INVALID.value)
     _assert_one_study_finalized(events)
     await close_runtime(rt)
 
@@ -1807,8 +1840,7 @@ async def test_api_zip_member_errors_study_finalized_not_500(tmp_path, catalog):
         sid = out["study_id"]
         rt = await open_runtime(tmp_path, sid, catalog=catalog)
         events = await rt.store.read_all()
-        refused = next(e for e in events if e.type == "StudyRefused")
-        assert refused.payload["kind"] == RefusalKind.INPUT_INVALID.value
+        _assert_one_study_refused(events, kind=RefusalKind.INPUT_INVALID.value)
         _assert_one_study_finalized(events)
         await close_runtime(rt)
 
@@ -2762,25 +2794,22 @@ def test_z13_z14_nested_meta_2000_both_paths(via, typeflag):
     assert "meta chain" in bad[1]
 
 
-@pytest.mark.parametrize("typeflag", ["L", "K", "g"])
-@pytest.mark.parametrize(
-    "mode,wrap,fname,mt",
-    [
-        ("r:xz", lambda raw: __import__("lzma").compress(raw), "b.txz", "application/x-xz"),
-        ("r:bz2", lambda raw: __import__("bz2").compress(raw), "b.tbz2", "application/x-bzip2"),
-    ],
-)
-@pytest.mark.parametrize("via", ["inspect_tar_streaming", "check_user_inputs_limits"])
-@pytest.mark.parametrize("depth,ok", [(8, True), (9, False)])
-def test_meta_chain_boundary_8_9_lk_g_xz_bz2(via, mode, wrap, fname, mt, typeflag, depth, ok):
-    """Boundary: depth 8 accepts, depth 9 rejects — L/K/g on xz and bz2, both paths."""
+def _meta_boundary_lk_g_xz_bz2_specs() -> list[tuple[str, object, str, str]]:
+    import bz2
+    import lzma
+
+    return [
+        ("r:xz", lzma.compress, "b.txz", "application/x-xz"),
+        ("r:bz2", bz2.compress, "b.tbz2", "application/x-bzip2"),
+    ]
+
+
+def _check_meta_chain_via(via: str, data: bytes, *, mode: str, fname: str, mt: str):
     from coscientist.core.archive_limits import inspect_tar_streaming
 
-    raw = _nested_meta_chain(depth, typeflag=typeflag)
-    data = wrap(raw)
     lim = InputLimits(max_bytes=10_000_000, max_unpack_ratio=100.0, max_zip_members=10_000)
     if via == "inspect_tar_streaming":
-        bad = inspect_tar_streaming(
+        return inspect_tar_streaming(
             data,
             max_bytes=lim.max_bytes,
             max_unpack_ratio=lim.max_unpack_ratio,
@@ -2788,16 +2817,35 @@ def test_meta_chain_boundary_8_9_lk_g_xz_bz2(via, mode, wrap, fname, mt, typefla
             name=fname,
             mode=mode,  # type: ignore[arg-type]
         )
-    else:
-        bad = check_user_inputs_limits(
-            [UserInput(name=fname, content=data, media_type=mt)],
-            lim,
-        )
-    if ok:
-        assert bad is None, bad
-    else:
-        assert bad is not None and bad[0] == RefusalKind.INPUT_INVALID
-        assert "meta chain" in bad[1]
+    return check_user_inputs_limits(
+        [UserInput(name=fname, content=data, media_type=mt)],
+        lim,
+    )
+
+
+@pytest.mark.parametrize("typeflag", ["L", "K", "g"])
+@pytest.mark.parametrize("mode,wrap,fname,mt", _meta_boundary_lk_g_xz_bz2_specs())
+@pytest.mark.parametrize("via", ["inspect_tar_streaming", "check_user_inputs_limits"])
+def test_meta_chain_depth_8_accepted_lk_g_xz_bz2(via, mode, wrap, fname, mt, typeflag):
+    """Boundary depth 8: L/K/g on xz/bz2 accepted on both gate paths."""
+    from coscientist.core.archive_limits import MAX_TAR_META_CHAIN
+
+    data = wrap(_nested_meta_chain(MAX_TAR_META_CHAIN, typeflag=typeflag))
+    bad = _check_meta_chain_via(via, data, mode=mode, fname=fname, mt=mt)
+    assert bad is None, bad
+
+
+@pytest.mark.parametrize("typeflag", ["L", "K", "g"])
+@pytest.mark.parametrize("mode,wrap,fname,mt", _meta_boundary_lk_g_xz_bz2_specs())
+@pytest.mark.parametrize("via", ["inspect_tar_streaming", "check_user_inputs_limits"])
+def test_meta_chain_depth_9_rejected_lk_g_xz_bz2(via, mode, wrap, fname, mt, typeflag):
+    """Boundary depth 9: L/K/g on xz/bz2 → INPUT_INVALID on both gate paths."""
+    from coscientist.core.archive_limits import MAX_TAR_META_CHAIN
+
+    data = wrap(_nested_meta_chain(MAX_TAR_META_CHAIN + 1, typeflag=typeflag))
+    bad = _check_meta_chain_via(via, data, mode=mode, fname=fname, mt=mt)
+    assert bad is not None and bad[0] == RefusalKind.INPUT_INVALID
+    assert "meta chain" in bad[1]
 
 
 @pytest.mark.asyncio
@@ -2832,7 +2880,7 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
     )
     events = await rt.store.read_all()
     types = [e.type for e in events]
-    assert "StudyRefused" in types
+    _assert_one_study_refused(events)
     fin = _assert_one_study_finalized(events)
     assert fin.payload["terminal_reason"] == TerminalReason.REFUSED.value
     assert fin.payload["trigger"] == "intake"
