@@ -1017,15 +1017,15 @@ class Executor:
         # PR15: stamp experiment_design / contradiction_map on output artifacts.
         from coscientist.core.experiment_design import artifact_kind_from_output_spec
 
+        out_map = dict(out.outputs or {})
         for ospec in getattr(task.spec, "expected_outputs", None) or ():
             name = str(getattr(ospec, "name", "") or "")
-            handle = (out.outputs or {}).get(name)
-            if handle is None:
+            if name not in out_map:
                 continue
             kind = artifact_kind_from_output_spec(ospec)
             if kind and hasattr(self.artifacts, "stamp_kind"):
                 try:
-                    self.artifacts.stamp_kind(handle.artifact_id, kind)
+                    self.artifacts.stamp_kind(out_map[name].artifact_id, kind)
                 except Exception:  # noqa: BLE001 — never fail record on stamp
                     pass
         # PR15: validate QuestionDisposed payloads (append after result; fail-closed).
@@ -1046,14 +1046,14 @@ class Executor:
                 if (
                     disposal.disposition == "needs_more_data"
                     and not disposal.design_artifact_id
-                    and out.outputs
+                    and out_map
                 ):
                     for ospec in getattr(task.spec, "expected_outputs", None) or ():
                         if artifact_kind_from_output_spec(ospec) == "experiment_design":
-                            h = (out.outputs or {}).get(str(ospec.name))
-                            if h is not None:
+                            oname = str(ospec.name)
+                            if oname in out_map:
                                 disposal = disposal.model_copy(
-                                    update={"design_artifact_id": h.artifact_id}
+                                    update={"design_artifact_id": out_map[oname].artifact_id}
                                 )
                                 break
                 # Prefer live graph question nodes when present.
