@@ -208,7 +208,8 @@ def test_upcast_planaccepted_questions_default():
     assert v == 3 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
 
 
-def test_upcast_taskcreated_check_role_defaults():
+def test_upcast_taskcreated_strips_plan_criterion_role():
+    """v5→v6 drops plan-side role; catalog is the authority at evaluate time."""
     v, p = upcast(
         "TaskCreated",
         5,
@@ -218,16 +219,19 @@ def test_upcast_taskcreated_check_role_defaults():
                 "task_key": "E1",
                 "addresses": [],
                 "criteria": [
-                    {"template_id": "value_match", "required": True},
+                    {
+                        "template_id": "value_match",
+                        "required": True,
+                        "role": "validity",  # stale / wrong — stripped
+                    },
                     {"template_id": "artifact_present", "required": True},
                 ],
             },
         },
     )
     assert v == 6
-    roles = {c["template_id"]: c["role"] for c in p["spec"]["criteria"]}
-    assert roles["value_match"] == "prediction"
-    assert roles["artifact_present"] == "validity"
+    for c in p["spec"]["criteria"]:
+        assert "role" not in c
 
 
 def test_upcast_study_finalized_v1_adds_counts_and_refusal():

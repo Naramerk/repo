@@ -91,21 +91,13 @@ def _task_created_v4_to_v5_input_kind(payload: dict[str, Any]) -> dict[str, Any]
     return out
 
 
-def _default_criterion_role(template_id: str) -> str:
-    """Upcast heuristic mirroring ``resolve_check_role`` without a catalog."""
-    tid = (template_id or "").lower()
-    if any(k in tid for k in ("value_match", "metric", "threshold", "prediction")):
-        return "prediction"
-    return "validity"
-
-
-def _criteria_with_roles(criteria: list[Any]) -> list[Any]:
+def _strip_plan_criterion_roles(criteria: list[Any]) -> list[Any]:
+    """Drop plan-side role; catalog template is the sole authority at evaluate time."""
     rewritten: list[Any] = []
     for item in criteria:
         if isinstance(item, dict):
             item = dict(item)
-            tid = str(item.get("template_id") or "")
-            item.setdefault("role", _default_criterion_role(tid))
+            item.pop("role", None)
             rewritten.append(item)
         else:
             rewritten.append(item)
@@ -113,20 +105,20 @@ def _criteria_with_roles(criteria: list[Any]) -> list[Any]:
 
 
 def _task_created_v5_to_v6_check_role(payload: dict[str, Any]) -> dict[str, Any]:
-    """PR8: RequirementRef.role (prediction|validity) on TaskCreated.spec.criteria."""
+    """PR8: strip plan criterion role (resolve from catalog by template_id)."""
     out = dict(payload)
     spec = out.get("spec")
     if isinstance(spec, dict):
         spec = dict(spec)
         criteria = spec.get("criteria")
         if isinstance(criteria, list):
-            spec["criteria"] = _criteria_with_roles(criteria)
+            spec["criteria"] = _strip_plan_criterion_roles(criteria)
         out["spec"] = spec
     return out
 
 
 def _plan_accepted_v2_to_v3_check_role(payload: dict[str, Any]) -> dict[str, Any]:
-    """PR8: RequirementRef.role on PlanAccepted.tasks[].criteria."""
+    """PR8: strip PlanAccepted.tasks[].criteria role (catalog is source of truth)."""
     out = dict(payload)
     tasks = out.get("tasks")
     if isinstance(tasks, list):
@@ -136,7 +128,7 @@ def _plan_accepted_v2_to_v3_check_role(payload: dict[str, Any]) -> dict[str, Any
                 t = dict(t)
                 criteria = t.get("criteria")
                 if isinstance(criteria, list):
-                    t["criteria"] = _criteria_with_roles(criteria)
+                    t["criteria"] = _strip_plan_criterion_roles(criteria)
                 rewritten.append(t)
             else:
                 rewritten.append(t)

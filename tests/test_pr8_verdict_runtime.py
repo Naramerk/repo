@@ -17,6 +17,7 @@ from coscientist.core.domain import (
     HitlPolicy,
     InputSpec,
     QuestionSpec,
+    RequirementRef,
     Study,
     Task,
     TaskKind,
@@ -34,6 +35,7 @@ from coscientist.core.inputs import (
     collect_bindable_claims,
     verdict_binding_digest,
 )
+from coscientist.core.reasons import TaskReason
 from tests.helpers import attach_executor, close_runtime, open_runtime
 from tests.test_inputs import _task
 
@@ -956,6 +958,7 @@ def test_criterion_match_is_exact_not_endswith():
             status=ReqStatus.MET,
             is_code=True,
             required=True,
+            role="unknown",
         )
     ]
     attrs = _derive_claim_core_attrs(
@@ -1006,9 +1009,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[
-                    RequirementRef(
-                        template_id="value_match", required=True, role="prediction"
-                    ),
+                    RequirementRef(template_id="value_match", required=True),
                 ],
                 addresses=["Q1"],
             )
@@ -1064,7 +1065,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
 async def test_validity_failed_claim_invalid_inconclusive(
     tmp_path, clock, runtime_cls
 ):
-    """(b) Failed required validity check → invalid claim, inconclusive (never refuted)."""
+    """(b) Failed required validity check → invalid claim, inconclusive + excluded."""
     from coscientist.core.domain import AgentTaskOutput, RequirementRef
 
     sid = "st_val"
@@ -1091,9 +1092,7 @@ async def test_validity_failed_claim_invalid_inconclusive(
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[
-                    RequirementRef(
-                        template_id="artifact_present", required=True, role="validity"
-                    ),
+                    RequirementRef(template_id="artifact_present", required=True),
                 ],
                 addresses=["Q1"],
             )
@@ -1130,10 +1129,177 @@ async def test_validity_failed_claim_invalid_inconclusive(
         study=rt.study,
         results=rt.results,
     )
-    # Invalid claim is not counted → not refuted; disposition inconclusive or
-    # not_attempted (no counting claims).
-    assert d["Q1"]["disposition"] in ("inconclusive", "not_attempted")
-    assert d["Q1"].get("verdict") != "refuted"
+    assert d["Q1"]["disposition"] == "inconclusive"
+    assert d["Q1"]["verdict"] == "inconclusive"
+    assert d["Q1"]["reason"] == "validity_failed"
+    assert d["Q1"]["excluded_claims"]
+    assert d["Q1"]["excluded_claims"][0]["reason"] == "validity_failed"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_plan_rejects_role_disagreeing_with_catalog(
+    tmp_path, clock, runtime_cls
+):
+    """Plan claiming validity for a prediction template is rejected."""
+    sid = "st_role_rej"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=120),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    with pytest.raises(ValueError, match="disagrees with template"):
+        await rt.accept_plan(
+            [
+                TaskSpec(
+                    task_key="E0",
+                    title="dodge",
+                    goal="g",
+                    route="experiment",
+                    depends_on=["PLAN"],
+                    criteria=[
+                        RequirementRef(
+                            template_id="value_match",
+                            required=True,
+                            role="validity",  # catalog says prediction
+                        ),
+                    ],
+                    addresses=["Q1"],
+                )
+            ],
+            questions=[QuestionSpec(id="Q1", text="why")],
+        )
+    with pytest.raises(ValueError, match="unknown criterion template"):
+        await rt.accept_plan(
+            [
+                TaskSpec(
+                    task_key="E0",
+                    title="unknown",
+                    goal="g",
+                    route="experiment",
+                    depends_on=["PLAN"],
+                    criteria=[
+                        RequirementRef(template_id="no_such_template", required=True),
+                    ],
+                    addresses=["Q1"],
+                )
+            ],
+            questions=[QuestionSpec(id="Q1", text="why")],
+        )
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_scientific_failed_refute_no_retry_no_hc_cascade(
+    tmp_path, clock, runtime_cls
+):
+    """Scientific FAILED refute: no retry, no H-c cascade, budget ok, finalize refuted."""
+    from decimal import Decimal
+
+    from coscientist.core.artifacts import make_tool_ref
+    from coscientist.core.domain import (
+        AgentTaskOutput,
+        ArtifactHandle,
+        Budget,
+        RequirementRef,
+    )
+
+    sid = "st_sci_hc"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    arts = rt.artifacts
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        budget=Budget(max_llm_calls=50, max_cost_rub=Decimal("100")),
+    )
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E_ref",
+                title="falsify",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="value_match", required=True)],
+                addresses=["Q1"],
+            ),
+            TaskSpec(
+                task_key="E_child",
+                title="depends",
+                goal="g",
+                route="experiment",
+                depends_on=["E_ref"],
+                criteria=[],
+                addresses=["Q1"],
+            ),
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    aid = await rt.start_attempt("E_ref", provenance="real")
+    await rt.record_budget_debit(spent_rub=Decimal("1.00"), request_id="debit-1")
+    art = arts.put(
+        b'{"count": 999}',
+        make_tool_ref(f"{aid}:1"),
+        name="main",
+        media_type="application/json",
+    )
+    await rt.executor.record(
+        aid,
+        AgentTaskOutput(
+            summary="falsified",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            values={"count": 999},
+            claims=[
+                {"id": "ref", "target": "Q1", "checked_against": "value_match"},
+            ],
+        ),
+    )
+    parent = rt.tasks[f"{sid}/E_ref"]
+    assert parent.state == TaskState.DONE
+    assert parent.outcome == TaskOutcome.FAILED
+    assert rt.results[aid].get("result_class") == "scientific"
+    assert getattr(rt, "_retry_at", {}) == {} or f"{sid}/E_ref" not in rt._retry_at
+    assert len(parent.attempts) == 1  # no retry attempt
+
+    await rt.tick()
+    child = rt.tasks[f"{sid}/E_child"]
+    # Scientific FAILED must not H-c cascade-cancel the dependent.
+    assert child.state != TaskState.DONE or child.outcome != TaskOutcome.SKIPPED
+    assert child.reason != TaskReason.INPUT_UNAVAILABLE
+
+    # Finish child + remaining stages so study can finalize.
+    await rt.start_attempt("E_child")
+    await rt.cancel_task("E_child", reason="cancelled")
+    await rt.start_attempt("REPORT")
+    await rt.cancel_task("REPORT", reason="cancelled")
+    await rt.tick()
+    assert rt._finalized
+    d = dispositions(
+        tasks=rt.tasks,
+        plans=rt.plans,
+        graph=rt.graph,
+        study=rt.study,
+        results=rt.results,
+    )
+    assert d["Q1"]["verdict"] == "refuted"
     await close_runtime(rt)
 
 

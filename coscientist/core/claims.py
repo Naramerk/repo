@@ -583,6 +583,21 @@ def compute_verdict_snapshots(
             refutations_needed=k_ref,
             refutation_priority=priority,
         )
+        excluded = [
+            {
+                "attempt_id": c.attempt_id,
+                "node_id": c.node_id,
+                "reason": "validity_failed",
+            }
+            for c in claims
+            if not c.counts() and getattr(c, "validity_ok", True) is False
+        ]
+        # Cap at inconclusive when validity failed, unless other valid claims refute.
+        if excluded and v != "refuted":
+            v = "inconclusive"
+        counting = [c for c in claims if c.counts()]
+        if excluded and not counting:
+            v = "inconclusive"
         provs: list[Provenance] = [
             c.provenance  # type: ignore[misc]
             for c in claims
@@ -599,6 +614,11 @@ def compute_verdict_snapshots(
             "refutation_priority": priority,
             "k": conf_k,
         }
+        if excluded and v == "inconclusive":
+            snap["reason"] = "validity_failed"
+            snap["excluded_claims"] = excluded
+        elif excluded:
+            snap["excluded_claims"] = excluded
         note = priority_refuted_support_note(
             claims,
             any_experiment_done,

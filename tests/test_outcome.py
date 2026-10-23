@@ -35,6 +35,7 @@ from coscientist.core.writer import StudyWriter
 
 def _req(status: ReqStatus, *, code: bool = True, required: bool = True, i: int = 0):
     return CheckResult(
+        role="validity",
         check_id=f"c{i}",
         template_id="t",
         status=status,

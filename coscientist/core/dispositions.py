@@ -137,8 +137,17 @@ def _dispositions_inner(
         covering = [by_key[kk] for kk in sorted(keys) if kk in by_key]
         claims = claims_for_ref(by_target, qid, prefer="question")  # explicit kind
         counting = [c for c in claims if c.counts()]
+        excluded = [
+            {
+                "attempt_id": c.attempt_id,
+                "node_id": c.node_id,
+                "reason": "validity_failed",
+            }
+            for c in claims
+            if not c.counts() and getattr(c, "validity_ok", True) is False
+        ]
+        any_exp = any(t.state == TaskState.DONE for t in covering)
         if counting:
-            any_exp = any(t.state == TaskState.DONE for t in covering)
             v, _by_lit = verdict(
                 claims,
                 any_exp,
@@ -146,11 +155,24 @@ def _dispositions_inner(
                 refutations_needed=k_ref,
                 refutation_priority=priority,
             )
+            # Validity-failed claims force inconclusive unless other valid
+            # claims already refute.
+            if excluded and v != "refuted":
+                row_cap: dict[str, Any] = {
+                    "disposition": Disposition.INCONCLUSIVE.value,
+                    "reason": "validity_failed",
+                    "reason_detail": ["validity_failed"],
+                    "formulation": text,
+                    "verdict": "inconclusive",
+                    "excluded_claims": excluded,
+                }
+                result[qid] = row_cap
+                continue
             disp = disposition_from_verdict(v)
             if disp is not None:
-                row: dict[str, Any] = {
+                row = {
                     "disposition": disp,
-                    "reason": None,
+                    "reason": None,  # type: ignore[dict-item]
                     "reason_detail": [],
                     "formulation": text,
                     "verdict": v,
@@ -164,8 +186,20 @@ def _dispositions_inner(
                 )
                 if note is not None:
                     row["note"] = note
+                if excluded:
+                    row["excluded_claims"] = excluded
                 result[qid] = row
                 continue
+        if excluded:
+            result[qid] = {
+                "disposition": Disposition.INCONCLUSIVE.value,
+                "reason": "validity_failed",
+                "reason_detail": ["validity_failed"],
+                "formulation": text,
+                "verdict": "inconclusive",
+                "excluded_claims": excluded,
+            }
+            continue
         reason, detail = _not_attempted_for_covering(covering)
         result[qid] = {
             "disposition": Disposition.NOT_ATTEMPTED.value,

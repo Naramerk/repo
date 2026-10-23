@@ -168,19 +168,16 @@ class InputSpec(Frozen):
     ref: str | None = None
 
 
-CheckRole = Literal["prediction", "validity"]
+CheckRole = Literal["prediction", "validity", "unknown"]
 
 
 class RequirementRef(Frozen):
     """Plan criterion reference.
 
-    ``role`` (Duhem–Quine / DESIGN_M1):
-    - ``prediction`` — tests the hypothesis/question prediction; FAILED →
-      ``criterion_status=not_met`` → counting refutation.
-    - ``validity`` — sanity / controls / integrity / code-ran; FAILED → claim
-      invalid (not counted); that experiment's verdict capped at inconclusive.
-    Default when omitted: resolved from check kind (``value_matches`` /
-    ``metric_threshold`` → prediction; otherwise validity).
+    ``role`` is optional plan-side annotation only. The authoritative role comes
+    from the catalog ``RequirementTemplate``. If ``role`` is set and disagrees
+    with the template, ``accept_plan`` rejects the plan. Runtime evaluation
+    never trusts this field over the catalog.
     """
 
     template_id: str
@@ -352,9 +349,9 @@ class CheckResult(Frozen):
     status: ReqStatus
     is_code: bool
     required: bool
+    role: CheckRole  # from catalog template; never defaulted to validity
     evidence: list[EvidenceRef] = Field(default_factory=list)
     detail: str | None = None
-    role: CheckRole = "validity"
 
 
 class Result(Frozen):
@@ -442,7 +439,12 @@ class ReviewCheck(Frozen):
 
 
 class RequirementTemplate(Frozen):
-    """One source: human-readable text_ru + machine check together."""
+    """One source: human-readable text_ru + machine check together.
+
+    ``role`` (Duhem–Quine) is catalog-authored only:
+    - ``prediction`` — FAILED → ``not_met`` → counting refute
+    - ``validity`` — FAILED → claim invalid; experiment capped at inconclusive
+    """
 
     id: str
     title: str
@@ -451,6 +453,7 @@ class RequirementTemplate(Frozen):
     rule_ids: list[str] = Field(default_factory=list)
     applies_to: list[str]  # registered node kinds (strings), not a hard-coded ontology
     check: CodeCheck | ReviewCheck
+    role: Literal["prediction", "validity"]
     required: bool = True
     version: str = "1"
 

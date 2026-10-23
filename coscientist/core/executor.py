@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from coscientist.checks.evaluate import evaluate_task_checks
+from coscientist.checks.evaluate import evaluate_task_checks, role_from_catalog
 from coscientist.core.artifacts import LocalArtifactStore
 from coscientist.core.digest import canonical_json, payload_digest
 from coscientist.core.domain import (
@@ -118,9 +118,9 @@ def _criterion_status_for_claim(
 
 def _check_role(c: Any) -> str:
     role = _check_field(c, "role")
-    if role in ("prediction", "validity"):
+    if role in ("prediction", "validity", "unknown"):
         return str(role)
-    return "validity"
+    return "unknown"
 
 
 def _required_validity_failed(checks: list[Any]) -> bool:
@@ -144,9 +144,13 @@ def _required_validity_failed(checks: list[Any]) -> bool:
 
 
 def _role_for_claim_key(
-    raw: dict[str, Any], checks: list[Any], criteria: list[Any]
+    raw: dict[str, Any],
+    checks: list[Any],
+    criteria: list[Any],
+    *,
+    catalog: Any | None = None,
 ) -> str:
-    """Role of the check this claim is checked_against (default validity)."""
+    """Role of the check this claim is checked_against (catalog / CheckResult only)."""
     key = _criterion_key_for_claim(raw, checks, criteria)
     if key:
         for c in checks:
@@ -156,24 +160,11 @@ def _role_for_claim_key(
                 cid is not None and str(cid) == key
             ):
                 return _check_role(c)
-        for ref in criteria:
-            tid = _check_field(ref, "template_id")
-            if tid is not None and str(tid) == key:
-                role = _check_field(ref, "role")
-                if role in ("prediction", "validity"):
-                    return str(role)
-                # Kind heuristic when CheckResult role missing.
-                from coscientist.checks.evaluate import resolve_check_role
-                from coscientist.core.domain import RequirementRef
-
-                if isinstance(ref, RequirementRef):
-                    return resolve_check_role(ref)
-                return resolve_check_role(
-                    RequirementRef(template_id=str(tid), role=role)
-                )
+        # Fall back to catalog by template_id (never plan RequirementRef.role).
+        return role_from_catalog(str(key), catalog)
     if len(checks) == 1:
         return _check_role(checks[0])
-    return "validity"
+    return "unknown"
 
 
 def _criterion_is_frozen(graph: Any, study_id: str, template_id: Any) -> bool:
@@ -199,16 +190,18 @@ def _derive_claim_core_attrs(
     graph: Any,
     study_id: str,
     validated: bool,
+    catalog: Any | None = None,
 ) -> dict[str, Any]:
     """Core-owned counting fields from plan/checks/freeze — never agent attrs.
 
     ``accepted`` means the result was recorded and the claim is structurally
     valid — **not** that criteria passed (graph_schema invariant 10).
 
-    Check ``role`` (Duhem–Quine):
+    Check ``role`` (catalog only, Duhem–Quine):
     - ``prediction`` FAILED → ``criterion_status=not_met`` → counting refute.
     - required ``validity`` FAILED → claim not counted (``validity_ok=False``);
       criterion_status stays ``unassessed`` (never refuted from that experiment).
+    - ``unknown`` → never refutes, never validates (``validity_ok=False``).
     """
     del task_outcome  # outcome is scientific whenever we derive; criteria ≠ accepted
     spec = getattr(task, "spec", None)
@@ -218,11 +211,15 @@ def _derive_claim_core_attrs(
     )
     criteria = list(getattr(spec, "criteria", None) or []) if spec is not None else []
     key = _criterion_key_for_claim(raw, checks, criteria)
-    role = _role_for_claim_key(raw, checks, criteria)
+    role = _role_for_claim_key(raw, checks, criteria, catalog=catalog)
     status = _criterion_status_for_claim(raw, checks, criteria)
     validity_ok = True
     # Any required validity failure caps this experiment: no counting refutation.
     if _required_validity_failed(checks):
+        validity_ok = False
+        status = "unassessed"
+    elif role == "unknown":
+        # Unknown role never refutes and never validates.
         validity_ok = False
         status = "unassessed"
     elif role == "validity" and status == "not_met":
@@ -531,6 +528,7 @@ class Executor:
                 graph=graph,
                 study_id=study_id,
                 validated=validated,
+                catalog=self.catalog,
             ),
         )
         if drops:

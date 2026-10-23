@@ -76,12 +76,39 @@ class AttemptsMixin:
     def _dep_map(self) -> dict[str, Task]:
         return {t.spec.task_key: t for t in self.tasks.values()}
 
+    def _hc_cascade_parent(self, dep: Task) -> bool:
+        """True when H-c should skip children of this DONE parent.
+
+        Scientific FAILED (``result_class=scientific``) does **not** cascade —
+        it is a valid research outcome. SKIPPED and infra FAILED still cascade.
+        ``fail_attempt`` without a ResultRecorded still cascades (legacy/infra).
+        """
+        if dep.outcome == TaskOutcome.SKIPPED:
+            return True
+        if dep.outcome != TaskOutcome.FAILED:
+            return False
+        results = getattr(self, "results", None) or {}
+        for aid in reversed(dep.attempts):
+            row = results.get(aid)
+            if not isinstance(row, dict):
+                continue
+            rc = str(row.get("result_class") or "")
+            if rc == "scientific":
+                return False
+            if rc == "infra":
+                return True
+            # Legacy FAILED row without class → treat as cascade.
+            return True
+        # No result row (e.g. fail_attempt) → cascade.
+        return True
+
     async def _skip_unavailable_dep_children(self) -> None:
         """H-c: FAILED/SKIPPED parent without InputSpec → SKIPPED(input_unavailable).
 
         Stage tasks are excluded (failed SPEC must not wipe PLAN/REPORT). Skipped
         when ``tolerate_failed_dep`` is set. Parents covered by an ``InputSpec``
-        are left to ``bind_inputs`` on start_attempt.
+        are left to ``bind_inputs`` on start_attempt. Scientific FAILED parents
+        do not cascade.
         """
         for task in list(self.tasks.values()):
             if task.state == TaskState.DONE:
@@ -97,7 +124,7 @@ class AttemptsMixin:
                 dep = self._lookup_dep(d)
                 if dep is None or dep.state != TaskState.DONE:
                     continue
-                if dep.outcome in (TaskOutcome.FAILED, TaskOutcome.SKIPPED):
+                if self._hc_cascade_parent(dep):
                     await self.cancel_task(
                         task.task_id, reason=TaskReason.INPUT_UNAVAILABLE
                     )

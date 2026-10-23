@@ -24,7 +24,7 @@ from coscientist.core.domain import (
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.graph import GraphNode
 from coscientist.core.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
-from coscientist.core.inputs import validate_input_specs
+from coscientist.core.inputs import validate_input_specs, validate_plan_criteria
 from coscientist.core.intake import IntakeRefuse, SafetyPort, intake
 from coscientist.core.ports import EventStore
 from coscientist.core.question_tasks import questions_from_spec_output
@@ -228,6 +228,10 @@ class LifecycleMixin:
         known_texts = {**known_texts, **{q.id: q.text for q in questions}}
         self._validate_addresses(tasks, set(known_texts))
         validate_input_specs(tasks)
+        catalog = getattr(self, "catalog", None) or getattr(
+            getattr(self, "executor", None), "catalog", None
+        )
+        validate_plan_criteria(tasks, catalog)
         pid = plan_id()
         plan = Plan(
             plan_id=pid,

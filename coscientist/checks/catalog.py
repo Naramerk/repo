@@ -69,6 +69,11 @@ def load_catalog(
                     kind_registry.require_node_kind(k)
                 except KeyError as e:
                     raise CatalogError(str(e)) from e
+        role = t.get("role")
+        if role not in ("prediction", "validity"):
+            raise CatalogError(
+                f"template {t.get('id')!r} needs role prediction|validity, got {role!r}"
+            )
         templates.append(
             RequirementTemplate(
                 id=t["id"],
@@ -78,6 +83,7 @@ def load_catalog(
                 rule_ids=list(t.get("rule_ids", [])),
                 applies_to=applies,
                 check=check,
+                role=role,
                 required=bool(t.get("required", True)),
                 version=str(t.get("version", "1")),
             )
@@ -138,6 +144,7 @@ def minimal_test_catalog() -> Catalog:
                     "method_sources": ["test"],
                     "applies_to": ["experiment"],
                     "check": {"kind": "artifact_exists", "output": "main"},
+                    "role": "validity",
                     "required": True,
                 },
                 {
@@ -153,6 +160,7 @@ def minimal_test_catalog() -> Catalog:
                         "pointer": "/count",
                         "target": 225,
                     },
+                    "role": "prediction",
                     "required": True,
                 },
                 {
@@ -166,6 +174,7 @@ def minimal_test_catalog() -> Catalog:
                         "reviewer_role": "reviewer",
                         "question": "Is the result adequate?",
                     },
+                    "role": "validity",
                     "required": True,
                 },
             ],

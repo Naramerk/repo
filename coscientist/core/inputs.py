@@ -240,6 +240,29 @@ def bind_inputs(
     return bindings, worst_provenance(*provs)
 
 
+def _claim_structurally_ok(
+    *,
+    claim_id: str | None,
+    target: str,
+    target_id: str | None,
+    graph: Any | None,
+    id_collides: bool,
+    target_changed: bool,
+    about_retarget: bool,
+) -> bool:
+    """True when claim id/target/about are structurally sound for ``accepted``."""
+    if not claim_id or ":claim:" not in claim_id:
+        return False
+    if not target or not target_id:
+        return False
+    if id_collides or target_changed or about_retarget:
+        return False
+    if graph is None:
+        return False
+    dst = graph.get_node(target_id)
+    return dst is not None and dst.kind in ("question", "hypothesis")
+
+
 def claim_nodes_from_attempt(
     *,
     study_id: str,
@@ -314,10 +337,15 @@ def claim_nodes_from_attempt(
             drops.append({"key": agent_key, "reason": "about_retarget_forbidden"})
             continue
 
-        # Real structural validation (not a literal): id/target/about gates passed.
-        structurally_ok = bool(
-            cid and target and resolved is not None and not id_collides
-            and not target_changed and not about_retarget
+        # Re-verify structural gates independently (not control-flow tautology).
+        structurally_ok = _claim_structurally_ok(
+            claim_id=cid,
+            target=str(target) if target else "",
+            target_id=target_id,
+            graph=graph,
+            id_collides=id_collides,
+            target_changed=target_changed,
+            about_retarget=about_retarget,
         )
 
         new_prov: Provenance = provenance
@@ -346,9 +374,9 @@ def claim_nodes_from_attempt(
         attrs["lit_own_criterion"] = bool(core.get("lit_own_criterion", False))
         attrs["accepted"] = bool(core.get("accepted", False))
         attrs["validity_ok"] = bool(core.get("validity_ok", True))
-        role = core.get("check_role", "prediction")
+        role = core.get("check_role", "unknown")
         attrs["check_role"] = (
-            role if role in ("prediction", "validity") else "prediction"
+            role if role in ("prediction", "validity", "unknown") else "unknown"
         )
         if core.get("artifact_id"):
             attrs["artifact_id"] = core["artifact_id"]
@@ -500,6 +528,35 @@ def validate_input_specs(tasks: list[TaskSpec]) -> None:
                 raise ValueError(f"unknown InputSpec.kind: {kind!r}")
 
 
+def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
+    """Reject unknown templates and plan roles that disagree with the catalog.
+
+    Role is catalog-authored; an explicit ``RequirementRef.role`` is accepted
+    only when it matches the template. Unknown ``template_id`` → reject.
+    """
+    if catalog is None:
+        raise ValueError("accept_plan requires catalog to validate criteria")
+    by_id = {t.id: t for t in getattr(catalog, "templates", []) or []}
+    for spec in tasks:
+        for ref in spec.criteria or []:
+            tid = getattr(ref, "template_id", None)
+            if not tid or tid not in by_id:
+                raise ValueError(
+                    f"unknown criterion template {tid!r} "
+                    f"(task {spec.task_key!r})"
+                )
+            tmpl = by_id[tid]
+            plan_role = getattr(ref, "role", None)
+            if plan_role is None:
+                continue
+            tmpl_role = getattr(tmpl, "role", None)
+            if plan_role != tmpl_role:
+                raise ValueError(
+                    f"criterion role {plan_role!r} disagrees with template "
+                    f"{tid!r} role {tmpl_role!r} (task {spec.task_key!r})"
+                )
+
+
 def collect_bindable_claims(
     graph: Any,
     *,
@@ -521,8 +578,6 @@ def collect_bindable_claims(
     for node in nodes:
         attrs = node.attrs or {}
         aid = attrs.get("attempt_id")
-        if producer_attempt_failed(str(aid) if aid else None, results=results):
-            continue
         if producer_attempt_failed(str(aid) if aid else None, results=results):
             continue
         known.add(node.node_id)
