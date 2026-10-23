@@ -580,16 +580,21 @@ def classify_guest_timeout(
     duration_s: float,
     cpu_usage_s: float | None,
     idle_ratio: float = IDLE_CPU_WALL_RATIO,
+    refute_role: bool = False,
 ) -> str:
     """Host-only classification: idle_timeout | cpu_timeout | wall_timeout.
 
-    Idle detection requires a measured ``cpu_usage_s`` from cgroup ``cpu.stat``.
-    When usage is unavailable, never guess sabotage — report ``wall_timeout``.
+    ``cpu_timeout`` only when the host watcher tripped the cgroup CPU budget
+    (``kill_cause==\"cpu\"``). Guest ``SIGXCPU`` / exit 152 is never trusted.
+
+    Idle (cpu/wall below ``idle_ratio``) requires measured ``cpu.stat``. Without
+    a measurement, refute-role timeouts are treated as ``idle_timeout``
+    (untestable / sabotage-suspected); other roles stay ``wall_timeout``.
     """
     if kill_cause == "cpu":
         return "cpu_timeout"
     if cpu_usage_s is None:
-        return "wall_timeout"
+        return "idle_timeout" if refute_role else "wall_timeout"
     wall = max(float(duration_s), 1e-6)
     cpu = float(cpu_usage_s)
     if (cpu / wall) < float(idle_ratio):
@@ -655,16 +660,16 @@ def _classify(
             reason="output_exceeded",
         )
     code = proc.returncode if proc.returncode is not None else -1
-    # SIGXCPU from RLIMIT → cpu kill even if watcher missed the budget edge.
-    if code in (-int(signal.SIGXCPU), 128 + int(signal.SIGXCPU)):
-        timed_out = True
-        kill_cause = "cpu"
+    # Guest SIGXCPU / exit 152 is forgeable — never treat as host cpu_timeout.
+    # cpu_timeout only when the host watcher set kill_cause=\"cpu\" via cgroup budget.
     if timed_out:
         # Guest timeout is NOT countable evidence — classified host-side only.
+        # Role-aware idle elevation (refute / no cpu.stat) happens in evaluate.
         kind = classify_guest_timeout(
             kill_cause=kill_cause,
             duration_s=duration,
             cpu_usage_s=cpu_usage_s,
+            refute_role=False,
         )
         return fin(
             status=SandboxStatus.TIMEOUT,

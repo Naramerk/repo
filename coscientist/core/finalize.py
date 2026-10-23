@@ -130,12 +130,16 @@ IDLE_TIMEOUT_RU = "не проверено: простой агента (под�
 
 
 def sandbox_timeout_report_line(reason: str | None, detail: str | None = None) -> str | None:
-    """Russian line when a task closes after guest timeouts."""
+    """Russian line when a task closes after guest timeouts.
+
+    Match by ``TaskReason`` only — never substring-match ``detail`` (avoids
+    false positives on unrelated reasons that mention \"timeout\").
+    """
+    _ = detail  # kept for call-site compat; classification is reason-only
     r = str(reason or "")
-    d = str(detail or "")
-    if r == TaskReason.IDLE_TIMEOUT.value or "idle_timeout" in d:
+    if r == TaskReason.IDLE_TIMEOUT.value:
         return IDLE_TIMEOUT_RU
-    if r == TaskReason.SANDBOX_TIMEOUT.value or "timeout" in d:
+    if r == TaskReason.SANDBOX_TIMEOUT.value:
         return TIMEOUT_BUDGET_RU
     return None
 

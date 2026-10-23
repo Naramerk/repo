@@ -190,6 +190,35 @@ def _collect_declared_outputs(
     return inputs, evidence
 
 
+def jail_mount_digest(inputs: dict[str, bytes]) -> str:
+    """Content digest of bytes actually mounted into the jail (normalized names)."""
+    return sha256_hex(
+        canonical_json(
+            {
+                "mounted": {
+                    str(k): sha256_hex(v) for k, v in sorted(inputs.items())
+                }
+            }
+        )
+    )
+
+
+def _timeout_kind_for_role(result: Any, role: CheckRole) -> str:
+    """Host-classified kind; refute + no cpu.stat → idle (untestable)."""
+    from coscientist.checks.sandbox import classify_guest_timeout
+
+    if getattr(result, "status", None) is not SandboxStatus.TIMEOUT:
+        return "wall_timeout"
+    raw = str(getattr(result, "reason", "") or "wall_timeout")
+    # Re-classify with role so missing cgroup elevates refute to idle.
+    return classify_guest_timeout(
+        kill_cause=getattr(result, "timeout_kill", None),
+        duration_s=float(getattr(result, "duration_s", 0.0) or 0.0),
+        cpu_usage_s=getattr(result, "cpu_usage_s", None),
+        refute_role=(role == "prediction"),
+    ) or raw
+
+
 def evaluate_exec_runs(
     check: CodeCheck,
     *,
@@ -208,7 +237,22 @@ def evaluate_exec_runs(
     inputs, _ev = _collect_declared_outputs(
         out, artifacts, slots, name_allowlist=allow
     )
-    result = run_sandbox(argv, limits=_limits(check), inputs=inputs or None)
+    mount_digest = jail_mount_digest(inputs)
+    # Refute/prediction: verifier jail (catalog command; agent inputs RO).
+    if role == "prediction":
+        holdout_b = (
+            canonical_json(check.holdout) if check.holdout is not None else None
+        )
+        result = run_verifier(
+            argv,
+            inputs=inputs or {},
+            limits=_limits(check),
+            holdout=holdout_b,
+            input_allowlist=allow,
+            collect=(),
+        )
+    else:
+        result = run_sandbox(argv, limits=_limits(check), inputs=inputs or None)
     raise_if_infra(
         result.status,
         result.reason,
@@ -239,7 +283,7 @@ def evaluate_exec_runs(
     note = result.note or soft_note(result.net_isolation, result.fs_isolation)
     # Guest timeout: never countable; classified host-side (idle/cpu/wall).
     if result.status is SandboxStatus.TIMEOUT:
-        kind = result.reason if result.is_guest_timeout else "wall_timeout"
+        kind = _timeout_kind_for_role(result, role)
         refute_unresolved = role == "prediction"
         return base_result(
             check_id=check_id,
@@ -261,6 +305,7 @@ def evaluate_exec_runs(
                 extra={
                     "cpu_usage_s": result.cpu_usage_s,
                     "wall_s": result.duration_s,
+                    "jail_inputs_digest": mount_digest,
                 },
             ),
         )
@@ -448,6 +493,7 @@ def evaluate_tests_pass(
         attempt_id=attempt_id,
         result=result,
         evidence=ev,
+        jail_inputs_digest=jail_mount_digest(code_inputs),
     )
     if timed is not None:
         return timed
@@ -689,6 +735,7 @@ def evaluate_metric_on_holdout(
         evidence=[
             EvidenceRef(artifact_id=predictions.artifact_id, digest=p_meta.sha256),
         ],
+        jail_inputs_digest=jail_mount_digest({"predictions.json": pred_bytes}),
     )
     if timed is not None:
         return timed

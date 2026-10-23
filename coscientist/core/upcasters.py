@@ -157,10 +157,12 @@ def _plan_accepted_v4_to_v5_foreach_quorum(payload: dict[str, Any]) -> dict[str,
 
 
 def _ensure_sandbox_limit_fields(spec: dict[str, Any]) -> dict[str, Any]:
-    """PR17: frozen sandbox wall/CPU limits on TaskSpec (None = not frozen)."""
+    """PR17: frozen sandbox limits on TaskSpec (aggregate + per-check)."""
     spec = dict(spec)
     spec.setdefault("sandbox_timeout_s", None)
     spec.setdefault("sandbox_memory_mb", None)
+    spec.setdefault("sandbox_check_limits", None)
+    spec.setdefault("sandbox_limits_note", None)
     return spec
 
 

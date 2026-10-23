@@ -20,6 +20,41 @@ jobs:
             --new-session --cap-drop ALL \
             --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 --ro-bind /bin /bin \
             -- /bin/true
+      # Delegated cgroup v2 subtree so cpu.stat / cpu.max / OOM tests can run.
+      # Move this job into a writable leaf; if the runner refuses delegation, tests
+      # that need cgroup still skip and DESIGN notes the M1 gap.
+      - name: Enable delegated cgroup v2
+        id: cgroup
+        run: |
+          set -euo pipefail
+          ROOT=/sys/fs/cgroup/coscientist-ci
+          sudo mkdir -p "$ROOT"
+          # Ensure memory+cpu are available on the parent before nesting.
+          if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+            for c in memory cpu pids; do
+              grep -qw "$c" /sys/fs/cgroup/cgroup.controllers && \
+                echo "+$c" | sudo tee /sys/fs/cgroup/cgroup.subtree_control >/dev/null || true
+            done
+          fi
+          for c in memory cpu pids; do
+            echo "+$c" | sudo tee "$ROOT/cgroup.subtree_control" >/dev/null 2>&1 || true
+          done
+          sudo chown -R "$(id -u):$(id -g)" "$ROOT" || true
+          # Move the current shell (and subsequent steps inherit via GITHUB_ENV wrapper).
+          if echo $$ | sudo tee "$ROOT/cgroup.procs" >/dev/null 2>&1; then
+            echo "CGROUP_DELEGATED=1" >> "$GITHUB_ENV"
+            echo "delegated=yes" >> "$GITHUB_OUTPUT"
+            # Verify we can create a child leaf + write memory.max (sandbox probe).
+            LEAF="$ROOT/probe-$$"
+            mkdir "$LEAF"
+            echo 1048576 > "$LEAF/memory.max"
+            rmdir "$LEAF"
+            echo "cgroup delegation OK under $ROOT"
+          else
+            echo "CGROUP_DELEGATED=0" >> "$GITHUB_ENV"
+            echo "delegated=no" >> "$GITHUB_OUTPUT"
+            echo "::warning::cgroup v2 delegation unavailable; cpu.stat idle/OOM tests will skip"
+          fi
       # pytest-asyncio>=1.3 supports pytest 9; 0.26.0 requires pytest<9 and breaks pip install
       - run: pip install pyyaml==6.0.3 pydantic==2.14.1 pytest==9.1.1 ruff==0.17.2 rfc8785==0.1.4 pytest-asyncio==1.3.0 hypothesis==6.148.2 mypy==1.19.1 types-PyYAML==6.0.12.20250915 import-linter==2.15 jsonschema==4.25.1 defusedxml==0.7.1
       - run: ruff check scripts tests coscientist
@@ -27,7 +62,15 @@ jobs:
       - run: mypy coscientist
       - run: lint-imports
       # Exclude perf SLO (absolute p99) — that runs in the dedicated job below.
-      - run: pytest -q tests -m "not perf"
+      # Re-enter delegated cgroup before pytest so _current_cgroup_path is writable.
+      - name: pytest
+        run: |
+          set -euo pipefail
+          ROOT=/sys/fs/cgroup/coscientist-ci
+          if [ "${CGROUP_DELEGATED:-0}" = "1" ] && [ -d "$ROOT" ]; then
+            echo $$ | sudo tee "$ROOT/cgroup.procs" >/dev/null || true
+          fi
+          pytest -q tests -m "not perf"
   perf:
     runs-on: ubuntu-latest
     steps:

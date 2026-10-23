@@ -368,13 +368,17 @@ async def _expand_plan(
         )
     )
     events.extend(skip_superseded_task_events(runtime, sid=sid, superseded_tasks=superseded_tasks, now=now))
+    from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
+
+    catalog = getattr(runtime, "catalog", None)
     existing_keys = {t.spec.task_key for t in runtime.tasks.values()}
     for spec in added_tasks:
         if spec.task_key in existing_keys and spec.task_key not in skip_keys:
             continue
-        tid = task_id(sid, spec.task_key)
+        frozen_spec = freeze_task_sandbox_limits(spec, catalog)
+        tid = task_id(sid, frozen_spec.task_key)
         kind = TaskKind.EXPERIMENT
-        route = (spec.route or "").lower()
+        route = (frozen_spec.route or "").lower()
         if route in ("literature", "lit"):
             kind = TaskKind.LITERATURE
         elif route in ("hypotheses", "hypothesis", "hyp"):
@@ -384,7 +388,7 @@ async def _expand_plan(
         task = Task(
             task_id=tid,
             kind=kind,
-            spec=spec,
+            spec=frozen_spec,
             state=TaskState.PENDING,
             deadline=ed,
         )

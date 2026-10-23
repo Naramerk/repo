@@ -687,27 +687,29 @@ class Executor:
             if not c.is_code and c.status == ReqStatus.UNASSESSED:
                 self._scheduled_reviews.append(c.check_id)
 
-        from coscientist.checks.kinds._util import check_is_guest_timeout
+        from coscientist.checks.kinds._util import check_is_guest_timeout, merge_detail
 
         timeout_checks = [c for c in checks if check_is_guest_timeout(c)]
-        # Prefer RouteReturned digest; else hash output artifact map.
-        att_row = self.get_attempt(attempt_id)
-        agent_digest = None
-        if isinstance(att_row, dict):
-            agent_digest = att_row.get("agent_output_digest")
-        elif att_row is not None:
-            agent_digest = getattr(att_row, "agent_output_digest", None)
-        if not agent_digest:
+        # Digest over content actually mounted into the jail (not artifact ids).
+        jail_digests = [
+            str((c.effect or {}).get("jail_inputs_digest") or "")
+            for c in checks
+            if isinstance(getattr(c, "effect", None), dict)
+            and (c.effect or {}).get("jail_inputs_digest")
+        ]
+        if jail_digests:
             agent_digest = sha256_hex(
-                canonical_json(
-                    {
-                        "outputs": {
-                            k: h.artifact_id
-                            for k, h in sorted((out.outputs or {}).items())
-                        }
-                    }
-                )
+                canonical_json({"jail_inputs": sorted(set(jail_digests))})
             )
+        else:
+            # Fallback: content hashes of declared outputs (same as mount inputs).
+            mounted: dict[str, str] = {}
+            for name, handle in sorted((out.outputs or {}).items()):
+                meta = self.artifacts.get_meta(handle.artifact_id)
+                if meta is None:
+                    continue
+                mounted[str(name)] = str(meta.sha256)
+            agent_digest = sha256_hex(canonical_json({"mounted": mounted}))
         results_map = self.get_results() if self.get_results is not None else {}
         for prev_aid in list(getattr(task, "attempts", []) or []):
             if prev_aid == attempt_id:
@@ -742,7 +744,72 @@ class Executor:
                 for c in timeout_checks
                 if isinstance(c.effect, dict)
             ]
-            idle = any(k == "idle_timeout" for k in kinds)
+            # Structural: ≥2 timeouts on the same prediction/refute check →
+            # untestable_by_agent (sabotage-suspected), regardless of CPU ratio.
+            refute_timeout_tids = {
+                str(getattr(c, "template_id", "") or "")
+                for c in timeout_checks
+                if getattr(c, "role", None) == "prediction"
+            }
+            prior_refute_timeouts = 0
+            for prev_aid in list(getattr(task, "attempts", []) or []):
+                if prev_aid == attempt_id:
+                    continue
+                prev = (
+                    results_map.get(prev_aid)
+                    if isinstance(results_map, dict)
+                    else None
+                )
+                if not isinstance(prev, dict):
+                    continue
+                if str(prev.get("result_class") or "") != "timeout":
+                    continue
+                for cr in prev.get("check_results") or []:
+                    if not isinstance(cr, dict):
+                        continue
+                    tid = str(cr.get("template_id") or "")
+                    if tid not in refute_timeout_tids:
+                        continue
+                    role = str(cr.get("role") or "")
+                    raw_eff = cr.get("effect")
+                    eff: dict[str, Any] = (
+                        dict(raw_eff) if isinstance(raw_eff, dict) else {}
+                    )
+                    if role == "prediction" and (
+                        eff.get("timeout_kind") or eff.get("refute_unresolved")
+                    ):
+                        prior_refute_timeouts += 1
+                        break
+            repeat_refute_timeout = prior_refute_timeouts >= 1
+            idle = any(k == "idle_timeout" for k in kinds) or repeat_refute_timeout
+            if repeat_refute_timeout:
+                elevated: list[Any] = []
+                for c in checks:
+                    if (
+                        check_is_guest_timeout(c)
+                        and getattr(c, "role", None) == "prediction"
+                        and isinstance(c.effect, dict)
+                    ):
+                        elevated.append(
+                            c.model_copy(
+                                update={
+                                    "effect": {
+                                        **c.effect,
+                                        "timeout_kind": "idle_timeout",
+                                        "refute_unresolved": True,
+                                        "repeat_timeout": True,
+                                    },
+                                    "detail": merge_detail(
+                                        getattr(c, "detail", None),
+                                        "repeat_timeout",
+                                    ),
+                                }
+                            )
+                        )
+                    else:
+                        elevated.append(c)
+                checks = elevated
+                kinds = ["idle_timeout"]
             timeout_reason = (
                 TaskReason.IDLE_TIMEOUT.value
                 if idle

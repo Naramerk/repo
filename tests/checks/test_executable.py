@@ -1342,13 +1342,54 @@ def test_classify_guest_timeout_idle_vs_busy():
         )
         == "wall_timeout"
     )
-    # Missing cpu.stat → never idle (cannot prove sabotage).
+    # Missing cpu.stat → never idle for non-refute (cannot prove sabotage).
     assert (
         classify_guest_timeout(
             kill_cause="wall", duration_s=1.0, cpu_usage_s=None
         )
         == "wall_timeout"
     )
+    # Refute / prediction without cgroup → untestable (idle), not benign wall.
+    assert (
+        classify_guest_timeout(
+            kill_cause="wall",
+            duration_s=1.0,
+            cpu_usage_s=None,
+            refute_role=True,
+        )
+        == "idle_timeout"
+    )
+    # Guest SIGXCPU / exit 152 alone never classifies as cpu_timeout.
+    assert (
+        classify_guest_timeout(
+            kill_cause=None, duration_s=1.0, cpu_usage_s=0.5
+        )
+        == "wall_timeout"
+    )
+
+
+def test_guest_forged_sigxcpu_is_scientific_nonzero():
+    """Guest os.kill(SIGXCPU) / exit 152 must NOT become host cpu_timeout."""
+    _require_hard()
+    r = run_sandbox(
+        [
+            "python3",
+            "-c",
+            "import os,signal; os.kill(os.getpid(), signal.SIGXCPU)",
+        ],
+        limits=SandboxLimits(timeout_s=5, memory_mb=64),
+    )
+    assert r.status is SandboxStatus.NONZERO
+    assert r.reason != "cpu_timeout"
+    assert r.status not in INFRA_STATUSES
+    # exit 152 (128+SIGXCPU) likewise
+    r2 = run_sandbox(
+        ["python3", "-c", "raise SystemExit(152)"],
+        limits=SandboxLimits(timeout_s=5, memory_mb=64),
+    )
+    assert r2.status is SandboxStatus.NONZERO
+    assert r2.exit_code == 152
+    assert r2.reason != "cpu_timeout"
 
 
 def test_refute_timeout_hard_blocks_supported():
@@ -1750,6 +1791,7 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls):
+    """Catalog per-check limits frozen; agent sandbox_timeout_s stripped."""
     cat = _catalog_with(
         {
             "id": "exec_ok",
@@ -1788,10 +1830,235 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="exec_ok")],
+                # Agent tries to override — must be stripped.
+                sandbox_timeout_s=0.05,
+                sandbox_memory_mb=1,
             )
         ]
     )
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
-    assert task.spec.sandbox_timeout_s == 7.5
-    assert task.spec.sandbox_memory_mb == 128
+    assert task.spec.sandbox_timeout_s is None
+    assert task.spec.sandbox_memory_mb is None
+    assert task.spec.sandbox_check_limits == {
+        "exec_ok": {
+            "timeout_s": 7.5,
+            "memory_mb": 128,
+            "allow_network": False,
+        }
+    }
+    assert task.spec.sandbox_limits_note == "stripped_agent_sandbox_limits"
     await close_runtime(rt)
+
+
+def test_freeze_strips_agent_timeout_zero_point_oh_five():
+    """Unit: plan timeout=0.05 never becomes the frozen limit."""
+    from coscientist.checks.sandbox_limits import (
+        apply_frozen_limits,
+        freeze_task_sandbox_limits,
+    )
+
+    cat = _catalog_with(
+        {
+            "id": "exec_ok",
+            "title": "exec",
+            "check": {
+                "kind": "exec_runs",
+                "argv": ["/bin/true"],
+                "timeout_s": 30.0,
+                "memory_mb": 256,
+            },
+            "role": "validity",
+        }
+    )
+    frozen = freeze_task_sandbox_limits(
+        TaskSpec(
+            task_key="E1",
+            title="t",
+            goal="g",
+            route="experiment",
+            criteria=[RequirementRef(template_id="exec_ok")],
+            sandbox_timeout_s=0.05,
+            sandbox_memory_mb=1,
+            sandbox_check_limits={"exec_ok": {"timeout_s": 0.05}},
+        ),
+        cat,
+    )
+    assert frozen.sandbox_timeout_s is None
+    assert frozen.sandbox_memory_mb is None
+    assert frozen.sandbox_check_limits["exec_ok"]["timeout_s"] == 30.0
+    assert "stripped_agent_sandbox_limits" in (frozen.sandbox_limits_note or "")
+    assert "stripped_agent_sandbox_check_limits" in (frozen.sandbox_limits_note or "")
+    check = CodeCheck(kind="exec_runs", argv=["/bin/true"], timeout_s=99.0)
+    applied = apply_frozen_limits(check, frozen, template_id="exec_ok")
+    assert applied.timeout_s == 30.0
+    assert applied.memory_mb == 256
+
+
+def test_agent_facing_catalog_view_is_sole_template_export():
+    """Catalog agent projection never includes holdout/scorer/tests bodies."""
+    from coscientist.checks.evaluate import agent_facing_catalog_view
+    from coscientist.core.digest import canonical_json, sha256_hex
+
+    holdout = {"y": [0, 1], "secret": "NEVER"}
+    cat = _catalog_with(
+        {
+            "id": "metric_secret",
+            "title": "m",
+            "text_ru": "Метрика",
+            "check": {
+                "kind": "metric_on_holdout",
+                "argv": ["catalog:metric"],
+                "holdout": holdout,
+                "holdout_digest": sha256_hex(canonical_json(holdout)),
+                "output": "predictions",
+                "op": ">=",
+                "target": 0.5,
+                "tests": {"test_x.py": "assert False"},
+            },
+            "role": "prediction",
+        }
+    )
+    view = agent_facing_catalog_view(cat)
+    tmpl_view = view["templates"][0]
+    blob = json.dumps(view, default=str)
+    assert "NEVER" not in blob
+    # Kind name may contain the substring; secret keys / payloads must not.
+    assert "holdout" not in tmpl_view  # no holdout field on the view dict
+    assert '"y"' not in blob
+    assert "catalog:metric" not in blob
+    assert "assert False" not in blob
+    assert tmpl_view["template_id"] == "metric_secret"
+    assert tmpl_view["check_kind"] == "metric_on_holdout"
+
+
+def test_sandbox_timeout_report_line_by_reason_only():
+    from coscientist.core.finalize import (
+        IDLE_TIMEOUT_RU,
+        TIMEOUT_BUDGET_RU,
+        sandbox_timeout_report_line,
+    )
+    from coscientist.core.reasons import TaskReason
+
+    assert (
+        sandbox_timeout_report_line(TaskReason.IDLE_TIMEOUT.value, "anything")
+        == IDLE_TIMEOUT_RU
+    )
+    assert (
+        sandbox_timeout_report_line(TaskReason.SANDBOX_TIMEOUT.value, "x")
+        == TIMEOUT_BUDGET_RU
+    )
+    # Detail substring must not trigger — reason alone decides.
+    assert sandbox_timeout_report_line("budget", "idle_timeout wall_timeout") is None
+    assert sandbox_timeout_report_line("cancelled", "sandbox_timeout") is None
+
+
+def test_jail_mount_digest_covers_mounted_bytes():
+    from coscientist.checks.kinds.executable import jail_mount_digest
+
+    a = jail_mount_digest({"code.py": b"print(1)\n"})
+    b = jail_mount_digest({"code.py": b"print(1)\n "})  # trailing space ≠ same
+    c = jail_mount_digest({"code.py": b"print(1)\n"})
+    assert a == c
+    assert a != b
+
+
+def test_no_derived_call_id_fallback():
+    """Missing produced_by_call_id must not be invented as {attempt}:derived."""
+    from datetime import UTC, datetime
+
+    from coscientist.core.graph import (
+        GraphNode,
+        GraphStore,
+        default_execution_registry,
+    )
+    from coscientist.core.ids import question_node_id
+    from coscientist.core.inputs import claim_nodes_from_attempt
+
+    sid = "st_noderived"
+    g = GraphStore(default_execution_registry())
+    g.upsert_node(
+        GraphNode(
+            node_id=question_node_id(sid, "Q1"),
+            kind="question",
+            study_id=sid,
+            ref_id="Q1",
+            attrs={"formulation": "why"},
+        )
+    )
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    evs, drops = claim_nodes_from_attempt(
+        study_id=sid,
+        attempt_id=f"{sid}/E1#1",
+        attempt_outcome="SUCCESS",
+        provenance="real",
+        claims=[{"id": "C1", "target": "Q1"}],
+        now=now,
+        graph=g,
+        derived={
+            "criterion_status": "met",
+            "evidence_kind": "computational",
+            "frozen": True,
+            "accepted": True,
+            "effect": {
+                "est": 1.0,
+                "core_evaluated": True,
+                "countable": True,
+                # intentionally no produced_by_call_id
+            },
+            "check_role": "prediction",
+        },
+    )
+    assert drops == []
+    saw = False
+    for ev in evs:
+        if ev.type == "GraphNodeUpserted":
+            effect = (ev.payload.get("attrs") or {}).get("effect") or {}
+            saw = True
+            assert "produced_by_call_id" not in effect or effect.get(
+                "produced_by_call_id"
+            ) in (None, "")
+            assert ":derived" not in str(effect.get("produced_by_call_id") or "")
+    assert saw
+
+
+def test_freeze_shared_helper_used_by_all_task_create_paths():
+    """accept_plan / expand / foreach / expand_trigger share freeze_task_sandbox_limits."""
+    import inspect
+
+    from coscientist.checks import sandbox_limits as sl
+    from coscientist.core import expand, expand_trigger, foreach, lifecycle
+
+    assert "freeze_task_sandbox_limits" in inspect.getsource(
+        lifecycle.LifecycleMixin.accept_plan
+    )
+    # Module-level TaskCreated writers import the shared helper.
+    for mod in (foreach, expand, expand_trigger):
+        src = inspect.getsource(mod)
+        assert "freeze_task_sandbox_limits" in src
+    # Catalog is the sole source — agent timeout=0.05 never wins.
+    cat = _catalog_with(
+        {
+            "id": "exec_ok",
+            "title": "e",
+            "check": {
+                "kind": "exec_runs",
+                "argv": ["/bin/true"],
+                "timeout_s": 12.0,
+                "memory_mb": 64,
+            },
+            "role": "validity",
+        }
+    )
+    out = sl.freeze_task_sandbox_limits(
+        TaskSpec(
+            task_key="E1",
+            title="t",
+            goal="g",
+            route="experiment",
+            criteria=[RequirementRef(template_id="exec_ok")],
+            sandbox_timeout_s=0.05,
+        ),
+        cat,
+    )
+    assert out.sandbox_check_limits["exec_ok"]["timeout_s"] == 12.0
+    assert out.sandbox_timeout_s is None

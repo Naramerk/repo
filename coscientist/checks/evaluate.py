@@ -529,7 +529,12 @@ def evaluate_code_check(
 
 
 def agent_facing_template_view(tmpl: RequirementTemplate) -> dict[str, Any]:
-    """Fields safe to show an agent — never the full CodeCheck (holdout/scorer/tests)."""
+    """Fields safe to show an agent — never the full CodeCheck (holdout/scorer/tests).
+
+    This is the **only** agent-facing serialization of a catalog template.
+    Prompt renderers (arriving later) must call this — never
+    ``RequirementTemplate.model_dump`` / full ``CodeCheck``.
+    """
     return {
         "template_id": tmpl.id,
         "text_ru": tmpl.text_ru,
@@ -542,6 +547,17 @@ def agent_facing_template_view(tmpl: RequirementTemplate) -> dict[str, Any]:
     }
 
 
+def agent_facing_catalog_view(catalog: Catalog) -> dict[str, Any]:
+    """Agent-safe catalog projection — templates via ``agent_facing_template_view`` only."""
+    return {
+        "catalog_version": catalog.catalog_version,
+        "edition": catalog.edition,
+        "templates": [agent_facing_template_view(t) for t in catalog.templates],
+        "defaults": {k: list(v) for k, v in (catalog.defaults or {}).items()},
+        "code_output_names": list(catalog.code_output_names or []),
+    }
+
+
 def template_to_requirement(
     tmpl: RequirementTemplate,
     node_id: str,
@@ -549,16 +565,17 @@ def template_to_requirement(
     status: ReqStatus = ReqStatus.PENDING,
     req_id: str | None = None,
 ) -> NodeRequirement:
-    is_code = isinstance(tmpl.check, CodeCheck)
+    """Build a NodeRequirement from the agent-facing template view (no check body)."""
+    view = agent_facing_template_view(tmpl)
     return NodeRequirement(
-        id=req_id or f"{node_id}:{tmpl.id}",
-        template_id=tmpl.id,
+        id=req_id or f"{node_id}:{view['template_id']}",
+        template_id=str(view["template_id"]),
         node_id=node_id,
-        text_ru=tmpl.text_ru,
-        required=tmpl.required,
+        text_ru=str(view["text_ru"] or ""),
+        required=bool(view["required"]),
         status=status,
-        check_version=tmpl.version,
-        is_code=is_code,
+        check_version=str(view["version"]),
+        is_code=bool(view["is_code"]),
     )
 
 
@@ -635,7 +652,9 @@ def evaluate_task_checks(
         if isinstance(tmpl.check, CodeCheck):
             from coscientist.checks.sandbox_limits import apply_frozen_limits
 
-            check = apply_frozen_limits(tmpl.check, spec)
+            check = apply_frozen_limits(
+                tmpl.check, spec, template_id=tmpl.id
+            )
         else:
             check = tmpl.check
         if isinstance(check, ReviewCheck):

@@ -252,13 +252,19 @@ def guest_timeout_result(
     attempt_id: str | None,
     result: Any,
     evidence: list[EvidenceRef] | None = None,
+    jail_inputs_digest: str | None = None,
 ) -> CheckResult | None:
     """If ``result`` is a guest timeout, return a non-countable CheckResult."""
-    from coscientist.checks.sandbox import SandboxStatus
+    from coscientist.checks.sandbox import SandboxStatus, classify_guest_timeout
 
     if getattr(result, "status", None) is not SandboxStatus.TIMEOUT:
         return None
-    kind = str(getattr(result, "reason", "") or "wall_timeout")
+    kind = classify_guest_timeout(
+        kill_cause=getattr(result, "timeout_kill", None),
+        duration_s=float(getattr(result, "duration_s", 0.0) or 0.0),
+        cpu_usage_s=getattr(result, "cpu_usage_s", None),
+        refute_role=(role == "prediction"),
+    )
     note = merge_detail(
         soft_note(
             getattr(result, "net_isolation", "none"),
@@ -267,6 +273,12 @@ def guest_timeout_result(
         getattr(result, "note", None),
     )
     art_id = ""
+    extra: dict[str, Any] = {
+        "cpu_usage_s": getattr(result, "cpu_usage_s", None),
+        "wall_s": getattr(result, "duration_s", None),
+    }
+    if jail_inputs_digest:
+        extra["jail_inputs_digest"] = jail_inputs_digest
     # Caller may have already stored a log; keep evidence only.
     return base_result(
         check_id=check_id,
@@ -285,10 +297,7 @@ def guest_timeout_result(
             note=note,
             timeout_kind=kind,
             refute_unresolved=(role == "prediction"),
-            extra={
-                "cpu_usage_s": getattr(result, "cpu_usage_s", None),
-                "wall_s": getattr(result, "duration_s", None),
-            },
+            extra=extra,
         ),
     )
 

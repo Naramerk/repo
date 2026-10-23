@@ -266,9 +266,13 @@ class TaskSpec(Frozen):
     foreach: ForEachSpec | None = None
     # Bound hypothesis/question id after foreach materialization (None on template).
     foreach_item: str | None = None
-    # Sandbox limits frozen at plan/TaskCreated (retries cannot raise without replan).
+    # Deprecated aggregate slots — always stripped at freeze (catalog is sole source).
     sandbox_timeout_s: float | None = None
     sandbox_memory_mb: int | None = None
+    # Per-check limits frozen from catalog at TaskCreated (template_id → fields).
+    sandbox_check_limits: dict[str, dict[str, Any]] | None = None
+    # Audit when agent-provided limit fields were ignored.
+    sandbox_limits_note: str | None = None
 
 
 class Budget(Frozen):
