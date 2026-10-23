@@ -33,8 +33,11 @@ class SlowWriteStore(SqliteEventStore):
         events: list[EventEnvelope],
         *,
         require_open_attempt: str | None = None,
+        allow_source_fetched: bool = False,
     ) -> list[EventEnvelope]:
         self._maybe_delay()
         return super()._append_many_sync(
-            events, require_open_attempt=require_open_attempt
+            events,
+            require_open_attempt=require_open_attempt,
+            allow_source_fetched=allow_source_fetched,
         )
