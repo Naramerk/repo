@@ -223,9 +223,9 @@ def test_upcast_taskcreated_input_mode_old_default():
 
 def test_upcast_planaccepted_questions_default():
     v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
-    assert v == 8 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
+    assert v == 9 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
 
-    # PR13: final_type / rubric defaults
+    # PR13: final_type / rubric defaults (v7→v8); PR11 loops land at v9.
     v2, p2 = upcast(
         "PlanAccepted",
         7,
@@ -240,13 +240,15 @@ def test_upcast_planaccepted_questions_default():
             ],
         },
     )
-    assert v2 == 8
+    assert v2 == 9
     assert p2["questions"][0]["final_type"] == "verdict"
-
+    assert p2["loops"] == []
     assert p["expand_after"] == []
+    assert p["loops"] == []
     assert p["tasks"][0]["foreach"] is None
     assert p["tasks"][0]["sandbox_timeout_s"] is None
     assert p["tasks"][0]["budget_share"] is None
+    assert p["tasks"][0]["loop_id"] is None
 
 
 def test_upcast_taskcreated_strips_plan_criterion_role():

@@ -75,6 +75,7 @@ class LifecycleMixin:
         max_depth: int = 8,
         plan_timeout_s: int = 600,
         max_foreach_children: int = 32,
+        max_loop_iter: int = 8,
         max_task_budget_share: float = 1.0,
         inputs: list[Any] | None = None,
         min_plan_cost: Decimal | float | int = 0,
@@ -113,6 +114,8 @@ class LifecycleMixin:
             raise ValueError(f"plan_timeout_s must be >= 1, got {plan_timeout_s}")
         if max_foreach_children < 1:
             raise ValueError(f"max_foreach_children must be >= 1, got {max_foreach_children}")
+        if max_loop_iter < 1:
+            raise ValueError(f"max_loop_iter must be >= 1, got {max_loop_iter}")
         if not (0.0 <= float(max_task_budget_share) <= 1.0):
             raise ValueError(f"max_task_budget_share out of range: {max_task_budget_share}")
         validate_budget_for_create(budget)  # delegated_costly ≤ max_cost_rub
@@ -151,6 +154,7 @@ class LifecycleMixin:
             max_depth=max_depth,
             plan_timeout_s=plan_timeout_s,
             max_foreach_children=max_foreach_children,
+            max_loop_iter=max_loop_iter,
             max_task_budget_share=float(max_task_budget_share),
         )
         effective = study.effective_deadline()
@@ -162,7 +166,7 @@ class LifecycleMixin:
                 idem_key=make_idem("StudyCreated", sid),
                 payload=study.model_dump(mode="json"),
                 ts=now,
-                schema_version=9,
+                schema_version=10,
             ),
             EventEnvelope(
                 study_id=sid,
@@ -253,19 +257,23 @@ class LifecycleMixin:
         revision: int = 1,
         spec_output: dict[str, Any] | None = None,
         expand_after: list[str] | None = None,
+        loops: list[Any] | None = None,
     ) -> str:
         """Accept a plan revision.
 
         Pass ``questions`` from SPEC (``ResearchSpecOut.questions[]``), or pass
         ``spec_output`` and questions are extracted via ``questions_from_spec_output``.
         ``expand_after`` lists task_keys that trigger planner after TaskDone (H-g).
+        ``loops`` — M1 PR11 ``LoopSpec`` list (body materialised by core).
         """
         assert self.study is not None
         sid = self.study.study_id
         now = self.clock.now()
         from pydantic import ValidationError
 
+        from coscientist.core.domain import LoopSpec
         from coscientist.core.foreach import validate_foreach_specs
+        from coscientist.core.loop import is_loop_dep, validate_loop_specs
         from coscientist.core.plan_validate import (
             PLAN_REFUSED_LINE,
             apply_plan_refused,
@@ -276,13 +284,32 @@ class LifecycleMixin:
 
         # All plan validation → PlanRefused (never raw ValueError to callers).
         # Catch only expected validation failures — not TypeError (bugs).
+        loop_specs: list[LoopSpec] = []
         try:
             # Planner may hand dicts; pydantic ValidationError → PlanRefused.
-            tasks = [t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t) for t in (tasks or [])]
+            tasks = [
+                t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t)
+                for t in (tasks or [])
+            ]
             if questions is None and spec_output is not None:
-                questions = [QuestionSpec.model_validate(q) for q in questions_from_spec_output(spec_output)]
+                questions = [
+                    QuestionSpec.model_validate(q)
+                    for q in questions_from_spec_output(spec_output)
+                ]
             questions = list(questions or [])
             expand_after = list(expand_after or [])
+            for item in list(loops or []):
+                if isinstance(item, LoopSpec):
+                    loop_specs.append(item)
+                elif isinstance(item, dict):
+                    if "max_iter" not in item or item.get("max_iter") is None:
+                        raise ValueError(
+                            "LoopSpec.max_iter is required "
+                            "(honest refusal: unbounded loops forbidden)"
+                        )
+                    loop_specs.append(LoopSpec.model_validate(item))
+                else:
+                    loop_specs.append(LoopSpec.model_validate(item))
             self._validate_dag(tasks)
             known_texts = await self._known_question_texts()
             self._validate_questions(questions, known_texts)
@@ -292,6 +319,13 @@ class LifecycleMixin:
             for k in expand_after:
                 if k not in task_keys:
                     raise ValueError(f"expand_after unknown task_key: {k!r}")
+            known_keys = {t.spec.task_key for t in self.tasks.values()} | task_keys
+            validate_loop_specs(
+                loop_specs,
+                known_keys=known_keys,
+                max_loop_iter=int(getattr(self.study, "max_loop_iter", 8) or 8),
+                known_questions=set(known_texts),
+            )
             validate_input_specs(tasks)
             validate_foreach_specs(
                 tasks,
@@ -300,11 +334,23 @@ class LifecycleMixin:
             share_err = critic_plan_shares(tasks, study=self.study)
             if share_err is not None:
                 raise ValueError(share_err)
-            catalog = getattr(self, "catalog", None) or getattr(getattr(self, "executor", None), "catalog", None)
+            catalog = getattr(self, "catalog", None) or getattr(
+                getattr(self, "executor", None), "catalog", None
+            )
             validate_plan_criteria(tasks, catalog)
             tasks, questions = freeze_plan_rubrics(tasks, questions, catalog=catalog)
+            loop_ids = {ls.loop_id for ls in loop_specs}
+            for t in tasks:
+                for d in t.depends_on:
+                    if not is_loop_dep(d):
+                        continue
+                    lid = d[len("loop:") :]
+                    if lid not in loop_ids:
+                        raise ValueError(f"depends_on unknown loop barrier {d!r}")
         except (ValueError, ValidationError) as e:
-            return await apply_plan_refused(self, detail=refuse_detail(e), report_line=PLAN_REFUSED_LINE)
+            return await apply_plan_refused(
+                self, detail=refuse_detail(e), report_line=PLAN_REFUSED_LINE
+            )
         pid = plan_id()
         plan = Plan(
             plan_id=pid,
@@ -314,6 +360,7 @@ class LifecycleMixin:
             tasks=tasks,
             questions=questions,
             expand_after=expand_after,
+            loops=loop_specs,
         )
         events: list[EventEnvelope] = [
             EventEnvelope(
@@ -323,7 +370,7 @@ class LifecycleMixin:
                 idem_key=make_idem("PlanAccepted", pid),
                 payload=plan.model_dump(mode="json"),
                 ts=now,
-                schema_version=8,
+                schema_version=9,
             )
         ]
         # Question nodes so claim ``about`` can bind without auto-creating targets.
@@ -485,8 +532,10 @@ class LifecycleMixin:
         await self._append(events)
         # B1: foreach templates whose of_task is already DONE (e.g. HYP-0).
         from coscientist.core.foreach import materialize_ready_foreach
+        from coscientist.core.loop import maybe_advance_loops
 
         await materialize_ready_foreach(self)  # type: ignore[arg-type]
+        await maybe_advance_loops(self)  # type: ignore[arg-type]
         return pid
 
     async def _known_question_texts(self) -> dict[str, str]:
@@ -536,7 +585,13 @@ class LifecycleMixin:
                 # Allow stage keys, peers in this revision, and PLAN-n containers.
                 # Expand revisions may depend on keys that only exist as runtime
                 # tasks (already DONE) — callers pass those via merged still_kept.
-                if d in keys or d in stage or d.startswith("PLAN-"):
+                # PR11: loop:<id> barriers resolved by core after LoopCapped/until.
+                if (
+                    d in keys
+                    or d in stage
+                    or d.startswith("PLAN-")
+                    or d.startswith("loop:")
+                ):
                     continue
                 raise ValueError(f"unknown dependency {d}")
         by = {t.task_key: t.depends_on for t in tasks}
@@ -549,6 +604,8 @@ class LifecycleMixin:
                 return
             stack.add(k)
             for d in by[k]:
+                if str(d).startswith("loop:"):
+                    continue
                 visit(d, stack)
             stack.remove(k)
             seen.add(k)

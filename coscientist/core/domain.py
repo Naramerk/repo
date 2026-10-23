@@ -280,6 +280,11 @@ class TaskSpec(Frozen):
     foreach: ForEachSpec | None = None
     # Bound hypothesis/question id after foreach materialization (None on template).
     foreach_item: str | None = None
+    # M1 PR11: concrete loop body task (None on non-loop / template keys in LoopSpec.body).
+    loop_id: str | None = None
+    loop_iter: int | None = None
+    # Original body template key (for depends remapping / reporting).
+    loop_template_key: str | None = None
     # Deprecated aggregate slots — always stripped at freeze (catalog is sole source).
     sandbox_timeout_s: float | None = None
     sandbox_memory_mb: int | None = None
@@ -290,6 +295,36 @@ class TaskSpec(Frozen):
     # M1 PR12: fractions of study budget / wall time (None = equal remainder).
     budget_share: float | None = Field(default=None, ge=0.0, le=1.0)
     deadline_share: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class LoopPredicate(Frozen):
+    """Until-predicate for ``LoopSpec`` (M1 PR11 / S10).
+
+    Built-ins: ``survivors_le``, ``criterion_met``, ``no_change``. Plugins register
+    via ``coscientist.core.loop_predicates.register_loop_predicate``.
+    """
+
+    name: str
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class LoopSpec(Frozen):
+    """Bounded plan loop: core materializes body iters until ``until`` or max_iter.
+
+    ``max_iter`` is mandatory (no default). PlanValidator rejects missing /
+    ``max_iter > Study.max_loop_iter``. DAG stays acyclic: each iter gets fresh
+    ``EXP-<n>`` keys with ``loop_id`` / ``loop_iter``. Cap → ``LoopCapped``, not
+    study ``terminal_reason``.
+    """
+
+    loop_id: str
+    body: list[TaskSpec]
+    until: LoopPredicate
+    max_iter: int = Field(ge=1)
+    scope_hypotheses: list[str] = Field(default_factory=list)
+    scope_questions: list[str] = Field(default_factory=list)
+    # When empty, iter 1 starts after accept_plan (same tick as ready foreach).
+    depends_on: list[str] = Field(default_factory=list)
 
 
 class Budget(Frozen):
@@ -350,6 +385,8 @@ class Study(Frozen):
     plan_timeout_s: int = Field(default=600, ge=1)
     # PR10: cap foreach children; excess → report limitation (sorted order kept).
     max_foreach_children: int = Field(default=32, ge=1)
+    # PR11: hard ceiling for LoopSpec.max_iter (PlanValidator enforces ≤ this).
+    max_loop_iter: int = Field(default=8, ge=1)
     # PR12: plan critic — no single task may claim more than this budget_share.
     max_task_budget_share: float = Field(default=1.0, ge=0.0, le=1.0)
 
@@ -372,6 +409,8 @@ class Plan(Frozen):
     questions: list[QuestionSpec] = Field(default_factory=list)
     # H-g: task_keys that trigger planner after TaskDone (PlanOut.expand_after).
     expand_after: list[str] = Field(default_factory=list)
+    # M1 PR11 / S10: bounded loops (body not in tasks[]; core materializes iters).
+    loops: list[LoopSpec] = Field(default_factory=list)
 
 
 class Task(Frozen):

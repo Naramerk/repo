@@ -333,6 +333,12 @@ async def _expand_plan(
     all_questions = [q for q in prev_questions if q.id not in superseded_old] + added_questions
 
     pid = plan_id()
+    from coscientist.core.domain import LoopSpec
+
+    prev_loops = [
+        LoopSpec.model_validate(x) if isinstance(x, dict) else x
+        for x in ((prev.get("loops") if prev else None) or [])
+    ]
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -341,6 +347,7 @@ async def _expand_plan(
         tasks=merged_tasks,
         questions=all_questions,
         expand_after=expand_after,
+        loops=prev_loops,
     )
     events: list[EventEnvelope] = []
     events.extend(

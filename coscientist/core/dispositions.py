@@ -81,12 +81,16 @@ def dispositions(
     results: Mapping[str, Mapping[str, Any]] | None = None,
     k: int | None = None,
     artifact_lookup: Any | None = None,
+    loop_capped_questions: Mapping[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-question disposition.
 
     With graph claims (PR 8): counting claims → ``verdict()`` → answered /
     refuted / survived / inconclusive (Study ``refutations_needed`` /
     ``refutation_priority``). Otherwise not_attempted + NotAttemptedReason.
+
+    PR11: questions in ``loop_capped_questions`` keep a verdict disposition
+    when available and set ``reason=iteration_cap`` (not study terminal_reason).
 
     Totality: never raises — graph/claim coerce failures fall back to
     not_attempted.
@@ -100,6 +104,7 @@ def dispositions(
             results=results,
             k=k,
             artifact_lookup=artifact_lookup,
+            loop_capped_questions=loop_capped_questions,
         )
     except Exception:  # noqa: BLE001 — finalize/view must never crash
         qmap = known_questions(plans)
@@ -123,6 +128,7 @@ def _dispositions_inner(
     results: Mapping[str, Mapping[str, Any]] | None,
     k: int | None,
     artifact_lookup: Any | None = None,
+    loop_capped_questions: Mapping[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     qmap = known_questions(plans)
     cover = question_tasks(plans)
@@ -315,6 +321,31 @@ def _dispositions_inner(
         if excluded:
             row_na["excluded_claims"] = excluded
         result[qid] = row_na
+
+    # PR11: LoopCapped scope questions — disposition from verdicts, reason=iteration_cap.
+    capped_q = {
+        str(k): v for k, v in (loop_capped_questions or {}).items()
+    }
+    for qid, row in list(result.items()):
+        if qid not in capped_q:
+            continue
+        disp = str(row.get("disposition") or "")
+        if disp in (
+            Disposition.ANSWERED.value,
+            Disposition.REFUTED.value,
+            Disposition.SURVIVED.value,
+            Disposition.INCONCLUSIVE.value,
+        ):
+            row = dict(row)
+            row["reason"] = TaskReason.ITERATION_CAP.value
+            result[qid] = row
+        else:
+            # No counting verdict: honest inconclusive + iteration_cap.
+            row = dict(row)
+            row["disposition"] = Disposition.INCONCLUSIVE.value
+            row["reason"] = TaskReason.ITERATION_CAP.value
+            row["reason_detail"] = [TaskReason.ITERATION_CAP.value]
+            result[qid] = row
     return result
 
 

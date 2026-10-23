@@ -92,6 +92,10 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         self._hitl_expand_used: set[str] = set()
         # PR10: foreach_template → concrete EXP keys (folded from PlanExpanded).
         self._foreach_children: dict[str, list[str]] = {}
+        # PR11: LoopSpec runtime (folded from PlanExpanded(loop) / LoopCapped).
+        self._loop_state: dict[str, dict[str, Any]] = {}
+        self._loop_capped: dict[str, dict[str, Any]] = {}
+        self._loop_done: set[str] = set()
 
     def bind_executor(self, executor: Any) -> Any:
         """Wire production ``graph`` into Executor (laundering + about edges)."""
@@ -164,6 +168,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                 return
             from coscientist.core.expand import maybe_expand_after_task_done
             from coscientist.core.foreach import maybe_foreach_after_task_done
+            from coscientist.core.loop import maybe_loop_after_task_done
 
             for ev in events:
                 if ev.type != "TaskDone":
@@ -179,6 +184,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                         await maybe_expand_after_task_done(self, ev.entity_key)
                     continue
                 await maybe_foreach_after_task_done(self, ev.entity_key)
+                await maybe_loop_after_task_done(self, ev.entity_key)
                 await maybe_expand_after_task_done(self, ev.entity_key)
 
         ex._append = _append_with_expand  # type: ignore[method-assign]
@@ -197,10 +203,11 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             self._project_local(ev)
             if ev.type == "TaskDone":
                 done_ids.append(ev.entity_key)
-        # PR10 foreach then H-g expand (expansion_request / expand_after).
+        # PR10 foreach → PR11 loops → H-g expand (expansion_request / expand_after).
         if done_ids and not self._finalized and not self._lease_lost:
             from coscientist.core.expand import maybe_expand_after_task_done
             from coscientist.core.foreach import maybe_foreach_after_task_done
+            from coscientist.core.loop import maybe_loop_after_task_done
 
             for tid in done_ids:
                 # Superseded non-foreach: skip expand (same-batch PlanExpanded).
@@ -215,6 +222,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                         await maybe_expand_after_task_done(self, tid)
                     continue
                 await maybe_foreach_after_task_done(self, tid)
+                await maybe_loop_after_task_done(self, tid)
                 await maybe_expand_after_task_done(self, tid)
 
     def view(self):
@@ -222,6 +230,8 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
 
         qdisp = None
         if self.plans:
+            from coscientist.core.loop import capped_scope_questions
+
             arts = getattr(self, "artifacts", None)
             lookup = getattr(arts, "get_meta", None) if arts is not None else None
             qdisp = dispositions(
@@ -231,6 +241,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                 study=self.study,
                 results=self.results,
                 artifact_lookup=lookup if callable(lookup) else None,
+                loop_capped_questions=capped_scope_questions(self),
             )
         ed = self.study.effective_deadline() if self.study else None
         ftypes = None

@@ -2,9 +2,18 @@
 
 ## Unreleased
 
+<<<<<<< HEAD
 ### Sandbox (host CPU sample order)
 - `_watch_process`: sample host-tree CPU via `/proc` **before** `poll()` (poll reaps the child and `/proc` vanishes). Keeps no-cgroup SIGXCPU classification accurate; retains the max sample while the guest is alive. Split out of PR14 so quote work stays focused.
 - **M2 notes:** `_host_tree_cpu_s` returns `0.0` (not `None`) when `/proc` is readable but idle; missing `CONFIG_PROC_CHILDREN` silently drops descendants; cgroup idle path untested on CI without delegation.
+=======
+### M1 PR11
+- `LoopSpec` on `Plan.loops` (body templates, `scope_*`, mandatory `max_iter` ≤ `Study.max_loop_iter`, `until` predicate).
+- Built-in predicates: `survivors_le`, `criterion_met`, `no_change` (scope-restricted); plugins via `register_loop_predicate`.
+- Core materializes each iter as `PlanExpanded(loop=true)` → fresh `EXP-<n>` with `loop_id`/`loop_iter` (no planner / expansion quota); `depends_on=["loop:<id>"]` barrier for post-loop tasks.
+- Cap → `LoopCapped{loop_id, iter, survivors}` + report «цикл остановлен лимитом…»; scope questions get disposition reason `iteration_cap` (not study `terminal_reason`).
+- Upcasters: StudyCreated **v10** (`max_loop_iter`), PlanAccepted **v8** (`loops`), TaskCreated **v10** (`loop_id`/`loop_iter`/`loop_template_key`).
+>>>>>>> 88bdf71 (M1 PR11: LoopSpec with scoped predicates, max_iter, LoopCapped)
 
 ### M1 PR14
 - `quote_in_source` (K9): token-boundary + digit-edge; CJK/Thai; super/sub before NFKC; norm cache; presence≠polarity.

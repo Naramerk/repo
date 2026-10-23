@@ -277,6 +277,12 @@ async def materialize_foreach(
         )
         return None
     pid = foreach_plan_id(sid, tkey, new_rev)
+    from coscientist.core.domain import LoopSpec
+
+    prev_loops = [
+        LoopSpec.model_validate(x) if isinstance(x, dict) else x
+        for x in (prev.get("loops") or [])
+    ]
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -285,6 +291,7 @@ async def materialize_foreach(
         tasks=merged,
         questions=list(prev_questions),
         expand_after=list(prev.get("expand_after") or []),
+        loops=prev_loops,
     )
     ed = study.effective_deadline()
     events: list[EventEnvelope] = []

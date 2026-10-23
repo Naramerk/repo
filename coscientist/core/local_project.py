@@ -40,6 +40,9 @@ class LocalProjectMixin:
     _hitl_requests: dict[str, dict[str, Any]]
     _hitl_expand_used: set[str]
     _foreach_children: dict[str, list[str]]
+    _loop_state: dict[str, dict[str, Any]]
+    _loop_capped: dict[str, dict[str, Any]]
+    _loop_done: set[str]
 
     def _clear_expand_request(
         self, *, after_task: str | None = None, plan_key: str | None = None
@@ -90,7 +93,8 @@ class LocalProjectMixin:
             self.plans[ev.entity_key] = dict(p)
             # B3: expansion counts + replan_used from events (not live counters).
             # Foreach (PR10) does not spend agent/human expansion quota.
-            if not p.get("foreach"):
+            # Foreach (PR10) / Loop (PR11) do not spend agent/human expansion quota.
+            if not p.get("foreach") and not p.get("loop"):
                 # timeout → agent quota (DESIGN_M1 §4); only human skips agent quota.
                 if p.get("delegated_by") == "human":
                     self._human_expansions = int(getattr(self, "_human_expansions", 0)) + 1
@@ -129,6 +133,15 @@ class LocalProjectMixin:
                     children = self._foreach_children
                 if tmpl:
                     children[tmpl] = kids
+            # PR11: rebuild loop iter index (does not spend expansion quota).
+            if p.get("loop"):
+                from coscientist.core.loop import fold_loop_plan_expanded
+
+                fold_loop_plan_expanded(self, p)
+        elif ev.type == "LoopCapped":
+            from coscientist.core.loop import fold_loop_capped
+
+            fold_loop_capped(self, p)
         elif ev.type == "ExpansionRefused":
             refusals = getattr(self, "_expansion_refusals", None)
             if isinstance(refusals, list):

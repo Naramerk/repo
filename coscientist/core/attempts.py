@@ -70,6 +70,14 @@ class AttemptsMixin:
     def _deps_done(self, task: Task) -> bool:
         children_map = getattr(self, "_foreach_children", None) or {}
         for d in task.spec.depends_on:
+            # PR11: loop:<id> barrier — ready after until-met or LoopCapped.
+            if str(d).startswith("loop:"):
+                from coscientist.core.loop import loop_is_complete, parse_loop_dep
+
+                lid = parse_loop_dep(d)
+                if lid is None or not loop_is_complete(self, lid):  # type: ignore[arg-type]
+                    return False
+                continue
             # PR10: depends_on a foreach template → wait for all concrete children.
             if d in children_map:
                 for ck in children_map[d]:
