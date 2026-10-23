@@ -266,9 +266,12 @@ class AttemptsMixin:
                 )
         except InputUnavailable as e:
             kids = children_map
+            reason = str(e.reason)
             if any(i.from_task in kids and not kids[i.from_task] for i in task.spec.inputs):
                 detail = "foreach_empty"
-            elif str(e.reason) == "quorum" or any(i.quorum is not None for i in task.spec.inputs):
+            elif reason == "foreach_quorum_gt_children":
+                detail = "foreach_quorum_gt_children"
+            elif reason == "quorum" or any(i.quorum is not None for i in task.spec.inputs):
                 detail = "quorum"
             else:
                 detail = None

@@ -58,17 +58,23 @@ def validate_quorum_specs(tasks: list[TaskSpec]) -> None:
         if not static_q:
             continue
         vals = {inp.quorum for inp in static_q}
-        ints = {v for v in vals if v != "all"}
+        has_all = "all" in vals
+        ints = {v for v in vals if isinstance(v, int)}
+        if has_all and ints:
+            raise ValueError(
+                f"static pool cannot mix 'all' and int quorum (task {t.task_key!r})"
+            )
         if len(ints) > 1:
             raise ValueError(
                 f"static InputSpec.quorum values must agree (task {t.task_key!r})"
             )
-        q0 = next(iter(vals))
-        if isinstance(q0, int) and q0 > len(static_q):
-            raise ValueError(
-                f"InputSpec.quorum {q0} > static pool size {len(static_q)} "
-                f"(task {t.task_key!r})"
-            )
+        if not has_all:
+            q0 = sorted(ints)[0]
+            if q0 > len(static_q):
+                raise ValueError(
+                    f"InputSpec.quorum {q0} > static pool size {len(static_q)} "
+                    f"(task {t.task_key!r})"
+                )
 
 
 def has_quorum_spec(inputs: list[InputSpec]) -> bool:
@@ -329,7 +335,7 @@ def bind_input_groups(
             )
             raise InputUnavailable(empty_as)
         if isinstance(orig.quorum, int) and orig.quorum > len(members):
-            raise InputUnavailable(miss)
+            raise InputUnavailable("foreach_quorum_gt_children")
         b, p, lims = _bind_members(
             members,
             needed=needed,
@@ -367,8 +373,13 @@ def bind_input_groups(
         flat: list[InputSpec] = []
         for _orig, members in static_quorum:
             flat.extend(members)
-        q0 = static_quorum[0][0].quorum
-        needed = len(flat) if q0 == "all" else max(1, int(q0 or 1))
+        # Order-independent: "all" alone, else deterministic min int.
+        qs = {o.quorum for o, _ in static_quorum}
+        if "all" in qs:
+            q0: Any = "all"
+        else:
+            q0 = sorted(v for v in qs if isinstance(v, int))[0]
+        needed = len(flat) if q0 == "all" else max(1, int(q0))
         if isinstance(q0, int) and q0 > len(flat):
             raise InputUnavailable("quorum")
         if not flat:

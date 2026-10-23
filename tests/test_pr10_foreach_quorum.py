@@ -979,7 +979,7 @@ async def test_foreach_template_cannot_be_started(tmp_path, clock, runtime_cls):
 async def test_driver_loop_skips_pending_foreach_template(
     tmp_path, clock, runtime_cls, monkeypatch
 ):
-    """Real driver loop via iter_dispatchable_tasks — no RuntimeError spin."""
+    """Test harness loop over iter_dispatchable_tasks (no product driver yet)."""
     from coscientist.core import foreach as foreach_mod
 
     sid = "st_fe_drv"
@@ -1238,9 +1238,30 @@ def test_quorum_rejects_gt_static_pool():
         )
 
 
+def test_quorum_rejects_mix_all_and_int():
+    """M-A: static pool cannot mix 'all' and int (order-independent reject)."""
+    from coscientist.core.quorum import validate_quorum_specs
+
+    with pytest.raises(ValueError, match="mix"):
+        validate_quorum_specs(
+            [
+                TaskSpec(
+                    task_key="S",
+                    title="s",
+                    goal="g",
+                    route="experiment",
+                    inputs=[
+                        InputSpec(from_task="A", output="main", quorum="all"),
+                        InputSpec(from_task="B", output="main", quorum=1),
+                    ],
+                )
+            ]
+        )
+
+
 @pytest.mark.asyncio
 async def test_foreach_quorum_gt_children_misses(tmp_path, clock, runtime_cls):
-    """Foreach pool: quorum > actual children → honest SKIPPED at bind."""
+    """Foreach pool: quorum > children → SKIPPED + explicit report line."""
     sid = "st_q_gt"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
@@ -1284,6 +1305,55 @@ async def test_foreach_quorum_gt_children_misses(tmp_path, clock, runtime_cls):
     with pytest.raises(InputUnavailable):
         await rt.start_attempt("SUM")
     assert rt.tasks[task_id(sid, "SUM")].reason == TaskReason.INPUT_UNAVAILABLE
+    fin = await _finalize_study(rt)
+    contrib = fin.payload.get("contributing_reasons") or []
+    assert "не выполнено: кворум > числа детей" in contrib
+    assert "не выполнено: кворум входов" not in contrib
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_foreach_empty_superseded_expand_after_queues_plan_n(
+    tmp_path, clock, runtime_cls
+):
+    """Empty foreach SUPERSEDED counts as done for expand_after (like REFUSED)."""
+    sid = "st_fe_ea_empty"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=400),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=2,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    await _boot_stages(rt)
+    e0 = _exp("E0", depends_on=["PLAN"], criteria=False)
+    fe = _exp(
+        "FE",
+        depends_on=["E0"],
+        foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
+        criteria=False,
+    )
+    await rt.accept_plan(
+        [e0, fe],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        expand_after=["FE"],
+    )
+    # No hypotheses → empty foreach → SUPERSEDED
+    aid = await rt.start_attempt("E0")
+    await _ok(rt, arts, aid)
+    fe_t = rt.tasks[task_id(sid, "FE")]
+    assert fe_t.reason == TaskReason.SUPERSEDED
+    assert rt._foreach_children.get("FE") == []
+    plan_n = [
+        t
+        for t in rt.tasks.values()
+        if t.spec.task_key.startswith("PLAN-") and t.spec.task_key != "PLAN"
+    ]
+    assert plan_n, "empty foreach SUPERSEDED on expand_after must queue PLAN-n"
     await _finalize_study(rt)
     await close_runtime(rt)
 
