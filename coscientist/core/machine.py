@@ -35,6 +35,7 @@ from coscientist.core.store import SqliteEventStore
 from coscientist.core.study_view import study_view
 from coscientist.core.writer import StudyWriter
 
+
 class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
     """In-process owner of one study: store, writer, tasks, timers."""
 
