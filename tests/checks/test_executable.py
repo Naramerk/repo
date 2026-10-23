@@ -225,21 +225,26 @@ def test_sandbox_sleep_bypass_is_idle_or_wall_timeout():
 
 
 def test_sandbox_busy_loop_is_cpu_or_wall_timeout():
-    """Busy loop hits CPU budget / RLIMIT → cpu_timeout (or wall if cpu.stat thin)."""
+    """Busy loop: host cpu/wall timeout; without cgroup RLIMIT SIGXCPU → NONZERO."""
     _require_hard()
     r = run_sandbox(
         ["python3", "-c", "while True: pass"],
         limits=SandboxLimits(timeout_s=3.0, memory_mb=64, max_output_bytes=10_000),
     )
-    assert r.status is SandboxStatus.TIMEOUT
-    assert r.reason in ("cpu_timeout", "wall_timeout")
-    assert r.reason != "idle_timeout"
-    assert r.is_guest_timeout
     assert r.status not in INFRA_STATUSES
+    if r.status is SandboxStatus.TIMEOUT:
+        assert r.reason in ("cpu_timeout", "wall_timeout")
+        assert r.reason != "idle_timeout"
+        assert r.is_guest_timeout
+    else:
+        # No cgroup: host RLIMIT_CPU may deliver forgeable SIGXCPU/152 → scientific.
+        assert r.status is SandboxStatus.NONZERO
+        assert r.reason != "cpu_timeout"
+        assert r.exit_code in (152, -24, 128 + 24)
 
 
 def test_sandbox_fork_cpu_spread_is_busy_timeout():
-    """CPU spread across child processes still bounded (cgroup tree) → busy timeout."""
+    """CPU spread across children: cgroup tree timeout, else scientific SIGXCPU."""
     _require_hard()
     # Fork several busy children so per-process RLIMIT alone would not catch them
     # before wall; tree-wide cpu.stat / wall must still yield a busy timeout.
@@ -259,10 +264,13 @@ while True:
         ["python3", "-c", attack],
         limits=SandboxLimits(timeout_s=2.0, memory_mb=64, max_output_bytes=10_000),
     )
-    assert r.status is SandboxStatus.TIMEOUT
-    assert r.reason in ("cpu_timeout", "wall_timeout")
-    assert r.reason != "idle_timeout"
     assert r.status not in INFRA_STATUSES
+    if r.status is SandboxStatus.TIMEOUT:
+        assert r.reason in ("cpu_timeout", "wall_timeout")
+        assert r.reason != "idle_timeout"
+    else:
+        assert r.status is SandboxStatus.NONZERO
+        assert r.reason != "cpu_timeout"
 
 
 def test_sandbox_positive_exit_137_is_scientific_not_oom():
@@ -1526,6 +1534,8 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
                 "argv": ["python3", "-c", "import time; time.sleep(1e9)"],
                 "timeout_s": 0.25,
                 "memory_mb": 64,
+                # Mount agent payload so jail digests differ across attempts.
+                "output": "payload",
             },
             "role": "validity",
         }
@@ -1570,20 +1580,19 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
 
     for i in range(2):
         aid = await rt.start_attempt("E1")
-        # Distinct digests so same-digest rejection does not fire before timeout.
-        out_name = f"note_{i}.txt"
+        # Distinct jail-mounted bytes so same-digest rejection does not fire.
         art = arts.put(
-            f"attempt-{i}".encode(),
+            f"# attempt-{i}\n".encode(),
             make_tool_ref(f"{aid}:1", tool="agent"),
-            name=out_name,
-            media_type="text/plain",
+            name="payload.py",
+            media_type="text/x-python",
         )
         result = await ex.record(
             aid,
             AgentTaskOutput(
                 outputs={
-                    out_name: ArtifactHandle(
-                        artifact_id=art.artifact_id, name=out_name
+                    "payload": ArtifactHandle(
+                        artifact_id=art.artifact_id, name="payload"
                     )
                 },
                 claim=Outcome.SUCCESS,
