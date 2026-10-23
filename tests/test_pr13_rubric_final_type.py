@@ -1168,6 +1168,60 @@ async def test_planner_validation_error_taskspec_dict_plan_refused(tmp_path, clo
     assert any(e.type == "StudyFinalized" for e in events)
 
 
+async def _assert_accept_plan_refused_finalizes(rt, *, pid: str, detail_substr: str | None = None) -> None:
+    """Canonical PlanRefused path: empty plan_id + PlanRefused + StudyFinalized."""
+    assert pid == ""
+    events = await rt.store.read_all()
+    refused = [e for e in events if e.type == "PlanRefused"]
+    assert len(refused) == 1
+    if detail_substr is not None:
+        assert detail_substr in str(refused[0].payload.get("detail") or "")
+    fin = [e for e in events if e.type == "StudyFinalized"]
+    assert len(fin) == 1
+    assert rt.view().phase == "closed"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_accept_plan_cyclic_dag_plan_refused(tmp_path, clock):
+    """DAG cycle in accept_plan → PlanRefused + StudyFinalized (no raw ValueError)."""
+    rt = await _boot(tmp_path, clock, "st_pr13_dag")
+    a = _exp("E0", addresses=["Q1"], rubric=_judge_only_rubric(), criteria=[], depends_on=["E1"])
+    b = _exp("E1", addresses=["Q1"], rubric=_judge_only_rubric(), criteria=[], depends_on=["E0"])
+    pid = await rt.accept_plan(
+        [a, b],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="artifact")],
+    )
+    await _assert_accept_plan_refused_finalizes(rt, pid=pid, detail_substr="cyclic")
+
+
+@pytest.mark.asyncio
+async def test_accept_plan_unknown_expand_after_plan_refused(tmp_path, clock):
+    """Unknown expand_after task_key → PlanRefused + StudyFinalized."""
+    rt = await _boot(tmp_path, clock, "st_pr13_expand_after")
+    pid = await rt.accept_plan(
+        [_exp("E0", addresses=["Q1"], rubric=_judge_only_rubric(), criteria=[])],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="artifact")],
+        expand_after=["MISSING"],
+    )
+    await _assert_accept_plan_refused_finalizes(rt, pid=pid, detail_substr="expand_after")
+
+
+@pytest.mark.asyncio
+async def test_accept_plan_shares_critic_plan_refused(tmp_path, clock):
+    """Σ budget_share over reserve → PlanRefused + StudyFinalized (shares critic)."""
+    rt = await _boot(tmp_path, clock, "st_pr13_shares")
+    a = _exp("E0", addresses=["Q1"], rubric=_judge_only_rubric(), criteria=[])
+    b = _exp("E1", addresses=["Q1"], rubric=_judge_only_rubric(), criteria=[], depends_on=["E0"])
+    a = a.model_copy(update={"budget_share": 0.6})
+    b = b.model_copy(update={"budget_share": 0.5})
+    pid = await rt.accept_plan(
+        [a, b],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="artifact")],
+    )
+    await _assert_accept_plan_refused_finalizes(rt, pid=pid, detail_substr="budget_share")
+
+
 @pytest.mark.asyncio
 async def test_corrupt_judge_cas_finalizes_internal_error(tmp_path, clock):
     """Corrupt pending CAS on reopen → JudgeCasCorrupt + StudyFinalized (no hang)."""
