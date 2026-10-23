@@ -306,6 +306,7 @@ def _row_key(table: str, row: dict[str, Any]) -> str | None:
         "meta": "study_id",
     }
     if table == "fetch_integrity":
+        # Key order (first non-empty wins): call_id → tool → tool_name → row_key.
         # call_id may be absent on tool-only integrity rows — never drop them.
         for cand in (
             row.get("call_id"),

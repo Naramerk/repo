@@ -338,7 +338,11 @@ async def journal_fetch_integrity_raised(
 
 
 async def reconcile_fetch_integrity(writer: StudyWriter) -> SourceFetchIndex:
-    """Fold journal, journal any reclassified markers, return index (uncounted)."""
+    """Fold journal, journal any reclassified markers, return index (uncounted).
+
+    Does **not** append when the study is already finalized — ``FetchIntegrityRaised``
+    must not land after ``StudyFinalized``.
+    """
     store = getattr(writer, "store", None)
     if store is None or not hasattr(store, "read_all"):
         return SourceFetchIndex()
@@ -351,6 +355,15 @@ async def reconcile_fetch_integrity(writer: StudyWriter) -> SourceFetchIndex:
     if not study_id:
         study = getattr(getattr(writer, "store", None), "study_id", None)
         study_id = str(study or "")
+    finalized = any(getattr(e, "type", None) == "StudyFinalized" for e in events)
+    if finalized:
+        # Fold only — never journal past StudyFinalized.
+        writer.source_fetch_idx = idx
+        if events:
+            writer.source_fetch_seq = max(
+                int(getattr(e, "seq", 0) or 0) for e in events
+            )
+        return idx
     if idx.reclassified and study_id:
         await journal_fetch_integrity_raised(
             writer, idx.reclassified, study_id=study_id

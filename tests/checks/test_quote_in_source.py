@@ -2017,6 +2017,70 @@ _RECLASS_FIXTURE = (
     / "reclassified_fetch_old"
 )
 
+# Raw schema_version values committed in events.db (before upcast on open).
+_RECLASS_RAW_SCHEMA_VERSIONS = (
+    ("StudyCreated", 2),
+    ("PlanAccepted", 1),
+    ("TaskCreated", 2),
+    ("AttemptStarted", 1),
+    ("AttemptTainted", 1),
+    ("SourceFetched", 1),
+)
+
+
+def _assert_raw_fixture_schema_versions(db_path: Path) -> None:
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT type, schema_version FROM events ORDER BY seq"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert [(t, int(sv)) for t, sv in rows] == list(_RECLASS_RAW_SCHEMA_VERSIONS)
+
+
+def _assert_single_study_finalized(events: list[Any]):
+    """Exactly one StudyFinalized; report XOR minimal_report; non-empty conclusions."""
+    fins = [e for e in events if e.type == "StudyFinalized"]
+    assert len(fins) == 1
+    fin = fins[0]
+    p = fin.payload if isinstance(fin.payload, dict) else {}
+    has_report = bool(p.get("report_artifact_id"))
+    has_minimal = bool(p.get("minimal_report"))
+    assert has_report ^ has_minimal, (
+        f"expected report XOR minimal_report, got report={has_report} "
+        f"minimal={has_minimal}"
+    )
+    cids = p.get("conclusion_ids")
+    assert isinstance(cids, list) and len(cids) > 0
+    return fin
+
+
+def _install_reclassified_papers_get() -> None:
+    _reset_registry_for_tests()
+    _register_tool_for_tests(
+        RegisteredToolSpec(name="papers_get", effect="read", is_fetch=False)
+    )
+    freeze_registry()
+
+
+def _copy_reclass_fixture(tmp_path: Path) -> tuple[str, str, str, Path]:
+    import shutil
+
+    meta = json.loads(
+        (_RECLASS_FIXTURE.parent / "reclassified_fetch_old.json").read_text()
+    )
+    sid = str(meta["study_id"])
+    digest = str(meta["digest"])
+    call_id = str(meta["call_id"])
+    dest = tmp_path / sid
+    dest.mkdir(parents=True)
+    db = dest / "events.db"
+    shutil.copy2(_RECLASS_FIXTURE / "events.db", db)
+    return sid, digest, call_id, db
+
 
 @pytest.mark.asyncio
 async def test_reclassified_tool_study_opens_finalizes_uncounted(
@@ -2028,26 +2092,13 @@ async def test_reclassified_tool_study_opens_finalizes_uncounted(
     AttemptTainted is_fetch=True + SourceFetched). Upcasters run on open.
     Finalization via tick/deadline — not finalize(trigger=...).
     """
-    import shutil
-
     from coscientist.core.projections import fold_events
     from coscientist.core.source_fetch import load_source_fetch_index_from_writer
 
-    meta = json.loads((_RECLASS_FIXTURE.parent / "reclassified_fetch_old.json").read_text())
-    sid = str(meta["study_id"])
-    digest = str(meta["digest"])
-    call_id = str(meta["call_id"])
+    sid, digest, call_id, db = _copy_reclass_fixture(tmp_path)
+    _assert_raw_fixture_schema_versions(db)
 
-    dest = tmp_path / sid
-    dest.mkdir(parents=True)
-    shutil.copy2(_RECLASS_FIXTURE / "events.db", dest / "events.db")
-
-    # Live registry: same name, is_fetch=False (reclassified vs journal).
-    _reset_registry_for_tests()
-    _register_tool_for_tests(
-        RegisteredToolSpec(name="papers_get", effect="read", is_fetch=False)
-    )
-    freeze_registry()
+    _install_reclassified_papers_get()
 
     catalog = _catalog_quote()
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog, owner="t2")
@@ -2077,11 +2128,8 @@ async def test_reclassified_tool_study_opens_finalizes_uncounted(
     await rt.tick()
     assert rt.view().phase == "closed"
     events = await rt.store.read_all()
-    fin = next(e for e in events if e.type == "StudyFinalized")
+    fin = _assert_single_study_finalized(events)
     assert fin.payload.get("trigger") == "deadline"
-    assert fin.payload.get("report_artifact_id")
-    assert "conclusion_ids" in fin.payload
-    assert fin.payload.get("conclusion_ids") is not None
     assert "internal_error" in (fin.payload.get("contributing_reasons") or [])
     assert digest not in (fold_events(events).get("source_fetches") or {})
     await close_runtime(rt)
@@ -2092,19 +2140,9 @@ async def test_reclassify_internal_error_survives_reconcile_failure(
     tmp_path: Path, clock, monkeypatch
 ):
     """MAJOR: fold_events fallback keeps internal_error when reconcile raises."""
-    import shutil
-
-    meta = json.loads((_RECLASS_FIXTURE.parent / "reclassified_fetch_old.json").read_text())
-    sid = str(meta["study_id"])
-    dest = tmp_path / sid
-    dest.mkdir(parents=True)
-    shutil.copy2(_RECLASS_FIXTURE / "events.db", dest / "events.db")
-
-    _reset_registry_for_tests()
-    _register_tool_for_tests(
-        RegisteredToolSpec(name="papers_get", effect="read", is_fetch=False)
-    )
-    freeze_registry()
+    sid, _digest, _call_id, db = _copy_reclass_fixture(tmp_path)
+    _assert_raw_fixture_schema_versions(db)
+    _install_reclassified_papers_get()
 
     async def boom(_writer):
         raise RuntimeError("reconcile_boom")
@@ -2119,27 +2157,98 @@ async def test_reclassify_internal_error_survives_reconcile_failure(
     await rt.ensure_lease(ttl_s=300)
     clock.advance(timedelta(seconds=120))
     await rt.tick()
-    fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
+    fin = _assert_single_study_finalized(await rt.store.read_all())
     assert "internal_error" in (fin.payload.get("contributing_reasons") or [])
-    assert fin.payload.get("report_artifact_id")
     await close_runtime(rt)
 
 
+@pytest.mark.asyncio
+async def test_open_finalized_study_does_not_append_fetch_integrity(
+    tmp_path: Path, clock
+):
+    """MAJOR: reopen of StudyFinalized must not journal FetchIntegrityRaised after it."""
+    sid, _digest, _call_id, db = _copy_reclass_fixture(tmp_path)
+    _assert_raw_fixture_schema_versions(db)
+    _install_reclassified_papers_get()
+
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, catalog=_catalog_quote(), owner="t1"
+    )
+    await rt.ensure_lease(ttl_s=300)
+    clock.advance(timedelta(seconds=120))
+    await rt.tick()
+    events_closed = await rt.store.read_all()
+    fin = _assert_single_study_finalized(events_closed)
+    fin_seq = int(fin.seq or 0)
+    integrity_before = [
+        e for e in events_closed if e.type == "FetchIntegrityRaised"
+    ]
+    assert integrity_before
+    assert all(int(e.seq or 0) < fin_seq for e in integrity_before)
+    await close_runtime(rt)
+
+    _install_reclassified_papers_get()
+    rt2 = await open_runtime(
+        tmp_path, sid, clock=clock, catalog=_catalog_quote(), owner="t2"
+    )
+    assert rt2._finalized  # noqa: SLF001
+    events2 = await rt2.store.read_all()
+    assert len([e for e in events2 if e.type == "StudyFinalized"]) == 1
+    after_fin = [e for e in events2 if int(e.seq or 0) > fin_seq]
+    assert after_fin == [], f"events after StudyFinalized: {[e.type for e in after_fin]}"
+    assert [
+        e for e in events2 if e.type == "FetchIntegrityRaised"
+    ] == integrity_before
+    await close_runtime(rt2)
+
+
 def test_fetch_integrity_row_key_without_call_id():
-    """Projection must not drop fetch_integrity rows that lack call_id."""
+    """Projection must not drop fetch_integrity rows that lack call_id.
+
+    ``_row_key`` order for fetch_integrity (first non-empty wins):
+    ``call_id`` → ``tool`` → ``tool_name`` → ``row_key``.
+    """
     from coscientist.core.events import EventEnvelope, make_idem
     from coscientist.core.projections import _row_key, apply_to_map, fold_events
 
+    # Empty call_id → tool.
     assert (
         _row_key("fetch_integrity", {"tool": "papers_get", "call_id": ""})
         == "papers_get"
     )
+    # call_id wins over tool and row_key.
     assert (
         _row_key(
             "fetch_integrity",
-            {"tool": "papers_get", "call_id": "", "row_key": "rk"},
+            {
+                "call_id": "att:1",
+                "tool": "papers_get",
+                "tool_name": "other",
+                "row_key": "rk",
+            },
+        )
+        == "att:1"
+    )
+    # No call_id: tool wins over tool_name and row_key.
+    assert (
+        _row_key(
+            "fetch_integrity",
+            {
+                "call_id": "",
+                "tool": "papers_get",
+                "tool_name": "other",
+                "row_key": "rk",
+            },
         )
         == "papers_get"
+    )
+    # tool empty → tool_name before row_key.
+    assert (
+        _row_key(
+            "fetch_integrity",
+            {"call_id": "", "tool": "", "tool_name": "tn", "row_key": "rk"},
+        )
+        == "tn"
     )
 
     ev = EventEnvelope(
