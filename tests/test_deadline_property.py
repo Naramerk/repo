@@ -248,7 +248,8 @@ class StudyClosesMachine(RuleBasedStateMachine):
         self.rt.store.epoch = 0
         self.lost_lease = True
         try:
-            self._run(self.rt.tick())
+            # tick() is a no-op after StudyFinalized; renew still fences.
+            self._run(self.rt.ensure_lease())
             raise AssertionError("stale epoch must not write")
         except LeaseLost:
             pass
