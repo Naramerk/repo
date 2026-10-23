@@ -8,6 +8,7 @@ from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import jsonschema
 import pytest
 
 from coscientist.core.domain import Budget
@@ -17,11 +18,6 @@ from coscientist.core.reasons import RefusalKind
 from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.study_view import study_phase, study_view
 from tests.helpers import attach_executor
-
-try:
-    import jsonschema
-except ImportError:  # pragma: no cover
-    jsonschema = None
 
 
 @pytest.mark.asyncio
@@ -159,11 +155,7 @@ def test_study_refused_schema_valid():
         "reason": "empty request",
         "classifier_error": False,
     }
-    if jsonschema is not None:
-        jsonschema.validate(payload, schema)
-    else:
-        for k in schema["required"]:
-            assert k in payload
+    jsonschema.validate(payload, schema)
     assert "duration_too_short" in schema["properties"]["kind"]["enum"]
 
 
@@ -186,14 +178,13 @@ async def test_intake_refuses_before_spec(tmp_path, clock):
     refused = [e for e in events if e.type == "StudyRefused"]
     assert len(refused) == 1
     assert refused[0].payload["kind"] == "empty_request"
-    if jsonschema is not None:
-        schema = json.loads(
-            (
-                Path(__file__).resolve().parents[1]
-                / "coscientist/schema/study_refused.schema.json"
-            ).read_text()
-        )
-        jsonschema.validate(refused[0].payload, schema)
+    schema = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "coscientist/schema/study_refused.schema.json"
+        ).read_text()
+    )
+    jsonschema.validate(refused[0].payload, schema)
     fins = [e for e in events if e.type == "StudyFinalized"]
     assert len(fins) == 1
     assert fins[0].payload["trigger"] == "intake"

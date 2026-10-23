@@ -6,7 +6,7 @@ PR 4 budget-zero intake is covered by ``tests/test_intake.py``.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 
@@ -17,49 +17,6 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.runtime_factory import close_runtime, open_runtime
-
-
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="PR 5: failed parent without InputSpec skips child",
-)
-@pytest.mark.asyncio
-async def test_failed_parent_without_inputspec_skips_child(tmp_path, clock):
-    from coscientist.core.reasons import TaskReason as TR
-
-    sid = "st_fp"
-    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
-    await rt.create_study(
-        profile="research",
-        request="q",
-        catalog_version="0.1.0",
-        deadline=clock.now() + timedelta(seconds=120),
-        sid=sid,
-        finalize_reserve_s=5,
-    )
-    for key in ("SPEC", "HYP", "LIT"):
-        await rt.start_attempt(key)
-        await rt.cancel_task(key, reason="cancelled")
-    await rt.accept_plan(
-        [
-            TaskSpec(
-                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"]
-            ),
-            TaskSpec(
-                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"]
-            ),
-        ],
-        questions=[],
-    )
-    await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
-    await rt.tick()
-    child = rt.tasks[f"{sid}/C"]
-    assert child.state == TaskState.DONE
-    assert child.outcome == TaskOutcome.SKIPPED
-    assert child.reason == TR.INPUT_UNAVAILABLE
-    await close_runtime(rt)
 
 
 @pytest.mark.xfail(

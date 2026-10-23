@@ -145,7 +145,8 @@ class InputSpec(Frozen):
     from_task: str
     output: str
     schema_ref: str | None = None
-    mode: Literal["use_partial", "simulate", "forbid"] = "use_partial"
+    # M1 PR5: default forbid (DESIGN was schema_stub / use_partial).
+    mode: Literal["use_partial", "simulate", "forbid"] = "forbid"
 
 
 class RequirementRef(Frozen):
@@ -173,6 +174,10 @@ class TaskSpec(Frozen):
     depends_on: list[str] = Field(default_factory=list)
     inputs: list[InputSpec] = Field(default_factory=list)
     addresses: list[str] = Field(default_factory=list)
+    # H-c: allow start when a depends_on parent is FAILED/SKIPPED (no InputSpec).
+    tolerate_failed_dep: bool = False
+    # experiment.method; "simulation" is scientific (provenance=real), not a stub.
+    method: str | None = None
 
 
 class Budget(Frozen):

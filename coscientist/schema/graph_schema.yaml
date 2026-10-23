@@ -87,7 +87,7 @@ nodes:
       - {name: task_key, type: str, required: true, note: "LIT-n | EXP-n"}
       - {name: title, type: str, required: true}
       - {name: goal, type: str, required: true}
-      - {name: method, type: enum(computational|statistical|laboratory|literature_search|expert), required: true}
+      - {name: method, type: enum(computational|statistical|laboratory|literature_search|expert|simulation), required: true, note: "simulation = scientific model run (provenance=real); not stub"}
       - {name: query_plan, type: list(str), required: false, note: "для literature_search"}
       - {name: route, type: str, required: true}
       - {name: required, type: bool, required: true}

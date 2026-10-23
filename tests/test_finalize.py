@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import jsonschema
 import pytest
 
 from coscientist.core.artifacts import LocalArtifactStore
@@ -34,11 +35,6 @@ from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.study_view import study_view
 from coscientist.core.upcasters import upcast
 from tests.helpers import attach_executor, record_success
-
-try:
-    import jsonschema
-except ImportError:  # pragma: no cover
-    jsonschema = None
 
 _TS = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
 
@@ -257,11 +253,7 @@ def test_minimal_report_schema_valid():
         / "coscientist/schema/minimal_report.schema.json"
     )
     schema = json.loads(schema_path.read_text())
-    if jsonschema is not None:
-        jsonschema.validate(report, schema)
-    else:
-        for k in schema["required"]:
-            assert k in report
+    jsonschema.validate(report, schema)
 
 
 def test_report_not_required_verdict():
@@ -335,10 +327,24 @@ async def test_task_budget_does_not_close_study(tmp_path, clock):
 
     sid = "st_bg2"
     rt = await _boot(tmp_path, clock, sid)
-    # Skip only SPEC with budget; leave other stages open.
-    spec = rt.tasks[f"{sid}/SPEC"]
+    # Sibling plan tasks (no depends_on between them) so H-c does not cascade.
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="A", title="a", goal="g", route="experiment", depends_on=["PLAN"]
+            ),
+            TaskSpec(
+                task_key="B", title="b", goal="g", route="experiment", depends_on=["PLAN"]
+            ),
+        ],
+        questions=[],
+    )
+    a = rt.tasks[f"{sid}/A"]
     events: list[EventEnvelope] = []
-    for aid in spec.attempts:
+    for aid in a.attempts:
         if not rt.attempts.get(aid, {}).get("closed"):
             events.append(
                 EventEnvelope(
@@ -352,7 +358,7 @@ async def test_task_budget_does_not_close_study(tmp_path, clock):
                         "attempt_id": aid,
                         "closed": True,
                         "close_reason": CloseReason.BUDGET.value,
-                        "task_id": spec.task_id,
+                        "task_id": a.task_id,
                     },
                     ts=clock.now(),
                     schema_version=2,
@@ -362,10 +368,10 @@ async def test_task_budget_does_not_close_study(tmp_path, clock):
         EventEnvelope(
             study_id=sid,
             type="TaskDone",
-            entity_key=spec.task_id,
-            idem_key=make_idem("TaskDone", spec.task_id),
+            entity_key=a.task_id,
+            idem_key=make_idem("TaskDone", a.task_id),
             payload={
-                "task_id": spec.task_id,
+                "task_id": a.task_id,
                 "outcome": TaskOutcome.SKIPPED.value,
                 "reason": TaskReason.BUDGET.value,
             },
@@ -376,6 +382,7 @@ async def test_task_budget_does_not_close_study(tmp_path, clock):
     await rt._append(events)
     await rt.tick()
     assert not rt._finalized
+    assert rt.tasks[f"{sid}/B"].state != TaskState.DONE
     assert rt.view().phase != "closed"
     await close_runtime(rt)
 
