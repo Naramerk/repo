@@ -156,6 +156,36 @@ def _plan_accepted_v4_to_v5_foreach_quorum(payload: dict[str, Any]) -> dict[str,
     return out
 
 
+def _ensure_sandbox_limit_fields(spec: dict[str, Any]) -> dict[str, Any]:
+    """PR17: frozen sandbox wall/CPU limits on TaskSpec (None = not frozen)."""
+    spec = dict(spec)
+    spec.setdefault("sandbox_timeout_s", None)
+    spec.setdefault("sandbox_memory_mb", None)
+    return spec
+
+
+def _task_created_v7_to_v8_sandbox_limits(payload: dict[str, Any]) -> dict[str, Any]:
+    out = dict(payload)
+    spec = out.get("spec")
+    if isinstance(spec, dict):
+        out["spec"] = _ensure_sandbox_limit_fields(spec)
+    return out
+
+
+def _plan_accepted_v5_to_v6_sandbox_limits(payload: dict[str, Any]) -> dict[str, Any]:
+    out = dict(payload)
+    tasks = out.get("tasks")
+    if isinstance(tasks, list):
+        rewritten: list[Any] = []
+        for t in tasks:
+            if isinstance(t, dict):
+                rewritten.append(_ensure_sandbox_limit_fields(dict(t)))
+            else:
+                rewritten.append(t)
+        out["tasks"] = rewritten
+    return out
+
+
 def _plan_accepted_v2_to_v3_check_role(payload: dict[str, Any]) -> dict[str, Any]:
     """PR8: strip PlanAccepted.tasks[].criteria role (catalog is source of truth)."""
     out = dict(payload)
@@ -368,10 +398,12 @@ register_upcaster("TaskCreated", 3, _task_created_v3_to_v4_input_mode)
 register_upcaster("TaskCreated", 4, _task_created_v4_to_v5_input_kind)
 register_upcaster("TaskCreated", 5, _task_created_v5_to_v6_check_role)
 register_upcaster("TaskCreated", 6, _task_created_v6_to_v7_foreach_quorum)
+register_upcaster("TaskCreated", 7, _task_created_v7_to_v8_sandbox_limits)
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)
 register_upcaster("PlanAccepted", 2, _plan_accepted_v2_to_v3_check_role)
 register_upcaster("PlanAccepted", 3, _plan_accepted_v3_to_v4_expand_after)
 register_upcaster("PlanAccepted", 4, _plan_accepted_v4_to_v5_foreach_quorum)
+register_upcaster("PlanAccepted", 5, _plan_accepted_v5_to_v6_sandbox_limits)
 register_upcaster("StudyCreated", 1, _study_created_v1_to_v2)
 register_upcaster("StudyCreated", 2, _study_created_v2_to_v3)
 register_upcaster("StudyCreated", 3, _study_created_v3_to_v4)

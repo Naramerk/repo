@@ -227,7 +227,7 @@ async def ensure_plan_n_task(
                 idem_key=make_idem("TaskCreated", tid, "expand_trigger"),
                 payload=payload,
                 ts=now,
-                schema_version=7,
+                schema_version=8,
             )
         ]
     )

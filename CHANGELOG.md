@@ -9,6 +9,7 @@
 - **Fail-closed:** without verified hard FS isolation → `sandbox_unavailable` (no guest exec). CI installs `bubblewrap` and lifts Ubuntu 24.04 AppArmor userns restrict.
 - **`trusted=true` only when both net and fs are hard** (never fake hard). Isolation + `core_evaluated` for replay from journal effect, not artifact meta.
 - Infra **only** via private FD (wrapper rlimit / cgroup attach / host errors) + blocked/unavailable/verified cgroup OOM — does **not** charge the retry budget. Guest wall/CPU → host-classified `idle_timeout` / `cpu_timeout` / `wall_timeout` (`result_class=timeout`, never `k_ref`/`k_sup`); refute-role → `refute_unresolved` hard-blocks `supported`; idle → `untestable_by_agent`. Wall/CPU frozen on `TaskSpec` at plan accept; retries cannot raise limits; same-digest retry rejected; exhausted → StudyFinalized RU lines. Cgroup `cpu.max` + `cpu.stat`; CPU budget always &lt; wall. `tests_pass` + `reproducible_rerun` are observation-only (no `est` / no `k_sup`).
+- Upcasters: TaskCreated **v8**, PlanAccepted **v6** (`sandbox_timeout_s` / `sandbox_memory_mb`); stacked on PR10 foreach/quorum versions.
 - Docs: host requirements (bwrap, userns/AppArmor sysctl, cgroup delegation) + timeout redesign in `DESIGN_HYP_DELTA` / `DESIGN_M1`.
 
 ### M1 PR10

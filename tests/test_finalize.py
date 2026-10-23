@@ -181,9 +181,10 @@ def test_questions_from_spec_output_wired():
 
 def test_upcast_taskcreated_addresses_default():
     v, p = upcast("TaskCreated", 2, {"task_id": "t", "spec": {"task_key": "E1"}})
-    # v2→v3 addresses … v5→v6 check role … v6→v7 foreach/quorum.
-    assert v == 7 and p["spec"]["addresses"] == []
+    # v2→…→v7 foreach/quorum → v8 sandbox limits.
+    assert v == 8 and p["spec"]["addresses"] == []
     assert p["spec"]["foreach"] is None
+    assert p["spec"]["sandbox_timeout_s"] is None
 
 
 def test_upcast_taskcreated_input_mode_old_default():
@@ -199,17 +200,19 @@ def test_upcast_taskcreated_input_mode_old_default():
             },
         },
     )
-    assert v == 7
+    assert v == 8
     assert p["spec"]["inputs"][0]["mode"] == "use_partial"
     assert p["spec"]["inputs"][0]["kind"] == "artifact"
     assert p["spec"]["inputs"][0]["quorum"] is None
+    assert p["spec"]["sandbox_memory_mb"] is None
 
 
 def test_upcast_planaccepted_questions_default():
     v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
-    assert v == 5 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
+    assert v == 6 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
     assert p["expand_after"] == []
     assert p["tasks"][0]["foreach"] is None
+    assert p["tasks"][0]["sandbox_timeout_s"] is None
 
 
 def test_upcast_taskcreated_strips_plan_criterion_role():
@@ -233,10 +236,11 @@ def test_upcast_taskcreated_strips_plan_criterion_role():
             },
         },
     )
-    assert v == 7
+    assert v == 8
     for c in p["spec"]["criteria"]:
         assert "role" not in c
     assert p["spec"]["foreach"] is None
+    assert p["spec"]["sandbox_timeout_s"] is None
 
 
 def test_upcast_study_finalized_v1_adds_counts_and_refusal():
