@@ -188,10 +188,10 @@ class LocalArtifactStore:
         role: str | None = None,
         attempt_closed: bool = False,
         context_tainted: bool = False,
-        expected_tool: str | None = None,
-        expected_call_id: str | None = None,
-        expected_study_id: str | None = None,
-        expected_attempt_id: str | None = None,
+        expected_tool: str,
+        expected_call_id: str,
+        expected_study_id: str,
+        expected_attempt_id: str,
     ) -> Artifact:
         """Fetch-tool path — ``producer=tool``, always ``tainted=True``.
 
@@ -199,16 +199,17 @@ class LocalArtifactStore:
         ``is_fetch`` tool (not any read tool). Pair with ``SourceFetched``.
         Journal provenance ≠ content trusted: network bytes stay tainted;
         ``quote_in_source`` may still accept them when the digest is journaled.
+        ``expected_*`` binds are required; assert (no consume) so append can
+        consume the opaque id once.
         """
-        from coscientist.core.source_fetch import verify_fetch_capability
+        from coscientist.core.source_fetch import assert_fetch_capability_bound
 
-        verify_fetch_capability(
+        assert_fetch_capability_bound(
             capability,
             tool=expected_tool,
             call_id=expected_call_id,
             study_id=expected_study_id,
             attempt_id=expected_attempt_id,
-            consume=False,
         )
         return self._store(
             content,

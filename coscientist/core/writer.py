@@ -89,13 +89,8 @@ class StudyWriter:
         self._depth_high_water = max(self._depth_high_water, self.queue.qsize())
         return await fut
 
-    async def append(
-        self,
-        event: EventEnvelope,
-        *,
-        _fetch_capability: Any | None = None,
-    ) -> EventEnvelope:
-        out = await self.append_many([event], _fetch_capability=_fetch_capability)
+    async def append(self, event: EventEnvelope) -> EventEnvelope:
+        out = await self.append_many([event])
         if out:
             return out[0]
         # Defensive: append_many always returns stored envelopes (incl. idempotent).
@@ -106,29 +101,27 @@ class StudyWriter:
         events: list[EventEnvelope],
         *,
         require_open_attempt: str | None = None,
-        _fetch_capability: Any | None = None,
     ) -> list[EventEnvelope]:
+        allow_source_fetched = False
         for ev in events:
             if getattr(ev, "type", None) == "SourceFetched":
                 # Direct StudyWriter.append(SourceFetched) is closed — only the
-                # capability-gated append_source_fetched path may journal these.
+                # capability-gated append_source_fetched path sets the permit.
                 from coscientist.core.errors import ArtifactRejected
-                from coscientist.core.source_fetch import verify_fetch_capability
+                from coscientist.core.source_fetch import source_fetched_permitted
 
-                if _fetch_capability is None:
+                if not source_fetched_permitted():
                     raise ArtifactRejected("fetch_capability_required")
-                p = getattr(ev, "payload", None) or {}
-                verify_fetch_capability(
-                    _fetch_capability,
-                    tool=str(p.get("tool") or "") or None,
-                    call_id=str(p.get("call_id") or "") or None,
-                    study_id=str(getattr(ev, "study_id", "") or "") or None,
-                    consume=False,
-                )
+                allow_source_fetched = True
+
+        # Capture permit for the writer-queue task (ContextVar does not cross).
+        _allow_sf = allow_source_fetched
 
         async def _do() -> list[EventEnvelope]:
             return await self.store.append_many(
-                events, require_open_attempt=require_open_attempt
+                events,
+                require_open_attempt=require_open_attempt,
+                _allow_source_fetched=_allow_sf,
             )
 
         return await self.submit(_do)

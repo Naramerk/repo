@@ -136,21 +136,42 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
             event.entity_key,
             {**p, "key": p.get("key") or event.entity_key, "denied": True},
         )
-    elif t == "SourceFetched":
-        # Separate from effects — only fold payloads paired with a fetch ToolCall.
-        from coscientist.core.source_fetch import source_fetched_payload_ok
-
-        if not source_fetched_payload_ok(p if isinstance(p, dict) else {}):
-            return
-        digest = str(p.get("digest") or "")
-        row_key = digest or event.entity_key
-        _put(proj, "source_fetches", row_key, {**p, "digest": digest})
     elif t == "AttemptTainted":
         # Sticky attempt taint after source fetch (write/external deny).
+        # Do not clobber an existing attempt ``reason`` with the taint payload.
         aid = str(p.get("attempt_id") or event.entity_key or "")
         if aid:
             prev = _get(proj, "attempts", aid) or {}
-            _put(proj, "attempts", aid, {**prev, "tainted_context": True, **p})
+            kept_reason = prev.get("reason")
+            row = {**prev, **p, "tainted_context": True}
+            if kept_reason is not None:
+                row["reason"] = kept_reason
+            _put(proj, "attempts", aid, row)
+        # Pairing marker for SourceFetched ↔ fetch ToolCall (call_id + tool).
+        call_id = str(p.get("call_id") or "")
+        tool = str(p.get("tool") or "")
+        if call_id and tool and str(p.get("reason") or "") == "source_fetch":
+            _put(
+                proj,
+                "fetch_calls",
+                call_id,
+                {"call_id": call_id, "tool": tool, "attempt_id": aid},
+            )
+    elif t == "SourceFetched":
+        # Only fold when paired with a journaled fetch ToolCall (AttemptTainted).
+        from coscientist.core.source_fetch import source_fetched_paired_with_fetch_call
+
+        payload = p if isinstance(p, dict) else {}
+        call_id = str(payload.get("call_id") or "")
+        paired = _get(proj, "fetch_calls", call_id) if call_id else None
+        fetch_calls = (
+            {call_id: str(paired.get("tool") or "")} if paired else {}
+        )
+        if not source_fetched_paired_with_fetch_call(payload, fetch_calls):
+            return
+        digest = str(payload.get("digest") or "")
+        row_key = digest or event.entity_key
+        _put(proj, "source_fetches", row_key, {**payload, "digest": digest})
     elif t == "HitlOpened":
         _put(proj, "hitl_requests", event.entity_key, {**p, "open": True})
     elif t in ("HitlDecided", "HitlTimedOut"):
@@ -260,7 +281,7 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         "EffectDone": ("effects",),
         "SideEffectDenied": ("effects",),
         "SourceFetched": ("source_fetches",),
-        "AttemptTainted": ("attempts",),
+        "AttemptTainted": ("attempts", "fetch_calls"),
         "HitlOpened": ("hitl_requests",),
         "HitlDecided": ("hitl_requests",),
         "HitlTimedOut": ("hitl_requests",),

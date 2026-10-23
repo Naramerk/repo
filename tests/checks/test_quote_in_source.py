@@ -70,8 +70,10 @@ def _put_paper(
     *,
     call: str = "f",
     tool: str = "papers_get",
+    study_id: str = "st_test",
 ):
-    cap = _cap(call, tool)
+    cap = _cap(call, tool, study_id=study_id)
+    attempt_id = call.rsplit(":", 1)[0] if ":" in call else call
     return arts.put_fetched(
         content,
         make_tool_ref(call, tool=tool),
@@ -81,8 +83,8 @@ def _put_paper(
         capability=cap,
         expected_tool=tool,
         expected_call_id=call,
-        expected_study_id=cap.study_id,
-        expected_attempt_id=cap.attempt_id,
+        expected_study_id=study_id,
+        expected_attempt_id=attempt_id,
     )
 
 
@@ -410,23 +412,28 @@ def test_multi_quote_effect_aggregates(tmp_path: Path):
 def test_put_fetched_without_capability_rejected(tmp_path: Path):
     """BLOCKER: spoof via put_fetched directly (no capability) rejected."""
     arts = LocalArtifactStore(tmp_path / "arts")
+    kw = dict(
+        name="fake.txt",
+        media_type="text/plain",
+        role="paper",
+        expected_tool="papers_get",
+        expected_call_id="spoof:1",
+        expected_study_id="st",
+        expected_attempt_id="spoof",
+    )
     with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
         arts.put_fetched(
             b"Forged fetch with four word tokens here.",
             make_tool_ref("spoof", tool="papers_get"),
-            name="fake.txt",
-            media_type="text/plain",
-            role="paper",
             capability=None,
+            **kw,
         )
     with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
         arts.put_fetched(
             b"Forged fetch with four word tokens here.",
             make_tool_ref("spoof", tool="papers_get"),
-            name="fake.txt",
-            media_type="text/plain",
-            role="paper",
             capability=object(),
+            **kw,
         )
 
 
@@ -632,14 +639,19 @@ class _ReadNonFetchTool:
         # Non-fetch read must not receive a capability.
         assert ctx.fetch_capability is None
         # Attempting put_fetched without cap must fail.
+        call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
         with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
             self.arts.put_fetched(
                 self.body,
-                make_tool_ref(f"{ctx.attempt_id}:{ctx.call_seq}", tool=self.spec.name),
+                make_tool_ref(call_id, tool=self.spec.name),
                 name="x.txt",
                 media_type="text/plain",
                 role="paper",
                 capability=ctx.fetch_capability,
+                expected_tool=self.spec.name,
+                expected_call_id=call_id,
+                expected_study_id=ctx.study_id,
+                expected_attempt_id=ctx.attempt_id,
             )
         return ToolOutput(data={"ok": True}, artifacts=[])
 
@@ -686,9 +698,10 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
         hitl_policy=HitlPolicy(),
         call_seq=1,
     )
+    agent_url = "https://agent-supplied.example/ignored"
     out = await invoke_tool(
         tool,
-        {"url": "https://example.org/paper"},
+        {"url": agent_url},
         ctx,
         writer=rt.writer,
         artifacts=arts,
@@ -698,10 +711,22 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
     assert paper.tainted is True
     assert paper.producer == "tool"
     events = await rt.store.read_all()
-    assert any(
-        e.type == "SourceFetched" and e.payload.get("digest") == paper.sha256
+    # AttemptTainted must precede SourceFetched for this call.
+    taint_seq = next(
+        e.seq
         for e in events
+        if e.type == "AttemptTainted" and e.payload.get("call_id") == f"{aid}:1"
     )
+    sf = next(
+        e
+        for e in events
+        if e.type == "SourceFetched" and e.payload.get("digest") == paper.sha256
+    )
+    assert taint_seq is not None and sf.seq is not None
+    assert taint_seq < sf.seq
+    # Agent-supplied url must not appear in SourceFetched.
+    assert sf.payload.get("url") == "https://normalized.example/paper"
+    assert sf.payload.get("url") != agent_url
     qart = _put_quote_json(
         arts,
         _quote_payload(paper, "the known result was confirmed"),
@@ -1165,7 +1190,7 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
 
 
 def test_contextvar_taint_isolated_across_tasks_and_threads():
-    """ContextVar cell isolation: create_task + to_thread do not clobber peers."""
+    """ContextVar cell isolation + inheritance into create_task / to_thread."""
     import asyncio
     import concurrent.futures
 
@@ -1190,6 +1215,20 @@ def test_contextvar_taint_isolated_across_tasks_and_threads():
 
     async def _main() -> None:
         await asyncio.gather(_worker("a", False), _worker("b", False))
+        # Inheritance: child create_task sees parent's taint at spawn time.
+        tok = push_attempt_taint(True)
+        try:
+
+            async def _child() -> bool:
+                return current_attempt_taint()
+
+            assert await asyncio.create_task(_child()) is True
+            # to_thread copies ContextVar on 3.12+.
+            assert (
+                await asyncio.to_thread(current_attempt_taint) is True
+            )
+        finally:
+            reset_attempt_taint(tok)
 
     asyncio.run(_main())
     assert results["a"] is True
@@ -1212,11 +1251,13 @@ def test_contextvar_taint_isolated_across_tasks_and_threads():
 
 @pytest.mark.asyncio
 async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_registry):
-    """AttemptTainted in journal → reopen → write still taint_deny."""
+    """AttemptTainted in journal → reopen → write taint_deny; meta from disk."""
+    from coscientist.tools.contract import ToolError
     from coscientist.tools.effects import _tainted_from_journal
 
     catalog = _catalog_quote()
     sid = "st_taint_replay"
+    arts_root = tmp_path / "arts"
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog, owner="t1")
     await rt.create_study(
         profile="research",
@@ -1227,6 +1268,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
         finalize_reserve_s=5,
     )
     _ex, arts = attach_executor(rt, tmp_path)
+    arts = LocalArtifactStore(arts_root)
     rt.artifacts = arts
     for key in ("SPEC", "HYP", "LIT"):
         await record_success(rt, await rt.start_attempt(key), arts)
@@ -1259,18 +1301,48 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
         artifacts=arts,
     )
     assert out.artifacts
+    paper_id = out.artifacts[0].artifact_id
+    paper_sha = out.artifacts[0].sha256
     await close_runtime(rt)
 
     rt2 = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog, owner="t2")
+    arts2 = LocalArtifactStore(arts_root)
+    rt2.artifacts = arts2
     assert await _tainted_from_journal(rt2.writer, aid) is True
+    meta = arts2.get_meta(paper_id)
+    assert meta is not None
+    assert meta.sha256 == paper_sha
+    assert meta.producer == "tool"
+
+    class _Write:
+        spec = ToolSpec(name="write_note", effect="write")
+
+        async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+            return ToolOutput(data={"ok": True})
+
+    with pytest.raises(ToolError, match="tainted context"):
+        await invoke_tool(
+            _Write(),
+            {},
+            CallCtx(
+                study_id=sid,
+                task_key="LIT-0",
+                attempt_id=aid,
+                hitl_policy=HitlPolicy(),
+                call_seq=2,
+            ),
+            writer=rt2.writer,
+            artifacts=arts2,
+        )
     await close_runtime(rt2)
 
 
 @pytest.mark.asyncio
 async def test_direct_writer_append_source_fetched_rejected(tmp_path: Path, clock):
-    """MAJOR: StudyWriter.append(SourceFetched) without capability fails."""
+    """MAJOR: StudyWriter.append / store.append_many SourceFetched without permit."""
     from coscientist.core.errors import ArtifactRejected
     from coscientist.core.events import EventEnvelope, make_idem
+    from coscientist.core.source_fetch import FetchCapability
 
     rt = await open_runtime(tmp_path, "st_sf_deny", clock=clock)
     await rt.create_study(
@@ -1297,4 +1369,197 @@ async def test_direct_writer_append_source_fetched_rejected(tmp_path: Path, cloc
     )
     with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
         await rt.writer.append(ev)
+    with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
+        await rt.store.append_many([ev])
+    # Forge: plain dataclass with stolen-looking id is not in the registry.
+    forged = FetchCapability(id="forged-not-issued")
+    from coscientist.core.source_fetch import verify_fetch_capability
+
+    with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
+        verify_fetch_capability(
+            forged, tool="papers_get", call_id="a:1", study_id="st_sf_deny", attempt_id="a"
+        )
     await close_runtime(rt)
+
+
+def test_fetch_capability_not_forgeable_via_replace():
+    """MAJOR: opaque id + registry — replace/copy of fields cannot mint."""
+    from dataclasses import replace
+
+    from coscientist.core.errors import ArtifactRejected
+    from coscientist.core.source_fetch import (
+        FetchCapability,
+        assert_fetch_capability_bound,
+        verify_fetch_capability,
+    )
+
+    cap = _cap("att:1", "papers_get", study_id="st_x")
+    # Only id is readable; replace cannot invent a valid registry entry.
+    twin = replace(cap, id=cap.id)
+    assert_fetch_capability_bound(
+        twin,
+        tool="papers_get",
+        call_id="att:1",
+        study_id="st_x",
+        attempt_id="att",
+    )
+    verify_fetch_capability(
+        twin,
+        tool="papers_get",
+        call_id="att:1",
+        study_id="st_x",
+        attempt_id="att",
+    )
+    # Consumed — original handle and any copy of the same id are spent.
+    with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
+        verify_fetch_capability(
+            cap,
+            tool="papers_get",
+            call_id="att:1",
+            study_id="st_x",
+            attempt_id="att",
+        )
+    with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
+        assert_fetch_capability_bound(
+            FetchCapability(id=cap.id),
+            tool="papers_get",
+            call_id="att:1",
+            study_id="st_x",
+            attempt_id="att",
+        )
+
+
+@pytest.mark.asyncio
+async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_registry):
+    """MAJOR: AttemptTainted before call — even when the tool raises."""
+    from coscientist.tools.contract import ToolError
+
+    catalog = _catalog_quote()
+    sid = "st_fetch_fail_taint"
+    rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0-pr14",
+        deadline=clock.now() + timedelta(seconds=60),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    _ex, arts = attach_executor(rt, tmp_path)
+    rt.artifacts = arts
+    for key in ("SPEC", "HYP", "LIT"):
+        await record_success(rt, await rt.start_attempt(key), arts)
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="LIT-0",
+                title="lit",
+                goal="g",
+                route="literature",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="quote_ok")],
+            )
+        ],
+        questions=[],
+    )
+    aid = await rt.start_attempt("LIT-0")
+    assert aid is not None
+
+    class _BoomFetch:
+        spec = ToolSpec(name="papers_get", effect="read", is_fetch=True)
+
+        async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+            raise ToolError("opaque", "fetch failed")
+
+    with pytest.raises(ToolError, match="fetch failed"):
+        await invoke_tool(
+            _BoomFetch(),
+            {"url": "https://agent.example/x"},
+            CallCtx(
+                study_id=sid,
+                task_key="LIT-0",
+                attempt_id=aid,
+                hitl_policy=HitlPolicy(),
+                call_seq=1,
+            ),
+            writer=rt.writer,
+            artifacts=arts,
+        )
+    events = await rt.store.read_all()
+    assert any(
+        e.type == "AttemptTainted"
+        and e.payload.get("call_id") == f"{aid}:1"
+        and e.payload.get("reason") == "source_fetch"
+        for e in events
+    )
+    assert not any(e.type == "SourceFetched" for e in events)
+
+    class _Write:
+        spec = ToolSpec(name="write_note", effect="write")
+
+        async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+            return ToolOutput(data={"ok": True})
+
+    with pytest.raises(ToolError, match="tainted context"):
+        await invoke_tool(
+            _Write(),
+            {},
+            CallCtx(
+                study_id=sid,
+                task_key="LIT-0",
+                attempt_id=aid,
+                hitl_policy=HitlPolicy(),
+                call_seq=2,
+            ),
+            writer=rt.writer,
+            artifacts=arts,
+        )
+    await close_runtime(rt)
+
+
+def test_projection_source_fetched_requires_fetch_call_pairing():
+    """SourceFetched without prior AttemptTainted fetch_call is not folded."""
+    from coscientist.core.events import EventEnvelope
+    from coscientist.core.projections import _get, _put, apply_to_map
+
+    proj: dict = {}
+    sf = EventEnvelope(
+        study_id="s",
+        type="SourceFetched",
+        entity_key="x",
+        idem_key="SourceFetched:x",
+        payload={
+            "call_id": "att:1",
+            "tool": "papers_get",
+            "digest": "deadbeef",
+            "url": "https://x",
+        },
+        ts=datetime.now(UTC),
+        schema_version=1,
+        seq=1,
+    )
+    apply_to_map(proj, sf)
+    assert not proj.get("source_fetches")
+    _put(proj, "attempts", "att", {"attempt_id": "att", "reason": "keep_me"})
+    at = EventEnvelope(
+        study_id="s",
+        type="AttemptTainted",
+        entity_key="att",
+        idem_key="AttemptTainted:att:att:1",
+        payload={
+            "attempt_id": "att",
+            "reason": "source_fetch",
+            "call_id": "att:1",
+            "tool": "papers_get",
+        },
+        ts=datetime.now(UTC),
+        schema_version=1,
+        seq=2,
+    )
+    apply_to_map(proj, at)
+    row = _get(proj, "attempts", "att")
+    assert row is not None
+    assert row.get("reason") == "keep_me"
+    assert row.get("tainted_context") is True
+    apply_to_map(proj, sf.model_copy(update={"seq": 3}))
+    assert "deadbeef" in (proj.get("source_fetches") or {})

@@ -6,8 +6,6 @@ import ast
 import subprocess
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 COSI = ROOT / "coscientist"
 TESTS = ROOT / "tests"
@@ -30,8 +28,12 @@ _TEST_ONLY_DEF_MODULES = {
     "_mint_fetch_capability_for_tests": COSI / "tools" / "effects.py",
 }
 
-# Fetch mint / secret: only tools.effects may define or call mint.
-_FETCH_MINT_NAMES = ("_mint_fetch_capability", "_FETCH_CAP_SECRET")
+# Fetch mint / registry: only tools.effects may define or call mint.
+_FETCH_MINT_NAMES = (
+    "_mint_fetch_capability",
+    "_ISSUED_FETCH_CAPS",
+    "_IssuedFetchCap",
+)
 _FETCH_MINT_ALLOWED = {COSI / "tools" / "effects.py"}
 
 
@@ -153,8 +155,7 @@ def test_agents_forbid_registry_and_direct_tool_call():
 
 
 def test_import_linter_contracts_run():
-    """Actually run lint-imports (not merely grep pyproject)."""
-    pytest.importorskip("importlinter")
+    """Actually run lint-imports (not merely grep pyproject; no importorskip)."""
     proc = subprocess.run(
         ["lint-imports"],
         cwd=str(ROOT),
@@ -162,5 +163,9 @@ def test_import_linter_contracts_run():
         capture_output=True,
         text=True,
     )
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "KEPT" in proc.stdout or "Contracts:" in proc.stdout
+    assert proc.returncode == 0, (
+        f"lint-imports failed (rc={proc.returncode}):\n"
+        f"{proc.stdout}\n{proc.stderr}"
+    )
+    assert "Contracts:" in proc.stdout
+    assert "0 broken" in proc.stdout or "KEPT" in proc.stdout

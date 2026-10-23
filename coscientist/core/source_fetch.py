@@ -5,23 +5,23 @@
 EffectIntended/EffectDone index. ``quote_in_source`` accepts a source only when
 its digest appears here **for the evaluating attempt**.
 
-Minting ``FetchCapability`` is **not** in this module — only
-``coscientist.tools.effects`` may mint (secret stays private there). This
-module verifies via a verifier registered at effects import time (fail-closed
-until registered).
+Minting is **not** in this module — only ``coscientist.tools.effects`` holds
+the issued-id registry. ``FetchCapability`` is an opaque handle (id only);
+verify looks up the registry entry (tool/call/study/attempt) and consumes it.
 
 Network content stays ``tainted=True``; journal match ≠ content trusted.
 ``countable=True`` with ``trusted=False`` is intentional (DESIGN_M1 §6.3 /
-PR 8b): presence in a journaled fetch is core-evaluated countable evidence;
-the bytes remain untrusted.
+PR 8b). Retries and downstream tasks must re-fetch (attempt-scoped digests).
 
 Payload v1: ``{call_id, tool, digest, url}``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -31,32 +31,50 @@ from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.writer import StudyWriter
 
 VerifyFetchCap = Callable[..., "FetchCapability"]
+AssertFetchCap = Callable[..., "FetchCapability"]
 
-# Installed by coscientist.tools.effects at import (mint secret never lives here).
+# Installed by coscientist.tools.effects at import (registry never lives here).
 _verify_impl: VerifyFetchCap | None = None
+_assert_impl: AssertFetchCap | None = None
+
+# One-shot permit after verify+consume — store/writer refuse SourceFetched otherwise.
+_SOURCE_FETCHED_PERMIT: ContextVar[bool] = ContextVar(
+    "source_fetched_permit", default=False
+)
 
 
-def register_fetch_capability_verifier(fn: VerifyFetchCap) -> None:
+def source_fetched_permitted() -> bool:
+    return bool(_SOURCE_FETCHED_PERMIT.get())
+
+
+@contextmanager
+def _source_fetched_permit_scope() -> Iterator[None]:
+    tok: Token[bool] = _SOURCE_FETCHED_PERMIT.set(True)
+    try:
+        yield
+    finally:
+        _SOURCE_FETCHED_PERMIT.reset(tok)
+
+
+def register_fetch_capability_verifier(
+    verify_fn: VerifyFetchCap,
+    *,
+    assert_fn: AssertFetchCap | None = None,
+) -> None:
     """Called once from ``tools.effects`` — core never mints capabilities."""
-    global _verify_impl
-    if _verify_impl is not None and _verify_impl is not fn:
+    global _verify_impl, _assert_impl
+    if _verify_impl is not None and _verify_impl is not verify_fn:
         raise RuntimeError("fetch capability verifier already registered")
-    _verify_impl = fn
+    _verify_impl = verify_fn
+    if assert_fn is not None:
+        _assert_impl = assert_fn
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class FetchCapability:
-    """Opaque capability for put_fetched / SourceFetched (minted only in effects).
+    """Opaque capability handle — only an id; binding lives in effects registry."""
 
-    ``_spent`` is a mutable single-use box: after consume, further verifies fail.
-    """
-
-    _token: object
-    tool: str
-    call_id: str
-    study_id: str
-    attempt_id: str
-    _spent: list[bool] = field(default_factory=list)
+    id: str
 
 
 def verify_fetch_capability(
@@ -66,9 +84,8 @@ def verify_fetch_capability(
     call_id: str | None = None,
     study_id: str | None = None,
     attempt_id: str | None = None,
-    consume: bool = False,
 ) -> FetchCapability:
-    """Raise ``ArtifactRejected`` unless capability was minted by effects and binds."""
+    """Lookup registry entry, check binds, **consume** (single-use)."""
     if _verify_impl is None:
         raise ArtifactRejected("fetch_capability_required")
     return _verify_impl(
@@ -77,7 +94,26 @@ def verify_fetch_capability(
         call_id=call_id,
         study_id=study_id,
         attempt_id=attempt_id,
-        consume=consume,
+    )
+
+
+def assert_fetch_capability_bound(
+    capability: Any,
+    *,
+    tool: str,
+    call_id: str,
+    study_id: str,
+    attempt_id: str,
+) -> FetchCapability:
+    """Lookup + bind check without consuming (put_fetched before SourceFetched)."""
+    if _assert_impl is None:
+        raise ArtifactRejected("fetch_capability_required")
+    return _assert_impl(
+        capability,
+        tool=tool,
+        call_id=call_id,
+        study_id=study_id,
+        attempt_id=attempt_id,
     )
 
 
@@ -106,7 +142,7 @@ def _attempt_id_from_call_id(call_id: str) -> str:
 
 
 def source_fetched_payload_ok(payload: dict[str, Any]) -> bool:
-    """True when SourceFetched payload is paired with a fetch ToolCall shape."""
+    """True when SourceFetched payload has the fetch ToolCall shape fields."""
     call_id = str(payload.get("call_id") or "")
     tool = str(payload.get("tool") or "")
     digest = str(payload.get("digest") or "")
@@ -120,15 +156,37 @@ def source_fetched_payload_ok(payload: dict[str, Any]) -> bool:
     return True
 
 
+def source_fetched_paired_with_fetch_call(
+    payload: dict[str, Any],
+    fetch_calls: dict[str, str],
+) -> bool:
+    """True when payload shape is ok and ``call_id`` maps to the same tool."""
+    if not source_fetched_payload_ok(payload):
+        return False
+    call_id = str(payload.get("call_id") or "")
+    tool = str(payload.get("tool") or "")
+    return fetch_calls.get(call_id) == tool
+
+
 @dataclass
 class SourceFetchIndex:
     """Attempt-scoped digest sets (plus study-wide view for diagnostics)."""
 
-    by_digest: dict[str, dict[str, Any]] = field(default_factory=dict)
-    by_attempt: dict[str, set[str]] = field(default_factory=dict)
+    by_digest: dict[str, dict[str, Any]]
+    by_attempt: dict[str, set[str]]
+    fetch_calls: dict[str, str]  # call_id → tool (from AttemptTainted)
+
+    def __init__(self) -> None:
+        self.by_digest = {}
+        self.by_attempt = {}
+        self.fetch_calls = {}
+
+    def note_fetch_call(self, *, call_id: str, tool: str) -> None:
+        if call_id and tool:
+            self.fetch_calls[call_id] = tool
 
     def note(self, payload: dict[str, Any]) -> None:
-        if not source_fetched_payload_ok(payload):
+        if not source_fetched_paired_with_fetch_call(payload, self.fetch_calls):
             return
         digest = str(payload.get("digest") or "")
         call_id = str(payload.get("call_id") or "")
@@ -152,16 +210,22 @@ class SourceFetchIndex:
 def apply_source_fetch_events(
     idx: SourceFetchIndex, events: list[Any]
 ) -> int:
-    """Fold valid SourceFetched events; return max seq seen."""
+    """Fold AttemptTainted fetch-calls then paired SourceFetched; return max seq."""
     max_seq = 0
     for ev in events:
         seq = int(getattr(ev, "seq", 0) or 0)
         if seq > max_seq:
             max_seq = seq
-        if getattr(ev, "type", None) != "SourceFetched":
-            continue
+        t = getattr(ev, "type", None)
         p = getattr(ev, "payload", None) or {}
-        if isinstance(p, dict):
+        if not isinstance(p, dict):
+            continue
+        if t == "AttemptTainted" and str(p.get("reason") or "") == "source_fetch":
+            idx.note_fetch_call(
+                call_id=str(p.get("call_id") or ""),
+                tool=str(p.get("tool") or ""),
+            )
+        elif t == "SourceFetched":
             idx.note(p)
     return max_seq
 
@@ -221,14 +285,13 @@ async def append_source_fetched(
     capability: FetchCapability,
     on_event: Any | None = None,
 ) -> EventEnvelope:
-    """Append ``SourceFetched`` v1. Requires bound (unspent) capability."""
+    """Append ``SourceFetched`` v1. Consumes the opaque capability (single-use)."""
     verify_fetch_capability(
         capability,
         tool=tool,
         call_id=call_id,
         study_id=study_id,
         attempt_id=_attempt_id_from_call_id(call_id),
-        consume=False,
     )
     entity = f"{call_id}:{digest}"
     ev = EventEnvelope(
@@ -245,7 +308,8 @@ async def append_source_fetched(
         ts=datetime.now(UTC),
         schema_version=1,
     )
-    stored = await writer.append(ev, _fetch_capability=capability)
+    with _source_fetched_permit_scope():
+        stored = await writer.append(ev)
     _cache_note_fetch(writer, stored)
     if on_event is not None:
         on_event(stored)
@@ -267,17 +331,35 @@ async def store_fetched_source(
     role: str = "paper",
     on_event: Any | None = None,
 ) -> Any:
-    """``put_fetched`` + ``SourceFetched`` — executor-path only (capability required)."""
+    """``put_fetched`` + ``SourceFetched`` — executor-path only (capability required).
+
+    Journals ``AttemptTainted`` first so SourceFetched pairs with the fetch call
+    (same marker ``invoke_tool`` writes before an ``is_fetch`` call).
+    """
     from coscientist.core.artifacts import make_tool_ref
 
-    verify_fetch_capability(
-        capability,
-        tool=tool,
-        call_id=call_id,
+    attempt_id = _attempt_id_from_call_id(call_id)
+    # Fetch-call marker for projection / index pairing (idempotent per call_id).
+    tainted = EventEnvelope(
         study_id=study_id,
-        attempt_id=_attempt_id_from_call_id(call_id),
-        consume=False,
+        type="AttemptTainted",
+        entity_key=attempt_id,
+        idem_key=make_idem("AttemptTainted", attempt_id, call_id),
+        payload={
+            "attempt_id": attempt_id,
+            "reason": "source_fetch",
+            "call_id": call_id,
+            "tool": tool,
+        },
+        ts=datetime.now(UTC),
+        schema_version=1,
     )
+    stored_taint = await writer.append(tainted)
+    _cache_note_fetch(writer, stored_taint)
+    if on_event is not None:
+        on_event(stored_taint)
+
+    # put asserts bound (no consume); append verifies+consumes.
     art = artifacts.put_fetched(
         content,
         make_tool_ref(call_id, tool=tool, args=url),
@@ -288,7 +370,7 @@ async def store_fetched_source(
         expected_tool=tool,
         expected_call_id=call_id,
         expected_study_id=study_id,
-        expected_attempt_id=_attempt_id_from_call_id(call_id),
+        expected_attempt_id=attempt_id,
     )
     await append_source_fetched(
         writer,

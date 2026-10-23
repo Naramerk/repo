@@ -14,6 +14,7 @@ Read tools are not journaled. Write / external_effect keys include
 from __future__ import annotations
 
 import json
+import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -32,8 +33,19 @@ from coscientist.core.writer import StudyWriter
 from coscientist.tools.contract import CallCtx, Tool, ToolError, ToolOutput
 from coscientist.tools.gate import side_effect_allowed
 
-# FetchCapability mint secret — private to this module (AST + import-linter).
-_FETCH_CAP_SECRET = object()
+# Issued capability registry — private to this module (AST + import-linter).
+# FetchCapability is an opaque id; binding fields live only here.
+
+
+@dataclass(slots=True)
+class _IssuedFetchCap:
+    tool: str
+    call_id: str
+    study_id: str
+    attempt_id: str
+
+
+_ISSUED_FETCH_CAPS: dict[str, _IssuedFetchCap] = {}
 
 
 def _mint_fetch_capability(
@@ -44,13 +56,14 @@ def _mint_fetch_capability(
     attempt_id: str,
 ) -> FetchCapability:
     """Only ``invoke_tool`` (this module) may mint fetch capabilities."""
-    return FetchCapability(
-        _token=_FETCH_CAP_SECRET,
+    cap_id = secrets.token_urlsafe(32)
+    _ISSUED_FETCH_CAPS[cap_id] = _IssuedFetchCap(
         tool=tool,
         call_id=call_id,
         study_id=study_id,
         attempt_id=attempt_id,
     )
+    return FetchCapability(id=cap_id)
 
 
 def _mint_fetch_capability_for_tests(
@@ -72,8 +85,50 @@ def _mint_fetch_capability_for_tests(
 def _invalidate_fetch_capability(capability: FetchCapability | None) -> None:
     if capability is None:
         return
-    if not capability._spent:
-        capability._spent.append(True)
+    _ISSUED_FETCH_CAPS.pop(getattr(capability, "id", None) or "", None)
+
+
+def _lookup_issued(
+    capability: Any,
+    *,
+    tool: str | None,
+    call_id: str | None,
+    study_id: str | None,
+    attempt_id: str | None,
+) -> tuple[FetchCapability, _IssuedFetchCap]:
+    if not isinstance(capability, FetchCapability):
+        raise ArtifactRejected("fetch_capability_required")
+    entry = _ISSUED_FETCH_CAPS.get(capability.id)
+    if entry is None:
+        raise ArtifactRejected("fetch_capability_required")
+    if tool is not None and entry.tool != tool:
+        raise ArtifactRejected("fetch_capability_mismatch")
+    if call_id is not None and entry.call_id != call_id:
+        raise ArtifactRejected("fetch_capability_mismatch")
+    if study_id is not None and entry.study_id != study_id:
+        raise ArtifactRejected("fetch_capability_mismatch")
+    if attempt_id is not None and entry.attempt_id != attempt_id:
+        raise ArtifactRejected("fetch_capability_mismatch")
+    return capability, entry
+
+
+def _assert_fetch_capability(
+    capability: Any,
+    *,
+    tool: str | None = None,
+    call_id: str | None = None,
+    study_id: str | None = None,
+    attempt_id: str | None = None,
+) -> FetchCapability:
+    """Bind check without consuming (put_fetched before SourceFetched)."""
+    cap, _entry = _lookup_issued(
+        capability,
+        tool=tool,
+        call_id=call_id,
+        study_id=study_id,
+        attempt_id=attempt_id,
+    )
+    return cap
 
 
 def _verify_fetch_capability(
@@ -83,28 +138,22 @@ def _verify_fetch_capability(
     call_id: str | None = None,
     study_id: str | None = None,
     attempt_id: str | None = None,
-    consume: bool = False,
 ) -> FetchCapability:
-    if not isinstance(capability, FetchCapability):
-        raise ArtifactRejected("fetch_capability_required")
-    if capability._token is not _FETCH_CAP_SECRET:
-        raise ArtifactRejected("fetch_capability_required")
-    if capability._spent:
-        raise ArtifactRejected("fetch_capability_spent")
-    if tool is not None and capability.tool != tool:
-        raise ArtifactRejected("fetch_capability_mismatch")
-    if call_id is not None and capability.call_id != call_id:
-        raise ArtifactRejected("fetch_capability_mismatch")
-    if study_id is not None and capability.study_id != study_id:
-        raise ArtifactRejected("fetch_capability_mismatch")
-    if attempt_id is not None and capability.attempt_id != attempt_id:
-        raise ArtifactRejected("fetch_capability_mismatch")
-    if consume:
-        capability._spent.append(True)
-    return capability
+    """Bind check and **consume** (single-use)."""
+    cap, _entry = _lookup_issued(
+        capability,
+        tool=tool,
+        call_id=call_id,
+        study_id=study_id,
+        attempt_id=attempt_id,
+    )
+    _ISSUED_FETCH_CAPS.pop(cap.id, None)
+    return cap
 
 
-register_fetch_capability_verifier(_verify_fetch_capability)
+register_fetch_capability_verifier(
+    _verify_fetch_capability, assert_fn=_assert_fetch_capability
+)
 
 
 def effect_fingerprint(
@@ -466,6 +515,16 @@ async def invoke_tool(
         cap: FetchCapability | None = None
         try:
             if is_fetch:
+                # Taint BEFORE the call — any is_fetch attempt, success or fail.
+                await _journal_attempt_tainted(
+                    writer,
+                    study_id=ctx.study_id,
+                    attempt_id=ctx.attempt_id,
+                    call_id=call_id,
+                    tool=name,
+                    on_event=on_event,
+                )
+                mark_attempt_tainted()
                 cap = _mint_fetch_capability(
                     tool=name,
                     call_id=call_id,
@@ -488,19 +547,29 @@ async def invoke_tool(
             ):
                 from coscientist.core.source_fetch import append_source_fetched
 
-                # URL from normalized tool result — not raw agent args.
+                # URL from normalized tool result — never raw agent args.
                 url = ""
                 if isinstance(output.data, dict):
                     url = str(
                         output.data.get("url") or output.data.get("uri") or ""
                     )
-                fetched_any = False
+                # First digest consumes the capability; further digests need a
+                # fresh mint (single-use verify). Typical fetch → one artifact.
+                first = True
                 for art in output.artifacts:
                     if getattr(art, "producer", None) != "tool":
                         continue
                     digest = str(getattr(art, "sha256", "") or "")
                     if not digest:
                         continue
+                    use_cap = cap
+                    if not first:
+                        use_cap = _mint_fetch_capability(
+                            tool=name,
+                            call_id=call_id,
+                            study_id=ctx.study_id,
+                            attempt_id=ctx.attempt_id,
+                        )
                     await append_source_fetched(
                         writer,
                         study_id=ctx.study_id,
@@ -508,23 +577,13 @@ async def invoke_tool(
                         tool=name,
                         digest=digest,
                         url=url,
-                        capability=cap,
+                        capability=use_cap,
                         on_event=on_event,
                     )
-                    fetched_any = True
-                if fetched_any:
-                    await _journal_attempt_tainted(
-                        writer,
-                        study_id=ctx.study_id,
-                        attempt_id=ctx.attempt_id,
-                        call_id=call_id,
-                        tool=name,
-                        on_event=on_event,
-                    )
-                    mark_attempt_tainted()
+                    first = False
             return output
         finally:
-            # Single-use: capability must not leak to later write/external calls.
+            # Drop any leftover issued id so the handle cannot be reused.
             _invalidate_fetch_capability(cap)
             ctx.fetch_capability = None
 

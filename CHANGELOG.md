@@ -7,8 +7,8 @@
 - **M2 notes:** `_host_tree_cpu_s` returns `0.0` (not `None`) when `/proc` is readable but idle; missing `CONFIG_PROC_CHILDREN` silently drops descendants; cgroup idle path untested on CI without delegation.
 
 ### M1 PR14
-- `quote_in_source` (K9): token-boundary + digit-edge; CJK/Thai ≥8 chars; super/sub before NFKC; norm cache; presence≠polarity.
-- Provenance: `SourceFetched` v1 + `AttemptTainted` after fetch. **Mint secret private to `tools.effects`** (AST + import-linter); capability bound to tool/call_id/study/attempt, single-use, cleared in `finally`. `StudyWriter.append(SourceFetched)` refused without capability. Network `tainted=True`; `countable=True`+`trusted=False` (DESIGN_M1 §6.3 / PR8b). `fetched_digests` **attempt-scoped**. `ArtifactProducer` includes `user` (fail-closed in evaluate).
+- `quote_in_source` (K9): token-boundary + digit-edge; CJK/Thai; super/sub before NFKC; norm cache; presence≠polarity.
+- Provenance: opaque `FetchCapability` id + private issued registry in `tools.effects` (not forgeable); verify looks up binds and **consumes**. `AttemptTainted` **before** any `is_fetch` call; `SourceFetched` only via permit after consume; store cannot bypass. Digests attempt-scoped (retries/downstream re-fetch). `countable=True`+`trusted=False`. `ArtifactProducer` includes `user`.
 - `NORMALIZATION_VERSION` rules `3`+unidata; M1 gaps documented.
 
 

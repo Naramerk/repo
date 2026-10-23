@@ -317,10 +317,13 @@ class SqliteEventStore:
         events: list[EventEnvelope],
         *,
         require_open_attempt: str | None = None,
+        _allow_source_fetched: bool = False,
     ) -> list[EventEnvelope]:
         return await self._to_thread(
             lambda: self._append_many_sync(
-                events, require_open_attempt=require_open_attempt
+                events,
+                require_open_attempt=require_open_attempt,
+                allow_source_fetched=_allow_source_fetched,
             )
         )
 
@@ -338,6 +341,7 @@ class SqliteEventStore:
         events: list[EventEnvelope],
         *,
         require_open_attempt: str | None = None,
+        allow_source_fetched: bool = False,
     ) -> list[EventEnvelope]:
         out: list[EventEnvelope] = []
         saw_finalized = False
@@ -351,6 +355,12 @@ class SqliteEventStore:
                 # Allow the StudyFinalized write itself; reject anything after.
                 if ev.type != "StudyFinalized":
                     self._reject_if_finalized(ev.type)
+                if ev.type == "SourceFetched" and not allow_source_fetched:
+                    # Direct store.append_many(SourceFetched) cannot bypass the
+                    # capability-gated append_source_fetched path.
+                    from coscientist.core.errors import ArtifactRejected
+
+                    raise ArtifactRejected("fetch_capability_required")
                 stored, idem = self._insert_one(ev)
                 if idem is not None:
                     out.append(self._fetch_by_idem(ev.idem_key))
