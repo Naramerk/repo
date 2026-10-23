@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Sandbox (host CPU sample order)
+- `_watch_process`: sample host-tree CPU via `/proc` **before** `poll()` (poll reaps the child and `/proc` vanishes). Keeps no-cgroup SIGXCPU classification accurate; retains the max sample while the guest is alive. Split out of PR14 so quote work stays focused.
+
 ### M1 PR18
 - Frozen closed `core.tool_registry` (loader-gated `register_tool` only; freeze at end of `tool_loader` → `MappingProxyType`; unregistered → `external_effect`); `invoke_tool` only (import-linter + agents AST); `ToolSpec.effect` advisory.
 - **M2 follow-up:** AST gate misses aliases/`getattr`/indirect calls; non-agents packages may still import `tool_registry`; agents contract is meaningful once `coscientist.agents` has code.
