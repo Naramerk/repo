@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from coscientist.core.digest import sha256_hex
 from coscientist.core.domain import (
     Artifact,
+    ArtifactKind,
     ArtifactProducer,
     ArtifactRole,
     FsIsolation,
@@ -104,7 +105,10 @@ class LocalArtifactStore:
         else:
             inferred = media_role
         # kind is core-stamped only (experiment_design / contradiction_map).
-        stamped_kind = kind if kind in ("experiment_design", "contradiction_map") else None
+        stamped_kind = cast(
+            ArtifactKind | None,
+            kind if kind in ("experiment_design", "contradiction_map") else None,
+        )
         art = Artifact(
             artifact_id=artifact_id,
             name=name,
@@ -304,22 +308,6 @@ class LocalArtifactStore:
         art = Artifact.model_validate_json(path.read_text(encoding="utf-8"))
         self._index[artifact_id] = art
         return art
-
-    def stamp_kind(self, artifact_id: str, kind: str | None) -> Artifact | None:
-        """Core-only stamp of ``Artifact.kind`` (experiment_design / contradiction_map)."""
-        if kind not in ("experiment_design", "contradiction_map", None):
-            raise ArtifactRejected(f"invalid artifact kind: {kind!r}")
-        art = self.get_meta(artifact_id)
-        if art is None:
-            return None
-        if art.kind == kind:
-            return art
-        updated = art.model_copy(update={"kind": kind})
-        self._index[artifact_id] = updated
-        (self.meta / f"{artifact_id}.json").write_text(
-            updated.model_dump_json(), encoding="utf-8"
-        )
-        return updated
 
     def read(self, artifact_id: str) -> bytes:
         art = self.get_meta(artifact_id)

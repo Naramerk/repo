@@ -1,14 +1,17 @@
 """Derivation evidence kind (M1 PR15 / DESIGN_M1 §6.6).
 
-``evidence_kind=derivation`` counts toward verdict:
-- review-only (ReviewCheck / rubric judge, no executable CodeCheck) → ceiling
-  ``inconclusive``; verdict marked ``by_theory``;
-- with executable CodeCheck MET → full counting; still ``by_theory``.
+``evidence_kind=derivation``:
+- review-only (ReviewCheck / rubric judge, no real executable CodeCheck) →
+  **never counts** toward k_sup/k_ref; may still mark ``by_theory`` and yield
+  ``inconclusive`` when it is the only evidence;
+- with a real executable CodeCheck MET (not WAIVED) → full counting + ``by_theory``.
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from pydantic import ValidationError
 
 EVIDENCE_KIND_DERIVATION = "derivation"
 # Rubric item ids that mark a first-principles derivation deliverable (§6.6).
@@ -23,7 +26,8 @@ VALID_EVIDENCE_KINDS: frozenset[str] = frozenset(
     }
 )
 
-# Executable CodeCheck kinds that lift the review-only ceiling (§7 / PR17).
+# Real executable CodeCheck kinds that lift the review-only ceiling (§7 / PR17).
+# Presence/schema probes (artifact_exists, schema_valid, json_pointer) do NOT count.
 _EXECUTABLE_KINDS: frozenset[str] = frozenset(
     {
         "exec_runs",
@@ -32,9 +36,6 @@ _EXECUTABLE_KINDS: frozenset[str] = frozenset(
         "reproducible_rerun",
         "metric_threshold",
         "value_matches",
-        "json_pointer",
-        "artifact_exists",
-        "schema_valid",
     }
 )
 
@@ -46,6 +47,8 @@ __all__ = [
     "derivation_caps_inconclusive",
     "by_theory_mark",
     "apply_derivation_ceiling",
+    "is_derivation_task_spec",
+    "executable_check_met",
 ]
 
 
@@ -67,18 +70,32 @@ def derivation_executable(claim: Any) -> bool:
 
 
 def derivation_caps_inconclusive(claims: list[Any]) -> bool:
-    """True when counted claims are derivation-only without executable checks."""
-    counted = [c for c in claims if _counts(c)]
-    if not counted:
+    """True when only review-only derivation is present (nothing else counts).
+
+    Review-only derivation never enters ``counts()``. Mixed with counting
+    computational/experimental claims must **not** cap those claims' verdict.
+    """
+    ders = [c for c in claims if is_derivation(c)]
+    if not ders:
         return False
-    if not all(is_derivation(c) for c in counted):
+    if any(derivation_executable(c) for c in ders):
         return False
-    return not any(derivation_executable(c) for c in counted)
+    for c in claims:
+        if is_derivation(c):
+            continue
+        fn = getattr(c, "counts", None)
+        if callable(fn):
+            try:
+                if bool(fn()):
+                    return False
+            except (TypeError, ValueError, AttributeError):
+                continue
+    return True
 
 
 def by_theory_mark(claims: list[Any]) -> bool:
-    """Mark verdict «теоретически» when ≥1 counting derivation claim contributed."""
-    return any(is_derivation(c) and _counts(c) for c in claims)
+    """Mark verdict «теоретически» when ≥1 derivation claim is present."""
+    return any(is_derivation(c) for c in claims)
 
 
 def apply_derivation_ceiling(verdict_value: str, claims: list[Any]) -> str:
@@ -88,16 +105,6 @@ def apply_derivation_ceiling(verdict_value: str, claims: list[Any]) -> str:
     if derivation_caps_inconclusive(claims):
         return "inconclusive"
     return verdict_value
-
-
-def _counts(claim: Any) -> bool:
-    fn = getattr(claim, "counts", None)
-    if callable(fn):
-        try:
-            return bool(fn())
-        except Exception:  # noqa: BLE001
-            return False
-    return False
 
 
 def is_derivation_task_spec(spec: Any | None) -> bool:
@@ -115,7 +122,7 @@ def is_derivation_task_spec(spec: Any | None) -> bool:
             continue
         try:
             r = rub if isinstance(rub, Rubric) else Rubric.model_validate(rub)
-        except Exception:  # noqa: BLE001
+        except ValidationError:
             continue
         ids = {it.id for it in r.items if it.required}
         if DERIVATION_RUBRIC_IDS <= ids:
@@ -124,14 +131,13 @@ def is_derivation_task_spec(spec: Any | None) -> bool:
 
 
 def executable_check_met(checks: list[Any] | None) -> bool:
-    """True if any non-rubric executable CodeCheck is MET/PASSED."""
+    """True if any real executable CodeCheck is MET/PASSED (not WAIVED)."""
     from coscientist.core.domain import ReqStatus
 
     for c in checks or ():
         kind = getattr(c, "kind", None)
         if kind is None:
-            # ReviewCheck — no kind
-            continue
+            continue  # ReviewCheck — no kind
         kind_s = getattr(kind, "value", kind)
         if str(kind_s) == "rubric":
             continue
@@ -139,6 +145,6 @@ def executable_check_met(checks: list[Any] | None) -> bool:
             continue
         st = getattr(c, "status", None)
         st_s = getattr(st, "value", st)
-        if st_s in (ReqStatus.MET, ReqStatus.WAIVED, "MET", "PASSED", "WAIVED"):
+        if st_s in (ReqStatus.MET, "MET", "PASSED"):
             return True
     return False

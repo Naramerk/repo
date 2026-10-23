@@ -1,14 +1,16 @@
 """Experiment-design deliverable (M1 PR15 / DESIGN_M1 §6.4).
 
-``needs_more_data`` requires an artifact ``role=report`` whose OutputSpec rubric
-covers hypothesis / variables / sample_size / success_criterion (ids). Core
-stamps ``Artifact.kind=experiment_design`` from that rubric signature — no
-journal schema bump.
+``needs_more_data`` requires an artifact ``role=report`` with explicit
+``OutputSpec.kind=experiment_design`` and a rubric covering hypothesis /
+variables / sample_size / success_criterion. Core stamps ``Artifact.kind`` from
+``OutputSpec.kind`` (PlanValidator-enforced; never inferred from item ids).
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from pydantic import ValidationError
 
 from coscientist.core.rubric import freeze_rubric
 from coscientist.core.rubric_types import Rubric, RubricItem
@@ -37,6 +39,7 @@ __all__ = [
     "MISSING_DESIGN_REASON",
     "experiment_design_rubric",
     "is_experiment_design_rubric",
+    "is_contradiction_map_rubric",
     "artifact_kind_from_output_spec",
     "design_artifact_ok",
 ]
@@ -78,37 +81,82 @@ def experiment_design_rubric(*, judge: bool = True) -> Rubric:
     return freeze_rubric(Rubric(items=items, aggregate="all_required"))
 
 
+def _as_rubric(rubric: Rubric | Any | None) -> Rubric | None:
+    if rubric is None:
+        return None
+    if isinstance(rubric, Rubric):
+        return rubric
+    try:
+        return Rubric.model_validate(rubric)
+    except ValidationError:
+        return None
+
+
 def is_experiment_design_rubric(rubric: Rubric | Any | None) -> bool:
     """True iff required item ids cover the §6.4 set."""
-    if rubric is None:
+    r = _as_rubric(rubric)
+    if r is None:
         return False
-    if not isinstance(rubric, Rubric):
-        try:
-            rubric = Rubric.model_validate(rubric)
-        except Exception:  # noqa: BLE001 — fail-closed
-            return False
-    req_ids = {it.id for it in rubric.items if it.required}
+    req_ids = {it.id for it in r.items if it.required}
     return EXPERIMENT_DESIGN_ITEM_IDS <= req_ids
 
 
+def is_contradiction_map_rubric(rubric: Rubric | Any | None) -> bool:
+    """True when rubric declares completeness + contradictions items (§6.5)."""
+    r = _as_rubric(rubric)
+    if r is None:
+        return False
+    ids = {it.id for it in r.items}
+    return "completeness" in ids and "contradictions" in ids
+
+
 def artifact_kind_from_output_spec(spec: Any | None) -> str | None:
-    """Stamp kind from plan OutputSpec (role + rubric signature)."""
+    """Return explicit ``OutputSpec.kind`` only (never infer from rubric ids)."""
     if spec is None:
         return None
-    role = getattr(spec, "role", None)
-    rub = getattr(spec, "rubric", None)
-    if role == "report" and is_experiment_design_rubric(rub):
-        return ARTIFACT_KIND_EXPERIMENT_DESIGN
-    # Contradiction map: report + rubric item id ``completeness`` (PR15 §6.5).
-    if role == "report" and rub is not None:
-        try:
-            r = rub if isinstance(rub, Rubric) else Rubric.model_validate(rub)
-        except Exception:  # noqa: BLE001
-            return None
-        ids = {it.id for it in r.items}
-        if "completeness" in ids and "contradictions" in ids:
-            return ARTIFACT_KIND_CONTRADICTION_MAP
+    kind = getattr(spec, "kind", None)
+    if kind in (ARTIFACT_KIND_EXPERIMENT_DESIGN, ARTIFACT_KIND_CONTRADICTION_MAP):
+        return str(kind)
     return None
+
+
+def _artifact_produced_by_covering_task(
+    *,
+    artifact_id: str,
+    tasks: Any,
+    results: Any,
+    task_keys: set[str],
+) -> bool:
+    """True when ``artifact_id`` is an output of a covering task with design kind."""
+    by_tid: dict[str, Any] = {}
+    for t in tasks.values() if hasattr(tasks, "values") else tasks:
+        tid = getattr(t, "task_id", None)
+        if tid is not None:
+            by_tid[str(tid)] = t
+    rows = results.values() if hasattr(results, "values") else results
+    for res in rows:
+        if not isinstance(res, dict):
+            continue
+        arts = list(res.get("artifacts") or [])
+        omap = res.get("output_map") or {}
+        if isinstance(omap, dict):
+            arts.extend(str(v) for v in omap.values() if v)
+        if str(artifact_id) not in {str(a) for a in arts}:
+            continue
+        tid = str(res.get("task_id") or "")
+        task = by_tid.get(tid)
+        if task is None:
+            continue
+        spec = getattr(task, "spec", None)
+        if spec is None:
+            continue
+        tkey = str(getattr(spec, "task_key", "") or "")
+        if tkey not in task_keys:
+            continue
+        for o in getattr(spec, "expected_outputs", None) or []:
+            if artifact_kind_from_output_spec(o) == ARTIFACT_KIND_EXPERIMENT_DESIGN:
+                return True
+    return False
 
 
 def design_artifact_ok(
@@ -119,10 +167,11 @@ def design_artifact_ok(
     results: Any | None = None,
     task_keys: set[str] | None = None,
 ) -> bool:
-    """True when ``artifact_id`` is a report experiment_design (meta kind or rubric).
+    """True when ``artifact_id`` is a report experiment_design bound to the task.
 
-    Prefer stamped ``Artifact.kind``. Fallback: producing task rubric signature
-    when meta lacks kind (legacy puts).
+    Prefer stamped ``Artifact.kind``. Fallback (legacy puts without stamp) requires
+    the artifact to appear in a covering task's outputs whose OutputSpec.kind is
+    ``experiment_design`` — never a bare rubric-id match on unrelated tasks.
     """
     if not artifact_id:
         return False
@@ -130,35 +179,19 @@ def design_artifact_ok(
     if artifact_lookup is not None:
         try:
             meta = artifact_lookup(str(artifact_id))
-        except Exception:  # noqa: BLE001 — totality
+        except (KeyError, FileNotFoundError, OSError, TypeError, ValueError):
             meta = None
     if meta is not None:
         kind = getattr(meta, "kind", None)
-        role = getattr(meta, "role", None)
-        if kind == ARTIFACT_KIND_EXPERIMENT_DESIGN and role in (None, "report"):
-            return True
         if kind == ARTIFACT_KIND_EXPERIMENT_DESIGN:
             return True
-    # Fallback via covering task rubric (when kind not stamped).
-    if tasks is None or not task_keys:
+    # Fallback (no stamp): artifact must be an output of a covering task whose
+    # OutputSpec.kind is experiment_design — never a bare rubric-id match.
+    if tasks is None or results is None or not task_keys:
         return False
-    from coscientist.core.rubric import task_rubric_status
-
-    st = task_rubric_status(task_keys=task_keys, tasks=tasks, results=results)
-    if st != "met":
-        return False
-    # Confirm at least one covering task carries the design rubric.
-    by_key = {}
-    for t in (tasks.values() if hasattr(tasks, "values") else tasks):
-        spec = getattr(t, "spec", None)
-        if spec is None:
-            continue
-        by_key[str(getattr(spec, "task_key", "") or "")] = spec
-    for k in task_keys:
-        spec = by_key.get(k)
-        if spec is None:
-            continue
-        for o in getattr(spec, "expected_outputs", None) or []:
-            if artifact_kind_from_output_spec(o) == ARTIFACT_KIND_EXPERIMENT_DESIGN:
-                return True
-    return False
+    return _artifact_produced_by_covering_task(
+        artifact_id=str(artifact_id),
+        tasks=tasks,
+        results=results,
+        task_keys=task_keys,
+    )

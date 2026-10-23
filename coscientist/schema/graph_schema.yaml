@@ -115,7 +115,7 @@ nodes:
     fields:
       - {name: artifact_id, type: str, required: true}
       - {name: role, type: enum(paper|data|code|figure|table|log|report), required: true}
-      - {name: kind, type: enum(experiment_design|contradiction_map), required: false, note: "M1 PR15; stamps core from OutputSpec rubric"}
+      - {name: kind, type: enum(experiment_design|contradiction_map), required: false, note: "M1 PR15; stamps core from explicit OutputSpec.kind (PlanValidator)"}
       - {name: media_type, type: str, required: false}
       - {name: sha256, type: digest, required: false}
       - {name: doi_or_url, type: str, required: false, note: "обяз. для paper; идентичность"}

@@ -3,11 +3,14 @@
 ## Unreleased
 
 ### M1 PR15
-- `needs_more_data` + required `artifact(role=report, kind=experiment_design)` with rubric ids `hypothesis` / `variables` / `sample_size` / `success_criterion` (DESIGN_M1 §6.4). Event `QuestionDisposed` (v1); without design → disposal rejected / disposition stays `not_attempted` (`missing_experiment_design`).
+- `needs_more_data` + required `artifact(role=report, kind=experiment_design)` with rubric ids `hypothesis` / `variables` / `sample_size` / `success_criterion` (DESIGN_M1 §6.4). Event `QuestionDisposed` (v1; **first-wins** per question); without design → `_note_reject` / disposition stays `not_attempted` (`missing_experiment_design`).
+- Explicit `OutputSpec.kind: experiment_design | contradiction_map` (Literal); PlanValidator enforces role=report + matching rubric. Core stamps `Artifact.kind` via journaled `ArtifactRegistered`.
 - Edge `contradicts: claim → claim` (unordered pair min/max; Idempotent). Contradiction map JSON helper for `final_type=artifact`.
-- Evidence kind `derivation`: counts with review-only ceiling → `inconclusive`; executable CodeCheck → full. Verdict mark `by_theory` («теоретически»).
-- Upcasters (after #29 on main): TaskCreated **v13** / PlanAccepted **v11** / PlanExpanded **v5** (continuous after PR16 PA10/PE4); StudyCreated **v10**. No duplicate `register_upcaster`.
+- Evidence kind `derivation`: **review-only never counts** toward k_sup/k_ref (only real executable CodeCheck MET lifts). Verdict mark `by_theory` («теоретически»).
+- Upcasters (after #29 / main `bd413e0`): TaskCreated **v12** (+ later **v13** evidence_kind) / PlanAccepted **v11** / PlanExpanded **v5** continuous after PR16 PA10/PE4. StudyCreated **v10**. No duplicate `register_upcaster`.
 - Honest terminals (`needs_more_data` / `infeasible` / `ill_posed`) stamp `verdict` for PR16 rollup clamp.
+- Import-linter: agents must not import `core.dispose` or `core.artifact_stamp`.
+- **PR8 debt:** `all_done` → `terminal_reason=infeasible` still needs computed `ill_posed` from PR8.
 - Tests: `test_needs_more_data_requires_design`, `test_contradicts_edge`, `test_derivation_verdict_marked`, `test_honest_terminals_stamp_verdict_for_rollup`.
 
 ### M1 PR16

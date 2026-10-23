@@ -155,6 +155,8 @@ class HitlPolicy(Frozen):
 
 
 ArtifactRole = Literal["paper", "data", "code", "figure", "table", "log", "report"]
+# M1 PR15: subtype on report artifacts (core-stamped from OutputSpec.kind).
+ArtifactKind = Literal["experiment_design", "contradiction_map"]
 # Who stored the artifact bytes. effect.trusted is a reporting tag (M1 verdicts
 # gate on countable). Sandbox puts are trusted only when both net and fs
 # isolation are hard (soft/none ⇒ trusted=False). ``tests_pass`` is
@@ -175,6 +177,8 @@ class OutputSpec(Frozen):
     role: ArtifactRole | None = None
     # M1 PR13: qualitative acceptance (literature review, design, …). Frozen at PLAN.
     rubric: Rubric | None = None
+    # M1 PR15: explicit deliverable kind (PlanValidator-enforced; not inferred).
+    kind: ArtifactKind | None = None
 
 
 class InputSpec(Frozen):
@@ -545,9 +549,9 @@ class Artifact(Frozen):
     produced_by: ToolCallRef
     schema_ref: str | None = None
     role: ArtifactRole | None = None
-    # M1 PR15: subtype stamped by core from OutputSpec rubric
+    # M1 PR15: subtype stamped by core from OutputSpec.kind
     # (experiment_design | contradiction_map); not agent-settable.
-    kind: str | None = None
+    kind: ArtifactKind | None = None
     # Core-stamped; agent ``put`` always ``agent``. Never settable by AgentTaskOutput.
     producer: ArtifactProducer = "agent"
     # Sandbox only: isolation actually achieved (PR17). trusted only if both hard.

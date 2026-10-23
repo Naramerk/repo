@@ -1188,7 +1188,7 @@ def test_upcast_plan_accepted_loops_default():
             "tasks": [],
         },
     )
-    assert v == 10  # PR16 stacks decomposes after PR11 loops v9
+    assert v == 11  # PR15 kind after PR16 decomposes v10
     assert p["loops"] == []
     assert p.get("rollup") == "all"
 
@@ -1210,7 +1210,7 @@ def test_upcast_task_created_loop_fields():
             "deadline": "2026-01-01T01:00:00+00:00",
         },
     )
-    assert v == 11
+    assert v == 12
     assert p["spec"]["loop_id"] is None
     assert p["spec"]["loop_iter"] is None
 
@@ -2119,7 +2119,7 @@ def test_upcast_plan_expanded_v2_loop_field_defaults():
             "added_questions": [],
         },
     )
-    assert v == 4  # PR16 stacks decomposes after PR11 loop fields v3
+    assert v == 5  # PR15 kind after PR16 decomposes v4
     spec = p["added_tasks"][0]
     assert spec["loop_id"] is None
     assert spec["loop_iter"] is None

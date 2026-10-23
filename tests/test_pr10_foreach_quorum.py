@@ -1474,7 +1474,7 @@ def test_upcast_task_created_foreach_quorum():
             "attempts": [],
         },
     )
-    assert v == 11
+    assert v == 12
     assert p["spec"]["foreach"] is None
     assert p["spec"]["inputs"][0]["quorum"] is None
     assert p["spec"]["sandbox_timeout_s"] is None

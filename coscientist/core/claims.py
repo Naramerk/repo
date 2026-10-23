@@ -158,9 +158,10 @@ class RuntimeClaim:
         """PR8b/PR9/PR15 counting filter: real ∧ valid ∧ consistent|inconsistent.
 
         Stubs/partials are excluded **before** counting (no provenance ceiling).
-        Literature never counts. Derivation counts (review-only → inconclusive
-        ceiling in ``verdict``; executable → full). Validity failures never count.
-        PR9/C10: claims whose target (or checked_against) is superseded are out.
+        Literature never counts. Review-only derivation never counts (DESIGN_M1
+        §6.6); only derivation with a real executable CodeCheck MET feeds
+        k_sup/k_ref. Validity failures never count. PR9/C10: claims whose
+        target (or checked_against) is superseded are out.
         """
         if self.exclusion_reason == "superseded":
             return False
@@ -171,6 +172,8 @@ class RuntimeClaim:
         if self.is_lit:
             return False
         if self.evidence_kind not in ("computational", "experimental", "derivation"):
+            return False
+        if self.is_derivation and not self.derivation_executable:
             return False
         from coscientist.core.verdict import effective_outcome
 

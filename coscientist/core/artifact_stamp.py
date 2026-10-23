@@ -1,0 +1,85 @@
+"""Journaled Artifact.kind stamps (M1 PR15).
+
+Agents must not import this module (import-linter). Core stamps
+``experiment_design`` / ``contradiction_map`` via ``ArtifactRegistered`` in the
+same append batch as ``ResultRecorded``; fold applies meta atomically.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Literal
+
+from coscientist.core.domain import Artifact, ArtifactKind
+from coscientist.core.errors import ArtifactRejected
+from coscientist.core.events import EventEnvelope, make_idem
+
+VALID_ARTIFACT_KINDS: frozenset[str] = frozenset({"experiment_design", "contradiction_map"})
+
+__all__ = [
+    "VALID_ARTIFACT_KINDS",
+    "kind_stamped_event",
+    "stamp_kind",
+    "apply_kind_stamp",
+]
+
+
+def stamp_kind(store: Any, artifact_id: str, kind: str | None) -> Artifact:
+    """Apply ``kind`` to artifact meta (core-only; raises on invalid / missing)."""
+    if kind is not None and kind not in VALID_ARTIFACT_KINDS:
+        raise ArtifactRejected(f"invalid artifact kind: {kind!r}")
+    art = store.get_meta(artifact_id)
+    if art is None:
+        raise ArtifactRejected(f"artifact missing for kind stamp: {artifact_id!r}")
+    if art.kind == kind:
+        return art
+    updated = art.model_copy(update={"kind": kind})
+    store._index[artifact_id] = updated  # noqa: SLF001 — LocalArtifactStore
+    (store.meta / f"{artifact_id}.json").write_text(
+        updated.model_dump_json(), encoding="utf-8"
+    )
+    return updated
+
+
+def apply_kind_stamp(store: Any, artifact_id: str, kind: str | None) -> Artifact | None:
+    """Fold-time apply; returns None only when store has no meta yet (CAS race)."""
+    if kind is not None and kind not in VALID_ARTIFACT_KINDS:
+        raise ArtifactRejected(f"invalid artifact kind: {kind!r}")
+    art = store.get_meta(artifact_id)
+    if art is None:
+        return None
+    if art.kind == kind:
+        return art
+    return stamp_kind(store, artifact_id, kind)
+
+
+def kind_stamped_event(
+    *,
+    study_id: str,
+    artifact_id: str,
+    kind: ArtifactKind | Literal["experiment_design", "contradiction_map"],
+    now: datetime,
+    name: str | None = None,
+    sha256: str | None = None,
+    role: str | None = None,
+) -> EventEnvelope:
+    """``ArtifactRegistered`` carrying core-stamped kind (idempotent per artifact)."""
+    if kind not in VALID_ARTIFACT_KINDS:
+        raise ArtifactRejected(f"invalid artifact kind: {kind!r}")
+    payload: dict[str, Any] = {
+        "artifact_id": artifact_id,
+        "kind": kind,
+        "name": name,
+        "sha256": sha256,
+        "role": role,
+        "stamped": True,
+    }
+    return EventEnvelope(
+        study_id=study_id,
+        type="ArtifactRegistered",
+        entity_key=artifact_id,
+        idem_key=make_idem("ArtifactRegistered", artifact_id, "kind", str(kind)),
+        payload=payload,
+        ts=now,
+        schema_version=1,
+    )

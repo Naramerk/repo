@@ -989,12 +989,14 @@ def hypothesis_verdict(
     is retained for PR8 snapshot ``k`` compat and is not the support gate.
     Returns ``(verdict, by_literature, by_theory, rule)``.
 
-    PR15 derivation: review-only derivation caps at ``inconclusive``; any counting
-    derivation claim sets ``by_theory`` (marked «теоретически»).
+    PR15 derivation: review-only derivation never feeds k_sup/k_ref; any
+    derivation claim sets ``by_theory`` (marked «теоретически»). When only
+    review-only derivation is present → ``inconclusive``.
     """
     from coscientist.core.derivation import (
         apply_derivation_ceiling,
         by_theory_mark,
+        derivation_caps_inconclusive,
     )
 
     del confirmations_needed  # PR8 k — not used for supported gate
@@ -1005,6 +1007,8 @@ def hypothesis_verdict(
 
     counted = [c for c in about if claim_counts_for_verdict(c)]
     theory = by_theory_mark(list(about))
+    if not counted and derivation_caps_inconclusive(list(about)):
+        return "inconclusive", False, True, "derivation_review_only"
 
     # Symmetric countability: non-countable inconsistent never counts toward k_ref.
     inconsistent = distinct_by_key(

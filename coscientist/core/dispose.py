@@ -3,6 +3,9 @@
 Explicit dispositions are only ``needs_more_data`` | ``infeasible``. They apply
 until the first counting claim. ``needs_more_data`` additionally requires an
 ``experiment_design`` report artifact (rubric MET).
+
+Idempotency: first-wins per (study, question) — journal ``idem_key`` and fold
+agree (later disposals are no-ops / Idempotent).
 """
 
 from __future__ import annotations
@@ -10,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.experiment_design import (
@@ -51,16 +54,14 @@ class DisposeRejected(ValueError):
 
 
 def _refs_ok(refs: list[str]) -> bool:
+    """Require ≥1 ref with a known prefix (evidence|limitation|hitl|art_|claim:)."""
     if not refs:
         return False
     for r in refs:
         s = str(r or "")
         if not s:
             return False
-        if s.startswith(VALID_REF_PREFIXES) or s.startswith("art_"):
-            continue
-        # Bare hitl request ids / evidence node ids are accepted when non-empty.
-        if len(s) >= 2:
+        if any(s.startswith(p) for p in VALID_REF_PREFIXES):
             continue
         return False
     return True
@@ -83,7 +84,9 @@ def validate_disposal(
     if disposal.question_id not in known_question_ids:
         raise DisposeRejected(f"unknown question id {disposal.question_id!r}")
     if not _refs_ok(list(disposal.refs or [])):
-        raise DisposeRejected("QuestionDisposed requires ≥1 ref (evidence|limitation|HitlDecided|artifact)")
+        raise DisposeRejected(
+            "QuestionDisposed requires ≥1 ref (evidence:|limitation:|hitl:|art_|claim:)"
+        )
     if disposal.disposition == Disposition.NEEDS_MORE_DATA.value:
         if not design_artifact_ok(
             artifact_id=disposal.design_artifact_id,
@@ -101,7 +104,7 @@ def question_disposed_event(
     disposal: QuestionDisposal,
     now: datetime,
 ) -> EventEnvelope:
-    """Build ``QuestionDisposed`` v1 (idempotent per question_id)."""
+    """Build ``QuestionDisposed`` v1 (idempotent per question_id — first-wins)."""
     payload = {
         "question_id": disposal.question_id,
         "disposition": disposal.disposition,
@@ -124,9 +127,11 @@ def fold_question_disposed(
     store: dict[str, dict[str, Any]],
     payload: dict[str, Any],
 ) -> None:
-    """Latest disposal per question_id (journal fold)."""
+    """First-wins per question_id (matches journal idempotency)."""
     qid = str(payload.get("question_id") or "")
     if not qid:
+        return
+    if qid in store:
         return
     store[qid] = {
         "question_id": qid,
@@ -143,7 +148,7 @@ async def dispose_question(
 ) -> str | None:
     """Validate + append QuestionDisposed. Returns question_id or None if rejected.
 
-    Rejection is recorded as a report line / limitation — study still closes.
+    Rejection is recorded via ``_note_reject`` — study still closes.
     Never raises into callers (totality); returns None on reject.
     """
     from coscientist.core.question_tasks import known_questions, question_tasks
@@ -151,7 +156,7 @@ async def dispose_question(
     if isinstance(disposal, dict):
         try:
             disposal = QuestionDisposal.model_validate(disposal)
-        except Exception:  # noqa: BLE001
+        except ValidationError:
             _note_reject(runtime, "invalid_disposal_payload")
             return None
     study = getattr(runtime, "study", None)

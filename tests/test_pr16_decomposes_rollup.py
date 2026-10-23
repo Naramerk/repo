@@ -257,7 +257,7 @@ async def test_accept_plan_writes_decomposes_edge(tmp_path, clock):
     assert len(decomp) == 1
     assert decomp[0].payload["attrs"]["origin"] == "explicit"
     accepted = next(e for e in await rt.store.read_all() if e.type == "PlanAccepted")
-    assert accepted.schema_version == PLAN_ACCEPTED_SCHEMA_VERSION == 10
+    assert accepted.schema_version == PLAN_ACCEPTED_SCHEMA_VERSION == 11
     await close_runtime(rt)
 
 
@@ -743,7 +743,7 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
     assert "~~`E1`~~" in md
     expanded = [e for e in await rt.store.read_all() if e.type == "PlanExpanded"]
     assert expanded
-    assert expanded[-1].schema_version == PLAN_EXPANDED_SCHEMA_VERSION == 4
+    assert expanded[-1].schema_version == PLAN_EXPANDED_SCHEMA_VERSION == 5
     await close_runtime(rt)
 
 
@@ -753,7 +753,7 @@ def test_upcaster_planaccepted_v9_to_v10_decomposes():
         9,
         {"plan_id": "p", "tasks": [], "questions": [{"id": "Q", "text": "t"}], "loops": []},
     )
-    assert v == 10
+    assert v == 11
     assert p["rollup"] == "all"
     assert p["subquestions"] == []
     assert p["questions"][0].get("origin") is None
@@ -766,7 +766,7 @@ def test_upcaster_planexpanded_v3_to_v4_decomposes():
         3,
         {"plan_id": "p", "added_questions": [{"id": "Q.a", "text": "a", "parent_id": "Q"}]},
     )
-    assert v == 4
+    assert v == 5
     assert p["rollup"] == "all"
     assert p["added_questions"][0].get("origin") is None
 

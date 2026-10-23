@@ -110,6 +110,15 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "agents must not import dispose or artifact_stamp"
+type = "forbidden"
+source_modules = ["coscientist.agents"]
+forbidden_modules = [
+  "coscientist.core.dispose",
+  "coscientist.core.artifact_stamp",
+]
+
+[[tool.importlinter.contracts]]
 name = "SourceFetched only via invoke_tool (no source_fetch import)"
 type = "forbidden"
 # Direct imports only: checks may reach artifacts→verify; experimental may

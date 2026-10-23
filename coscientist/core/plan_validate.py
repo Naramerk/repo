@@ -5,6 +5,8 @@
 - ``final_type=both`` → both requirements
 - decomposes (§10): named subquestions; leaf coverage; decomposition ReviewCheck;
   depth ≤ max_depth; question count ≤ max_tasks; acyclic
+- ``OutputSpec.kind`` (PR15): ``experiment_design`` | ``contradiction_map`` —
+  role=report + matching rubric; never inferred from item-id signatures alone
 
 Also rejects in-place rubric digest changes on an already-frozen task_key
 unless that key is superseded (change only via PlanExpanded / HITL).
@@ -30,6 +32,12 @@ from coscientist.core.decomposes import (
     parent_map_from_questions,
 )
 from coscientist.core.domain import QuestionSpec, TaskSpec
+from coscientist.core.experiment_design import (
+    ARTIFACT_KIND_CONTRADICTION_MAP,
+    ARTIFACT_KIND_EXPERIMENT_DESIGN,
+    is_contradiction_map_rubric,
+    is_experiment_design_rubric,
+)
 from coscientist.core.rubric import freeze_rubric, freeze_task_rubrics
 from coscientist.core.rubric_types import VALID_FINAL_TYPES, Rubric
 
@@ -41,6 +49,7 @@ __all__ = [
     "refuse_detail",
     "validate_decomposes",
     "validate_final_types",
+    "validate_output_kinds",
     "validate_plan_final_types_or_err",
     "validate_rubric_immutable",
 ]
@@ -71,6 +80,44 @@ def _has_criterion(spec: TaskSpec, catalog: Any | None = None) -> bool:
     return bool(spec.criteria)
 
 
+def validate_output_kinds(tasks: list[TaskSpec]) -> None:
+    """Raise ValueError if OutputSpec.kind is set without role/rubric match."""
+    for spec in tasks:
+        for o in spec.expected_outputs or []:
+            kind = getattr(o, "kind", None)
+            if kind is None:
+                continue
+            role = getattr(o, "role", None)
+            rub = getattr(o, "rubric", None)
+            if kind == ARTIFACT_KIND_EXPERIMENT_DESIGN:
+                if role != "report":
+                    raise ValueError(
+                        f"task {spec.task_key!r} output {o.name!r}: "
+                        f"kind=experiment_design requires role=report"
+                    )
+                if not is_experiment_design_rubric(rub):
+                    raise ValueError(
+                        f"task {spec.task_key!r} output {o.name!r}: "
+                        f"kind=experiment_design requires §6.4 rubric ids"
+                    )
+            elif kind == ARTIFACT_KIND_CONTRADICTION_MAP:
+                if role != "report":
+                    raise ValueError(
+                        f"task {spec.task_key!r} output {o.name!r}: "
+                        f"kind=contradiction_map requires role=report"
+                    )
+                if not is_contradiction_map_rubric(rub):
+                    raise ValueError(
+                        f"task {spec.task_key!r} output {o.name!r}: "
+                        f"kind=contradiction_map requires completeness+contradictions rubric"
+                    )
+            else:
+                raise ValueError(
+                    f"task {spec.task_key!r} output {o.name!r}: "
+                    f"unknown OutputSpec.kind {kind!r}"
+                )
+
+
 def validate_final_types(
     tasks: list[TaskSpec],
     questions: list[QuestionSpec],
@@ -83,6 +130,7 @@ def validate_final_types(
     When ``active_question_ids`` is set (expansion), only those questions are
     checked — disposed/superseded questions may be omitted (H-f / PR8).
     """
+    validate_output_kinds(tasks)
     q_by_id = {q.id: q for q in questions}
     cover: dict[str, list[TaskSpec]] = {qid: [] for qid in q_by_id}
     for spec in tasks:

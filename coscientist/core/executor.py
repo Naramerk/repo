@@ -1014,30 +1014,54 @@ class Executor:
         # Keep claims so not_met can refute (invariant 10); only infra drops them.
         payload["result_class"] = "scientific"
         payload["payload_digest"] = payload_digest(payload)
-        # PR15: stamp experiment_design / contradiction_map on output artifacts.
+        # PR15: journaled kind stamps + QuestionDisposed in the same append as result.
+        from pydantic import ValidationError
+
+        from coscientist.core.artifact_stamp import kind_stamped_event, stamp_kind
+        from coscientist.core.dispose import (
+            DisposeRejected,
+            QuestionDisposal,
+            _note_reject,
+            question_disposed_event,
+            validate_disposal,
+        )
+        from coscientist.core.errors import ArtifactRejected
         from coscientist.core.experiment_design import artifact_kind_from_output_spec
 
         out_map = dict(out.outputs or {})
+        extra_events: list[EventEnvelope] = []
+        now_stamp = self.clock.now()
         for ospec in getattr(task.spec, "expected_outputs", None) or ():
+            kind = artifact_kind_from_output_spec(ospec)
+            if not kind:
+                continue
             name = str(getattr(ospec, "name", "") or "")
             if name not in out_map:
-                continue
-            kind = artifact_kind_from_output_spec(ospec)
-            if kind and hasattr(self.artifacts, "stamp_kind"):
-                try:
-                    self.artifacts.stamp_kind(out_map[name].artifact_id, kind)
-                except Exception:  # noqa: BLE001 — never fail record on stamp
-                    pass
-        # PR15: validate QuestionDisposed payloads (append after result; fail-closed).
-        disposal_events: list[EventEnvelope] = []
+                raise ArtifactRejected(
+                    f"OutputSpec.kind={kind!r} but output {name!r} missing"
+                )
+            handle = out_map[name]
+            meta = self.artifacts.get_meta(handle.artifact_id)
+            if meta is None:
+                raise ArtifactRejected(
+                    f"artifact missing for kind stamp: {handle.artifact_id!r}"
+                )
+            # Journal event + live meta in lockstep; fold re-applies on replay.
+            # Errors propagate (never swallowed).
+            stamp_kind(self.artifacts, handle.artifact_id, kind)
+            extra_events.append(
+                kind_stamped_event(
+                    study_id=study_id,
+                    artifact_id=handle.artifact_id,
+                    kind=kind,  # type: ignore[arg-type]
+                    now=now_stamp,
+                    name=meta.name,
+                    sha256=meta.sha256,
+                    role=meta.role,
+                )
+            )
         for raw in list(out.question_disposals or []):
             try:
-                from coscientist.core.dispose import (
-                    QuestionDisposal,
-                    question_disposed_event,
-                    validate_disposal,
-                )
-
                 disposal = (
                     raw
                     if isinstance(raw, QuestionDisposal)
@@ -1056,7 +1080,7 @@ class Executor:
                                     update={"design_artifact_id": out_map[oname].artifact_id}
                                 )
                                 break
-                # Prefer live graph question nodes when present.
+                # Prefer live graph; else task addresses — never invent from disposal id.
                 g = self.get_graph() if self.get_graph is not None else None
                 known: set[str] = set()
                 if g is not None:
@@ -1064,26 +1088,27 @@ class Executor:
                         if n.study_id == study_id:
                             known.add(n.ref_id or n.node_id.split(":")[-1])
                 if not known:
-                    known = {disposal.question_id}  # defer unknown to fold-time
+                    known = {str(a) for a in (task.spec.addresses or []) if a}
                 validate_disposal(
                     disposal,
                     known_question_ids=known,
                     artifact_lookup=getattr(self.artifacts, "get_meta", None),
                     covering_task_keys={task.spec.task_key},
                     tasks={task_id: task},
-                    results=None,
+                    results=self.get_results() if self.get_results is not None else None,
                 )
-                disposal_events.append(
+                extra_events.append(
                     question_disposed_event(
                         study_id=study_id,
                         disposal=disposal,
-                        now=self.clock.now(),
+                        now=now_stamp,
                     )
                 )
-            except Exception:  # noqa: BLE001 — reject silently; report via missing design
+            except (DisposeRejected, ValidationError) as e:
+                _note_reject(self, str(e))
                 continue
 
-        result = await self._commit_result(
+        return await self._commit_result(
             attempt_id,
             study_id,
             task_id,
@@ -1094,13 +1119,8 @@ class Executor:
             checks=checks,
             infra_failure=False,
             cost_rub=out.cost_rub,
+            extra_events=extra_events,
         )
-        if disposal_events:
-            try:
-                await self._append(disposal_events)
-            except Exception:  # noqa: BLE001 — study still closed by finalize
-                pass
-        return result
 
     async def record_review(
         self,
@@ -1342,6 +1362,7 @@ class Executor:
         charge_attempt: bool = True,
         allow_retry: bool = False,
         cost_rub: Decimal | float | int | str | None = None,
+        extra_events: list[EventEnvelope] | None = None,
     ) -> Result:
         # Attempt-open check runs inside the write transaction (_append_many_sync).
         now = self.clock.now()
@@ -1451,6 +1472,7 @@ class Executor:
         events = [
             *claim_events,
             *contradict_events,
+            *(extra_events or ()),
             EventEnvelope(
                 study_id=study_id,
                 type="ResultRecorded",
