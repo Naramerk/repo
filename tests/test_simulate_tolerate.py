@@ -82,6 +82,7 @@ def test_experiment_method_enum_matches_graph():
     schema_vals = set(method["type"].removeprefix("enum(").removesuffix(")").split("|"))
     assert {m.value for m in ExperimentMethod} == schema_vals
     assert "simulation" in schema_vals
+    assert method.get("required") is False  # aligns with TaskSpec.method Optional
 
 
 @pytest.mark.asyncio
@@ -163,6 +164,46 @@ async def test_cancel_task_cascades_via_hc(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
+async def test_hc_skipped_when_budget_exceeded(tmp_path, clock, runtime_cls):
+    """When study budget is already exceeded, H-c must not rewrite reasons."""
+    sid = "st_hc_bud"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=120),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"]
+            ),
+            TaskSpec(
+                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"]
+            ),
+        ],
+        questions=[],
+    )
+    await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
+    await rt.note_budget_exceeded()
+    await rt.tick()
+    child = rt.tasks[f"{sid}/C"]
+    assert child.state == TaskState.DONE
+    assert child.reason == TaskReason.BUDGET
+    fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
+    assert len(fins) == 1 and fins[0].payload["trigger"] == "budget"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
 async def test_tolerate_failed_dep(tmp_path, clock, runtime_cls):
     """tolerate_failed_dep=True allows starting after FAILED parent."""
     sid = "st_tol"
@@ -238,13 +279,13 @@ async def test_failed_spec_plan_still_runs_and_report(tmp_path, clock, runtime_c
     assert rt.tasks[f"{sid}/PLAN"].state == TaskState.DONE
     assert rt.tasks[f"{sid}/PLAN"].outcome == TaskOutcome.SUCCESS
     await record_success(rt, await rt.start_attempt("REPORT"), arts)
+    assert rt.tasks[f"{sid}/REPORT"].state == TaskState.DONE
+    assert rt.tasks[f"{sid}/REPORT"].outcome == TaskOutcome.SUCCESS
+    rt.artifacts = arts
     await rt.tick()
     fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
     assert len(fins) == 1
-    # Primary report artifact and/or minimal_report — either counts as a report.
-    assert fins[0].payload.get("report_artifact_id") or fins[0].payload.get(
-        "minimal_report"
-    )
+    assert fins[0].payload.get("report_artifact_id")
     await close_runtime(rt)
 
 
@@ -330,13 +371,7 @@ async def test_method_simulation_keeps_stub_input_provenance(
         ],
         questions=[],
     )
-    # Parent DONE without the output → simulate mode yields stub binding.
     await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
-    # fail → no artifact; mode=simulate creates stub input.
-    # Re-open path: mark P SUCCESS-less — use cancel then set outputs empty via simulate.
-    # Actually FAILED + simulate: bind_inputs allows simulate with stub when no aid.
-    # Parent FAILED with mode=simulate: looking at inputs.py — FAILED+FORBID raises;
-    # FAILED with SIMULATE: aid missing → source=stub. Good.
     aid = await rt.start_attempt("S")
     assert rt.attempts[aid]["provenance"] == "stub"
     await close_runtime(rt)

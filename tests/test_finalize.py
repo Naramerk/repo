@@ -39,8 +39,18 @@ from tests.helpers import attach_executor, record_success
 _TS = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
 
 
-async def _boot(tmp: Path, clock, sid: str, *, reserve: int = 5, seconds: int = 60):
-    rt = await open_runtime(tmp, sid, clock=clock, owner="t1")
+async def _boot(
+    tmp: Path,
+    clock,
+    sid: str,
+    *,
+    reserve: int = 5,
+    seconds: int = 60,
+    runtime_cls: type | None = None,
+):
+    rt = await open_runtime(
+        tmp, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
     await rt.create_study(
         profile="research", request="q", catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=seconds), sid=sid,
@@ -339,12 +349,12 @@ async def test_finalize_budget_trigger(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_task_budget_does_not_close_study(tmp_path, clock):
+async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
     """TaskDone(budget) from a costly route must not close the whole study."""
     from coscientist.core.reasons import CloseReason
 
     sid = "st_bg2"
-    rt = await _boot(tmp_path, clock, sid)
+    rt = await _boot(tmp_path, clock, sid, runtime_cls=runtime_cls)
     # Sibling plan tasks (no depends_on between them) so H-c does not cascade.
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -504,10 +514,15 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
 
 @pytest.mark.asyncio
 async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runtime_cls):
-    """Old StudyCreated with delegated_costly > max_cost_rub still reopens + finalizes."""
+    """Old StudyCreated with delegated_costly > max_cost_rub still reopens + finalizes.
+
+    Exercises the real reopen path: ``open_runtime`` → ``_project_local`` →
+    ``Study.model_validate`` (local_project). The ratio check lives only in
+    ``validate_budget_for_create`` / ``create_study``, so replay must not raise.
+    """
     from decimal import Decimal
 
-    from coscientist.core.domain import HitlPolicy
+    from coscientist.core.domain import Budget, HitlPolicy, Study
     from coscientist.core.store import SqliteEventStore
 
     sid = "st_bg_old_ratio"
@@ -517,31 +532,39 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
     await store.acquire_lease("seed")
     now = clock.now()
     # Raw journal row (pre-create_study check): looser delegated_costly than max_cost_rub.
+    payload = {
+        "study_id": sid,
+        "profile": "research",
+        "request": "q",
+        "catalog_version": "0.1.0",
+        "hitl_policy": HitlPolicy().model_dump(mode="json"),
+        "deadline": (now + timedelta(seconds=60)).isoformat(),
+        "created_at": now.isoformat(),
+        "parent_study_id": None,
+        "budget": {
+            "max_llm_calls": 100,
+            "max_tokens": 1_000_000,
+            "max_cost_rub": "50",
+            "max_tool_calls": 500,
+            "deadline": None,
+            "delegated_costly": "999",
+        },
+        "finalize_reserve_s": 5,
+    }
+    # Pin: fold path uses the same Study.model_validate as local_project.
+    folded = Study.model_validate(payload)
+    assert folded.budget is not None
+    assert folded.budget.delegated_costly == Decimal("999")
+    assert folded.budget.max_cost_rub == Decimal("50")
+    # Budget alone also accepts the legacy ratio (no model_validator).
+    Budget.model_validate(payload["budget"])
     await store.append(
         EventEnvelope(
             study_id=sid,
             type="StudyCreated",
             entity_key=sid,
             idem_key=make_idem("StudyCreated", sid),
-            payload={
-                "study_id": sid,
-                "profile": "research",
-                "request": "q",
-                "catalog_version": "0.1.0",
-                "hitl_policy": HitlPolicy().model_dump(mode="json"),
-                "deadline": (now + timedelta(seconds=60)).isoformat(),
-                "created_at": now.isoformat(),
-                "parent_study_id": None,
-                "budget": {
-                    "max_llm_calls": 100,
-                    "max_tokens": 1_000_000,
-                    "max_cost_rub": "50",
-                    "max_tool_calls": 500,
-                    "deadline": None,
-                    "delegated_costly": "999",
-                },
-                "finalize_reserve_s": 5,
-            },
+            payload=payload,
             ts=now,
             schema_version=2,
         )
