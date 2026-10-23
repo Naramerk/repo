@@ -214,6 +214,8 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
             _append_foreach_report_lines(seen, ev.payload)
         elif ev.type == "LoopCapped":
             _append_loop_capped_report_line(seen, ev.payload)
+        elif ev.type == "LoopRefused":
+            _append_loop_refused_report_line(seen, ev.payload)
         elif ev.type == "LoopCompleted":
             _append_loop_completed_report_line(seen, ev.payload)
         elif ev.type == "PlanRefused":
@@ -254,7 +256,7 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
     return seen
 
 def _append_loop_capped_report_line(seen: list[str], p: dict[str, Any]) -> None:
-    """DESIGN_M1 §4: «цикл остановлен лимитом после i итераций, осталось m»."""
+    """DESIGN_M1 §4: iteration_cap vs refuse/error (never disguise bugs as cap)."""
     try:
         i = int(p.get("iter") or 0)
     except (TypeError, ValueError):
@@ -264,16 +266,35 @@ def _append_loop_capped_report_line(seen: list[str], p: dict[str, Any]) -> None:
         m = int(raw_m) if raw_m is not None else 0  # type: ignore[arg-type]
     except (TypeError, ValueError):
         m = 0
-    detail = str(p.get("refuse_detail") or "")
-    if detail.startswith("loop_exception:"):
-        line = f"цикл остановлен ошибкой после {i} итераций: {detail}"
-    else:
-        line = f"цикл остановлен лимитом после {i} итераций, осталось {m}"
+    reason = str(p.get("reason") or "iteration_cap")
+    detail = str(p.get("detail") or p.get("refuse_detail") or "")
+    if reason in ("error", "refused") or detail.startswith("loop_predicate:"):
+        line = f"цикл остановлен ошибкой после {i} итераций: {detail or reason}"
+        if line not in seen:
+            seen.append(line)
+        if reason not in seen:
+            seen.append(reason)
+        return
+    line = f"цикл остановлен лимитом после {i} итераций, осталось {m}"
     if line not in seen:
         seen.append(line)
-    # Also surface as contributing TaskReason token for ordered reasons.
     if "iteration_cap" not in seen:
         seen.append("iteration_cap")
+
+
+def _append_loop_refused_report_line(seen: list[str], p: dict[str, Any]) -> None:
+    """LoopRefused: honest error/refuse line (not iteration_cap)."""
+    try:
+        i = int(p.get("iter") or 0)
+    except (TypeError, ValueError):
+        i = 0
+    reason = str(p.get("reason") or "error")
+    detail = str(p.get("detail") or "")
+    line = f"цикл остановлен ошибкой после {i} итераций: {detail or reason}"
+    if line not in seen:
+        seen.append(line)
+    if reason not in seen:
+        seen.append(reason)
 
 
 def _append_loop_completed_report_line(seen: list[str], p: dict[str, Any]) -> None:

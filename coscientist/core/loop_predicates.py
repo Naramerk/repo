@@ -7,14 +7,17 @@ built-ins).
 
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Mapping
-from math import isfinite
 from typing import Any, Protocol
 
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import LoopPredicate, LoopSpec, ReqStatus, Study
 from coscientist.core.reasons import Disposition
 from coscientist.core.rules import PlanInvalid
+
+# survivors_le n is a count threshold — keep well below pathological ints.
+SURVIVORS_LE_N_MAX = 10_000
 
 
 class LoopPredicateFn(Protocol):
@@ -38,15 +41,29 @@ class UnknownLoopPredicateError(PlanInvalid):
     """Unknown until.name — fail-closed at accept / eval."""
 
 
+class LoopPredicateEvalError(Exception):
+    """Expected fail-closed eval failure (unknown/unregistered predicate)."""
+
+
+def normalize_predicate_name(raw: str) -> str:
+    """NFKC-normalize predicate name; reject empty / invisible chars."""
+    s = unicodedata.normalize("NFKC", str(raw or "")).strip()
+    if not s:
+        raise PlanInvalid("LoopSpec.until.name is required")
+    if any(unicodedata.category(ch) in {"Cf", "Cc", "Cs"} for ch in s):
+        raise PlanInvalid(f"loop predicate name has invisible/control chars: {raw!r}")
+    return s
+
+
 def register_loop_predicate(name: str, fn: LoopPredicateFn) -> None:
-    """Register a loop predicate. Built-ins cannot be overridden after first load."""
-    if not name or not str(name).strip():
-        raise ValueError("loop predicate name required")
-    key = str(name)
-    if key in BUILTIN_LOOP_PREDICATES and key in _REGISTRY:
-        raise ValueError(f"cannot override built-in loop predicate: {key!r}")
-    if key in _REGISTRY and key in BUILTIN_LOOP_PREDICATES:
-        raise ValueError(f"cannot override built-in loop predicate: {key!r}")
+    """Register a loop predicate. Built-ins and existing plugins cannot be overridden."""
+    key = normalize_predicate_name(name)
+    if key in BUILTIN_LOOP_PREDICATES:
+        if key in _REGISTRY:
+            raise ValueError(f"cannot override built-in loop predicate: {key!r}")
+        # First registration of a built-in (module load) is allowed.
+    elif key in _REGISTRY:
+        raise ValueError(f"cannot override registered loop predicate: {key!r}")
     _REGISTRY[key] = fn
 
 
@@ -55,7 +72,10 @@ def known_loop_predicates() -> frozenset[str]:
 
 
 def get_loop_predicate(name: str) -> LoopPredicateFn | None:
-    return _REGISTRY.get(name)
+    try:
+        return _REGISTRY.get(normalize_predicate_name(name))
+    except PlanInvalid:
+        return None
 
 
 def eval_loop_predicate(
@@ -65,17 +85,22 @@ def eval_loop_predicate(
     iter_n: int,
     ctx: Mapping[str, Any] | None = None,
 ) -> bool:
-    """Evaluate ``loop.until``. Unknown name raises; body exceptions propagate."""
-    fn = _REGISTRY.get(loop.until.name)
+    """Evaluate ``loop.until``. Unknown name → LoopPredicateEvalError; body bugs propagate."""
+    try:
+        key = normalize_predicate_name(loop.until.name)
+    except PlanInvalid as e:
+        raise LoopPredicateEvalError(str(e)) from e
+    fn = _REGISTRY.get(key)
     if fn is None:
-        raise UnknownLoopPredicateError(
-            f"unknown loop predicate: {loop.until.name!r}"
-        )
+        raise LoopPredicateEvalError(f"unknown loop predicate: {key!r}")
     return bool(fn(runtime, loop, iter_n=iter_n, ctx=ctx or {}))
 
 
 def _require_int_n(params: dict[str, Any]) -> int:
-    """survivors_le params.n: exact int >= 0 (reject bool, float, inf)."""
+    """survivors_le params.n: exact int, not bool, 0 <= n <= SURVIVORS_LE_N_MAX.
+
+    Never coerce via ``float()`` (OverflowError on huge ints).
+    """
     if "n" not in params:
         raise PlanInvalid("survivors_le requires params.n")
     n = params["n"]
@@ -85,9 +110,10 @@ def _require_int_n(params: dict[str, Any]) -> int:
         )
     if n < 0:
         raise PlanInvalid("survivors_le params.n must be >= 0")
-    # Guard against non-finite sneaking in via weird subclasses.
-    if not isfinite(float(n)):
-        raise PlanInvalid("survivors_le params.n must be finite")
+    if n > SURVIVORS_LE_N_MAX:
+        raise PlanInvalid(
+            f"survivors_le params.n must be <= {SURVIVORS_LE_N_MAX} (got {n})"
+        )
     return n
 
 
@@ -97,14 +123,12 @@ def validate_loop_predicate(pred: LoopPredicate | dict[str, Any] | None) -> None
         raise PlanInvalid("LoopSpec.until is required")
     params: dict[str, Any]
     if isinstance(pred, dict):
-        name = str(pred.get("name") or "")
+        name = normalize_predicate_name(str(pred.get("name") or ""))
         raw_params = pred.get("params")
         params = dict(raw_params) if isinstance(raw_params, dict) else {}
     else:
-        name = str(pred.name or "")
+        name = normalize_predicate_name(str(pred.name or ""))
         params = dict(pred.params or {})
-    if not name:
-        raise PlanInvalid("LoopSpec.until.name is required")
     if name not in _REGISTRY:
         raise UnknownLoopPredicateError(f"unknown loop predicate: {name!r}")
     if name == "survivors_le":

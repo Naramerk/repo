@@ -142,6 +142,10 @@ class LocalProjectMixin:
             from coscientist.core.loop import fold_loop_capped
 
             fold_loop_capped(self, p)
+        elif ev.type == "LoopRefused":
+            from coscientist.core.loop import fold_loop_refused
+
+            fold_loop_refused(self, p)
         elif ev.type == "LoopCompleted":
             from coscientist.core.loop import fold_loop_completed
 
@@ -156,7 +160,7 @@ class LocalProjectMixin:
                 after_task=str(p.get("after_task") or "") or None,
                 plan_key=p.get("plan_key"),
             )
-            # PR11: loop refuse must restore capped status on replay.
+            # PR11: loop refuse must restore status on replay.
             if p.get("loop") or p.get("loop_id"):
                 from coscientist.core.loop import fold_loop_expansion_refused
 

@@ -330,11 +330,19 @@ def apply_loop_cap_dispositions(
     result: dict[str, dict[str, Any]],
     loop_capped_questions: Mapping[str, Any] | None,
 ) -> dict[str, dict[str, Any]]:
-    """Tag LoopCapped scope questions; never erase infeasible/needs_more_data/ill_posed."""
+    """Tag only questions genuinely unresolved by an iteration_cap.
+
+    - Refuse/error LoopCapped payloads must not appear in ``loop_capped_questions``
+      (caller filters via ``capped_scope_questions``).
+    - Answered / refuted / survived (including from tasks outside the loop) keep
+      their disposition and reason — never overwritten with iteration_cap.
+    - infeasible / needs_more_data / ill_posed preserved.
+    - not_attempted → inconclusive + iteration_cap.
+    """
     capped_q = {str(k): v for k, v in (loop_capped_questions or {}).items()}
     if not capped_q:
         return result
-    keep = (
+    answered = (
         Disposition.ANSWERED.value,
         Disposition.REFUTED.value,
         Disposition.SURVIVED.value,
@@ -348,20 +356,28 @@ def apply_loop_cap_dispositions(
     for qid, row in list(result.items()):
         if qid not in capped_q:
             continue
+        p = capped_q[qid]
+        if isinstance(p, dict):
+            reason = str(p.get("reason") or TaskReason.ITERATION_CAP.value)
+            if reason != TaskReason.ITERATION_CAP.value:
+                continue
+            try:
+                if int(p.get("iter") or 0) < 1:
+                    continue
+            except (TypeError, ValueError):
+                continue
         disp = str(row.get("disposition") or "")
         if disp in preserve:
             continue
-        if disp in keep:
-            row = dict(row)
-            row["reason"] = TaskReason.ITERATION_CAP.value
-            result[qid] = row
-        else:
-            # not_attempted / empty: unresolved because the loop hit the cap.
-            row = dict(row)
-            row["disposition"] = Disposition.INCONCLUSIVE.value
-            row["reason"] = TaskReason.ITERATION_CAP.value
-            row["reason_detail"] = [TaskReason.ITERATION_CAP.value]
-            result[qid] = row
+        if disp in answered:
+            # Real answer (possibly from outside-loop tasks) — leave untouched.
+            continue
+        # not_attempted / empty: unresolved because the loop hit the cap.
+        row = dict(row)
+        row["disposition"] = Disposition.INCONCLUSIVE.value
+        row["reason"] = TaskReason.ITERATION_CAP.value
+        row["reason_detail"] = [TaskReason.ITERATION_CAP.value]
+        result[qid] = row
     return result
 
 

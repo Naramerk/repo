@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 
 from coscientist.core.artifacts import make_tool_ref
-from coscientist.core.claims import RuntimeClaim
 from coscientist.core.domain import (
     AgentTaskOutput,
     ArtifactHandle,
@@ -520,10 +519,10 @@ async def test_loop_completed_survives_restart(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
-async def test_loop_refuse_survives_restart(tmp_path, clock, runtime_cls):
-    """After ExpansionRefused+LoopCapped, reopen restores capped; POST unblocked."""
+async def test_loop_capped_survives_restart(tmp_path, clock, runtime_cls):
+    """After true iteration_cap LoopCapped, reopen restores capped; POST unblocked."""
     rt, arts = await _open_study(
-        tmp_path, clock, "st_loop_ref_re", runtime_cls=runtime_cls
+        tmp_path, clock, "st_loop_cap_re", runtime_cls=runtime_cls
     )
     _upsert_hyps(rt, "H1")
     await rt.accept_plan(
@@ -554,10 +553,11 @@ async def test_loop_refuse_survives_restart(tmp_path, clock, runtime_cls):
             await _ok(rt, arts, aid)
     assert loop_status(rt, "L1") == "capped"
     live_capped = dict(getattr(rt, "_loop_capped", {})["L1"])
+    assert live_capped.get("reason") == "iteration_cap"
 
     await close_runtime(rt)
     rt2 = await open_runtime(
-        tmp_path, "st_loop_ref_re", clock=clock, owner="t2", runtime_cls=runtime_cls
+        tmp_path, "st_loop_cap_re", clock=clock, owner="t2", runtime_cls=runtime_cls
     )
     attach_executor(rt2, tmp_path)
     await recover(rt2)
@@ -566,6 +566,75 @@ async def test_loop_refuse_survives_restart(tmp_path, clock, runtime_cls):
     assert loop_is_complete(rt2, "L1")
     fin = await _drive_to_finalized(rt2, arts)
     assert fin.payload["terminal_reason"] == "completed"
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_loop_refuse_error_survives_restart(tmp_path, clock, runtime_cls):
+    """LoopRefused+LoopCapped(reason=error) folds on reopen; not iteration_cap."""
+    import coscientist.core.loop_predicates as lp
+
+    name = "test_plugin_refuse_restart"
+    register_loop_predicate(name, lambda *a, **k: False)
+    rt, arts = await _open_study(
+        tmp_path, clock, "st_loop_err_re", runtime_cls=runtime_cls
+    )
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="POST",
+                title="after",
+                goal="g",
+                route="experiment",
+                depends_on=["loop:L1"],
+                addresses=["Q1"],
+                criteria=[RequirementRef(template_id="value_match")],
+                required=False,
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="q")],
+        loops=[
+            _loop(
+                max_iter=5,
+                until=LoopPredicate(name=name, params={}),
+                scope_hypotheses=[],
+                scope_questions=["Q1"],
+            )
+        ],
+    )
+    for t in current_loop_iter_tasks(rt, "L1", 1):
+        aid = await rt.start_attempt(t.spec.task_key)
+        await _ok(rt, arts, aid)
+    lp._REGISTRY.pop(name, None)
+    for t in current_loop_iter_tasks(rt, "L1", 2):
+        aid = await rt.start_attempt(t.spec.task_key)
+        await _ok(rt, arts, aid)
+    assert loop_status(rt, "L1") == "refused"
+    events = await rt.store.read_all()
+    refused = [e for e in events if e.type == "LoopRefused"]
+    assert len(refused) == 1
+    assert refused[0].payload["reason"] == "error"
+    capped = [e for e in events if e.type == "LoopCapped"]
+    assert len(capped) == 1
+    assert capped[0].payload["reason"] == "error"
+    # Must not stamp iteration_cap on dispositions for error path.
+    from coscientist.core.loop import capped_scope_questions
+
+    assert capped_scope_questions(rt) == {}
+
+    await close_runtime(rt)
+    rt2 = await open_runtime(
+        tmp_path, "st_loop_err_re", clock=clock, owner="t2", runtime_cls=runtime_cls
+    )
+    attach_executor(rt2, tmp_path)
+    await recover(rt2)
+    assert loop_status(rt2, "L1") == "refused"
+    assert loop_is_complete(rt2, "L1")
+    assert current_loop_iter_tasks(rt2, "L1", 3) == []
+    fin = await _drive_to_finalized(rt2, arts)
+    contrib = list(fin.payload["contributing_reasons"])
+    assert "iteration_cap" not in contrib
+    assert any("ошибкой" in str(c) for c in contrib)
     await close_runtime(rt2)
 
 
@@ -725,31 +794,143 @@ async def test_loop_restart_idempotent(tmp_path, clock, runtime_cls):
     await close_runtime(rt2)
 
 
-def test_survivors_le_real_claims_and_scope_filter():
-    """survivors_le through real RuntimeClaims; outside-loop claims ignored."""
+def _seed_refute_claim_on_graph(rt, *, hid: str, exp_key: str, claim_suffix: str) -> None:
+    """Upsert a countable refute claim on the real graph (no monkeypatch)."""
     from datetime import datetime, timezone
+
+    from coscientist.core.graph import GraphEdge, GraphNode
+    from coscientist.core.ids import claim_node_id, experiment_node_id, hypothesis_node_id
+
+    sid = rt.study.study_id
+    now = datetime.now(timezone.utc)
+    hid_n = hypothesis_node_id(sid, hid)
+    if rt.graph.get_node(hid_n) is None:
+        rt.graph.upsert_node(
+            GraphNode(
+                node_id=hid_n,
+                kind="hypothesis",
+                study_id=sid,
+                ref_id=hid,
+                attrs={"text": hid},
+            )
+        )
+    eid = experiment_node_id(sid, exp_key)
+    if rt.graph.get_node(eid) is None:
+        rt.graph.upsert_node(
+            GraphNode(
+                node_id=eid,
+                kind="experiment",
+                study_id=sid,
+                ref_id=exp_key,
+                attrs={"task_key": exp_key},
+            )
+        )
+        rt.graph.add_edge(
+            GraphEdge(
+                edge_id=f"tests:{eid}:{hid_n}",
+                kind="tests",
+                study_id=sid,
+                src_id=eid,
+                dst_id=hid_n,
+                attrs={"intent": "refute"},
+                created_at=now,
+            )
+        )
+    cid = claim_node_id(sid, f"{sid}/{exp_key}#{claim_suffix}")
+    aid = f"{sid}/{exp_key}#1"
+    rt.graph.upsert_node(
+        GraphNode(
+            node_id=cid,
+            kind="claim",
+            study_id=sid,
+            ref_id=cid,
+            attrs={
+                "provenance": "real",
+                "attempt_id": aid,
+                "attempt_outcome": "SUCCESS",
+                "experiment_id": exp_key,
+                "target": hid,
+                "criterion_status": "not_met",
+                "claim_outcome": "inconsistent",
+                "accepted": True,
+                "frozen": True,
+                "evidence_kind": "computational",
+                "validity_ok": True,
+                "check_role": "prediction",
+                "severe": True,
+                "refute_capable": True,
+                "independence_key": exp_key,
+                "effect": {
+                    "est": 1.0,
+                    "ci_low": 1.0,
+                    "ci_high": 1.0,
+                    "producer": "agent",
+                    "trusted": False,
+                    "core_evaluated": True,
+                    "countable": True,
+                    "produced_by_call_id": f"{aid}:1",
+                },
+            },
+        )
+    )
+    rt.graph.add_edge(
+        GraphEdge(
+            edge_id=f"about:{cid}:{hid_n}",
+            kind="about",
+            study_id=sid,
+            src_id=cid,
+            dst_id=hid_n,
+            created_at=now,
+        )
+    )
+    rt.results[aid] = {
+        "outcome": "SUCCESS",
+        "task_id": f"{sid}/{exp_key}",
+        "check_results": [
+            {
+                "template_id": "value_match",
+                "status": "FAILED",
+                "role": "prediction",
+            }
+        ],
+    }
+    rt.attempts[aid] = {"task_id": f"{sid}/{exp_key}", "attempt_id": aid}
+
+
+def test_survivors_le_real_graph_scope_filter():
+    """survivors_le via real GraphStore claims; outside-loop claims ignored."""
+    from datetime import datetime, timezone
+
+    from coscientist.core.domain import HitlPolicy, Study
+    from coscientist.core.graph import GraphStore, default_execution_registry
 
     now = datetime.now(timezone.utc)
     loop_key = "EXP-LOOP"
     outside_key = "EXP-OUT"
-
-    class Study:
-        study_id = "st_surv"
-        refutations_needed = 1
-        refutation_priority = True
-        confirmations_needed = 1
-        supported_needed = 2
+    sid = "st_surv_graph"
 
     class RT:
         def __init__(self):
-            self.study = Study()
-            self.graph = object()  # non-None so _claims_for_loop_scope proceeds
+            self.study = Study(
+                study_id=sid,
+                profile="research",
+                request="q",
+                catalog_version="0.1.0",
+                hitl_policy=HitlPolicy(),
+                deadline=now,
+                created_at=now,
+                refutations_needed=1,
+                refutation_priority=True,
+                confirmations_needed=1,
+                supported_needed=2,
+            )
+            self.graph = GraphStore(default_execution_registry())
             self.artifacts = None
             self.results = {}
             self.attempts = {}
             self.tasks = {
                 "t_loop": Task(
-                    task_id="t_loop",
+                    task_id=f"{sid}/{loop_key}",
                     kind=TaskKind.EXPERIMENT,
                     spec=TaskSpec(
                         task_key=loop_key,
@@ -763,7 +944,7 @@ def test_survivors_le_real_claims_and_scope_filter():
                     deadline=now,
                 ),
                 "t_out": Task(
-                    task_id="t_out",
+                    task_id=f"{sid}/{outside_key}",
                     kind=TaskKind.EXPERIMENT,
                     spec=TaskSpec(
                         task_key=outside_key,
@@ -776,81 +957,100 @@ def test_survivors_le_real_claims_and_scope_filter():
                 ),
             }
 
-    def _refute(hid: str, exp: str) -> RuntimeClaim:
-        return RuntimeClaim(
-            study_id="st_surv",
-            target=hid,
-            target_kind="hypothesis",
-            experiment_id=exp,
-            attempt_id=f"{exp}#1",
-            criterion_status="not_met",
-            claim_outcome="inconsistent",
-            intent="refute",
-            severe=True,
-            refute_capable=True,
-            validity_ok=True,
-            accepted=True,
-            frozen=True,
-            provenance="real",
-            evidence_kind="computational",
-            check_role="prediction",
-            independence_key=exp,
-            effect={
-                "est": 1.0,
-                "ci_low": 1.0,
-                "ci_high": 1.0,
-                "producer": "agent",
-                "trusted": False,
-                "core_evaluated": True,
-                "countable": True,
-            },
+    rt = RT()
+    _seed_refute_claim_on_graph(rt, hid="H1", exp_key=loop_key, claim_suffix="c1")
+    _seed_refute_claim_on_graph(rt, hid="H3", exp_key=outside_key, claim_suffix="c3")
+    # H2: hypothesis node only — unrefuted survivor.
+    from coscientist.core.graph import GraphNode
+    from coscientist.core.ids import hypothesis_node_id
+
+    rt.graph.upsert_node(
+        GraphNode(
+            node_id=hypothesis_node_id(sid, "H2"),
+            kind="hypothesis",
+            study_id=sid,
+            ref_id="H2",
+            attrs={"text": "H2"},
         )
+    )
+    loop = _loop(
+        until=LoopPredicate(name="survivors_le", params={"n": 1}),
+        scope_hypotheses=["H1", "H2", "H3"],
+        scope_questions=[],
+    )
+    scoped = _claims_for_loop_scope(rt, loop, upto_iter=1)
+    assert [c.experiment_id for c in scoped["H1"]] == [loop_key]
+    assert scoped["H2"] == []
+    assert scoped["H3"] == []  # outside-loop refute excluded
+    n = count_survivors(rt, loop, upto_iter=1)
+    # H1 refuted (loop), H2 + H3 survivors under loop scope → 2
+    assert n == 2
+    assert eval_loop_predicate(rt, loop, iter_n=1) is False
+    loop_le2 = loop.model_copy(
+        update={"until": LoopPredicate(name="survivors_le", params={"n": 2})}
+    )
+    assert eval_loop_predicate(rt, loop_le2, iter_n=1) is True
 
-    # H1 refuted by loop task; H2 unrefuted; H3 refuted only by outside task.
-    by_target = {
-        "hypothesis:H1": [_refute("H1", loop_key)],
-        "hypothesis:H2": [],
-        "hypothesis:H3": [_refute("H3", outside_key)],
-    }
 
-    import coscientist.core.loop_predicates as lp
-
-    real_fct = lp.filtered_claims_by_target if hasattr(lp, "filtered_claims_by_target") else None
-    # Patch at claims module used inside _claims_for_loop_scope.
-    import coscientist.core.claims as claims_mod
-
-    orig = claims_mod.filtered_claims_by_target
-
-    def fake_filtered(*_a, **_k):
-        return by_target
-
-    claims_mod.filtered_claims_by_target = fake_filtered  # type: ignore[assignment]
-    try:
-        rt = RT()
-        loop = _loop(
-            until=LoopPredicate(name="survivors_le", params={"n": 1}),
-            scope_hypotheses=["H1", "H2", "H3"],
+@pytest.mark.asyncio
+async def test_survivors_le_e2e_real_graph_runtime(tmp_path, clock, runtime_cls):
+    """E2E: survivors_le on live runtime graph claims (no filtered_claims monkeypatch)."""
+    rt, arts = await _open_study(
+        tmp_path, clock, "st_surv_e2e", runtime_cls=runtime_cls
+    )
+    _upsert_hyps(rt, "H1", "H2")
+    await rt.accept_plan(
+        [],
+        questions=[QuestionSpec(id="Q1", text="q")],
+        loops=[
+            _loop(
+                max_iter=3,
+                until=LoopPredicate(name="survivors_le", params={"n": 0}),
+                scope_hypotheses=["H1", "H2"],
+                scope_questions=[],
+            )
+        ],
+    )
+    body = current_loop_iter_tasks(rt, "L1", 1)
+    assert len(body) == 1
+    exp_key = body[0].spec.task_key
+    aid = await rt.start_attempt(exp_key)
+    await _ok(rt, arts, aid)
+    # After iter 1 without claims: 2 survivors → continue.
+    assert loop_status(rt, "L1") == "running"
+    assert len(current_loop_iter_tasks(rt, "L1", 2)) == 1
+    # Seed refute claims for both hyps from the loop body task; until should fire.
+    _seed_refute_claim_on_graph(rt, hid="H1", exp_key=exp_key, claim_suffix="e2e1")
+    _seed_refute_claim_on_graph(rt, hid="H2", exp_key=exp_key, claim_suffix="e2e2")
+    assert count_survivors(
+        rt,
+        _loop(
+            until=LoopPredicate(name="survivors_le", params={"n": 0}),
+            scope_hypotheses=["H1", "H2"],
             scope_questions=[],
+        ).model_copy(update={"loop_id": "L1"}),
+        upto_iter=1,
+    ) == 0
+    # Drive iter 2 completion → until met via real graph claims.
+    for t in current_loop_iter_tasks(rt, "L1", 2):
+        # Claims already on graph from iter-1 key; also attach iter-2 key claims.
+        _seed_refute_claim_on_graph(
+            rt, hid="H1", exp_key=t.spec.task_key, claim_suffix="e2e1b"
         )
-        scoped = _claims_for_loop_scope(rt, loop, upto_iter=1)
-        assert [c.experiment_id for c in scoped["H1"]] == [loop_key]
-        assert scoped["H2"] == []
-        # Outside refute must not appear under loop scope.
-        assert scoped["H3"] == []
-        n = count_survivors(rt, loop, upto_iter=1)
-        # H1 refuted (loop), H2 survivor, H3 unrefuted under loop scope → 2 survivors.
-        assert n == 2
-        assert eval_loop_predicate(rt, loop, iter_n=1) is False
-        loop_le1 = loop.model_copy(
-            update={"until": LoopPredicate(name="survivors_le", params={"n": 2})}
+        _seed_refute_claim_on_graph(
+            rt, hid="H2", exp_key=t.spec.task_key, claim_suffix="e2e2b"
         )
-        assert eval_loop_predicate(rt, loop_le1, iter_n=1) is True
-    finally:
-        claims_mod.filtered_claims_by_target = orig  # type: ignore[assignment]
-        _ = real_fct
+        aid2 = await rt.start_attempt(t.spec.task_key)
+        await _ok(rt, arts, aid2)
+    assert loop_status(rt, "L1") == "done"
+    events = await rt.store.read_all()
+    assert sum(1 for e in events if e.type == "LoopCompleted") == 1
+    assert sum(1 for e in events if e.type == "LoopCapped") == 0
+    await _drive_to_finalized(rt, arts)
+    await close_runtime(rt)
 
 
-def test_dispositions_preserve_infeasible_under_cap():
+def test_dispositions_preserve_infeasible_and_outside_answers_under_cap():
     from coscientist.core.dispositions import apply_loop_cap_dispositions, dispositions
 
     plans = {
@@ -862,9 +1062,12 @@ def test_dispositions_preserve_infeasible_under_cap():
     out = dispositions(
         tasks={},
         plans=plans,
-        loop_capped_questions={"Q1": {"loop_id": "L1"}, "Q2": {"loop_id": "L1"}},
+        loop_capped_questions={
+            "Q1": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+            "Q2": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+        },
     )
-    # not_attempted under cap → inconclusive + iteration_cap.
+    # not_attempted under true cap → inconclusive + iteration_cap.
     assert out["Q1"]["disposition"] == Disposition.INCONCLUSIVE.value
     assert out["Q1"]["reason"] == TaskReason.ITERATION_CAP.value
     assert out["Q2"]["disposition"] == Disposition.INCONCLUSIVE.value
@@ -892,10 +1095,10 @@ def test_dispositions_preserve_infeasible_under_cap():
         },
     }
     capped = {
-        "Q1": {"loop_id": "L1"},
-        "Q2": {"loop_id": "L1"},
-        "Q3": {"loop_id": "L1"},
-        "Q4": {"loop_id": "L1"},
+        "Q1": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+        "Q2": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+        "Q3": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
+        "Q4": {"loop_id": "L1", "reason": "iteration_cap", "iter": 2},
     }
     apply_loop_cap_dispositions(result, capped)
     assert result["Q1"]["disposition"] == Disposition.INFEASIBLE.value
@@ -903,8 +1106,25 @@ def test_dispositions_preserve_infeasible_under_cap():
     assert result["Q3"]["disposition"] == Disposition.NEEDS_MORE_DATA.value
     assert result["Q2"]["disposition"] == Disposition.INCONCLUSIVE.value
     assert result["Q2"]["reason"] == TaskReason.ITERATION_CAP.value
+    # Outside-loop / already-answered: keep answer, do not stamp iteration_cap.
     assert result["Q4"]["disposition"] == Disposition.ANSWERED.value
-    assert result["Q4"]["reason"] == TaskReason.ITERATION_CAP.value
+    assert result["Q4"]["reason"] is None
+    # Error/refuse / zero-iter must not apply.
+    err = {
+        "Q2": {
+            "disposition": Disposition.NOT_ATTEMPTED.value,
+            "reason": "no_task",
+            "formulation": "q2",
+        }
+    }
+    apply_loop_cap_dispositions(
+        err, {"Q2": {"loop_id": "L1", "reason": "error", "iter": 1}}
+    )
+    assert err["Q2"]["disposition"] == Disposition.NOT_ATTEMPTED.value
+    apply_loop_cap_dispositions(
+        err, {"Q2": {"loop_id": "L1", "reason": "iteration_cap", "iter": 0}}
+    )
+    assert err["Q2"]["disposition"] == Disposition.NOT_ATTEMPTED.value
 
 
 def test_upcast_study_created_max_loop_iter():
@@ -984,6 +1204,9 @@ def test_upcaster_duplicate_and_continuous_chains():
 
 
 def test_validate_loop_predicate_builtins():
+    from coscientist.core.loop_predicates import SURVIVORS_LE_N_MAX
+    from coscientist.core.rules import PlanInvalid
+
     validate_loop_predicate(LoopPredicate(name="survivors_le", params={"n": 1}))
     validate_loop_predicate(
         LoopPredicate(name="criterion_met", params={"criterion_id": "value_match"})
@@ -991,14 +1214,40 @@ def test_validate_loop_predicate_builtins():
     validate_loop_predicate(LoopPredicate(name="no_change", params={}))
     with pytest.raises(ValueError, match="unknown"):
         validate_loop_predicate(LoopPredicate(name="Nope", params={}))
-    with pytest.raises(ValueError, match="int"):
+    with pytest.raises(PlanInvalid, match="int"):
         validate_loop_predicate(LoopPredicate(name="survivors_le", params={"n": 1.5}))
-    with pytest.raises(ValueError, match="int"):
+    with pytest.raises(PlanInvalid, match="int"):
         validate_loop_predicate(LoopPredicate(name="survivors_le", params={"n": True}))
-    with pytest.raises(ValueError, match="int"):
+    with pytest.raises(PlanInvalid, match="int"):
         validate_loop_predicate(
             LoopPredicate(name="survivors_le", params={"n": float("inf")})
         )
+    # Huge int must not OverflowError via float(); PlanInvalid instead.
+    with pytest.raises(PlanInvalid, match=str(SURVIVORS_LE_N_MAX)):
+        validate_loop_predicate(
+            LoopPredicate(name="survivors_le", params={"n": 10**400})
+        )
+
+
+@pytest.mark.asyncio
+async def test_survivors_le_huge_n_plan_refused(tmp_path, clock, runtime_cls):
+    """accept_plan with n=10**400 → PlanRefused (no OverflowError crash)."""
+    rt, _arts = await _open_study(
+        tmp_path, clock, "st_loop_huge_n", runtime_cls=runtime_cls
+    )
+    pid = await rt.accept_plan(
+        [],
+        questions=[QuestionSpec(id="Q1", text="q")],
+        loops=[
+            _loop(
+                until=LoopPredicate(name="survivors_le", params={"n": 10**400}),
+                scope_hypotheses=[],
+            )
+        ],
+    )
+    assert pid == ""
+    await _assert_plan_refused(rt, match="10000")
+    await close_runtime(rt)
 
 
 def test_builtin_predicate_override_rejected():
@@ -1008,6 +1257,12 @@ def test_builtin_predicate_override_rejected():
         register_loop_predicate("criterion_met", lambda *a, **k: True)
     with pytest.raises(ValueError, match="cannot override built-in"):
         register_loop_predicate("no_change", lambda *a, **k: True)
+
+
+def test_plugin_predicate_override_rejected():
+    register_loop_predicate("test_plugin_once_pr11", lambda *a, **k: True)
+    with pytest.raises(ValueError, match="cannot override registered"):
+        register_loop_predicate("test_plugin_once_pr11", lambda *a, **k: False)
 
 
 def test_scope_fingerprint_stable_empty():
@@ -1028,21 +1283,66 @@ def test_plugin_loop_predicate_registration():
     def always_true(runtime, loop, *, iter_n, ctx):
         return True
 
-    register_loop_predicate("test_always_true_pr11", always_true)
-    loop = _loop(until=LoopPredicate(name="test_always_true_pr11", params={}))
+    register_loop_predicate("test_always_true_pr11b", always_true)
+    loop = _loop(until=LoopPredicate(name="test_always_true_pr11b", params={}))
     assert eval_loop_predicate(None, loop, iter_n=1) is True
 
 
 def test_normalize_loop_id_nfkc_and_invisible():
-    from coscientist.core.loop import normalize_loop_id
+    from coscientist.core.loop import normalize_loop_id, parse_loop_dep
     from coscientist.core.rules import PlanInvalid
 
     assert normalize_loop_id("Ｌ１") == "L1"  # fullwidth → NFKC ASCII
     assert normalize_loop_id("Loop_1") == "Loop_1"
+    assert parse_loop_dep("loop:Ｌ１") == "L1"
     with pytest.raises(PlanInvalid, match="invisible"):
         normalize_loop_id("L\u200b1")  # zero-width space
     with pytest.raises(PlanInvalid, match="required"):
         normalize_loop_id("   ")
+
+
+@pytest.mark.asyncio
+async def test_fullwidth_loop_dep_normalized_on_accept(tmp_path, clock, runtime_cls):
+    """depends_on=['loop:Ｌ１'] stores normalized loop:L1 and barrier works."""
+    rt, arts = await _open_study(
+        tmp_path, clock, "st_loop_fw", runtime_cls=runtime_cls
+    )
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="POST",
+                title="after",
+                goal="g",
+                route="experiment",
+                depends_on=["loop:Ｌ１"],
+                addresses=["Q1"],
+                criteria=[RequirementRef(template_id="value_match")],
+                required=False,
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="q")],
+        loops=[
+            _loop(
+                loop_id="Ｌ１",
+                max_iter=1,
+                until=LoopPredicate(name="survivors_le", params={"n": 0}),
+                scope_hypotheses=[],
+            )
+        ],
+    )
+    post = next(t for t in rt.tasks.values() if t.spec.task_key == "POST")
+    assert post.spec.depends_on == ["loop:L1"]
+    plans = list(rt.plans.values())
+    loops = plans[-1].get("loops") or []
+    assert loops and loops[0]["loop_id"] == "L1"
+    for t in current_loop_iter_tasks(rt, "L1", 1):
+        aid = await rt.start_attempt(t.spec.task_key)
+        await _ok(rt, arts, aid)
+    assert loop_status(rt, "L1") == "done"
+    aid = await rt.start_attempt("POST")
+    await _ok(rt, arts, aid)
+    await _drive_to_finalized(rt, arts)
+    await close_runtime(rt)
 
 
 @pytest.mark.asyncio
@@ -1088,7 +1388,6 @@ async def test_unregistered_plugin_predicate_fail_closed_on_restart(
     assert len(current_loop_iter_tasks(rt, "L1", 2)) == 1
     await close_runtime(rt)
 
-    # Drop plugin from registry (simulates restart without plugin load).
     lp._REGISTRY.pop(name, None)
 
     rt2 = await open_runtime(
@@ -1096,15 +1395,17 @@ async def test_unregistered_plugin_predicate_fail_closed_on_restart(
     )
     attach_executor(rt2, tmp_path)
     await recover(rt2)
-    # Completing iter-2 body should refuse (unknown predicate), not spawn iter 3+.
     for t in current_loop_iter_tasks(rt2, "L1", 2):
         if t.state != TaskState.DONE:
             aid = await rt2.start_attempt(t.spec.task_key)
             await _ok(rt2, arts, aid)
-    assert loop_status(rt2, "L1") == "capped"
+    assert loop_status(rt2, "L1") == "refused"
     assert current_loop_iter_tasks(rt2, "L1", 3) == []
     events = await rt2.store.read_all()
-    assert any(e.type == "LoopCapped" for e in events)
+    assert any(e.type == "LoopRefused" for e in events)
+    assert any(
+        e.type == "LoopCapped" and e.payload.get("reason") == "error" for e in events
+    )
     assert any(
         e.type == "ExpansionRefused" and e.payload.get("loop_id") == "L1" for e in events
     )

@@ -22,6 +22,7 @@ from coscientist.core.domain import (
 )
 from coscientist.core.events import (
     PLAN_EXPANDED_SCHEMA_VERSION,
+    TASK_CREATED_SCHEMA_VERSION,
     EventEnvelope,
     make_idem,
 )
@@ -29,6 +30,8 @@ from coscientist.core.expand_graph import plan_graph_events, question_graph_even
 from coscientist.core.expand_validate import active_plan_blob, assign_core_keys
 from coscientist.core.ids import task_id
 from coscientist.core.loop_predicates import (
+    LoopPredicateEvalError,
+    UnknownLoopPredicateError,
     count_survivors,
     eval_loop_predicate,
     validate_loop_predicate,
@@ -41,6 +44,9 @@ if TYPE_CHECKING:
     from coscientist.core.machine import StudyRuntime
 
 LOOP_DEP_PREFIX = "loop:"
+LOOP_REASON_ITERATION_CAP = "iteration_cap"
+LOOP_REASON_ERROR = "error"
+LOOP_REASON_REFUSED = "refused"
 
 
 def normalize_loop_id(raw: str) -> str:
@@ -63,9 +69,14 @@ def is_loop_dep(key: str) -> bool:
 
 
 def parse_loop_dep(key: str) -> str | None:
+    """Return NFKC-normalized loop_id from ``loop:<id>``, or None if not a barrier."""
     if not is_loop_dep(key):
         return None
-    return str(key)[len(LOOP_DEP_PREFIX) :]
+    raw = str(key)[len(LOOP_DEP_PREFIX) :]
+    try:
+        return normalize_loop_id(raw)
+    except PlanInvalid:
+        return None
 
 
 def loop_plan_id(study_id: str, loop_id: str, iter_n: int, rev: int) -> str:
@@ -111,7 +122,7 @@ def loop_status(runtime: StudyRuntime, loop_id: str) -> str | None:
 
 
 def loop_is_complete(runtime: StudyRuntime, loop_id: str) -> bool:
-    return loop_status(runtime, loop_id) in ("done", "capped")
+    return loop_status(runtime, loop_id) in ("done", "capped", "refused")
 
 
 def iter_keys(runtime: StudyRuntime, loop_id: str, iter_n: int) -> list[str]:
@@ -214,17 +225,25 @@ def validate_loop_specs(
                         f"LoopSpec.scope_questions unknown question {qid!r} "
                         f"(loop {lid!r})"
                     )
+        norm_hyps: list[str] = []
         for hid in ls.scope_hypotheses:
             hid_n = unicodedata.normalize("NFKC", str(hid or "")).strip()
             if not hid_n:
                 raise PlanInvalid(
                     f"LoopSpec.scope_hypotheses empty id (loop {lid!r})"
                 )
+            if any(unicodedata.category(ch) in {"Cf", "Cc", "Cs"} for ch in hid_n):
+                raise PlanInvalid(
+                    f"LoopSpec.scope_hypotheses invisible chars {hid!r} (loop {lid!r})"
+                )
             if hyps is not None and hid_n not in hyps:
                 raise PlanInvalid(
                     f"LoopSpec.scope_hypotheses unknown hypothesis {hid!r} "
                     f"(loop {lid!r})"
                 )
+            norm_hyps.append(hid_n)
+        if norm_hyps != list(ls.scope_hypotheses):
+            ls = ls.model_copy(update={"scope_hypotheses": norm_hyps})
         out.append(ls)
     return out
 
@@ -442,7 +461,7 @@ async def materialize_loop_iter(
                 idem_key=make_idem("TaskCreated", tid, pid),
                 payload=task.model_dump(mode="json"),
                 ts=now,
-                schema_version=10,
+                schema_version=TASK_CREATED_SCHEMA_VERSION,
             )
         )
 
@@ -489,17 +508,25 @@ async def _emit_loop_capped(
     loop: LoopSpec,
     *,
     iter_n: int,
-    refuse_detail: str | None = None,
+    reason: str = LOOP_REASON_ITERATION_CAP,
+    detail: str | None = None,
+    survivors: int | None = None,
 ) -> None:
+    """Journal LoopCapped. Never recomputes survivors on error/refuse paths."""
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return
     sid = runtime.study.study_id
     capped = getattr(runtime, "_loop_capped", None) or {}
     if isinstance(capped, dict) and loop.loop_id in capped:
         return
-    if loop_status(runtime, loop.loop_id) == "capped":
+    status = loop_status(runtime, loop.loop_id)
+    # LoopRefused folds status=refused *before* LoopCapped on the fail-closed
+    # path — still emit LoopCapped(reason=error|refused) so reopen can restore
+    # ``_loop_capped`` without re-eval. Skip only true prior terminals.
+    if status in ("done", "capped"):
         return
-    survivors = count_survivors(runtime, loop, upto_iter=iter_n)
+    if survivors is None and reason == LOOP_REASON_ITERATION_CAP:
+        survivors = count_survivors(runtime, loop, upto_iter=iter_n)
     now = runtime.clock.now()
     payload: dict[str, Any] = {
         "loop_id": loop.loop_id,
@@ -509,19 +536,94 @@ async def _emit_loop_capped(
         "scope_hypotheses": list(loop.scope_hypotheses),
         "scope_questions": list(loop.scope_questions),
         "until": loop.until.model_dump(mode="json"),
+        "reason": reason,
     }
-    if refuse_detail:
-        payload["refuse_detail"] = refuse_detail[:200]
+    if detail:
+        payload["detail"] = detail[:200]
+        payload["refuse_detail"] = detail[:200]  # legacy report readers
     ev = EventEnvelope(
         study_id=sid,
         type="LoopCapped",
         entity_key=f"{sid}:loop:{loop.loop_id}",
-        idem_key=make_idem("LoopCapped", sid, loop.loop_id),
+        idem_key=make_idem("LoopCapped", sid, loop.loop_id, reason),
         payload=payload,
         ts=now,
         schema_version=1,
     )
     await runtime._append([ev])  # noqa: SLF001
+
+
+async def _emit_loop_refused(
+    runtime: StudyRuntime,
+    loop: LoopSpec,
+    *,
+    iter_n: int,
+    detail: str,
+    reason: str = LOOP_REASON_ERROR,
+) -> None:
+    """Journal LoopRefused + LoopCapped(reason=error|refused) without re-eval."""
+    if runtime.study is None or getattr(runtime, "_finalized", False):
+        return
+    if loop_is_complete(runtime, loop.loop_id):
+        return
+    sid = runtime.study.study_id
+    now = runtime.clock.now()
+    detail_s = detail[:200]
+    after = loop.depends_on[0] if loop.depends_on else loop.loop_id
+    # LoopRefused first (distinct from iteration_cap); then LoopCapped for barrier.
+    await runtime._append(  # noqa: SLF001
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="LoopRefused",
+                entity_key=f"{sid}:loop:{loop.loop_id}",
+                idem_key=make_idem("LoopRefused", sid, loop.loop_id, reason),
+                payload={
+                    "loop_id": loop.loop_id,
+                    "iter": iter_n,
+                    "max_iter": int(loop.max_iter),
+                    "reason": reason,
+                    "detail": detail_s,
+                    "scope_hypotheses": list(loop.scope_hypotheses),
+                    "scope_questions": list(loop.scope_questions),
+                    "until": loop.until.model_dump(mode="json"),
+                },
+                ts=now,
+                schema_version=1,
+            )
+        ]
+    )
+    await _emit_loop_capped(
+        runtime,
+        loop,
+        iter_n=iter_n,
+        reason=reason,
+        detail=detail_s,
+        survivors=None,  # never recompute — predicate may be what failed
+    )
+    await runtime._append(  # noqa: SLF001
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="ExpansionRefused",
+                entity_key=f"{sid}:loop:{loop.loop_id}:{reason}",
+                idem_key=make_idem(
+                    "ExpansionRefused", sid, f"loop:{loop.loop_id}", reason, detail_s
+                ),
+                payload={
+                    "after_task": after,
+                    "reason": "invalid",
+                    "detail": detail_s,
+                    "plan_key": None,
+                    "loop_id": loop.loop_id,
+                    "loop": True,
+                    "loop_reason": reason,
+                },
+                ts=now,
+                schema_version=1,
+            )
+        ]
+    )
 
 
 async def _emit_loop_completed(
@@ -561,42 +663,16 @@ async def _emit_loop_completed(
 
 
 async def _refuse_loop(
-    runtime: StudyRuntime, loop: LoopSpec, *, detail: str
+    runtime: StudyRuntime,
+    loop: LoopSpec,
+    *,
+    detail: str,
+    reason: str = LOOP_REASON_REFUSED,
 ) -> None:
-    """Journal LoopCapped then ExpansionRefused(loop_id=…) for live ≡ replay."""
-    if runtime.study is None or getattr(runtime, "_finalized", False):
-        return
-    sid = runtime.study.study_id
-    now = runtime.clock.now()
-    after = loop.depends_on[0] if loop.depends_on else loop.loop_id
-    detail_s = detail[:200]
-    # LoopCapped first (dispositions / report); ExpansionRefused carries loop_id
-    # so a partial journal without LoopCapped still restores status=capped.
+    """Journal LoopRefused + LoopCapped(reason≠iteration_cap) for live ≡ replay."""
     cur = current_iter(runtime, loop.loop_id) or 0
-    await _emit_loop_capped(
-        runtime, loop, iter_n=max(cur, 1), refuse_detail=detail_s
-    )
-    await runtime._append(  # noqa: SLF001
-        [
-            EventEnvelope(
-                study_id=sid,
-                type="ExpansionRefused",
-                entity_key=f"{sid}:loop:{loop.loop_id}:invalid",
-                idem_key=make_idem(
-                    "ExpansionRefused", sid, f"loop:{loop.loop_id}", "invalid", detail_s
-                ),
-                payload={
-                    "after_task": after,
-                    "reason": "invalid",
-                    "detail": detail_s,
-                    "plan_key": None,
-                    "loop_id": loop.loop_id,
-                    "loop": True,
-                },
-                ts=now,
-                schema_version=1,
-            )
-        ]
+    await _emit_loop_refused(
+        runtime, loop, iter_n=cur, detail=detail, reason=reason
     )
 
 
@@ -667,24 +743,29 @@ async def _advance_one(runtime: StudyRuntime, loop: LoopSpec) -> str | None:
 async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
     """Advance all loops that can take a step (start / next iter / cap / complete).
 
-    Unexpected errors → ExpansionRefused + LoopCapped (reportable), never a crash
-    that blocks StudyFinalized. Predicate bugs are not treated as until=False.
+    Expected eval failures (unknown predicate) → LoopRefused + LoopCapped(reason=error).
+    Real bugs propagate (never disguised as iteration_cap).
     """
     done: list[str] = []
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return done
+    # Orphan scan / plan parse bugs propagate (honest failure). Expected
+    # predicate eval failures are caught per-loop below — never iteration_cap.
     await refuse_orphaned_loop_barriers(runtime)
-    for loop in _loops_from_plans(runtime):
+    loops = _loops_from_plans(runtime)
+    for loop in loops:
         try:
             pid = await _advance_one(runtime, loop)
             if pid:
                 done.append(pid)
-        except Exception as e:  # noqa: BLE001 — study-level honesty via refuse+cap
+        except (LoopPredicateEvalError, UnknownLoopPredicateError) as e:
             await _refuse_loop(
                 runtime,
                 loop,
-                detail=f"loop_exception:{type(e).__name__}:{e}"[:200],
+                detail=f"loop_predicate:{type(e).__name__}:{e}"[:200],
+                reason=LOOP_REASON_ERROR,
             )
+        # All other exceptions propagate — honest study failure, not iteration_cap.
     return done
 
 
@@ -736,22 +817,45 @@ def fold_loop_capped(runtime: Any, payload: dict[str, Any]) -> None:
     lid = str(payload.get("loop_id") or "")
     if not lid:
         return
+    reason = str(payload.get("reason") or LOOP_REASON_ITERATION_CAP)
     st = _loop_state(runtime)
     row = dict(st.get(lid) or {})
-    row["status"] = "capped"
+    row["status"] = "refused" if reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED) else "capped"
     try:
         row["iter"] = int(payload.get("iter") or row.get("iter") or 0)
     except (TypeError, ValueError):
         pass
     row["survivors"] = payload.get("survivors")
-    if payload.get("refuse_detail"):
-        row["refuse_detail"] = payload.get("refuse_detail")
+    row["reason"] = reason
+    detail = payload.get("detail") or payload.get("refuse_detail")
+    if detail:
+        row["refuse_detail"] = detail
     st[lid] = row
     capped = getattr(runtime, "_loop_capped", None)
     if not isinstance(capped, dict):
         runtime._loop_capped = {}
         capped = runtime._loop_capped
     capped[lid] = dict(payload)
+
+
+def fold_loop_refused(runtime: Any, payload: dict[str, Any]) -> None:
+    """Rebuild refused status from LoopRefused (before LoopCapped on the same path)."""
+    lid = str(payload.get("loop_id") or "")
+    if not lid:
+        return
+    st = _loop_state(runtime)
+    row = dict(st.get(lid) or {})
+    if row.get("status") in ("done", "capped", "refused"):
+        return
+    row["status"] = "refused"
+    row["reason"] = str(payload.get("reason") or LOOP_REASON_ERROR)
+    try:
+        row["iter"] = int(payload.get("iter") or row.get("iter") or 0)
+    except (TypeError, ValueError):
+        pass
+    if payload.get("detail"):
+        row["refuse_detail"] = str(payload.get("detail"))[:200]
+    st[lid] = row
 
 
 def fold_loop_completed(runtime: Any, payload: dict[str, Any]) -> None:
@@ -777,10 +881,9 @@ def fold_loop_completed(runtime: Any, payload: dict[str, Any]) -> None:
 
 
 def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
-    """ExpansionRefused for a loop restores status=capped (barrier / no re-advance).
+    """ExpansionRefused for a loop restores terminal status (barrier / no re-advance).
 
-    Does not populate ``_loop_capped`` (that is LoopCapped's job) so emitting
-    ExpansionRefused after LoopCapped cannot suppress the LoopCapped write.
+    Does not populate ``_loop_capped`` (LoopCapped's job).
     """
     if not payload.get("loop") and not payload.get("loop_id"):
         return
@@ -789,21 +892,40 @@ def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
         return
     st = _loop_state(runtime)
     row = dict(st.get(lid) or {})
-    if row.get("status") in ("done", "capped"):
+    if row.get("status") in ("done", "capped", "refused"):
         return
-    row["status"] = "capped"
+    loop_reason = str(payload.get("loop_reason") or LOOP_REASON_REFUSED)
+    row["status"] = (
+        "refused"
+        if loop_reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED)
+        else "capped"
+    )
+    row["reason"] = loop_reason
     row["refuse_detail"] = str(payload.get("detail") or "")[:200]
     st[lid] = row
 
 
 def capped_scope_questions(runtime: Any) -> dict[str, dict[str, Any]]:
-    """qid → LoopCapped payload for disposition reason=iteration_cap."""
+    """qid → LoopCapped payload only for true iteration_cap with ≥1 iter.
+
+    Refuse/error terminals and zero-iter caps are excluded — they must not stamp
+    disposition reason=iteration_cap.
+    """
     capped = getattr(runtime, "_loop_capped", None) or {}
     out: dict[str, dict[str, Any]] = {}
     if not isinstance(capped, dict):
         return out
     for _lid, p in capped.items():
         if not isinstance(p, dict):
+            continue
+        reason = str(p.get("reason") or LOOP_REASON_ITERATION_CAP)
+        if reason != LOOP_REASON_ITERATION_CAP:
+            continue
+        try:
+            iter_n = int(p.get("iter") or 0)
+        except (TypeError, ValueError):
+            iter_n = 0
+        if iter_n < 1:
             continue
         for qid in p.get("scope_questions") or []:
             out[str(qid)] = p
