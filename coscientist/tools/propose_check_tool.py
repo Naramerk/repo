@@ -87,7 +87,7 @@ class ProposeCheckTool:
         )
         if pid is None:
             return ToolOutput(data={"proposal_id": None, "reason": "proposal_quota"})
-        ref = requirement_ref_for_proposal(pid)
+        ref = requirement_ref_for_proposal(pid, target=str(args["target"]))
         return ToolOutput(
             data={
                 "proposal_id": pid,

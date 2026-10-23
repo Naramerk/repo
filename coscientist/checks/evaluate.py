@@ -670,9 +670,8 @@ def _evaluate_proposed_check(
     base_effect["delegated"] = bool(row.get("delegated"))
     base_effect["bound_task_id"] = row.get("bound_task_id") or row.get("task_id")
     base_effect["bound_target"] = row.get("bound_target") or row.get("target")
+    # Target must be on the RequirementRef (params); no fallback to bound_target.
     eval_target = params.get("target")
-    if eval_target is None:
-        eval_target = row.get("bound_target") or row.get("target")
     prereg_err = assert_proposal_preregistered_for_eval(
         row,
         attempt_id=attempt_id,

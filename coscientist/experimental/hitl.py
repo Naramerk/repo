@@ -283,8 +283,16 @@ class HitlForkMixin(CostlyHitlMixin):
                     ),
                 ]
             )
+            # reviewer_task_id from expansion (required before bind); timeout≡reject
+            # still applies even when unset (reject_stale does not need bind).
+            rev_tid = None
+            if isinstance(expansion, dict):
+                rev_tid = expansion.get("reviewer_task_id")
             await schedule_proposed_check_review(
-                self, pid, hitl_request_id_s=request_id
+                self,
+                pid,
+                hitl_request_id_s=request_id,
+                reviewer_task_id=str(rev_tid) if rev_tid else None,
             )
             return
         await reject_check(

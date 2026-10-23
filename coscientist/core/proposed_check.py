@@ -5,12 +5,20 @@ Flow:
    **before** the evaluating attempt starts and before any ``ResultRecorded`` for that
    task/target. NFKC is applied in ``compute_proposal_digest``.
 2. Approval is a HITL checkpoint (``CheckApproved`` / ``CheckRejected``); timeout ≡ reject.
-   Delegation schedules ``ReviewScheduled(kind=proposed_check_review)``; a live reviewer
-   attempt (role=reviewer, different task) must call ``approve_check`` / ``reject_check``.
+   Delegation schedules ``ReviewScheduled(kind=proposed_check_review)`` with a designated
+   ``reviewer_task_id``; only a live ``attempt_role=reviewer`` attempt on that task may
+   ``bind_proposed_check_reviewer`` then ``approve_check`` / ``reject_check``.
 3. Core alone decides countability: unapproved → ``unapproved_check``; approved executable
    counts like catalog (severe only when trusted); approved rubric is qualitative never-severe;
    delegated approvals count but do not tip ties against catalog claims (including 0:0).
-4. Quota ``Study.max_proposals`` (default 3); excess closes the task with ``proposal_quota``.
+4. Quota ``Study.max_proposals`` (default 3) caps **new** proposal ids before eval starts;
+   excess closes the proposing task with ``proposal_quota``. Live-attempt / post-result
+   gates are separate temporal prereg windows, not a second quota.
+
+Unicode / digests:
+   Digests and target binds use NFKC only. Compatibility forms (e.g. fullwidth Latin)
+   collapse; **confusables do not** (Cyrillic ``а`` ≠ Latin ``a``). Homoglyph attacks
+   that rely on distinct scripts remain distinct proposal digests / target mismatches.
 """
 
 from __future__ import annotations
@@ -77,7 +85,11 @@ _PREREG_FIELDS = frozenset(
 
 
 def _nfkc(value: Any) -> Any:
-    """NFKC-normalize strings (and nested string leaves) for stable digests."""
+    """NFKC-normalize strings (and nested string leaves) for stable digests.
+
+    Limitation: NFKC does not collapse cross-script confusables (Cyrillic/Latin
+    lookalikes, etc.); only Unicode compatibility equivalents (e.g. fullwidth).
+    """
     if isinstance(value, str):
         return unicodedata.normalize("NFKC", value)
     if isinstance(value, list):
@@ -269,11 +281,23 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
         }
 
 
-def requirement_ref_for_proposal(proposal_id_s: str, *, required: bool = True) -> RequirementRef:
-    """Plan criterion pointing at the catalog meta-template + proposal id."""
+def requirement_ref_for_proposal(
+    proposal_id_s: str,
+    *,
+    target: str,
+    required: bool = True,
+) -> RequirementRef:
+    """Plan criterion for ``proposed_check`` — params carry proposal_id **and** target.
+
+    Eval compares ``params['target']`` to the proposal's bound_target (fail-closed
+    if missing) so one approval cannot satisfy a criterion for a different target.
+    """
+    target_s = unicodedata.normalize("NFKC", str(target)).strip()
+    if not target_s:
+        raise ValueError("requirement_ref_for_proposal requires non-empty target")
     return RequirementRef(
         template_id=PROPOSED_CHECK_TEMPLATE_ID,
-        params={"proposal_id": str(proposal_id_s)},
+        params={"proposal_id": str(proposal_id_s), "target": target_s},
         required=required,
     )
 
@@ -321,7 +345,12 @@ def _task_has_started_attempt(
 def _result_seq_for_task(
     results: Mapping[str, Mapping[str, Any]] | None, task_id: str
 ) -> int | None:
-    """Earliest ResultRecorded._seq for ``task_id``, or None if none / missing seq."""
+    """Earliest ResultRecorded._seq for ``task_id``.
+
+    Returns ``None`` when no result exists. Returns ``-1`` (fail-closed sentinel)
+    when any matching row lacks a usable ``_seq`` — including mixed rows where
+    some have ``_seq`` and others do not (never silently ``min`` over a subset).
+    """
     if not results:
         return None
     found = False
@@ -340,8 +369,9 @@ def _result_seq_for_task(
             missing_seq = True
     if not found:
         return None
-    if missing_seq and best is None:
-        return -1  # sentinel: result exists but seq unknown → fail-closed
+    # Fail-closed on any missing _seq among matching rows (mixed or all-missing).
+    if missing_seq:
+        return -1
     return best
 
 
@@ -385,6 +415,8 @@ async def propose_check(
 
     # Refuse while a foreign evaluating attempt is live, and block any new pid
     # once a ResultRecorded exists for the bound task (prereg must precede both).
+    # New proposal ids before eval starts are also capped by max_proposals above
+    # (quota close); this gate is the temporal prereg window, not a second quota.
     if _task_has_started_attempt(
         runtime, task_id, except_attempt_id=str(attempt_id)
     ):
@@ -608,6 +640,15 @@ def _validate_reviewer_attempt(
     return att
 
 
+def _lookup_hitl_request(runtime: Any, request_id: str) -> Any | None:
+    hitl_map = getattr(runtime, "hitl", None)
+    if not isinstance(hitl_map, dict):
+        hitl_map = getattr(runtime, "_hitl_requests", None) or {}
+    if not isinstance(hitl_map, dict):
+        return None
+    return hitl_map.get(request_id)
+
+
 def _verify_human_principal(
     runtime: Any,
     *,
@@ -616,41 +657,42 @@ def _verify_human_principal(
     hitl_request_id_s: str | None,
     human_principal: str | None,
 ) -> str:
-    """Return auditable principal id, or raise (fail-closed — no anonymous human)."""
-    if source == "hitl":
-        rid = str(hitl_request_id_s or "").strip()
-        if not rid:
-            raise ValueError("hitl approval requires hitl_request_id")
-        hitl_map = getattr(runtime, "hitl", None)
-        if not isinstance(hitl_map, dict):
-            hitl_map = getattr(runtime, "_hitl_requests", None) or {}
-        h = hitl_map.get(rid) if isinstance(hitl_map, dict) else None
-        if h is None:
-            raise ValueError(
-                f"hitl approval requires verifiable HitlOpened request: {rid!r}"
-            )
-        if isinstance(h, dict):
-            kind = str(h.get("kind") or "")
-            ref = str(h.get("payload_ref") or h.get("proposal_id") or "")
-        else:
-            kind = str(getattr(h, "kind", "") or "")
-            ref = str(getattr(h, "payload_ref", "") or "")
-        if kind and kind != "proposed_check":
-            raise ValueError(f"hitl request kind must be proposed_check, got {kind!r}")
-        if ref and ref != str(proposal_id_s):
-            raise ValueError(
-                f"hitl request {rid!r} not bound to proposal {proposal_id_s!r}"
-            )
-        return f"hitl:{rid}"
-    if source == "api":
-        principal = str(human_principal or "").strip()
-        if not principal:
-            raise ValueError(
-                "api approval requires verifiable human_principal "
-                "(non-empty authenticated identity)"
-            )
-        return principal
-    raise ValueError(f"human principal not applicable for source={source!r}")
+    """Return auditable principal id, or raise (fail-closed — no anonymous human).
+
+    Both ``source=hitl`` and ``source=api`` require a journaled ``HitlOpened``
+    with ``kind=proposed_check`` and ``payload_ref`` bound to this proposal.
+    A free-form ``human_principal`` string alone never authenticates ``by=human``.
+    """
+    del human_principal  # audit-only callers may still pass it; never sufficient alone
+    if source not in ("hitl", "api"):
+        raise ValueError(f"human principal not applicable for source={source!r}")
+    rid = str(hitl_request_id_s or "").strip()
+    if not rid:
+        raise ValueError(
+            f"{source} approval requires hitl_request_id bound to authenticated HitlOpened"
+        )
+    h = _lookup_hitl_request(runtime, rid)
+    if h is None:
+        raise ValueError(
+            f"{source} approval requires verifiable HitlOpened request: {rid!r}"
+        )
+    if isinstance(h, dict):
+        kind = str(h.get("kind") or "")
+        ref = str(h.get("payload_ref") or h.get("proposal_id") or "")
+    else:
+        kind = str(getattr(h, "kind", "") or "")
+        ref = str(getattr(h, "payload_ref", "") or "")
+    # Fail-closed: empty kind/ref are not a free pass (must equal expected).
+    if kind != "proposed_check":
+        raise ValueError(
+            f"hitl request kind must be proposed_check, got {kind!r}"
+        )
+    if ref != str(proposal_id_s):
+        raise ValueError(
+            f"hitl request {rid!r} not bound to proposal {proposal_id_s!r} "
+            f"(payload_ref={ref!r})"
+        )
+    return f"hitl:{rid}"
 
 
 async def bind_proposed_check_reviewer(
@@ -658,10 +700,11 @@ async def bind_proposed_check_reviewer(
     proposal_id_s: str,
     reviewer_attempt_id: str,
 ) -> None:
-    """Journal ReviewScheduled bind: reviewer role comes from the journal, not caller.
+    """Journal ReviewScheduled bind — only the designated reviewer attempt.
 
-    ``start_attempt`` no longer accepts ``attempt_role``; a live attempt on a
-    different task is bound here and later checked by ``approve_check``.
+    Callers cannot choose ``attempt_role``; ``start_attempt`` derives
+    ``attempt_role=reviewer`` from ``ReviewScheduled.reviewer_task_id``. Bind
+    requires that role, a matching designated task, and a pending review row.
     """
     row = get_proposal(runtime, proposal_id_s)
     if row is None:
@@ -676,6 +719,11 @@ async def bind_proposed_check_reviewer(
         )
     if str(rev.get("status") or "pending") != "pending":
         raise ValueError(f"review not pending for {proposal_id_s!r}")
+    designated = str(rev.get("reviewer_task_id") or "").strip()
+    if not designated:
+        raise ValueError(
+            f"ReviewScheduled for {proposal_id_s!r} missing reviewer_task_id"
+        )
     existing = str(rev.get("reviewer_attempt_id") or "")
     aid = str(reviewer_attempt_id or "")
     if existing and existing != aid:
@@ -693,10 +741,20 @@ async def bind_proposed_check_reviewer(
         raise ValueError("delegated reviewer must differ from the proposal author attempt")
     if att.get("closed"):
         raise AttemptClosedError(aid)
+    role = str(att.get("attempt_role") or "agent")
+    if role != "reviewer":
+        raise ValueError(
+            f"bind requires attempt_role=reviewer from journal, got {role!r}"
+        )
     prop_task = str(row.get("bound_task_id") or row.get("task_id") or "")
     rev_task = str(att.get("task_id") or "")
     if prop_task and rev_task and prop_task == rev_task:
         raise ValueError("reviewer attempt must belong to a different task than the proposer")
+    if rev_task != designated:
+        raise ValueError(
+            f"reviewer attempt task {rev_task!r} != ReviewScheduled.reviewer_task_id "
+            f"{designated!r}"
+        )
     study = runtime.study
     assert study is not None
     now = runtime.clock.now()
@@ -705,6 +763,7 @@ async def bind_proposed_check_reviewer(
         "kind": "proposed_check_review",
         "proposal_id": str(proposal_id_s),
         "reviewer_attempt_id": aid,
+        "reviewer_task_id": designated,
         "status": "pending",
         "deadline": rev.get("deadline"),
         "hitl_request_id": rev.get("hitl_request_id"),
@@ -934,10 +993,15 @@ async def schedule_proposed_check_review(
     runtime: Any,
     proposal_id_s: str,
     *,
+    reviewer_task_id: str | None = None,
     hitl_request_id_s: str | None = None,
     timeout_s: int | None = None,
 ) -> None:
-    """Journal ReviewScheduled(proposed_check_review) with a hard deadline (timeout≡reject)."""
+    """Journal ReviewScheduled(proposed_check_review) with a hard deadline (timeout≡reject).
+
+    ``reviewer_task_id`` designates which task may start a ``attempt_role=reviewer``
+    attempt and call ``bind_proposed_check_reviewer`` (required before bind).
+    """
     row = get_proposal(runtime, proposal_id_s)
     if row is None:
         raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
@@ -954,6 +1018,13 @@ async def schedule_proposed_check_review(
         else study.effective_deadline(),
         study.effective_deadline(),
     )
+    designated = str(reviewer_task_id).strip() if reviewer_task_id else ""
+    if designated:
+        if designated not in (getattr(runtime, "tasks", None) or {}):
+            raise ValueError(f"unknown reviewer_task_id: {designated!r}")
+        prop_task = str(row.get("bound_task_id") or row.get("task_id") or "")
+        if prop_task and designated == prop_task:
+            raise ValueError("reviewer_task_id must differ from the proposer task")
     await _append_events(
         runtime,
         [
@@ -967,6 +1038,7 @@ async def schedule_proposed_check_review(
                     "proposal_id": str(proposal_id_s),
                     "hitl_request_id": hitl_request_id_s,
                     "task_id": row.get("task_id"),
+                    "reviewer_task_id": designated or None,
                     "proposer_attempt_id": row.get("proposer_attempt_id")
                     or row.get("attempt_id"),
                     "deadline": deadline.isoformat(),
@@ -1067,11 +1139,14 @@ def assert_proposal_preregistered_for_eval(
         return "unapproved_check:missing_task_id"
     if str(task_id) != bound_task:
         return f"unapproved_check:task_mismatch:{bound_task}!={task_id}"
-    if target is not None:
-        want = unicodedata.normalize("NFKC", str(target)).strip()
-        got = unicodedata.normalize("NFKC", bound_target).strip()
-        if want != got:
-            return f"unapproved_check:target_mismatch:{got!r}!={want!r}"
+    # Fail-closed: eval target must come from RequirementRef.params (not a silent
+    # fallback to bound_target — that would let one approval cover other targets).
+    if target is None or not str(target).strip():
+        return "unapproved_check:missing_eval_target"
+    want = unicodedata.normalize("NFKC", str(target)).strip()
+    got = unicodedata.normalize("NFKC", bound_target).strip()
+    if want != got:
+        return f"unapproved_check:target_mismatch:{got!r}!={want!r}"
 
     proposed_seq = row.get("proposed_seq")
     if not isinstance(proposed_seq, int):

@@ -37,6 +37,7 @@ from coscientist.core.events import (
     make_idem,
 )
 from coscientist.core.finalize import finalize
+from coscientist.core.ids import hitl_request_id
 from coscientist.core.proposed_check import (
     approve_check,
     assert_proposal_preregistered_for_eval,
@@ -167,12 +168,54 @@ async def _finish_report(rt, tmp_path: Path) -> None:
     await rt.tick()
 
 
-def _set_proposed_criteria(rt, task_id: str, pid: str, *extra: RequirementRef) -> None:
+def _set_proposed_criteria(
+    rt, task_id: str, pid: str, target: str, *extra: RequirementRef
+) -> None:
     task = rt.tasks[task_id]
-    criteria = [requirement_ref_for_proposal(pid), *extra]
+    criteria = [requirement_ref_for_proposal(pid, target=target), *extra]
     rt.tasks[task_id] = task.model_copy(
         update={"spec": task.spec.model_copy(update={"criteria": criteria})}
     )
+
+
+async def _plant_proposed_hitl(rt, pid: str, task_id: str) -> str:
+    """Journal HitlOpened(kind=proposed_check) so approve_check(source=api|hitl) can auth."""
+    from datetime import timedelta
+
+    from coscientist.core.domain import HitlRequest
+
+    rid = hitl_request_id()
+    now = rt.clock.now()
+    study = rt.study
+    assert study is not None
+    req = HitlRequest(
+        request_id=rid,
+        kind="proposed_check",
+        payload_ref=pid,
+        deadline=now + timedelta(seconds=120),
+        study_id=study.study_id,
+        task_id=str(task_id),
+        open=True,
+    )
+    await rt._append(
+        [
+            EventEnvelope(
+                study_id=study.study_id,
+                type="HitlOpened",
+                entity_key=rid,
+                idem_key=make_idem("HitlOpened", rid),
+                payload=req.model_dump(mode="json"),
+                ts=now,
+            )
+        ]
+    )
+    return rid
+
+
+async def _approve_human(rt, pid: str, task_id: str, *, source: str = "api") -> str:
+    rid = await _plant_proposed_hitl(rt, pid, task_id)
+    await approve_check(rt, pid, source=source, hitl_request_id_s=rid)  # type: ignore[arg-type]
+    return rid
 
 
 @pytest.mark.asyncio
@@ -259,7 +302,7 @@ async def test_unapproved_check_excluded_from_verdict(tmp_path: Path) -> None:
             open_hitl=False,
         )
         assert pid
-        _set_proposed_criteria(rt, exp_tid, pid)
+        _set_proposed_criteria(rt, exp_tid, pid, "q1")
         aid = await rt.start_attempt("EXP")
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
@@ -316,10 +359,10 @@ async def test_approved_executable_counts_like_catalog(tmp_path: Path) -> None:
             open_hitl=False,
         )
         assert pid
-        await approve_check(rt, pid, source="api", delegated=False, human_principal="test-human")
+        await _approve_human(rt, pid, exp_tid)
         assert rt._check_proposals[pid]["status"] == "approved"
         _set_proposed_criteria(
-            rt, exp_tid, pid, RequirementRef(template_id="artifact_present")
+            rt, exp_tid, pid, "q1", RequirementRef(template_id="artifact_present")
         )
         aid = await rt.start_attempt("EXP")
         assert aid
@@ -732,6 +775,9 @@ async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
             open_hitl=False,
         )
         assert pid
+        # Plant authentic HitlOpened before finalize so post-close approve auth can run
+        # and still fail closed at the journal (StudyClosedError), not at principal check.
+        closed_hitl_rid = await _plant_proposed_hitl(rt, pid, exp_tid)
         aid = await rt.start_attempt("EXP")
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
@@ -770,7 +816,7 @@ async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
                 open_hitl=False,
             )
         with pytest.raises(StudyClosedError):
-            await approve_check(rt, pid, source="api", human_principal="test-human")
+            await approve_check(rt, pid, source="api", hitl_request_id_s=closed_hitl_rid)
         with pytest.raises(StudyClosedError):
             await reject_check(rt, pid, source="timeout", reason="too_late")
         events_after = await rt.store.read_all()
@@ -811,7 +857,8 @@ async def test_kill_reopen_restores_proposals(tmp_path: Path) -> None:
         assert pid in rt2._check_proposals
         assert rt2._check_proposals[pid]["proposal_digest"] == digest
         assert rt2._check_proposals[pid]["status"] == "proposed"
-        await approve_check(rt2, pid, source="api", human_principal="test-human")
+        bound = str(rt2._check_proposals[pid].get("bound_task_id") or "")
+        await _approve_human(rt2, pid, bound)
         assert rt2._check_proposals[pid]["status"] == "approved"
     finally:
         await close_runtime(rt2)
@@ -867,7 +914,7 @@ async def test_restart_open_hitl_and_delegated_review_live_eq_replay(
 
 @pytest.mark.asyncio
 async def test_delegated_reviewer_adversarial(tmp_path: Path) -> None:
-    """Reviewer role from journal bind; must differ / live / different task."""
+    """Bind requires ReviewScheduled.reviewer_task_id + attempt_role=reviewer."""
     rt = await open_runtime(tmp_path, "st_pr20_del")
     try:
         await _create(rt, "delegated")
@@ -876,11 +923,12 @@ async def test_delegated_reviewer_adversarial(tmp_path: Path) -> None:
             [
                 _exp_spec(task_key="EXP"),
                 _exp_spec(task_key="REV_AGENT", title="agent"),
-                _exp_spec(task_key="REV_CLOSED", title="closed"),
                 _exp_spec(task_key="REV_OK", title="ok"),
+                _exp_spec(task_key="REV_FOREIGN", title="foreign"),
             ],
         )
         exp_tid = _task_id(rt, "EXP")
+        rev_ok_tid = _task_id(rt, "REV_OK")
         pid = await propose_check(
             rt,
             target="study",
@@ -894,19 +942,26 @@ async def test_delegated_reviewer_adversarial(tmp_path: Path) -> None:
             open_hitl=False,
         )
         assert pid
-        await schedule_proposed_check_review(rt, pid, timeout_s=60)
+        # Designated reviewer task — foreign live attempts must not bind.
+        await schedule_proposed_check_review(
+            rt, pid, timeout_s=60, reviewer_task_id=rev_ok_tid
+        )
+        assert rt._proposed_check_reviews[pid].get("reviewer_task_id") == rev_ok_tid
 
         # start_attempt no longer accepts caller-chosen attempt_role.
         with pytest.raises(TypeError):
             await rt.start_attempt("REV_AGENT", attempt_role="reviewer")  # type: ignore[call-arg]
 
-        # Same attempt id as author (even if that attempt is already closed).
-        with pytest.raises(ValueError, match="differ"):
+        # Same attempt id as author.
+        with pytest.raises(ValueError, match="differ|attempt_role=reviewer"):
             await bind_proposed_check_reviewer(rt, pid, proposer_aid)
 
-        # Approve without journal bind → fail-closed.
+        # Live attempt on a non-designated task → role stays agent; bind fail-closed.
         unbound = await rt.start_attempt("REV_AGENT")
         assert unbound
+        assert rt.attempts[unbound].get("attempt_role") == "agent"
+        with pytest.raises(ValueError, match="attempt_role=reviewer"):
+            await bind_proposed_check_reviewer(rt, pid, unbound)
         with pytest.raises(ValueError, match="not bound|bind_proposed_check_reviewer"):
             await approve_check(
                 rt,
@@ -916,22 +971,23 @@ async def test_delegated_reviewer_adversarial(tmp_path: Path) -> None:
                 reviewer_attempt_id=unbound,
             )
 
+        # Another non-designated foreign live attempt also cannot bind.
+        foreign = await rt.start_attempt("REV_FOREIGN")
+        assert foreign
+        with pytest.raises(ValueError, match="attempt_role=reviewer"):
+            await bind_proposed_check_reviewer(rt, pid, foreign)
+
         same_task = await rt.start_attempt("EXP")
         assert same_task
-        with pytest.raises(ValueError, match="different task"):
+        with pytest.raises(ValueError, match="different task|attempt_role=reviewer"):
             await bind_proposed_check_reviewer(rt, pid, same_task)
 
         with pytest.raises(ValueError, match="unknown reviewer_attempt_id"):
             await bind_proposed_check_reviewer(rt, pid, "bogus-reviewer-aid")
 
-        closed = await rt.start_attempt("REV_CLOSED")
-        assert closed
-        await rt.cancel_task("REV_CLOSED", reason="cancelled")
-        with pytest.raises(AttemptClosedError):
-            await bind_proposed_check_reviewer(rt, pid, closed)
-
         ok = await rt.start_attempt("REV_OK")
         assert ok
+        assert rt.attempts[ok].get("attempt_role") == "reviewer"
         await bind_proposed_check_reviewer(rt, pid, ok)
         assert rt._proposed_check_reviews[pid]["reviewer_attempt_id"] == ok
         # Wrong attempt after bind.
@@ -957,8 +1013,83 @@ async def test_delegated_reviewer_adversarial(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_bind_closed_designated_reviewer_fail_closed(tmp_path: Path) -> None:
+    """Major: designated reviewer attempt that is closed cannot bind."""
+    rt = await open_runtime(tmp_path, "st_pr20_bind_closed")
+    try:
+        await _create(rt, "bind closed")
+        proposer_aid = await _boot_plan(
+            rt,
+            [
+                _exp_spec(task_key="EXP"),
+                _exp_spec(task_key="REV_CLOSE", title="close"),
+            ],
+        )
+        exp_tid = _task_id(rt, "EXP")
+        rev_tid = _task_id(rt, "REV_CLOSE")
+        pid = await propose_check(
+            rt,
+            target="study",
+            role="prediction",
+            measures="m",
+            justification="j",
+            rejected_templates=_rejected(),
+            check=_value_check(target=1),
+            task_id=exp_tid,
+            attempt_id=proposer_aid,
+            open_hitl=False,
+        )
+        assert pid
+        await schedule_proposed_check_review(
+            rt, pid, timeout_s=60, reviewer_task_id=rev_tid
+        )
+        closed = await rt.start_attempt("REV_CLOSE")
+        assert closed
+        assert rt.attempts[closed].get("attempt_role") == "reviewer"
+        await rt.cancel_task("REV_CLOSE", reason="cancelled")
+        with pytest.raises(AttemptClosedError):
+            await bind_proposed_check_reviewer(rt, pid, closed)
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_bind_requires_reviewer_task_id_on_schedule(tmp_path: Path) -> None:
+    """Major: ReviewScheduled without reviewer_task_id → bind fail-closed."""
+    rt = await open_runtime(tmp_path, "st_pr20_bind_no_desig")
+    try:
+        await _create(rt, "no desig")
+        proposer_aid = await _boot_plan(
+            rt,
+            [_exp_spec(task_key="EXP"), _exp_spec(task_key="REV", title="rev")],
+        )
+        exp_tid = _task_id(rt, "EXP")
+        pid = await propose_check(
+            rt,
+            target="study",
+            role="prediction",
+            measures="m",
+            justification="j",
+            rejected_templates=_rejected(),
+            check=_value_check(target=1),
+            task_id=exp_tid,
+            attempt_id=proposer_aid,
+            open_hitl=False,
+        )
+        assert pid
+        await schedule_proposed_check_review(rt, pid, timeout_s=60)
+        assert not rt._proposed_check_reviews[pid].get("reviewer_task_id")
+        aid = await rt.start_attempt("REV")
+        assert aid
+        with pytest.raises(ValueError, match="missing reviewer_task_id"):
+            await bind_proposed_check_reviewer(rt, pid, aid)
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
 async def test_approve_source_human_and_reviewer_guards(tmp_path: Path) -> None:
-    """by/human not settable; human only via hitl/api with principal; reviewer needs bind."""
+    """by/human not settable; human only via authentic HitlOpened; reviewer needs bind."""
     rt = await open_runtime(tmp_path, "st_pr20_src")
     try:
         await _create(rt, "sources")
@@ -983,9 +1114,9 @@ async def test_approve_source_human_and_reviewer_guards(tmp_path: Path) -> None:
             await approve_check(rt, pid, source="human")  # type: ignore[arg-type]
         with pytest.raises(ValueError, match="delegated=True"):
             await approve_check(rt, pid, source="reviewer", delegated=False)
-        with pytest.raises(ValueError, match="human_principal"):
+        with pytest.raises(ValueError, match="hitl_request_id|HitlOpened"):
             await approve_check(rt, pid, source="api")
-        with pytest.raises(ValueError, match="hitl_request_id|verifiable"):
+        with pytest.raises(ValueError, match="hitl_request_id|verifiable|HitlOpened"):
             await approve_check(rt, pid, source="hitl")
         with pytest.raises(ValueError, match="reviewer_attempt_id|unknown|not bound|ReviewScheduled"):
             await approve_check(
@@ -995,14 +1126,14 @@ async def test_approve_source_human_and_reviewer_guards(tmp_path: Path) -> None:
                 delegated=True,
                 reviewer_attempt_id="not-a-real-attempt",
             )
-        await approve_check(rt, pid, source="api", human_principal="test-human")
+        rid = await _approve_human(rt, pid, exp_tid, source="api")
         assert rt._check_proposals[pid]["status"] == "approved"
         events = await rt.store.read_all()
         approved = [e for e in events if e.type == "CheckApproved"]
         assert len(approved) == 1
         assert approved[0].idem_key == make_idem("CheckApproved", pid)
         assert approved[0].idem_key == f"CheckApproved:{pid}"
-        assert approved[0].payload.get("human_principal") == "test-human"
+        assert approved[0].payload.get("human_principal") == f"hitl:{rid}"
     finally:
         await close_runtime(rt)
 
@@ -1046,8 +1177,8 @@ async def test_prereg_after_attempt_fails_eval(tmp_path: Path) -> None:
             open_hitl=False,
         )
         assert pid
-        await approve_check(rt, pid, source="api", human_principal="test-human")
-        _set_proposed_criteria(rt, exp_tid, pid)
+        await _approve_human(rt, pid, exp_tid)
+        _set_proposed_criteria(rt, exp_tid, pid, "q1")
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
         art = arts.put(
@@ -1107,8 +1238,8 @@ async def test_approval_cannot_bind_another_task_id(tmp_path: Path) -> None:
             open_hitl=False,
         )
         assert pid
-        await approve_check(rt, pid, source="api", human_principal="test-human")
-        _set_proposed_criteria(rt, exp2_tid, pid)
+        await _approve_human(rt, pid, exp_tid)
+        _set_proposed_criteria(rt, exp2_tid, pid, "q1")
         aid = await rt.start_attempt("EXP2")
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
@@ -1265,9 +1396,9 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
             open_hitl=False,
         )
         assert pid
-        ref = requirement_ref_for_proposal(pid)
+        ref = requirement_ref_for_proposal(pid, target="q1")
         # Re-accept not needed — plan already has EXP; expand criteria via propose bind.
-        await approve_check(rt, pid, source="api", human_principal="test-human")
+        await _approve_human(rt, pid, exp_tid)
         # Replace EXP criteria by recording with proposed_check in a fresh plan child:
         # start EXP with artifact_present only from boot; inject proposal via evaluate path
         # by re-planning is heavy — keep finalize invariant on quota-free path.
@@ -1682,7 +1813,7 @@ async def test_refuse_new_pid_after_result_adversarial(tmp_path: Path) -> None:
             open_hitl=False,
         )
         assert pid
-        await approve_check(rt, pid, source="api", human_principal="test-human")
+        await _approve_human(rt, pid, exp_tid)
         aid = await rt.start_attempt("EXP")
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
@@ -1787,7 +1918,7 @@ def test_prereg_fail_closed_missing_attempts_seq() -> None:
 
 @pytest.mark.asyncio
 async def test_api_approve_without_principal_fail_closed(tmp_path: Path) -> None:
-    """B3 adversarial: source=api|hitl without verifiable principal → reject."""
+    """B5: source=api free-form string / missing HitlOpened → fail-closed."""
     rt = await open_runtime(tmp_path, "st_pr20_no_principal")
     try:
         await _create(rt, "no principal")
@@ -1806,15 +1937,234 @@ async def test_api_approve_without_principal_fail_closed(tmp_path: Path) -> None
             open_hitl=False,
         )
         assert pid
-        with pytest.raises(ValueError, match="human_principal"):
+        # Arbitrary non-empty string alone must never authenticate by=human.
+        with pytest.raises(ValueError, match="hitl_request_id|HitlOpened"):
+            await approve_check(
+                rt, pid, source="api", human_principal="attacker-free-form"
+            )
+        with pytest.raises(ValueError, match="hitl_request_id|HitlOpened"):
             await approve_check(rt, pid, source="api", human_principal="")
-        with pytest.raises(ValueError, match="human_principal"):
+        with pytest.raises(ValueError, match="hitl_request_id|HitlOpened"):
             await approve_check(rt, pid, source="api", human_principal=None)
-        with pytest.raises(ValueError, match="hitl_request_id|verifiable"):
+        with pytest.raises(ValueError, match="hitl_request_id|verifiable|HitlOpened"):
             await approve_check(rt, pid, source="hitl", hitl_request_id_s="ghost")
         assert rt._check_proposals[pid]["status"] == "proposed"
     finally:
         await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_hitl_empty_kind_ref_fail_closed(tmp_path: Path) -> None:
+    """B5: empty HitlOpened kind/ref must not pass (fail-closed equality)."""
+    rt = await open_runtime(tmp_path, "st_pr20_empty_kind_ref")
+    try:
+        await _create(rt, "empty kind ref")
+        proposer_aid = await _boot_plan(rt, [_exp_spec()])
+        exp_tid = _task_id(rt, "EXP")
+        pid = await propose_check(
+            rt,
+            target="study",
+            role="prediction",
+            measures="m",
+            justification="j",
+            rejected_templates=_rejected(),
+            check=_value_check(target=1),
+            task_id=exp_tid,
+            attempt_id=proposer_aid,
+            open_hitl=False,
+        )
+        assert pid
+        study = rt.study
+        assert study is not None
+        now = rt.clock.now()
+
+        async def _plant_raw(*, kind: str, ref: str) -> str:
+            rid = hitl_request_id()
+            await rt._append(
+                [
+                    EventEnvelope(
+                        study_id=study.study_id,
+                        type="HitlOpened",
+                        entity_key=rid,
+                        idem_key=make_idem("HitlOpened", rid),
+                        payload={
+                            "request_id": rid,
+                            "kind": kind,
+                            "payload_ref": ref,
+                            "deadline": (now + timedelta(seconds=120)).isoformat(),
+                            "study_id": study.study_id,
+                            "task_id": exp_tid,
+                            "open": True,
+                        },
+                        ts=now,
+                    )
+                ]
+            )
+            return rid
+
+        rid_empty_kind = await _plant_raw(kind="", ref=pid)
+        with pytest.raises(ValueError, match="proposed_check"):
+            await approve_check(
+                rt, pid, source="api", hitl_request_id_s=rid_empty_kind
+            )
+        rid_empty_ref = await _plant_raw(kind="proposed_check", ref="")
+        with pytest.raises(ValueError, match="not bound|payload_ref"):
+            await approve_check(
+                rt, pid, source="hitl", hitl_request_id_s=rid_empty_ref
+            )
+        assert rt._check_proposals[pid]["status"] == "proposed"
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_approval_cannot_satisfy_other_target_same_task(tmp_path: Path) -> None:
+    """B3: one approval does not close a claim with a different target on same task."""
+    rt = await open_runtime(tmp_path, "st_pr20_cross_target")
+    try:
+        await _create(rt, "cross target")
+        proposer_aid = await _boot_plan(
+            rt,
+            [
+                _exp_spec(
+                    addresses=["q1", "q2"],
+                    criteria=[RequirementRef(template_id="artifact_present")],
+                )
+            ],
+            questions=[
+                QuestionSpec(id="q1", text="Q1?"),
+                QuestionSpec(id="q2", text="Q2?"),
+            ],
+        )
+        exp_tid = _task_id(rt, "EXP")
+        pid = await propose_check(
+            rt,
+            target="q1",
+            role="prediction",
+            measures="count",
+            justification="bound to q1",
+            rejected_templates=_rejected(),
+            check=_value_check(target=42),
+            task_id=exp_tid,
+            attempt_id=proposer_aid,
+            open_hitl=False,
+        )
+        assert pid
+        await _approve_human(rt, pid, exp_tid)
+        # Criterion pretends the same proposal covers q2 — must fail-closed.
+        _set_proposed_criteria(rt, exp_tid, pid, "q2")
+        aid = await rt.start_attempt("EXP")
+        assert aid
+        ex, arts = attach_executor(rt, tmp_path)
+        content = json.dumps({"count": 42}).encode()
+        art = arts.put(
+            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
+        )
+        await ex.record(
+            aid,
+            AgentTaskOutput(
+                summary="ok",
+                outputs={
+                    "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
+                },
+                values={"count": 42},
+                claims=[
+                    {"target": "q1", "target_kind": "question"},
+                    {"target": "q2", "target_kind": "question"},
+                ],
+            ),
+        )
+        events = await rt.store.read_all()
+        recorded = [e for e in events if e.type == "ResultRecorded"]
+        assert recorded
+        checks = recorded[-1].payload.get("check_results") or []
+        proposed = [
+            c for c in checks if c.get("template_id") == PROPOSED_CHECK_TEMPLATE_ID
+        ]
+        assert proposed
+        assert proposed[0]["status"] == ReqStatus.FAILED.value
+        detail = proposed[0].get("detail") or ""
+        assert "target_mismatch" in detail or "unapproved_check" in detail
+    finally:
+        await close_runtime(rt)
+
+
+def test_nfkc_fullwidth_collapses_confusables_do_not() -> None:
+    """Major: NFKC collapses fullwidth; Cyrillic/Latin lookalikes stay distinct."""
+    from coscientist.core.proposed_check import compute_proposal_digest
+
+    base = {
+        "target": "metric",
+        "target_kind": "question",
+        "role": "prediction",
+        "measures": "count",
+        "check": _value_check(target=1).model_dump(mode="json"),
+        "rubric": None,
+        "threshold": None,
+        "sesoi": None,
+        "uses_sesoi": False,
+        "predicts_null": False,
+        "predicted_direction": "two_sided",
+        "justification": "j",
+        "rejected_templates": [n.model_dump(mode="json") for n in _rejected()],
+    }
+    latin = compute_proposal_digest({**base, "target": "a"})
+    cyrillic = compute_proposal_digest({**base, "target": "а"})  # Cyrillic small a
+    assert latin != cyrillic
+    fullwidth = compute_proposal_digest({**base, "target": "ｍetric"})  # fullwidth m
+    ascii_m = compute_proposal_digest({**base, "target": "metric"})
+    assert fullwidth == ascii_m
+
+
+def test_result_seq_mixed_missing_fail_closed() -> None:
+    """Minor: mixed rows with/without _seq → fail-closed (not silent min)."""
+    from coscientist.core.proposed_check import _result_seq_for_task
+
+    assert (
+        _result_seq_for_task(
+            {
+                "r1": {"task_id": "t1", "_seq": 5},
+                "r2": {"task_id": "t1"},  # missing _seq
+            },
+            "t1",
+        )
+        == -1
+    )
+    assert (
+        assert_proposal_preregistered_for_eval(
+            {
+                "proposal_id": "p",
+                "bound_task_id": "t1",
+                "bound_target": "q",
+                "proposed_seq": 1,
+            },
+            attempt_id="a1",
+            task_id="t1",
+            target="q",
+            attempts={"a1": {"_seq": 5}},
+            results={
+                "r1": {"task_id": "t1", "_seq": 10},
+                "r2": {"task_id": "t1"},
+            },
+        )
+        == "unapproved_check:missing_result_seq"
+    )
+    # missing eval target fail-closed (no silent bound_target fallback)
+    assert (
+        assert_proposal_preregistered_for_eval(
+            {
+                "proposal_id": "p",
+                "bound_task_id": "t1",
+                "bound_target": "q",
+                "proposed_seq": 1,
+            },
+            attempt_id="a1",
+            task_id="t1",
+            target=None,
+            attempts={"a1": {"_seq": 5}},
+        )
+        == "unapproved_check:missing_eval_target"
+    )
 
 
 @pytest.mark.asyncio
@@ -1890,7 +2240,7 @@ async def test_check_proposed_idem_without_digest(tmp_path: Path) -> None:
 
 
 def test_upcasters_byte_identical_to_pr23_bridges() -> None:
-    """B1: StudyCreated 10→11 and AttemptStarted 7→8 match #23 @ cc1fa57 bodies."""
+    """B1: StudyCreated 10→11 and AttemptStarted 7→8 match #23 @ 57bc1ad bodies."""
     import inspect
 
     from coscientist.core import upcasters as u
