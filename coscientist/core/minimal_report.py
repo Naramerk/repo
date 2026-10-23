@@ -166,6 +166,7 @@ def render_markdown_report(
     question_dispositions: Mapping[str, Mapping[str, Any]],
     tasks: Mapping[str, Task],
     refusal: str | None = None,
+    plans: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None = None,
 ) -> str:
     """Deterministic MD report (no LLM)."""
     lines = [
@@ -201,4 +202,76 @@ def render_markdown_report(
             f"- `{t.spec.task_key}` [{t.kind.value}] "
             f"{t.state.value}/{t.outcome} reason={t.reason}"
         )
+    tree = render_subtask_tree(
+        question_dispositions=question_dispositions,
+        tasks=tasks,
+        plans=plans,
+    )
+    if tree:
+        lines.extend(["", "## Дерево подзадач", *tree])
     return "\n".join(lines) + "\n"
+
+
+def render_subtask_tree(
+    *,
+    question_dispositions: Mapping[str, Mapping[str, Any]],
+    tasks: Mapping[str, Task],
+    plans: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None = None,
+) -> list[str]:
+    """Markdown lines for «Дерево подзадач» (DESIGN_M1 §10 / R29).
+
+    question → subquestion → task_key with status/outcome/reason, origin,
+    revision; superseded task keys struck through.
+    """
+    if not plans:
+        return []
+    from coscientist.core.decomposes import (
+        children_map,
+        parent_map_from_plans,
+        question_origin_from_plans,
+        question_revision_from_plans,
+        superseded_task_keys_from_plans,
+    )
+    from coscientist.core.question_tasks import question_tasks
+
+    parent_of = parent_map_from_plans(plans)
+    if not any(parent_of.values()):
+        return []
+    kids = children_map(parent_of)
+    origins = question_origin_from_plans(plans)
+    revs = question_revision_from_plans(plans)
+    cover = question_tasks(plans)
+    superseded = superseded_task_keys_from_plans(plans)
+    by_key = {t.spec.task_key: t for t in tasks.values()}
+    roots = sorted(qid for qid, p in parent_of.items() if not p)
+    lines: list[str] = []
+
+    def _emit_question(qid: str, indent: int) -> None:
+        d = question_dispositions.get(qid) or {}
+        origin = origins.get(qid, "explicit")
+        rev = revs.get(qid, 1)
+        disp = d.get("disposition", "?")
+        reason = d.get("reason")
+        pad = "  " * indent
+        lines.append(
+            f"{pad}- `{qid}` origin={origin} rev={rev}: {disp}"
+            + (f" ({reason})" if reason else "")
+        )
+        for tkey in sorted(cover.get(qid) or ()):
+            t = by_key.get(tkey)
+            if t is None and tkey in superseded:
+                lines.append(f"{pad}  - ~~`{tkey}`~~ superseded")
+                continue
+            if t is None:
+                lines.append(f"{pad}  - `{tkey}` (missing)")
+                continue
+            key_fmt = f"~~`{tkey}`~~" if tkey in superseded else f"`{tkey}`"
+            lines.append(
+                f"{pad}  - {key_fmt}: {t.state.value}/{t.outcome} reason={t.reason}"
+            )
+        for child in kids.get(qid) or []:
+            _emit_question(child, indent + 1)
+
+    for root in roots:
+        _emit_question(root, 0)
+    return lines

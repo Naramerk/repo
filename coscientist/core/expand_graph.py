@@ -98,6 +98,33 @@ def plan_graph_events(
     return events
 
 
+def _decomposes_parent_map(runtime: StudyRuntime, sid: str) -> dict[str, str | None]:
+    """Existing decomposes edges as question_id → parent_id (plus known roots)."""
+    prefix = f"{sid}:question:"
+    parent_of: dict[str, str | None] = {}
+
+    def _qid(node_id: str, node: Any) -> str:
+        ref = getattr(node, "ref_id", None) if node is not None else None
+        if ref:
+            return str(ref)
+        if node_id.startswith(prefix):
+            return node_id[len(prefix) :]
+        return node_id
+
+    for e in runtime.graph.all_edges():
+        if e.kind != "decomposes":
+            continue
+        child = _qid(e.src_id, runtime.graph.get_node(e.src_id))
+        parent = _qid(e.dst_id, runtime.graph.get_node(e.dst_id))
+        parent_of[child] = parent
+        parent_of.setdefault(parent, None)
+    for n in runtime.graph.nodes_by_kind("question"):
+        qid = str(getattr(n, "ref_id", None) or "")
+        if qid:
+            parent_of.setdefault(qid, None)
+    return parent_of
+
+
 def question_graph_events(
     runtime: StudyRuntime,
     *,
@@ -109,6 +136,10 @@ def question_graph_events(
     now: Any,
 ) -> list[EventEnvelope]:
     events: list[EventEnvelope] = []
+    from coscientist.core.decomposes import assert_decomposes_acyclic
+
+    # Full tree (existing edges + edges in this batch) — not just the new self-pair.
+    parent_of = _decomposes_parent_map(runtime, sid)
     for q in added_questions:
         qnid = question_node_id(sid, q.id)
         if runtime.graph.get_node(qnid) is not None:
@@ -133,6 +164,14 @@ def question_graph_events(
         )
         parent = getattr(q, "parent_id", None)
         if parent:
+            # Acyclicity on every decomposes write (DESIGN_M1 §10).
+            q_origin = getattr(q, "origin", None)
+            edge_origin = (
+                q_origin if q_origin in ("explicit", "implicit", "emergent") else "emergent"
+            )
+            parent_of[q.id] = str(parent)
+            parent_of.setdefault(str(parent), None)
+            assert_decomposes_acyclic(parent_of)
             pn = question_node_id(sid, str(parent))
             eid = f"decomposes:{qnid}:{pn}"
             events.append(
@@ -147,7 +186,7 @@ def question_graph_events(
                         study_id=sid,
                         src_id=qnid,
                         dst_id=pn,
-                        attrs={"origin": "emergent"},
+                        attrs={"origin": edge_origin},
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,

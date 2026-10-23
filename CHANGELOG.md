@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### M1 PR16
+- `decomposes` acyclicity (self-loop + cycle) on accept/expand writes; `Plan.rollup` (`all|any|majority|rubric`) + `Plan.subquestions` / `QuestionSpec.origin` (`explicit` = PlanOut.subquestions; `implicit` = parent_id without subquestions listing; `emergent` = PlanExpanded origin=emergent).
+- PlanValidator: named subquestions; leaf coverage (task or disposition hook); frozen rubric item `decomposition_covers`; depth ≤ `max_depth`; question count ≤ `max_tasks`.
+- Parent disposition via `apply_rollup` in `dispositions()` (after PR11 loop-cap tagging). Strict majority `n//2+1` (1:1 / 2:2 → no majority). Rollup never **raises** a parent above its PR 8b claims-based verdict (may lower/keep); `expand_graph` cycle check uses the full existing decomposes tree. Report section «Дерево подзадач».
+- Upcasters (rebased on #24+#26+#27 / main `d88f96b`): PlanAccepted **v10** (after loops v9); PlanExpanded **v4** (after loop fields v3). StudyCreated unchanged (v10; #23 takes v11). Open #28 stacks PlanAccepted **v11** / PlanExpanded **v5** after this PR — whichever merges second renumbers. `GraphEdgeAdded` → `graph_edges` in `_affected_tables` for #27 dirty-key projection; load-writes seed covers decomposes edges. No duplicate `register_upcaster`.
+- Rollup clamp: terminal own = ``disposition != not_attempted`` or ``verdict is not None`` (covers PR11 ``iteration_cap`` without ``verdict``); incomplete/no-majority/cycle never wipe own terminal; cyclic decomposes localized to subtree (not study-wide wipe).
+
 ### M1 PR14 follow-up
 - `append_source_fetched`: try/finally releases write permit if append fails after verify; `release_source_fetched_write_permit` raises when no handler is registered.
 - Replay pairing trusts journaled `AttemptTainted.{tool,is_fetch}`. Same-name reclassified `is_fetch=False` → domain `FetchToolReclassified` (caught on fold): paired `SourceFetched` uncounted. `FetchIntegrityRaised` journaled only on open/finalize; finalize fold fallback still puts `internal_error` in the report if reconcile fails. Proven by committed old-schema fixture + natural `tick` finalize (`tests/fixtures/journals/reclassified_fetch_old`).

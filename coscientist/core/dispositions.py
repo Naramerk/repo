@@ -322,8 +322,12 @@ def _dispositions_inner(
             row_na["excluded_claims"] = excluded
         result[qid] = row_na
 
+    # PR11: iteration_cap on unresolved loop-scoped questions (before rollup).
     apply_loop_cap_dispositions(result, loop_capped_questions)
-    return result
+    # PR16: parent disposition from frozen Plan.rollup (DESIGN_M1 §10).
+    from coscientist.core.rollup import apply_rollup
+
+    return apply_rollup(result, plans=plans)
 
 
 def apply_loop_cap_dispositions(

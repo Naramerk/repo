@@ -1,8 +1,10 @@
-"""PlanValidator for final_type + rubric (M1 PR13 / DESIGN_M1 §6.1).
+"""PlanValidator for final_type + rubric (M1 PR13) and decomposes (M1 PR16).
 
 - ``final_type=artifact`` → ≥1 addressing task with OutputSpec.rubric
 - ``final_type=verdict`` → ≥1 addressing task with criterion (RequirementRef)
 - ``final_type=both`` → both requirements
+- decomposes (§10): named subquestions; leaf coverage; decomposition ReviewCheck;
+  depth ≤ max_depth; question count ≤ max_tasks; acyclic
 
 Also rejects in-place rubric digest changes on an already-frozen task_key
 unless that key is superseded (change only via PlanExpanded / HITL).
@@ -18,6 +20,15 @@ from __future__ import annotations
 
 from typing import Any
 
+from coscientist.core.decomposes import (
+    DECOMPOSITION_COVERS_ITEM_ID,
+    VALID_DECOMPOSE_ORIGINS,
+    VALID_ROLLUP_RULES,
+    assert_decomposes_acyclic,
+    leaf_ids,
+    max_decomposes_depth,
+    parent_map_from_questions,
+)
 from coscientist.core.domain import QuestionSpec, TaskSpec
 from coscientist.core.rubric import freeze_rubric, freeze_task_rubrics
 from coscientist.core.rubric_types import VALID_FINAL_TYPES, Rubric
@@ -26,7 +37,9 @@ __all__ = [
     "PLAN_REFUSED_LINE",
     "apply_plan_refused",
     "freeze_plan_rubrics",
+    "merge_plan_questions",
     "refuse_detail",
+    "validate_decomposes",
     "validate_final_types",
     "validate_plan_final_types_or_err",
     "validate_rubric_immutable",
@@ -209,15 +222,143 @@ def validate_rubric_immutable(
             )
 
 
+def merge_plan_questions(
+    questions: list[QuestionSpec] | None,
+    subquestions: list[QuestionSpec] | None,
+) -> tuple[list[QuestionSpec], list[QuestionSpec]]:
+    """Merge PlanOut.questions + PlanOut.subquestions (subquestions keep parent_id).
+
+    Returns ``(all_questions, named_subquestions)``. Named subquestions are those
+    with ``parent_id`` set (from either list) plus any explicit ``subquestions``.
+    """
+    roots = list(questions or [])
+    subs = list(subquestions or [])
+    by_id: dict[str, QuestionSpec] = {}
+    for q in roots + subs:
+        if q.id in by_id and by_id[q.id].text != q.text:
+            raise ValueError(f"question id {q.id!r} text conflict")
+        by_id[q.id] = q
+    all_qs = list(by_id.values())
+    named = [q for q in all_qs if getattr(q, "parent_id", None)]
+    # Explicit subquestions list wins order for Plan.subquestions payload.
+    if subs:
+        named = list(subs)
+    return all_qs, named
+
+
+def _has_decomposition_covers_rubric(tasks: list[TaskSpec]) -> bool:
+    for spec in tasks:
+        for o in spec.expected_outputs or []:
+            rub = getattr(o, "rubric", None)
+            if rub is None:
+                continue
+            if not isinstance(rub, Rubric):
+                try:
+                    rub = Rubric.model_validate(rub)
+                except Exception:  # noqa: BLE001 — treat as missing item
+                    continue
+            for it in rub.items:
+                if it.id == DECOMPOSITION_COVERS_ITEM_ID:
+                    return True
+    return False
+
+
+def validate_decomposes(
+    tasks: list[TaskSpec],
+    questions: list[QuestionSpec],
+    *,
+    subquestions: list[QuestionSpec] | None = None,
+    rollup: str = "all",
+    max_depth: int = 8,
+    max_tasks: int = 64,
+    disposed_question_ids: set[str] | None = None,
+) -> None:
+    """DESIGN_M1 §10 PlanValidator: names, leaves, critic rubric, depth, acyclicity."""
+    if rollup not in VALID_ROLLUP_RULES:
+        raise ValueError(f"unknown rollup {rollup!r} (expected all|any|majority|rubric)")
+    for q in questions:
+        origin = getattr(q, "origin", None)
+        if origin is not None and origin not in VALID_DECOMPOSE_ORIGINS:
+            raise ValueError(
+                f"question {q.id!r}: unknown origin {origin!r} "
+                f"(expected explicit|implicit|emergent)"
+            )
+    parent_of = parent_map_from_questions(questions)
+    # Named subquestions: every child must have non-empty text (PlanOut.subquestions).
+    for q in questions:
+        if not getattr(q, "parent_id", None):
+            continue
+        if not str(q.text or "").strip():
+            raise ValueError(
+                f"subquestion {q.id!r}: name/text required (PlanOut.subquestions)"
+            )
+    # Explicit subquestions list may include entries not yet merged — check too.
+    for q in subquestions or []:
+        if not getattr(q, "parent_id", None):
+            raise ValueError(f"subquestion {q.id!r}: parent_id required")
+        if not str(q.text or "").strip():
+            raise ValueError(
+                f"subquestion {q.id!r}: name/text required (PlanOut.subquestions)"
+            )
+        if q.parent_id == q.id:
+            raise ValueError(f"decomposes self-loop on {q.id!r}")
+    assert_decomposes_acyclic(parent_of)
+    # Unknown parent id.
+    known = set(parent_of)
+    for qid, parent in parent_of.items():
+        if parent and parent not in known:
+            raise ValueError(f"decomposes parent {parent!r} unknown for {qid!r}")
+    if any(parent_of.values()):
+        # (б) frozen decomposition-covers ReviewCheck / rubric item.
+        if not _has_decomposition_covers_rubric(tasks):
+            raise ValueError(
+                f"decomposition requires rubric item id={DECOMPOSITION_COVERS_ITEM_ID!r} "
+                f"(«декомпозиция покрывает исходный вопрос»)"
+            )
+        # (а) each leaf covered by task or explicit disposition (PR15 hook).
+        disposed = set(disposed_question_ids or ())
+        cover: dict[str, list[str]] = {qid: [] for qid in parent_of}
+        for spec in tasks:
+            for qid in spec.addresses or []:
+                if qid in cover:
+                    cover[qid].append(spec.task_key)
+        for leaf in leaf_ids(parent_of):
+            if cover.get(leaf) or leaf in disposed:
+                continue
+            raise ValueError(
+                f"leaf question {leaf!r} uncovered (need addressing task or disposition)"
+            )
+        # (в) depth ≤ max_depth; question count ≤ max_tasks.
+        depth = max_decomposes_depth(parent_of)
+        if depth > max_depth:
+            raise ValueError(f"max_depth:{max_depth}")
+        if len(parent_of) > max_tasks:
+            raise ValueError(f"max_tasks:{max_tasks}")
+
+
 def freeze_plan_rubrics(
     tasks: list[TaskSpec],
     questions: list[QuestionSpec],
     *,
     catalog: Any | None = None,
+    subquestions: list[QuestionSpec] | None = None,
+    rollup: str = "all",
+    max_depth: int = 8,
+    max_tasks: int = 64,
+    disposed_question_ids: set[str] | None = None,
 ) -> tuple[list[TaskSpec], list[QuestionSpec]]:
-    """Freeze rubric digests on all task outputs; validate final_type rules."""
+    """Freeze rubric digests on all task outputs; validate final_type + decomposes."""
     frozen_tasks = [freeze_task_rubrics(t) for t in tasks]
     validate_final_types(frozen_tasks, questions, catalog=catalog)
+    validate_decomposes(
+        frozen_tasks,
+        questions,
+        subquestions=subquestions,
+        rollup=rollup,
+        max_depth=max_depth,
+        max_tasks=max_tasks,
+        disposed_question_ids=disposed_question_ids,
+    )
     return frozen_tasks, list(questions)
 
 
@@ -229,6 +370,10 @@ def validate_plan_final_types_or_err(
     prev_tasks: list[TaskSpec] | None = None,
     superseded_tasks: set[str] | None = None,
     catalog: Any | None = None,
+    rollup: str = "all",
+    max_depth: int = 8,
+    max_tasks: int = 64,
+    disposed_question_ids: set[str] | None = None,
 ) -> str | None:
     """Expansion-friendly: return error string or None (never raise to tick)."""
     from pydantic import ValidationError
@@ -253,6 +398,16 @@ def validate_plan_final_types_or_err(
             active_question_ids=active_question_ids,
             catalog=catalog,
         )
+        # Only validate decomposes tree when any parent_id is present (cheap no-op otherwise).
+        if any(getattr(q, "parent_id", None) for q in qspecs):
+            validate_decomposes(
+                frozen,
+                qspecs,
+                rollup=rollup,
+                max_depth=max_depth,
+                max_tasks=max_tasks,
+                disposed_question_ids=disposed_question_ids,
+            )
         return None
     except (ValueError, ValidationError) as e:
         return str(e) or "invalid_final_type"

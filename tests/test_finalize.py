@@ -225,9 +225,10 @@ def test_upcast_taskcreated_input_mode_old_default():
 
 def test_upcast_planaccepted_questions_default():
     v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
-    assert v == 9 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
+    assert v == 10 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
+    assert p.get("rollup") == "all" and p.get("subquestions") == []
 
-    # PR13: final_type / rubric defaults (v7→v8); PR11 loops land at v9.
+    # PR13 rubric (v8); PR11 loops (v9); PR16 rollup (v10).
     v2, p2 = upcast(
         "PlanAccepted",
         7,
@@ -242,9 +243,11 @@ def test_upcast_planaccepted_questions_default():
             ],
         },
     )
-    assert v2 == 9
+    assert v2 == 10
     assert p2["questions"][0]["final_type"] == "verdict"
     assert p2["loops"] == []
+    assert p2.get("rollup") == "all"
+
     assert p["expand_after"] == []
     assert p["loops"] == []
     assert p["tasks"][0]["foreach"] is None

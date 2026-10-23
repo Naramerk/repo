@@ -260,6 +260,8 @@ class LifecycleMixin:
         tasks: list[TaskSpec],
         *,
         questions: list[QuestionSpec] | None = None,
+        subquestions: list[QuestionSpec] | None = None,
+        rollup: str = "all",
         revision: int = 1,
         spec_output: dict[str, Any] | None = None,
         expand_after: list[str] | None = None,
@@ -269,6 +271,7 @@ class LifecycleMixin:
 
         Pass ``questions`` from SPEC (``ResearchSpecOut.questions[]``), or pass
         ``spec_output`` and questions are extracted via ``questions_from_spec_output``.
+        ``subquestions`` / ``rollup`` are PlanOut fields (M1 PR16 / DESIGN_M1 §10).
         ``expand_after`` lists task_keys that trigger planner after TaskDone (H-g).
         ``loops`` — M1 PR11 ``LoopSpec`` list (body materialised by core).
         """
@@ -277,19 +280,22 @@ class LifecycleMixin:
         now = self.clock.now()
         from pydantic import ValidationError
 
+        from coscientist.core.decomposes import assert_decomposes_acyclic, parent_map_from_questions
         from coscientist.core.foreach import validate_foreach_specs
+        from coscientist.core.graph import GraphEdge
         from coscientist.core.loop import is_loop_dep, normalize_loop_id, validate_loop_specs
         from coscientist.core.plan_validate import (
             PLAN_REFUSED_LINE,
             apply_plan_refused,
             freeze_plan_rubrics,
+            merge_plan_questions,
             refuse_detail,
         )
         from coscientist.core.rules import PlanInvalid
         from coscientist.core.shares import critic_plan_shares
 
         LOOP_PLAN_REFUSED_LINE = "не выполнено: план отклонён (LoopSpec)"
-
+        named_subs: list[QuestionSpec] = []
         # All plan validation → PlanRefused (never raw ValueError to callers).
         raw_loops = list(loops or [])
         loop_specs: list = []
@@ -304,6 +310,19 @@ class LifecycleMixin:
                     for q in questions_from_spec_output(spec_output)
                 ]
             questions = list(questions or [])
+            raw_subs = [
+                s if isinstance(s, QuestionSpec) else QuestionSpec.model_validate(s)
+                for s in (subquestions or [])
+            ]
+            questions, named_subs = merge_plan_questions(questions, raw_subs)
+            from coscientist.core.decomposes import stamp_question_origins
+
+            questions = stamp_question_origins(
+                questions, named_sub_ids={s.id for s in named_subs}
+            )
+            named_subs = [
+                q for q in questions if getattr(q, "parent_id", None)
+            ] or named_subs
             expand_after = list(expand_after or [])
             self._validate_dag(tasks)
             known_texts = await self._known_question_texts()
@@ -341,7 +360,16 @@ class LifecycleMixin:
                 getattr(self, "executor", None), "catalog", None
             )
             validate_plan_criteria(tasks, catalog)
-            tasks, questions = freeze_plan_rubrics(tasks, questions, catalog=catalog)
+            tasks, questions = freeze_plan_rubrics(
+                tasks,
+                questions,
+                catalog=catalog,
+                subquestions=named_subs,
+                rollup=rollup,
+                max_depth=int(getattr(self.study, "max_depth", 8) or 8),
+                max_tasks=int(getattr(self.study, "max_tasks", 64) or 64),
+            )
+            assert_decomposes_acyclic(parent_map_from_questions(questions))
             loop_ids = {ls.loop_id for ls in loop_specs}
             # NFKC-normalize loop:<id> barriers and store normalized deps on tasks.
             rewritten: list[TaskSpec] = []
@@ -398,6 +426,8 @@ class LifecycleMixin:
             questions=questions,
             expand_after=expand_after,
             loops=loop_specs,
+            subquestions=named_subs,
+            rollup=rollup,  # type: ignore[arg-type]
         )
         events: list[EventEnvelope] = [
             EventEnvelope(
@@ -420,6 +450,10 @@ class LifecycleMixin:
                 "formulation": q.text,
                 "final_type": getattr(q, "final_type", None) or "verdict",
             }
+            if getattr(q, "parent_id", None):
+                q_attrs["parent_id"] = q.parent_id
+            if getattr(q, "origin", None):
+                q_attrs["origin"] = q.origin
             events.append(
                 EventEnvelope(
                     study_id=sid,
@@ -432,6 +466,34 @@ class LifecycleMixin:
                         study_id=sid,
                         ref_id=q.id,
                         attrs=q_attrs,
+                        created_at=now,
+                    ).model_dump(mode="json"),
+                    ts=now,
+                    schema_version=1,
+                )
+            )
+        # PR16: decomposes edges on accept (child → parent); acyclicity already checked.
+        for q in questions:
+            parent = getattr(q, "parent_id", None)
+            if not parent:
+                continue
+            qnid = question_node_id(sid, q.id)
+            pn = question_node_id(sid, str(parent))
+            eid = f"decomposes:{qnid}:{pn}"
+            origin = getattr(q, "origin", None) or "explicit"
+            events.append(
+                EventEnvelope(
+                    study_id=sid,
+                    type="GraphEdgeAdded",
+                    entity_key=eid,
+                    idem_key=make_idem("GraphEdgeAdded", eid),
+                    payload=GraphEdge(
+                        edge_id=eid,
+                        kind="decomposes",
+                        study_id=sid,
+                        src_id=qnid,
+                        dst_id=pn,
+                        attrs={"origin": origin},
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,

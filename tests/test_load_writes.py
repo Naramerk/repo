@@ -123,10 +123,12 @@ async def _run_load(tmp_path: Path, runtime_cls: type):
 
 
 async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
-    """Append AttemptTainted / SourceFetched / FetchIntegrityRaised / HitlOpened.
+    """Append AttemptTainted / SourceFetched / FetchIntegrityRaised / HitlOpened /
+    GraphNodeUpserted / GraphEdgeAdded(kind=decomposes).
 
     Exercises ``fetch_calls`` load for SourceFetched, ``fetch_integrity`` write set,
-    and ``hitl_requests`` so the equivalence test covers non-empty sparse tables.
+    ``hitl_requests``, and dirty-key ``graph_nodes`` / ``graph_edges`` (PR16
+    decomposes) so the equivalence test covers non-empty sparse tables.
     Uses a synthetic attempt id (no ``start_attempt``) so seeding works after the
     parallel load has already closed EXP tasks.
     """
@@ -219,6 +221,48 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
         )
     )
 
+    # PR16: GraphNodeUpserted + GraphEdgeAdded(kind=decomposes) must project via
+    # #27 dirty-key apply_event (GraphEdgeAdded ∈ _affected_tables → graph_edges).
+    q_root = f"{sid}:question:Q"
+    q_child = f"{sid}:question:Q.a"
+    for nid, ref, text in ((q_root, "Q", "root"), (q_child, "Q.a", "child")):
+        await rt.writer.append(
+            EventEnvelope(
+                study_id=sid,
+                type="GraphNodeUpserted",
+                entity_key=nid,
+                idem_key=make_idem("GraphNodeUpserted", nid, "seed"),
+                payload={
+                    "node_id": nid,
+                    "kind": "question",
+                    "study_id": sid,
+                    "ref_id": ref,
+                    "attrs": {"formulation": text},
+                },
+                ts=now,
+                schema_version=1,
+            )
+        )
+    eid = f"decomposes:{q_child}:{q_root}"
+    await rt.writer.append(
+        EventEnvelope(
+            study_id=sid,
+            type="GraphEdgeAdded",
+            entity_key=eid,
+            idem_key=make_idem("GraphEdgeAdded", eid),
+            payload={
+                "edge_id": eid,
+                "kind": "decomposes",
+                "study_id": sid,
+                "src_id": q_child,
+                "dst_id": q_root,
+                "attrs": {"origin": "explicit"},
+            },
+            ts=now,
+            schema_version=1,
+        )
+    )
+
 
 @pytest.mark.slow
 @pytest.mark.serial
@@ -247,9 +291,11 @@ async def test_twenty_parallel_sqlite_projection_matches_fold(
 ):
     """After the full 20-parallel load, SQLite projections == fold_events (every table).
 
-    Also seeds AttemptTainted / SourceFetched / FetchIntegrityRaised / HitlOpened so
-    ``source_fetches``, ``fetch_calls``, ``fetch_integrity``, and ``hitl_requests``
-    are non-empty (covers dirty-key load deps + #26 integrity rows).
+    Also seeds AttemptTainted / SourceFetched / FetchIntegrityRaised / HitlOpened /
+    GraphNodeUpserted / GraphEdgeAdded(kind=decomposes) so ``source_fetches``,
+    ``fetch_calls``, ``fetch_integrity``, ``hitl_requests``, ``graph_nodes``, and
+    ``graph_edges`` are non-empty (dirty-key load deps + #26 integrity + PR16
+    decomposes).
     """
     rt = await _run_load(tmp_path, runtime_cls)
     await _seed_fetch_hitl_projection_events(rt)
@@ -262,9 +308,18 @@ async def test_twenty_parallel_sqlite_projection_matches_fold(
         "fetch_calls",
         "fetch_integrity",
         "hitl_requests",
+        "graph_nodes",
+        "graph_edges",
     ):
         assert folded.get(table), f"{table} must be non-empty after seed"
         assert sqlite_map.get(table), f"{table} missing from SQLite projection"
+    # Decomposes edge must land in the projected graph_edges set.
+    decomp_keys = [
+        k
+        for k, row in (sqlite_map.get("graph_edges") or {}).items()
+        if (row.get("kind") == "decomposes")
+    ]
+    assert decomp_keys, "GraphEdgeAdded kind=decomposes missing from SQLite projection"
     await close_runtime(rt)
 
 

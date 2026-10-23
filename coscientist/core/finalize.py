@@ -670,6 +670,8 @@ async def _build_finalized_payload(
             qdisp=qdisp,
             refusal=refusal,
         )
+    except LeaseLost:
+        raise
     except Exception as e:  # noqa: BLE001 — primary failure → minimal_report
         fallback = type(e).__name__
         log.warning("finalize primary path failed: %s", e, exc_info=True)
@@ -688,6 +690,8 @@ async def _build_finalized_payload(
                 hypotheses=hypothesis_verdicts or {},
                 hypotheses_unavailable=hypotheses_unavailable,
             )
+        except LeaseLost:
+            raise
         except Exception as e2:  # noqa: BLE001
             raise RuntimeError(f"minimal_report:{type(e2).__name__}") from e2
     return {
@@ -717,6 +721,7 @@ async def _primary_report_path(
     qdisp: dict[str, dict[str, Any]],
     refusal: str | None = None,
 ) -> str:
+    plans_local = getattr(runtime, "plans", None)
     md = render_markdown_report(
         study_id=sid,
         terminal_reason=term.value,
@@ -726,6 +731,7 @@ async def _primary_report_path(
         question_dispositions=qdisp,
         tasks=runtime.tasks,
         refusal=refusal,
+        plans=plans_local if isinstance(plans_local, dict) else None,
     )
     # Surface infra details (sandbox reason + soft-isolation note) in report text.
     # Escape agent/host-provided strings so markdown/HTML injection cannot reshape

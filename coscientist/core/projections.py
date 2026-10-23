@@ -377,6 +377,8 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         "HitlTimedOut": ("hitl_requests",),
         "HitlDeadlineExtended": ("hitl_requests",),
         "GraphNodeUpserted": ("graph_nodes",),
+        # kind=decomposes (PR16) writes graph_edges; keep in the set so #27's
+        # dirty-key apply_event path still projects those edges.
         "GraphEdgeAdded": ("graph_edges",),
         "RequirementUpserted": ("requirements",),
         "ReviewScheduled": ("requirements",),
