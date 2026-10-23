@@ -525,10 +525,12 @@ class CodeCheck(Frozen):
     # tests_pass — catalog/task tests (not agent tests), mounted RO into verifier
     min_tests: int | None = None
     tests: dict[str, str] | None = None  # relative path → source text
+    # Permitted agent input filenames (allowlist; empty → mount nothing).
+    input_allowlist: list[str] | None = None
     # metric_on_holdout — labels from catalog/task store only (never agent slots)
     holdout: dict[str, Any] | None = None
     holdout_digest: str | None = None  # sha256 of canonical_json(holdout)
-    holdout_output: str | None = None  # legacy; ignored — agent holdout never used
+    holdout_output: str | None = None  # legacy; migrated away in load_catalog
     # reproducible_rerun (alias of tolerance when set)
     rerun_tol: float | None = None
 

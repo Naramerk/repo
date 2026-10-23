@@ -12,9 +12,9 @@ core-evaluated/countable but always ``trusted=False`` (tamper-able).
 
 Fail-closed: without verified hard FS isolation (real bwrap probe), do **not**
 execute guest code — return ``sandbox_unavailable``. ``trusted`` requires both
-net and fs hard. Infra only from the wrapper private channel (rlimit) or
-delegated cgroup OOM; guest timeout / exit codes / output overflow are
-scientific. Seccomp filters are deferred to M2.
+net and fs hard. Infra: wrapper private-channel rlimit, wall-clock timeout
+(``wall_timeout``), delegated cgroup OOM, blocked/unavailable. Scientific:
+``cpu_limit`` (RLIMIT_CPU), exit codes, output overflow. Seccomp → M2.
 """
 
 from __future__ import annotations
@@ -66,10 +66,12 @@ class SandboxStatus(StrEnum):
     MALFORMED = "malformed"
 
 
-# Infra: wrapper private-channel rlimit / delegated cgroup OOM / blocked /
-# unavailable. Guest timeout, OUTPUT_EXCEEDED, and exit codes are scientific.
+# Infra: wrapper private-channel rlimit / wall-clock timeout / delegated cgroup
+# OOM / blocked / unavailable. RLIMIT_CPU (cpu_limit) and OUTPUT_EXCEEDED are
+# scientific.
 INFRA_STATUSES = frozenset(
     {
+        SandboxStatus.TIMEOUT,
         SandboxStatus.OOM,
         SandboxStatus.UNAVAILABLE,
         SandboxStatus.BLOCKED,
@@ -92,37 +94,14 @@ _BLOCKED_PATTERNS = (
 )
 _NET_TOOLS = frozenset({"curl", "wget", "nc", "ncat", "fetch"})
 
-# Agent-mounted filenames under /inputs (shared with executable kinds).
-_BLOCKED_AGENT_NAMES = frozenset(
-    {
-        "sitecustomize.py",
-        "usercustomize.py",
-        "conftest.py",
-        "os.py",
-        "sys.py",
-        "builtins.py",
-        "importlib.py",
-        "pytest.py",
-        "py.py",
-        "pathlib.py",
-        "json.py",
-        "typing.py",
-        "asyncio.py",
-        "subprocess.py",
-        "ctypes.py",
-        "resource.py",
-        "signal.py",
-    }
-)
-
-
-def agent_input_name_allowed(name: str) -> bool:
+def agent_input_name_allowed(name: str, allowlist: frozenset[str] | None) -> bool:
+    """Allowlist-only: ``name`` must appear in ``allowlist`` (basename match)."""
+    if allowlist is None:
+        return False
     base = Path(name).name
     if not base or base.startswith(".") or ".." in Path(name).parts:
         return False
-    if base.endswith(".pth") or base in _BLOCKED_AGENT_NAMES:
-        return False
-    return bool(base.replace("_", "a").replace("-", "a").replace(".", "a").isalnum())
+    return base in allowlist
 
 
 def soft_isolation_note(net: Isolation, fs: Isolation) -> str | None:
@@ -278,29 +257,27 @@ def _collect_results(results_dir: Path, names: Sequence[str] | None) -> dict[str
     return out
 
 
-def _wrapper_script(*, memory_mb: int, timeout_s: float) -> str:
-    """Wait for host cgroup attach, setrlimit, close infra FD, then exec.
+def _cpu_limit_seconds(timeout_s: float) -> int:
+    """RLIMIT_CPU strictly below wall when wall ≥ 2s so busy loops hit cpu_limit first."""
+    wall = float(timeout_s)
+    if wall >= 2.0:
+        return max(1, int(wall) - 1)
+    # Short wall tests: keep CPU above wall so sleep hits wall_timeout.
+    return max(1, int(wall) + 5)
 
-    Host writes pid into the cgroup leaf, then releases ``COSCIENTIST_CGROUP_GATE``.
-    Rlimit failure writes magic to ``COSCIENTIST_INFRA_FD`` then aborts.
-    Guest exit codes alone never classify as infra. Infra/gate FDs are closed
-    before exec so agent/test code never inherits them.
+
+def _wrapper_script(*, memory_mb: int, timeout_s: float) -> str:
+    """setrlimit, close infra FD, then exec.
+
+    Host starts bwrap already inside the cgroup leaf (launcher). Rlimit failure
+    writes magic to ``COSCIENTIST_INFRA_FD`` then aborts. Infra FD closed before
+    exec so agent/test code never inherits it. CPU soft limit is strictly below
+    wall when wall ≥ 2s.
     """
+    cpu = _cpu_limit_seconds(timeout_s)
     return f"""
 import os, sys
 infra_fd = os.environ.get("COSCIENTIST_INFRA_FD")
-gate_fd = os.environ.get("COSCIENTIST_CGROUP_GATE")
-# Block until host attaches us to the cgroup leaf (or signals no cgroup).
-if gate_fd is not None:
-    try:
-        os.read(int(gate_fd), 1)
-    except OSError:
-        pass
-    try:
-        os.close(int(gate_fd))
-    except OSError:
-        pass
-    os.environ.pop("COSCIENTIST_CGROUP_GATE", None)
 try:
     import resource
 except ImportError:
@@ -313,8 +290,8 @@ except ImportError:
 as_bytes = {int(memory_mb)} * 1024 * 1024
 try:
     resource.setrlimit(resource.RLIMIT_AS, (as_bytes, as_bytes))
-    cpu = max(1, {int(timeout_s)} + 5)
-    resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 5))
+    cpu = {int(cpu)}
+    resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
 except (ValueError, OSError):
     if infra_fd is not None:
         try:
@@ -340,6 +317,23 @@ except MemoryError:
 except OSError as e:
     sys.stderr.write(str(e) + "\\n")
     sys.exit(127)
+"""
+
+
+def _cgroup_bwrap_launcher(leaf: Path) -> str:
+    """Host-side: join ``leaf`` then exec bwrap (starts jail already in cgroup)."""
+    return f"""
+import os, sys
+leaf = {str(leaf)!r}
+try:
+    with open(os.path.join(leaf, "cgroup.procs"), "w", encoding="utf-8") as f:
+        f.write(str(os.getpid()))
+except OSError as e:
+    sys.stderr.write(f"cgroup_attach:{{e.__class__.__name__}}\\n")
+    sys.exit(70)
+if len(sys.argv) < 2:
+    sys.exit(64)
+os.execvp(sys.argv[1], sys.argv[1:])
 """
 
 
@@ -537,11 +531,11 @@ def _classify(
             reason="output_exceeded",
         )
     if timed_out:
-        # Guest infinite loop / slow work — scientific, not infra.
+        # Host wall-clock kill — infra (non-counting).
         return fin(
             status=SandboxStatus.TIMEOUT,
             exit_code=-1,
-            reason="timeout",
+            reason="wall_timeout",
         )
     if _cgroup_oom_killed(cgroup_leaf):
         return fin(
@@ -550,6 +544,13 @@ def _classify(
             reason="sandbox_oom",
         )
     code = proc.returncode if proc.returncode is not None else -1
+    # RLIMIT_CPU → scientific cpu_limit (CPU soft limit < wall).
+    if code in (-int(signal.SIGXCPU), 128 + int(signal.SIGXCPU)):
+        return fin(
+            status=SandboxStatus.NONZERO,
+            exit_code=code,
+            reason="cpu_limit",
+        )
     # Guest signals / nonzero exits (including forged 75) are scientific.
     if code == 0:
         return fin(status=SandboxStatus.OK, exit_code=0, reason="ok")
@@ -581,11 +582,10 @@ def _unavailable(
     )
 
 
-def _cgroup_attach_and_verify(leaf: Path | None, pid: int) -> tuple[bool, str | None]:
-    """Host places ``pid`` into leaf before guest exec; verify membership + max.
+def _verify_guest_in_cgroup(leaf: Path | None, bwrap_pid: int) -> tuple[bool, str | None]:
+    """oom_detectable only if memory.max applied and a GUEST host pid is in leaf.
 
-    Returns ``(oom_detectable, note_fragment)``. Any failure → detectable False
-    with an explicit note (never silent).
+    ``bwrap_pid`` is the launcher/bwrap host pid — must not count as the guest.
     """
     if leaf is None:
         return False, "OOM not detectable"
@@ -593,11 +593,18 @@ def _cgroup_attach_and_verify(leaf: Path | None, pid: int) -> tuple[bool, str | 
         mem_raw = (leaf / "memory.max").read_text().strip()
         if not mem_raw or mem_raw == "max":
             return False, "OOM not detectable: memory.max not applied"
-        (leaf / "cgroup.procs").write_text(str(pid))
-        procs = (leaf / "cgroup.procs").read_text().split()
-        if str(pid) not in procs:
-            return False, "OOM not detectable: cgroup membership unverified"
-        return True, None
+        # Poll briefly for a guest host pid (child of bwrap in the leaf).
+        for _ in range(50):
+            procs = {
+                int(x)
+                for x in (leaf / "cgroup.procs").read_text().split()
+                if x.isdigit()
+            }
+            guests = procs - {int(bwrap_pid)}
+            if guests:
+                return True, None
+            time.sleep(0.01)
+        return False, "OOM not detectable: guest cgroup membership unverified"
     except OSError as e:
         return False, f"OOM not detectable: {e.__class__.__name__}"
 
@@ -613,34 +620,20 @@ def _run_jailed(
     collect: Sequence[str] | None,
     extra_env: Mapping[str, str] | None = None,
 ) -> SandboxResult:
-    """Spawn bwrap+wrapper with private infra FD; host attaches cgroup before exec."""
+    """Spawn bwrap already inside a cgroup leaf + wrapper private infra FD."""
     note = soft_isolation_note(net_i, fs_i)
     leaf = _cgroup_prepare_leaf(lim.memory_mb)
 
     r_fd, w_fd = os.pipe()
-    gate_r, gate_w = os.pipe()
     os.set_inheritable(w_fd, True)
     os.set_inheritable(r_fd, False)
-    os.set_inheritable(gate_r, True)
-    os.set_inheritable(gate_w, False)
 
-    # Infra + cgroup gate FDs only — never pass cgroup path to guest.
-    env_pairs: list[tuple[str, str]] = [
-        ("COSCIENTIST_INFRA_FD", str(w_fd)),
-        ("COSCIENTIST_CGROUP_GATE", str(gate_r)),
-    ]
+    env_pairs: list[tuple[str, str]] = [("COSCIENTIST_INFRA_FD", str(w_fd))]
     if extra_env:
         env_pairs.extend((str(k), str(v)) for k, v in extra_env.items())
 
-    # Re-inject env into bwrap argv: cmd already built; append --setenv before --.
-    if "--" in cmd:
-        idx = cmd.index("--")
-        injected: list[str] = []
-        for k, v in env_pairs:
-            injected.extend(["--setenv", k, v])
-        cmd = [*cmd[:idx], *injected, *cmd[idx:]]
-    else:
-        for fd in (r_fd, w_fd, gate_r, gate_w):
+    if "--" not in cmd:
+        for fd in (r_fd, w_fd):
             try:
                 os.close(fd)
             except OSError:
@@ -652,24 +645,40 @@ def _run_jailed(
             note=note,
         )
 
+    idx = cmd.index("--")
+    injected: list[str] = []
+    for k, v in env_pairs:
+        injected.extend(["--setenv", k, v])
+    bwrap_cmd = [*cmd[:idx], *injected, *cmd[idx:]]
+
+    # Start bwrap already inside the leaf via a tiny host launcher.
+    launcher_path: Path | None = None
+    if leaf is not None:
+        td = Path(tempfile.mkdtemp(prefix="cos_cg_"))
+        launcher_path = td / "cgroup_launch.py"
+        launcher_path.write_text(_cgroup_bwrap_launcher(leaf), encoding="utf-8")
+        popen_cmd = ["python3", str(launcher_path), *bwrap_cmd]
+    else:
+        popen_cmd = bwrap_cmd
+        note = f"{note}; OOM not detectable" if note else "OOM not detectable"
+
     started = time.monotonic()
     try:
         try:
             proc = subprocess.Popen(
-                cmd,
+                popen_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=None,
-                env=None,  # clearenv inside bwrap; host env not passed
+                env=None if leaf is not None else None,
                 start_new_session=True,
-                pass_fds=(w_fd, gate_r),
+                pass_fds=(w_fd,),
             )
         except OSError as e:
-            for fd in (w_fd, gate_r, gate_w):
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
+            try:
+                os.close(w_fd)
+            except OSError:
+                pass
             return _unavailable(
                 reason=f"sandbox_unavailable:{e.__class__.__name__}",
                 net_i=net_i,
@@ -682,28 +691,14 @@ def _run_jailed(
                 os.close(w_fd)
             except OSError:
                 pass
-            try:
-                os.close(gate_r)
-            except OSError:
-                pass
 
-        # Place wrapper into cgroup *before* releasing the gate (then exec).
-        oom_det, oom_frag = _cgroup_attach_and_verify(leaf, proc.pid)
+        oom_det, oom_frag = _verify_guest_in_cgroup(leaf, proc.pid)
         if oom_frag:
             note = f"{note}; {oom_frag}" if note else oom_frag
-        try:
-            os.write(gate_w, b"1")
-        except OSError:
-            pass
-        try:
-            os.close(gate_w)
-        except OSError:
-            pass
 
         timed_out, overflow, out_b, err_b = _watch_process(proc, lim=lim)
         infra_msg = b""
         try:
-            # Non-blocking drain of private channel.
             import select
 
             if select.select([r_fd], [], [], 0)[0]:
@@ -736,6 +731,10 @@ def _run_jailed(
         )
     finally:
         _cgroup_remove_leaf(leaf)
+        if launcher_path is not None:
+            import shutil
+
+            shutil.rmtree(launcher_path.parent, ignore_errors=True)
 
 
 def run_sandbox(

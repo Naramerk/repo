@@ -174,6 +174,7 @@ def sandbox_effect(
     fs_isolation: FsIsolation,
     note: str | None,
     extra: dict[str, Any] | None = None,
+    countable: bool | None = None,
 ) -> dict[str, Any]:
     call = f"{attempt_id or 'noattempt'}:sandbox:{check_id}"
     effect: dict[str, Any] = {
@@ -182,7 +183,7 @@ def sandbox_effect(
         "net_isolation": net_isolation,
         "fs_isolation": fs_isolation,
         "core_evaluated": True,
-        "countable": bool(attempt_id),
+        "countable": bool(attempt_id) if countable is None else bool(countable),
         "produced_by_call_id": call,
         "artifact_id": art_id,
     }
