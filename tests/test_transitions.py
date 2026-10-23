@@ -232,6 +232,7 @@ async def test_recover_records_from_cas_route_returned(tmp_path, clock, runtime_
         make_tool_ref(f"{aid}:1"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     _spec_with_value_match(rt, aid)
     out = _success_output(art.artifact_id, summary="from-agent")
@@ -286,6 +287,7 @@ async def test_recover_corrupt_cas_crashes_retryable(tmp_path, clock, runtime_cl
         make_tool_ref(f"{aid}:1"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     _spec_with_value_match(rt, aid)
     digest = await ex.mark_route_returned(aid, _success_output(art.artifact_id))
@@ -311,6 +313,7 @@ async def test_record_vs_deadline_race(tmp_path, clock, runtime_cls):
         make_tool_ref(f"{aid}:1"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     _spec_with_value_match(rt, aid)
     out = _success_output(art.artifact_id, summary="race")
@@ -368,6 +371,7 @@ async def test_mark_route_returned_vs_deadline_race(tmp_path, clock, runtime_cls
         make_tool_ref(f"{aid}:1"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     task = rt.tasks[rt.attempts[aid]["task_id"]]
     now = clock.now()

@@ -171,6 +171,7 @@ async def test_b2_matching_value_in_raw_artifact_is_success(tmp_path, catalog):
         make_tool_ref("st_b2/EXP-1#1:1"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     spec = TaskSpec(
         task_key="EXP-1",
@@ -230,6 +231,7 @@ async def test_review_scheduled_on_every_record_path(tmp_path, catalog):
         make_tool_ref("st_r/EXP-1#1:1"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     spec = TaskSpec(
         task_key="EXP-1",
@@ -323,6 +325,7 @@ async def test_downgrade_without_refs_rejected(tmp_path, catalog):
         make_tool_ref("st_d/EXP-1#1:1"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     spec = TaskSpec(
         task_key="EXP-1",

@@ -14,9 +14,15 @@ MAX_BYTES = 10_240
 
 def _task_provenance(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> str:
     for aid in reversed(task.attempts):
-        att = attempts.get(aid, {})
-        if att.get("closed"):
-            return str(att["provenance"])
+        att = attempts.get(aid)
+        if att is None or not att.get("closed"):
+            continue
+        # Closed attempts must stamp provenance (never defaulted).
+        return str(att["provenance"])
+    if not task.attempts:
+        # Never started (e.g. cancelled before first attempt): schema still
+        # requires an enum; there is no attempt row to read.
+        return "real"
     raise ValueError(f"no closed attempt provenance for task {task.spec.task_key!r}")
 
 

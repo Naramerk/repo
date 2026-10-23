@@ -934,6 +934,7 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
         make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
+        role="report",
     )
     await ex.record(
         aid,
@@ -1209,7 +1210,7 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
         criteria=[RequirementRef(template_id="value_match")],
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
     )
-    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")])
+    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")])
     now = rt.clock.now()
     for i, hid in enumerate(("H0", "H1")):
         nid = hypothesis_node_id(sid, hid)
@@ -1241,7 +1242,7 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
 
     aid = await rt.start_attempt("E0")
     content = b'{"count": 1}'
-    art = arts.put(content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json")
+    art = arts.put(content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json", role="data")
     await rt.executor.record(
         aid,
         AgentTaskOutput(
@@ -1297,7 +1298,8 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
         aid = await rt.start_attempt(key)
         content = b'{"count": 1}'
         art = arts.put(
-            content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
+            content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json",
+            role="data",
         )
         await rt.executor.record(
             aid,
@@ -1342,7 +1344,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
                 required=False,
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="which hyp")],
+        questions=[QuestionSpec(id="Q1", text="which hyp", final_type="verdict")],
         loops=[
             LoopSpec(
                 loop_id="L1",
@@ -1370,7 +1372,8 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
             aid = await rt.start_attempt(t.spec.task_key)
             content = b'{"count": 1}'
             art = arts.put(
-                content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
+                content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json",
+                role="data",
             )
             await rt.executor.record(
                 aid,
@@ -1565,8 +1568,8 @@ def test_validate_decomposes_pure_cycle():
         validate_decomposes(
             [_exp("E0", addresses=["A"], rubric=_decomp_rubric())],
             [
-                QuestionSpec(id="A", text="a", parent_id="B"),
-                QuestionSpec(id="B", text="b", parent_id="A"),
+                QuestionSpec(id="A", text="a", parent_id="B", final_type="verdict"),
+                QuestionSpec(id="B", text="b", parent_id="A", final_type="verdict"),
             ],
             rollup="all",
         )
@@ -1624,8 +1627,8 @@ def test_expand_graph_rejects_cycle_via_existing_edges():
             sid=sid,
             pid="p_new",
             added_questions=[
-                QuestionSpec(id="X", text="x", parent_id="Y", origin="emergent"),
-                QuestionSpec(id="Y", text="y", parent_id="X", origin="emergent"),
+                QuestionSpec(id="X", text="x", parent_id="Y", origin="emergent", final_type="verdict"),
+                QuestionSpec(id="Y", text="y", parent_id="X", origin="emergent", final_type="verdict"),
             ],
             superseded_questions=[],
             known_texts={},
@@ -1652,6 +1655,7 @@ async def _complete_report_and_finalize(rt, tmp_path) -> None:
         make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
+        role="report",
     )
     await ex.record(
         aid,
@@ -1699,6 +1703,7 @@ async def test_rollup_run_finalizes_with_single_study_finalized(tmp_path, clock)
         make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
+        role="report",
     )
     await ex.record(
         aid,
@@ -1793,6 +1798,7 @@ async def test_recover_then_finalize_single(tmp_path, clock):
         make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
+        role="report",
     )
     await ex.record(
         aid,

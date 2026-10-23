@@ -771,7 +771,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
                 addresses=["Q1"],
             ),
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid_p = await rt.start_attempt("P0")
     # Spoof: agent labels bytes as python; planner role=code — catalog still data.
@@ -780,6 +780,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
         make_tool_ref(f"{aid_p}:1"),
         name="dataset",
         media_type="text/x-python",
+        role="code",
     )
     assert raw.role == "code"  # media_type heuristic at put
     await rt.executor.record(
@@ -800,6 +801,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
         make_tool_ref(f"{aid_e}:1"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     await rt.executor.record(
         aid_e,
@@ -918,6 +920,7 @@ def test_value_matches_never_used_sesoi():
             make_tool_ref("t:1"),
             name="main",
             media_type="application/json",
+            role="data",
         )
         cr = evaluate_code_check(
             CodeCheck(kind="value_matches", output="main", pointer="/count", target=225),
@@ -1337,7 +1340,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
                 addresses=["Q1"],
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
@@ -1345,6 +1348,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
         make_tool_ref(f"{aid0}:1"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     await rt.executor.record(
         aid0,
@@ -1502,7 +1506,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 addresses=["Q1"],
             ),
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid_p = await rt.start_attempt("P_RAW")
     da = arts.put(
@@ -1638,7 +1642,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
                 addresses=["Q1"],
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid0 = await rt.start_attempt("E0", provenance="real")
     art = arts.put(
@@ -1646,6 +1650,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
         make_tool_ref(f"{aid0}:1"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     await rt.executor.record(
         aid0,
@@ -1701,7 +1706,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
                 addresses=["Q1"],
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid = await rt.start_attempt("E0")
     foreign = arts.put(
@@ -1709,6 +1714,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
         make_tool_ref("other_attempt#1:1"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     await rt.executor.record(
         aid,
@@ -1774,7 +1780,7 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
                 addresses=["Q1"],
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid = await rt.start_attempt("E0")
     await rt.executor.record(
@@ -1886,7 +1892,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
                 addresses=["Q1"],
             ),
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     now = datetime.now(UTC)
     hid = hypothesis_node_id(sid, "H1")
@@ -2068,7 +2074,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 ],
             ),
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     # Hypothesis + tests.intent=refute so capable refute counts toward supported.
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -2182,7 +2188,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 addresses=["Q1"],
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid_f = await rt2.start_attempt("E0", provenance="real")
     art_f = arts2.put_sandbox(
@@ -2192,6 +2198,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
         media_type="application/json",
         net_isolation="hard",
         fs_isolation="hard",
+        role="data",
     )
     await rt2.executor.record(
         aid_f,
@@ -2264,7 +2271,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
                 addresses=["Q1"],
             ),
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
@@ -2272,6 +2279,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
         make_tool_ref(f"{aid0}:1"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     await rt.executor.record(
         aid0,
@@ -2353,7 +2361,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
                 addresses=["Q1"],
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     cid = claim_node_id(sid, "forged")
     qid = question_node_id(sid, "Q1")
@@ -2471,7 +2479,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
                 addresses=["Q1"],
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
@@ -2479,6 +2487,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
         make_tool_ref(f"{aid0}:1"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     await rt.executor.record(
         aid0,

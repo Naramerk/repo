@@ -322,6 +322,7 @@ def test_sandbox_cannot_rewrite_artifact_meta(tmp_path):
         make_tool_ref("st/E1#1:data"),
         name="data.bin",
         media_type="application/octet-stream",
+        role="data",
     )
     meta_path = arts.meta / f"{art.artifact_id}.json"
     original = meta_path.read_bytes()
@@ -423,12 +424,14 @@ def test_tests_pass_runs_catalog_tests_not_agent(tmp_path):
         make_tool_ref("st/E1#1:code"),
         name="solution.py",
         media_type="text/x-python",
+        role="code",
     )
     fake_junit = arts.put(
         b'<testsuite tests="99" failures="0"/>',
         make_tool_ref("st/E1#1:junit"),
         name="junit.xml",
         media_type="application/xml",
+        role="data",
     )
     out = AgentTaskOutput(
         outputs={
@@ -489,12 +492,14 @@ def test_holdout_from_catalog_ignores_agent_slot_and_claimed_score(tmp_path):
         make_tool_ref("st/E1#1:holdout"),
         name="holdout.json",
         media_type="application/json",
+        role="data",
     )
     predictions = arts.put(
         json.dumps({"y_hat": [0, 1, 0, 0], "score": 0.9}).encode(),
         make_tool_ref("st/E1#1:pred"),
         name="predictions.json",
         media_type="application/json",
+        role="data",
     )
     out = AgentTaskOutput(
         outputs={
@@ -853,12 +858,14 @@ def test_y_hat_equals_catalog_labels_still_uses_catalog_holdout(tmp_path):
         make_tool_ref("st/E1#1:pred"),
         name="predictions.json",
         media_type="application/json",
+        role="data",
     )
     fake_hold = arts.put(
         json.dumps({"y": [0, 0, 0, 0]}).encode(),
         make_tool_ref("st/E1#1:holdout"),
         name="holdout.json",
         media_type="application/json",
+        role="data",
     )
     out = AgentTaskOutput(
         outputs={
@@ -902,12 +909,14 @@ def test_sitecustomize_slot_rejected_from_inputs(tmp_path):
         make_tool_ref("st/E1#1:evil"),
         name="sitecustomize.py",
         media_type="text/x-python",
+        role="code",
     )
     good = arts.put(
         b"def add(a,b): return a+b\n",
         make_tool_ref("st/E1#1:code"),
         name="solution.py",
         media_type="text/x-python",
+        role="code",
     )
     out = AgentTaskOutput(
         outputs={
@@ -966,6 +975,7 @@ def test_forged_junit_os_exit_still_untrusted(tmp_path):
         make_tool_ref("st/E1#1:evil"),
         name="solution.py",
         media_type="text/x-python",
+        role="code",
     )
     out = AgentTaskOutput(
         outputs={
@@ -1009,12 +1019,14 @@ def test_pth_file_not_mounted_even_if_named_in_outputs(tmp_path):
         make_tool_ref("st/E1#1:pth"),
         name="evil.pth",
         media_type="text/plain",
+        role="data",
     )
     good = arts.put(
         b"def add(a,b): return a+b\n",
         make_tool_ref("st/E1#1:code"),
         name="solution.py",
         media_type="text/x-python",
+        role="code",
     )
     out = AgentTaskOutput(
         outputs={
@@ -1061,6 +1073,7 @@ def test_holdout_digest_mismatch_is_catalog_error(tmp_path):
         make_tool_ref("st/E1#1:pred"),
         name="predictions.json",
         media_type="application/json",
+        role="data",
     )
     out = AgentTaskOutput(
         outputs={
@@ -1128,6 +1141,7 @@ sys.exit(0)
         make_tool_ref("st/E1#1:pred"),
         name="predictions.json",
         media_type="application/json",
+        role="data",
     )
     cr = evaluate_code_check(
         CodeCheck(
@@ -1656,6 +1670,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
             make_tool_ref(f"{aid}:1", tool="agent"),
             name="payload.py",
             media_type="text/x-python",
+            role="code",
         )
         result = await ex.record(
             aid,
@@ -2000,7 +2015,7 @@ async def test_infra_failure_does_not_charge_attempt(
     def boom(*args, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
-            raise SandboxInfraError("sandbox_unavailable:cgroup_attach")
+            raise SandboxInfraError("sandbox_unavailable:cgroup_attach", transient=True)
         return real_eval(*args, **kwargs)
 
     monkeypatch.setattr(

@@ -144,7 +144,10 @@ def test_last_resort_payload_constants_only():
 async def test_i2_conclusions_after_restart(tmp_path, clock):
     sid = "st_i2"
     rt = await _boot(tmp_path, clock, sid)
-    qs = [QuestionSpec(id="Q1", text="one"), QuestionSpec(id="Q2", text="two")]
+    qs = [
+        QuestionSpec(id="Q1", text="one", final_type="verdict"),
+        QuestionSpec(id="Q2", text="two", final_type="verdict"),
+    ]
     await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs)
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")

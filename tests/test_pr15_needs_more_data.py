@@ -130,6 +130,7 @@ async def _complete_report_and_finalize(rt, tmp_path) -> None:
         make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
+        role="report",
     )
     await ex.record(
         aid,
@@ -594,6 +595,7 @@ async def test_disposal_unknown_question_fail_closed_empty_graph(tmp_path, clock
         make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
+        role="report",
     )
     await ex.record(
         aid,

@@ -131,6 +131,7 @@ def _put_quote_json(arts: LocalArtifactStore, payload: dict, *, call: str):
         make_tool_ref(call, tool="test"),
         name="quote.json",
         media_type="application/json",
+        role="data",
     )
 
 

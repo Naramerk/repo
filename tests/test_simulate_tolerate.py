@@ -415,7 +415,7 @@ async def test_method_simulation_keeps_stub_input_provenance(
                 route="experiment",
                 depends_on=["PLAN"],
                 expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json")
+                    OutputSpec(name="main", media_type="application/json", role="data")
                 ],
             ),
             TaskSpec(

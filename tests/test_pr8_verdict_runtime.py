@@ -368,13 +368,14 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
                 criteria=[RequirementRef(template_id="value_match")],
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     assert rt.graph.get_node(question_node_id(sid, "Q1")) is not None
     aid0 = await rt.start_attempt("E0")
     content = b'{"count": 225}'
     art = arts.put(
-        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json",
+        role="data",
     )
 
     def boom(*_a, **_k):
@@ -429,7 +430,7 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
                 addresses=["Q1"],
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid0 = await rt.start_attempt("E0")
     # No artifact → artifact_present (validity) FAILED → scientific.
@@ -597,7 +598,7 @@ async def test_accept_plan_allows_verdict_kind(tmp_path, clock, runtime_cls):
                 addresses=["Q1"],
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     await close_runtime(rt)
 
@@ -644,12 +645,13 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
                 addresses=["Q1"],
             ),
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid0 = await rt.start_attempt("E0", provenance="real")
     content = b'{"count": 225}'
     art = arts.put(
-        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json",
+        role="data",
     )
     await rt.executor.record(
         aid0,
@@ -773,12 +775,13 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
                 addresses=["Q1"],
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid0 = await rt.start_attempt("E0")
     content = b'{"effect": 2.0}'
     art = arts.put(
-        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json",
+        role="data",
     )
     await rt.executor.record(
         aid0,
@@ -1064,7 +1067,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
                 addresses=["Q1"],
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     assert any(n.kind == "criterion" for n in rt.graph.nodes_by_kind("criterion"))
     aid0 = await rt.start_attempt("E0", provenance="real")
@@ -1075,6 +1078,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
         make_tool_ref(f"{aid0}:1"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     await rt.executor.record(
         aid0,
@@ -1150,7 +1154,7 @@ async def test_validity_failed_claim_invalid_inconclusive(
                 addresses=["Q1"],
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid0 = await rt.start_attempt("E0", provenance="real")
     # No artifact → artifact_present FAILED (validity).
@@ -1225,7 +1229,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
                 addresses=["Q1"],
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     assert pid == ""
     events = await rt.store.read_all()
@@ -1261,7 +1265,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
                 addresses=["Q1"],
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     assert pid2 == ""
     events2 = await rt2.store.read_all()
@@ -1323,7 +1327,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
                 addresses=["Q1"],
             ),
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid = await rt.start_attempt("E_ref", provenance="real")
     await rt.record_budget_debit(spent_rub=Decimal("1.00"), request_id="debit-1")
@@ -1332,6 +1336,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
         make_tool_ref(f"{aid}:1"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     await rt.executor.record(
         aid,
@@ -1674,7 +1679,7 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
                     addresses=["Q1"],
                 )
             ],
-            questions=[QuestionSpec(id="Q1", text="why")],
+            questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
         )
         aid0 = await rt.start_attempt("E0")
         art = rt.artifacts.put(
@@ -1682,6 +1687,7 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
             make_tool_ref(f"{aid0}:1"),
             name="main",
             media_type="application/json",
+            role="data",
         )
         await rt.executor.record(
             aid0,
@@ -1911,7 +1917,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
                 addresses=["Q1"],
             ),
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid0 = await rt.start_attempt("E0", provenance="real")
     art = arts.put(
@@ -1919,6 +1925,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
         make_tool_ref(f"{aid0}:1"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     await rt.executor.record(
         aid0,
@@ -2014,7 +2021,7 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
                 addresses=["Q1"],
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
@@ -2022,6 +2029,7 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
         make_tool_ref(f"{aid0}:1"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     await rt.executor.record(
         aid0,

@@ -179,7 +179,9 @@ def test_task_without_address_belongs_to_study():
 
 def test_not_attempted_reason_from_task_statuses():
     plans = {"p": {
-        "questions": [{"id": f"Q{i}", "text": "t"} for i in (1, 2, 3, 4)],
+        "questions": [
+            {"id": f"Q{i}", "text": "t", "final_type": "verdict"} for i in (1, 2, 3, 4)
+        ],
         "tasks": [
             {"task_key": "A", "addresses": ["Q1"]},
             {"task_key": "B", "addresses": ["Q2"]},
@@ -748,7 +750,10 @@ async def test_phase_finalizing_between_done_and_finalized(tmp_path, clock):
 async def test_conclusion_per_question(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_cq")
     rt.artifacts = LocalArtifactStore(tmp_path / "arts")
-    qs = [QuestionSpec(id="Q1", text="one"), QuestionSpec(id="Q2", text="two")]
+    qs = [
+        QuestionSpec(id="Q1", text="one", final_type="verdict"),
+        QuestionSpec(id="Q2", text="two", final_type="verdict"),
+    ]
     await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs)
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
@@ -802,7 +807,7 @@ async def test_finalize_total_on_cas_failure(tmp_path, clock):
 async def test_finalized_dispositions_replay(tmp_path, clock):
     sid = "st_rep"
     rt = await _boot(tmp_path, clock, sid)
-    await rt.accept_plan([_spec("E1", ["Q1"])], questions=[QuestionSpec(id="Q1", text="why")])
+    await rt.accept_plan([_spec("E1", ["Q1"])], questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")])
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     payload = _fin(await rt.store.read_all()).payload["question_dispositions"]
@@ -1369,7 +1374,7 @@ async def test_plan_refused_and_normal_finalize_exactly_one(tmp_path, clock):
     """PlanRefused path and normal finalize each leave exactly one StudyFinalized."""
     rt = await _boot(tmp_path, clock, "st_sf_plan")
     await rt.accept_plan(
-        [_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")]
+        [_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok", final_type="verdict")]
     )
     events = await rt.store.read_all()
     assert any(e.type == "PlanRefused" for e in events)
@@ -1544,7 +1549,10 @@ async def test_p5_after_long_downtime_uses_task_deadline(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_ua")
-    pid = await rt.accept_plan([_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")])
+    pid = await rt.accept_plan(
+        [_spec("E1", ["QX"])],
+        questions=[QuestionSpec(id="Q1", text="ok", final_type="verdict")],
+    )
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
@@ -1556,8 +1564,8 @@ async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_accept_plan_rejects_question_text_conflict(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_qc")
-    await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="one")], revision=1)
-    pid = await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="other")], revision=2)
+    await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="one", final_type="verdict")], revision=1)
+    pid = await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="other", final_type="verdict")], revision=2)
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]

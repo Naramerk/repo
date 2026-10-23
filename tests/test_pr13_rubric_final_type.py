@@ -53,6 +53,7 @@ async def _complete_report_and_finalize(rt, tmp_path) -> None:
         make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
+        role="report",
     )
     await ex.record(
         aid,
@@ -398,6 +399,7 @@ async def test_final_type_artifact_fulfilled_by_rubric(tmp_path, clock):
         make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
+        role="report",
     )
     await ex.record(
         aid,
@@ -571,6 +573,7 @@ async def test_judge_rubric_e2e_met_failed_retry(tmp_path, clock):
         make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
+        role="report",
     )
     pending = await ex.record(
         aid,
@@ -674,6 +677,7 @@ async def test_judge_restart_after_review_scheduled(tmp_path, clock):
         make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
+        role="report",
     )
     pending = await ex.record(
         aid,
@@ -737,6 +741,7 @@ async def test_judge_restart_after_judge_failure(tmp_path, clock):
         make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
+        role="report",
     )
     await ex.record(
         aid,
@@ -1334,6 +1339,7 @@ async def test_e2e_fulfilled_view_matches_payload(tmp_path, clock):
         make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
+        role="report",
     )
     await ex.record(
         aid,
@@ -1373,6 +1379,7 @@ async def test_e2e_downgrade_unaddressed_question_view_matches(tmp_path, clock):
         make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="application/json",
+        role="data",
     )
     await ex.record(
         aid,
@@ -1443,6 +1450,7 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
         make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
+        role="report",
     )
     await ex.record(
         aid,
@@ -1524,6 +1532,7 @@ async def test_corrupt_judge_cas_finalizes_internal_error(tmp_path, clock):
         make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
+        role="report",
     )
     await ex.record(
         aid,
@@ -1576,6 +1585,7 @@ async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
         make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
+        role="report",
     )
     out_check = f"rubric:{rub.digest}#out"
     pending = await ex.record(

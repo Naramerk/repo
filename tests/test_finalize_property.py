@@ -156,7 +156,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         n = data.draw(st.integers(min_value=1, max_value=12))
         fan = data.draw(st.integers(min_value=1, max_value=min(10, n)))
         n_q = data.draw(st.integers(min_value=1, max_value=3))
-        qs = [QuestionSpec(id=f"Q{rev}_{i}", text=f"q{rev}_{i}") for i in range(n_q)]
+        qs = [QuestionSpec(id=f"Q{rev}_{i}", text=f"q{rev}_{i}", final_type="verdict") for i in range(n_q)]
         specs = []
         for i in range(n):
             key = f"EXP-r{rev}-{i + 1}"
@@ -283,7 +283,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         self._plan_rev += 1
         rev = self._plan_rev
         new_id = f"Qsup_{rev}"
-        new_q = QuestionSpec(id=new_id, text=f"supersede {old_id}")
+        new_q = QuestionSpec(id=new_id, text=f"supersede {old_id}", final_type="verdict")
         new_task = TaskSpec(
             task_key=f"EXP-sup{rev}",
             title="sup",

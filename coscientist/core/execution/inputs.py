@@ -200,7 +200,6 @@ def bind_inputs(
             raise InputUnavailable()
         arts = dep_outputs.get(spec.from_task, {})
         aid = arts.get(spec.output)
-        dep_prov: Provenance = dep_provenance[spec.from_task]
 
         if dep.outcome == TaskOutcome.FAILED and mode == InputMode.FORBID:
             raise InputUnavailable()
@@ -216,6 +215,10 @@ def bind_inputs(
             raise InputUnavailable()
 
         if source != "stub":
+            try:
+                dep_prov: Provenance = dep_provenance[spec.from_task]
+            except KeyError as e:
+                raise InputUnavailable("dep_provenance_missing") from e
             source = worst_provenance(source, dep_prov)
         digest = input_binding_digest(
             kind="artifact",

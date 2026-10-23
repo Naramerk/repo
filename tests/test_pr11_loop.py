@@ -90,7 +90,8 @@ async def _ok(rt, arts, aid: str, *, count: int = 1) -> None:
     """Record experiment output. ``count=225`` matches catalog ``value_match`` target."""
     content = f'{{"count": {int(count)}}}'.encode()
     art = arts.put(
-        content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json",
+        role="data",
     )
     await rt.executor.record(
         aid,
@@ -256,7 +257,7 @@ async def test_loop_max_iter_missing_honest_refusal(tmp_path, clock, runtime_cls
                 criteria=[RequirementRef(template_id="value_match")],
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[
             {
                 "loop_id": "L1",
@@ -300,7 +301,7 @@ async def test_loop_max_iter_exceeds_profile_rejected(tmp_path, clock, runtime_c
                 required=False,
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[_loop(max_iter=9)],
     )
     assert pid == ""
@@ -315,7 +316,7 @@ async def test_loop_unknown_predicate_rejected(tmp_path, clock, runtime_cls):
     )
     pid = await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[_loop(until=LoopPredicate(name="not_a_real_pred", params={}))],
     )
     assert pid == ""
@@ -331,7 +332,7 @@ async def test_loop_unknown_scope_question_refused(tmp_path, clock, runtime_cls)
     )
     pid = await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[_loop(scope_questions=["Q_MISSING"])],
     )
     assert pid == ""
@@ -346,7 +347,7 @@ async def test_loop_unknown_scope_hypothesis_refused(tmp_path, clock, runtime_cl
     )
     pid = await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[_loop(scope_hypotheses=["H_MISSING"])],
     )
     assert pid == ""
@@ -373,7 +374,7 @@ async def test_loop_until_empty_scope_completes(tmp_path, clock, runtime_cls):
                 required=False,
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[
             _loop(
                 max_iter=5,
@@ -430,7 +431,7 @@ async def test_loop_iteration_cap_honest_final(tmp_path, clock, runtime_cls):
                 required=False,
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="which hyp")],
+        questions=[QuestionSpec(id="Q1", text="which hyp", final_type="verdict")],
         loops=[
             _loop(
                 max_iter=2,
@@ -481,7 +482,7 @@ async def test_loop_infinite_guard_max_iter(tmp_path, clock, runtime_cls):
     _upsert_hyps(rt, "H1")
     await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[
             _loop(
                 max_iter=3,
@@ -521,7 +522,7 @@ async def test_loop_completed_survives_restart(tmp_path, clock, runtime_cls):
                 required=False,
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[
             _loop(
                 max_iter=5,
@@ -576,7 +577,7 @@ async def test_loop_capped_survives_restart(tmp_path, clock, runtime_cls):
                 required=False,
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[
             _loop(
                 max_iter=2,
@@ -630,7 +631,7 @@ async def test_loop_refuse_error_survives_restart(tmp_path, clock, runtime_cls):
                 required=False,
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[
             _loop(
                 max_iter=5,
@@ -690,7 +691,7 @@ async def test_loop_no_change_stops_on_stable_scope(tmp_path, clock, runtime_cls
     )
     await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[loop],
     )
     assert len(current_loop_iter_tasks(rt, "L1", 1)) == 1
@@ -717,7 +718,7 @@ async def test_loop_criterion_met(tmp_path, clock, runtime_cls):
     )
     await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[
             _loop(
                 max_iter=4,
@@ -799,7 +800,7 @@ async def test_loop_restart_idempotent(tmp_path, clock, runtime_cls):
     _upsert_hyps(rt, "H1")
     await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[
             _loop(
                 max_iter=2,
@@ -1039,7 +1040,7 @@ async def test_survivors_le_e2e_real_graph_runtime(tmp_path, clock, runtime_cls)
     _upsert_hyps(rt, "H1", "H2")
     await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[
             _loop(
                 max_iter=3,
@@ -1293,7 +1294,7 @@ async def test_survivors_le_huge_n_plan_refused(tmp_path, clock, runtime_cls):
     )
     pid = await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[
             _loop(
                 until=LoopPredicate(name="survivors_le", params={"n": 10**400}),
@@ -1376,7 +1377,7 @@ async def test_fullwidth_loop_dep_normalized_on_accept(tmp_path, clock, runtime_
                 required=False,
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[
             _loop(
                 loop_id="Ｌ１",
@@ -1429,7 +1430,7 @@ async def test_unregistered_plugin_predicate_fail_closed_on_restart(
                 required=False,
             )
         ],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[
             _loop(
                 max_iter=5,
@@ -1478,7 +1479,7 @@ async def test_plan_expanded_uses_writer_constant(tmp_path, clock, runtime_cls):
     )
     await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[
             _loop(
                 max_iter=1,
@@ -1520,7 +1521,7 @@ async def test_loop_unexpected_error_finalizes_live(tmp_path, clock, runtime_cls
         )
         await rt.accept_plan(
             [],
-            questions=[QuestionSpec(id="Q1", text="q")],
+            questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
             loops=[
                 _loop(
                     max_iter=5,
@@ -1566,7 +1567,7 @@ async def test_loop_unexpected_error_finalizes_on_recover(
         )
         await rt.accept_plan(
             [],
-            questions=[QuestionSpec(id="Q1", text="q")],
+            questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
             loops=[
                 _loop(
                     max_iter=5,
@@ -1667,7 +1668,7 @@ async def test_materialize_loop_iter_writes_plan_expanded(tmp_path, clock, runti
     )
     await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[],
     )
     # Direct materialize (accept with empty loops leaves no auto-iter).
@@ -1712,7 +1713,7 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
         )
         await rt.accept_plan(
             [],
-            questions=[QuestionSpec(id="Q1", text="q")],
+            questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
             loops=[
                 _loop(
                     max_iter=5,
@@ -1803,7 +1804,7 @@ async def test_refuse_loop_failure_in_expected_branch_finalizes(
         )
         await rt.accept_plan(
             [],
-            questions=[QuestionSpec(id="Q1", text="q")],
+            questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
             loops=[
                 _loop(
                     max_iter=5,
@@ -1868,7 +1869,7 @@ async def test_internal_error_closes_running_tasks_and_attempts(
                     required=False,
                 )
             ],
-            questions=[QuestionSpec(id="Q1", text="q")],
+            questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
             loops=[
                 _loop(
                     max_iter=5,
@@ -1958,7 +1959,7 @@ async def test_internal_error_close_does_not_reenter_hooks(
                     required=False,
                 )
             ],
-            questions=[QuestionSpec(id="Q1", text="q")],
+            questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
             expand_after=["OUT"],
             loops=[
                 _loop(
@@ -2010,7 +2011,7 @@ async def test_count_survivors_failure_finalizes_internal_error(
     )
     await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q")],
+        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[
             _loop(
                 max_iter=5,
@@ -2045,7 +2046,7 @@ async def test_materialize_loop_iter_failure_finalizes_internal_error(
         )
         await rt.accept_plan(
             [],
-            questions=[QuestionSpec(id="Q1", text="q")],
+            questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
             loops=[
                 _loop(
                     max_iter=5,
@@ -2091,7 +2092,7 @@ async def test_plan_invalid_from_predicate_body_finalizes(
         )
         await rt.accept_plan(
             [],
-            questions=[QuestionSpec(id="Q1", text="q")],
+            questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
             loops=[
                 _loop(
                     max_iter=5,

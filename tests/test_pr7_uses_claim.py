@@ -373,13 +373,14 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
                 inputs=[InputSpec(kind="claim", ref=claim_id)],
             ),
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid0 = await rt.start_attempt("E0", provenance="stub")
     assert aid0 == aid0_expected
     content = b'{"count": 225}'
     art = arts.put(
-        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json",
+        role="data",
     )
     await rt.executor.record(
         aid0,

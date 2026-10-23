@@ -161,7 +161,6 @@ def _try_bind_one(
             )
         arts = dep_outputs.get(spec.from_task, {})
         aid = arts.get(spec.output)
-        dep_prov: Provenance = dep_provenance[spec.from_task]
 
         if dep.outcome == TaskOutcome.FAILED and mode == InputMode.FORBID:
             return (
@@ -200,6 +199,12 @@ def _try_bind_one(
             )
 
         if source != "stub":
+            # Required only when a real/partial artifact is bound. Failed or
+            # skipped deps never stamp provenance and must not default to real.
+            try:
+                dep_prov: Provenance = dep_provenance[spec.from_task]
+            except KeyError as e:
+                raise InputUnavailable("dep_provenance_missing") from e
             source = worst_provenance(source, dep_prov)
         digest = input_binding_digest(
             kind="artifact",
