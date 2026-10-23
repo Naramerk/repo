@@ -54,9 +54,11 @@ class HitlUnsupported(CoreError):
     """
 
     def __init__(self, request_ids: list[str]):
+        if not request_ids:
+            raise ValueError("HitlUnsupported requires at least one request_id")
         self.request_ids = list(request_ids)
-        ids = ", ".join(self.request_ids) or "(unknown)"
         super().__init__(
             f"core StudyRuntime cannot open/recover journal with open HITL "
-            f"gate(s): {ids}; use coscientist.experimental.StudyRuntime"
+            f"gate(s): {', '.join(self.request_ids)}; "
+            f"use coscientist.experimental.StudyRuntime"
         )

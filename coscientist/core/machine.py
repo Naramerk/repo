@@ -82,6 +82,39 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         )
         return study_view(self.tasks.values(), open_hitl=0, simulated_done=sim)
 
+    def invariant_open_attempts(self) -> bool:
+        """≤1 open attempt per task (DESIGN §3.3 property invariant)."""
+        for t in self.tasks.values():
+            open_n = 0
+            for a in t.attempts:
+                if not self.attempts.get(a, {}).get("closed"):
+                    open_n += 1
+            if open_n > 1:
+                return False
+        return True
+
+    def invariant_deadlines(self) -> bool:
+        """Every task/attempt/(optional HITL) deadline ≤ study.deadline."""
+        if self.study is None:
+            return True
+        sd = self.study.deadline
+        for t in self.tasks.values():
+            if t.deadline > sd:
+                return False
+            for a in t.attempts:
+                ad = self.attempts.get(a, {}).get("deadline")
+                if ad is None:
+                    continue
+                if isinstance(ad, str):
+                    ad = datetime.fromisoformat(ad)
+                if ad > sd:
+                    return False
+        # Experimental runtimes may carry open HitlRequest maps.
+        for h in getattr(self, "hitl", {}).values():
+            if h.deadline > sd:
+                return False
+        return True
+
     async def ensure_lease(self, ttl_s: float = 30.0) -> None:
         if self._lease_lost:
             raise LeaseLost("lease previously lost")

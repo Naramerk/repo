@@ -25,6 +25,8 @@ async def open_runtime(
     """Open a study runtime. ``runtime_cls`` defaults to core ``StudyRuntime``.
 
     Core refuses journals that still have open HITL gates (use experimental).
+    The journal is checked **before** ``acquire_lease`` so a refused open does
+    not leave a dangling lease until TTL.
     """
     cls = runtime_cls or StudyRuntime
     clock = clock or SystemClock()
@@ -32,6 +34,12 @@ async def open_runtime(
     root = Path(data_root) / study_id
     root.mkdir(parents=True, exist_ok=True)
     store = SqliteEventStore(study_id, root / "events.db", clock=clock, owner=None)
+    events = store.read_all()
+    try:
+        reject_open_hitl_if_unsupported(cls, events)
+    except Exception:
+        store.close()
+        raise
     if acquire:
         await store.acquire_lease(owner)
     writer = StudyWriter(store)
@@ -43,12 +51,6 @@ async def open_runtime(
         registry=registry or default_execution_registry(),
         owner=owner,
     )
-    events = store.read_all()
-    try:
-        reject_open_hitl_if_unsupported(rt, events)
-    except Exception:
-        await close_runtime(rt)
-        raise
     for ev in events:
         rt._project_local(ev)  # noqa: SLF001
     return rt

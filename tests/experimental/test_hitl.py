@@ -1,4 +1,4 @@
-"""HITL gate tests (experimental / pre-M2). Skipped on core runtime."""
+"""HITL gate tests (experimental / pre-M2)."""
 
 from __future__ import annotations
 
@@ -10,12 +10,13 @@ import pytest
 from coscientist.core.clock import FakeClock
 from coscientist.core.domain import HitlPolicy
 from coscientist.core.runtime_factory import close_runtime, open_runtime
+from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
 from tests.helpers import attach_executor, record_success
 
 
-async def _boot(tmp_path: Path, clock: FakeClock, runtime_cls: type, seconds: int = 60, **kw):
+async def _boot(tmp_path: Path, clock: FakeClock, seconds: int = 60, **kw):
     rt = await open_runtime(
-        tmp_path, "st_tr", clock=clock, runtime_cls=runtime_cls
+        tmp_path, "st_tr", clock=clock, runtime_cls=ExpStudyRuntime
     )
     await rt.create_study(
         profile="research",
@@ -30,11 +31,10 @@ async def _boot(tmp_path: Path, clock: FakeClock, runtime_cls: type, seconds: in
 
 
 @pytest.mark.asyncio
-async def test_hitl_delegate_records_critic(tmp_path, clock, runtime_cls, require_hitl):
+async def test_hitl_delegate_records_critic(tmp_path, clock):
     rt = await _boot(
         tmp_path,
         clock,
-        runtime_cls,
         seconds=60,
         hitl_policy=HitlPolicy(on_timeout="delegate"),
     )
@@ -52,11 +52,9 @@ async def test_hitl_delegate_records_critic(tmp_path, clock, runtime_cls, requir
 
 
 @pytest.mark.asyncio
-async def test_hitl_human_delegate_records_critic(
-    tmp_path, clock, runtime_cls, require_hitl
-):
+async def test_hitl_human_delegate_records_critic(tmp_path, clock):
     """Non-costly answer_hitl('delegate') → critic + delegated_by=human (§7.3)."""
-    rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
+    rt = await _boot(tmp_path, clock, seconds=120)
     _, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
     await record_success(rt, aid, arts)

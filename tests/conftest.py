@@ -21,11 +21,6 @@ from coscientist.core.runtime_factory import close_runtime, open_runtime  # noqa
 
 CORE_RULES = "coscientist.core.rules"  # required API: tests/README.md
 
-HITL_SKIP_REASON = (
-    "HITL gates require experimental StudyRuntime "
-    "(core drops HITL: tick ignores HITL timeouts, view open_hitl=0; pre-M2)"
-)
-
 
 @pytest.fixture(params=["refmodel", "core"])
 def impl(request):
@@ -60,13 +55,6 @@ def runtime_cls(runtime_kind: str) -> type:
     from coscientist.experimental.runtime import StudyRuntime
 
     return StudyRuntime
-
-
-@pytest.fixture
-def require_hitl(runtime_kind: str) -> None:
-    """Skip when the dual-runtime param is core (HITL is experimental-only)."""
-    if runtime_kind == "core":
-        pytest.skip(HITL_SKIP_REASON)
 
 
 @pytest.fixture

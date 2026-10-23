@@ -1,4 +1,9 @@
-"""Hypothesis stateful: every study closes by deadline (DESIGN §3.3)."""
+"""Hypothesis stateful: every study closes by deadline (DESIGN §3.3).
+
+Core invariants (open attempts, deadlines) live on StudyRuntime. HITL/fork
+rules are gated with ``@precondition(supports_hitl)`` so the machine runs on
+both ``rt_core`` and ``rt_exp``.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +19,7 @@ from hypothesis.stateful import (
     RuleBasedStateMachine,
     initialize,
     invariant,
+    precondition,
     rule,
     run_state_machine_as_test,
 )
@@ -21,16 +27,19 @@ from hypothesis.stateful import (
 from coscientist.core.clock import FakeClock
 from coscientist.core.domain import Clarification, TaskSpec, TaskState
 from coscientist.core.errors import LeaseLost
+from coscientist.core.hitl_guard import supports_hitl
 from coscientist.core.projections import fold_events
 from coscientist.core.recover import recover
 from coscientist.core.runtime_factory import close_runtime, open_runtime
-from coscientist.experimental.runtime import StudyRuntime as ExperimentalStudyRuntime
 
 
 class StudyClosesMachine(RuleBasedStateMachine):
+    """Base property machine. Subclasses set ``runtime_cls`` before running."""
+
     task_keys = Bundle("task_keys")
     attempt_ids = Bundle("attempt_ids")
     hitl_ids = Bundle("hitl_ids")
+    runtime_cls: type  # set by the test wrapper
 
     def __init__(self):
         super().__init__()
@@ -46,6 +55,9 @@ class StudyClosesMachine(RuleBasedStateMachine):
     def _run(self, coro):
         return self._loop.run_until_complete(coro)
 
+    def _hitl_ok(self) -> bool:
+        return self.rt is not None and supports_hitl(self.rt)
+
     @initialize(data=st.data())
     def boot(self, data):
         import tempfile
@@ -54,7 +66,13 @@ class StudyClosesMachine(RuleBasedStateMachine):
         seconds = data.draw(st.integers(min_value=20, max_value=120))
         self.study_deadline = self.clock.now() + timedelta(seconds=seconds)
         self.rt = self._run(
-            open_runtime(self.tmp, self.sid, owner="owner-a", clock=self.clock, runtime_cls=ExperimentalStudyRuntime)
+            open_runtime(
+                self.tmp,
+                self.sid,
+                owner="owner-a",
+                clock=self.clock,
+                runtime_cls=self.runtime_cls,
+            )
         )
         self._run(
             self.rt.create_study(
@@ -78,7 +96,6 @@ class StudyClosesMachine(RuleBasedStateMachine):
     def create_and_accept_plan(self):
         if self.lost_lease or self.rt is None:
             return "PLAN"
-        # finish stages if needed
         for key in ("SPEC", "HYP", "LIT"):
             t = self.rt.tasks.get(f"{self.sid}/{key}")
             if t and t.state == TaskState.PENDING:
@@ -87,7 +104,9 @@ class StudyClosesMachine(RuleBasedStateMachine):
                     self._run(self.rt.cancel_task(key, reason="prop_advance"))
                 except Exception:
                     pass
-        if not any(k.startswith("EXP-") for k in (t.spec.task_key for t in self.rt.tasks.values())):
+        if not any(
+            k.startswith("EXP-") for k in (t.spec.task_key for t in self.rt.tasks.values())
+        ):
             specs = [
                 TaskSpec(
                     task_key="EXP-1",
@@ -124,7 +143,6 @@ class StudyClosesMachine(RuleBasedStateMachine):
         if self.lost_lease or aid == "none" or self.rt is None:
             return
         try:
-            # cancel path for property coverage (record path covered in unit tests)
             att = self.rt.attempts.get(aid, {})
             tid = att.get("task_id")
             if tid:
@@ -152,6 +170,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
             except Exception:
                 pass
 
+    @precondition(lambda self: self._hitl_ok())
     @rule(key=task_keys, target=hitl_ids)
     def open_hitl(self, key):
         if self.lost_lease or self.rt is None:
@@ -161,6 +180,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
         except Exception:
             return "none"
 
+    @precondition(lambda self: self._hitl_ok())
     @rule(hid=hitl_ids)
     def answer_hitl(self, hid):
         if self.lost_lease or hid == "none" or self.rt is None:
@@ -170,6 +190,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
         except Exception:
             pass
 
+    @precondition(lambda self: self._hitl_ok())
     @rule()
     def recover_after_idle(self):
         if self.lost_lease or self.rt is None:
@@ -191,14 +212,13 @@ class StudyClosesMachine(RuleBasedStateMachine):
         except Exception:
             pass
 
+    @precondition(lambda self: self._hitl_ok())
     @rule()
     def fork_session(self):
         if self.lost_lease or self.rt is None:
             return
         try:
-            self._run(
-                self.rt.fork([Clarification(target="EXP-1", text="retry")])
-            )
+            self._run(self.rt.fork([Clarification(target="EXP-1", text="retry")]))
             self.fork_count += 1
         except Exception:
             pass
@@ -216,10 +236,9 @@ class StudyClosesMachine(RuleBasedStateMachine):
                 owner="owner-b",
                 clock=self.clock,
                 acquire=True,
-                runtime_cls=ExperimentalStudyRuntime,
+                runtime_cls=self.runtime_cls,
             )
         )
-        # poison first runtime lease
         self.rt.store.epoch = 0
         self.lost_lease = True
         try:
@@ -229,7 +248,6 @@ class StudyClosesMachine(RuleBasedStateMachine):
             pass
         except Exception:
             pass
-        # expire owner-b lease and drop its connection before teardown reopen
         self.clock.advance(timedelta(seconds=31))
         try:
             self._run(close_runtime(other))
@@ -288,14 +306,11 @@ class StudyClosesMachine(RuleBasedStateMachine):
 
     @invariant()
     def lease_lost_writes_nothing_new(self):
-        # checked by lose_lease raising; epoch fencing in store
         return
 
     def check_finally_closed(self):
         if self.rt is None or self.study_deadline is None:
             return
-        # Always reopen with a fresh connection/owner so deadline drain is not
-        # blocked by a poisoned epoch or a lingering second-owner connection.
         old = self.rt
         try:
             self._run(close_runtime(old))
@@ -304,7 +319,6 @@ class StudyClosesMachine(RuleBasedStateMachine):
                 old.store.close()
             except Exception:
                 pass
-        # Never move the clock backwards (lease expiry is absolute); clear lease row.
         target = max(self.clock.now(), self.study_deadline) + timedelta(seconds=35)
         self.clock.set(target)
         try:
@@ -323,7 +337,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
                 self.sid,
                 owner="owner-final",
                 clock=self.clock,
-                runtime_cls=ExperimentalStudyRuntime,
+                runtime_cls=self.runtime_cls,
             )
         )
         self.lost_lease = False
@@ -337,8 +351,8 @@ class StudyClosesMachine(RuleBasedStateMachine):
 
 
 @pytest.mark.asyncio
-async def test_every_study_closes_by_deadline(runtime_kind, require_hitl):
-    """Property test uses HITL/fork rules — experimental runtime only."""
+async def test_every_study_closes_by_deadline(runtime_cls):
+    """Runs on both core and experimental via ``runtime_cls``."""
 
     def run():
         class M(StudyClosesMachine):
@@ -348,6 +362,7 @@ async def test_every_study_closes_by_deadline(runtime_kind, require_hitl):
                 finally:
                     super().teardown()
 
+        M.runtime_cls = runtime_cls
         run_state_machine_as_test(
             M,
             settings=settings(
@@ -358,7 +373,6 @@ async def test_every_study_closes_by_deadline(runtime_kind, require_hitl):
                     HealthCheck.too_slow,
                     HealthCheck.filter_too_much,
                 ],
-                # Shrink is expensive with asyncio+sqlite; generation coverage is enough for M0.
                 phases=[Phase.generate, Phase.target],
             ),
         )

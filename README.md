@@ -27,7 +27,8 @@ coscientist/core/          M0 state-core (no HITL: tick/view/recover ignore or r
 coscientist/checks/        M1 requirement catalog + CodeCheck evaluation
 coscientist/experimental/  pre-M2/M5: HITL gates, DelegatedBudget/costly_gate, report stub
 coscientist/schema/        graph_schema.yaml (packaged)
-tests/                     dual runtime_kind=[core,experimental]; HITL tests skip on core
+tests/                     dual runtime_kind=[core,experimental]; pure HITL under experimental/
 docs/                      DESIGN.md, CAPABILITIES.md
 ```
+
 

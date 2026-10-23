@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from coscientist.checks.catalog import minimal_test_catalog
 from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
@@ -17,7 +17,19 @@ from coscientist.core.domain import (
 from coscientist.core.executor import Executor
 
 
-def attach_executor(rt: Any, tmp: Path) -> tuple[Executor, LocalArtifactStore]:
+class RuntimeLike(Protocol):
+    """Minimal surface used by attach_executor / record_success."""
+
+    writer: Any
+    clock: Any
+    attempts: dict[str, dict[str, Any]]
+    tasks: dict[str, Any]
+    executor: Any
+
+    def _project_local(self, ev: Any) -> None: ...
+
+
+def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifactStore]:
     catalog = minimal_test_catalog()
     arts = LocalArtifactStore(tmp / "arts")
     ex = Executor(
@@ -29,7 +41,7 @@ def attach_executor(rt: Any, tmp: Path) -> tuple[Executor, LocalArtifactStore]:
         get_task=lambda tid: rt.tasks[tid],
         on_events=rt._project_local,
     )
-    # patch closed/provenance attribute access for dict-backed attempts
+
     def get_attempt(aid: str):
         d = rt.attempts[aid]
         return type(
@@ -50,14 +62,13 @@ def attach_executor(rt: Any, tmp: Path) -> tuple[Executor, LocalArtifactStore]:
 
 
 async def record_success(
-    rt: Any, aid: str, arts: LocalArtifactStore, *, count: int = 225
+    rt: RuntimeLike, aid: str, arts: LocalArtifactStore, *, count: int = 225
 ) -> None:
     assert rt.executor is not None
     content = json.dumps({"count": count}).encode()
     art = arts.put(
         content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
     )
-    # ensure task criteria include value_match so SUCCESS is possible
     task = rt.tasks[rt.attempts[aid]["task_id"]]
     if not task.spec.criteria:
         new_spec = task.spec.model_copy(
