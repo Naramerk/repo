@@ -24,9 +24,27 @@ KNOWN_CODE_KINDS = frozenset(
         "source_link",
         "metric_threshold",
         "value_matches",
+        "exec_runs",
+        "tests_pass",
+        "metric_on_holdout",
+        "reproducible_rerun",
     }
 )
 KNOWN_REVIEW_ROLES = frozenset({"reviewer", "critic", "human"})
+
+
+def _migrate_code_check(raw: dict[str, Any]) -> dict[str, Any]:
+    """Upcast legacy CodeCheck fields (holdout_output → holdout required)."""
+    out = dict(raw)
+    kind = out.get("kind")
+    if kind == "metric_on_holdout":
+        if out.get("holdout_output") and not out.get("holdout"):
+            raise CatalogError(
+                "metric_on_holdout: legacy holdout_output removed — provide "
+                "catalog holdout{{...}} + holdout_digest (agent slots never supply labels)"
+            )
+        out.pop("holdout_output", None)
+    return out
 
 
 def _parse_check(raw: dict[str, Any]) -> CodeCheck | ReviewCheck:
@@ -34,7 +52,7 @@ def _parse_check(raw: dict[str, Any]) -> CodeCheck | ReviewCheck:
         kind = raw["kind"]
         if kind not in KNOWN_CODE_KINDS:
             raise CatalogError(f"unknown CodeCheck kind: {kind}")
-        return CodeCheck.model_validate(raw)
+        return CodeCheck.model_validate(_migrate_code_check(raw))
     if "reviewer_role" in raw:
         role = raw["reviewer_role"]
         if role not in KNOWN_REVIEW_ROLES:

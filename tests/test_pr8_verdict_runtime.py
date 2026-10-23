@@ -59,12 +59,25 @@ _DERIVED_OK = {
         "trusted": False,
         "core_evaluated": True,
         "countable": True,
-        "produced_by_call_id": "",
+        # Bound call_id required for countable (no {attempt}:derived invention).
+        "produced_by_call_id": "PLACEHOLDER:1",
     },
     "check_role": "prediction",
     "refute_capable": True,
     "severe": True,
 }
+
+
+def _derived_for(attempt_id: str, **extra: object) -> dict:
+    """``_DERIVED_OK`` with ``produced_by_call_id`` bound to ``attempt_id``."""
+    base: dict = {**_DERIVED_OK, **extra}
+    eff = dict(base.get("effect") or {})
+    extra_eff = extra.get("effect")
+    if isinstance(extra_eff, dict):
+        eff = {**eff, **extra_eff}
+    eff["produced_by_call_id"] = f"{attempt_id}:1"
+    base["effect"] = eff
+    return base
 
 
 def _apply_events(g: GraphStore, evs: list) -> None:
@@ -103,7 +116,7 @@ def test_reupsert_keeps_worst_provenance():
         claims=[{"id": "C1", "target": "Q1"}],
         now=now,
         graph=g,
-        derived=_DERIVED_OK,
+        derived=_derived_for(aid),
     )
     assert drops1 == []
     _apply_events(g, evs1)
@@ -116,7 +129,7 @@ def test_reupsert_keeps_worst_provenance():
         claims=[{"id": "C1", "target": "Q1", "secret": "x", "criterion_status": "met"}],
         now=now,
         graph=g,
-        derived={**_DERIVED_OK, "accepted": True},
+        derived=_derived_for(aid, accepted=True),
     )
     node_ev = next(e for e in evs2 if e.type == "GraphNodeUpserted" and e.entity_key == cid)
     assert node_ev.payload["attrs"]["provenance"] == "stub"
@@ -131,9 +144,10 @@ def test_claim_attrs_whitelisted_no_counting_controls():
     sid = "st_w"
     _seed_question(g, sid)
     now = datetime(2026, 1, 1, tzinfo=UTC)
+    aid = f"{sid}/E#1"
     evs, drops = claim_nodes_from_attempt(
         study_id=sid,
-        attempt_id=f"{sid}/E#1",
+        attempt_id=aid,
         provenance="real",
         claims=[
             {
@@ -150,7 +164,7 @@ def test_claim_attrs_whitelisted_no_counting_controls():
         ],
         now=now,
         graph=g,
-        derived=_DERIVED_OK,
+        derived=_derived_for(aid),
     )
     assert drops == []
     attrs = next(e for e in evs if e.type == "GraphNodeUpserted").payload["attrs"]
@@ -169,26 +183,27 @@ def test_about_edge_emitted_unknown_target_dropped():
     g = GraphStore(default_execution_registry())
     sid = "st_about"
     now = datetime(2026, 1, 1, tzinfo=UTC)
+    aid = f"{sid}/E#1"
     evs, drops = claim_nodes_from_attempt(
         study_id=sid,
-        attempt_id=f"{sid}/E#1",
+        attempt_id=aid,
         provenance="real",
         claims=[{"id": "C1", "target": "Q1"}],
         now=now,
         graph=g,
-        derived=_DERIVED_OK,
+        derived=_derived_for(aid),
     )
     assert drops and drops[0]["reason"] == "target_unknown"
     assert evs == []
     _seed_question(g, sid)
     evs2, drops2 = claim_nodes_from_attempt(
         study_id=sid,
-        attempt_id=f"{sid}/E#1",
+        attempt_id=aid,
         provenance="real",
         claims=[{"id": "C1", "target": "Q1"}],
         now=now,
         graph=g,
-        derived=_DERIVED_OK,
+        derived=_derived_for(aid),
     )
     assert drops2 == []
     _apply_events(g, evs2)
@@ -281,15 +296,16 @@ def test_foreign_claim_id_rejected():
     sid = "st_foreign"
     _seed_question(g, sid)
     now = datetime(2026, 1, 1, tzinfo=UTC)
+    aid = f"{sid}/E#1"
     foreign = claim_node_id(sid, f"{sid}/OTHER#1:C1")
     evs, drops = claim_nodes_from_attempt(
         study_id=sid,
-        attempt_id=f"{sid}/E#1",
+        attempt_id=aid,
         provenance="real",
         claims=[{"id": foreign, "target": "Q1"}],
         now=now,
         graph=g,
-        derived=_DERIVED_OK,
+        derived=_derived_for(aid),
     )
     assert drops and drops[0]["reason"] == "foreign_claim_id"
     assert evs == []
@@ -300,14 +316,15 @@ def test_no_h_star_heuristic_auto_create():
     g = GraphStore(default_execution_registry())
     sid = "st_h"
     now = datetime(2026, 1, 1, tzinfo=UTC)
+    aid = f"{sid}/E#1"
     _, drops = claim_nodes_from_attempt(
         study_id=sid,
-        attempt_id=f"{sid}/E#1",
+        attempt_id=aid,
         provenance="real",
         claims=[{"id": "C1", "target": "H1"}],
         now=now,
         graph=g,
-        derived=_DERIVED_OK,
+        derived=_derived_for(aid),
     )
     assert drops[0]["reason"] == "target_unknown"
     assert g.get_node(f"{sid}:hypothesis:H1") is None
@@ -674,7 +691,7 @@ def test_dispositions_from_verdict_counting_claims():
         claims=[{"id": "C1", "target": "Q1"}],
         now=now,
         graph=g,
-        derived=_DERIVED_OK,
+        derived=_derived_for(aid),
     )
     assert drops == []
     _apply_events(g, evs)
@@ -824,7 +841,7 @@ def test_qh_logical_id_collision_does_not_merge():
         claims=[{"id": "cq", "target": "X1"}],
         now=now,
         graph=g,
-        derived=_DERIVED_OK,
+        derived=_derived_for(aid_q),
     )
     _apply_events(g, evs_q)
     # Force about to hypothesis for second claim via full node id target.
@@ -835,7 +852,7 @@ def test_qh_logical_id_collision_does_not_merge():
         claims=[{"id": "ch", "target": hid}],
         now=now,
         graph=g,
-        derived={**_DERIVED_OK, "criterion_status": "not_met"},
+        derived=_derived_for(aid_h, criterion_status="not_met"),
     )
     assert drops_h == []
     _apply_events(g, evs_h)
@@ -1412,13 +1429,13 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
             claims=[{"id": f"c{i}", "target": "Q1"}],
             now=now,
             graph=g,
-            derived={
-                **_DERIVED_OK,
-                "criterion_status": "met",
-                "validity_ok": True,
-                "check_role": "prediction",
-                "artifact_id": f"A{i}",
-            },
+            derived=_derived_for(
+                aid,
+                criterion_status="met",
+                validity_ok=True,
+                check_role="prediction",
+                artifact_id=f"A{i}",
+            ),
         )
         assert drops == []
         _apply_events(g, evs)
@@ -1430,14 +1447,14 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
         claims=[{"id": "bad", "target": "Q1"}],
         now=now,
         graph=g,
-        derived={
-            **_DERIVED_OK,
-            "criterion_status": "unassessed",
-            "validity_ok": False,
-            "check_role": "validity",
-            "exclusion_reason": "validity_failed",
-            "artifact_id": "AV",
-        },
+        derived=_derived_for(
+            aid_b,
+            criterion_status="unassessed",
+            validity_ok=False,
+            check_role="validity",
+            exclusion_reason="validity_failed",
+            artifact_id="AV",
+        ),
     )
     assert drops_b == []
     _apply_events(g, evs_b)
@@ -1503,14 +1520,14 @@ def test_unknown_role_exclusion_never_forces_verdict():
         claims=[{"id": "u", "target": "Q1"}],
         now=now,
         graph=g,
-        derived={
-            **_DERIVED_OK,
-            "criterion_status": "unassessed",
-            "validity_ok": False,
-            "check_role": "unknown",
-            "exclusion_reason": "unknown_role",
-            "artifact_id": "AU",
-        },
+        derived=_derived_for(
+            aid,
+            criterion_status="unassessed",
+            validity_ok=False,
+            check_role="unknown",
+            exclusion_reason="unknown_role",
+            artifact_id="AU",
+        ),
     )
     assert drops == []
     _apply_events(g, evs)
@@ -1554,14 +1571,14 @@ def test_validity_only_evidence_inconclusive():
         claims=[{"id": "bad", "target": "Q1"}],
         now=now,
         graph=g,
-        derived={
-            **_DERIVED_OK,
-            "criterion_status": "unassessed",
-            "validity_ok": False,
-            "check_role": "validity",
-            "exclusion_reason": "validity_failed",
-            "artifact_id": "AV",
-        },
+        derived=_derived_for(
+            aid,
+            criterion_status="unassessed",
+            validity_ok=False,
+            check_role="validity",
+            exclusion_reason="validity_failed",
+            artifact_id="AV",
+        ),
     )
     assert drops == []
     _apply_events(g, evs)
@@ -1694,7 +1711,7 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         claims=[{"id": "sup", "target": "H1"}],
         now=now,
         graph=g,
-        derived={**_DERIVED_OK, "criterion_status": "met"},
+        derived=_derived_for(aid_sup, criterion_status="met"),
     )
     assert drops_sup == []
     _apply_events(g, evs_sup)
@@ -1705,7 +1722,7 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         claims=[{"id": "ref", "target": "H1"}],
         now=now,
         graph=g,
-        derived={**_DERIVED_OK, "criterion_status": "not_met"},
+        derived=_derived_for(aid_ref, criterion_status="not_met"),
     )
     assert drops_ref == []
     _apply_events(g, evs_ref)
@@ -1824,7 +1841,7 @@ def test_intent_from_producing_experiment_two_opposite():
             claims=[{"id": "c", "target": "H1"}],
             now=now,
             graph=g,
-            derived=_DERIVED_OK,
+            derived=_derived_for(aid),
         )
         assert drops == []
         _apply_events(g, evs)

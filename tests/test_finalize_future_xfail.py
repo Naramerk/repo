@@ -90,6 +90,8 @@ def test_question_disposition_computed_from_verdict():
                 "trusted": False,
                 "core_evaluated": True,
                 "countable": True,
+                # Bound at claim authorship (not invented from aid at read time).
+                "produced_by_call_id": f"{aid}:derived",
             },
             "claim_outcome": "consistent",
             "severe": True,

@@ -24,7 +24,12 @@ from coscientist.core.domain import (
     ReviewCheck,
     TaskSpec,
 )
-from coscientist.core.errors import ArtifactCorrupt
+from coscientist.core.errors import (
+    ArtifactCorrupt,
+    CatalogError,
+    CoreBugError,
+    SandboxInfraError,
+)
 
 
 def role_from_template(tmpl: RequirementTemplate | None) -> CheckRole:
@@ -132,7 +137,7 @@ def _effect_provenance_fields(
 ) -> dict[str, Any]:
     """Core-stamped producer/trusted/countable from artifact meta (agent cannot set).
 
-    ``trusted`` = producer core|sandbox (sandbox not wired in M1 production).
+    ``trusted`` = producer core, or sandbox with both net and fs isolation hard.
     ``countable`` = core catalog evaluation on an artifact bound to this attempt.
     """
     meta = artifacts.get_meta(artifact_id) if artifact_id else None
@@ -142,7 +147,7 @@ def _effect_provenance_fields(
     produced = getattr(meta, "produced_by", None) if meta is not None else None
     call_id = str(getattr(produced, "call_id", "") or "")
     belongs = artifact_belongs_to_attempt(meta, attempt_id)
-    return {
+    out: dict[str, Any] = {
         "producer": producer,
         "trusted": artifact_producer_trusted(meta),
         "core_evaluated": True,
@@ -151,6 +156,14 @@ def _effect_provenance_fields(
         # Countable only when the artifact was produced for this attempt.
         "countable": bool(belongs),
     }
+    if meta is not None and producer == "sandbox":
+        ni = getattr(meta, "net_isolation", None)
+        fs = getattr(meta, "fs_isolation", None)
+        if ni in ("hard", "soft", "none"):
+            out["net_isolation"] = ni
+        if fs in ("hard", "soft", "none"):
+            out["fs_isolation"] = fs
+    return out
 
 
 def _extract_ci(doc: Any, left: Any) -> dict[str, float] | None:
@@ -427,6 +440,27 @@ def evaluate_code_check(
                 role=role,
             )
 
+        if check.kind in (
+            "exec_runs",
+            "tests_pass",
+            "metric_on_holdout",
+            "reproducible_rerun",
+        ):
+            from coscientist.checks.kinds.executable import evaluate_executable
+
+            # Executable kinds stamp binding/trusted themselves — do not pass
+            # empty provenance (artifact_id="") that would overwrite countable.
+            return evaluate_executable(
+                check,
+                template_id=template_id,
+                check_id=check_id,
+                out=out,
+                artifacts=artifacts,
+                role=role,
+                attempt_id=attempt_id,
+                prov_fields={},
+            )
+
     except ArtifactCorrupt as e:
         return CheckResult(
             check_id=check_id,
@@ -437,7 +471,42 @@ def evaluate_code_check(
             role=role,
             detail=str(e),
         )
+    except SandboxInfraError:
+        raise
+    except CoreBugError:
+        raise
+    except CatalogError:
+        # Catalog integrity (e.g. holdout_digest mismatch) — not a core bug.
+        raise
+    except OSError as e:
+        # Host I/O outside Popen on executable kinds → infra (B3).
+        if check.kind in (
+            "exec_runs",
+            "tests_pass",
+            "metric_on_holdout",
+            "reproducible_rerun",
+        ):
+            raise SandboxInfraError(
+                f"sandbox_unavailable:host_io:{e.__class__.__name__}"
+            ) from e
+        return CheckResult(
+            check_id=check_id,
+            template_id=template_id,
+            status=ReqStatus.FAILED,
+            is_code=True,
+            required=True,
+            role=role,
+            detail=str(e),
+        )
     except Exception as e:
+        # Unexpected core bugs: neither infra nor scientific (B3).
+        if check.kind in (
+            "exec_runs",
+            "tests_pass",
+            "metric_on_holdout",
+            "reproducible_rerun",
+        ):
+            raise CoreBugError(f"core_bug:{e.__class__.__name__}:{e}") from e
         return CheckResult(
             check_id=check_id,
             template_id=template_id,
@@ -459,6 +528,36 @@ def evaluate_code_check(
     )
 
 
+def agent_facing_template_view(tmpl: RequirementTemplate) -> dict[str, Any]:
+    """Fields safe to show an agent — never the full CodeCheck (holdout/scorer/tests).
+
+    This is the **only** agent-facing serialization of a catalog template.
+    Prompt renderers (arriving later) must call this — never
+    ``RequirementTemplate.model_dump`` / full ``CodeCheck``.
+    """
+    return {
+        "template_id": tmpl.id,
+        "text_ru": tmpl.text_ru,
+        "version": tmpl.version,
+        "required": tmpl.required,
+        "role": tmpl.role,
+        "is_code": isinstance(tmpl.check, CodeCheck),
+        "check_kind": getattr(tmpl.check, "kind", None)
+        or getattr(tmpl.check, "reviewer_role", None),
+    }
+
+
+def agent_facing_catalog_view(catalog: Catalog) -> dict[str, Any]:
+    """Agent-safe catalog projection — templates via ``agent_facing_template_view`` only."""
+    return {
+        "catalog_version": catalog.catalog_version,
+        "edition": catalog.edition,
+        "templates": [agent_facing_template_view(t) for t in catalog.templates],
+        "defaults": {k: list(v) for k, v in (catalog.defaults or {}).items()},
+        "code_output_names": list(catalog.code_output_names or []),
+    }
+
+
 def template_to_requirement(
     tmpl: RequirementTemplate,
     node_id: str,
@@ -466,16 +565,17 @@ def template_to_requirement(
     status: ReqStatus = ReqStatus.PENDING,
     req_id: str | None = None,
 ) -> NodeRequirement:
-    is_code = isinstance(tmpl.check, CodeCheck)
+    """Build a NodeRequirement from the agent-facing template view (no check body)."""
+    view = agent_facing_template_view(tmpl)
     return NodeRequirement(
-        id=req_id or f"{node_id}:{tmpl.id}",
-        template_id=tmpl.id,
+        id=req_id or f"{node_id}:{view['template_id']}",
+        template_id=str(view["template_id"]),
         node_id=node_id,
-        text_ru=tmpl.text_ru,
-        required=tmpl.required,
+        text_ru=str(view["text_ru"] or ""),
+        required=bool(view["required"]),
         status=status,
-        check_version=tmpl.version,
-        is_code=is_code,
+        check_version=str(view["version"]),
+        is_code=bool(view["is_code"]),
     )
 
 
@@ -548,7 +648,16 @@ def evaluate_task_checks(
                 )
             )
             continue
-        if isinstance(tmpl.check, ReviewCheck):
+        check: CodeCheck | ReviewCheck
+        if isinstance(tmpl.check, CodeCheck):
+            from coscientist.checks.sandbox_limits import apply_frozen_limits
+
+            check = apply_frozen_limits(
+                tmpl.check, spec, template_id=tmpl.id
+            )
+        else:
+            check = tmpl.check
+        if isinstance(check, ReviewCheck):
             st = review_statuses.get(cid, ReqStatus.UNASSESSED)
             results.append(
                 CheckResult(
@@ -558,12 +667,12 @@ def evaluate_task_checks(
                     is_code=False,
                     required=ref.required and tmpl.required,
                     role=role,
-                    detail=tmpl.check.question,
+                    detail=check.question,
                 )
             )
         else:
             cr = evaluate_code_check(
-                tmpl.check,
+                check,  # type: ignore[arg-type]  # CodeCheck after ReviewCheck branch
                 template_id=tmpl.id,
                 check_id=cid,
                 out=out,

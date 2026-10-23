@@ -45,6 +45,8 @@ EventType = Literal[
     "ArtifactRegistered",
     "LateWriteRejected",
     "CatalogErrorRaised",
+    "SandboxInfraRaised",
+    "SameDigestRetryRejected",
     "LeaseAcquired",
     "ReviewScheduled",
     "ForkCreated",

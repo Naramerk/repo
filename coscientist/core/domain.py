@@ -146,9 +146,13 @@ class HitlPolicy(Frozen):
 
 
 ArtifactRole = Literal["paper", "data", "code", "figure", "table", "log", "report"]
-# Who stored the artifact bytes. Sets effect.trusted (reporting tag); M1
-# verdicts gate on countable core catalog eval, not trusted. Sandbox not wired.
+# Who stored the artifact bytes. effect.trusted is a reporting tag (M1 verdicts
+# gate on countable). Sandbox puts are trusted only when both net and fs
+# isolation are hard (soft/none ⇒ trusted=False). ``tests_pass`` is
+# observation-only (countable=False); other executable kinds stay countable.
 ArtifactProducer = Literal["agent", "core", "sandbox"]
+NetIsolation = Literal["hard", "soft", "none"]
+FsIsolation = Literal["hard", "soft", "none"]
 
 
 class OutputSpec(Frozen):
@@ -262,6 +266,13 @@ class TaskSpec(Frozen):
     foreach: ForEachSpec | None = None
     # Bound hypothesis/question id after foreach materialization (None on template).
     foreach_item: str | None = None
+    # Deprecated aggregate slots — always stripped at freeze (catalog is sole source).
+    sandbox_timeout_s: float | None = None
+    sandbox_memory_mb: int | None = None
+    # Per-check limits frozen from catalog at TaskCreated (template_id → fields).
+    sandbox_check_limits: dict[str, dict[str, Any]] | None = None
+    # Audit when agent-provided limit fields were ignored.
+    sandbox_limits_note: str | None = None
 
 
 class Budget(Frozen):
@@ -450,6 +461,9 @@ class Artifact(Frozen):
     role: ArtifactRole | None = None
     # Core-stamped; agent ``put`` always ``agent``. Never settable by AgentTaskOutput.
     producer: ArtifactProducer = "agent"
+    # Sandbox only: isolation actually achieved (PR17). trusted only if both hard.
+    net_isolation: NetIsolation | None = None
+    fs_isolation: FsIsolation | None = None
 
 
 class Clarification(Frozen):
@@ -496,6 +510,11 @@ class CodeCheck(Frozen):
         "source_link",
         "metric_threshold",
         "value_matches",
+        # M1 PR17 executable kinds (DESIGN_M1 §7)
+        "exec_runs",
+        "tests_pass",
+        "metric_on_holdout",
+        "reproducible_rerun",
     ]
     output: str | None = None
     schema_ref: str | None = None
@@ -504,6 +523,24 @@ class CodeCheck(Frozen):
     op: Literal["<", "<=", "==", ">=", ">", "in"] | None = None
     target: Any = None
     tolerance: float | None = None
+    # exec_runs / reproducible_rerun
+    command: str | None = None
+    argv: list[str] | None = None
+    timeout_s: float | None = None
+    memory_mb: int | None = None
+    max_output_bytes: int | None = None
+    allow_network: bool = False
+    # tests_pass — catalog/task tests (not agent tests), mounted RO into verifier
+    min_tests: int | None = None
+    tests: dict[str, str] | None = None  # relative path → source text
+    # Permitted agent input filenames (allowlist; empty → mount nothing).
+    input_allowlist: list[str] | None = None
+    # metric_on_holdout — labels from catalog/task store only (never agent slots)
+    holdout: dict[str, Any] | None = None
+    holdout_digest: str | None = None  # sha256 of canonical_json(holdout)
+    holdout_output: str | None = None  # legacy; migrated away in load_catalog
+    # reproducible_rerun (alias of tolerance when set)
+    rerun_tol: float | None = None
 
 
 class ReviewCheck(Frozen):

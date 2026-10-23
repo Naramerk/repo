@@ -7,10 +7,86 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
+      # bubblewrap required for hard sandbox isolation (PR17); anti-rewrite test must run.
+      # Ubuntu 24.04 AppArmor withholds CAP_NET_ADMIN inside unprivileged userns, so
+      # bwrap --unshare-net dies on loopback (RTM_NEWADDR). Lift the runner knob only;
+      # the sandbox under test is unchanged.
+      - run: |
+          sudo apt-get update -qq && sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          # Fail fast if hard netns still broken after the AppArmor lift.
+          bwrap --die-with-parent --unshare-user --uid 0 --gid 0 --disable-userns \
+            --unshare-pid --unshare-net --unshare-ipc --unshare-uts --unshare-cgroup-try \
+            --new-session --cap-drop ALL \
+            --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 --ro-bind /bin /bin \
+            -- /bin/true
+      # Delegated cgroup v2: move the job into a dedicated leaf BEFORE enabling
+      # subtree_control on the parent ("no internal processes" rule). Sandbox
+      # tests then nest under the job leaf. If the runner refuses, tests skip
+      # and DESIGN notes the M1 gap.
+      - name: Enable delegated cgroup v2
+        id: cgroup
+        run: |
+          set -euo pipefail
+          ROOT=/sys/fs/cgroup/coscientist-ci
+          JOB="$ROOT/ci-job"
+          # Ensure memory+cpu are available on the system root before nesting.
+          if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+            for c in memory cpu pids; do
+              grep -qw "$c" /sys/fs/cgroup/cgroup.controllers && \
+                echo "+$c" | sudo tee /sys/fs/cgroup/cgroup.subtree_control >/dev/null || true
+            done
+          fi
+          sudo mkdir -p "$JOB"
+          # Move THIS shell into the leaf first — ROOT must be empty of processes
+          # before subtree_control can be enabled.
+          if ! echo $$ | sudo tee "$JOB/cgroup.procs" >/dev/null 2>&1; then
+            echo "CGROUP_DELEGATED=0" >> "$GITHUB_ENV"
+            echo "delegated=no" >> "$GITHUB_OUTPUT"
+            echo "::warning::could not move into $JOB; cpu.stat idle/OOM tests will skip"
+            exit 0
+          fi
+          for c in memory cpu pids; do
+            echo "+$c" | sudo tee "$ROOT/cgroup.subtree_control" >/dev/null 2>&1 || true
+            echo "+$c" | sudo tee "$JOB/cgroup.subtree_control" >/dev/null 2>&1 || true
+          done
+          sudo chown -R "$(id -u):$(id -g)" "$ROOT" || true
+          # Verify nested leaf + memory.max under the job cgroup (sandbox probe).
+          LEAF="$JOB/probe-$$"
+          if mkdir "$LEAF" 2>/dev/null && echo 1048576 > "$LEAF/memory.max" 2>/dev/null; then
+            rmdir "$LEAF" 2>/dev/null || true
+            echo "CGROUP_DELEGATED=1" >> "$GITHUB_ENV"
+            echo "CGROUP_JOB=$JOB" >> "$GITHUB_ENV"
+            echo "delegated=yes" >> "$GITHUB_OUTPUT"
+            echo "cgroup delegation OK under $JOB"
+          else
+            rmdir "$LEAF" 2>/dev/null || true
+            echo "CGROUP_DELEGATED=0" >> "$GITHUB_ENV"
+            echo "delegated=no" >> "$GITHUB_OUTPUT"
+            echo "::warning::cgroup v2 nested leaf unavailable; cpu.stat idle/OOM tests will skip"
+          fi
       # pytest-asyncio>=1.3 supports pytest 9; 0.26.0 requires pytest<9 and breaks pip install
-      - run: pip install pyyaml==6.0.3 pydantic==2.14.1 pytest==9.1.1 ruff==0.17.2 rfc8785==0.1.4 pytest-asyncio==1.3.0 hypothesis==6.148.2 mypy==1.19.1 types-PyYAML==6.0.12.20250915 import-linter==2.15 jsonschema==4.25.1
+      - run: pip install pyyaml==6.0.3 pydantic==2.14.1 pytest==9.1.1 ruff==0.17.2 rfc8785==0.1.4 pytest-asyncio==1.3.0 hypothesis==6.148.2 mypy==1.19.1 types-PyYAML==6.0.12.20250915 import-linter==2.15 jsonschema==4.25.1 defusedxml==0.7.1
       - run: ruff check scripts tests coscientist
       - run: python scripts/gen_model_tables.py --check
       - run: mypy coscientist
       - run: lint-imports
-      - run: pytest -q tests
+      # Exclude perf SLO (absolute p99) — that runs in the dedicated job below.
+      # Re-enter the job leaf before pytest so _current_cgroup_path is writable.
+      - name: pytest
+        run: |
+          set -euo pipefail
+          JOB="${CGROUP_JOB:-/sys/fs/cgroup/coscientist-ci/ci-job}"
+          if [ "${CGROUP_DELEGATED:-0}" = "1" ] && [ -d "$JOB" ]; then
+            echo $$ | sudo tee "$JOB/cgroup.procs" >/dev/null || true
+          fi
+          pytest -q tests -m "not perf"
+  perf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install pyyaml==6.0.3 pydantic==2.14.1 pytest==9.1.1 rfc8785==0.1.4 pytest-asyncio==1.3.0 hypothesis==6.148.2 defusedxml==0.7.1 jsonschema==4.25.1
+      # Collects the full suite then selects -m perf; install deps needed at import.
+      - run: pytest -q tests -m "perf" --tb=short

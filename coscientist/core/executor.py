@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping
+from datetime import timedelta
 from typing import Any
 
 from coscientist.checks.evaluate import evaluate_task_checks, role_from_catalog
 from coscientist.core.artifacts import LocalArtifactStore
-from coscientist.core.digest import canonical_json, payload_digest
+from coscientist.core.attempts import RETRY_BACKOFF_S
+from coscientist.core.digest import canonical_json, payload_digest, sha256_hex
 from coscientist.core.domain import (
     VALID_PROVENANCE,
     AgentTaskOutput,
@@ -20,7 +23,12 @@ from coscientist.core.domain import (
     Result,
     TaskOutcome,
 )
-from coscientist.core.errors import AttemptClosedError, CatalogError
+from coscientist.core.errors import (
+    AttemptClosedError,
+    CatalogError,
+    CoreBugError,
+    SandboxInfraError,
+)
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.ids import criterion_node_id, result_id
 from coscientist.core.inputs import claim_nodes_from_attempt
@@ -277,6 +285,21 @@ def _effect_from_checks(
             if data.get("ci_low") is not None and data.get("ci_high") is not None:
                 effect["ci_low"] = float(data["ci_low"])
                 effect["ci_high"] = float(data["ci_high"])
+            # Preserve isolation / observation stamps (effect-only; not from meta).
+            for key in (
+                "net_isolation",
+                "fs_isolation",
+                "trusted",
+                "countable",
+                "note",
+                "observation_only",
+                "timeout_kind",
+                "refute_unresolved",
+                "cpu_usage_s",
+                "wall_s",
+            ):
+                if key in data:
+                    effect[key] = data[key]
             recomputed = recompute_effect_provenance(effect, attempt_id=attempt_id)
             if recomputed is not None:
                 effect = recomputed
@@ -370,14 +393,43 @@ def _derive_claim_core_attrs(
     effect, used_sesoi = _effect_from_checks(
         list(checks or []), attempt_id=attempt_id
     )
-    validity_s, claim_outcome, _ = classify_outcome(
-        validity_ok=validity_ok,
-        prediction_statuses=pred_statuses,
-        predicts_null=predicts_null,
-        sesoi=sesoi if isinstance(sesoi, float) else None,
-        effect=effect,
-        r17_ok=True,  # R17 runtime metadata still deferred (PR8)
-    )
+    from coscientist.checks.kinds._util import check_is_guest_timeout
+
+    timeout_kind: str | None = None
+    refute_unresolved = False
+    timeout_checks = [c for c in (checks or ()) if check_is_guest_timeout(c)]
+    claim_outcome: str | None
+    validity_s: str
+    if timeout_checks:
+        # Guest timeout is never a counting outcome (not k_ref / not k_sup).
+        for tc in timeout_checks:
+            te = getattr(tc, "effect", None) or {}
+            if isinstance(te, dict) and te.get("timeout_kind"):
+                timeout_kind = str(te["timeout_kind"])
+            if isinstance(te, dict) and te.get("refute_unresolved"):
+                refute_unresolved = True
+            elif _check_role(tc) == "prediction":
+                refute_unresolved = True
+        claim_outcome = "indeterminate"
+        validity_s = "valid" if validity_ok else "invalid"
+        if effect is None:
+            effect = {}
+        effect = {
+            **effect,
+            "countable": False,
+            "observation_only": True,
+            "timeout_kind": timeout_kind,
+            "refute_unresolved": refute_unresolved,
+        }
+    else:
+        validity_s, claim_outcome, _ = classify_outcome(
+            validity_ok=validity_ok,
+            prediction_statuses=pred_statuses,
+            predicts_null=predicts_null,
+            sesoi=sesoi if isinstance(sesoi, float) else None,
+            effect=effect,
+            r17_ok=True,  # R17 runtime metadata still deferred (PR8)
+        )
     if validity_s == "invalid":
         validity_ok = False
         if exclusion_reason is None:
@@ -486,6 +538,10 @@ def _derive_claim_core_attrs(
         out["alpha"] = crit["alpha"]
     if effect is not None:
         out["effect"] = effect
+    if timeout_kind:
+        out["timeout_kind"] = timeout_kind
+    if refute_unresolved:
+        out["refute_unresolved"] = True
     if lit and exclusion_reason is None:
         exclusion_reason = "lit"
     if exclusion_reason is not None:
@@ -507,6 +563,7 @@ class Executor:
         review_statuses: dict[str, ReqStatus] | None = None,
         get_graph: Any | None = None,
         get_results: Any | None = None,
+        max_attempts: int = 3,
     ) -> None:
         self.writer = writer
         self.catalog = catalog
@@ -518,6 +575,7 @@ class Executor:
         self.review_statuses = review_statuses or {}
         self.get_graph = get_graph
         self.get_results = get_results
+        self.max_attempts = int(max_attempts)
         self._scheduled_reviews: list[str] = []
 
     async def mark_route_returned(self, attempt_id: str, out: AgentTaskOutput) -> str:
@@ -575,19 +633,200 @@ class Executor:
             raise AttemptClosedError(attempt_id)
 
         task = self.get_task(task_id)
-        checks = evaluate_task_checks(
-            self.catalog,
-            task.spec,
-            out,
-            self.artifacts,
-            review_statuses=self.review_statuses,
-            attempt_id=attempt_id,
-            task_kind=str(getattr(task.kind, "value", task.kind)),
-            task_key=task.spec.task_key,
-        )
+        try:
+            # MJ2: no sync Popen on the event loop — evaluate (sandbox) off-thread.
+            checks = await asyncio.to_thread(
+                evaluate_task_checks,
+                self.catalog,
+                task.spec,
+                out,
+                self.artifacts,
+                review_statuses=self.review_statuses,
+                attempt_id=attempt_id,
+                task_kind=str(getattr(task.kind, "value", task.kind)),
+                task_key=task.spec.task_key,
+            )
+        except SandboxInfraError as e:
+            # Host/private-FD infra — does NOT charge the retry budget.
+            # Permanent unavailability closes the task (allow_retry=False); the
+            # attempt stays charged=False so a later reopen/retry budget is intact.
+            # Transient attach failures may retry without consuming charged slots.
+            detail = e.reason
+            transient = "cgroup_attach" in detail or detail.endswith(":attach")
+            provenance = _provenance(self.get_attempt(attempt_id))
+            return await self._commit_failure(
+                attempt_id,
+                study_id,
+                task_id,
+                out,
+                provenance,
+                out.claim,
+                reason=TaskReason.SANDBOX_INFRA.value,
+                detail=detail,
+                event_type="SandboxInfraRaised",
+                result_class="infra",
+                charge_attempt=False,
+                allow_retry=transient,
+            )
+        except CoreBugError as e:
+            # Own result_class (not infra); reported; never counts.
+            provenance = _provenance(self.get_attempt(attempt_id))
+            return await self._commit_failure(
+                attempt_id,
+                study_id,
+                task_id,
+                out,
+                provenance,
+                out.claim,
+                reason=TaskReason.CORE_BUG.value,
+                detail=e.reason,
+                event_type="CatalogErrorRaised",
+                result_class="core_bug",
+            )
         for c in checks:
             if not c.is_code and c.status == ReqStatus.UNASSESSED:
                 self._scheduled_reviews.append(c.check_id)
+
+        from coscientist.checks.kinds._util import check_is_guest_timeout, merge_detail
+
+        timeout_checks = [c for c in checks if check_is_guest_timeout(c)]
+        # Digest over content actually mounted into the jail (not artifact ids).
+        jail_digests = [
+            str((c.effect or {}).get("jail_inputs_digest") or "")
+            for c in checks
+            if isinstance(getattr(c, "effect", None), dict)
+            and (c.effect or {}).get("jail_inputs_digest")
+        ]
+        if jail_digests:
+            agent_digest = sha256_hex(
+                canonical_json({"jail_inputs": sorted(set(jail_digests))})
+            )
+        else:
+            # Fallback: content hashes of declared outputs (same as mount inputs).
+            mounted: dict[str, str] = {}
+            for name, handle in sorted((out.outputs or {}).items()):
+                meta = self.artifacts.get_meta(handle.artifact_id)
+                if meta is None:
+                    continue
+                mounted[str(name)] = str(meta.sha256)
+            agent_digest = sha256_hex(canonical_json({"mounted": mounted}))
+        results_map = self.get_results() if self.get_results is not None else {}
+        for prev_aid in list(getattr(task, "attempts", []) or []):
+            if prev_aid == attempt_id:
+                continue
+            prev = results_map.get(prev_aid) if isinstance(results_map, dict) else None
+            if not isinstance(prev, dict):
+                continue
+            if str(prev.get("result_class") or "") != "timeout":
+                continue
+            prev_dig = prev.get("agent_output_digest")
+            if prev_dig and agent_digest and prev_dig == agent_digest:
+                provenance = _provenance(self.get_attempt(attempt_id))
+                return await self._commit_failure(
+                    attempt_id,
+                    study_id,
+                    task_id,
+                    out,
+                    provenance,
+                    out.claim,
+                    reason=TaskReason.SAME_DIGEST_RETRY.value,
+                    detail=f"same_digest_retry:{agent_digest}",
+                    event_type="SameDigestRetryRejected",
+                    result_class="timeout",
+                    charge_attempt=True,
+                    allow_retry=True,
+                )
+
+        if timeout_checks:
+            provenance = _provenance(self.get_attempt(attempt_id))
+            kinds = [
+                str((c.effect or {}).get("timeout_kind") or "")
+                for c in timeout_checks
+                if isinstance(c.effect, dict)
+            ]
+            # Structural: ≥2 prediction/refute-role timeouts on this TASK
+            # (any template_id — alternation does not evade) → untestable.
+            # A single timeout (even on the last charged attempt) stays a
+            # plain timeout; refute_unresolved already blocks supported.
+            def _prediction_timeout_in_row(row: dict[str, Any]) -> bool:
+                if str(row.get("result_class") or "") != "timeout":
+                    return False
+                for cr in row.get("check_results") or []:
+                    if not isinstance(cr, dict):
+                        continue
+                    if str(cr.get("role") or "") != "prediction":
+                        continue
+                    raw_eff = cr.get("effect")
+                    eff: dict[str, Any] = (
+                        dict(raw_eff) if isinstance(raw_eff, dict) else {}
+                    )
+                    if eff.get("timeout_kind") or eff.get("refute_unresolved"):
+                        return True
+                return False
+
+            current_prediction_timeout = any(
+                getattr(c, "role", None) == "prediction" for c in timeout_checks
+            )
+            prior_prediction_timeouts = 0
+            for prev_aid in list(getattr(task, "attempts", []) or []):
+                if prev_aid == attempt_id:
+                    continue
+                prev = (
+                    results_map.get(prev_aid)
+                    if isinstance(results_map, dict)
+                    else None
+                )
+                if isinstance(prev, dict) and _prediction_timeout_in_row(prev):
+                    prior_prediction_timeouts += 1
+            task_prediction_timeouts = prior_prediction_timeouts + (
+                1 if current_prediction_timeout else 0
+            )
+            repeat_refute_timeout = task_prediction_timeouts >= 2
+            idle = any(k == "idle_timeout" for k in kinds) or repeat_refute_timeout
+            if repeat_refute_timeout:
+                elevated: list[Any] = []
+                for c in checks:
+                    if (
+                        check_is_guest_timeout(c)
+                        and getattr(c, "role", None) == "prediction"
+                        and isinstance(c.effect, dict)
+                    ):
+                        elevated.append(
+                            c.model_copy(
+                                update={
+                                    "effect": {
+                                        **c.effect,
+                                        "timeout_kind": "idle_timeout",
+                                        "refute_unresolved": True,
+                                        "repeat_timeout": True,
+                                    },
+                                    "detail": merge_detail(
+                                        getattr(c, "detail", None),
+                                        "repeat_timeout",
+                                    ),
+                                }
+                            )
+                        )
+                    else:
+                        elevated.append(c)
+                checks = elevated
+                kinds = ["idle_timeout"]
+            timeout_reason = (
+                TaskReason.IDLE_TIMEOUT.value
+                if idle
+                else TaskReason.SANDBOX_TIMEOUT.value
+            )
+            return await self._commit_timeout(
+                attempt_id,
+                study_id,
+                task_id,
+                out,
+                provenance,
+                checks=checks,
+                reason=timeout_reason,
+                detail=";".join(kinds) or "timeout",
+                agent_output_digest=str(agent_digest or ""),
+            )
 
         claim = out.claim
         reason: str | None = None
@@ -722,6 +961,55 @@ class Executor:
             infra_failure=False,
         )
 
+    async def _commit_timeout(
+        self,
+        attempt_id: str,
+        study_id: str,
+        task_id: str,
+        out: AgentTaskOutput,
+        provenance: Provenance,
+        *,
+        checks: list[Any],
+        reason: str,
+        detail: str,
+        agent_output_digest: str,
+    ) -> Result:
+        """Guest timeout: charged, non-countable; may retry until budget exhausted."""
+        rid = result_id(attempt_id)
+        payload = {
+            "result_id": rid,
+            "attempt_id": attempt_id,
+            "task_id": task_id,
+            "outcome": Outcome.FAILED.value,
+            "computed_outcome": Outcome.FAILED.value,
+            "reason": reason,
+            "provenance": provenance,
+            "check_results": [c.model_dump(mode="json") for c in checks],
+            "unassessed": [
+                c.check_id for c in checks if c.status == ReqStatus.UNASSESSED
+            ],
+            "artifacts": [h.artifact_id for h in out.outputs.values()],
+            "agent_claim": out.claim.value if out.claim else None,
+            "inputs": [],
+            "detail": detail,
+            "result_class": "timeout",
+            "agent_output_digest": agent_output_digest,
+        }
+        payload["payload_digest"] = payload_digest(payload)
+        return await self._commit_result(
+            attempt_id,
+            study_id,
+            task_id,
+            payload,
+            TaskOutcome.FAILED,
+            reason,
+            claims=list(out.claims or []),
+            checks=checks,
+            infra_failure=False,
+            charge_attempt=True,
+            allow_retry=True,
+        )
+
     async def _commit_failure(
         self,
         attempt_id: str,
@@ -733,12 +1021,23 @@ class Executor:
         *,
         reason: str,
         detail: str,
+        event_type: str = "CatalogErrorRaised",
+        result_class: str = "infra",
+        charge_attempt: bool = True,
+        allow_retry: bool = False,
     ) -> Result:
-        """Infra/execution failure (catalog, crash path) — drop claims."""
+        """Infra/core_bug/reject path — drop claims; infra never charges the budget."""
         rid = result_id(attempt_id)
+        drop_claims = result_class in ("infra", "core_bug") or reason in (
+            TaskReason.SAME_DIGEST_RETRY.value,
+            TaskReason.CATALOG_ERROR.value,
+            TaskReason.CORE_BUG.value,
+            TaskReason.SANDBOX_INFRA.value,
+        )
         payload = {
             "result_id": rid,
             "attempt_id": attempt_id,
+            "task_id": task_id,
             "outcome": Outcome.FAILED.value,
             "computed_outcome": Outcome.FAILED.value,
             "reason": reason,
@@ -749,16 +1048,16 @@ class Executor:
             "agent_claim": claim.value if claim else None,
             "inputs": [],
             "detail": detail,
-            "result_class": "infra",
+            "result_class": result_class,
         }
         payload["payload_digest"] = payload_digest(payload)
         await self._append(
             [
                 EventEnvelope(
                     study_id=study_id,
-                    type="CatalogErrorRaised",
+                    type=event_type,
                     entity_key=attempt_id,
-                    idem_key=make_idem("CatalogErrorRaised", attempt_id),
+                    idem_key=make_idem(event_type, attempt_id),
                     payload={"error": detail, "reason": reason},
                     ts=self.clock.now(),
                 )
@@ -773,8 +1072,28 @@ class Executor:
             reason,
             claims=[],
             checks=[],
-            infra_failure=True,
+            infra_failure=drop_claims,
+            charge_attempt=charge_attempt,
+            allow_retry=allow_retry,
         )
+
+    def _charged_count_after(
+        self, task: Any, attempt_id: str, *, charge_attempt: bool
+    ) -> int:
+        """How many charged attempts the task will have after closing ``attempt_id``."""
+        results = self.get_results() if self.get_results is not None else {}
+        n = 1 if charge_attempt else 0
+        for aid in list(getattr(task, "attempts", []) or []):
+            if aid == attempt_id:
+                continue
+            row = results.get(aid) if isinstance(results, dict) else None
+            if isinstance(row, dict):
+                if row.get("charged", True):
+                    n += 1
+            else:
+                # Prior closed attempt without a row — assume charged.
+                n += 1
+        return n
 
     async def _commit_result(
         self,
@@ -788,6 +1107,8 @@ class Executor:
         claims: list[dict[str, Any]] | None = None,
         checks: list[Any] | None = None,
         infra_failure: bool = False,
+        charge_attempt: bool = True,
+        allow_retry: bool = False,
     ) -> Result:
         # Attempt-open check runs inside the write transaction (_append_many_sync).
         now = self.clock.now()
@@ -810,9 +1131,12 @@ class Executor:
                 ],
             }
             payload["payload_digest"] = payload_digest(payload)
+        payload = {**payload, "charged": bool(charge_attempt)}
+        payload["payload_digest"] = payload_digest(payload)
         # PR7/PR8: claim nodes carry producing-attempt provenance (H-b);
         # re-upsert keeps worst provenance; about edges + attr whitelist.
         # Scientific FAILED/PARTIAL keep claims (not_met → refute); infra drops.
+        # Guest timeout keeps claims (refute_unresolved / timeout_kind).
         claim_events, drops = claim_nodes_from_attempt(
             study_id=study_id,
             attempt_id=attempt_id,
@@ -842,6 +1166,31 @@ class Executor:
         if drops:
             payload = {**payload, "claims_dropped": drops}
             payload["payload_digest"] = payload_digest(payload)
+
+        charged_after = self._charged_count_after(
+            task, attempt_id, charge_attempt=charge_attempt
+        )
+        deadline = getattr(task, "deadline", None)
+        within_deadline = deadline is None or now < deadline
+        schedule_retry = (
+            allow_retry
+            and charged_after < self.max_attempts
+            and within_deadline
+        )
+
+        close_payload: dict[str, Any] = {
+            "attempt_id": attempt_id,
+            "closed": True,
+            "close_reason": CloseReason.RESULT.value,
+            "task_id": task_id,
+            "charged": bool(charge_attempt),
+            "retryable": bool(schedule_retry),
+        }
+        if schedule_retry:
+            close_payload["retry_at"] = (
+                now + timedelta(seconds=RETRY_BACKOFF_S)
+            ).isoformat()
+
         events = [
             *claim_events,
             EventEnvelope(
@@ -858,29 +1207,30 @@ class Executor:
                 type="AttemptClosed",
                 entity_key=attempt_id,
                 idem_key=make_idem("AttemptClosed", attempt_id, CloseReason.RESULT.value),
-                payload={
-                    "attempt_id": attempt_id,
-                    "closed": True,
-                    "close_reason": CloseReason.RESULT.value,
-                    "task_id": task_id,
-                },
-                ts=now,
-                schema_version=2,
-            ),
-            EventEnvelope(
-                study_id=study_id,
-                type="TaskDone",
-                entity_key=task_id,
-                idem_key=make_idem("TaskDone", task_id),
-                payload={
-                    "task_id": task_id,
-                    "outcome": task_outcome.value,
-                    "reason": reason,
-                },
+                payload=close_payload,
                 ts=now,
                 schema_version=2,
             ),
         ]
+        if not schedule_retry:
+            done_payload: dict[str, Any] = {
+                "task_id": task_id,
+                "outcome": task_outcome.value,
+                "reason": reason,
+            }
+            if payload.get("detail"):
+                done_payload["detail"] = payload["detail"]
+            events.append(
+                EventEnvelope(
+                    study_id=study_id,
+                    type="TaskDone",
+                    entity_key=task_id,
+                    idem_key=make_idem("TaskDone", task_id),
+                    payload=done_payload,
+                    ts=now,
+                    schema_version=2,
+                )
+            )
         await self._append(events, require_open_attempt=attempt_id)
         return Result(
             result_id=payload["result_id"],

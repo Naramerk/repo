@@ -309,12 +309,16 @@ async def materialize_foreach(
             runtime, sid=sid, superseded_tasks=superseded, now=now
         )
     )
+    from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
+
+    catalog = getattr(runtime, "catalog", None)
     existing_keys = {t.spec.task_key for t in runtime.tasks.values()}
     for spec in added:
         if spec.task_key in existing_keys and spec.task_key not in superseded:
             continue
-        tid = task_id(sid, spec.task_key)
-        route = (spec.route or "").lower()
+        frozen_spec = freeze_task_sandbox_limits(spec, catalog)
+        tid = task_id(sid, frozen_spec.task_key)
+        route = (frozen_spec.route or "").lower()
         kind = {
             "literature": TaskKind.LITERATURE,
             "lit": TaskKind.LITERATURE,
@@ -327,7 +331,7 @@ async def materialize_foreach(
         task = Task(
             task_id=tid,
             kind=kind,
-            spec=spec,
+            spec=frozen_spec,
             state=TaskState.PENDING,
             deadline=ed,
         )
@@ -339,7 +343,7 @@ async def materialize_foreach(
                 idem_key=make_idem("TaskCreated", tid, pid),
                 payload=task.model_dump(mode="json"),
                 ts=now,
-                schema_version=7,
+                schema_version=8,
             )
         )
 

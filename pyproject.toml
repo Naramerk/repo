@@ -12,6 +12,7 @@ dependencies = [
   "pydantic>=2.7,<3",
   "pyyaml>=6.0",
   "rfc8785>=0.1.4",
+  "defusedxml>=0.7.1",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +39,8 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
   "slow: long-running load or integration tests",
+  "serial: must not run in parallel with other tests (timing-sensitive)",
+  "perf: absolute latency SLO (separate CI job; not in main pytest)",
 ]
 testpaths = ["tests"]
 filterwarnings = [

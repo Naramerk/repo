@@ -629,19 +629,24 @@ def recompute_effect_provenance(
 ) -> dict[str, Any] | None:
     """Recompute ``trusted`` / ``countable`` from provenance facts (not journal bits).
 
-    Prefer live ``artifact_meta`` (``producer``, ``produced_by.call_id``) when the
-    artifact store is available on replay. Otherwise use effect-stamped facts
-    written at eval from that same meta (``producer``, ``produced_by_call_id``,
-    ``core_evaluated``). Journal ``trusted``/``countable`` bits are never trusted.
+    Prefer live ``artifact_meta`` for ``producer`` / ``produced_by.call_id`` /
+    ``artifact_id`` when the store is available. Isolation (net/fs) for replay
+    comes from the core journal effect only — never from artifact meta (B2).
 
-    ``trusted`` = producer ∈ {core, sandbox} (sandbox producer not wired in M1).
-    ``countable`` = core-evaluated catalog check on an artifact bound to the attempt.
+    ``trusted`` = producer core, or sandbox with both isolations hard.
+    ``countable`` requires core_evaluated and attempt binding of call_id.
+    ``observation_only`` (effect-stamped, e.g. tests_pass) ⇒ never countable.
+    ``core_evaluated`` always from the effect — never from artifact meta.
     """
     if not isinstance(effect, Mapping):
         return None
     out = dict(effect)
     producer = out.get("producer", "agent")
     call_id = str(out.get("produced_by_call_id") or "")
+    # Isolation + core_evaluated: journal effect only (never artifact meta).
+    net_isolation = out.get("net_isolation")
+    fs_isolation = out.get("fs_isolation")
+    observation_only = bool(out.get("observation_only"))
     if artifact_meta is not None:
         meta_prod = getattr(artifact_meta, "producer", None)
         if meta_prod in ("agent", "core", "sandbox"):
@@ -657,15 +662,40 @@ def recompute_effect_provenance(
     if producer not in ("agent", "core", "sandbox"):
         producer = "agent"
     out["producer"] = producer
-    out["trusted"] = producer in ("core", "sandbox")
+    if net_isolation in ("hard", "soft", "none"):
+        out["net_isolation"] = net_isolation
+    if fs_isolation in ("hard", "soft", "none"):
+        out["fs_isolation"] = fs_isolation
+    if observation_only:
+        out["observation_only"] = True
+    if out.get("timeout_kind"):
+        out["timeout_kind"] = str(out["timeout_kind"])
+        observation_only = True
+        out["observation_only"] = True
+    if out.get("refute_unresolved"):
+        out["refute_unresolved"] = True
+    if producer == "core":
+        out["trusted"] = out.get("trusted") is not False
+    elif producer == "sandbox":
+        out["trusted"] = net_isolation == "hard" and fs_isolation == "hard"
+    else:
+        out["trusted"] = False
     core_eval = bool(out.get("core_evaluated"))
-    if attempt_id and call_id:
-        out["countable"] = core_eval and call_id_belongs_to_attempt(
-            call_id, attempt_id
+    # Countable requires attempt binding when attempt_id is known.
+    # Never fall back to core_eval alone with a missing call_id (that was the
+    # legacy path that let unbound evidence count). Without attempt context
+    # (unit derive), honor an explicitly stamped countable ∧ core_eval.
+    # Observation-only / guest timeout never count toward k_ref/k_sup.
+    if observation_only or out.get("timeout_kind"):
+        out["countable"] = False
+    elif attempt_id:
+        out["countable"] = bool(
+            core_eval
+            and call_id
+            and call_id_belongs_to_attempt(call_id, attempt_id)
         )
     else:
-        # No binding facts (unit probe / legacy): core_evaluated is the fact.
-        out["countable"] = core_eval
+        out["countable"] = bool(out.get("countable")) and core_eval
     return out
 
 
@@ -679,10 +709,18 @@ def recompute_effect_trusted(
 
 
 def effect_producer_trusted(effect: Mapping[str, Any] | None) -> bool:
-    """True when metric producer is core/sandbox (stronger tag; not M1 counting)."""
+    """True when producer is core, or sandbox with both isolations hard (MJ3)."""
     if not isinstance(effect, Mapping):
         return False
-    return effect.get("producer") in ("core", "sandbox")
+    producer = effect.get("producer")
+    if producer == "core":
+        return effect.get("trusted") is not False
+    if producer == "sandbox":
+        return (
+            effect.get("net_isolation") == "hard"
+            and effect.get("fs_isolation") == "hard"
+        )
+    return False
 
 
 def effect_is_countable(effect: Mapping[str, Any] | None) -> bool:
@@ -980,6 +1018,24 @@ def hypothesis_verdict(
     n_inc = len(inconsistent)
     n_con = len(consistent_severe)
 
+    def _timeout_kind(c: Any) -> str | None:
+        tk = getattr(c, "timeout_kind", None)
+        if tk:
+            return str(tk)
+        eff = getattr(c, "effect", None)
+        if isinstance(eff, dict) and eff.get("timeout_kind"):
+            return str(eff["timeout_kind"])
+        return None
+
+    def _refute_unresolved(c: Any) -> bool:
+        if getattr(c, "refute_unresolved", False):
+            return True
+        eff = getattr(c, "effect", None)
+        return bool(isinstance(eff, dict) and eff.get("refute_unresolved"))
+
+    unresolved = [c for c in about if _refute_unresolved(c)]
+    idle_unresolved = any(_timeout_kind(c) == "idle_timeout" for c in unresolved)
+
     if n_inc >= k_ref and refutation_priority:
         return "refuted", False, "k_ref"
     if n_inc >= k_ref and not refutation_priority:
@@ -988,10 +1044,21 @@ def hypothesis_verdict(
         return "refuted", False, "k_ref"
     if n_inc > 0:
         return "inconclusive", False, "inc_below_k_ref"
+    # Guest timeout on a refute-role check hard-blocks supported (never k_sup).
+    if unresolved and idle_unresolved:
+        return "untestable_by_agent", False, "idle_timeout"
     if n_con >= k_sup and any(refute_intent_counts(c) for c in consistent_severe):
+        if unresolved:
+            return "inconclusive", False, "refute_unresolved"
         return "supported", False, "support_min"
     if n_con >= 1:
+        if unresolved and idle_unresolved:
+            return "untestable_by_agent", False, "idle_timeout"
         return "survived", False, "single_severe"
+    if unresolved and idle_unresolved:
+        return "untestable_by_agent", False, "idle_timeout"
+    if unresolved:
+        return "inconclusive", False, "refute_unresolved"
     if counted:
         return "inconclusive", False, "no_counted"
     if any(effective_validity(c) == "invalid" for c in about):
@@ -1126,7 +1193,7 @@ def hypothesis_report_row(
             + ")"
         )
         severity_note = f"{severity_note}; {excl_txt}" if severity_note else excl_txt
-    return {
+    out: dict[str, Any] = {
         "hypothesis_id": hypothesis_id,
         "question_id": question_id,
         "verdict": verdict_value,
@@ -1138,6 +1205,12 @@ def hypothesis_report_row(
         "auxiliary_assumptions": aux,
         "legacy_claims": legacy_claims,
     }
+    # Refute-role timeout: verdict alone is inconclusive — surface explicit
+    # not-tested so conclusions/report consumers do not treat it as a finished
+    # inconclusive assessment.
+    if (rule or "") == "refute_unresolved":
+        out["not_tested"] = True
+    return out
 
 
 # Alias required by review wording.

@@ -12,6 +12,8 @@ from coscientist.core.domain import (
     Artifact,
     ArtifactProducer,
     ArtifactRole,
+    FsIsolation,
+    NetIsolation,
     ToolCallRef,
 )
 from coscientist.core.errors import ArtifactCorrupt, ArtifactRejected
@@ -80,6 +82,8 @@ class LocalArtifactStore:
         schema_ref: str | None = None,
         role: str | None = None,
         attempt_closed: bool = False,
+        net_isolation: NetIsolation | None = None,
+        fs_isolation: FsIsolation | None = None,
     ) -> Artifact:
         if attempt_closed:
             raise ArtifactRejected("attempt_closed")
@@ -106,6 +110,8 @@ class LocalArtifactStore:
             schema_ref=schema_ref,
             role=inferred,  # type: ignore[arg-type]
             producer=producer,
+            net_isolation=net_isolation if producer == "sandbox" else None,
+            fs_isolation=fs_isolation if producer == "sandbox" else None,
         )
         self._index[artifact_id] = art
         (self.meta / f"{artifact_id}.json").write_text(
@@ -169,8 +175,10 @@ class LocalArtifactStore:
         schema_ref: str | None = None,
         role: str | None = None,
         attempt_closed: bool = False,
+        net_isolation: NetIsolation = "none",
+        fs_isolation: FsIsolation = "none",
     ) -> Artifact:
-        """Sandbox execution of catalog/check code (trusted for verdict evidence)."""
+        """Sandbox write. ``trusted`` only when both net and fs isolation are hard."""
         return self._store(
             content,
             produced_by,
@@ -180,6 +188,8 @@ class LocalArtifactStore:
             role=role,
             attempt_closed=attempt_closed,
             producer="sandbox",
+            net_isolation=net_isolation,
+            fs_isolation=fs_isolation,
         )
 
     def get_meta(self, artifact_id: str) -> Artifact | None:
@@ -216,10 +226,18 @@ def make_tool_ref(call_id: str, tool: str = "local", args: str = "") -> ToolCall
 def artifact_producer_trusted(
     meta: object | None,
 ) -> bool:
-    """True when core stamped producer=core|sandbox."""
+    """True when producer is core, or sandbox with both net and fs isolation hard."""
     if meta is None:
         return False
-    return getattr(meta, "producer", "agent") in ("core", "sandbox")
+    producer = getattr(meta, "producer", "agent")
+    if producer == "core":
+        return True
+    if producer == "sandbox":
+        return (
+            getattr(meta, "net_isolation", None) == "hard"
+            and getattr(meta, "fs_isolation", None) == "hard"
+        )
+    return False
 
 
 def output_kind_from_spec(

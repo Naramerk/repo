@@ -481,6 +481,7 @@ def claim_nodes_from_attempt(
         if core.get("artifact_id"):
             attrs["artifact_id"] = core["artifact_id"]
         if isinstance(core.get("effect"), dict):
+            # No invented call_id: missing produced_by_call_id ⇒ not countable.
             attrs["effect"] = dict(core["effect"])
 
         node = GraphNode(

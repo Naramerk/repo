@@ -197,14 +197,19 @@ async def ensure_plan_n_task(
     study = runtime.study
     ed = study.effective_deadline()
     deadline = min(now + timedelta(seconds=allocate), ed)
-    spec = TaskSpec(
-        task_key=key,
-        title=f"Replan after {after_task}",
-        goal="expand plan (M1 deterministic critic gate)",
-        route="planner",
-        required=False,
-        depends_on=[after_task],
-        criteria=list(PLAN_N_CRITIC_CRITERIA),
+    from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
+
+    spec = freeze_task_sandbox_limits(
+        TaskSpec(
+            task_key=key,
+            title=f"Replan after {after_task}",
+            goal="expand plan (M1 deterministic critic gate)",
+            route="planner",
+            required=False,
+            depends_on=[after_task],
+            criteria=list(PLAN_N_CRITIC_CRITERIA),
+        ),
+        getattr(runtime, "catalog", None),
     )
     task = Task(
         task_id=tid,
@@ -227,7 +232,7 @@ async def ensure_plan_n_task(
                 idem_key=make_idem("TaskCreated", tid, "expand_trigger"),
                 payload=payload,
                 ts=now,
-                schema_version=7,
+                schema_version=8,
             )
         ]
     )

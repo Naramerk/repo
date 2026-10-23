@@ -83,12 +83,22 @@ A prediction check that yields **no numeric effect** is **indeterminate** (never
 
 Study disposition / `StudyFinalized.question_dispositions[].reason` and `excluded_claims[].reason` carry that code. Claim `outcome=indeterminate`; severity and `k_ref` counting skip it.
 
-### Sandbox producer not wired in M1
+### Sandbox producer wired (M1 PR 17)
 
-`put_core` / `put_sandbox` exist and stamp `Artifact.producer`, but **no production executor path calls them**. Live metrics use agent `put` + core catalog evaluation. Until sandbox/catalog-check execution is wired to `put_sandbox`:
+Executable catalog CodeCheck kinds (`exec_runs`, `tests_pass`, `metric_on_holdout`, `reproducible_rerun`) run in a **core-owned** local sandbox (`coscientist.checks.sandbox`) and store logs via `put_sandbox` (`Artifact.producer=sandbox`). Agent `put` + non-executable catalog eval still yields `trusted=false`.
 
-- `effect.trusted` stays **false** on the production path
-- trusted remains a stronger severity **tag** for reporting; when wired, core/sandbox-produced data will set `trusted=true` without changing the countable gate
+- **`net_isolation: hard | soft | none`** is recorded on every `SandboxResult` and on sandbox `Artifact` meta (and stamped into `effect`).
+  - `allow_network=True` → `none` (network permitted by catalog) with FS still hard when the probe passes.
+  - `allow_network=False` + working bwrap netns → `hard`.
+  - Probe fail / no bubblewrap → `soft` **fail-closed**: no guest exec; reason `sandbox_unavailable:isolation` (recorded/reported; study still closes).
+- **`trusted=true` only when both `net_isolation` and `fs_isolation` are `hard`**. `allow_network=True` ⇒ not trusted. There is no silent downgrade to trusted.
+- **trusted** remains a severity **tag** for reporting only — it does **not** gate `refuted` / `supported` (countable does).
+- Sandbox infra **only** via the private FD channel (wrapper rlimit failure, cgroup attach failure, bwrap/launcher host errors) plus blocked / unavailable / verified cgroup OOM → `result_class=infra` (does **not** charge the retry budget). Guest wall or tree-wide CPU budget exhaustion is host-classified from `cgroup cpu.stat` + wall: `idle_timeout` (cpu/wall below threshold → suspected sabotage → hypothesis `untestable_by_agent`) / `cpu_timeout` / `wall_timeout` → `result_class=timeout`, **never** countable toward `k_ref`/`k_sup`. **`cpu_timeout` from host cgroup watcher** (`kill_cause==cpu`); with live cgroup, `RLIMIT_CPU` is a fuse **above** the cgroup budget (watcher wins the race). Without cgroup, guest `SIGXCPU`/152 → `cpu_timeout` only when host-measured child rusage CPU ≥ budget, else scientific `NONZERO`. Refute-role timeout → `refute_unresolved` (hard-blocks verdict `supported` regardless of `k_sup`). Without `cpu.stat`, refute-role timeouts are never plain benign `wall_timeout` — elevate to `idle_timeout` / untestable. Structural rule: ≥2 prediction/refute-role timeouts **on the task** (any template_id; alternation does not evade) → `untestable_by_agent`; a single timeout (even on the last charged attempt) is not escalated. Support-role timeout contributes no `k_sup`. **Limits come only from the catalog per check** (agent `sandbox_timeout_s` / `sandbox_memory_mb` / agent `sandbox_check_limits` stripped + journaled); frozen per-check at every `TaskCreated` path (`accept_plan` / `expand` / `foreach` / `expand_trigger`) via `freeze_task_sandbox_limits`; retries cannot raise them (replan + critic only). Every guest-timeout attempt is charged; same-digest retry uses a digest over **jail-mounted** input bytes; exhausted timeout budget → task closes; `StudyFinalized.contributing_reasons` includes Russian lines «не проверено в пределах бюджета» / idle variant (matched by `TaskReason`, not detail substring). Refute/prediction `exec_runs` go through the **verifier jail** (catalog command, holdout, agent artifacts RO). Output overflow and exit codes remain scientific. Unexpected core bugs → `result_class=core_bug`. `StudyFinalized` still holds.
+- **Host requirements:** `bubblewrap`; unprivileged user namespaces (on Ubuntu 24.04 runners set `kernel.apparmor_restrict_unprivileged_userns=0`); cgroup v2 memory+cpu delegation (`cpu.max` + `cpu.stat` tree budget always &lt; wall; else note `OOM not detectable`). Start bwrap **inside** the cgroup leaf; `oom_detectable` only when a guest host pid is verified in the leaf. CI moves the job into a dedicated leaf (`…/coscientist-ci/ci-job`) **before** enabling `subtree_control` on the parent (cgroup v2 “no internal processes”), then nests sandbox leaves under the job; if the runner still refuses, cpu.stat idle/OOM probes skip — **known M1 gap** (fail-closed rules still apply; refute without cgroup → untestable).
+- Holdout labels come from the **catalog** (`CodeCheck.holdout` + `holdout_digest`); agent holdout slots are ignored. Metric verifier treats predictions as JSON data (`python -I`; no `/inputs` on `sys.path`). `tests_pass` and `reproducible_rerun` are **observation-only** (`countable=false`; no agent `est` toward `k_sup`; tamper-proof = M2). **Observation only:** `tests_pass` denylists agent filenames that shadow stdlib / pytest hooks (`sitecustomize.py`, `os.py`, …) but this is defense-in-depth, not a complete import sandbox — agents can still ship modules that influence the test process; hence observation-only until M2. Per-check `input_allowlist` (fail-closed when empty). Agent-facing views never serialize full `CodeCheck` (holdout/scorer/tests): **`agent_facing_template_view` / `agent_facing_catalog_view` are the only agent-facing template serialization** (prompt renderer arrives later and must use them).
+- **Seccomp filters: deferred to M2.**
+- Enforced limits: time, memory (`RLIMIT_AS` + optional cgroup), output size, network policy as above.
+- `reward.txt` is strict JSON `{"schema":"coscientist.reward.v1","value": <number>}` — never `pass`/`fail` strings.
 
 ### M1 limits (call_id + catalog kinds)
 
@@ -167,7 +177,7 @@ Unit + property (`record_claim` V1–V5) + executor e2e:
 
 - Independence: slot-rename, catalog kinds (planner `role=code` ignored), goal reword, intermediate step, all-code upstream, media_type spoof, diamond DFS.
 - Structural: share-any templates; empty criteria → catalog defaults.
-- Countable: agent `put` + core eval → not_met refutes; two independent SESOI mets → live `supported`; foreign / missing-output finalize with specific reason; sandbox `trusted` tagged separately (producer API not wired in production).
+- Countable: agent `put` + core eval → not_met refutes; two independent SESOI mets → live `supported`; foreign / missing-output finalize with specific reason; executable kinds → `put_sandbox` stamps `trusted=true` without changing the countable gate.
 - TOST / non-null SESOI; `value_matches` never `used_sesoi`.
 - Forged journal `severe`/`refute_capable`/`trusted`/`countable` recomputed on replay.
 - Provenance walk safe; ResultRecorded v2→v3 upcaster for `output_kinds`.

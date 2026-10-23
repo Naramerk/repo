@@ -184,9 +184,16 @@ class AttemptsMixin:
         open_atts = [a for a in task.attempts if not self.attempts.get(a, {}).get("closed")]
         if open_atts:
             raise RuntimeError("already has open attempt")
-        n = len(task.attempts) + 1
-        if n > self.max_attempts:
+        # Only charged attempts consume the retry budget (infra does not charge).
+        # Sequence ``n`` is always len+1 so uncharged retries keep unique attempt ids.
+        charged = 0
+        for aid in task.attempts:
+            att = self.attempts.get(aid) or {}
+            if att.get("charged", True):
+                charged += 1
+        if charged + 1 > self.max_attempts:
             raise RuntimeError("max_attempts exceeded")
+        n = len(task.attempts) + 1
 
         graph = getattr(self, "graph", None)
         results = getattr(self, "results", None) or {}
@@ -392,8 +399,19 @@ class AttemptsMixin:
                 schema_version=2,
             )
         ]
-        n = int(att["n"])
-        can_retry = retryable and n < self.max_attempts and now < task.deadline
+        # Budget uses charged attempts (current defaults charged=True until stamped).
+        charged = 0
+        for a in task.attempts:
+            row = self.attempts.get(a) or {}
+            if a == aid:
+                # Closing now; treat as charged unless already stamped False.
+                if row.get("charged", True):
+                    charged += 1
+            elif row.get("charged", True):
+                charged += 1
+        can_retry = (
+            retryable and charged < self.max_attempts and now < task.deadline
+        )
         if not can_retry:
             events.append(
                 EventEnvelope(

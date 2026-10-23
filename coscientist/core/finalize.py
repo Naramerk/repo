@@ -23,6 +23,24 @@ log = logging.getLogger(__name__)
 
 FinalizeTrigger = Literal["cancel", "budget", "deadline", "all_done", "intake"]
 
+def _escape_report_text(value: object) -> str:
+    """Escape agent/host detail so it cannot inject markdown/HTML structure.
+
+    Keeps alphanumeric reason codes readable (e.g. ``sandbox_unavailable``) while
+    neutralizing fence/link/HTML injection and collapsing newlines.
+    """
+    text = " ".join(str(value).split())[:2000]
+    return (
+        text.replace("\\", "\\\\")
+        .replace("`", "'")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("[", "&#91;")
+        .replace("]", "&#93;")
+        .replace("http://", "hxxp://")
+        .replace("https://", "hxxps://")
+    )
+
 # Bound rich StudyFinalized payload (JCS); oversized → last-resort.
 MAX_FINALIZED_PAYLOAD_BYTES = 65_536
 
@@ -106,8 +124,30 @@ def expansion_not_done_line(reason: str, detail: str) -> str:
         return "не выполнено: отказ критика"
     return "не выполнено: лимит расширений"  # quota / reserve / expansion_limit
 
+# Guest sandbox timeout exhaustion (PR17) — Russian report lines.
+TIMEOUT_BUDGET_RU = "не проверено в пределах бюджета"
+IDLE_TIMEOUT_RU = "не проверено: простой агента (подозрение на саботаж)"
+# Must survive `_bound_rich_payload` contributing_reasons truncation.
+_PROTECTED_CONTRIBUTING_REASONS = frozenset({TIMEOUT_BUDGET_RU, IDLE_TIMEOUT_RU})
+
+
+def sandbox_timeout_report_line(reason: str | None, detail: str | None = None) -> str | None:
+    """Russian line when a task closes after guest timeouts.
+
+    Match by ``TaskReason`` only — never substring-match ``detail`` (avoids
+    false positives on unrelated reasons that mention \"timeout\").
+    """
+    _ = detail  # kept for call-site compat; classification is reason-only
+    r = str(reason or "")
+    if r == TaskReason.IDLE_TIMEOUT.value:
+        return IDLE_TIMEOUT_RU
+    if r == TaskReason.SANDBOX_TIMEOUT.value:
+        return TIMEOUT_BUDGET_RU
+    return None
+
+
 def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
-    """TaskReason values + ExpansionRefused / foreach / quorum report lines."""
+    """TaskReason + ExpansionRefused / foreach / quorum / timeout lines (by seq)."""
     seen: list[str] = []
     for ev in sorted(events, key=lambda e: e.seq or 0):
         if ev.type == "TaskDone":
@@ -118,6 +158,12 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
                 except ValueError:
                     continue
                 seen.append(str(reason))
+                line = sandbox_timeout_report_line(
+                    str(reason),
+                    str(ev.payload.get("detail") or ""),
+                )
+                if line and line not in seen:
+                    seen.append(line)
             line = _TASKDONE_DETAIL_LINES.get(str(ev.payload.get("detail") or ""))
             if line and line not in seen:
                 seen.append(line)
@@ -283,6 +329,36 @@ async def _append_finalized(
         ]
     )
 
+def truncate_contributing_reasons(
+    reasons: list[str] | None, *, limit: int = 10
+) -> list[str]:
+    """Truncate contributing_reasons while keeping timeout RU lines.
+
+    ``TIMEOUT_BUDGET_RU`` / ``IDLE_TIMEOUT_RU`` are non-truncatable: they are
+    always retained (deduped, original relative order). Other reasons fill the
+    remaining slots in first-seen order. If only protected lines remain and
+    somehow exceed ``limit``, collapse duplicates into a single counter line.
+    """
+    src = [str(r) for r in (reasons or [])]
+    if len(src) <= limit:
+        return src
+    pinned: list[str] = []
+    pinned_seen: set[str] = set()
+    others: list[str] = []
+    for r in src:
+        if r in _PROTECTED_CONTRIBUTING_REASONS:
+            if r not in pinned_seen:
+                pinned.append(r)
+                pinned_seen.add(r)
+        else:
+            others.append(r)
+    if len(pinned) > limit:
+        # Aggregate rather than drop (should not happen with two constants).
+        return [f"{pinned[0]} ×{len(pinned)}"][:limit]
+    room = max(0, limit - len(pinned))
+    return pinned + others[:room]
+
+
 def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Shrink question_dispositions / reasons until JCS ≤ MAX; else raise."""
     out = dict(payload)
@@ -298,7 +374,9 @@ def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
         for qid, d in (out.get("question_dispositions") or {}).items()
     }
     out["question_dispositions"] = qdisp
-    out["contributing_reasons"] = list(out.get("contributing_reasons") or [])[:10]
+    out["contributing_reasons"] = truncate_contributing_reasons(
+        list(out.get("contributing_reasons") or [])
+    )
     if len(canonical_json(out)) <= MAX_FINALIZED_PAYLOAD_BYTES:
         return out
     raise RuntimeError("finalized_payload_too_large")
@@ -464,6 +542,27 @@ async def _primary_report_path(
         tasks=runtime.tasks,
         refusal=refusal,
     )
+    # Surface infra details (sandbox reason + soft-isolation note) in report text.
+    # Escape agent/host-provided strings so markdown/HTML injection cannot reshape
+    # the report structure.
+    results = getattr(runtime, "results", None) or {}
+    detail_lines: list[str] = []
+    for rid in sorted(results):
+        res = results[rid]
+        if not isinstance(res, dict):
+            continue
+        detail = res.get("detail")
+        if detail:
+            detail_lines.append(
+                f"- result `{rid}` detail: {_escape_report_text(detail)}"
+            )
+        reason = res.get("reason")
+        if reason:
+            detail_lines.append(
+                f"- result `{rid}` reason: {_escape_report_text(reason)}"
+            )
+    if detail_lines:
+        md = md + "\n## Infra / result details\n" + "\n".join(detail_lines) + "\n"
     arts = _artifact_store(runtime)
     if arts is None:
         raise CASUnavailable("no artifact store on runtime")

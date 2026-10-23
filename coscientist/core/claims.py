@@ -66,6 +66,8 @@ _CORE_CLAIM_ATTRS: frozenset[str] = frozenset(
         "study_id",
         "effect",
         "alpha",
+        "refute_unresolved",
+        "timeout_kind",
     }
 )
 
@@ -74,6 +76,7 @@ _VERDICT_TO_DISPOSITION = {
     "refuted": "refuted",
     "survived": "survived",
     "inconclusive": "inconclusive",
+    "untestable_by_agent": "infeasible",
 }
 
 
@@ -120,6 +123,9 @@ class RuntimeClaim:
     study_id: str = ""
     effect: dict[str, Any] | None = None
     validity: str | None = None  # valid|invalid (mirrors validity_ok)
+    # Guest sandbox timeout closed a refute-role check without a decisive outcome.
+    refute_unresolved: bool = False
+    timeout_kind: str | None = None  # idle_timeout|cpu_timeout|wall_timeout
 
     def __post_init__(self) -> None:
         if self.intent not in ("confirm", "refute"):
@@ -166,7 +172,7 @@ def whitelist_claim_attrs(raw: Mapping[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in raw.items() if k in CLAIM_ATTR_WHITELIST}
 
 
-_INFRA_RESULT = "infra"
+_NONCOUNT_RESULTS = frozenset({"infra", "core_bug"})
 _INFRA_REASONS = frozenset(
     {
         "catalog_error",
@@ -174,6 +180,8 @@ _INFRA_REASONS = frozenset(
         "invalid_output",
         "timeout",
         "human_timeout",
+        "core_bug",
+        "sandbox_infra",
     }
 )
 
@@ -183,24 +191,27 @@ def producer_attempt_failed(
     *,
     results: Mapping[str, Mapping[str, Any]] | None,
 ) -> bool:
-    """True when the producing attempt is an **infra** failure (not criteria).
+    """True when the producing attempt is infra/core_bug (not criteria).
 
     Scientific FAILED (criteria not met) still yields bindable claims.
+    ``result_class=core_bug`` is reported but never counts.
     """
     if not attempt_id or not results:
         return False
     row = results.get(attempt_id)
     if not row:
         return False
-    if str(row.get("result_class") or "") == _INFRA_RESULT:
+    rc = str(row.get("result_class") or "")
+    if rc in _NONCOUNT_RESULTS:
         return True
-    if str(row.get("result_class") or "") == "scientific":
+    # Scientific criteria + guest timeout keep claims (refute_unresolved / attrs).
+    if rc in ("scientific", "timeout"):
         return False
     # Legacy journals without result_class: FAILED + infra reason only.
     if str(row.get("outcome") or "") != "FAILED":
         return False
     reason = str(row.get("reason") or "")
-    return reason in _INFRA_REASONS or reason.endswith("timeout")
+    return reason in _INFRA_REASONS
 
 
 def _coerce_str(val: Any, *, allow_empty: bool = False) -> str | None:
@@ -509,8 +520,11 @@ def runtime_claim_from_node(
                     meta = artifact_lookup(str(art_id))
                 except Exception:  # noqa: BLE001 — totality
                     meta = None
+            stamped = dict(effect_raw)
+            # Never invent produced_by_call_id from the attempt id alone — a bare
+            # aid is not a call_id; missing call_id stays missing (not countable).
             effect = recompute_effect_provenance(
-                dict(effect_raw),
+                stamped,
                 attempt_id=aid or None,
                 artifact_meta=meta,
             )
@@ -641,6 +655,19 @@ def runtime_claim_from_node(
             effect=effect,
             experiment_id=experiment_id,
             refute_capable=False if stored_refute is False else None,
+            refute_unresolved=bool(
+                attrs.get("refute_unresolved")
+                or (isinstance(effect, dict) and effect.get("refute_unresolved"))
+            ),
+            timeout_kind=(
+                str(attrs["timeout_kind"])
+                if attrs.get("timeout_kind")
+                else (
+                    str(effect.get("timeout_kind"))
+                    if isinstance(effect, dict) and effect.get("timeout_kind")
+                    else None
+                )
+            ),
         )
         severe_coerced = claim_is_severe(probe)
         if stored_refute is False:

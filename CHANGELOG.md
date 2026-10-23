@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### M1 PR17
+- Executable CodeCheck kinds + sandbox limits (B7, B8, K5): `exec_runs`, `tests_pass`, `metric_on_holdout`, `reproducible_rerun`.
+- **Separate verifier (B1):** collect agent declared outputs (sha256); catalog scorer / task tests in a second fresh bwrap jail (data/scorer/holdout/tests RO; only results RW); read structured `reward.txt` JSON / junit — never stdout. Holdout labels from catalog (`CodeCheck.holdout`); agent holdout slots ignored. `catalog:metric` scores predictions-as-data (`python -I`). `tests_pass` is **observation-only** (`countable=false`, `trusted=false`; tamper-proof = M2). Per-check `input_allowlist` (fail-closed).
+- **bwrap hard isolation (B2):** `--clearenv`, system `--ro-bind`, `--tmpfs /tmp`, `--unshare-net`/`--unshare-pid`/`--unshare-ipc`/`uts`/`cgroup-try`, `--disable-userns`, `--cap-drop ALL`, `--new-session`, `--die-with-parent`; journal/CAS never mounted. Hard only after a real probe. Cgroup: start bwrap inside leaf; `oom_detectable` only after guest host pid verified.
+- **Fail-closed:** without verified hard FS isolation → `sandbox_unavailable` (no guest exec). CI installs `bubblewrap` and lifts Ubuntu 24.04 AppArmor userns restrict.
+- **`trusted=true` only when both net and fs are hard** (never fake hard). Isolation + `core_evaluated` for replay from journal effect, not artifact meta.
+- Infra **only** via private FD (wrapper rlimit / cgroup attach / host errors) + blocked/unavailable/verified cgroup OOM — does **not** charge the retry budget. Guest wall/CPU → host-classified `idle_timeout` / `cpu_timeout` / `wall_timeout` (`result_class=timeout`, never `k_ref`/`k_sup`); **`cpu_timeout` from host cgroup watcher**; with cgroup, `RLIMIT_CPU` is a fuse above budget; without cgroup, SIGXCPU/152 → `cpu_timeout` only when host rusage ≥ budget else NONZERO; refute-role → `refute_unresolved`; idle / no-cgroup refute / ≥2 **task-level** prediction timeouts (any template) → `untestable_by_agent` (single last-attempt timeout not escalated). **Catalog-only per-check limits** frozen on all TaskCreated paths; same-digest over jail-mounted bytes; prediction `exec_runs` via verifier jail. Cgroup `cpu.max` + `cpu.stat`; CPU budget always &lt; wall. `tests_pass` + `reproducible_rerun` observation-only. `agent_facing_*` sole agent template serialization (prompt renderer later).
+- Upcasters: TaskCreated **v8**, PlanAccepted **v6** (`sandbox_check_limits` / `sandbox_limits_note`; aggregate slots always stripped); stacked on PR10 foreach/quorum versions.
+- Docs: host requirements + timeout redesign. CI moves job into `ci-job` leaf before `subtree_control` (no-internal-processes); if still refused, cpu.stat tests skip (known M1 gap).
+
 ### M1 PR10
 - `TaskSpec.foreach` (selected/all hypothesis|question of a source task): core materializes N `EXP-<n>` via `PlanExpanded(foreach=true)` — no planner, no expansion quota; restart/recover resumes; report lines in Russian.
 - Expand at source `TaskDone` **and** at `accept_plan` / after `PlanExpanded` when `of_task` is already DONE (B1; live == replay). `validate_foreach_specs` in `validate_expansion`.
@@ -25,7 +35,7 @@
 ### M1 PR8b
 - Hypothesis verdict model (`docs/DESIGN_HYP_DELTA.md`): claim `validity`/`outcome`/`severe`/`independence_key`; stub|partial|lit|invalid excluded **before** counting.
 - `independence_key` base = `experiment_id`; count-time merge by **transitive root-data** digest overlap (code vs data from **`ResultRecorded.output_kinds`** via catalog **`code_output_names`** — planner `OutputSpec.role` and agent `media_type` ignored; all-code upstream → intermediate is a root; diamond DFS uses on_stack vs done) or **structural** share-any criterion template (same target, empty roots; empty plan criteria → `catalog.defaults["experiment"]`). No TaskSpec/goal/title/plan_id hash. Method is not in the key.
-- **Countable vs trusted:** evidence is **countable** when the core evaluates a catalog check on an artifact bound to the **current attempt** (`produced_by.call_id`). Countable gates **both** `refuted` (`k_ref`) and severe/`supported` symmetrically. Foreign artifacts are rejected. `effect.trusted` (`Artifact.producer` core|sandbox) is a separate stronger tag for reporting — **sandbox producer not wired in M1** production (only tests call `put_sandbox`); when wired, trusted becomes true on that path without changing the countable gate.
+- **Countable vs trusted:** evidence is **countable** when the core evaluates a catalog check on an artifact bound to the **current attempt** (`produced_by.call_id`). Countable gates **both** `refuted` (`k_ref`) and severe/`supported` symmetrically. Foreign artifacts are rejected. `effect.trusted` is a separate stronger tag — **PR 17** wires executable kinds to `put_sandbox`; trusted only when sandbox limits fully held (`net_isolation != soft`).
 - **No numeric effect → indeterminate** (deliberate safe weakening vs main): missing output / missing artifact / empty json_pointer / `foreign_artifact` never refute. Report carries a **specific** reason (`output_not_submitted`, `artifact_missing`, `pointer_empty`, `foreign_artifact`) — not generic `unclear`.
 - On journal read/replay: recompute `severe`/`refute_capable`/`trusted`/`countable` from artifact metadata when the store is attached, else from effect-stamped provenance facts — never journal bits. **Compat:** old `inconsistent` journals without countable provenance may recompute differently (indeterminate / not toward `k_ref`).
 - `ResultRecorded` **v3** + v2→v3 upcaster for `output_kinds`. M1: caller passes `attempt_id` for call_id binding; production catalogs have empty `code_output_names` (conservative → all data).
@@ -33,7 +43,7 @@
 - `aggregate='evalue'` rejected at create (deferred until core computes p-values).
 - Report: `hypothesis_report_row` in finalize; failures set dedicated `hypotheses_unavailable` (not a fake hypothesis id). Bind snapshots win on replay; finalize recomputes report rows.
 - Keeps PR8: check roles, per-experiment `validity_failed` / `unknown_role`, `VerdictSnapshotsRecorded`.
-- **Known flake:** `test_twenty_parallel_attempts_fsync` p99 write latency (seen 56ms > 50ms on `6fe49e5` push CI); timing-sensitive, not a logic regression.
+- Load write test: serial/slow; p99 budget scales with median (CI-tolerant) without weakening correctness asserts.
 
 ### M1 PR8
 - Runtime `verdict()` wired into `dispositions()` / finalize (Study `confirmations_needed` / `refutations_needed` / `refutation_priority`); supported → answered; hypothesis verdicts in StudyFinalized.
