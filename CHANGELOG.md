@@ -9,11 +9,7 @@
 
 ### M1 PR16 follow-up
 - Finalize LeaseLost reraise coverage for `_primary_report_path` / `render_markdown_report` / `build_minimal_report`.
-<<<<<<< HEAD
 - `dispositions()` order on main `7217a95` (#28+#31+#33): skip_cap/scoped_capped → `apply_loop_cap_dispositions` → `_stamp_honest_terminals` → `apply_rollup`. Skip cap only for decomposes parents with **no own covering tasks** (plans + ``runtime.tasks`` addresses — foreach/expand/loop). Combined cover **excludes** ``superseded`` / ``cancelled`` (fold ``TaskDone.reason``) so dead tasks cannot falsely keep a parent under loop-cap.
-=======
-- `dispositions()` order on main `9ee0ac9` (#28+#31): skip_cap/scoped_capped → `apply_loop_cap_dispositions` → `_stamp_honest_terminals` → `apply_rollup`. Skip cap only for decomposes parents with **no own covering tasks** (plans + ``runtime.tasks`` addresses — foreach/expand/loop). Combined cover **excludes** ``superseded`` / ``cancelled`` (fold ``TaskDone.reason``) so dead tasks cannot falsely keep a parent under loop-cap.
->>>>>>> 72fd7f3 (fix(pr16): exclude superseded/cancelled from cover; foreach/loop reopen tests)
 - Combined cover (plans ∪ runtime) can change ``not_attempted`` reason for questions that previously had ``no_task`` (e.g. runtime-only covering → ``tasks_skipped`` / ``tasks_failed``; cancelled-only covering → empty cover → ``no_task`` again).
 - Equal-rank rollup keeps own without false ``rollup_clamped``; lowering preserves ``iteration_cap`` in ``reason_detail``. Clamp predicate includes ``terminal=True`` (#28).
 
@@ -39,8 +35,11 @@
 - Replay pairing trusts journaled `AttemptTainted.{tool,is_fetch}`. Same-name reclassified `is_fetch=False` → domain `FetchToolReclassified` (caught on fold): paired `SourceFetched` uncounted. `FetchIntegrityRaised` journaled only on open/finalize; finalize fold fallback still puts `internal_error` in the report if reconcile fails. Proven by committed old-schema fixture + natural `tick` finalize (`tests/fixtures/journals/reclassified_fetch_old`).
 - `fetch_integrity` projection rows survive without `call_id` (key via tool/row_key).
 
+### Perf / journal write SLO (configurable gate)
+- Defaults on and unchanged: **p99 ≤ 50ms**, **max-of-3** rounds, **≥1000 samples/round**. Env overrides (`COSCI_PERF_P99_MS` / `COSCI_PERF_ROUNDS` / `COSCI_PERF_SAMPLES`) allowed in both directions; values weaker than defaults emit `warnings.warn` + a `PERF GATE WEAKENED:` `record_property` on the SLO test (never silent). `COSCI_PERF_GATE=off` skips the SLO test with a clear reason; CI also rejects `GATE=off` and any weaker `COSCI_PERF_*`. Non-finite / out-of-range values raise (`math.isfinite`; p99 in `(0, 10000]`, rounds ≥ 1, samples ≥ 100). CI pins the defaults and, on SLO failure only, reruns the perf pytest **once** under the same 50/3/1000 config (job fails iff both attempts fail; both attempts’ p99 logs are kept). Local loosening/off stays allowed with the explicit warning. Goal: catch a steady slowdown. Demos clear host `COSCI_PERF_*` then use the resolved config.
+
 ### Perf / journal write SLO (CI noise)
-- p99 ≤ 50ms unchanged. Gate is **max-of-3** independent full loads with **≥1000 samples/round** (replaces outer CI 5× pytest loop; not the same tolerance — at n=1049, p99 is the 12th-from-end sample, so rare fsync outliers are more tolerated than with n≈149). `min`/best-of removed — hid intermittent regressions. No separate median SLO. Demos: synthetic one-bad-round + real-path `append_many` +60ms sleep.
+- p99 ≤ 50ms unchanged. Gate is **max-of-3** independent full loads with **≥1000 samples/round**. `min`/best-of removed — hid intermittent regressions. No separate median SLO.
 
 ### Perf / journal write SLO
 - Restored honest DESIGN §3.5a measurement: 20 parallel attempts on real-disk `tmp_path`, full `StudyWriter` path (queue → `to_thread` → fence/insert/commit), `writer.latency_samples_ms`, 50ms p99, no retries/skips.
