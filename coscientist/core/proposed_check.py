@@ -27,7 +27,6 @@ import asyncio
 import math
 import unicodedata
 from contextlib import asynccontextmanager
-from contextvars import ContextVar
 from datetime import timedelta
 from typing import Any, AsyncIterator, Literal, Mapping
 
@@ -541,28 +540,40 @@ def proposed_check_decision_lock(runtime: Any, proposal_id: str) -> asyncio.Lock
     return locks.setdefault(str(proposal_id), asyncio.Lock())
 
 
-# Re-entrancy for nested holders (HITL critical section → approve/reject).
-_decision_locks_held: ContextVar[frozenset[str]] = ContextVar(
-    "proposed_check_decision_locks_held", default=frozenset()
-)
+def _decision_lock_owners(runtime: Any) -> dict[str, asyncio.Task[Any]]:
+    owners = getattr(runtime, "_hitl_decision_lock_owners", None)
+    if not isinstance(owners, dict):
+        owners = {}
+        runtime._hitl_decision_lock_owners = owners
+    return owners
 
 
 @asynccontextmanager
 async def hold_proposed_check_decision_lock(
     runtime: Any, proposal_id: str
 ) -> AsyncIterator[None]:
-    """Acquire the per-proposal lock, or nest if this task already holds it."""
+    """Acquire the per-proposal lock, or nest if *this* task already holds it.
+
+    Ownership is keyed by ``asyncio.current_task()`` (not a ContextVar) so a
+    child task never inherits a false re-entry from its parent.
+    """
     pid = str(proposal_id)
-    held = _decision_locks_held.get()
-    if pid in held:
+    task = asyncio.current_task()
+    if task is None:
+        raise RuntimeError("hold_proposed_check_decision_lock requires a running task")
+    owners = _decision_lock_owners(runtime)
+    if owners.get(pid) is task:
         yield
         return
-    async with proposed_check_decision_lock(runtime, pid):
-        token = _decision_locks_held.set(held | {pid})
-        try:
-            yield
-        finally:
-            _decision_locks_held.reset(token)
+    lock = proposed_check_decision_lock(runtime, pid)
+    await lock.acquire()
+    owners[pid] = task
+    try:
+        yield
+    finally:
+        if owners.get(pid) is task:
+            del owners[pid]
+        lock.release()
 
 
 async def _append_events(runtime: Any, events: list[EventEnvelope]) -> None:
@@ -890,9 +901,10 @@ async def approve_check(
             raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
         if row.get("status") == "approved":
             return
-        # Lost race with timeout/reject — settle no-op (do not raise under gather).
+        # External API/reviewer/hitl: fail-closed if already rejected (lost race
+        # is not silent success). Timeout/stale never call approve_check.
         if row.get("status") == "rejected":
-            return
+            raise ValueError(f"proposal already rejected: {proposal_id_s!r}")
 
         by: Literal["human", "reviewer"]
         principal: str | None = None
@@ -966,9 +978,12 @@ async def reject_check(
             raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
         if row.get("status") == "rejected":
             return
-        # Lost race with approve — settle no-op.
         if row.get("status") == "approved":
-            return
+            # Internal race paths (HITL timeout / stale review) no-op; external
+            # api/hitl/reviewer must fail-closed — never silent success.
+            if source == "timeout":
+                return
+            raise ValueError(f"proposal already approved: {proposal_id_s!r}")
         # Race: HitlDecided(accept) already journaled but CheckApproved not yet —
         # timeout must not clobber the in-flight human accept.
         if source == "timeout" and hitl_request_id_s:

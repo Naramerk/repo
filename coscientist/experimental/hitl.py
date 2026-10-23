@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from typing import Any, Self
 
@@ -21,7 +22,9 @@ class HitlForkMixin(CostlyHitlMixin):
     def _resolve_task(self, task_key_or_id: str) -> Task:
         raise NotImplementedError
 
-    def _proposed_check_decision_lock(self, proposal_id: str):
+    def _proposed_check_decision_lock(
+        self, proposal_id: str
+    ) -> AbstractAsyncContextManager[None]:
         """Per-proposal lock: accept/delegate/reject/timeout/stale serialize side effects."""
         from coscientist.core.proposed_check import hold_proposed_check_decision_lock
 

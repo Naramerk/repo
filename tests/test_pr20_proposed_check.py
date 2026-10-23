@@ -2586,7 +2586,6 @@ async def test_stale_review_timeout_vs_approve_serialized(
             await asyncio.sleep(0)
             b = asyncio.create_task(_approve())
         results = await asyncio.gather(a, b, return_exceptions=True)
-        assert results == [None, None]
 
         events = await rt.store.read_all()
         approved = [
@@ -2597,14 +2596,201 @@ async def test_stale_review_timeout_vs_approve_serialized(
         ]
         status = rt._check_proposals[pid]["status"]
         if first == "approve":
+            assert results == [None, None]
             assert len(approved) == 1
             assert len(rejected) == 0
             assert status == "approved"
         else:
+            # Timeout wins; external approve_check must fail-closed (not silent).
+            assert results[0] is None
+            assert isinstance(results[1], ValueError)
+            assert "already rejected" in str(results[1])
             assert len(rejected) == 1
             assert rejected[0].payload.get("reason") == "human_timeout"
             assert len(approved) == 0
             assert status == "rejected"
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_approve_already_rejected_raises_for_external(
+    tmp_path: Path,
+) -> None:
+    """source=api/reviewer must raise on already-rejected — not silent success."""
+    rt = await open_runtime(tmp_path, "st_pr20_appr_after_rej")
+    try:
+        await _create(rt, "appr after rej")
+        proposer_aid = await _boot_plan(
+            rt,
+            [_exp_spec(task_key="EXP"), _exp_spec(task_key="REV", title="rev")],
+        )
+        exp_tid = _task_id(rt, "EXP")
+        rev_tid = _task_id(rt, "REV")
+        pid = await propose_check(
+            rt,
+            target="study",
+            role="prediction",
+            measures="m",
+            justification="j",
+            rejected_templates=_rejected(),
+            check=_value_check(target=1),
+            task_id=exp_tid,
+            attempt_id=proposer_aid,
+            open_hitl=False,
+        )
+        assert pid
+        # Bind reviewer while still proposed, then reject — approve must fail-closed.
+        await schedule_proposed_check_review(
+            rt, pid, timeout_s=60, reviewer_task_id=rev_tid
+        )
+        ok = await rt.start_attempt("REV")
+        assert ok
+        await bind_proposed_check_reviewer(rt, pid, ok)
+        await reject_check(rt, pid, source="timeout", reason="human_timeout")
+        assert rt._check_proposals[pid]["status"] == "rejected"
+
+        rid = await _plant_human_hitl_decision(rt, pid, exp_tid, decision="accept")
+        with pytest.raises(ValueError, match="already rejected"):
+            await approve_check(rt, pid, source="api", hitl_request_id_s=rid)
+        with pytest.raises(ValueError, match="already rejected"):
+            await approve_check(
+                rt,
+                pid,
+                source="reviewer",
+                delegated=True,
+                reviewer_attempt_id=ok,
+            )
+        assert rt._check_proposals[pid]["status"] == "rejected"
+        assert not any(
+            e.type == "CheckApproved" and e.entity_key == pid
+            for e in await rt.store.read_all()
+        )
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_reject_already_approved_raises_except_timeout(
+    tmp_path: Path,
+) -> None:
+    """External reject on approved raises; source=timeout no-ops (internal race)."""
+    rt = await open_runtime(tmp_path, "st_pr20_rej_after_appr")
+    try:
+        await _create(rt, "rej after appr")
+        proposer_aid = await _boot_plan(rt, [_exp_spec()])
+        exp_tid = _task_id(rt, "EXP")
+        pid = await propose_check(
+            rt,
+            target="study",
+            role="prediction",
+            measures="m",
+            justification="j",
+            rejected_templates=_rejected(),
+            check=_value_check(target=1),
+            task_id=exp_tid,
+            attempt_id=proposer_aid,
+            open_hitl=False,
+        )
+        assert pid
+        rid = await _approve_human(rt, pid, exp_tid, source="api")
+        assert rt._check_proposals[pid]["status"] == "approved"
+        with pytest.raises(ValueError, match="already approved"):
+            await reject_check(
+                rt, pid, source="api", reason="nope", hitl_request_id_s=rid
+            )
+        # Internal race path: timeout after approve must not clobber / must not raise.
+        await reject_check(
+            rt, pid, source="timeout", reason="human_timeout", hitl_request_id_s=rid
+        )
+        assert rt._check_proposals[pid]["status"] == "approved"
+        assert not any(
+            e.type == "CheckRejected" and e.entity_key == pid
+            for e in await rt.store.read_all()
+        )
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_proposed_check_decision_lock_reentry_and_child(
+    tmp_path: Path,
+) -> None:
+    """Lock owner is current_task: re-entry ok; child does not inherit; release on error/cancel."""
+    from coscientist.core.proposed_check import (
+        hold_proposed_check_decision_lock,
+        proposed_check_decision_lock,
+    )
+
+    rt = await open_runtime(tmp_path, "st_pr20_lock_owner")
+    try:
+        await _create(rt, "lock owner")
+        pid = "prop_lock_test"
+        lock = proposed_check_decision_lock(rt, pid)
+
+        # Re-entry in the same task.
+        nested = 0
+        async with hold_proposed_check_decision_lock(rt, pid):
+            assert lock.locked()
+            async with hold_proposed_check_decision_lock(rt, pid):
+                nested += 1
+                assert lock.locked()
+            nested += 1
+        assert nested == 2
+        assert not lock.locked()
+
+        # Exception inside the section still releases.
+        with pytest.raises(RuntimeError, match="boom"):
+            async with hold_proposed_check_decision_lock(rt, pid):
+                assert lock.locked()
+                raise RuntimeError("boom")
+        assert not lock.locked()
+
+        # Child task must not false-reenter; it waits until parent releases.
+        child_entered = asyncio.Event()
+        parent_release = asyncio.Event()
+
+        async def _child() -> str:
+            async with hold_proposed_check_decision_lock(rt, pid):
+                child_entered.set()
+                return "child"
+
+        async with hold_proposed_check_decision_lock(rt, pid):
+            child = asyncio.create_task(_child())
+            await asyncio.sleep(0)
+            assert not child_entered.is_set()
+            assert not child.done()
+            parent_release.set()
+        await parent_release.wait()
+        assert await child == "child"
+        assert child_entered.is_set()
+        assert not lock.locked()
+
+        # Cancellation while waiting to acquire.
+        hold = asyncio.Event()
+
+        async def _holder() -> None:
+            async with hold_proposed_check_decision_lock(rt, pid):
+                hold.set()
+                await asyncio.sleep(3600)
+
+        holder = asyncio.create_task(_holder())
+        await hold.wait()
+        assert lock.locked()
+
+        async def _waiter() -> None:
+            async with hold_proposed_check_decision_lock(rt, pid):
+                return None
+
+        waiter = asyncio.create_task(_waiter())
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        holder.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await holder
+        assert not lock.locked()
     finally:
         await close_runtime(rt)
 
