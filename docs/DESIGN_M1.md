@@ -256,9 +256,9 @@ class Disposition(StrEnum):
 - `TaskSpec.budget_share: float | None`, `deadline_share: float | None`. Незаданные доли = равные доли от не распределённого остатка.
 - Резервы: `finalize_reserve_s` (§0.5) и `replan_reserve: float` (доля, по умолчанию 0.1) под PLAN-n.
 - Валидатор: `Σ budget_share ≤ 1` по всем задачам активной ревизии (бюджет расходуется задачами независимо от параллельности). `Σ deadline_share` проверяется **по критическому пути** DAG (максимум суммы долей по путям от источника до стока) ≤ 1 — параллельные ветви время делят, а не складывают.
-- **Перенормировка при P2** (каждый старт задачи i): `remaining = effective_deadline − now − replan_reserve × (effective_deadline − now)`; `task.deadline = now + share_i / Σ share(задачи на критическом пути от i, ещё не стартовавшие) × remaining`. Бюджет: `budget_i = share_i / Σ share(ещё не стартовавшие задачи) × (budget_remaining − budget_reserve)`. Ранний SUCCESS освобождает время и деньги для хвоста; поздние задачи не голодают.
+- **Перенормировка при P2** (каждый старт задачи i): `remaining = effective_deadline − now − replan_reserve × (effective_deadline − now)`; `task.deadline = now + share_i / Σ share(задачи на критическом пути от i, ещё не стартовавшие) × remaining`. Бюджет: `budget_i = share_i / Σ share(ещё не стартовавшие задачи) × (budget_remaining − budget_reserve)`. Ранний SUCCESS освобождает время и деньги для хвоста; поздние задачи не голодают. Остаток доли журналируется как `AttemptStarted.budget_limit_rub` (лимит раннеру): где раннер может enforce — abort с budget-exceeded; иначе перерасход пишется в результат/отчёт, и доля дальше только запрещает retries. `cost_rub` списывается `BudgetDebited` в том же append batch, что и `ResultRecorded`/`TaskDone`, на всех путях (включая infra).
 
-**Тесты.** `test_shares_validator_sum`, `test_tail_gets_remaining_time`, `test_reserve_untouchable`.
+**Тесты.** `test_shares_validator_sum`, `test_tail_gets_remaining_time`, `test_reserve_untouchable`, `test_debit_cost_rub_on_every_result_path`, `test_single_attempt_budget_overrun`.
 
 ## 6. Финальные типы результата и рубрика (B2, B5, K7, строки 4, 5, 8)
 
