@@ -40,6 +40,13 @@ class StudyClosedError(CoreError):
         )
 
 
+def reject_write_after_finalized(finalized: bool, event_type: str) -> str | None:
+    """Return ``StudyClosedError`` name when a post-finalize write must be rejected."""
+    if finalized and event_type != "StudyFinalized":
+        return "StudyClosedError"
+    return None
+
+
 class CASUnavailable(CoreError):
     """Content-addressed artifact store is not attached / unreachable."""
 

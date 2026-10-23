@@ -61,6 +61,17 @@ def _compute_verdict(
     return verdict, stub_share
 
 
+def study_phase(
+    *, finalized: bool = False, all_done: bool = False, past_effective: bool = False
+) -> str:
+    """Pure phase: closed | finalizing | running (DESIGN §3.2)."""
+    if finalized:
+        return "closed"
+    if all_done or past_effective:
+        return "finalizing"
+    return "running"
+
+
 def study_view(
     tasks: Iterable[Task],
     *,
@@ -79,7 +90,18 @@ def study_view(
     """
     tasks = list(tasks)
     atts: Mapping[str, Mapping[str, Any]] = attempts or {}
-    if finalized:
+    total = len(tasks)
+    done = sum(1 for t in tasks if t.state == TaskState.DONE)
+    all_done = bool(tasks) and done == total
+    past_effective = (
+        now is not None
+        and effective_deadline is not None
+        and now >= effective_deadline
+    )
+    phase = study_phase(
+        finalized=finalized, all_done=all_done, past_effective=past_effective
+    )
+    if phase == "closed":
         if not tasks:
             return StudyView(phase="closed", progress=1.0, awaiting_human=False)
         verdict, stub_share = _compute_verdict(
@@ -92,19 +114,7 @@ def study_view(
             verdict=verdict,  # type: ignore[arg-type]
             stub_share=stub_share,
         )
-
-    if not tasks:
-        return StudyView(phase="running", progress=0.0, awaiting_human=open_hitl > 0)
-
-    total = len(tasks)
-    done = sum(1 for t in tasks if t.state == TaskState.DONE)
-    all_done = done == total
-    past_effective = (
-        now is not None
-        and effective_deadline is not None
-        and now >= effective_deadline
-    )
-    if all_done or past_effective:
+    if phase == "finalizing":
         verdict, stub_share = _compute_verdict(
             tasks, atts=atts, question_dispositions=question_dispositions
         )
@@ -115,7 +125,8 @@ def study_view(
             verdict=verdict,  # type: ignore[arg-type]
             stub_share=stub_share,
         )
-
+    if not tasks:
+        return StudyView(phase="running", progress=0.0, awaiting_human=open_hitl > 0)
     stub_share = 0.0
     done_tasks = [t for t in tasks if t.state == TaskState.DONE]
     if done_tasks:

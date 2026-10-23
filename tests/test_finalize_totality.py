@@ -209,7 +209,7 @@ async def test_crash_between_cancelled_and_finalized(tmp_path, clock, monkeypatc
 
 @pytest.mark.asyncio
 async def test_crash_between_cas_put_and_append(tmp_path, clock, monkeypatch):
-    """CAS put succeeds, then append fails → last-resort retry still finalizes."""
+    """CAS put succeeds, then append fails → last-resort; reopen still finalized."""
     sid = "st_cas_mid"
     rt = await _boot(tmp_path, clock, sid)
     rt.artifacts = LocalArtifactStore(tmp_path / "arts")
@@ -225,10 +225,103 @@ async def test_crash_between_cas_put_and_append(tmp_path, clock, monkeypatch):
 
     monkeypatch.setattr(rt, "_append", boom_then_ok)
     await rt.finalize(trigger="all_done")
-    ev = _fin(await rt.store.read_all())
+    await close_runtime(rt)
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    assert rt2._finalized and rt2.view().phase == "closed"
+    ev = _fin(await rt2.store.read_all())
     assert ev.payload["fallback_reason"] == "OSError"
     assert ev.payload["conclusion_ids"] == conclusion_ids_for(sid, {})
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_finalize_conflict_after_commit_is_success(tmp_path, clock, monkeypatch):
+    """Append commits StudyFinalized then fold fails; Conflict retry = success."""
+    sid = "st_conf"
+    rt = await _boot(tmp_path, clock, sid)
+    await _skip_all(rt)
+    real_project = rt._project_local
+    blown = {"v": False}
+
+    def boom_fold(ev):
+        if ev.type == "StudyFinalized" and not blown["v"]:
+            blown["v"] = True
+            raise RuntimeError("fold_after_commit")
+        return real_project(ev)
+
+    monkeypatch.setattr(rt, "_project_local", boom_fold)
+    await rt.finalize(trigger="all_done")
+    assert rt._finalized
+    assert _fin(await rt.store.read_all()).type == "StudyFinalized"
+    assert rt.view().phase == "closed"
     await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_finalize_conflict_without_event_reraises(tmp_path, clock, monkeypatch):
+    """Conflict with no StudyFinalized in store must not mark finalized."""
+    from coscientist.core.errors import Conflict
+
+    sid = "st_conf_neg"
+    rt = await _boot(tmp_path, clock, sid)
+    await _skip_all(rt)
+
+    async def boom_conflict(_events):
+        raise Conflict("idem mismatch without prior commit")
+
+    monkeypatch.setattr(rt, "_append", boom_conflict)
+    with pytest.raises(Conflict):
+        await rt.finalize(trigger="all_done")
+    assert not rt._finalized
+    assert not any(e.type == "StudyFinalized" for e in await rt.store.read_all())
+    assert rt.view().phase != "closed"
+    await close_runtime(rt)
+
+
+def test_rich_payload_bound_truncates_or_raises():
+    from coscientist.core.digest import canonical_json
+    from coscientist.core.finalize import (
+        MAX_FINALIZED_PAYLOAD_BYTES,
+        _bound_rich_payload,
+    )
+
+    mid = {
+        "trigger": "all_done",
+        "terminal_reason": "completed",
+        "contributing_reasons": [f"r{i}" for i in range(50)],
+        "verdict": "partial",
+        "question_dispositions": {
+            f"Q{i}": {
+                "disposition": "not_attempted",
+                "reason": "no_task",
+                "formulation": "x" * 5000,
+            }
+            for i in range(40)
+        },
+        "report_artifact_id": None,
+        "conclusion_ids": [],
+        "minimal_report": None,
+        "fallback_reason": None,
+    }
+    out = _bound_rich_payload(mid)
+    assert len(canonical_json(out)) <= MAX_FINALIZED_PAYLOAD_BYTES
+    assert all(
+        len(str(d.get("formulation", ""))) <= 80
+        for d in out["question_dispositions"].values()
+    )
+    huge = {
+        **mid,
+        "question_dispositions": {
+            f"Q{i}": {
+                "disposition": "not_attempted",
+                "reason": "no_task",
+                "formulation": "y" * 200,
+            }
+            for i in range(2000)
+        },
+    }
+    with pytest.raises(RuntimeError, match="finalized_payload_too_large"):
+        _bound_rich_payload(huge)
 
 
 @pytest.mark.asyncio
