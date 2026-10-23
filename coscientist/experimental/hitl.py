@@ -98,9 +98,11 @@ class HitlForkMixin(CostlyHitlMixin):
                 h, answer=answer, critic_accepts=critic_accepts  # type: ignore[arg-type]
             )
             return
-        # DESIGN §7.3: «реши сам» → critic with delegated_by=human
+        # DESIGN §7.3 / PR12 budget gate: «реши сам» → critic with delegated_by=human
         if decision == "delegate":
             await self._critic_decide(h, decision="accept", delegated_by="human")
+            if h.kind == "budget":
+                await self._mark_budget_delegated(h, delegated_by="human")
             await self._maybe_hitl_expand(h, request_id, expansion)
             return
         now = self.clock.now()
@@ -278,7 +280,7 @@ class HitlForkMixin(CostlyHitlMixin):
         await self._mark_plan_delegated(h, delegated_by=delegated_by)
 
     async def _mark_plan_delegated(self, h: HitlRequest, *, delegated_by: str) -> None:
-        if h.kind not in ("plan", "plan_approval", "plan_expansion", "hypotheses"):
+        if h.kind not in ("plan", "plan_approval", "plan_expansion", "hypotheses", "budget"):
             return
         graph = getattr(self, "graph", None)
         plans = getattr(self, "plans", None)
@@ -313,6 +315,45 @@ class HitlForkMixin(CostlyHitlMixin):
                     type="GraphNodeUpserted",
                     entity_key=pnid,
                     idem_key=make_idem("GraphNodeUpserted", pnid, "hitl_delegate", delegated_by),
+                    payload=node.model_dump(mode="json"),
+                    ts=now,
+                    schema_version=1,
+                )
+            ]
+        )
+
+    async def _mark_budget_delegated(self, h: HitlRequest, *, delegated_by: str) -> None:
+        """PR12: mark study graph node when budget HITL is «decide yourself»."""
+        graph = getattr(self, "graph", None)
+        if graph is None:
+            return
+        from coscientist.core.graph import GraphNode
+
+        sid = h.study_id
+        snid = f"{sid}:study"
+        existing = graph.get_node(snid)
+        attrs = dict((existing.attrs if existing is not None else None) or {})
+        attrs["delegated_by"] = delegated_by
+        attrs["approved_by"] = "critic"
+        attrs["budget_hitl_delegated"] = True
+        now = self.clock.now()
+        node = GraphNode(
+            node_id=snid,
+            kind="study",
+            study_id=sid,
+            ref_id=sid,
+            attrs=attrs,
+            created_at=getattr(existing, "created_at", None) or now,
+        )
+        await self._append(
+            [
+                EventEnvelope(
+                    study_id=sid,
+                    type="GraphNodeUpserted",
+                    entity_key=snid,
+                    idem_key=make_idem(
+                        "GraphNodeUpserted", snid, "budget_hitl_delegate", delegated_by
+                    ),
                     payload=node.model_dump(mode="json"),
                     ts=now,
                     schema_version=1,

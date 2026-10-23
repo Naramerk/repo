@@ -65,10 +65,21 @@ class LocalProjectMixin:
                 classifier_error=bool(p.get("classifier_error", False)),
             )
         elif ev.type == "BudgetDebited":
-            self._study_spent_rub += Decimal(str(p.get("spent_rub") or 0))
+            spent = Decimal(str(p.get("spent_rub") or 0))
+            self._study_spent_rub += spent
+            tid = p.get("task_id")
+            if tid:
+                raw_spent = getattr(self, "_task_spent_rub", None)
+                if not isinstance(raw_spent, dict):
+                    raw_spent = {}
+                    self._task_spent_rub: dict[str, Decimal] = raw_spent
+                raw_spent[str(tid)] = Decimal(str(raw_spent.get(str(tid), 0))) + spent
         elif ev.type == "BudgetExceeded":
             if str(p.get("scope") or "study") == "study":
                 self._budget_exceeded = True
+            elif str(p.get("scope") or "") == "task":
+                # Task-level exceed is folded via TaskDone(budget); flag unused.
+                pass
         elif ev.type == "PlanAccepted":
             self.plans[ev.entity_key] = dict(p)
         elif ev.type == "PlanExpanded":
@@ -176,9 +187,25 @@ class LocalProjectMixin:
             attempts = list(t.attempts)
             if p["attempt_id"] not in attempts:
                 attempts.append(p["attempt_id"])
-            self.tasks[p["task_id"]] = t.model_copy(
-                update={"state": TaskState.RUNNING, "attempts": attempts, "reason": None}
-            )
+            upd: dict[str, Any] = {
+                "state": TaskState.RUNNING,
+                "attempts": attempts,
+                "reason": None,
+            }
+            # PR12: journaled P2 deadline renorm (replay == live).
+            if p.get("share_renorm") and p.get("deadline") is not None:
+                raw_dl: Any = p["deadline"]
+                if isinstance(raw_dl, str):
+                    raw_dl = datetime.fromisoformat(raw_dl)
+                upd["deadline"] = raw_dl
+            self.tasks[p["task_id"]] = t.model_copy(update=upd)
+            bud_alloc = p.get("allocated_budget_rub")
+            if bud_alloc is not None:
+                raw_caps = getattr(self, "_task_budget_alloc", None)
+                if not isinstance(raw_caps, dict):
+                    raw_caps = {}
+                    self._task_budget_alloc: dict[str, Decimal] = raw_caps
+                raw_caps[str(p["task_id"])] = Decimal(str(bud_alloc))
             self._retry_at.pop(p["task_id"], None)
         elif ev.type == "AttemptClosed":
             att = self.attempts.get(p["attempt_id"], {})

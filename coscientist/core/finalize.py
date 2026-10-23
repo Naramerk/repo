@@ -55,6 +55,7 @@ _TASKDONE_DETAIL_LINES = {
     "foreach_quorum_gt_children": "не выполнено: кворум > числа детей",
     "quorum": "не выполнено: кворум входов",
     "foreach_empty": "не выполнено: foreach пуст",
+    "share_exhausted": "не выполнено: бюджет исчерпан",
 }
 
 def is_finalized(runtime: StudyRuntime) -> bool:
@@ -164,9 +165,20 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
                 )
                 if line and line not in seen:
                     seen.append(line)
+            # PR12: honest Russian report line on budget exhaustion (task or study).
+            if reason == TaskReason.BUDGET.value:
+                from coscientist.core.shares import BUDGET_EXHAUSTED_LINE
+
+                if BUDGET_EXHAUSTED_LINE not in seen:
+                    seen.append(BUDGET_EXHAUSTED_LINE)
             line = _TASKDONE_DETAIL_LINES.get(str(ev.payload.get("detail") or ""))
             if line and line not in seen:
                 seen.append(line)
+        elif ev.type == "BudgetExceeded":
+            from coscientist.core.shares import BUDGET_EXHAUSTED_LINE
+
+            if BUDGET_EXHAUSTED_LINE not in seen:
+                seen.append(BUDGET_EXHAUSTED_LINE)
         elif ev.type == "ExpansionRefused":
             line = expansion_not_done_line(
                 str(ev.payload.get("reason") or ""),

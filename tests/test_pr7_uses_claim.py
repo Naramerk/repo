@@ -116,6 +116,7 @@ def test_upcast_task_created_input_kind_defaults():
     assert inp["ref"] is None
     assert inp["quorum"] is None
     assert p["spec"]["sandbox_timeout_s"] is None
+    assert p["spec"]["budget_share"] is None
 
 
 def test_upcast_attempt_started_inputs_default():
@@ -131,9 +132,10 @@ def test_upcast_attempt_started_inputs_default():
             "deadline": "2026-01-01T00:00:00+00:00",
         },
     )
-    assert v == 4
+    assert v == 5
     assert p["inputs"] == []
     assert p["limitations"] == []
+    assert p["allocated_budget_rub"] is None
 
 
 @pytest.mark.asyncio
@@ -275,10 +277,11 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
     edges = [e for e in rt.graph.edges_from(exp_id) if e.kind == "uses_claim"]
     assert len(edges) == 1 and edges[0].dst_id == claim_id
     started = next(e for e in await rt.store.read_all() if e.type == "AttemptStarted" and e.entity_key == aid)
-    assert started.schema_version == 4
+    assert started.schema_version == 5
     assert len(started.payload["inputs"]) == 1
     assert started.payload["inputs"][0]["kind"] == "claim"
     assert started.payload["inputs"][0]["digest"]
+    assert started.payload.get("share_renorm") is True
     await close_runtime(rt)
 
     # Replay: bindings survive reopen.

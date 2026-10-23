@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### M1 PR12
+- `TaskSpec.budget_share` / `deadline_share` (None = equal remainder of undistributed pool).
+- Validators: Σ `budget_share` ≤ 1; critical-path Σ `deadline_share` ≤ 1 (parallel branches do not stack).
+- P2 renorm (journaled on `AttemptStarted` v5): deadline from CP∩not-started shares × remaining after `replan_reserve`; budget from not-started shares × (`budget_remaining − reserve`).
+- Task-level share enforcement via `record_budget_debit(..., task_id=)` → `SKIPPED(budget)` without closing the study; study exhaustion still finalizes with Russian report line «не выполнено: бюджет исчерпан».
+- Foreach children inherit equal splits of the template’s shares; agents cannot raise their own `budget_share` (critic `agent_share_raise`); HITL gate `budget` supports «decide yourself» (`delegated_by` on study graph).
+- Upcasters: TaskCreated v8 / PlanAccepted v6 also carry share defaults (stacked with PR17 sandbox fields); AttemptStarted v5.
+
 ### M1 PR17
 - Executable CodeCheck kinds + sandbox limits (B7, B8, K5): `exec_runs`, `tests_pass`, `metric_on_holdout`, `reproducible_rerun`.
 - **Separate verifier (B1):** collect agent declared outputs (sha256); catalog scorer / task tests in a second fresh bwrap jail (data/scorer/holdout/tests RO; only results RW); read structured `reward.txt` JSON / junit — never stdout. Holdout labels from catalog (`CodeCheck.holdout`); agent holdout slots ignored. `catalog:metric` scores predictions-as-data (`python -I`). `tests_pass` is **observation-only** (`countable=false`, `trusted=false`; tamper-proof = M2). Per-check `input_allowlist` (fail-closed).

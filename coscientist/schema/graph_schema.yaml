@@ -101,6 +101,8 @@ nodes:
       - {name: baselines, type: list(str), required: false}
       - {name: tool_resolution, type: enum(tool_found|tool_built|coder|tool_missing), required: false}
       - {name: addresses, type: list(str), required: false, note: "question id[]; by plan (TaskSpec.addresses)"}
+      - {name: budget_share, type: float, required: false, note: "M1 PR12; None = equal remainder; Σ ≤ 1"}
+      - {name: deadline_share, type: float, required: false, note: "M1 PR12; critical-path Σ ≤ 1"}
       - {name: attempts, type: list(obj(Attempt)), required: true, note: "n, outcome, close_reason, provenance=real|partial|stub, config_digest"}
       - {name: limitations, type: list(obj(Limitation)), required: false}
   - kind: artifact

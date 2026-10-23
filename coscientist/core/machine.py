@@ -77,6 +77,9 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         self._budget_exceeded = False
         self._intake_refusal: IntakeRefuse | None = None
         self._study_spent_rub = Decimal("0")
+        # PR12: per-task budget_share caps / spend (folded from AttemptStarted / Debit).
+        self._task_budget_alloc: dict[str, Decimal] = {}
+        self._task_spent_rub: dict[str, Decimal] = {}
         # PR9 expansion accounting (folded from PlanExpanded / ExpansionRefused).
         self._agent_expansions = 0
         self._human_expansions = 0
@@ -296,11 +299,13 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         spent_rub: Decimal | float | int | str,
         request_id: str,
         extra: dict[str, Any] | None = None,
+        task_id: str | None = None,
     ) -> None:
         """Public writer for ``BudgetDebited`` (study spend fold).
 
         Does not emit ``BudgetExceeded`` — call ``tick`` (or costly settle) so the
-        producer re-checks the cap.
+        producer re-checks the cap. Optional ``task_id`` enforces budget_share
+        (PR12): over-cap → TaskDone(SKIPPED, budget) without closing the study.
         """
         if self.study is None:
             raise RuntimeError("no study")
@@ -310,6 +315,8 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             "request_id": request_id,
             **(extra or {}),
         }
+        if task_id:
+            payload["task_id"] = task_id
         await self._append(
             [
                 EventEnvelope(
@@ -327,6 +334,10 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                 )
             ]
         )
+        if task_id:
+            from coscientist.core.shares import enforce_task_budget_share
+
+            await enforce_task_budget_share(self, task_id)
 
     def _study_budget_exhausted(self) -> bool:
         """True when folded ``BudgetDebited.spent_rub`` reaches ``Budget.max_cost_rub``.

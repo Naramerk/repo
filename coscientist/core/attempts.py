@@ -299,7 +299,8 @@ class AttemptsMixin:
         now = self.clock.now()
         assert self.study is not None
         sid = self.study.study_id
-        deadline = min(task.deadline, self.study.effective_deadline())
+        from coscientist.core.shares import p2_share_payload_fields
+
         lim_payload = [lim.model_dump(mode="json") if hasattr(lim, "model_dump") else dict(lim) for lim in limitations]
         payload = {
             "attempt_id": aid,
@@ -310,13 +311,11 @@ class AttemptsMixin:
             "close_reason": None,
             "provenance": prov,
             "agent_output_digest": None,
-            "deadline": deadline.isoformat(),
             "task_id": task.task_id,
             "study_id": sid,
-            # PR7: P2 bindings (+ digest) live in the journal for replay.
             "inputs": [b.model_dump(mode="json") for b in bindings],
-            # PR10: fan-in gaps (inputs below quorum / failed deps).
             "limitations": lim_payload,
+            **p2_share_payload_fields(self, task),
         }
         events: list[EventEnvelope] = [
             EventEnvelope(
@@ -326,7 +325,7 @@ class AttemptsMixin:
                 idem_key=make_idem("AttemptStarted", aid),
                 payload=payload,
                 ts=now,
-                schema_version=4,
+                schema_version=5,
             )
         ]
         # Persist full verdict snapshots used at bind (not digest-only).

@@ -83,6 +83,7 @@ HitlGateKind = Literal[
     "report",
     "result_acceptance",
     "skip_task",
+    "budget",  # M1 PR12: budget_share checkpoint («реши сам» → critic)
 ]
 
 
@@ -106,6 +107,7 @@ def _default_gates() -> dict[str, GateConfig]:
         "report": GateConfig(timeout_s=1800, on_timeout="delegate"),
         "result_acceptance": GateConfig(timeout_s=1800, on_timeout="delegate"),
         "skip_task": GateConfig(timeout_s=1800, on_timeout="delegate"),
+        "budget": GateConfig(timeout_s=1800, on_timeout="delegate"),
     }
 
 
@@ -273,6 +275,9 @@ class TaskSpec(Frozen):
     sandbox_check_limits: dict[str, dict[str, Any]] | None = None
     # Audit when agent-provided limit fields were ignored.
     sandbox_limits_note: str | None = None
+    # M1 PR12: fractions of study budget / wall time (None = equal remainder).
+    budget_share: float | None = Field(default=None, ge=0.0, le=1.0)
+    deadline_share: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class Budget(Frozen):

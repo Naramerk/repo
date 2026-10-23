@@ -72,6 +72,16 @@ def critic_gate(
         if isinstance(q, dict) and q.get("id"):
             known[str(q["id"])] = str(q.get("text") or "")
     known.update({q.id: q.text for q in req.questions})
+    # PR12: agents cannot raise their own budget_share (before Σ validation).
+    from coscientist.core.shares import agent_raises_budget_share
+
+    raise_detail = agent_raises_budget_share(
+        prev_tasks=prev_tasks,
+        added_tasks=keyed,
+        after_task=after_task,
+    )
+    if raise_detail is not None:
+        return raise_detail
     err = validate_expansion(
         runtime,
         added_tasks=keyed,

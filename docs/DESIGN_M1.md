@@ -375,7 +375,7 @@ CodeCheck kinds: `exec_runs` (agent jail, exit 0; **prediction/refute role → v
 | 9 | `PlanExpanded` + триггер + квоты агента/человека + replan_reserve + question add/supersede + фильтр k | S6, H-d, H-g, C10 | 8b |
 | 10 | foreach + quorum fan-in (`TaskSpec.foreach`, `InputSpec.quorum`; RU report lines; no expansion quota) | S9 | 9 |
 | 11 | LoopSpec (scope, 3 предиката, обязательный max_iter, LoopCapped) | S10 | 9 |
-| 12 | budget_share/deadline_share + перенормировка + валидатор (критический путь) | S4 | 9 |
+| 12 | budget_share/deadline_share + перенормировка + валидатор (критический путь) — **landed** | S4 | 9 |
 | 13 | Рубрика + final_type + PlanValidator | B2, B5, K7 | 8 |
 | 14 | quote_in_source с нормализацией по CAS | K9 | — |
 | 15 | needs_more_data + experiment_design; contradicts; derivation | строки 4, 5, 8, 9 | 13 |

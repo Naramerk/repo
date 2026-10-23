@@ -72,6 +72,7 @@ def test_upcast_input_mode_keeps_old_default():
     assert p["spec"]["inputs"][0]["mode"] == "use_partial"
     assert p["spec"]["inputs"][0]["kind"] == "artifact"
     assert p["spec"]["sandbox_memory_mb"] is None
+    assert p["spec"]["budget_share"] is None
 
 
 def test_experiment_method_enum_matches_graph():

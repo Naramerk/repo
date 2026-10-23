@@ -247,7 +247,10 @@ async def materialize_foreach(
                 detail=f"foreach_assign_keys:{keyed}",
             )
             return None
-        added: list[TaskSpec] = list(keyed)
+        # PR12: children share the template's budget_share / deadline_share.
+        from coscientist.core.shares import apply_foreach_parent_shares
+
+        added: list[TaskSpec] = apply_foreach_parent_shares(template.spec, list(keyed))
     else:
         added = []
 

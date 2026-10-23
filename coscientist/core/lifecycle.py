@@ -276,11 +276,13 @@ class LifecycleMixin:
                 raise ValueError(f"expand_after unknown task_key: {k!r}")
         validate_input_specs(tasks)
         from coscientist.core.foreach import validate_foreach_specs
+        from coscientist.core.shares import validate_plan_shares
 
         validate_foreach_specs(
             tasks,
             known_keys={t.spec.task_key for t in self.tasks.values()},
         )
+        validate_plan_shares(tasks)
         catalog = getattr(self, "catalog", None) or getattr(getattr(self, "executor", None), "catalog", None)
         validate_plan_criteria(tasks, catalog)
         pid = plan_id()
