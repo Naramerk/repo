@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -34,6 +35,11 @@ from coscientist.core.domain import (
     TaskSpec,
 )
 from coscientist.core.errors import ArtifactRejected
+from coscientist.core.events import (
+    PLAN_ACCEPTED_SCHEMA_VERSION,
+    PLAN_EXPANDED_SCHEMA_VERSION,
+    TASK_CREATED_SCHEMA_VERSION,
+)
 from coscientist.core.experiment_design import (
     ARTIFACT_KIND_EXPERIMENT_DESIGN,
     EXPERIMENT_DESIGN_ITEM_IDS,
@@ -46,11 +52,6 @@ from coscientist.core.graph import GraphEdge, GraphNode, GraphStore, registry_fr
 from coscientist.core.plan_validate import validate_output_kinds
 from coscientist.core.reasons import Disposition
 from coscientist.core.rubric_types import Rubric, RubricItem
-from coscientist.core.events import (
-    PLAN_ACCEPTED_SCHEMA_VERSION,
-    PLAN_EXPANDED_SCHEMA_VERSION,
-    TASK_CREATED_SCHEMA_VERSION,
-)
 from coscientist.core.upcasters import (
     UPCASTERS,
     assert_upcaster_chain_continuous,
@@ -59,6 +60,19 @@ from coscientist.core.upcasters import (
 )
 from coscientist.core.verdict import hypothesis_verdict
 from tests.helpers import attach_executor, close_runtime, open_runtime
+
+
+def _assert_terminated(events: list[Any]) -> Any:
+    """Exactly one StudyFinalized; report XOR minimal_report; non-empty conclusion_ids."""
+    fins = [e for e in events if e.type == "StudyFinalized"]
+    assert len(fins) == 1
+    fin = fins[0]
+    has_art = fin.payload.get("report_artifact_id") is not None
+    has_min = fin.payload.get("minimal_report") is not None
+    assert has_art ^ has_min, "report_artifact_id XOR minimal_report"
+    cids = fin.payload.get("conclusion_ids")
+    assert isinstance(cids, list) and len(cids) > 0, "conclusion_ids must be non-empty"
+    return fin
 
 
 def _design_rubric() -> Rubric:
@@ -330,12 +344,7 @@ async def test_needs_more_data_requires_design(tmp_path, clock):
     await _complete_report_and_finalize(rt, tmp_path)
     assert rt.view().phase == "closed"
     events = await rt.store.read_all()
-    fins = [e for e in events if e.type == "StudyFinalized"]
-    assert len(fins) == 1
-    fin = fins[0]
-    assert fin.payload.get("report_artifact_id") or fin.payload.get("minimal_report")
-    assert "conclusion_ids" in fin.payload
-    assert isinstance(fin.payload["conclusion_ids"], list)
+    _assert_terminated(events)
     d = dispositions(
         tasks=rt.tasks,
         plans=rt.plans,
@@ -387,6 +396,11 @@ async def test_disposal_unknown_question_fail_closed_empty_graph(tmp_path, clock
     )
     assert "QX" not in rt.question_disposals
     assert any("unknown question" in str(n.get("detail", "")) for n in getattr(ex, "_disposal_rejects", []))
+    # REPORT completion finalizes; assert honest termination shape.
+    await rt.ensure_lease(ttl_s=10_000)
+    await rt.tick()
+    if rt.view().phase == "closed":
+        _assert_terminated(await rt.store.read_all())
     await close_runtime(rt)
 
 
@@ -614,7 +628,5 @@ async def test_impossible_task_still_closes_with_report(tmp_path, clock):
     await _complete_report_and_finalize(rt, tmp_path)
     assert rt.view().phase == "closed"
     assert rt.view().verdict is not None
-    fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
-    assert len(fins) == 1
-    assert fins[0].payload.get("report_artifact_id") or fins[0].payload.get("minimal_report")
+    _assert_terminated(await rt.store.read_all())
     await close_runtime(rt)

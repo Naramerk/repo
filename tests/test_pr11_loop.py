@@ -191,7 +191,9 @@ async def _drive_to_finalized(rt, arts) -> Any:
     fin = fins[0]
     has_art = fin.payload.get("report_artifact_id") is not None
     has_min = fin.payload.get("minimal_report") is not None
-    assert has_art ^ has_min
+    assert has_art ^ has_min, "report_artifact_id XOR minimal_report"
+    cids = fin.payload.get("conclusion_ids")
+    assert isinstance(cids, list) and len(cids) > 0, "conclusion_ids must be non-empty"
     assert fin.payload.get("terminal_reason") is not None
     return fin
 
@@ -223,6 +225,11 @@ async def _assert_plan_refused(rt, *, match: str) -> None:
     assert rt._finalized is True
     fin = fins[0]
     assert fin.payload.get("terminal_reason") == TerminalReason.REFUSED.value
+    has_art = fin.payload.get("report_artifact_id") is not None
+    has_min = fin.payload.get("minimal_report") is not None
+    assert has_art ^ has_min, "report_artifact_id XOR minimal_report"
+    cids = fin.payload.get("conclusion_ids")
+    assert isinstance(cids, list) and len(cids) > 0, "conclusion_ids must be non-empty"
     report_line = str(refused[0].payload.get("report_line") or "")
     contrib = list(fin.payload.get("contributing_reasons") or [])
     assert report_line, "PlanRefused must carry report_line"
@@ -2119,9 +2126,17 @@ def test_upcast_plan_expanded_v2_loop_field_defaults():
             "added_questions": [],
         },
     )
+<<<<<<< HEAD
     assert v == 5  # PR15 kind after PR16 decomposes v4
+=======
+    assert v == 4
+>>>>>>> 4b5f306 (fix(pr15): rebase onto #24 — kind at v12/v10/v4; LeaseLost; termination XOR)
     spec = p["added_tasks"][0]
     assert spec["loop_id"] is None
     assert spec["loop_iter"] is None
     assert spec["loop_template_key"] is None
+<<<<<<< HEAD
     assert p.get("rollup") == "all"
+=======
+    assert spec["expected_outputs"][0].get("kind") is None
+>>>>>>> 4b5f306 (fix(pr15): rebase onto #24 — kind at v12/v10/v4; LeaseLost; termination XOR)

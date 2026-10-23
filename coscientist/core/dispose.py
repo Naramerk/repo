@@ -149,8 +149,10 @@ async def dispose_question(
     """Validate + append QuestionDisposed. Returns question_id or None if rejected.
 
     Rejection is recorded via ``_note_reject`` — study still closes.
-    Never raises into callers (totality); returns None on reject.
+    ``LeaseLost`` always propagates. Post-``StudyFinalized`` writes return None
+    (nothing may be appended after finalize).
     """
+    from coscientist.core.errors import LeaseLost, StudyClosedError
     from coscientist.core.question_tasks import known_questions, question_tasks
 
     if isinstance(disposal, dict):
@@ -189,7 +191,12 @@ async def dispose_question(
     append = getattr(runtime, "_append", None)
     if append is None:
         return None
-    await append([ev])
+    try:
+        await append([ev])
+    except LeaseLost:
+        raise
+    except StudyClosedError:
+        return None
     return disposal.question_id
 
 
