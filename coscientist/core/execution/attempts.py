@@ -10,6 +10,12 @@ from coscientist.core.claims.claims import compute_verdict_snapshots
 from coscientist.core.claims.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import attempt_id, task_id
+from coscientist.core.events.schema_versions import (
+    ATTEMPT_CLOSED_SCHEMA_VERSION,
+    ATTEMPT_STARTED_SCHEMA_VERSION,
+    TASK_DONE_SCHEMA_VERSION,
+    VERDICT_SNAPSHOTS_RECORDED_SCHEMA_VERSION,
+)
 from coscientist.core.execution.domain import (
     VALID_PROVENANCE,
     Provenance,
@@ -340,12 +346,6 @@ class AttemptsMixin:
         now = self.clock.now()
         assert self.study is not None
         sid = self.study.study_id
-        from coscientist.core.events.schema_versions import (
-            ATTEMPT_CLOSED_SCHEMA_VERSION,
-            ATTEMPT_STARTED_SCHEMA_VERSION,
-            TASK_DONE_SCHEMA_VERSION,
-            VERDICT_SNAPSHOTS_RECORDED_SCHEMA_VERSION,
-        )
         from coscientist.core.execution.domain import Limitation as _Limitation
         from coscientist.core.execution.input_limits import (
             apply_input_drift,

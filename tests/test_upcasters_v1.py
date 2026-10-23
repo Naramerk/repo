@@ -77,8 +77,9 @@ def test_upcast_raises_above_writer():
 
 def test_upcast_raises_chain_gap(dummy_upcasters):
     name = dummy_upcasters
-    # Punch a gap at v2→v3 by removing from_version=2; writer still reports 3.
-    del UPCASTERS[name][2]
+    # Punch a gap at v1→v2 by removing from_version=1; max key 2 keeps writer=3.
+    del UPCASTERS[name][1]
+    assert writer_schema_version(name) == 3
     with pytest.raises(ValueError, match="chain gap"):
         upcast(name, 1, {"src": "a"})
 
