@@ -77,6 +77,7 @@ HitlGateKind = Literal[
     "spec_approval",
     "plan",
     "plan_approval",
+    "plan_expansion",
     "hypotheses",
     "costly_or_nonreal",
     "report",
@@ -99,6 +100,7 @@ def _default_gates() -> dict[str, GateConfig]:
         "spec_approval": GateConfig(timeout_s=120, on_timeout="delegate"),
         "plan": GateConfig(timeout_s=180, on_timeout="delegate"),
         "plan_approval": GateConfig(timeout_s=180, on_timeout="delegate"),
+        "plan_expansion": GateConfig(timeout_s=180, on_timeout="delegate"),
         "hypotheses": GateConfig(timeout_s=1800, on_timeout="delegate"),
         "costly_or_nonreal": GateConfig(timeout_s=1800, on_timeout="fail"),
         "report": GateConfig(timeout_s=1800, on_timeout="delegate"),
@@ -434,6 +436,8 @@ class HitlRequest(Frozen):
     task_id: str
     open: bool = True
     cost_rub: float = 0.0
+    # Bound after_task / PLAN-n key for kind=plan_expansion (expand_plan gate).
+    expand_after_task: str | None = None
 
 
 class HitlDecision(Frozen):

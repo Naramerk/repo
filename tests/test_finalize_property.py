@@ -308,11 +308,12 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                         idem_key=make_idem("HitlOpened", rid),
                         payload={
                             "request_id": rid,
-                            "kind": "plan_approval",
+                            "kind": "plan_expansion",
                             "payload_ref": tid0,
                             "deadline": now.isoformat(),
                             "study_id": self.rt.study.study_id,
                             "task_id": tid0,
+                            "expand_after_task": "PLAN",
                             "open": True,
                             "cost_rub": 0.0,
                         },

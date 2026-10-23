@@ -37,7 +37,7 @@ from coscientist.core.ids import plan_id, task_id
 from coscientist.core.supersede import (
     should_skip_for_question_supersede,
     target_blocks_agent_supersede,
-    task_has_refute_intent,
+    task_protected_from_agent_skip,
     tasks_needed_by_active_questions,
 )
 
@@ -54,15 +54,17 @@ def _quota_kind(delegated_by: DelegatedBy) -> Literal["agent", "human"]:
     return "human" if delegated_by == "human" else "agent"
 
 
-_PLAN_EXPAND_HITL_KINDS = frozenset({"plan", "plan_approval", "hypotheses"})
-
-
 def _delegated_by_from_hitl(
-    runtime: StudyRuntime, hitl_request_id: str
+    runtime: StudyRuntime,
+    hitl_request_id: str,
+    *,
+    after_task: str,
+    plan_key: str | None = None,
 ) -> DelegatedBy | str:
     """Derive delegated_by from HitlDecided only. Return error detail if missing/reused.
 
-    HitlOpened kind must be a plan-expansion gate (plan / plan_approval / hypotheses).
+    HitlOpened must be kind ``plan_expansion`` and bound to this ``after_task``
+    (or PLAN-n key) via ``expand_after_task`` / task_key.
     """
     used = getattr(runtime, "_hitl_expand_used", None)
     if isinstance(used, set) and hitl_request_id in used:
@@ -82,16 +84,28 @@ def _delegated_by_from_hitl(
             req = {
                 "kind": getattr(h, "kind", None),
                 "task_id": getattr(h, "task_id", None),
+                "expand_after_task": getattr(h, "expand_after_task", None)
+                if hasattr(h, "expand_after_task")
+                else (getattr(h, "__dict__", {}) or {}).get("expand_after_task"),
             }
+            # HitlRequest has no expand_after_task field — check payload extras via fold only.
     if req is None:
         return "missing_hitl_opened"
     kind = str(req.get("kind") or "")
-    if kind not in _PLAN_EXPAND_HITL_KINDS:
+    if kind != "plan_expansion":
         return f"hitl_wrong_kind:{kind or 'unknown'}"
+    bound = str(req.get("expand_after_task") or "")
+    if not bound and req.get("task_id"):
+        t = runtime.tasks.get(str(req["task_id"]))
+        if t is not None:
+            bound = t.spec.task_key
+    if bound and bound not in {after_task, plan_key or ""}:
+        return f"hitl_wrong_target:{bound}"
+    if not bound:
+        return "hitl_unbound"
     db = row.get("delegated_by")
     if db in ("human", "timeout"):
         return db  # type: ignore[return-value]
-    # Human accept (approved_by=human, no delegated_by) → treat as human quota.
     if row.get("approved_by") == "human" or row.get("decided_by") == "human":
         return "human"
     if row.get("approved_by") == "critic" or row.get("decided_by") == "critic":
@@ -166,7 +180,9 @@ async def _expand_plan(
 
     delegated_by: DelegatedBy = None
     if hitl_request_id:
-        derived = _delegated_by_from_hitl(runtime, hitl_request_id)
+        derived = _delegated_by_from_hitl(
+            runtime, hitl_request_id, after_task=after_task, plan_key=plan_key
+        )
         if isinstance(derived, str) and derived not in ("human", "timeout"):
             await refuse_expansion(
                 runtime, after_task, reason="invalid_hitl", detail=str(derived)[:200]
@@ -227,7 +243,7 @@ async def _expand_plan(
                 return None
             blocked_qs.add(s.old_id)
         for rt in runtime.tasks.values():
-            if rt.state != TaskState.DONE and task_has_refute_intent(runtime, rt):
+            if rt.state != TaskState.DONE and task_protected_from_agent_skip(runtime, rt):
                 refute_keys.add(rt.spec.task_key)
                 if rt.spec.task_key in superseded_tasks:
                     await refuse_expansion(
@@ -417,45 +433,39 @@ async def _expand_plan(
 def _resolve_plan_n_request(
     runtime: StudyRuntime, plan_key: str, meta: dict
 ) -> tuple[ExpansionRequest | None, str | None]:
-    """Planner output first; seed ``pending`` only when planner wrote nothing.
+    """Single source of truth: PLAN-n final-attempt ``expansion_request``.
 
-    Returns ``(req, None)`` or ``(None, refuse_detail)`` — caller uses
-    ``ExpansionRefused(invalid, detail)``.
+    No silent seed fallback. Attempt/result mismatch → ``invalid``.
     """
     from coscientist.core.expand_trigger import parse_plan_n_expansion
     from coscientist.core.ids import task_id as make_task_id
 
+    _ = meta  # seed pending is advisory for the planner only — never applied here
     sid = runtime.study.study_id if runtime.study is not None else ""
     plan_tid = make_task_id(sid, plan_key) if sid else ""
-    if plan_tid and plan_tid in runtime.tasks:
-        task = runtime.tasks[plan_tid]
-        wrote_output = False
-        if task.attempts:
-            aid = task.attempts[-1]
-            row = dict(runtime.results.get(aid) or runtime.results.get(f"result:{aid}") or {})
-            wrote_output = "expansion_request" in row
-        req, err = parse_plan_n_expansion(runtime, plan_tid)
-        if req is not None:
-            return req, None
-        if wrote_output:
-            # Malformed / empty planner blob — do not fall back to seed.
-            return None, err or "malformed_planner_output"
-        # No planner expansion_request field → allow seed from expansion_request trigger.
-    raw = meta.get("pending")
-    if isinstance(raw, dict):
-        try:
-            return ExpansionRequest.model_validate(raw), None
-        except Exception:  # noqa: BLE001
-            return None, "pending_bad"
-    return None, "missing_planner_output"
+    if not plan_tid or plan_tid not in runtime.tasks:
+        return None, "missing_plan_n_task"
+    task = runtime.tasks[plan_tid]
+    if not task.attempts:
+        return None, "missing_planner_attempt"
+    aid = task.attempts[-1]
+    primary = runtime.results.get(aid)
+    alternate = runtime.results.get(f"result:{aid}")
+    if primary is not None and alternate is not None and dict(primary) != dict(alternate):
+        return None, "attempt_result_mismatch"
+    row = primary if isinstance(primary, dict) else alternate
+    if not isinstance(row, dict) or "expansion_request" not in row:
+        return None, "missing_planner_output"
+    req, err = parse_plan_n_expansion(runtime, plan_tid)
+    if req is None:
+        return None, err or "malformed_planner_output"
+    return req, None
 
 
 async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str | None:
     """Run M1 critic gate, then apply ExpansionRequest after PLAN-n SUCCESS.
 
-    Prefers PLAN-n planner output (final attempt); falls back to seed
-    ``pending`` from ``expansion_request`` triggers. ``expand_after`` has no
-    seed — planner output is required (DESIGN_M1 §4 / H-g).
+    Planner final-attempt ``expansion_request`` is the sole input (DESIGN_M1 §4).
     """
     reqs = getattr(runtime, "_expand_requests", None) or {}
     meta = reqs.get(plan_key) if isinstance(reqs, dict) else None

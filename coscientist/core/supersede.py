@@ -66,80 +66,102 @@ def countable_refutation_n(runtime: Any, target_id: str) -> int:
     return n
 
 
-def derive_tests_intent(runtime: Any, spec: Any) -> TestsIntent | None:
-    """Core-derived tests.intent from catalog check roles (not planner alone).
-
-    - Graph / catalog prediction-role criteria are required for ``refute``.
-    - Planner ``TaskSpec.tests_intent=refute`` is ignored without a prediction role.
-    - ``predicts_null`` templates imply refute.
-    """
-    planner = getattr(spec, "tests_intent", None)
+def _criteria_prediction_capable(runtime: Any, spec: Any) -> bool:
+    """True when any criterion has catalog role prediction (refutation-capable)."""
     catalog = getattr(runtime, "catalog", None)
     by_id = {t.id: t for t in getattr(catalog, "templates", []) or []} if catalog else {}
-    has_prediction = False
-    predicts_null = False
     for ref in getattr(spec, "criteria", None) or []:
         tid = getattr(ref, "template_id", None)
         tmpl = by_id.get(tid) if tid else None
         role = getattr(tmpl, "role", None) if tmpl is not None else getattr(ref, "role", None)
         if role == "prediction":
-            has_prediction = True
+            return True
         if tmpl is not None and bool(getattr(tmpl, "predicts_null", False)):
-            predicts_null = True
-            has_prediction = True
-    if predicts_null:
-        return "refute"
-    if planner == "refute":
-        return "refute" if has_prediction else None
-    if planner == "confirm" and has_prediction:
-        return "confirm"
-    if has_prediction:
-        return "confirm"
-    return None
+            return True
+    return False
 
 
-def task_has_refute_intent(runtime: Any, task: Any) -> bool:
-    """True when the task carries tests.intent=refute (edge or core-derived)."""
+def _task_links_to_target(runtime: Any, task: Any, target_id: str | None = None) -> bool:
+    """Linked via addresses, tests edge, or declared target."""
     spec = getattr(task, "spec", task)
+    addrs = list(getattr(spec, "addresses", None) or [])
+    if target_id is None:
+        if addrs:
+            return True
+    elif target_id in addrs:
+        return True
     study = getattr(runtime, "study", None)
     graph = getattr(runtime, "graph", None)
-    if study is not None and graph is not None:
-        key = getattr(spec, "task_key", None) or (
-            spec.get("task_key") if isinstance(spec, dict) else None
-        )
-        if key:
-            exp_id = experiment_node_id(study.study_id, str(key))
-            for e in graph.edges_from(exp_id):
-                if e.kind == "tests" and (e.attrs or {}).get("intent") == "refute":
-                    return True
-    return derive_tests_intent(runtime, spec) == "refute"
+    if study is None or graph is None:
+        return bool(addrs) if target_id is None else False
+    key = getattr(spec, "task_key", None)
+    if not key:
+        return False
+    exp_id = experiment_node_id(study.study_id, str(key))
+    for e in graph.edges_from(exp_id):
+        if e.kind != "tests":
+            continue
+        if target_id is None:
+            return True
+        hid = hypothesis_node_id(study.study_id, target_id)
+        if e.dst_id == hid:
+            return True
+    return False
+
+
+def _has_refute_tests_edge(runtime: Any, task: Any) -> bool:
+    study = getattr(runtime, "study", None)
+    graph = getattr(runtime, "graph", None)
+    if study is None or graph is None:
+        return False
+    key = getattr(getattr(task, "spec", task), "task_key", None)
+    if not key:
+        return False
+    exp_id = experiment_node_id(study.study_id, str(key))
+    for e in graph.edges_from(exp_id):
+        if e.kind == "tests" and (e.attrs or {}).get("intent") == "refute":
+            return True
+    return False
+
+
+def task_protected_from_agent_skip(runtime: Any, task: Any) -> bool:
+    """True when agent path must not SKIP/supersede this open task (MJ-b).
+
+    Structure: linked (tests/addresses/declared target) to a hypothesis/question
+    with an open prediction / refutation-capable check → protected.
+    Planner ``confirm`` never removes protection. Planner ``refute`` only ADDS it
+    (even without a prediction role or tests edge).
+    """
+    if getattr(task, "state", None) == TaskState.DONE:
+        return False
+    spec = getattr(task, "spec", task)
+    # Structure-based protection (confirm cannot strip this).
+    if _task_links_to_target(runtime, task) and _criteria_prediction_capable(runtime, spec):
+        return True
+    # Graph tests.intent=refute.
+    if _has_refute_tests_edge(runtime, task):
+        return True
+    # Planner refute only ADDS protection.
+    if getattr(spec, "tests_intent", None) == "refute":
+        return True
+    return False
+
+
+# Back-compat alias used by older call sites.
+def task_has_refute_intent(runtime: Any, task: Any) -> bool:
+    return task_protected_from_agent_skip(runtime, task)
 
 
 def has_open_refute_task(runtime: Any, target_id: str) -> bool:
-    """True when a non-DONE task has tests.intent=refute toward this target.
-
-    PENDING tasks without an experiment node are protected via core-derived
-    ``tests_intent`` from check roles.
-    """
-    study = getattr(runtime, "study", None)
-    graph = getattr(runtime, "graph", None)
-    if study is None or not target_id:
+    """True when an open protected task is linked to this question/hypothesis."""
+    if not target_id:
         return False
-    sid = study.study_id
-    hid = hypothesis_node_id(sid, target_id)
     for task in runtime.tasks.values():
         if task.state == TaskState.DONE:
             continue
-        if not task_has_refute_intent(runtime, task):
+        if not task_protected_from_agent_skip(runtime, task):
             continue
-        addrs = list(task.spec.addresses or [])
-        if graph is not None:
-            exp_id = experiment_node_id(sid, task.spec.task_key)
-            for e in graph.edges_from(exp_id):
-                if e.kind == "tests" and (e.attrs or {}).get("intent") == "refute":
-                    if e.dst_id == hid:
-                        return True
-        if target_id in addrs:
+        if _task_links_to_target(runtime, task, target_id):
             return True
     return False
 

@@ -8,13 +8,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from coscientist.core.domain import ExpansionRequest, RequirementRef, TaskSpec
+from coscientist.core.domain import ExpansionRequest, RequirementRef, TaskSpec, TaskState
 from coscientist.core.expand_validate import (
     active_plan_blob,
     assign_core_keys,
     validate_expansion,
 )
-from coscientist.core.supersede import target_blocks_agent_supersede
+from coscientist.core.supersede import (
+    target_blocks_agent_supersede,
+    task_protected_from_agent_skip,
+)
 
 if TYPE_CHECKING:
     from coscientist.core.machine import StudyRuntime
@@ -38,15 +41,28 @@ def critic_gate(
     """Return rejection detail, or None if the request passes the M1 critic gate.
 
     Checks: schema/DAG/addresses, depth/quota/reserve, no refutation escape,
-    new tasks have acceptance criteria, no duplicates of existing tasks.
+    new tasks have real catalog acceptance criteria (no plan_expansion_* markers),
+    no duplicates of existing tasks.
     """
     study = runtime.study
     if study is None:
         return "no_study"
-    # Schema / DAG / addresses / max_depth / max_tasks.
+    catalog = getattr(runtime, "catalog", None)
+    by_id = {t.id: t for t in getattr(catalog, "templates", []) or []} if catalog else {}
     keyed = assign_core_keys(runtime, list(req.tasks))
     if isinstance(keyed, str):
         return keyed
+    # Forbid plan_expansion_* / require catalog criteria before schema validate.
+    for spec in keyed:
+        crits = list(spec.criteria or [])
+        if not crits:
+            return f"missing_criteria:{spec.task_key}"
+        for ref in crits:
+            tid = str(getattr(ref, "template_id", "") or "")
+            if tid.startswith("plan_expansion_"):
+                return f"forbidden_plan_expansion_marker:{spec.task_key}"
+        if not any(str(getattr(r, "template_id", "") or "") in by_id for r in crits):
+            return f"missing_catalog_criteria:{spec.task_key}"
     prev = active_plan_blob(runtime) or {}
     prev_tasks = [
         TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in (prev.get("tasks") or [])
@@ -68,40 +84,27 @@ def critic_gate(
     )
     if err is not None:
         return err
-    # Quota: PLAN-n already reserved replan time; still enforce agent expansion count
-    # (PlanExpanded not yet folded). Reserve was checked at ensure_plan_n.
     if int(getattr(runtime, "_agent_expansions", 0)) >= int(study.max_expansions):
         return "agent_quota"
     # No refutation escape (MJ-b).
-    from coscientist.core.supersede import task_has_refute_intent
-
     for s in req.superseded_questions:
         block = target_blocks_agent_supersede(runtime, s.old_id)
         if block:
             return f"refutation_escape:{s.old_id}:{block}"
     for tkey in req.superseded_tasks:
-        # Superseding away a task that addresses a blocked question, or an open
-        # refute task (even with empty addresses — must not be SKIPpable).
-        tid = None
+        rt_task = None
         for t in runtime.tasks.values():
             if t.spec.task_key == tkey:
-                tid = t
+                rt_task = t
                 break
-        if tid is None:
+        if rt_task is None:
             continue
-        from coscientist.core.domain import TaskState
-
-        if task_has_refute_intent(runtime, tid) and tid.state != TaskState.DONE:
+        if rt_task.state != TaskState.DONE and task_protected_from_agent_skip(runtime, rt_task):
             return f"refutation_escape:{tkey}:open_refute_task"
-        for qid in tid.spec.addresses or []:
+        for qid in rt_task.spec.addresses or []:
             block = target_blocks_agent_supersede(runtime, qid)
             if block:
                 return f"refutation_escape:{qid}:{block}"
-    # New tasks must have acceptance criteria.
-    for spec in keyed:
-        if not (spec.criteria or []):
-            return f"missing_criteria:{spec.task_key}"
-    # No duplicates of existing tasks (key or identical goal+addresses+depends).
     existing_keys = {t.spec.task_key for t in runtime.tasks.values()}
     for spec in keyed:
         if spec.task_key in existing_keys:

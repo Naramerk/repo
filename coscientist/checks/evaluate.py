@@ -487,6 +487,8 @@ def evaluate_task_checks(
     *,
     review_statuses: dict[str, ReqStatus] | None = None,
     attempt_id: str | None = None,
+    task_kind: str | None = None,
+    task_key: str | None = None,
 ) -> list[CheckResult]:
     """Evaluate criteria on the task; review checks become UNASSESSED unless overridden."""
     by_id = {t.id: t for t in catalog.templates}
@@ -498,23 +500,40 @@ def evaluate_task_checks(
         for tid in catalog.defaults.get("experiment", []):
             refs.append(RequirementRef(template_id=tid))
 
+    # plan_expansion_* markers are valid ONLY on core-created PLAN-n containers.
+    key = task_key if task_key is not None else spec.task_key
+    kind = str(task_kind or "")
+    is_core_plan_n = kind == "plan" and str(key).startswith("PLAN-")
+
     for i, ref in enumerate(refs):
         tmpl = by_id.get(ref.template_id)
         cid = f"{ref.template_id}#{i}"
         role = role_from_template(tmpl)
-        # M1 PLAN-n critic markers: evaluated by expand_critic, not CodeCheck.
         if str(ref.template_id or "").startswith("plan_expansion_"):
-            results.append(
-                CheckResult(
-                    check_id=cid,
-                    template_id=ref.template_id,
-                    status=ReqStatus.MET,
-                    is_code=True,
-                    required=ref.required,
-                    role="validity",
-                    detail="m1_deterministic_critic",
+            if is_core_plan_n:
+                results.append(
+                    CheckResult(
+                        check_id=cid,
+                        template_id=ref.template_id,
+                        status=ReqStatus.MET,
+                        is_code=True,
+                        required=ref.required,
+                        role="validity",
+                        detail="m1_deterministic_critic",
+                    )
                 )
-            )
+            else:
+                results.append(
+                    CheckResult(
+                        check_id=cid,
+                        template_id=ref.template_id,
+                        status=ReqStatus.FAILED,
+                        is_code=True,
+                        required=ref.required,
+                        role="unknown",
+                        detail="invalid_plan_expansion_marker",
+                    )
+                )
             continue
         if tmpl is None:
             results.append(

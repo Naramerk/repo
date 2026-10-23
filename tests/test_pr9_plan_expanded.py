@@ -40,9 +40,18 @@ async def _boot_plan(rt, *, tasks, questions, expand_after=None):
 
 
 async def _record_hitl_opened(
-    rt, rid: str, *, kind: str = "plan_approval", task_id: str | None = None
+    rt,
+    rid: str,
+    *,
+    kind: str = "plan_expansion",
+    task_id: str | None = None,
+    expand_after_task: str | None = None,
 ) -> None:
     tid = task_id or next(iter(rt.tasks))
+    after = expand_after_task
+    if after is None:
+        t = rt.tasks.get(tid)
+        after = t.spec.task_key if t is not None else "E0"
     await rt._append(
         [
             EventEnvelope(
@@ -57,6 +66,7 @@ async def _record_hitl_opened(
                     "deadline": (rt.clock.now() + timedelta(seconds=60)).isoformat(),
                     "study_id": rt.study.study_id,
                     "task_id": tid,
+                    "expand_after_task": after,
                     "open": True,
                     "cost_rub": 0.0,
                 },
@@ -94,8 +104,9 @@ async def _record_hitl_decided(rt, rid: str, *, delegated_by: str | None = None)
 
 async def _human_expand(rt, **kwargs):
     rid = kwargs.pop("hitl_request_id", None) or f"hitl_{rt.study.study_id}_{len(rt._hitl_decisions)}"
-    kind = kwargs.pop("hitl_kind", "plan_approval")
-    await _record_hitl_opened(rt, rid, kind=kind)
+    kind = kwargs.pop("hitl_kind", "plan_expansion")
+    after = kwargs.get("after_task") or "E0"
+    await _record_hitl_opened(rt, rid, kind=kind, expand_after_task=str(after))
     await _record_hitl_decided(rt, rid, delegated_by=kwargs.pop("delegated_by_event", None))
     return await rt.expand_plan(**kwargs, hitl_request_id=rid)
 
@@ -149,8 +160,18 @@ async def test_expand_after_exp(tmp_path, clock, runtime_cls):
     assert plan_n[0].spec.criteria, "PLAN-n must carry critic criteria"
     events = await rt.store.read_all()
     assert not any(e.type == "PlanExpanded" for e in events)
-    pid = await apply_pending_expansion(rt, plan_n[0].spec.task_key)
-    assert pid is not None
+    # Planner output is the sole apply input (no seed fallback).
+    paid = await rt.start_attempt(plan_n[0].spec.task_key)
+    await rt.executor.record(
+        paid,
+        AgentTaskOutput(
+            summary="plan",
+            expansion_request=ExpansionRequest(
+                tasks=[_task(key="agent_wants_E1", addresses=["Q1"], depends_on=["E0"])],
+                reason="need follow-up",
+            ),
+        ),
+    )
     assert rt._agent_expansions == 1
     assert any(e.type == "PlanExpanded" for e in await rt.store.read_all())
     assert any("/EXP-" in k for k in rt.tasks)
@@ -931,7 +952,7 @@ async def test_hitl_id_single_use(tmp_path, clock, runtime_cls):
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     rid = "hitl_once"
-    await _record_hitl_opened(rt, rid, kind="plan_approval")
+    await _record_hitl_opened(rt, rid, kind="plan_expansion", expand_after_task="E0")
     await _record_hitl_decided(rt, rid, delegated_by="human")
     assert (
         await rt.expand_plan(
@@ -960,7 +981,7 @@ async def test_hitl_id_single_use(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_pending_refute_without_experiment_node(tmp_path, clock, runtime_cls):
-    """PENDING refute via core-derived intent (prediction role) without experiment node."""
+    """Honest refute without prediction role / tests edge still protects (MJ-b)."""
     sid = "st_pendref"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
@@ -983,13 +1004,13 @@ async def test_pending_refute_without_experiment_node(tmp_path, clock, runtime_c
                 route="experiment",
                 depends_on=["E0"],
                 addresses=["Q1"],
-                criteria=[RequirementRef(template_id="value_match")],
+                # validity-only criteria — no prediction role; refute still ADDS protection.
+                criteria=[RequirementRef(template_id="artifact_present")],
                 tests_intent="refute",
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="old")],
     )
-    # No experiment node for E1 — still PENDING; core derives refute from prediction role.
     assert rt.graph.get_node(experiment_node_id(sid, "E1")) is None
     refused = await rt.expand_plan(
         after_task="E0",
@@ -1155,23 +1176,36 @@ async def test_empty_address_refute_not_skippable(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_timeout_counts_toward_agent_quota(tmp_path, clock, runtime_cls):
-    """delegated_by=timeout uses agent quota (not human) and MJ-b."""
+    """delegated_by=timeout uses agent quota and runs MJ-b refutation check."""
     sid = "st_tmo"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
         catalog_version="0.1.0",
-        deadline=clock.now() + timedelta(seconds=300),
+        deadline=clock.now() + timedelta(seconds=600),
         sid=sid,
         finalize_reserve_s=5,
-        max_expansions=1,
+        replan_reserve=0.5,
+        max_expansions=3,
         max_human_expansions=5,
     )
     attach_executor(rt, tmp_path)
     await _boot_plan(
         rt,
-        tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
+        tasks=[
+            _task(key="E0", addresses=["Q1"], depends_on=["PLAN"]),
+            TaskSpec(
+                task_key="E1",
+                title="refute",
+                goal="g",
+                route="experiment",
+                depends_on=["E0"],
+                addresses=["Q1"],
+                criteria=[RequirementRef(template_id="value_match")],
+                tests_intent="refute",
+            ),
+        ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     pid = await _human_expand(
@@ -1181,27 +1215,33 @@ async def test_timeout_counts_toward_agent_quota(tmp_path, clock, runtime_cls):
         origin="plan",
         reason="timeout_delegate",
         delegated_by_event="timeout",
+        replan_allocated_s=0.0,
     )
     assert pid is not None
     assert rt._agent_expansions == 1
     assert rt._human_expansions == 0
-    # Second timeout expand hits agent quota.
-    assert (
-        await _human_expand(
-            rt,
-            after_task="E0",
-            added_tasks=[_task(key="Et2", addresses=["Q1"], depends_on=["E0"])],
-            origin="plan",
-            delegated_by_event="timeout",
-        )
-        is None
+    # MJ-b: timeout path still blocks supersede of protected refute task.
+    refused = await _human_expand(
+        rt,
+        after_task="E0",
+        added_tasks=[_task(key="Et2", addresses=["Q2"], depends_on=["E0"])],
+        added_questions=[QuestionSpec(id="Q2", text="new")],
+        superseded_questions=[QuestionSupersede(new_id="Q2", old_id="Q1")],
+        origin="plan",
+        delegated_by_event="timeout",
+        replan_allocated_s=0.0,
+    )
+    assert refused is None
+    assert any(
+        e.type == "ExpansionRefused" and e.payload.get("reason") == "has_refutation"
+        for e in await rt.store.read_all()
     )
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
 async def test_hitl_wrong_kind_refused(tmp_path, clock, runtime_cls):
-    """HitlDecided for non-plan gate → invalid_hitl."""
+    """HitlDecided for non-plan_expansion gate (incl. hypotheses) → invalid_hitl."""
     sid = "st_wrongk"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
@@ -1220,20 +1260,179 @@ async def test_hitl_wrong_kind_refused(tmp_path, clock, runtime_cls):
         tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
-    rid = "hitl_report"
-    await _record_hitl_opened(rt, rid, kind="report")
-    await _record_hitl_decided(rt, rid, delegated_by="human")
-    assert (
-        await rt.expand_plan(
-            after_task="E0",
-            added_tasks=[_task(key="Eh", addresses=["Q1"], depends_on=["E0"])],
-            origin="plan",
-            hitl_request_id=rid,
+    for kind in ("report", "hypotheses", "plan_approval"):
+        rid = f"hitl_{kind}"
+        await _record_hitl_opened(rt, rid, kind=kind, expand_after_task="E0")
+        await _record_hitl_decided(rt, rid, delegated_by="human")
+        assert (
+            await rt.expand_plan(
+                after_task="E0",
+                added_tasks=[_task(key=f"Eh_{kind}", addresses=["Q1"], depends_on=["E0"])],
+                origin="plan",
+                hitl_request_id=rid,
+            )
+            is None
         )
-        is None
-    )
     assert any(
         e.type == "ExpansionRefused" and e.payload.get("reason") == "invalid_hitl"
+        for e in await rt.store.read_all()
+    )
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_plan_expansion_marker_not_met_on_exp(tmp_path, clock, runtime_cls):
+    """MAJOR-1: plan_expansion_* on EXP task → FAILED, not MET bypass."""
+    from coscientist.checks.evaluate import evaluate_task_checks
+    from coscientist.core.domain import ReqStatus
+
+    sid = "st_mark"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    attach_executor(rt, tmp_path)
+    await _boot_plan(
+        rt,
+        tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    forged = TaskSpec(
+        task_key="E0",
+        title="t",
+        goal="g",
+        route="experiment",
+        depends_on=["PLAN"],
+        addresses=["Q1"],
+        criteria=[RequirementRef(template_id="plan_expansion_schema")],
+    )
+    checks = evaluate_task_checks(
+        rt.catalog,
+        forged,
+        AgentTaskOutput(summary="x"),
+        rt.artifacts,
+        task_kind="experiment",
+        task_key="E0",
+    )
+    assert checks and checks[0].status == ReqStatus.FAILED
+    assert checks[0].detail == "invalid_plan_expansion_marker"
+    # Same marker on core PLAN-n → MET.
+    plan_checks = evaluate_task_checks(
+        rt.catalog,
+        forged.model_copy(update={"task_key": "PLAN-1"}),
+        AgentTaskOutput(summary="x"),
+        rt.artifacts,
+        task_kind="plan",
+        task_key="PLAN-1",
+    )
+    assert plan_checks and plan_checks[0].status == ReqStatus.MET
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_critic_rejects_plan_expansion_marker_on_added(tmp_path, clock, runtime_cls):
+    """MAJOR-1: critic rejects added tasks with plan_expansion_* markers."""
+    from coscientist.core.expand_critic import critic_gate
+
+    sid = "st_critmark"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=3,
+    )
+    attach_executor(rt, tmp_path)
+    await _boot_plan(
+        rt,
+        tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    req = ExpansionRequest(
+        tasks=[
+            TaskSpec(
+                task_key="E1",
+                title="t",
+                goal="g",
+                route="experiment",
+                depends_on=["E0"],
+                addresses=["Q1"],
+                criteria=[RequirementRef(template_id="plan_expansion_schema")],
+            )
+        ],
+        reason="forge",
+    )
+    detail = critic_gate(rt, req, after_task="E0")
+    assert detail is not None and "forbidden_plan_expansion_marker" in detail
+    # Also require real catalog template.
+    req2 = ExpansionRequest(
+        tasks=[
+            TaskSpec(
+                task_key="E2",
+                title="t",
+                goal="g",
+                route="experiment",
+                depends_on=["E0"],
+                addresses=["Q1"],
+                criteria=[RequirementRef(template_id="not_in_catalog_xyz")],
+            )
+        ],
+        reason="forge",
+    )
+    detail2 = critic_gate(rt, req2, after_task="E0")
+    assert detail2 is not None and "missing_catalog_criteria" in detail2
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_false_confirm_cannot_unprotect_prediction_task(tmp_path, clock, runtime_cls):
+    """MAJOR-2: planner confirm cannot strip structure-based protection."""
+    sid = "st_fconf"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    attach_executor(rt, tmp_path)
+    await _boot_plan(
+        rt,
+        tasks=[
+            _task(key="E0", addresses=["Q1"], depends_on=["PLAN"]),
+            TaskSpec(
+                task_key="E1",
+                title="pred",
+                goal="g",
+                route="experiment",
+                depends_on=["E0"],
+                addresses=["Q1"],
+                criteria=[RequirementRef(template_id="value_match")],  # prediction
+                tests_intent="confirm",  # false confirm — must not unprotect
+            ),
+        ],
+        questions=[QuestionSpec(id="Q1", text="old")],
+    )
+    refused = await rt.expand_plan(
+        after_task="E0",
+        added_tasks=[_task(key="E2", addresses=["Q1"], depends_on=["E0"])],
+        superseded_tasks=["E1"],
+        origin="emergent",
+    )
+    assert refused is None
+    assert rt.tasks[f"{sid}/E1"].state == TaskState.PENDING
+    assert any(
+        e.type == "ExpansionRefused" and e.payload.get("reason") == "has_refutation"
         for e in await rt.store.read_all()
     )
     await close_runtime(rt)

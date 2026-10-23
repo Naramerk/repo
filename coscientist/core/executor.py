@@ -582,6 +582,8 @@ class Executor:
             self.artifacts,
             review_statuses=self.review_statuses,
             attempt_id=attempt_id,
+            task_kind=str(getattr(task.kind, "value", task.kind)),
+            task_key=task.spec.task_key,
         )
         for c in checks:
             if not c.is_code and c.status == ReqStatus.UNASSESSED:

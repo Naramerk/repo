@@ -126,7 +126,8 @@ class HitlForkMixin(CostlyHitlMixin):
         """
         if not expansion:
             return
-        if h.kind not in ("plan", "plan_approval", "hypotheses"):
+        # Core expand_plan accepts only kind=plan_expansion (bound to after_task).
+        if h.kind != "plan_expansion":
             return
         from coscientist.core.domain import QuestionSpec, QuestionSupersede, TaskSpec
         from coscientist.core.expand import expand_plan
