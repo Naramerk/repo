@@ -614,6 +614,11 @@ def _classify(
         note = f"{note}; OOM not detectable" if note else "OOM not detectable"
 
     def fin(**extra: object) -> SandboxResult:
+        if "timeout_kill" not in extra:
+            extra = {
+                **extra,
+                "timeout_kill": kill_cause if timed_out else None,
+            }
         return _result(
             stdout=out_b,
             stderr=err_b,
@@ -625,7 +630,6 @@ def _classify(
             oom_detectable=oom_detectable,
             note=note,
             cpu_usage_s=cpu_usage_s,
-            timeout_kill=kill_cause if timed_out else None,
             **extra,
         )
 

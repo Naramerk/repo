@@ -615,8 +615,8 @@ def test_countable_requires_attempt_binding(tmp_path):
     assert cr.effect.get("produced_by_call_id", "").startswith("noattempt:")
 
 
-def test_exec_runs_timeout_is_scientific_failed_countable(tmp_path):
-    """Sleep-bypass → FAILED with countable effect (toward k_ref), not infra."""
+def test_exec_runs_timeout_is_noncountable_refute_unresolved(tmp_path):
+    """Sleep-bypass → FAILED guest timeout; never countable; refute_unresolved."""
     _require_hard()
     arts = LocalArtifactStore(tmp_path)
     check = CodeCheck(
@@ -636,10 +636,11 @@ def test_exec_runs_timeout_is_scientific_failed_countable(tmp_path):
         attempt_id="st/E1#1",
     )
     assert cr.status is ReqStatus.FAILED
-    assert "timeout" in (cr.detail or "")
     assert cr.effect is not None
-    assert cr.effect.get("countable") is True
-    assert cr.effect.get("observation_only") is not True
+    assert cr.effect.get("timeout_kind") == "idle_timeout"
+    assert cr.effect.get("countable") is False
+    assert cr.effect.get("observation_only") is True
+    assert cr.effect.get("refute_unresolved") is True
 
 
 @pytest.mark.asyncio
@@ -1511,10 +1512,26 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
     )
     from coscientist.core.finalize import IDLE_TIMEOUT_RU, TIMEOUT_BUDGET_RU
 
-    for _ in range(2):
+    for i in range(2):
         aid = await rt.start_attempt("E1")
+        # Distinct digests so same-digest rejection does not fire before timeout.
+        out_name = f"note_{i}.txt"
+        art = arts.put(
+            f"attempt-{i}".encode(),
+            make_tool_ref(f"{aid}:1", tool="agent"),
+            name=out_name,
+            media_type="text/plain",
+        )
         result = await ex.record(
-            aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
+            aid,
+            AgentTaskOutput(
+                outputs={
+                    out_name: ArtifactHandle(
+                        artifact_id=art.artifact_id, name=out_name
+                    )
+                },
+                claim=Outcome.SUCCESS,
+            ),
         )
         assert result.reason in (
             TaskReason.IDLE_TIMEOUT.value,
@@ -1523,8 +1540,9 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
         row = rt.results.get(aid)
         assert row and row.get("result_class") == "timeout"
         assert row.get("charged") is True
+        # Do not tick() here — tick would auto-start the retry and race
+        # with the next start_attempt in this loop.
         clock.advance(timedelta(seconds=1))
-        await rt.tick()
 
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     assert task.state.value == "DONE" or str(task.state) == "DONE"
@@ -1630,8 +1648,8 @@ async def test_infra_failure_does_not_charge_attempt(
     att = rt.attempts.get(aid) or {}
     assert att.get("charged") is False
     # Uncharged → charged budget still allows a real attempt (max_attempts=2).
+    # Avoid tick() auto-start; start the next attempt explicitly.
     clock.advance(timedelta(seconds=1))
-    await rt.tick()
     aid2 = await rt.start_attempt("E1")
     assert aid2 != aid
     # Second attempt can succeed (hard path) without the infra counting.
@@ -1705,7 +1723,7 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
         TaskReason.SANDBOX_TIMEOUT.value,
     )
     clock.advance(timedelta(seconds=1))
-    await rt.tick()
+    # Explicit retry (no tick auto-start) with the same empty digest.
     aid2 = await rt.start_attempt("E1")
     r2 = await ex.record(aid2, empty)
     assert r2.reason == TaskReason.SAME_DIGEST_RETRY.value
