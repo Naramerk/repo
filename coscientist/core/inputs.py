@@ -250,21 +250,22 @@ def claim_nodes_from_attempt(
     graph: Any | None = None,
     attempt_outcome: str = "SUCCESS",
     derived: dict[str, Any] | None = None,
+    derive_attrs: Any | None = None,
 ) -> tuple[list[EventEnvelope], list[dict[str, str]]]:
     """Emit ``GraphNodeUpserted`` (+ ``about`` edges) for agent claims.
 
     Returns ``(events, drops)`` where drops are ``{key, reason}`` for rejected
     claims (never raises). Agent fields are whitelisted; counting fields come
-    from ``derived`` (Executor). Claim ids are namespaced per attempt. Unknown
-    targets are rejected — never auto-created. Existing target nodes are never
-    clobbered. Re-upsert of the same namespaced id keeps worst provenance.
+    from ``derive_attrs(raw, validated)`` or static ``derived`` (Executor).
+    Claim ids are namespaced per attempt. Unknown targets are rejected — never
+    auto-created. Existing target nodes are never clobbered. Re-upsert of the
+    same namespaced id keeps worst provenance.
     """
     drops: list[dict[str, str]] = []
     if attempt_outcome == "FAILED":
         return [], drops
     if provenance not in VALID_PROVENANCE:
         provenance = "stub"  # type: ignore[assignment]
-    core = dict(derived or {})
     events: list[EventEnvelope] = []
     for i, raw in enumerate(claims):
         if not isinstance(raw, dict):
@@ -311,6 +312,11 @@ def claim_nodes_from_attempt(
                     new_prov = worst_provenance(old, provenance)  # type: ignore[arg-type]
 
         # Core-derived counting fields (Executor); never from agent whitelist.
+        # validated=True: target/id/about checks above passed.
+        if derive_attrs is not None:
+            core = dict(derive_attrs(raw, True) or {})
+        else:
+            core = dict(derived or {})
         attrs["provenance"] = new_prov
         attrs["attempt_id"] = attempt_id
         attrs["attempt_outcome"] = attempt_outcome
@@ -393,13 +399,14 @@ def uses_claim_graph_events(
         return []
     exp_id = experiment_node_id(study_id, task.spec.task_key)
     events: list[EventEnvelope] = []
+    # Do not emit empty-attrs upserts that would clobber richer nodes.
     if graph is None or graph.get_node(exp_id) is None:
         node = GraphNode(
             node_id=exp_id,
             kind="experiment",
             study_id=study_id,
             ref_id=task.spec.task_key,
-            attrs={},
+            attrs={"task_key": task.spec.task_key},
             created_at=now,
         )
         events.append(

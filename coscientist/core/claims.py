@@ -14,7 +14,12 @@ from coscientist.core.domain import (
     worst_provenance,
 )
 from coscientist.core.graph import GraphStore
-from coscientist.core.ids import hypothesis_node_id, question_node_id
+from coscientist.core.ids import (
+    claim_node_id,
+    experiment_node_id,
+    hypothesis_node_id,
+    question_node_id,
+)
 from coscientist.core.rules import (
     DEFAULT_TESTS_INTENT,
     TestsIntent,
@@ -75,11 +80,17 @@ class RuntimeClaim:
     confirming_evidence_ids: set[str] | frozenset[str] | list[str] | None = None
     threshold_source_evidence_ids: set[str] | frozenset[str] | list[str] | None = None
     target: str = ""
+    target_kind: Literal["question", "hypothesis"] = "question"
     node_id: str = ""
 
     def __post_init__(self) -> None:
         if self.intent not in ("confirm", "refute"):
             self.intent = DEFAULT_TESTS_INTENT
+
+    @property
+    def group_key(self) -> str:
+        """Kind-prefixed target so Q and H with the same logical id do not merge."""
+        return f"{self.target_kind}:{self.target}"
 
     @property
     def stance(self) -> str:
@@ -169,14 +180,67 @@ def _coerce_id_set(val: Any) -> frozenset[str] | None | Literal[False]:
         return False
 
 
+def _task_key_from_attempt_id(attempt_id: str) -> str | None:
+    """``{study}/{task_key}#{n}`` → ``task_key``."""
+    if not attempt_id or "#" not in attempt_id:
+        return None
+    left = attempt_id.rsplit("#", 1)[0]
+    if "/" not in left:
+        return None
+    return left.rsplit("/", 1)[-1]
+
+
+def intent_from_producing_experiment(
+    graph: GraphStore | None,
+    *,
+    study_id: str,
+    attempt_id: str,
+    target_logical: str,
+    target_kind: str,
+) -> TestsIntent:
+    """Read ``tests.intent`` from the producing experiment's tests edge.
+
+    Path: attempt_id → task_key → experiment node → that experiment's
+    ``tests`` edge to the hypothesis (DESIGN_M1 §3). Falls back to confirm.
+    """
+    if graph is None or target_kind != "hypothesis" or not target_logical:
+        return DEFAULT_TESTS_INTENT
+    task_key = _task_key_from_attempt_id(attempt_id)
+    if not task_key:
+        return DEFAULT_TESTS_INTENT
+    exp_id = experiment_node_id(study_id, task_key)
+    hid = (
+        target_logical
+        if target_logical.startswith(f"{study_id}:hypothesis:")
+        else hypothesis_node_id(study_id, target_logical)
+    )
+    for e in graph.edges_from(exp_id):
+        if e.kind != "tests" or e.dst_id != hid:
+            continue
+        raw = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)
+        if raw in ("confirm", "refute"):
+            return raw  # type: ignore[return-value]
+    return DEFAULT_TESTS_INTENT
+
+
 def intent_from_tests_edge(
     graph: GraphStore | None,
     *,
     study_id: str,
     target_logical: str,
     target_kind: str,
+    attempt_id: str = "",
 ) -> TestsIntent:
-    """Read ``tests.intent`` from experiment→hypothesis edge (#12 / DESIGN)."""
+    """Backward-compatible wrapper; prefer producing-experiment intent."""
+    if attempt_id:
+        return intent_from_producing_experiment(
+            graph,
+            study_id=study_id,
+            attempt_id=attempt_id,
+            target_logical=target_logical,
+            target_kind=target_kind,
+        )
+    # Legacy: first tests→hypothesis edge (tests only; prefer attempt_id path).
     if graph is None or target_kind != "hypothesis" or not target_logical:
         return DEFAULT_TESTS_INTENT
     hid = (
@@ -220,8 +284,6 @@ def resolve_existing_target(
 
 def namespaced_claim_id(study_id: str, attempt_id: str, agent_key: str) -> str | None:
     """Claim ids are namespaced per attempt; foreign full ids are rejected."""
-    from coscientist.core.ids import claim_node_id
-
     key = str(agent_key)
     prefix = f"{study_id}:claim:"
     ns = f"{prefix}{attempt_id}:"
@@ -312,9 +374,10 @@ def runtime_claim_from_node(
             else:
                 return None, "about_dst_kind"
 
-        intent = intent_from_tests_edge(
+        intent = intent_from_producing_experiment(
             graph,
             study_id=study_id,
+            attempt_id=aid or "",
             target_logical=target,
             target_kind=target_kind,
         )
@@ -336,6 +399,7 @@ def runtime_claim_from_node(
                 confirming_evidence_ids=conf,
                 threshold_source_evidence_ids=thr,
                 target=target,
+                target_kind=target_kind,  # type: ignore[arg-type]
                 node_id=node.node_id,
             ),
             None,
@@ -357,10 +421,11 @@ def filtered_claims_by_target(
     study_id: str,
     results: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, list[RuntimeClaim]]:
-    """Group claims by target; about cardinality + coerce applied uniformly.
+    """Group claims by ``{kind}:{logical}``; about + coerce applied uniformly.
 
-    Used by both ``dispositions`` and ``compute_verdict_snapshots`` so the
-    P2 snapshot and the report cannot diverge.
+    Keys are kind-prefixed (``question:Q1``, ``hypothesis:H1``) so a question
+    and hypothesis that share a logical id never merge. Used by both
+    ``dispositions`` and ``compute_verdict_snapshots``.
     """
     grouped: dict[str, list[RuntimeClaim]] = defaultdict(list)
     for node in graph.nodes_by_kind("claim"):
@@ -369,8 +434,28 @@ def filtered_claims_by_target(
         )
         if rc is None or not rc.target:
             continue
-        grouped[rc.target].append(rc)
+        grouped[rc.group_key].append(rc)
     return dict(grouped)
+
+
+def claims_for_ref(
+    by_target: Mapping[str, list[RuntimeClaim]],
+    ref: str,
+    *,
+    prefer: Literal["question", "hypothesis", "either"] = "either",
+) -> list[RuntimeClaim]:
+    """Lookup claims for a bind/report ref (logical id or kind-prefixed)."""
+    if ":" in ref and ref.split(":", 1)[0] in ("question", "hypothesis"):
+        return list(by_target.get(ref) or [])
+    qk, hk = f"question:{ref}", f"hypothesis:{ref}"
+    if prefer == "question":
+        return list(by_target.get(qk) or [])
+    if prefer == "hypothesis":
+        return list(by_target.get(hk) or [])
+    # either: prefer question when both exist (bind refs are usually questions).
+    if qk in by_target:
+        return list(by_target[qk])
+    return list(by_target.get(hk) or [])
 
 
 def claims_missing_about(graph: GraphStore) -> list[str]:
@@ -389,28 +474,46 @@ def compute_verdict_snapshots(
     study_id: str,
     study: Study | None = None,
     results: Mapping[str, Mapping[str, Any]] | None = None,
-    k: int = 1,
+    k: int | None = None,
     any_experiment_done: bool = False,
     refs: Sequence[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """ref → snapshot dict used for ``InputSpec.kind=verdict`` P2 digests.
 
+    ``k`` defaults to Study ``confirmations_needed`` (same as ``dispositions``).
     When ``refs`` is set, only those logical ids are computed (scoped bind).
+    Output keys are the caller's refs (logical ids), not kind-prefixed.
     """
     k_ref = study.refutations_needed if study is not None else 1
     priority = study.refutation_priority if study is not None else False
+    conf_k = (
+        k
+        if k is not None
+        else (study.confirmations_needed if study is not None else 1)
+    )
     by_target = filtered_claims_by_target(
         graph, study_id=study_id, results=results
     )
     if refs is not None:
-        want = set(refs)
-        by_target = {r: by_target[r] for r in want if r in by_target}
+        ref_list = list(refs)
+    else:
+        # All logical ids present (question preferred when both share a name).
+        seen: set[str] = set()
+        ref_list = []
+        for key in by_target:
+            logical = key.split(":", 1)[-1] if ":" in key else key
+            if logical not in seen:
+                seen.add(logical)
+                ref_list.append(logical)
     out: dict[str, dict[str, Any]] = {}
-    for ref, claims in by_target.items():
+    for ref in ref_list:
+        claims = claims_for_ref(by_target, ref, prefer="either")
+        if not claims and refs is None:
+            continue
         v, by_lit = verdict(
             claims,
             any_experiment_done,
-            k,
+            conf_k,
             refutations_needed=k_ref,
             refutation_priority=priority,
         )
@@ -427,7 +530,7 @@ def compute_verdict_snapshots(
             "provenance": source,
             "refutations_needed": k_ref,
             "refutation_priority": priority,
-            "k": k,
+            "k": conf_k,
         }
     return out
 
@@ -445,10 +548,23 @@ def hypothesis_verdicts(
     study_id: str,
     study: Study | None = None,
     results: Mapping[str, Mapping[str, Any]] | None = None,
-    k: int = 1,
+    k: int | None = None,
     any_experiment_done: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Verdicts for hypothesis targets (for report payload)."""
+    by_target = filtered_claims_by_target(
+        graph, study_id=study_id, results=results
+    )
+    hyp_refs = [
+        key.split(":", 1)[-1]
+        for key in by_target
+        if key.startswith("hypothesis:")
+    ]
+    # Also include hypothesis nodes that may lack claims yet.
+    for node in graph.nodes_by_kind("hypothesis"):
+        logical = _logical_id_from_node(node.node_id, study_id, "hypothesis")
+        if logical not in hyp_refs:
+            hyp_refs.append(logical)
     snaps = compute_verdict_snapshots(
         graph,
         study_id=study_id,
@@ -456,21 +572,17 @@ def hypothesis_verdicts(
         results=results,
         k=k,
         any_experiment_done=any_experiment_done,
+        refs=hyp_refs,
     )
     out: dict[str, dict[str, Any]] = {}
     for ref, snap in snaps.items():
         hid = hypothesis_node_id(study_id, ref)
         if graph.get_node(hid) is not None or ref.startswith(f"{study_id}:hypothesis:"):
             out[ref] = snap
-        else:
-            # Only include if any claim about this ref points at a hypothesis node.
-            for c in filtered_claims_by_target(
-                graph, study_id=study_id, results=results
-            ).get(ref, []):
-                about = [
-                    e for e in graph.edges_from(c.node_id) if e.kind == "about"
-                ]
-                if about and (n := graph.get_node(about[0].dst_id)) and n.kind == "hypothesis":
-                    out[ref] = snap
-                    break
+            continue
+        for c in claims_for_ref(by_target, ref, prefer="hypothesis"):
+            about = [e for e in graph.edges_from(c.node_id) if e.kind == "about"]
+            if about and (n := graph.get_node(about[0].dst_id)) and n.kind == "hypothesis":
+                out[ref] = snap
+                break
     return out

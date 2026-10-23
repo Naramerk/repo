@@ -667,9 +667,9 @@ def test_dispositions_from_verdict_counting_claims():
     )
     assert d["Q1"]["disposition"] == "answered"
     assert d["Q1"]["verdict"] == "supported"
-    # Same filter as snapshots
+    # Same filter as snapshots (kind-prefixed keys)
     by = filtered_claims_by_target(g, study_id=sid, results={aid: {"outcome": "SUCCESS"}})
-    assert "Q1" in by and by["Q1"][0].counts()
+    assert "question:Q1" in by and by["question:Q1"][0].counts()
 
 
 @pytest.mark.asyncio
@@ -736,3 +736,516 @@ def test_empty_provenance_list_is_stub():
     from coscientist.core.domain import worst_provenance
 
     assert worst_provenance() == "stub"
+
+
+def test_qh_logical_id_collision_does_not_merge():
+    """Question and hypothesis with the same logical id stay separate."""
+    from coscientist.core.ids import hypothesis_node_id
+
+    g = GraphStore(default_execution_registry())
+    sid = "st_qh"
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    _seed_question(g, sid, "X1")
+    hid = hypothesis_node_id(sid, "X1")
+    g.upsert_node(
+        GraphNode(
+            node_id=hid,
+            kind="hypothesis",
+            study_id=sid,
+            ref_id="X1",
+            attrs={"formulation": "h"},
+        )
+    )
+    aid_q = f"{sid}/EQ#1"
+    aid_h = f"{sid}/EH#1"
+    evs_q, _ = claim_nodes_from_attempt(
+        study_id=sid,
+        attempt_id=aid_q,
+        provenance="real",
+        claims=[{"id": "cq", "target": "X1"}],
+        now=now,
+        graph=g,
+        derived=_DERIVED_OK,
+    )
+    _apply_events(g, evs_q)
+    # Force about to hypothesis for second claim via full node id target.
+    evs_h, drops_h = claim_nodes_from_attempt(
+        study_id=sid,
+        attempt_id=aid_h,
+        provenance="real",
+        claims=[{"id": "ch", "target": hid}],
+        now=now,
+        graph=g,
+        derived=_DERIVED_OK,
+    )
+    assert drops_h == []
+    _apply_events(g, evs_h)
+    by = filtered_claims_by_target(g, study_id=sid)
+    assert "question:X1" in by
+    assert "hypothesis:X1" in by
+    assert by["question:X1"][0].target_kind == "question"
+    assert by["hypothesis:X1"][0].target_kind == "hypothesis"
+
+
+def test_criterion_status_not_met_from_failed_check():
+    """checked_against → FAILED ReqStatus ⇒ criterion_status=not_met."""
+    from coscientist.core.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
+    from coscientist.core.executor import _derive_claim_core_attrs
+
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    task = Task(
+        task_id="st/E0",
+        kind=TaskKind.EXPERIMENT,
+        spec=TaskSpec(
+            task_key="E0",
+            title="e",
+            goal="g",
+            route="experiment",
+            criteria=[],
+        ),
+        state=TaskState.DONE,
+        outcome=TaskOutcome.SUCCESS,
+        deadline=now,
+    )
+    checks = [
+        CheckResult(
+            check_id="value_match#0",
+            template_id="value_match",
+            status=ReqStatus.FAILED,
+            is_code=True,
+            required=False,
+        )
+    ]
+    attrs = _derive_claim_core_attrs(
+        task,
+        TaskOutcome.SUCCESS,
+        raw={"checked_against": "value_match", "target": "Q1"},
+        checks=checks,
+        graph=None,
+        study_id="st",
+        validated=True,
+    )
+    assert attrs["criterion_status"] == "not_met"
+    assert attrs["accepted"] is True
+    assert attrs["frozen"] is False  # no freeze node
+
+
+@pytest.mark.asyncio
+async def test_runtime_refuted_end_to_end(tmp_path, clock, runtime_cls):
+    """SUCCESS attempt + optional failed checked_against ⇒ refuted at runtime."""
+    from coscientist.checks.catalog import minimal_test_catalog
+    from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
+    from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
+
+    sid = "st_ref"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=180),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    arts = LocalArtifactStore(tmp_path / "arts")
+    catalog = minimal_test_catalog()
+    rt.make_executor(
+        catalog,
+        arts,
+        get_attempt=lambda aid: type(
+            "Att",
+            (),
+            {
+                "attempt_id": rt.attempts[aid]["attempt_id"],
+                "closed": rt.attempts[aid].get("closed", False),
+                "provenance": rt.attempts[aid].get("provenance", "real"),
+                "task_id": rt.attempts[aid]["task_id"],
+                "study_id": rt.attempts[aid]["study_id"],
+            },
+        )(),
+        get_task=lambda tid: rt.tasks[tid],
+        on_events=rt._project_local,
+    )
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E0",
+                title="producer",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[
+                    RequirementRef(template_id="artifact_present", required=True),
+                    RequirementRef(template_id="value_match", required=False),
+                ],
+                addresses=["Q1"],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    # Criterion nodes frozen at accept_plan.
+    assert any(n.kind == "criterion" for n in rt.graph.nodes_by_kind("criterion"))
+    aid0 = await rt.start_attempt("E0", provenance="real")
+    content = b'{"count": 999}'  # fails optional value_match (target 225)
+    art = arts.put(
+        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
+    )
+    await rt.executor.record(
+        aid0,
+        AgentTaskOutput(
+            summary="ok",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            values={"count": 999},
+            claims=[
+                {
+                    "id": "ref",
+                    "target": "Q1",
+                    "checked_against": "value_match",
+                }
+            ],
+        ),
+    )
+    claim = next(iter(rt.graph.nodes_by_kind("claim")))
+    assert claim.attrs["criterion_status"] == "not_met"
+    assert claim.attrs["accepted"] is True
+    assert claim.attrs["frozen"] is True
+    d = dispositions(
+        tasks=rt.tasks,
+        plans=rt.plans,
+        graph=rt.graph,
+        study=rt.study,
+        results=rt.results,
+    )
+    assert d["Q1"]["disposition"] == "refuted"
+    assert d["Q1"]["verdict"] == "refuted"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_production_make_executor_wires_get_graph(tmp_path, clock, runtime_cls):
+    """get_graph is live via make_executor — not only tests/helpers."""
+    from coscientist.checks.catalog import minimal_test_catalog
+    from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
+    from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
+
+    sid = "st_mkex"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=180),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    arts = LocalArtifactStore(tmp_path / "arts")
+    ex = rt.make_executor(
+        minimal_test_catalog(),
+        arts,
+        get_attempt=lambda aid: type(
+            "Att",
+            (),
+            {
+                "attempt_id": rt.attempts[aid]["attempt_id"],
+                "closed": rt.attempts[aid].get("closed", False),
+                "provenance": rt.attempts[aid].get("provenance", "real"),
+                "task_id": rt.attempts[aid]["task_id"],
+                "study_id": rt.attempts[aid]["study_id"],
+            },
+        )(),
+        get_task=lambda tid: rt.tasks[tid],
+        on_events=rt._project_local,
+    )
+    assert ex.get_graph is not None
+    assert ex.get_graph() is rt.graph
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E0",
+                title="producer",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    aid0 = await rt.start_attempt("E0")
+    art = arts.put(
+        b'{"count": 225}',
+        make_tool_ref(f"{aid0}:1"),
+        name="main",
+        media_type="application/json",
+    )
+    await ex.record(
+        aid0,
+        AgentTaskOutput(
+            summary="ok",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            values={"count": 225},
+            claims=[{"id": "c1", "target": "Q1"}],
+        ),
+    )
+    claims = list(rt.graph.nodes_by_kind("claim"))
+    assert len(claims) == 1
+    about = [e for e in rt.graph.edges_from(claims[0].node_id) if e.kind == "about"]
+    assert len(about) == 1
+    await close_runtime(rt)
+
+
+def test_intent_from_producing_experiment_two_opposite():
+    """Two experiments, opposite tests.intent → claims pick their producer."""
+    from coscientist.core.claims import intent_from_producing_experiment, runtime_claim_from_node
+    from coscientist.core.ids import experiment_node_id, hypothesis_node_id
+
+    g = GraphStore(default_execution_registry())
+    sid = "st_dual"
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    hid = hypothesis_node_id(sid, "H1")
+    g.upsert_node(
+        GraphNode(
+            node_id=hid, kind="hypothesis", study_id=sid, ref_id="H1", attrs={}
+        )
+    )
+    for key, intent in (("E_confirm", "confirm"), ("E_refute", "refute")):
+        eid = experiment_node_id(sid, key)
+        g.upsert_node(
+            GraphNode(
+                node_id=eid,
+                kind="experiment",
+                study_id=sid,
+                ref_id=key,
+                attrs={"task_key": key},
+            )
+        )
+        g.add_edge(
+            GraphEdge(
+                edge_id=f"tests:{eid}:{hid}",
+                kind="tests",
+                study_id=sid,
+                src_id=eid,
+                dst_id=hid,
+                attrs={"intent": intent},
+                created_at=now,
+            )
+        )
+    aid_c = f"{sid}/E_confirm#1"
+    aid_r = f"{sid}/E_refute#1"
+    assert (
+        intent_from_producing_experiment(
+            g,
+            study_id=sid,
+            attempt_id=aid_c,
+            target_logical="H1",
+            target_kind="hypothesis",
+        )
+        == "confirm"
+    )
+    assert (
+        intent_from_producing_experiment(
+            g,
+            study_id=sid,
+            attempt_id=aid_r,
+            target_logical="H1",
+            target_kind="hypothesis",
+        )
+        == "refute"
+    )
+    for aid, want in ((aid_c, "confirm"), (aid_r, "refute")):
+        evs, drops = claim_nodes_from_attempt(
+            study_id=sid,
+            attempt_id=aid,
+            provenance="real",
+            claims=[{"id": "c", "target": "H1"}],
+            now=now,
+            graph=g,
+            derived=_DERIVED_OK,
+        )
+        assert drops == []
+        _apply_events(g, evs)
+        node = g.get_node(claim_node_id(sid, f"{aid}:c"))
+        rc, reason = runtime_claim_from_node(node, study_id=sid, graph=g)
+        assert reason is None and rc is not None
+        assert rc.intent == want
+
+
+@pytest.mark.asyncio
+async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtime_cls):
+    """VerdictSnapshotsRecorded: record → reopen → read; claim invalidates."""
+    from coscientist.core.artifacts import make_tool_ref
+    from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
+
+    sid = "st_snap_replay"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=180),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E0",
+                title="producer",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            ),
+            TaskSpec(
+                task_key="E1",
+                title="consumer",
+                goal="g",
+                route="experiment",
+                depends_on=["E0"],
+                inputs=[InputSpec(kind="verdict", ref="Q1")],
+                addresses=["Q1"],
+            ),
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    aid0 = await rt.start_attempt("E0", provenance="real")
+    art = arts.put(
+        b'{"count": 225}',
+        make_tool_ref(f"{aid0}:1"),
+        name="main",
+        media_type="application/json",
+    )
+    await rt.executor.record(
+        aid0,
+        AgentTaskOutput(
+            summary="ok",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            values={"count": 225},
+            claims=[{"id": "c1", "target": "Q1"}],
+        ),
+    )
+    await rt.start_attempt("E1")
+    assert "Q1" in rt.verdict_snapshots
+    snap_before = dict(rt.verdict_snapshots["Q1"])
+    await close_runtime(rt)
+
+    rt2 = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
+    )
+    assert "Q1" in rt2.verdict_snapshots
+    assert rt2.verdict_snapshots["Q1"]["verdict"] == snap_before["verdict"]
+
+    # New claim about Q1 invalidates only that target.
+    rt2.verdict_snapshots["OTHER"] = {"verdict": "untested", "k": 1}
+    claim_nodes = list(rt2.graph.nodes_by_kind("claim"))
+    assert claim_nodes
+    rt2._invalidate_verdict_snapshots_for_target("Q1")
+    assert "Q1" not in rt2.verdict_snapshots
+    assert "OTHER" in rt2.verdict_snapshots
+    await close_runtime(rt2)
+
+
+def test_hypothesis_verdicts_not_in_bind_snapshot_cache():
+    """_fold_finalized_graph keeps hypothesis_verdicts off the bind cache."""
+    from coscientist.core.local_project import LocalProjectMixin
+
+    class _T(LocalProjectMixin):
+        def __init__(self) -> None:
+            self.graph = GraphStore(default_execution_registry())
+            self.verdict_snapshots = {"Q_bind": {"verdict": "supported", "k": 1}}
+            self.hypothesis_verdicts = {}
+
+    t = _T()
+    t._fold_finalized_graph(
+        "st_hyp",
+        {
+            "question_dispositions": {},
+            "hypothesis_verdicts": {"H1": {"verdict": "survived", "k": 1}},
+            "terminal_reason": "completed",
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    assert "Q_bind" in t.verdict_snapshots
+    assert "H1" not in t.verdict_snapshots
+    assert t.hypothesis_verdicts.get("H1", {}).get("verdict") == "survived"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="R17 runtime metadata not wired in M1 PR8 (DESIGN_M1 §12)",
+)
+@pytest.mark.asyncio
+async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
+    """xfail: Executor does not yet stamp criterion_frozen_at_seq on claims."""
+    from coscientist.core.artifacts import make_tool_ref
+    from coscientist.core.domain import AgentTaskOutput, ArtifactHandle, RequirementRef
+
+    sid = "st_r17"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=180),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E0",
+                title="producer",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    aid0 = await rt.start_attempt("E0")
+    art = arts.put(
+        b'{"count": 225}',
+        make_tool_ref(f"{aid0}:1"),
+        name="main",
+        media_type="application/json",
+    )
+    await rt.executor.record(
+        aid0,
+        AgentTaskOutput(
+            summary="ok",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            values={"count": 225},
+            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
+        ),
+    )
+    claim = next(iter(rt.graph.nodes_by_kind("claim")))
+    # Will XPASS once R17 metadata is wired; until then AssertionError → xfail.
+    assert claim.attrs.get("criterion_frozen_at_seq") is not None
+    await close_runtime(rt)

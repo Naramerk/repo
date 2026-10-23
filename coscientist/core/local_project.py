@@ -29,6 +29,7 @@ class LocalProjectMixin:
     _intake_refusal: IntakeRefuse | None
     _study_spent_rub: Decimal
     verdict_snapshots: dict[str, dict[str, Any]]
+    hypothesis_verdicts: dict[str, dict[str, Any]]
 
     def _project_local(self, ev: EventEnvelope) -> None:
         p = ev.payload
@@ -121,15 +122,42 @@ class LocalProjectMixin:
             ):
                 pass  # keep existing
             else:
+                # Plan-freeze: stamp frozen_at_seq from journal seq when missing.
+                if (
+                    node.kind == "criterion"
+                    and bool((node.attrs or {}).get("frozen"))
+                    and (node.attrs or {}).get("frozen_at_seq") is None
+                    and ev.seq is not None
+                ):
+                    node = node.model_copy(
+                        update={
+                            "attrs": {
+                                **(node.attrs or {}),
+                                "frozen_at_seq": int(ev.seq),
+                            }
+                        }
+                    )
                 self.graph.upsert_node(node)
             if node.kind == "claim":
-                self._invalidate_verdict_snapshots(node)
+                self._invalidate_verdict_snapshots_for_target(
+                    (node.attrs or {}).get("target")
+                )
         elif ev.type == "GraphEdgeAdded":
             # Fail loudly: missing endpoints / illegal pairs are journal bugs.
             edge = GraphEdge.model_validate(p)
             self.graph.add_edge(edge)
             if edge.kind == "about":
-                self.verdict_snapshots.clear()
+                # Scope invalidation to the about target (not all snapshots).
+                dst = self.graph.get_node(edge.dst_id)
+                logical = None
+                if dst is not None:
+                    prefix = f"{ev.study_id}:{dst.kind}:"
+                    logical = (
+                        edge.dst_id[len(prefix) :]
+                        if edge.dst_id.startswith(prefix)
+                        else (dst.ref_id or edge.dst_id)
+                    )
+                self._invalidate_verdict_snapshots_for_target(logical)
         elif ev.type == "VerdictSnapshotsRecorded":
             snaps = p.get("snapshots") or {}
             if isinstance(snaps, dict):
@@ -137,14 +165,16 @@ class LocalProjectMixin:
                     {str(k): dict(v) for k, v in snaps.items() if isinstance(v, dict)}
                 )
 
-    def _invalidate_verdict_snapshots(self, node: GraphNode) -> None:
-        """Drop journaled snapshots for a claim's target (DESIGN_M1 PR8)."""
-        target = (node.attrs or {}).get("target")
-        if target is not None and str(target) in self.verdict_snapshots:
-            self.verdict_snapshots.pop(str(target), None)
-        else:
-            # Unknown target mapping — invalidate all (safe).
-            self.verdict_snapshots.clear()
+    def _invalidate_verdict_snapshots_for_target(self, target: Any) -> None:
+        """Drop journaled snapshots for one target ref (DESIGN_M1 PR8)."""
+        if target is None:
+            return
+        key = str(target)
+        self.verdict_snapshots.pop(key, None)
+        # Kind-prefixed keys (question:Q1 / hypothesis:H1) if present.
+        if ":" not in key or key.split(":", 1)[0] not in ("question", "hypothesis"):
+            self.verdict_snapshots.pop(f"question:{key}", None)
+            self.verdict_snapshots.pop(f"hypothesis:{key}", None)
 
     def _fold_finalized_graph(
         self, study_id: str, payload: dict[str, Any], *, created_at: datetime
@@ -176,8 +206,9 @@ class LocalProjectMixin:
             except (KeyError, ValueError):
                 # study/question node may be missing in sparse journals
                 pass
+        # Keep hypothesis_verdicts separate from bind's verdict_snapshots cache.
         hv = payload.get("hypothesis_verdicts")
         if isinstance(hv, dict):
-            self.verdict_snapshots.update(
+            self.hypothesis_verdicts.update(
                 {str(k): dict(v) for k, v in hv.items() if isinstance(v, dict)}
             )

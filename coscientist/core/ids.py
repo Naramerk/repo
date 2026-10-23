@@ -63,3 +63,8 @@ def hypothesis_node_id(study_id: str, hypothesis_id: str) -> str:
 
 def study_node_id(study_id: str) -> str:
     return f"{study_id}:study"
+
+
+def criterion_node_id(study_id: str, criterion_key: str) -> str:
+    """Stable graph node id for a criterion (``{study}:criterion:{key}``)."""
+    return f"{study_id}:criterion:{criterion_key}"

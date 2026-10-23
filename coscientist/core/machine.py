@@ -70,6 +70,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         self.dep_outputs: dict[str, dict[str, str]] = {}
         self.dep_provenance: dict[str, Provenance] = {}
         self.verdict_snapshots: dict[str, dict[str, Any]] = {}
+        self.hypothesis_verdicts: dict[str, dict[str, Any]] = {}
         self._retry_at: dict[str, datetime] = {}
         self._finalized = False
         self._study_cancelled = False
@@ -82,6 +83,46 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         executor.get_graph = lambda: self.graph
         self.executor = executor
         return executor
+
+    def make_executor(
+        self,
+        catalog: Any,
+        artifacts: Any,
+        *,
+        get_attempt: Any | None = None,
+        get_task: Any | None = None,
+        on_events: Any | None = None,
+        review_statuses: dict[str, Any] | None = None,
+    ) -> Any:
+        """Production factory: build Executor and bind live ``get_graph``."""
+        from coscientist.core.executor import Executor
+
+        def _default_attempt(aid: str) -> Any:
+            d = self.attempts[aid]
+            return type(
+                "Att",
+                (),
+                {
+                    "attempt_id": d["attempt_id"],
+                    "closed": d.get("closed", False),
+                    "provenance": d.get("provenance", "real"),
+                    "task_id": d["task_id"],
+                    "study_id": d["study_id"],
+                },
+            )()
+
+        ex = Executor(
+            self.writer,
+            catalog,
+            artifacts,
+            clock=self.clock,
+            get_attempt=get_attempt or _default_attempt,
+            get_task=get_task or (lambda tid: self.tasks[tid]),
+            on_events=on_events or self._project_local,
+            review_statuses=review_statuses,
+            get_graph=lambda: self.graph,
+        )
+        return self.bind_executor(ex)
 
     async def _append(self, events: list[EventEnvelope]) -> None:
         if self._lease_lost:

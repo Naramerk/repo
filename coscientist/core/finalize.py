@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
 from coscientist.core.digest import canonical_json
-from coscientist.core.dispositions import dispositions
+from coscientist.core.dispositions import dispositions, report_hypothesis_verdicts
 from coscientist.core.domain import Task, TaskOutcome, TaskState
 from coscientist.core.errors import CASUnavailable, Conflict, LeaseLost
 from coscientist.core.events import EventEnvelope, make_idem
@@ -263,8 +263,6 @@ async def _build_rich_payload(
         study=runtime.study,
         results=getattr(runtime, "results", None),
     )
-    from coscientist.core.dispositions import report_hypothesis_verdicts
-
     hyp_verdicts = report_hypothesis_verdicts(
         graph=getattr(runtime, "graph", None),
         study=runtime.study,

@@ -32,15 +32,6 @@ class RuntimeLike(Protocol):
 def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifactStore]:
     catalog = minimal_test_catalog()
     arts = LocalArtifactStore(tmp / "arts")
-    ex = Executor(
-        rt.writer,
-        catalog,
-        arts,
-        clock=rt.clock,
-        get_attempt=lambda aid: type("A", (), rt.attempts[aid])(),
-        get_task=lambda tid: rt.tasks[tid],
-        on_events=rt._project_local,
-    )
 
     def get_attempt(aid: str):
         d = rt.attempts[aid]
@@ -56,15 +47,33 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
             },
         )()
 
-    ex.get_attempt = get_attempt
-    # Production path: StudyRuntime.bind_executor wires get_graph.
+    # Prefer production factory when available (wires get_graph).
+    make = getattr(rt, "make_executor", None)
+    if callable(make):
+        ex = make(
+            catalog,
+            arts,
+            get_attempt=get_attempt,
+            get_task=lambda tid: rt.tasks[tid],
+            on_events=rt._project_local,
+        )
+        return ex, arts
+
+    ex = Executor(
+        rt.writer,
+        catalog,
+        arts,
+        clock=rt.clock,
+        get_attempt=get_attempt,
+        get_task=lambda tid: rt.tasks[tid],
+        on_events=rt._project_local,
+    )
     bind = getattr(rt, "bind_executor", None)
     if callable(bind):
         bind(ex)
     else:
         ex.get_graph = lambda: rt.graph
         rt.executor = ex
-    # finalize/_artifact_store prefers executor.artifacts; no runtime.artifacts assign.
     return ex, arts
 
 

@@ -21,7 +21,7 @@ from coscientist.core.domain import (
 )
 from coscientist.core.errors import AttemptClosedError, CatalogError
 from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.ids import result_id
+from coscientist.core.ids import criterion_node_id, result_id
 from coscientist.core.inputs import claim_nodes_from_attempt
 from coscientist.core.outcome import compute_outcome
 from coscientist.core.reasons import CloseReason, TaskReason
@@ -39,22 +39,100 @@ def _provenance(attempt: Any) -> Provenance:
     return p  # type: ignore[return-value]
 
 
-def _derive_claim_core_attrs(task: Any, task_outcome: TaskOutcome) -> dict[str, Any]:
-    """Core-owned counting fields from plan/results — never agent claim attrs."""
+def _req_to_criterion_status(status: ReqStatus) -> str:
+    if status in (ReqStatus.MET, ReqStatus.WAIVED, ReqStatus.NOT_APPLICABLE):
+        return "met"
+    if status in (ReqStatus.FAILED, ReqStatus.MIGRATION_ERROR):
+        return "not_met"
+    return "unassessed"
+
+
+def _check_field(c: Any, name: str) -> Any:
+    if isinstance(c, dict):
+        return c.get(name)
+    return getattr(c, name, None)
+
+
+def _criterion_key_for_claim(
+    raw: dict[str, Any], checks: list[Any], criteria: list[Any]
+) -> str | None:
+    """Resolve checked_against, else sole check / sole plan criterion."""
+    checked = raw.get("checked_against")
+    if checked:
+        return str(checked)
+    if len(checks) == 1:
+        tid = _check_field(checks[0], "template_id")
+        return str(tid) if tid else None
+    if len(criteria) == 1:
+        tid = _check_field(criteria[0], "template_id")
+        return str(tid) if tid else None
+    return None
+
+
+def _criterion_status_for_claim(
+    raw: dict[str, Any], checks: list[Any], criteria: list[Any] | None = None
+) -> str:
+    """Map claim.checked_against → ReqStatus of that criterion's check."""
+    key = _criterion_key_for_claim(raw, checks, list(criteria or []))
+    if key:
+        for c in checks:
+            tid = _check_field(c, "template_id")
+            cid = _check_field(c, "check_id")
+            st = _check_field(c, "status")
+            if tid == key or cid == key or (tid and key.endswith(str(tid))):
+                if isinstance(st, ReqStatus):
+                    return _req_to_criterion_status(st)
+                try:
+                    return _req_to_criterion_status(ReqStatus(str(st)))
+                except ValueError:
+                    return "unassessed"
+        return "unassessed"
+    if len(checks) == 1:
+        st = _check_field(checks[0], "status")
+        if isinstance(st, ReqStatus):
+            return _req_to_criterion_status(st)
+    return "unassessed"
+
+
+def _criterion_is_frozen(graph: Any, study_id: str, checked_against: Any) -> bool:
+    """True when plan-accept freeze marked the criterion node."""
+    if not checked_against or graph is None:
+        return False
+    key = str(checked_against)
+    node = graph.get_node(criterion_node_id(study_id, key))
+    if node is None:
+        node = graph.get_node(key)
+    if node is None or node.kind != "criterion":
+        return False
+    attrs = node.attrs or {}
+    return attrs.get("frozen_at_seq") is not None or bool(attrs.get("frozen"))
+
+
+def _derive_claim_core_attrs(
+    task: Any,
+    task_outcome: TaskOutcome,
+    *,
+    raw: dict[str, Any],
+    checks: list[Any],
+    graph: Any,
+    study_id: str,
+    validated: bool,
+) -> dict[str, Any]:
+    """Core-owned counting fields from plan/checks/freeze — never agent attrs."""
     spec = getattr(task, "spec", None)
     method = getattr(spec, "method", None) if spec is not None else None
     lit = method == ExperimentMethod.LITERATURE_SEARCH or str(method or "") == (
         "literature_search"
     )
-    success = task_outcome == TaskOutcome.SUCCESS
     criteria = list(getattr(spec, "criteria", None) or []) if spec is not None else []
+    key = _criterion_key_for_claim(raw, checks, criteria)
     return {
-        "criterion_status": "met" if success else "unassessed",
+        "criterion_status": _criterion_status_for_claim(raw, checks, criteria),
         "evidence_kind": "literature" if lit else "computational",
-        # Plan criteria are treated frozen at accept until freeze events exist.
-        "frozen": True,
+        "frozen": _criterion_is_frozen(graph, study_id, key),
         "lit_own_criterion": bool(lit and criteria),
-        "accepted": bool(success),
+        # Attempt succeeded AND claim passed validation (target/id/about).
+        "accepted": bool(task_outcome == TaskOutcome.SUCCESS and validated),
     }
 
 
@@ -252,6 +330,7 @@ class Executor:
             TaskOutcome(final.value),
             None,
             claims=list(out.claims or []),
+            checks=checks,
         )
 
     async def _commit_failure(
@@ -304,6 +383,7 @@ class Executor:
             TaskOutcome.FAILED,
             reason,
             claims=[],
+            checks=[],
         )
 
     async def _commit_result(
@@ -316,14 +396,15 @@ class Executor:
         reason: str | None,
         *,
         claims: list[dict[str, Any]] | None = None,
+        checks: list[Any] | None = None,
     ) -> Result:
         # Attempt-open check runs inside the write transaction (_append_many_sync).
         now = self.clock.now()
         graph = self.get_graph() if self.get_graph is not None else None
         task = self.get_task(task_id)
-        derived = _derive_claim_core_attrs(task, task_outcome)
         # PR7/PR8: claim nodes carry producing-attempt provenance (H-b);
         # re-upsert keeps worst provenance; about edges + attr whitelist.
+        # Per-claim derived attrs (criterion_status from checked_against ReqStatus).
         claim_events, drops = claim_nodes_from_attempt(
             study_id=study_id,
             attempt_id=attempt_id,
@@ -332,7 +413,15 @@ class Executor:
             now=now,
             graph=graph,
             attempt_outcome=task_outcome.value,
-            derived=derived,
+            derive_attrs=lambda raw, validated: _derive_claim_core_attrs(
+                task,
+                task_outcome,
+                raw=raw,
+                checks=list(checks or []),
+                graph=graph,
+                study_id=study_id,
+                validated=validated,
+            ),
         )
         if drops:
             payload = {**payload, "claims_dropped": drops}

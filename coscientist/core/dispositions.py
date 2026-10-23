@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from coscientist.core.claims import (
+    claims_for_ref,
     disposition_from_verdict,
     filtered_claims_by_target,
     hypothesis_verdicts,
@@ -134,7 +135,7 @@ def _dispositions_inner(
     for qid, text in qmap.items():
         keys = cover.get(qid, set())
         covering = [by_key[kk] for kk in sorted(keys) if kk in by_key]
-        claims = by_target.get(qid) or []
+        claims = claims_for_ref(by_target, qid, prefer="question")
         counting = [c for c in claims if c.counts()]
         if counting:
             any_exp = any(t.state == TaskState.DONE for t in covering)
@@ -186,7 +187,7 @@ def report_hypothesis_verdicts(
             study_id=study.study_id,
             study=study,
             results=results,
-            k=1,
+            k=study.confirmations_needed,
             any_experiment_done=any_exp,
         )
     except Exception:  # noqa: BLE001
