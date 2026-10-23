@@ -69,6 +69,7 @@ def build_minimal_report(
     attempts: Mapping[str, Mapping[str, Any]],
     question_dispositions: Mapping[str, Mapping[str, Any]],
     fallback_reason: str | None,
+    refusal: str | None = None,
 ) -> dict[str, Any]:
     task_list = sorted(tasks.values(), key=lambda t: t.spec.task_key)
     q_rows = [
@@ -95,14 +96,18 @@ def build_minimal_report(
         for t in task_list
         if t.state == TaskState.DONE or t.outcome is not None
     ]
+    q_n = len(q_rows)
+    na_n = sum(1 for q in q_rows if q.get("disposition") == "not_attempted")
     report: dict[str, Any] = {
         "study_id": study_id,
         "terminal_reason": terminal_reason,
         "trigger": trigger,
         "contributing_reasons": contributing_reasons[:20],
         "summary": _summary(terminal_reason, task_list, q_rows),
+        "question_count": q_n,
+        "not_attempted_count": na_n,
         "fallback_reason": fallback_reason,
-        "refusal": None,
+        "refusal": refusal,
         "verdict": verdict,
         "tasks": t_rows,
         "questions": q_rows,

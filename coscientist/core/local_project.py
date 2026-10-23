@@ -90,8 +90,8 @@ class LocalProjectMixin:
                 }
             )
             self._retry_at.pop(p["task_id"], None)
-            if reason == TaskReason.BUDGET.value or reason == TaskReason.BUDGET:
-                self._budget_exceeded = True
+            # TaskDone(reason=budget) is task-level only; study budget trigger
+            # comes from note_budget_exceeded() / BudgetExceeded (not folded here).
         elif ev.type == "GraphNodeUpserted":
             self.graph.upsert_node(GraphNode.model_validate(p))
 

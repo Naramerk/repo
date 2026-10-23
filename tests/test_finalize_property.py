@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 import shutil
 import tempfile
 from datetime import timedelta
@@ -371,15 +370,13 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         minimal = p.get("minimal_report") or {}
         mq = {q.get("question_id") for q in (minimal.get("questions") or [])}
         truncated = bool(minimal.get("truncated"))
-        summary = str(minimal.get("summary") or "")
-        m = re.search(r"вопросов (\d+)", summary)
-        summary_n = int(m.group(1)) if m else -1
+        summary_n = int(minimal.get("question_count", -1))
         conclusions = {n.node_id for n in self.rt.graph.nodes_by_kind("conclusion")}
         for qid in known:
             cid = conclusion_id_for_question(self.sid, qid)
             if cid in conclusions or qid in mq:
                 continue
-            # Truncated: structural count in summary covers all known questions.
+            # Truncated: structured question_count covers all known questions.
             if truncated and summary_n >= len(known):
                 continue
             raise AssertionError(f"I2 uncovered question {qid}")

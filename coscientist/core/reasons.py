@@ -81,7 +81,7 @@ class NotAttemptedReason(StrEnum):
 
 
 class RefusalKind(StrEnum):
-    """PR 4, не реализовывать."""
+    """Why intake refused a study (see ``coscientist.core.intake``)."""
 
     SAFETY = "safety"
     OUT_OF_SCOPE = "out_of_scope"
@@ -98,9 +98,12 @@ def intake(
     inputs: list[Any],
     profile: str,
     budget: Any,
+    **kwargs: Any,
 ) -> Any:
-    """PR 4, не реализовывать."""
-    raise NotImplementedError("PR 4, не реализовывать")
+    """Delegate to ``coscientist.core.intake.intake`` (PR 4)."""
+    from coscientist.core.intake import intake as _intake
+
+    return _intake(request, inputs, profile, budget, **kwargs)
 
 
 def coerce_task_reason(value: str | TaskReason | None) -> TaskReason | None:

@@ -73,8 +73,11 @@ def test_task_reason_enum_roundtrip():
     assert Disposition.NOT_ATTEMPTED.value == "not_attempted"
     assert NotAttemptedReason.NO_TASK.value == "no_task"
     assert RefusalKind.BUDGET_ZERO.value == "budget_zero"
-    with pytest.raises(NotImplementedError, match="PR 4"):
-        intake("", [], "p", None)
+    from coscientist.core.intake import IntakeRefuse
+
+    refused = intake("", [], "p", None)
+    assert isinstance(refused, IntakeRefuse)
+    assert refused.kind == RefusalKind.EMPTY_REQUEST
 
 
 @pytest.mark.parametrize("reason", _TASK_REASON_STRINGS)
