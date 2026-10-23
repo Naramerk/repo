@@ -16,6 +16,7 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
+from coscientist.core.errors import LeaseLost
 from coscientist.core.events import (
     PLAN_EXPANDED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
@@ -449,6 +450,8 @@ async def maybe_foreach_after_task_done(
             pid = await _materialize_one(runtime, tmpl)
             if pid:
                 done.append(pid)
+        except LeaseLost:
+            raise
         except Exception as e:  # noqa: BLE001 — never raise; refuse + skip
             await _refuse_and_skip_foreach(
                 runtime,
@@ -473,6 +476,8 @@ async def materialize_ready_foreach(runtime: StudyRuntime) -> list[str]:
             pid = await _materialize_one(runtime, tmpl)
             if pid:
                 done.append(pid)
+        except LeaseLost:
+            raise
         except Exception as e:  # noqa: BLE001
             await _refuse_and_skip_foreach(
                 runtime,
