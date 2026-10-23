@@ -435,9 +435,10 @@ def _resolve_plan_n_request(
 ) -> tuple[ExpansionRequest | None, str | None]:
     """Single source of truth: PLAN-n final-attempt ``expansion_request``.
 
-    No silent seed fallback. Attempt/result mismatch → ``invalid``.
+    Uses ``_final_attempt_id`` only (no seed fallback). Attempt/result
+    mismatch → ``invalid`` / ``ExpansionRefused``.
     """
-    from coscientist.core.expand_trigger import parse_plan_n_expansion
+    from coscientist.core.expand_trigger import _final_attempt_id, parse_plan_n_expansion
     from coscientist.core.ids import task_id as make_task_id
 
     _ = meta  # seed pending is advisory for the planner only — never applied here
@@ -445,10 +446,9 @@ def _resolve_plan_n_request(
     plan_tid = make_task_id(sid, plan_key) if sid else ""
     if not plan_tid or plan_tid not in runtime.tasks:
         return None, "missing_plan_n_task"
-    task = runtime.tasks[plan_tid]
-    if not task.attempts:
+    aid = _final_attempt_id(runtime, plan_tid)
+    if not aid:
         return None, "missing_planner_attempt"
-    aid = task.attempts[-1]
     primary = runtime.results.get(aid)
     alternate = runtime.results.get(f"result:{aid}")
     if primary is not None and alternate is not None and dict(primary) != dict(alternate):

@@ -27,11 +27,24 @@ class HitlForkMixin(CostlyHitlMixin):
         timeout_s: int | None = None,
         *,
         cost_rub: float = 0.0,
+        expand_after_task: str | None = None,
     ) -> str:
+        """Open a HITL gate.
+
+        Plan-change offers (``plan`` / ``plan_approval`` / ``plan_expansion``)
+        open as ``kind=plan_expansion`` bound via ``expand_after_task`` so a
+        human edit can produce ``PlanExpanded`` / ``ExpansionRefused``.
+        """
         task = self._resolve_task(task_key_or_id)
         assert self.study is not None
         now = self.clock.now()
-        gate = self.study.hitl_policy.gate(kind)
+        # Plan approval with edits → plan_expansion path (bound after_task).
+        gate_kind = kind
+        after: str | None = expand_after_task
+        if kind in ("plan", "plan_approval", "plan_expansion"):
+            gate_kind = "plan_expansion"
+            after = after or task.spec.task_key
+        gate = self.study.hitl_policy.gate(gate_kind)
         to = timeout_s if timeout_s is not None else gate.timeout_s
         deadline = min(
             now + timedelta(seconds=to),
@@ -41,13 +54,14 @@ class HitlForkMixin(CostlyHitlMixin):
         rid = hitl_request_id()
         req = HitlRequest(
             request_id=rid,
-            kind=kind,  # type: ignore[arg-type]
+            kind=gate_kind,  # type: ignore[arg-type]
             payload_ref=task.task_id,
             deadline=deadline,
             study_id=self.study.study_id,
             task_id=task.task_id,
             open=True,
             cost_rub=float(cost_rub),
+            expand_after_task=after,
         )
         await self._append(
             [
@@ -120,22 +134,35 @@ class HitlForkMixin(CostlyHitlMixin):
         request_id: str,
         expansion: dict[str, Any] | None,
     ) -> None:
-        """Third H-g trigger: HITL plan/hypotheses edit → PlanExpanded (MJ6).
+        """Third H-g trigger: HITL plan edit → PlanExpanded / ExpansionRefused.
 
         ``delegated_by`` is derived from the HitlDecided event, not an argument.
+        Wrong/unknown kind with a plan change → ``ExpansionRefused(invalid_hitl)``
+        (never silent drop).
         """
         if not expansion:
             return
-        # Core expand_plan accepts only kind=plan_expansion (bound to after_task).
-        if h.kind != "plan_expansion":
-            return
         from coscientist.core.domain import QuestionSpec, QuestionSupersede, TaskSpec
         from coscientist.core.expand import expand_plan
+        from coscientist.core.expand_trigger import refuse_expansion
 
-        after = str(expansion.get("after_task") or "")
+        after = str(
+            expansion.get("after_task")
+            or getattr(h, "expand_after_task", None)
+            or ""
+        )
         if not after and h.task_id:
             task = self.tasks.get(h.task_id)
             after = task.spec.task_key if task is not None else h.task_id
+        after = after or "HITL"
+        if h.kind != "plan_expansion":
+            await refuse_expansion(
+                self,  # type: ignore[arg-type]
+                after,
+                reason="invalid_hitl",
+                detail=f"hitl_wrong_kind:{h.kind or 'unknown'}",
+            )
+            return
         added_tasks = [
             TaskSpec.model_validate(t) if isinstance(t, dict) else t
             for t in (expansion.get("added_tasks") or [])
@@ -150,7 +177,7 @@ class HitlForkMixin(CostlyHitlMixin):
         ]
         await expand_plan(
             self,  # type: ignore[arg-type]
-            after_task=after or "HITL",
+            after_task=after,
             added_tasks=added_tasks,
             added_questions=added_questions,
             superseded_tasks=list(expansion.get("superseded_tasks") or []),
@@ -184,6 +211,7 @@ class HitlForkMixin(CostlyHitlMixin):
         )
         if h.kind not in (
             "plan_approval",
+            "plan_expansion",
             "spec_approval",
             "plan",
             "hypotheses",
@@ -241,7 +269,7 @@ class HitlForkMixin(CostlyHitlMixin):
         await self._mark_plan_delegated(h, delegated_by=delegated_by)
 
     async def _mark_plan_delegated(self, h: HitlRequest, *, delegated_by: str) -> None:
-        if h.kind not in ("plan", "plan_approval", "hypotheses"):
+        if h.kind not in ("plan", "plan_approval", "plan_expansion", "hypotheses"):
             return
         graph = getattr(self, "graph", None)
         plans = getattr(self, "plans", None)

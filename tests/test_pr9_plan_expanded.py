@@ -1129,6 +1129,55 @@ async def test_expand_after_malformed_planner_output(tmp_path, clock, runtime_cl
 
 
 @pytest.mark.asyncio
+async def test_plan_n_attempt_result_mismatch_refused(tmp_path, clock, runtime_cls):
+    """_resolve_plan_n_request: aid vs result:aid mismatch → ExpansionRefused(invalid)."""
+    sid = "st_aid_mm"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=3,
+    )
+    attach_executor(rt, tmp_path)
+    await _boot_plan(
+        rt,
+        tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        expand_after=["E0"],
+    )
+    aid = await rt.start_attempt("E0")
+    await rt.executor.record(aid, AgentTaskOutput(summary="ok"))
+    plan_n = next(t for t in rt.tasks.values() if t.spec.task_key.startswith("PLAN-"))
+    paid = await rt.start_attempt(plan_n.spec.task_key)
+    good = ExpansionRequest(
+        tasks=[_task(key="E1", addresses=["Q1"], depends_on=["E0"])],
+        reason="ok",
+    ).model_dump(mode="json")
+    rt.results[paid] = {
+        "attempt_id": paid,
+        "task_id": plan_n.task_id,
+        "expansion_request": good,
+    }
+    rt.results[f"result:{paid}"] = {
+        "attempt_id": paid,
+        "task_id": plan_n.task_id,
+        "expansion_request": {"tasks": [], "reason": "other"},
+    }
+    await apply_pending_expansion(rt, plan_n.spec.task_key)
+    assert any(
+        e.type == "ExpansionRefused"
+        and e.payload.get("reason") == "invalid"
+        and "attempt_result_mismatch" in str(e.payload.get("detail") or "")
+        for e in await rt.store.read_all()
+    )
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
 async def test_empty_address_refute_not_skippable(tmp_path, clock, runtime_cls):
     """Refute task with empty addresses must not be SKIPpable on agent path."""
     sid = "st_emptyref"
@@ -1241,7 +1290,7 @@ async def test_timeout_counts_toward_agent_quota(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_hitl_wrong_kind_refused(tmp_path, clock, runtime_cls):
-    """HitlDecided for non-plan_expansion gate (incl. hypotheses) → invalid_hitl."""
+    """Forged non-plan_expansion HitlOpened still refused by expand_plan."""
     sid = "st_wrongk"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
@@ -1260,6 +1309,8 @@ async def test_hitl_wrong_kind_refused(tmp_path, clock, runtime_cls):
         tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
+    # plan_approval forged (not via open_hitl) remains invalid; production open
+    # promotes plan_approval → plan_expansion (see real-path tests below).
     for kind in ("report", "hypotheses", "plan_approval"):
         rid = f"hitl_{kind}"
         await _record_hitl_opened(rt, rid, kind=kind, expand_after_task="E0")
@@ -1276,6 +1327,211 @@ async def test_hitl_wrong_kind_refused(tmp_path, clock, runtime_cls):
     assert any(
         e.type == "ExpansionRefused" and e.payload.get("reason") == "invalid_hitl"
         for e in await rt.store.read_all()
+    )
+    await close_runtime(rt)
+
+
+async def _finalize_for_report(rt) -> list[str]:
+    for key in list(rt.tasks):
+        t = rt.tasks[key]
+        if t.state.value != "DONE":
+            await rt.cancel_task(t.spec.task_key, reason="cancelled")
+    if not rt._finalized:
+        await rt.cancel_study()
+    fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
+    return list(fin.payload.get("contributing_reasons") or [])
+
+
+@pytest.mark.asyncio
+async def test_hitl_open_plan_approval_promotes_plan_expansion(tmp_path, clock):
+    """(a) open_hitl(plan_approval) → kind=plan_expansion + expand_after_task."""
+    from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
+
+    sid = "st_hitl_promo"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=0,
+        max_human_expansions=3,
+    )
+    attach_executor(rt, tmp_path)
+    await _boot_plan(
+        rt,
+        tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    rid = await rt.open_hitl("E0", kind="plan_approval", timeout_s=60)
+    h = rt.hitl[rid]
+    assert h.kind == "plan_expansion"
+    assert h.expand_after_task == "E0"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_hitl_human_edit_applied_via_open_decide(tmp_path, clock):
+    """Real open_hitl/answer_hitl: human plan edit → PlanExpanded."""
+    from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
+
+    sid = "st_hitl_edit"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=0,
+        max_human_expansions=3,
+    )
+    attach_executor(rt, tmp_path)
+    await _boot_plan(
+        rt,
+        tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    rid = await rt.open_hitl(
+        "E0", kind="plan_approval", timeout_s=60, expand_after_task="E0"
+    )
+    assert rt.hitl[rid].kind == "plan_expansion"
+    await rt.answer_hitl(
+        rid,
+        "accept",
+        expansion={
+            "after_task": "E0",
+            "added_tasks": [
+                _task(key="Eh", addresses=["Q1"], depends_on=["E0"]).model_dump(mode="json")
+            ],
+            "reason": "human_plan_edit",
+        },
+    )
+    events = await rt.store.read_all()
+    assert any(e.type == "PlanExpanded" for e in events)
+    assert any(t.spec.task_key == "Eh" or "/Eh" in k for k, t in rt.tasks.items())
+    assert rt._human_expansions == 1
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_hitl_wrong_kind_edit_refused_and_reported(tmp_path, clock):
+    """Real path: HitlDecided+edit on wrong kind → ExpansionRefused in report."""
+    from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
+
+    sid = "st_hitl_wk"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=0,
+        max_human_expansions=3,
+    )
+    attach_executor(rt, tmp_path)
+    await _boot_plan(
+        rt,
+        tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    for kind in ("hypotheses", "report"):
+        rid = await rt.open_hitl("E0", kind=kind, timeout_s=60)
+        assert rt.hitl[rid].kind == kind
+        await rt.answer_hitl(
+            rid,
+            "accept",
+            expansion={
+                "after_task": "E0",
+                "added_tasks": [
+                    _task(
+                        key=f"Eh_{kind}", addresses=["Q1"], depends_on=["E0"]
+                    ).model_dump(mode="json")
+                ],
+            },
+        )
+    events = await rt.store.read_all()
+    refused = [
+        e
+        for e in events
+        if e.type == "ExpansionRefused" and e.payload.get("reason") == "invalid_hitl"
+    ]
+    assert len(refused) >= 2
+    assert any("hitl_wrong_kind" in str(e.payload.get("detail")) for e in refused)
+    contrib = await _finalize_for_report(rt)
+    assert "не выполнено: невалидный запрос" in contrib
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_hitl_decide_yourself_delegation_marked(tmp_path, clock):
+    """Real path: answer_hitl('delegate') marks plan delegated_by=human."""
+    from coscientist.core.supersede import plan_node_id
+    from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
+
+    sid = "st_hitl_diy"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        max_expansions=0,
+        max_human_expansions=3,
+    )
+    attach_executor(rt, tmp_path)
+    await _boot_plan(
+        rt,
+        tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    rid = await rt.open_hitl("E0", kind="plan_approval", timeout_s=60)
+    await rt.answer_hitl(
+        rid,
+        "delegate",
+        expansion={
+            "after_task": "E0",
+            "added_tasks": [
+                _task(key="Ed", addresses=["Q1"], depends_on=["E0"]).model_dump(mode="json")
+            ],
+        },
+    )
+    decided = [
+        e
+        for e in await rt.store.read_all()
+        if e.type == "HitlDecided" and e.entity_key == rid
+    ]
+    assert decided and decided[0].payload.get("delegated_by") == "human"
+    assert any(e.type == "PlanExpanded" for e in await rt.store.read_all())
+    # Graph plan node marked «decide yourself».
+    plans = list(rt.plans.values())
+    assert plans
+    pid = str(plans[-1].get("plan_id") or "")
+    node = rt.graph.get_node(plan_node_id(sid, pid))
+    # Prefer active/previous plan attrs from GraphNodeUpserted.
+    marked = False
+    for p in rt.plans.values():
+        pn = rt.graph.get_node(plan_node_id(sid, str(p.get("plan_id") or "")))
+        if pn is not None and (pn.attrs or {}).get("delegated_by") == "human":
+            marked = True
+            break
+    assert marked or (
+        node is not None and (node.attrs or {}).get("delegated_by") == "human"
     )
     await close_runtime(rt)
 
