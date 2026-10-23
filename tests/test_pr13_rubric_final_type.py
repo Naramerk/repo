@@ -1229,8 +1229,11 @@ async def _assert_accept_plan_refused_finalizes(rt, *, pid: str, detail_substr: 
     payload = fin[0].payload
     assert payload.get("trigger") == "intake"
     assert payload.get("terminal_reason") == "refused"
-    assert payload.get("report_artifact_id") is not None or payload.get("minimal_report") is not None
-    assert payload.get("conclusion_ids") is not None
+    # PlanRefused finalize builds a real report artifact (not minimal fallback).
+    assert payload.get("report_artifact_id") is not None
+    assert payload.get("minimal_report") is None
+    cids = payload.get("conclusion_ids")
+    assert isinstance(cids, list) and len(cids) >= 1, cids
     assert rt.view().phase == "closed"
     assert rt.view().verdict == payload.get("verdict")
     await close_runtime(rt)
@@ -1379,8 +1382,109 @@ async def test_e2e_downgrade_unaddressed_question_view_matches(tmp_path, clock):
     assert payload.get("verdict") == "partial"
     assert rt.view().verdict == payload.get("verdict") == "partial"
     qdisp = payload.get("question_dispositions") or {}
-    assert qdisp.get("Q1", {}).get("disposition") in ("not_attempted", "untested")
+    assert qdisp.get("Q1", {}).get("disposition") == "not_attempted"
     await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
+    """Corrupt ReviewRecorded.retry → JudgePendingCorrupt → finalize(internal_error)."""
+    from coscientist.core.reviews import JudgePendingCorrupt, rebuild_judge_state
+
+    # Unit: rebuild must raise on non-int retry (fail-closed).
+    bad = EventEnvelope(
+        study_id="s",
+        type="ReviewRecorded",
+        entity_key="a1",
+        idem_key="x",
+        payload={
+            "review_key": '["t","a1","c","i","d"]',
+            "status": "PENDING",
+            "retry": "not-an-int",
+            "attempt_id": "a1",
+        },
+        ts=clock.now(),
+    )
+    with pytest.raises(JudgePendingCorrupt, match="retry_corrupt"):
+        rebuild_judge_state([bad], artifacts=None)
+
+    # E2E: journal with corrupt retry on reopen → honest internal-error finalize.
+    sid = "st_pr13_retry_corrupt"
+    rt = await _boot(tmp_path, clock, sid)
+    rub = freeze_rubric(
+        Rubric(
+            items=[RubricItem(id="adequate", text="ok?", required=True, check="judge")],
+            aggregate="all_required",
+        )
+    )
+    await rt.accept_plan(
+        [
+            _exp(
+                "E0",
+                addresses=["Q1"],
+                rubric=rub,
+                criteria=[RequirementRef(template_id="rubric_check")],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="lit", final_type="artifact")],
+    )
+    ex, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("E0")
+    assert aid is not None
+    art = arts.put(
+        b"# review\n",
+        make_tool_ref(f"{aid}:main"),
+        name="main",
+        media_type="text/markdown",
+    )
+    await ex.record(
+        aid,
+        AgentTaskOutput(
+            summary="draft",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+        ),
+    )
+    # Append a corrupt ReviewRecorded into the journal before reopen.
+    dig = ex._output_digests[aid]
+    key = review_key(
+        task_id=str(rt.attempts[aid]["task_id"]),
+        attempt_id=aid,
+        check_id=f"rubric:{rub.digest}#out",
+        item_id="adequate",
+        output_digest=dig,
+    )
+    await rt._append(
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="ReviewRecorded",
+                entity_key=aid,
+                idem_key=make_idem("ReviewRecorded", aid, key, "corrupt_retry"),
+                payload={
+                    "review_key": key,
+                    "attempt_id": aid,
+                    "task_id": rt.attempts[aid]["task_id"],
+                    "check_id": f"rubric:{rub.digest}#out",
+                    "item_id": "adequate",
+                    "output_digest": dig,
+                    "status": "PENDING",
+                    "failure_kind": "timeout",
+                    "retry": {"bad": True},
+                },
+                ts=rt.clock.now(),
+            )
+        ]
+    )
+    await close_runtime(rt)
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    events = await rt2.store.read_all()
+    assert any(e.type == "JudgeCasCorrupt" for e in events)
+    fin = [e for e in events if e.type == "StudyFinalized"]
+    assert len(fin) == 1
+    assert fin[0].payload.get("trigger") == "internal_error"
+    assert fin[0].payload.get("terminal_reason") == "internal_error"
+    assert rt2.view().phase == "closed"
+    await close_runtime(rt2)
 
 
 @pytest.mark.asyncio

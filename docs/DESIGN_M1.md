@@ -69,6 +69,7 @@ class CloseReason(StrEnum):  # Attempt.close_reason
 | `deadline` — `now ≥ study.deadline − finalize_reserve_s` | `deadline` |
 | `all_done` — все задачи DONE естественно | по порядку: `human_timeout` (≥1 required DONE(FAILED, human_timeout)) → `infeasible` (≥1 question с disposition ∈ {infeasible, ill_posed} и ни одного answered/refuted/survived/inconclusive; **not_attempted не считается** — исправление M1:70) → `completed` |
 | (intake, PR 4) | `refused` |
+| `internal_error` — honest study-level failure (PR13: judge CAS / corrupt retry; not cancel) | `internal_error` |
 
 - `contributing_reasons: list[TaskReason]` — все прочие причины, встретившиеся в study (budget, deadline, human_timeout, expansion_limit…), без повторов, **по seq первого появления**.
 - Тай-брейк, если в одном тике сработали несколько триггеров: `cancelled > budget > deadline` (all_done проигрывает любому).
@@ -84,7 +85,7 @@ JSON Schema (draft 2020-12), хранится в `coscientist/schema/minimal_rep
  "required":["study_id","terminal_reason","trigger","contributing_reasons","summary","fallback_reason","verdict","tasks","questions","sections","truncated"],
  "properties":{
   "study_id":{"type":"string"},
-  "terminal_reason":{"enum":["refused","human_timeout","budget","deadline","infeasible","cancelled","completed"]},
+  "terminal_reason":{"enum":["refused","human_timeout","budget","deadline","infeasible","cancelled","completed","internal_error"]},
   "trigger":{"enum":["cancel","budget","deadline","all_done","intake","internal_error"]},
   "contributing_reasons":{"type":"array","items":{"type":"string"},"maxItems":20},
   "summary":{"type":"string","maxLength":1000},
@@ -158,7 +159,7 @@ JSON Schema (draft 2020-12), хранится в `coscientist/schema/minimal_rep
 
 ```python
 class TerminalReason(StrEnum):   # уровень study; приоритет — §0.2
-    REFUSED; HUMAN_TIMEOUT; BUDGET; DEADLINE; EXPANSION_LIMIT; INFEASIBLE; CANCELLED; COMPLETED
+    REFUSED; HUMAN_TIMEOUT; BUDGET; DEADLINE; EXPANSION_LIMIT; INFEASIBLE; CANCELLED; COMPLETED; INTERNAL_ERROR
 class RefusalKind(StrEnum): SAFETY; OUT_OF_SCOPE; EMPTY_REQUEST; UNSUPPORTED_OUTPUT; BUDGET_ZERO; CONTRADICTORY; EGRESS_POLICY; INPUT_TOO_LARGE; DURATION_TOO_SHORT
 class Disposition(StrEnum):
     ANSWERED; REFUTED; SURVIVED; INCONCLUSIVE             # вычисляемые (из вердикта)

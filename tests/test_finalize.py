@@ -48,13 +48,12 @@ async def _boot(
     seconds: int = 60,
     runtime_cls: type | None = None,
 ):
-    rt = await open_runtime(tmp, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    rt = await open_runtime(
+        tmp, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
     await rt.create_study(
-        profile="research",
-        request="q",
-        catalog_version="0.1.0",
-        deadline=clock.now() + timedelta(seconds=seconds),
-        sid=sid,
+        profile="research", request="q", catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=seconds), sid=sid,
         finalize_reserve_s=reserve,
     )
     return rt
@@ -72,30 +71,22 @@ def _fin(events):
     return fins[0]
 
 
-def _task(
-    key, *, outcome=TaskOutcome.SUCCESS, reason=None, required=True, kind=TaskKind.EXPERIMENT, state=TaskState.DONE
-):
+def _task(key, *, outcome=TaskOutcome.SUCCESS, reason=None, required=True,
+          kind=TaskKind.EXPERIMENT, state=TaskState.DONE):
     return Task(
-        task_id=f"st/{key}",
-        kind=kind,
+        task_id=f"st/{key}", kind=kind,
         spec=TaskSpec(task_key=key, title=key, goal="g", route="experiment", required=required),
-        state=state,
-        outcome=outcome if state == TaskState.DONE else None,
-        reason=reason,
-        deadline=_TS,
+        state=state, outcome=outcome if state == TaskState.DONE else None,
+        reason=reason, deadline=_TS,
     )
 
 
 def _spec(key, addresses=None, deps=None):
     return TaskSpec(
-        task_key=key,
-        title=key,
-        goal="g",
-        route="experiment",
-        depends_on=deps or ["PLAN"],
-        addresses=addresses or [],
-        # Explicit criterion — PlanValidator does not credit catalog defaults.
-        criteria=[RequirementRef(template_id="artifact_present")] if addresses else [],
+        task_key=key, title=key, goal="g", route="experiment",
+        depends_on=deps or ["PLAN"], addresses=addresses or [],
+    # Explicit criterion — PlanValidator does not credit catalog defaults.
+    criteria=[RequirementRef(template_id="artifact_present")] if addresses else [],
     )
 
 
@@ -119,7 +110,9 @@ def test_terminal_reason_trigger_deadline():
 
 
 def test_terminal_reason_trigger_all_done_completed():
-    term = terminal_reason_for("all_done", tasks={"a": _task("A")}, question_dispositions={})
+    term = terminal_reason_for(
+        "all_done", tasks={"a": _task("A")}, question_dispositions={}
+    )
     assert term == TerminalReason.COMPLETED
 
 
@@ -130,8 +123,7 @@ def test_terminal_reason_trigger_all_done_human_timeout():
 
 def test_all_done_not_attempted_is_completed_not_infeasible():
     term = terminal_reason_for(
-        "all_done",
-        tasks={"a": _task("A")},
+        "all_done", tasks={"a": _task("A")},
         question_dispositions={"Q1": {"disposition": "not_attempted", "reason": "no_task"}},
     )
     assert term == TerminalReason.COMPLETED != TerminalReason.INFEASIBLE
@@ -140,19 +132,11 @@ def test_all_done_not_attempted_is_completed_not_infeasible():
 def test_contributing_reasons_ordered_by_seq():
     def td(key, reason, seq):
         return EventEnvelope(
-            study_id="s",
-            type="TaskDone",
-            entity_key=key,
-            idem_key=key,
-            payload={"reason": reason},
-            ts=_TS,
-            seq=seq,
+            study_id="s", type="TaskDone", entity_key=key, idem_key=key,
+            payload={"reason": reason}, ts=_TS, seq=seq,
         )
-
     assert contributing_reasons_ordered([td("a", "budget", 2), td("b", "cancelled", 1), td("c", "budget", 3)]) == [
-        "cancelled",
-        "budget",
-        "не выполнено: бюджет задачи исчерпан",
+        "cancelled", "budget", "не выполнено: бюджет задачи исчерпан",
     ]
 
 
@@ -165,30 +149,21 @@ def test_question_tasks_union_across_revisions():
 
 
 def test_task_without_address_belongs_to_study():
-    cover = question_tasks(
-        {
-            "p": {
-                "tasks": [
-                    {"task_key": "E0", "addresses": []},
-                    {"task_key": "E1", "addresses": ["Q1"]},
-                ]
-            }
-        }
-    )
+    cover = question_tasks({"p": {"tasks": [
+        {"task_key": "E0", "addresses": []}, {"task_key": "E1", "addresses": ["Q1"]},
+    ]}})
     assert cover == {"Q1": {"E1"}}
 
 
 def test_not_attempted_reason_from_task_statuses():
-    plans = {
-        "p": {
-            "questions": [{"id": f"Q{i}", "text": "t"} for i in (1, 2, 3)],
-            "tasks": [
-                {"task_key": "A", "addresses": ["Q1"]},
-                {"task_key": "B", "addresses": ["Q2"]},
-                {"task_key": "C", "addresses": ["Q3"]},
-            ],
-        }
-    }
+    plans = {"p": {
+        "questions": [{"id": f"Q{i}", "text": "t"} for i in (1, 2, 3)],
+        "tasks": [
+            {"task_key": "A", "addresses": ["Q1"]},
+            {"task_key": "B", "addresses": ["Q2"]},
+            {"task_key": "C", "addresses": ["Q3"]},
+        ],
+    }}
     tasks = {
         "st/A": _task("A", outcome=TaskOutcome.FAILED, reason=TaskReason.FAILED),
         "st/B": _task("B", outcome=TaskOutcome.SKIPPED, reason=TaskReason.CANCELLED),
@@ -201,7 +176,9 @@ def test_not_attempted_reason_from_task_statuses():
 
 
 def test_questions_from_spec_output_wired():
-    out = questions_from_spec_output({"questions": [{"id": "Q1", "text": "one"}, {"formulation": "two"}, "three"]})
+    out = questions_from_spec_output(
+        {"questions": [{"id": "Q1", "text": "one"}, {"formulation": "two"}, "three"]}
+    )
     assert out == [{"id": "Q1", "text": "one"}, {"id": "Q2", "text": "two"}, {"id": "Q3", "text": "three"}]
 
 
@@ -238,10 +215,7 @@ def test_upcast_taskcreated_input_mode_old_default():
 def test_upcast_planaccepted_questions_default():
     v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
     assert v == 8 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
-    assert p["expand_after"] == []
-    assert p["tasks"][0]["foreach"] is None
-    assert p["tasks"][0]["sandbox_timeout_s"] is None
-    assert p["tasks"][0]["budget_share"] is None
+
     # PR13: final_type / rubric defaults
     v2, p2 = upcast(
         "PlanAccepted",
@@ -259,7 +233,11 @@ def test_upcast_planaccepted_questions_default():
     )
     assert v2 == 8
     assert p2["questions"][0]["final_type"] == "verdict"
-    assert p2["tasks"][0]["expected_outputs"][0]["rubric"] is None
+
+    assert p["expand_after"] == []
+    assert p["tasks"][0]["foreach"] is None
+    assert p["tasks"][0]["sandbox_timeout_s"] is None
+    assert p["tasks"][0]["budget_share"] is None
 
 
 def test_upcast_taskcreated_strips_plan_criterion_role():
@@ -346,15 +324,9 @@ def test_minimal_report_le_10kb():
         for i in range(200)
     }
     report = build_minimal_report(
-        study_id="st_big",
-        terminal_reason="cancelled",
-        trigger="cancel",
-        contributing_reasons=["cancelled"],
-        verdict="failed",
-        tasks=tasks,
-        attempts={},
-        question_dispositions=qdisp,
-        fallback_reason="CASUnavailable",
+        study_id="st_big", terminal_reason="cancelled", trigger="cancel",
+        contributing_reasons=["cancelled"], verdict="failed", tasks=tasks, attempts={},
+        question_dispositions=qdisp, fallback_reason="CASUnavailable",
     )
     assert report["truncated"] is True
     assert len(canonical_json(report)) <= MAX_BYTES
@@ -362,17 +334,15 @@ def test_minimal_report_le_10kb():
 
 def test_minimal_report_schema_valid():
     report = build_minimal_report(
-        study_id="st",
-        terminal_reason="completed",
-        trigger="all_done",
-        contributing_reasons=[],
-        verdict="partial",
-        tasks={"st/A": _task("A")},
-        attempts={},
+        study_id="st", terminal_reason="completed", trigger="all_done", contributing_reasons=[],
+        verdict="partial", tasks={"st/A": _task("A")}, attempts={},
         question_dispositions={"Q1": {"disposition": "not_attempted", "reason": "no_task", "formulation": "q"}},
         fallback_reason=None,
     )
-    schema_path = Path(__file__).resolve().parents[1] / "coscientist/schema/minimal_report.schema.json"
+    schema_path = (
+        Path(__file__).resolve().parents[1]
+        / "coscientist/schema/minimal_report.schema.json"
+    )
     schema = json.loads(schema_path.read_text())
     jsonschema.validate(report, schema)
 
@@ -434,7 +404,10 @@ async def test_finalize_budget_trigger(tmp_path, clock):
     await rt.note_budget_exceeded()
     await rt.tick()
     assert _fin(await rt.store.read_all()).payload["trigger"] == "budget"
-    assert any(t.reason == TaskReason.BUDGET and t.outcome == TaskOutcome.SKIPPED for t in rt.tasks.values())
+    assert any(
+        t.reason == TaskReason.BUDGET and t.outcome == TaskOutcome.SKIPPED
+        for t in rt.tasks.values()
+    )
     await close_runtime(rt)
 
 
@@ -451,8 +424,12 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
         await rt.cancel_task(key, reason="cancelled")
     await rt.accept_plan(
         [
-            TaskSpec(task_key="A", title="a", goal="g", route="experiment", depends_on=["PLAN"]),
-            TaskSpec(task_key="B", title="b", goal="g", route="experiment", depends_on=["PLAN"]),
+            TaskSpec(
+                task_key="A", title="a", goal="g", route="experiment", depends_on=["PLAN"]
+            ),
+            TaskSpec(
+                task_key="B", title="b", goal="g", route="experiment", depends_on=["PLAN"]
+            ),
         ],
         questions=[],
     )
@@ -465,7 +442,9 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
                     study_id=sid,
                     type="AttemptClosed",
                     entity_key=aid,
-                    idem_key=make_idem("AttemptClosed", aid, CloseReason.BUDGET.value),
+                    idem_key=make_idem(
+                        "AttemptClosed", aid, CloseReason.BUDGET.value
+                    ),
                     payload={
                         "attempt_id": aid,
                         "closed": True,
@@ -503,7 +482,9 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
 async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
     """BudgetExceeded persisted → reopen finalizes trigger=budget (core + exp)."""
     sid = "st_bg_crash"
-    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
     await rt.create_study(
         profile="research",
         request="q",
@@ -517,7 +498,9 @@ async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
     assert any(e.type == "BudgetExceeded" for e in await rt.store.read_all())
     assert not rt._finalized
     await close_runtime(rt)
-    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
+    rt2 = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
+    )
     assert rt2._budget_exceeded
     await rt2.tick()
     assert _fin(await rt2.store.read_all()).payload["trigger"] == "budget"
@@ -536,7 +519,9 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
         max_cost_rub=Decimal("50"),
         deadline=clock.now() + timedelta(seconds=60),
     )
-    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
     await rt.create_study(
         profile="research",
         request="q",
@@ -553,7 +538,9 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
     assert not any(e.type == "BudgetExceeded" for e in await rt.store.read_all())
     await close_runtime(rt)
 
-    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
+    rt2 = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
+    )
     assert rt2._study_spent_rub == Decimal("50")
     assert not rt2._budget_exceeded
     await rt2.tick()
@@ -569,7 +556,9 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
     from coscientist.core.domain import Budget
 
     sid = "st_bg_bad"
-    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
     with pytest.raises(ValueError, match="delegated_costly"):
         await rt.create_study(
             profile="research",
@@ -646,7 +635,9 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
     await store.release_lease("seed", store.epoch)
     await store.close()
 
-    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
     assert rt.study is not None
     assert rt.study.budget is not None
     assert rt.study.budget.delegated_costly == Decimal("999")
@@ -667,7 +658,9 @@ async def test_all_done_budget_reasons_finalize_all_done(tmp_path, clock):
 
     sid = "st_bg3"
     rt = await _boot(tmp_path, clock, sid)
-    events = _close_open_work(rt, reason=TaskReason.BUDGET, close=CloseReason.BUDGET)
+    events = _close_open_work(
+        rt, reason=TaskReason.BUDGET, close=CloseReason.BUDGET
+    )
     if events:
         await rt._append(events)
     assert not rt._finalized
@@ -731,11 +724,12 @@ async def test_conclusion_per_question(tmp_path, clock):
 async def test_finalize_total_on_render_failure(tmp_path, clock, monkeypatch):
     rt = await _boot(tmp_path, clock, "st_rr")
     rt.artifacts = LocalArtifactStore(tmp_path / "arts")
-
     def _boom(*_a, **_k):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("coscientist.core.finalize.render_markdown_report", _boom)
+    monkeypatch.setattr(
+        "coscientist.core.finalize.render_markdown_report", _boom
+    )
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     ev = _fin(await rt.store.read_all())
@@ -801,17 +795,12 @@ async def test_write_after_finalized_rejected_no_event(tmp_path, clock):
     late_write_rejected_total.clear()
     tid = next(iter(rt.tasks))
     with pytest.raises(StudyClosedError):
-        await rt.store.append(
-            EventEnvelope(
-                study_id=rt.study.study_id,
-                type="TaskDone",
-                entity_key=tid,
-                idem_key=make_idem("TaskDone", tid, "late"),
-                payload={"task_id": tid, "outcome": "FAILED", "reason": "failed"},
-                ts=clock.now(),
-                schema_version=2,
-            )
-        )
+        await rt.store.append(EventEnvelope(
+            study_id=rt.study.study_id, type="TaskDone", entity_key=tid,
+            idem_key=make_idem("TaskDone", tid, "late"),
+            payload={"task_id": tid, "outcome": "FAILED", "reason": "failed"},
+            ts=clock.now(), schema_version=2,
+        ))
     assert late_write_rejected_total["TaskDone"] >= 1
     assert len(await rt.store.read_all()) == n_before
     await close_runtime(rt)

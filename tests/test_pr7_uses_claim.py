@@ -249,7 +249,9 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
 async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_cls):
     """P2 claim input → uses_claim edge; bindings+digest on AttemptStarted."""
     sid = "st_uses_cl"
-    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
     await rt.create_study(
         profile="research",
         request="q",
@@ -309,7 +311,9 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
     await close_runtime(rt)
 
     # Replay: bindings survive reopen.
-    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
+    rt2 = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
+    )
     assert rt2.attempts[aid]["inputs"][0]["ref"] == claim_id
     assert rt2.attempts[aid]["inputs"][0]["digest"] == started.payload["inputs"][0]["digest"]
     await close_runtime(rt2)
@@ -324,7 +328,9 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
     from tests.helpers import attach_executor
 
     sid = "st_stub_cl"
-    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
     await rt.create_study(
         profile="research",
         request="q",
@@ -367,7 +373,9 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
     aid0 = await rt.start_attempt("E0", provenance="stub")
     assert aid0 == aid0_expected
     content = b'{"count": 225}'
-    art = arts.put(content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json")
+    art = arts.put(
+        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
+    )
     await rt.executor.record(
         aid0,
         AgentTaskOutput(
@@ -391,7 +399,9 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
 async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
     """GraphEdgeAdded with missing endpoints raises (no silent swallow)."""
     sid = "st_edge_loud"
-    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
     await rt.create_study(
         profile="research",
         request="q",
@@ -430,7 +440,9 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
     from coscientist.core.domain import Task, TaskKind, TaskState
 
     sid = "st_tc_v4"
-    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
     await rt.create_study(
         profile="research",
         request="q",
@@ -475,7 +487,9 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
     )
     await close_runtime(rt)
 
-    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
+    rt2 = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
+    )
     task = rt2.tasks[tid]
     assert task.spec.inputs[0].kind == "artifact"
     assert task.spec.inputs[0].from_task == "A"
@@ -486,7 +500,9 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
 async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
     """Old AttemptStarted schema_version=2 (no inputs) upcasts to [] on reopen."""
     sid = "st_as_v2"
-    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
     await rt.create_study(
         profile="research",
         request="q",
@@ -540,7 +556,9 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
     )
     await close_runtime(rt)
 
-    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
+    rt2 = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
+    )
     assert "inputs" in rt2.attempts[aid]
     assert rt2.attempts[aid]["inputs"] == []
     await close_runtime(rt2)

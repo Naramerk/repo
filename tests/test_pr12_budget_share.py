@@ -47,23 +47,41 @@ from tests.helpers import attach_executor, close_runtime, open_runtime, open_run
 
 
 def _exp(key: str, *, depends_on: list[str] | None = None, **kw) -> TaskSpec:
-    return TaskSpec(
+    """Build a TaskSpec that satisfies PlanValidator invariants (PR13).
+
+    Catalog defaults do **not** count as criteria. ``criteria=False`` ⇒ no
+    addresses by default. Addressing tasks always get an explicit RequirementRef
+    so ``accept_plan`` / ``validate_final_types`` accept them.
+    """
+    from coscientist.core.plan_validate import _has_criterion
+
+    want_criteria = kw.get("criteria", True)
+    if want_criteria is False:
+        criteria: list = []
+        addresses = kw.get("addresses", [])
+    elif want_criteria is True:
+        criteria = [RequirementRef(template_id="value_match")]
+        addresses = kw.get("addresses", ["Q1"])
+    else:
+        criteria = list(want_criteria)
+        addresses = kw.get("addresses", ["Q1"] if criteria else [])
+    spec = TaskSpec(
         task_key=key,
         title=kw.get("title", key),
         goal=kw.get("goal", "g"),
         route="experiment",
         depends_on=depends_on or [],
-        # Empty criteria ⇒ no addresses by default (PlanValidator: no catalog-default credit).
-        addresses=kw.get(
-            "addresses",
-            ["Q1"] if kw.get("criteria", True) else [],
-        ),
-        criteria=[RequirementRef(template_id="value_match")] if kw.get("criteria", True) else [],
+        addresses=addresses,
+        criteria=criteria,
         budget_share=kw.get("budget_share"),
         deadline_share=kw.get("deadline_share"),
         foreach=kw.get("foreach"),
         required=kw.get("required", True),
     )
+    # Fail closed in the helper so accept_plan tests never rely on catalog defaults.
+    if spec.addresses and not _has_criterion(spec):
+        raise ValueError("PlanValidator: addressing task needs ≥1 explicit criterion")
+    return spec
 
 
 async def _boot(tmp_path, clock, sid: str, **create_kw):
