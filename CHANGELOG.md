@@ -8,6 +8,7 @@
 - Taint from journal `AttemptStarted.tainted_context`; per-attempt `ContextVar` for sandbox puts (foreach-safe); taint/side_effect deny → `SideEffectDenied` + report lines.
 - Journal effect index + AttemptStarted taint map cached incrementally on the writer (no per-invoke ``read_all``); artifact store required before write call.
 - `POST /studies` Idempotency-Key: deterministic id, `O_EXCL`, empty-file recover, fsync+rename; takeover + multi-process race tests.
+- Upcasters: AttemptStarted **v7** (`tainted_context`) chained after PR12 v5 shares / v6 `budget_limit_rub` (TaskCreated v9 / PlanAccepted v7 unchanged).
 
 ### M1 PR12
 - `TaskSpec.budget_share` / `deadline_share` (None = equal remainder of undistributed pool).
