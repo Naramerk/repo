@@ -74,6 +74,10 @@ class LocalProjectMixin:
                     raw_spent = {}
                     self._task_spent_rub: dict[str, Decimal] = raw_spent
                 raw_spent[str(tid)] = Decimal(str(raw_spent.get(str(tid), 0))) + spent
+        elif ev.type == "BudgetSharesAdjusted":
+            from coscientist.core.share_alloc import fold_budget_shares_adjusted
+
+            fold_budget_shares_adjusted(self, p)
         elif ev.type == "BudgetExceeded":
             if str(p.get("scope") or "study") == "study":
                 self._budget_exceeded = True

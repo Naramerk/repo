@@ -4,11 +4,13 @@
 
 ### M1 PR12
 - `TaskSpec.budget_share` / `deadline_share` (None = equal remainder of undistributed pool).
-- Validators: Σ `budget_share` ≤ 1; critical-path Σ `deadline_share` ≤ 1 (parallel branches do not stack).
-- P2 renorm (journaled on `AttemptStarted` v5): deadline from CP∩not-started shares × remaining after `replan_reserve`; budget from not-started shares × (`budget_remaining − reserve`).
-- Task-level share enforcement via `record_budget_debit(..., task_id=)` → `SKIPPED(budget)` without closing the study; study exhaustion still finalizes with Russian report line «не выполнено: бюджет исчерпан».
-- Foreach children inherit equal splits of the template’s shares; agents cannot raise their own `budget_share` (critic `agent_share_raise`); HITL gate `budget` supports «decide yourself» (`delegated_by` on study graph).
-- Upcasters: TaskCreated v8 / PlanAccepted v6 also carry share defaults (stacked with PR17 sandbox fields); AttemptStarted v5.
+- Validators / plan critic: Σ `budget_share` ≤ (1−`replan_reserve`); per-task range + `Study.max_task_budget_share`; critical-path Σ `deadline_share` ≤ (1−reserve). Same critic on `accept_plan`, expansions, foreach, and HITL budget apply.
+- P2 renorm (journaled on `AttemptStarted` v5): when shares present, `deadline = min(task.deadline, renormed, ed)`; without shares, `min(task.deadline, ed)` only. Budget: no `max_cost_rub` → `allocated_budget_rub=None` (no task cap); pool/share 0 → refuse at start `SKIPPED(budget)` (no attempt); else exceed only when `spent > cap`. Cap fixed at first allocation across retries; spend accumulates.
+- Concurrent starts: pool subtracts allocated-but-unspent of open tasks so reserve stays untouchable.
+- Executor wires `AgentTaskOutput.cost_rub` → `BudgetDebited(task_id=)` via `on_budget_debit`.
+- Foreach children **split** the template’s share (`template/N`; `None` template ⇒ `1/N` each); Σ rechecked after expansion. Agents cannot raise own `budget_share` (`agent_share_raise`).
+- HITL `budget`: explicit shares via journaled `BudgetSharesAdjusted` (critic-validated); `delegated_by`/`approved_by` on the HITL decision node only (not plan). Report: task «не выполнено: бюджет задачи исчерпан»; study «не выполнено: бюджет исчерпан».
+- Upcasters: TaskCreated v8 / PlanAccepted v6 also carry share defaults (stacked with PR17 sandbox fields); AttemptStarted v5; StudyCreated v9 (`max_task_budget_share`).
 
 ### M1 PR17
 - Executable CodeCheck kinds + sandbox limits (B7, B8, K5): `exec_runs`, `tests_pass`, `metric_on_holdout`, `reproducible_rerun`.

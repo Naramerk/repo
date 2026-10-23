@@ -299,9 +299,10 @@ class AttemptsMixin:
         now = self.clock.now()
         assert self.study is not None
         sid = self.study.study_id
-        from coscientist.core.shares import p2_share_payload_fields
+        from coscientist.core.shares import attempt_share_fields_or_refuse
 
         lim_payload = [lim.model_dump(mode="json") if hasattr(lim, "model_dump") else dict(lim) for lim in limitations]
+        share_fields = await attempt_share_fields_or_refuse(self, task)
         payload = {
             "attempt_id": aid,
             "n": n,
@@ -315,7 +316,7 @@ class AttemptsMixin:
             "study_id": sid,
             "inputs": [b.model_dump(mode="json") for b in bindings],
             "limitations": lim_payload,
-            **p2_share_payload_fields(self, task),
+            **share_fields,
         }
         events: list[EventEnvelope] = [
             EventEnvelope(

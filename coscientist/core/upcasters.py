@@ -315,6 +315,13 @@ def _study_created_v7_to_v8(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _study_created_v8_to_v9(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR12: max_task_budget_share default 1.0."""
+    out = dict(payload)
+    out.setdefault("max_task_budget_share", 1.0)
+    return out
+
+
 def _plan_accepted_v3_to_v4_expand_after(payload: dict[str, Any]) -> dict[str, Any]:
     """PR9: PlanAccepted.expand_after defaults to []."""
     out = dict(payload)
@@ -432,6 +439,7 @@ register_upcaster("StudyCreated", 4, _study_created_v4_to_v5)
 register_upcaster("StudyCreated", 5, _study_created_v5_to_v6)
 register_upcaster("StudyCreated", 6, _study_created_v6_to_v7)
 register_upcaster("StudyCreated", 7, _study_created_v7_to_v8)
+register_upcaster("StudyCreated", 8, _study_created_v8_to_v9)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)

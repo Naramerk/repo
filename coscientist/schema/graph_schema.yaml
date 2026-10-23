@@ -82,8 +82,8 @@ nodes:
       - {name: hypotheses, type: obj(Need), required: true, note: "{needed, reason}"}
       - {name: literature, type: obj(Need), required: true, note: "{needed, reason}"}
       - {name: critic_decision, type: enum(accept|revise|reject), required: false}
-      - {name: approved_by, type: enum(human|critic), required: false}
-      - {name: delegated_by, type: enum(human|timeout), required: false}
+      - {name: approved_by, type: enum(human|critic), required: false, note: "HITL plan gate; human|critic"}
+      - {name: delegated_by, type: enum(human|timeout), required: false, note: "«реши сам»/timeout; budget gate does NOT set this on plan"}
   - kind: experiment
     prefix: X
     created_by: PLAN-n (при accept)
@@ -170,8 +170,17 @@ nodes:
     fields:
       - {name: artifact_id, type: str, required: true}
       - {name: format, type: str, required: true}
-      - {name: approved_by, type: enum(human|critic), required: false}
-      - {name: delegated_by, type: enum(human|timeout), required: false}
+      - {name: approved_by, type: enum(human|critic), required: false, note: "HITL: human|critic who approved"}
+      - {name: delegated_by, type: enum(human|timeout), required: false, note: "HITL «реши сам»/timeout → critic; else absent"}
+  - kind: hitl
+    prefix: HITL
+    created_by: HITL-шлюз (HitlDecided / delegate)
+    from_output: HitlDecided
+    text_ru: Узел решения HITL; budget-шлюз пишет approved_by/delegated_by только сюда (не на plan)
+    fields:
+      - {name: approved_by, type: enum(human|critic), required: false, note: "кто утвердил: human или critic после делегирования"}
+      - {name: delegated_by, type: enum(human|timeout), required: false, note: "human=«реши сам»; timeout=on_timeout=delegate; иначе нет"}
+      - {name: kind_gate, type: str, required: false, note: "исходный HitlOpened.kind (plan|budget|…)"}
 edges:
   - {name: asks, pairs: [[study, question]], card: {out: "1..n", in: "1..1"}, by: spec}
   - {name: constrained_by, pairs: [[study, constraint]], card: {out: "0..n", in: "1..1"}, by: spec}

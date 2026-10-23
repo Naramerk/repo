@@ -35,7 +35,6 @@ from coscientist.core.store import SqliteEventStore
 from coscientist.core.study_view import study_view
 from coscientist.core.writer import StudyWriter
 
-
 class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
     """In-process owner of one study: store, writer, tasks, timers."""
 
@@ -130,6 +129,8 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                 },
             )()
 
+        from coscientist.core.shares import make_budget_debit_cb
+
         ex = Executor(
             self.writer,
             catalog,
@@ -142,6 +143,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             get_graph=lambda: self.graph,
             get_results=lambda: self.results,
             max_attempts=self.max_attempts,
+            on_budget_debit=make_budget_debit_cb(self),
         )
         self.artifacts = artifacts
         self.catalog = catalog
@@ -301,12 +303,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         extra: dict[str, Any] | None = None,
         task_id: str | None = None,
     ) -> None:
-        """Public writer for ``BudgetDebited`` (study spend fold).
-
-        Does not emit ``BudgetExceeded`` — call ``tick`` (or costly settle) so the
-        producer re-checks the cap. Optional ``task_id`` enforces budget_share
-        (PR12): over-cap → TaskDone(SKIPPED, budget) without closing the study.
-        """
+        """Public writer for ``BudgetDebited`` (study + optional task_id share)."""
         if self.study is None:
             raise RuntimeError("no study")
         spent = Decimal(str(spent_rub))
@@ -498,7 +495,6 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             prov = self._provenance_for_retry(tid)
             self._retry_at.pop(tid, None)
             await self.start_attempt(tid, provenance=prov)
-
 
 def new_owner() -> str:
     return str(uuid.uuid4())

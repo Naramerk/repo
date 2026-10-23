@@ -338,6 +338,8 @@ class Study(Frozen):
     plan_timeout_s: int = Field(default=600, ge=1)
     # PR10: cap foreach children; excess → report limitation (sorted order kept).
     max_foreach_children: int = Field(default=32, ge=1)
+    # PR12: plan critic — no single task may claim more than this budget_share.
+    max_task_budget_share: float = Field(default=1.0, ge=0.0, le=1.0)
 
     def effective_deadline(self) -> datetime:
         """Last instant usable by tasks/attempts/HITL (deadline − finalize reserve)."""
@@ -645,6 +647,8 @@ class AgentTaskOutput(Frozen):
     downgrade: DowngradeClaim | None = None
     # PR9: typed request; core enqueues PLAN-n → critic (never direct PlanExpanded).
     expansion_request: ExpansionRequest | None = None
+    # PR12: actual spend → BudgetDebited(task_id) from Executor.record.
+    cost_rub: Decimal | None = None
 
 
 class StudyView(Frozen):

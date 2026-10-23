@@ -133,7 +133,7 @@ def test_contributing_reasons_ordered_by_seq():
             payload={"reason": reason}, ts=_TS, seq=seq,
         )
     assert contributing_reasons_ordered([td("a", "budget", 2), td("b", "cancelled", 1), td("c", "budget", 3)]) == [
-        "cancelled", "budget", "не выполнено: бюджет исчерпан",
+        "cancelled", "budget", "не выполнено: бюджет задачи исчерпан",
     ]
 
 

@@ -7,16 +7,18 @@ Agents cannot raise their own budget_share — only accept_plan / HITL+critic.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from decimal import Decimal
 from typing import Any, Literal, Mapping, Sequence
 
 from coscientist.core.domain import Study, Task, TaskSpec, TaskState
 
 ShareField = Literal["budget_share", "deadline_share"]
 
-# Report line when a task or study closes for budget (Russian, DESIGN_M1 / finalize).
+# Study-level vs per-task Russian report lines (finalize contributing_reasons).
 BUDGET_EXHAUSTED_LINE = "не выполнено: бюджет исчерпан"
+TASK_BUDGET_EXHAUSTED_LINE = "не выполнено: бюджет задачи исчерпан"
+
+# Default per-task cap when Study.max_task_budget_share is unset.
+DEFAULT_MAX_TASK_BUDGET_SHARE = 1.0
 
 
 def _raw(spec: TaskSpec, field: ShareField) -> float | None:
@@ -26,13 +28,21 @@ def _raw(spec: TaskSpec, field: ShareField) -> float | None:
     return float(v)
 
 
+def shares_present(tasks: Sequence[TaskSpec]) -> bool:
+    """True when any task has an explicit budget_share or deadline_share."""
+    return any(
+        t.budget_share is not None or t.deadline_share is not None for t in tasks
+    )
+
+
 def resolve_shares(
     tasks: Sequence[TaskSpec], field: ShareField
 ) -> dict[str, float]:
     """Fill unspecified shares with equal parts of the undistributed remainder.
 
-    Explicit shares must already sum to ≤ 1 (caller validates). Remainder
-    ``1 − Σ explicit`` is split equally among tasks with ``None``.
+    Explicit shares must already sum to ≤ cap (caller validates). Remainder
+    ``cap − Σ explicit`` is split equally among tasks with ``None`` (cap=1 here;
+    accept/critic may enforce a tighter Σ vs replan_reserve).
     """
     specs = list(tasks)
     if not specs:
@@ -48,9 +58,19 @@ def resolve_shares(
     return out
 
 
-def validate_budget_shares(tasks: Sequence[TaskSpec]) -> None:
-    """Σ budget_share (explicit) ≤ 1 across the active revision."""
+def validate_budget_shares(
+    tasks: Sequence[TaskSpec],
+    *,
+    replan_reserve: float = 0.0,
+    max_task_share: float = DEFAULT_MAX_TASK_BUDGET_SHARE,
+) -> None:
+    """Σ budget_share ≤ (1 − replan_reserve); per-task range and max_task_share."""
     specs = list(tasks)
+    reserve = float(replan_reserve)
+    if not (0.0 <= reserve <= 1.0):
+        raise ValueError(f"replan_reserve out of range: {reserve}")
+    sigma_cap = 1.0 - reserve
+    max_share = float(max_task_share)
     total = 0.0
     for t in specs:
         v = _raw(t, "budget_share")
@@ -58,9 +78,13 @@ def validate_budget_shares(tasks: Sequence[TaskSpec]) -> None:
             continue
         if v < 0.0 or v > 1.0:
             raise ValueError(f"budget_share out of range for {t.task_key!r}: {v}")
+        if v > max_share + 1e-9:
+            raise ValueError(
+                f"budget_share above max_task_share for {t.task_key!r}: {v}>{max_share}"
+            )
         total += v
-    if total > 1.0 + 1e-9:
-        raise ValueError(f"Σ budget_share > 1 ({total})")
+    if total > sigma_cap + 1e-9:
+        raise ValueError(f"Σ budget_share > {sigma_cap} (1−replan_reserve) ({total})")
 
 
 def _dag_adj(tasks: Sequence[TaskSpec]) -> dict[str, list[str]]:
@@ -73,12 +97,24 @@ def _dag_adj(tasks: Sequence[TaskSpec]) -> dict[str, list[str]]:
     return adj
 
 
-def critical_path_deadline_share_sum(tasks: Sequence[TaskSpec]) -> float:
-    """Max Σ resolved deadline_share over any source→sink path in the DAG."""
+def critical_path_deadline_share_sum(
+    tasks: Sequence[TaskSpec], *, explicit_only: bool = False
+) -> float:
+    """Max Σ deadline_share over any source→sink path in the DAG.
+
+    ``explicit_only``: None contributes 0 (plan critic vs reserve). Otherwise
+    unresolved shares are filled via ``resolve_shares`` (allocation / tests).
+    """
     specs = list(tasks)
     if not specs:
         return 0.0
-    shares = resolve_shares(specs, "deadline_share")
+    if explicit_only:
+        shares = {}
+        for t in specs:
+            v = _raw(t, "deadline_share")
+            shares[t.task_key] = 0.0 if v is None else float(v)
+    else:
+        shares = resolve_shares(specs, "deadline_share")
     keys = {t.task_key for t in specs}
     preds = {t.task_key: [d for d in t.depends_on if d in keys] for t in specs}
     adj = _dag_adj(specs)
@@ -108,57 +144,114 @@ def critical_path_deadline_share_sum(tasks: Sequence[TaskSpec]) -> float:
     return best
 
 
-def validate_deadline_shares(tasks: Sequence[TaskSpec]) -> None:
-    """Critical-path Σ deadline_share ≤ 1 (parallel branches do not add)."""
+def validate_deadline_shares(
+    tasks: Sequence[TaskSpec],
+    *,
+    replan_reserve: float = 0.0,
+) -> None:
+    """Critical-path Σ **explicit** deadline_share ≤ (1 − replan_reserve)."""
     specs = list(tasks)
+    sigma_cap = 1.0 - float(replan_reserve)
     for t in specs:
         v = _raw(t, "deadline_share")
         if v is not None and (v < 0.0 or v > 1.0):
             raise ValueError(f"deadline_share out of range for {t.task_key!r}: {v}")
-    # Also reject explicit sum > 1 on any single node set (path check covers chains).
-    path = critical_path_deadline_share_sum(specs)
-    if path > 1.0 + 1e-9:
-        raise ValueError(f"critical-path Σ deadline_share > 1 ({path})")
+    path = critical_path_deadline_share_sum(specs, explicit_only=True)
+    if path > sigma_cap + 1e-9:
+        raise ValueError(
+            f"critical-path Σ deadline_share > {sigma_cap} (1−replan_reserve) ({path})"
+        )
 
 
-def validate_plan_shares(tasks: Sequence[TaskSpec]) -> None:
-    """accept_plan / expansion: budget Σ ≤ 1 and deadline critical-path ≤ 1."""
-    validate_budget_shares(tasks)
-    validate_deadline_shares(tasks)
+def validate_plan_shares(
+    tasks: Sequence[TaskSpec],
+    *,
+    replan_reserve: float = 0.0,
+    max_task_share: float = DEFAULT_MAX_TASK_BUDGET_SHARE,
+) -> None:
+    """accept_plan / expansion / HITL: same deterministic critic gate for shares."""
+    validate_budget_shares(
+        tasks, replan_reserve=replan_reserve, max_task_share=max_task_share
+    )
+    validate_deadline_shares(tasks, replan_reserve=replan_reserve)
 
 
-def split_parent_share(parent: float | None, n: int) -> list[float | None]:
-    """Foreach children share a parent's budget/deadline share equally.
+def critic_plan_shares(
+    tasks: Sequence[TaskSpec],
+    *,
+    study: Study | None = None,
+    replan_reserve: float | None = None,
+    max_task_share: float | None = None,
+) -> str | None:
+    """Return error detail, or None if shares pass the plan critic."""
+    reserve = (
+        float(replan_reserve)
+        if replan_reserve is not None
+        else float(getattr(study, "replan_reserve", 0.0) or 0.0)
+    )
+    mx = (
+        float(max_task_share)
+        if max_task_share is not None
+        else float(
+            getattr(study, "max_task_budget_share", DEFAULT_MAX_TASK_BUDGET_SHARE)
+            or DEFAULT_MAX_TASK_BUDGET_SHARE
+        )
+    )
+    try:
+        validate_plan_shares(tasks, replan_reserve=reserve, max_task_share=mx)
+    except ValueError as e:
+        return str(e) or "invalid_shares"
+    return None
 
-    ``None`` parent → all children ``None`` (equal remainder at resolve time).
-    ``n==0`` → [].
+
+def split_parent_share(parent: float | None, n: int) -> list[float]:
+    """Foreach children SPLIT the template's share (template / N).
+
+    ``None`` template ⇒ one default share (1.0) split among N children (explicit).
     """
     if n <= 0:
         return []
-    if parent is None:
-        return [None] * n
-    each = float(parent) / float(n)
+    base = 1.0 if parent is None else float(parent)
+    each = base / float(n)
     return [each] * n
 
 
 def apply_foreach_parent_shares(
-    template: TaskSpec, children: Sequence[TaskSpec]
+    template: TaskSpec,
+    children: Sequence[TaskSpec],
+    *,
+    plan_tasks: Sequence[TaskSpec] | None = None,
+    share_cap: float | None = None,
 ) -> list[TaskSpec]:
-    """Stamp equal splits of the template's shares onto concrete children."""
+    """Stamp equal splits of the template's shares onto concrete children.
+
+    ``None`` template share ⇒ one resolved default from ``plan_tasks`` (else 1.0),
+    capped by ``share_cap`` (typically ``1 − replan_reserve``) so Σ still passes critic.
+    """
     n = len(children)
-    b_parts = split_parent_share(template.budget_share, n)
-    d_parts = split_parent_share(template.deadline_share, n)
-    out: list[TaskSpec] = []
-    for i, child in enumerate(children):
-        out.append(
-            child.model_copy(
-                update={
-                    "budget_share": b_parts[i],
-                    "deadline_share": d_parts[i],
-                }
-            )
+    tb, td = template.budget_share, template.deadline_share
+    if plan_tasks is not None:
+        if tb is None:
+            tb = resolve_shares(plan_tasks, "budget_share").get(template.task_key)
+        if td is None:
+            td = resolve_shares(plan_tasks, "deadline_share").get(template.task_key)
+    if share_cap is not None:
+        if tb is None:
+            tb = float(share_cap)
+        elif template.budget_share is None:
+            tb = min(float(tb), float(share_cap))
+        if td is None:
+            td = float(share_cap)
+        elif template.deadline_share is None:
+            td = min(float(td), float(share_cap))
+    b_parts = split_parent_share(tb, n)
+    d_parts = split_parent_share(td, n)
+    return [
+        child.model_copy(
+            update={"budget_share": b_parts[i], "deadline_share": d_parts[i]}
         )
-    return out
+        for i, child in enumerate(children)
+    ]
 
 
 def _not_started_keys(runtime_tasks: Mapping[str, Task]) -> set[str]:
@@ -169,7 +262,6 @@ def _not_started_keys(runtime_tasks: Mapping[str, Task]) -> set[str]:
             continue
         if t.attempts:
             continue
-        # Foreach templates are never dispatched.
         if t.spec.foreach is not None:
             continue
         out.add(t.spec.task_key)
@@ -187,17 +279,13 @@ def _plan_specs_for_shares(runtime: Any) -> list[TaskSpec]:
             if isinstance(t, TaskSpec):
                 specs.append(t)
             elif isinstance(t, dict):
-                # Skip foreach templates still in the blob if superseded — keep all;
-                # renorm filters by not-started runtime tasks.
                 specs.append(TaskSpec.model_validate(t))
         if specs:
             return specs
     return [t.spec for t in runtime.tasks.values() if t.spec.foreach is None]
 
 
-def critical_path_from(
-    start_key: str, tasks: Sequence[TaskSpec]
-) -> set[str]:
+def critical_path_from(start_key: str, tasks: Sequence[TaskSpec]) -> set[str]:
     """Nodes on some maximum-share path that includes ``start_key`` (forward)."""
     specs = list(tasks)
     shares = resolve_shares(specs, "deadline_share")
@@ -227,160 +315,29 @@ def critical_path_from(
     return set(best_path)
 
 
-def renorm_deadline(
-    task_key: str,
-    *,
-    study: Study,
-    now: datetime,
-    plan_tasks: Sequence[TaskSpec],
-    not_started: set[str],
-) -> datetime:
-    """P2 deadline: share_i / Σ(CP∩not_started) × remaining (minus replan reserve)."""
-    ed = study.effective_deadline()
-    wall = max(0.0, (ed - now).total_seconds())
-    reserve_frac = float(study.replan_reserve)
-    remaining = wall * (1.0 - reserve_frac)
-    shares = resolve_shares(plan_tasks, "deadline_share")
-    share_i = float(shares.get(task_key, 0.0))
-    cp = critical_path_from(task_key, plan_tasks)
-    peers = [k for k in cp if k in not_started or k == task_key]
-    # Always include self even if already counted in not_started.
-    if task_key not in peers:
-        peers.append(task_key)
-    denom = sum(float(shares.get(k, 0.0)) for k in peers)
-    if denom <= 0.0 or remaining <= 0.0:
-        return min(now, ed) if remaining <= 0.0 else min(now + timedelta(seconds=remaining), ed)
-    span = remaining * (share_i / denom)
-    return min(now + timedelta(seconds=span), ed)
 
-
-def allocate_budget(
-    task_key: str,
-    *,
-    study: Study,
-    spent_rub: Decimal,
-    plan_tasks: Sequence[TaskSpec],
-    not_started: set[str],
-) -> Decimal:
-    """P2 budget_i = share_i / Σ(not_started) × (budget_remaining − budget_reserve)."""
-    bud = study.budget
-    if bud is None or bud.max_cost_rub is None:
-        return Decimal("0")
-    max_cost = Decimal(str(bud.max_cost_rub))
-    remaining = max_cost - Decimal(str(spent_rub))
-    if remaining <= 0:
-        return Decimal("0")
-    reserve = remaining * Decimal(str(study.replan_reserve))
-    pool = remaining - reserve
-    if pool <= 0:
-        return Decimal("0")
-    shares = resolve_shares(plan_tasks, "budget_share")
-    share_i = Decimal(str(shares.get(task_key, 0.0)))
-    peers = set(not_started) | {task_key}
-    denom = sum(Decimal(str(shares.get(k, 0.0))) for k in peers)
-    if denom <= 0:
-        return Decimal("0")
-    return (pool * share_i / denom).quantize(Decimal("0.0001"))
-
-
-def compute_p2_allocation(
-    runtime: Any, task: Task
-) -> tuple[datetime, Decimal]:
-    """Deadline + budget_rub for ``task`` at P2 (deterministic from folded state)."""
-    assert runtime.study is not None
-    study: Study = runtime.study
-    now = runtime.clock.now()
-    plan_tasks = _plan_specs_for_shares(runtime)
-    not_started = _not_started_keys(runtime.tasks)
-    # Current task is about to start — treat as still in the peer set.
-    not_started.add(task.spec.task_key)
-    deadline = renorm_deadline(
-        task.spec.task_key,
-        study=study,
-        now=now,
-        plan_tasks=plan_tasks,
-        not_started=not_started,
-    )
-    spent = Decimal(str(getattr(runtime, "_study_spent_rub", 0) or 0))
-    budget = allocate_budget(
-        task.spec.task_key,
-        study=study,
-        spent_rub=spent,
-        plan_tasks=plan_tasks,
-        not_started=not_started,
-    )
-    return min(deadline, study.effective_deadline()), budget
-
-
-def p2_share_payload_fields(runtime: Any, task: Task) -> dict[str, Any]:
-    """Fields merged into AttemptStarted for journaled share renorm."""
-    deadline, budget = compute_p2_allocation(runtime, task)
-    return {
-        "deadline": deadline.isoformat(),
-        "allocated_budget_rub": str(budget),
-        "share_renorm": True,
+# Lazy re-export allocation API (avoids circular import with share_alloc).
+_ALLOC_EXPORTS = frozenset(
+    {
+        "allocate_budget",
+        "agent_raises_budget_share",
+        "attempt_share_fields_or_refuse",
+        "build_budget_shares_payload",
+        "compute_p2_allocation",
+        "enforce_task_budget_share",
+        "ensure_share_defaults",
+        "fold_budget_shares_adjusted",
+        "make_budget_debit_cb",
+        "outstanding_task_allocations",
+        "p2_share_payload_fields",
+        "renorm_deadline",
     }
+)
 
 
-def agent_raises_budget_share(
-    *,
-    prev_tasks: Sequence[TaskSpec],
-    added_tasks: Sequence[TaskSpec],
-    after_task: str | None,
-) -> str | None:
-    """Reject agent expansions that raise their own (or total) budget_share.
+def __getattr__(name: str) -> Any:
+    if name in _ALLOC_EXPORTS:
+        from coscientist.core import share_alloc
 
-    Only accept_plan / HITL+critic may assign explicit shares that increase a
-    lineage's allocation. Agents may leave shares ``None`` (equal remainder) or
-    split ≤ the after_task's prior resolved share among added tasks.
-    """
-    prev_res = resolve_shares(prev_tasks, "budget_share")
-    after_cap = float(prev_res.get(after_task or "", 0.0))
-    explicit_added = 0.0
-    any_explicit = False
-    for t in added_tasks:
-        v = _raw(t, "budget_share")
-        if v is None:
-            continue
-        any_explicit = True
-        if v < 0.0 or v > 1.0:
-            return f"agent_share_raise:bad:{t.task_key}"
-        explicit_added += v
-    if not any_explicit:
-        return None
-    # Raising: explicit sum on added tasks exceeds the triggering task's share.
-    if after_task and explicit_added > after_cap + 1e-9:
-        return f"agent_share_raise:{after_task}:{explicit_added}>{after_cap}"
-    # Or any single added share > after_cap when after_task known.
-    if after_task:
-        for t in added_tasks:
-            v = _raw(t, "budget_share")
-            if v is not None and v > after_cap + 1e-9:
-                return f"agent_share_raise:{t.task_key}:{v}>{after_cap}"
-    return None
-
-
-def ensure_share_defaults(spec: dict[str, Any]) -> dict[str, Any]:
-    """Upcaster helper: old journals lack budget_share / deadline_share."""
-    out = dict(spec)
-    out.setdefault("budget_share", None)
-    out.setdefault("deadline_share", None)
-    return out
-
-
-async def enforce_task_budget_share(runtime: Any, task_id: str) -> None:
-    """If task spend ≥ allocated share → SKIPPED(budget). Does not close study."""
-    from coscientist.core.reasons import TaskReason
-
-    caps = getattr(runtime, "_task_budget_alloc", None) or {}
-    spent_map = getattr(runtime, "_task_spent_rub", None) or {}
-    cap = caps.get(task_id)
-    if cap is None:
-        return
-    spent = Decimal(str(spent_map.get(task_id, 0)))
-    if spent < Decimal(str(cap)):
-        return
-    task = (getattr(runtime, "tasks", None) or {}).get(task_id)
-    if task is None or task.state == TaskState.DONE:
-        return
-    await runtime.cancel_task(task_id, reason=TaskReason.BUDGET, detail="share_exhausted")
+        return getattr(share_alloc, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

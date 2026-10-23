@@ -29,6 +29,7 @@ from coscientist.core.reasons import TaskReason
 from coscientist.core.recover import recover
 from coscientist.core.shares import (
     BUDGET_EXHAUSTED_LINE,
+    TASK_BUDGET_EXHAUSTED_LINE,
     allocate_budget,
     apply_foreach_parent_shares,
     critical_path_deadline_share_sum,
@@ -166,7 +167,8 @@ def test_foreach_parent_share_split():
     assert parts[0] == pytest.approx(0.2)
     assert parts[1] == pytest.approx(0.2)
     assert parts[2] == pytest.approx(0.2)
-    assert split_parent_share(None, 2) == [None, None]
+    # None template ⇒ one default share (1.0) split among N.
+    assert split_parent_share(None, 2) == pytest.approx([0.5, 0.5])
     parent = _exp("T", budget_share=0.5, deadline_share=0.4)
     stamped = apply_foreach_parent_shares(parent, [_exp("K0"), _exp("K1")])
     assert stamped[0].budget_share == pytest.approx(0.25)
@@ -225,8 +227,9 @@ async def test_reserve_untouchable(tmp_path, clock):
         replan_reserve=0.5,
         budget=Budget(max_cost_rub=Decimal("100")),
     )
+    # Explicit shares ≤ (1−reserve)=0.5; sole task still takes the full pool.
     await rt.accept_plan(
-        [_exp("E0", deadline_share=1.0, budget_share=1.0, criteria=False)],
+        [_exp("E0", deadline_share=0.5, budget_share=0.5, criteria=False)],
         questions=[QuestionSpec(id="Q1", text="q")],
     )
     aid = await rt.start_attempt("E0")
@@ -240,7 +243,7 @@ async def test_reserve_untouchable(tmp_path, clock):
         "E0",
         study=rt.study,
         spent_rub=Decimal("0"),
-        plan_tasks=[_exp("E0", budget_share=1.0)],
+        plan_tasks=[_exp("E0", budget_share=0.5)],
         not_started={"E0"},
     )
     assert alloc == pytest.approx(Decimal("50"))
@@ -267,7 +270,10 @@ async def test_share_split_and_enforcement(tmp_path, clock):
     tid = task_id(rt.study.study_id, "E0")
     cap = Decimal(str(rt.attempts[aid]["allocated_budget_rub"]))
     assert cap == pytest.approx(Decimal("20"))
-    await rt.record_budget_debit(spent_rub=cap, request_id="d1", task_id=tid)
+    # Equality is still within share; exceed only when spent > cap.
+    await rt.record_budget_debit(spent_rub=cap, request_id="d0", task_id=tid)
+    assert rt.tasks[tid].state == TaskState.RUNNING
+    await rt.record_budget_debit(spent_rub=Decimal("0.01"), request_id="d1", task_id=tid)
     t0 = rt.tasks[tid]
     assert t0.state == TaskState.DONE
     assert t0.reason == TaskReason.BUDGET
@@ -284,6 +290,7 @@ async def test_exhaustion_closure(tmp_path, clock):
         clock,
         "share-exhaust",
         budget=Budget(max_cost_rub=Decimal("10")),
+        replan_reserve=0.0,
     )
     await rt.accept_plan(
         [_exp("E0", budget_share=1.0, criteria=False)],
@@ -311,7 +318,7 @@ async def test_replay_equals_live(tmp_path, clock):
         "share-replay",
         deadline=clock.now() + timedelta(seconds=200),
         finalize_reserve_s=20,
-        replan_reserve=0.1,
+        replan_reserve=0.0,
         budget=Budget(max_cost_rub=Decimal("100")),
     )
     await rt.accept_plan(
@@ -396,13 +403,17 @@ async def test_budget_hitl_delegation(tmp_path, clock):
         deadline=clock.now() + timedelta(hours=1),
         finalize_reserve_s=30,
         sid="share-hitl",
+        replan_reserve=0.0,
         hitl_policy=HitlPolicy(mode="interactive"),
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
     await rt.accept_plan(
-        [_exp("E0", criteria=False)],
+        [
+            _exp("E0", budget_share=0.5, criteria=False),
+            _exp("E1", budget_share=0.4, depends_on=["E0"], criteria=False),
+        ],
         questions=[QuestionSpec(id="Q1", text="q")],
     )
     rid = await rt.open_hitl("E0", kind="budget")
@@ -416,16 +427,29 @@ async def test_budget_hitl_delegation(tmp_path, clock):
     assert decided
     assert decided[0].payload.get("delegated_by") == "human"
     assert decided[0].payload.get("approved_by") == "critic"
-    node = rt.graph.get_node(f"{rt.study.study_id}:study")
-    assert node is not None
-    assert node.attrs.get("delegated_by") == "human"
-    assert node.attrs.get("budget_hitl_delegated") is True
+    # Delegation attrs on HITL decision node only — not plan / study.
+    hitl_node = rt.graph.get_node(f"{rt.study.study_id}:hitl:{rid}")
+    assert hitl_node is not None
+    assert hitl_node.attrs.get("delegated_by") == "human"
+    assert hitl_node.attrs.get("approved_by") == "critic"
+    study_node = rt.graph.get_node(f"{rt.study.study_id}:study")
+    assert study_node is None or study_node.attrs.get("delegated_by") is None
+
+    rid2 = await rt.open_hitl("E0", kind="budget")
+    await rt.answer_hitl(
+        rid2,
+        decision="accept",
+        expansion={"budget_shares": {"E0": 0.3, "E1": 0.7}},
+    )
+    adj = [e for e in await rt.store.read_all() if e.type == "BudgetSharesAdjusted"]
+    assert adj and adj[-1].payload["budget_shares"]["E0"] == pytest.approx(0.3)
+    assert rt.tasks[task_id(rt.study.study_id, "E0")].spec.budget_share == pytest.approx(0.3)
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
 async def test_agent_cannot_raise_own_budget_share(tmp_path, clock):
-    rt = await _boot(tmp_path, clock, "share-agent")
+    rt = await _boot(tmp_path, clock, "share-agent", replan_reserve=0.0)
     await rt.accept_plan(
         [_exp("E0", budget_share=0.2, addresses=["Q1"])],
         questions=[QuestionSpec(id="Q1", text="q")],
@@ -468,6 +492,161 @@ async def test_agent_cannot_raise_own_budget_share(tmp_path, clock):
     )
     detail2 = critic_gate(rt, req2, after_task="E0")
     assert detail2 is None or "agent_share_raise" not in detail2
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_starts_reserve_outstanding(tmp_path, clock):
+    """B2: allocated-but-unspent must not let two starts eat the reserve."""
+    rt = await _boot(
+        tmp_path,
+        clock,
+        "share-concurrent",
+        replan_reserve=0.2,
+        budget=Budget(max_cost_rub=Decimal("100")),
+    )
+    await rt.accept_plan(
+        [
+            _exp("E0", budget_share=0.4, criteria=False),
+            _exp("E1", budget_share=0.4, criteria=False),
+        ],
+        questions=[QuestionSpec(id="Q1", text="q")],
+    )
+    a0 = await rt.start_attempt("E0")
+    a1 = await rt.start_attempt("E1")
+    c0 = Decimal(str(rt.attempts[a0]["allocated_budget_rub"]))
+    c1 = Decimal(str(rt.attempts[a1]["allocated_budget_rub"]))
+    # Pool after 20% reserve = 80; equal peers → 40+40, reserve untouched.
+    assert c0 == pytest.approx(Decimal("40"))
+    assert c1 == pytest.approx(Decimal("40"))
+    assert c0 + c1 == pytest.approx(Decimal("80"))
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_no_study_budget_means_no_task_cap(tmp_path, clock):
+    rt = await _boot(tmp_path, clock, "share-nobudget", replan_reserve=0.0)
+    await rt.accept_plan(
+        [_exp("E0", budget_share=1.0, criteria=False)],
+        questions=[QuestionSpec(id="Q1", text="q")],
+    )
+    aid = await rt.start_attempt("E0")
+    assert rt.attempts[aid]["allocated_budget_rub"] is None
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_zero_pool_refuses_start(tmp_path, clock):
+    rt = await _boot(
+        tmp_path,
+        clock,
+        "share-zeropool",
+        replan_reserve=0.0,
+        budget=Budget(max_cost_rub=Decimal("100")),
+    )
+    await rt.accept_plan(
+        [_exp("E0", budget_share=0.0, criteria=False)],
+        questions=[QuestionSpec(id="Q1", text="q")],
+    )
+    with pytest.raises(RuntimeError, match="budget share"):
+        await rt.start_attempt("E0")
+    t = rt.tasks[task_id(rt.study.study_id, "E0")]
+    assert t.state == TaskState.DONE
+    assert t.reason == TaskReason.BUDGET
+    assert t.outcome == TaskOutcome.SKIPPED
+    tid = task_id(rt.study.study_id, "E0")
+    events = await rt.store.read_all()
+    assert not any(
+        e.type == "AttemptStarted" and e.payload.get("task_id") == tid for e in events
+    )
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_retry_keeps_fixed_task_cap(tmp_path, clock):
+    """M3: first allocation is fixed; retries reuse it (spend accumulates)."""
+    from coscientist.core.shares import p2_share_payload_fields
+
+    rt = await _boot(
+        tmp_path,
+        clock,
+        "share-retry",
+        replan_reserve=0.0,
+        budget=Budget(max_cost_rub=Decimal("100")),
+    )
+    await rt.accept_plan(
+        [_exp("E0", budget_share=0.4, criteria=False)],
+        questions=[QuestionSpec(id="Q1", text="q")],
+    )
+    a1 = await rt.start_attempt("E0")
+    tid = task_id(rt.study.study_id, "E0")
+    cap = Decimal(str(rt.attempts[a1]["allocated_budget_rub"]))
+    assert cap > 0
+    await rt.record_budget_debit(spent_rub=Decimal("5"), request_id="s1", task_id=tid)
+    # Fresh allocate would change with spend/outstanding; payload must keep fixed cap.
+    fields = p2_share_payload_fields(rt, rt.tasks[tid])
+    assert Decimal(str(fields["allocated_budget_rub"])) == cap
+    assert rt._task_spent_rub[tid] == Decimal("5")
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_task_budget_report_line(tmp_path, clock):
+    rt = await _boot(
+        tmp_path,
+        clock,
+        "share-taskline",
+        replan_reserve=0.0,
+        budget=Budget(max_cost_rub=Decimal("100")),
+    )
+    await rt.accept_plan(
+        [_exp("E0", budget_share=0.1, criteria=False)],
+        questions=[QuestionSpec(id="Q1", text="q")],
+    )
+    aid = await rt.start_attempt("E0")
+    tid = task_id(rt.study.study_id, "E0")
+    cap = Decimal(str(rt.attempts[aid]["allocated_budget_rub"]))
+    await rt.record_budget_debit(spent_rub=cap + Decimal("1"), request_id="x", task_id=tid)
+    await rt.cancel_study()
+    await rt.tick()
+    events = await rt.store.read_all()
+    fin = next(e for e in events if e.type == "StudyFinalized")
+    reasons = fin.payload.get("contributing_reasons") or []
+    assert TASK_BUDGET_EXHAUSTED_LINE in reasons
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_executor_debits_cost_rub(tmp_path, clock):
+    rt = await _boot(
+        tmp_path,
+        clock,
+        "share-exec",
+        replan_reserve=0.0,
+        budget=Budget(max_cost_rub=Decimal("100")),
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    await rt.accept_plan(
+        [_exp("E0", budget_share=0.5, criteria=False)],
+        questions=[QuestionSpec(id="Q1", text="q")],
+    )
+    aid = await rt.start_attempt("E0")
+    tid = task_id(rt.study.study_id, "E0")
+    content = b'{"count": 1}'
+    art = arts.put(
+        content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
+    )
+    await rt.executor.record(
+        aid,
+        AgentTaskOutput(
+            summary="ok",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            values={"count": 1},
+            cost_rub=Decimal("5"),
+        ),
+    )
+    assert rt._task_spent_rub.get(tid) == Decimal("5")
+    assert rt._study_spent_rub >= Decimal("5")
     await close_runtime(rt)
 
 

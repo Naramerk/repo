@@ -1,8 +1,4 @@
-"""Foreach materialization (M1 PR10 / S9).
-
-``PlanExpanded(foreach=true)`` — no planner/quota. Fires on source TaskDone,
-at accept_plan / after PlanExpanded when of_task already DONE.
-"""
+"""Foreach materialization (M1 PR10): PlanExpanded(foreach=true), no planner/quota."""
 
 from __future__ import annotations
 
@@ -247,30 +243,39 @@ async def materialize_foreach(
                 detail=f"foreach_assign_keys:{keyed}",
             )
             return None
-        # PR12: children share the template's budget_share / deadline_share.
         from coscientist.core.shares import apply_foreach_parent_shares
 
-        added: list[TaskSpec] = apply_foreach_parent_shares(template.spec, list(keyed))
+        prev0 = active_plan_blob(runtime) or {}
+        plan_specs = [
+            TaskSpec.model_validate(t) if isinstance(t, dict) else t
+            for t in (prev0.get("tasks") or [])
+        ]
+        cap = 1.0 - float(getattr(study, "replan_reserve", 0.0) or 0.0)
+        added = apply_foreach_parent_shares(
+            template.spec, list(keyed), plan_tasks=plan_specs, share_cap=cap
+        )
     else:
-        added = []
+        added, prev0, plan_specs = [], active_plan_blob(runtime) or {}, []
+    from coscientist.core.shares import critic_plan_shares
 
-    prev = active_plan_blob(runtime) or {}
-    prev_rev = int(prev.get("revision") or 0)
-    prev_pid = str(prev.get("plan_id") or "")
+    prev = prev0
+    prev_rev, prev_pid = int(prev.get("revision") or 0), str(prev.get("plan_id") or "")
     new_rev = prev_rev + 1
-    prev_tasks = [
-        TaskSpec.model_validate(t) if isinstance(t, dict) else t
-        for t in (prev.get("tasks") or [])
+    prev_tasks = plan_specs or [
+        TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in (prev.get("tasks") or [])
     ]
     prev_questions = [
         QuestionSpec.model_validate(q) if isinstance(q, dict) else q
         for q in (prev.get("questions") or [])
     ]
-
-    new_keys = [t.task_key for t in added]
-    superseded = [tkey]
-    still_kept = [t for t in prev_tasks if t.task_key != tkey]
-    merged = still_kept + added
+    new_keys, superseded = [t.task_key for t in added], [tkey]
+    merged = [t for t in prev_tasks if t.task_key != tkey] + added
+    share_err = critic_plan_shares(merged, study=study)
+    if share_err is not None:
+        await _refuse_and_skip_foreach(
+            runtime, template, after=after, detail=f"foreach_shares:{share_err}"
+        )
+        return None
     pid = foreach_plan_id(sid, tkey, new_rev)
     plan = Plan(
         plan_id=pid,

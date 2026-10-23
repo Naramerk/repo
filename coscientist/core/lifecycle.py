@@ -37,7 +37,6 @@ STAGE_KEYS = [
     ("REPORT", TaskKind.REPORT),
 ]
 
-
 class LifecycleMixin:
     """Attribute stubs so mypy accepts mixin use on StudyRuntime."""
 
@@ -75,6 +74,7 @@ class LifecycleMixin:
         max_depth: int = 8,
         plan_timeout_s: int = 600,
         max_foreach_children: int = 32,
+        max_task_budget_share: float = 1.0,
         inputs: list[Any] | None = None,
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,
@@ -111,10 +111,10 @@ class LifecycleMixin:
         if plan_timeout_s < 1:
             raise ValueError(f"plan_timeout_s must be >= 1, got {plan_timeout_s}")
         if max_foreach_children < 1:
-            raise ValueError(
-                f"max_foreach_children must be >= 1, got {max_foreach_children}"
-            )
-        validate_budget_for_create(budget)
+            raise ValueError(f"max_foreach_children must be >= 1, got {max_foreach_children}")
+        if not (0.0 <= float(max_task_budget_share) <= 1.0):
+            raise ValueError(f"max_task_budget_share out of range: {max_task_budget_share}")
+        validate_budget_for_create(budget)  # delegated_costly ≤ max_cost_rub
         duration_s = (dl - now).total_seconds()
         decision = await intake(
             request,
@@ -150,6 +150,7 @@ class LifecycleMixin:
             max_depth=max_depth,
             plan_timeout_s=plan_timeout_s,
             max_foreach_children=max_foreach_children,
+            max_task_budget_share=float(max_task_budget_share),
         )
         effective = study.effective_deadline()
         events: list[EventEnvelope] = [
@@ -160,7 +161,7 @@ class LifecycleMixin:
                 idem_key=make_idem("StudyCreated", sid),
                 payload=study.model_dump(mode="json"),
                 ts=now,
-                schema_version=8,
+                schema_version=9,
             ),
             EventEnvelope(
                 study_id=sid,
@@ -276,13 +277,15 @@ class LifecycleMixin:
                 raise ValueError(f"expand_after unknown task_key: {k!r}")
         validate_input_specs(tasks)
         from coscientist.core.foreach import validate_foreach_specs
-        from coscientist.core.shares import validate_plan_shares
+        from coscientist.core.shares import critic_plan_shares
 
         validate_foreach_specs(
             tasks,
             known_keys={t.spec.task_key for t in self.tasks.values()},
         )
-        validate_plan_shares(tasks)
+        share_err = critic_plan_shares(tasks, study=self.study)
+        if share_err is not None:
+            raise ValueError(share_err)
         catalog = getattr(self, "catalog", None) or getattr(getattr(self, "executor", None), "catalog", None)
         validate_plan_criteria(tasks, catalog)
         pid = plan_id()

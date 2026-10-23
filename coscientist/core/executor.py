@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import Mapping
 from datetime import timedelta
+from decimal import Decimal
 from typing import Any
 
 from coscientist.checks.evaluate import evaluate_task_checks, role_from_catalog
@@ -564,6 +565,7 @@ class Executor:
         get_graph: Any | None = None,
         get_results: Any | None = None,
         max_attempts: int = 3,
+        on_budget_debit: Any | None = None,
     ) -> None:
         self.writer = writer
         self.catalog = catalog
@@ -576,6 +578,8 @@ class Executor:
         self.get_graph = get_graph
         self.get_results = get_results
         self.max_attempts = int(max_attempts)
+        # PR12: async (task_id, spent_rub, request_id) → record_budget_debit
+        self.on_budget_debit = on_budget_debit
         self._scheduled_reviews: list[str] = []
 
     async def mark_route_returned(self, attempt_id: str, out: AgentTaskOutput) -> str:
@@ -949,7 +953,7 @@ class Executor:
         # Keep claims so not_met can refute (invariant 10); only infra drops them.
         payload["result_class"] = "scientific"
         payload["payload_digest"] = payload_digest(payload)
-        return await self._commit_result(
+        result = await self._commit_result(
             attempt_id,
             study_id,
             task_id,
@@ -960,6 +964,9 @@ class Executor:
             checks=checks,
             infra_failure=False,
         )
+        # PR12: wire per-task BudgetDebited from AgentTaskOutput.cost_rub.
+        await self._debit_task_cost(out, task_id=task_id, attempt_id=attempt_id)
+        return result
 
     async def _commit_timeout(
         self,
@@ -1245,6 +1252,22 @@ class Executor:
             unassessed=list(payload.get("unassessed", [])),
             payload_digest=payload["payload_digest"],
             reason=reason,
+        )
+
+    async def _debit_task_cost(
+        self, out: AgentTaskOutput, *, task_id: str, attempt_id: str
+    ) -> None:
+        """Minimal PR12 hook: debit study+task budget when agent reports cost_rub."""
+        if self.on_budget_debit is None:
+            return
+        cost = out.cost_rub
+        if cost is None:
+            return
+        spent = Decimal(str(cost))
+        if spent <= 0:
+            return
+        await self.on_budget_debit(
+            spent_rub=spent, request_id=attempt_id, task_id=task_id
         )
 
     async def _append(
