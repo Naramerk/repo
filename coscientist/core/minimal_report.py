@@ -71,6 +71,7 @@ def build_minimal_report(
     fallback_reason: str | None,
     refusal: str | None = None,
     hypotheses: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None = None,
+    hypotheses_unavailable: str | None = None,
 ) -> dict[str, Any]:
     task_list = sorted(tasks.values(), key=lambda t: t.spec.task_key)
     q_rows = [
@@ -86,6 +87,7 @@ def build_minimal_report(
         h_rows: list[dict[str, Any]] = [
             dict(v) if isinstance(v, Mapping) else {"hypothesis_id": hid, "verdict": v}
             for hid, v in sorted(hypotheses.items())
+            if hid != "_error"
         ]
     else:
         h_rows = [dict(h) for h in (hypotheses or [])]
@@ -120,6 +122,7 @@ def build_minimal_report(
         "tasks": t_rows,
         "questions": q_rows,
         "hypotheses": h_rows,
+        "hypotheses_unavailable": hypotheses_unavailable,
         "sections": _sections(task_list, attempts),
         "truncated": False,
     }

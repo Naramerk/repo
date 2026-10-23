@@ -19,7 +19,7 @@ import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal, Protocol
 
-from coscientist.core.digest import canonical_json, spec_digest
+from coscientist.core.digest import canonical_json
 from coscientist.core.r17 import claim_counts_under_r17
 from coscientist.core.stance import DEFAULT_TESTS_INTENT, TestsIntent, claim_stance
 
@@ -78,70 +78,144 @@ def outcome_to_status(outcome: ClaimOutcome | None, *, validity: ClaimValidity) 
     return "unassessed"
 
 
-def artifact_is_data(*, role: str | None, media_type: str | None) -> bool:
-    """Classify artifact as data vs code from core role/media_type (not input name)."""
-    if role in ("code", "log", "report"):
-        return False
-    if role in ("data", "paper", "table", "figure"):
-        return True
-    mt = (media_type or "").lower()
-    if any(
-        tok in mt
-        for tok in (
-            "python",
-            "javascript",
-            "typescript",
-            "x-sh",
-            "x-shellscript",
-            "x-script",
-            "x-bytecode",
+def binding_is_code(input_name: str, *, code_output_names: Sequence[str] | None) -> bool:
+    """True only when the catalog explicitly declares this output name as code.
+
+    Planner ``OutputSpec.role`` / ``media_type`` are ignored. Default: DATA.
+    """
+    names = {str(x) for x in (code_output_names or ())}
+    return str(input_name or "") in names
+
+
+def _binding_fields(b: Any) -> tuple[str, str, str | None]:
+    if isinstance(b, Mapping):
+        return (
+            str(b.get("kind", "artifact")),
+            str(b.get("input") or ""),
+            str(b.get("artifact_id") or "") or None,
         )
-    ):
-        return False
-    if mt.startswith("text/x-"):
-        return False
-    return True
+    return (
+        str(getattr(b, "kind", "artifact")),
+        str(getattr(b, "input", "") or ""),
+        str(getattr(b, "artifact_id", "") or "") or None,
+    )
+
+
+def _content_digest(
+    artifact_id: str,
+    *,
+    artifact_lookup: Callable[[str], Any] | None,
+    fallback: str | None = None,
+) -> str | None:
+    if artifact_id and artifact_lookup is not None:
+        meta = artifact_lookup(artifact_id)
+        if meta is not None:
+            d = getattr(meta, "sha256", None) or getattr(meta, "digest", None)
+            if d:
+                return str(d)
+    return str(fallback) if fallback else None
+
+
+def _producer_index(
+    results: Mapping[str, Mapping[str, Any]] | None,
+) -> dict[str, Mapping[str, Any]]:
+    """artifact_id → ResultRecorded payload (first writer wins)."""
+    idx: dict[str, Mapping[str, Any]] = {}
+    if not results:
+        return idx
+    seen_payloads: set[int] = set()
+    for _key, payload in results.items():
+        if not isinstance(payload, Mapping):
+            continue
+        pid = id(payload)
+        if pid in seen_payloads:
+            continue
+        seen_payloads.add(pid)
+        for aid in payload.get("artifacts") or ():
+            idx.setdefault(str(aid), payload)
+        omap = payload.get("output_map")
+        if isinstance(omap, Mapping):
+            for aid in omap.values():
+                if aid:
+                    idx.setdefault(str(aid), payload)
+    return idx
+
+
+def root_data_digests_from_bindings(
+    bindings: Sequence[Any] | None,
+    *,
+    results: Mapping[str, Mapping[str, Any]] | None = None,
+    artifact_lookup: Callable[[str], Any] | None = None,
+    code_output_names: Sequence[str] | None = None,
+) -> list[str]:
+    """Content digests of **root** data artifacts reachable from bindings.
+
+    Walks InputBinding → producer ResultRecorded.inputs transitively. An artifact
+    with no upstream producer (or a producer with no artifact inputs) is a root.
+    Code hops (catalog ``code_output_names``) are skipped. Planner role/media_type
+    ignored — every non-code binding is DATA.
+    """
+    producers = _producer_index(results)
+    roots: set[str] = set()
+
+    def _walk(artifact_id: str, *, via_code: bool, seen: set[str]) -> None:
+        if not artifact_id or artifact_id in seen:
+            return
+        seen.add(artifact_id)
+        if via_code:
+            return
+        producer = producers.get(artifact_id)
+        if producer is None:
+            d = _content_digest(artifact_id, artifact_lookup=artifact_lookup)
+            if d:
+                roots.add(d)
+            return
+        upstream = [
+            b
+            for b in (producer.get("inputs") or ())
+            if _binding_fields(b)[0] == "artifact" and _binding_fields(b)[2]
+        ]
+        if not upstream:
+            d = _content_digest(artifact_id, artifact_lookup=artifact_lookup)
+            if d:
+                roots.add(d)
+            return
+        for b in upstream:
+            _kind, iname, child = _binding_fields(b)
+            if not child:
+                continue
+            _walk(
+                child,
+                via_code=binding_is_code(iname, code_output_names=code_output_names),
+                seen=seen,
+            )
+
+    for b in bindings or ():
+        kind, iname, aid = _binding_fields(b)
+        if kind != "artifact" or not aid:
+            continue
+        _walk(
+            aid,
+            via_code=binding_is_code(iname, code_output_names=code_output_names),
+            seen=set(),
+        )
+    return sorted(roots)
 
 
 def data_digests_from_bindings(
     bindings: Sequence[Any] | None,
     *,
     artifact_lookup: Callable[[str], Any] | None = None,
+    code_output_names: Sequence[str] | None = None,
+    results: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[str]:
-    """Content digests of **data** artifact bindings (code ignored).
-
-    Classification uses Artifact.role / media_type from the core store when
-    ``artifact_lookup`` is provided — never the planner-chosen input name.
-    """
-    out: list[str] = []
-    for b in bindings or ():
-        if isinstance(b, Mapping):
-            kind = b.get("kind", "artifact")
-            aid = str(b.get("artifact_id") or "")
-            digest = b.get("digest")
-        else:
-            kind = getattr(b, "kind", "artifact")
-            aid = str(getattr(b, "artifact_id", "") or "")
-            digest = getattr(b, "digest", None)
-        if kind != "artifact":
-            continue
-        role: str | None = None
-        media_type: str | None = None
-        content: str | None = None
-        if aid and artifact_lookup is not None:
-            meta = artifact_lookup(aid)
-            if meta is not None:
-                role = getattr(meta, "role", None)
-                media_type = getattr(meta, "media_type", None)
-                content = getattr(meta, "sha256", None) or getattr(meta, "digest", None)
-        if content is None and digest:
-            # No store meta: treat binding digest as content; role unknown → data.
-            content = str(digest)
-        if not content:
-            continue
-        if artifact_is_data(role=role, media_type=media_type):
-            out.append(str(content))
-    return sorted(set(out))
+    """Root data digests for independence (catalog code names; transitive walk)."""
+    return root_data_digests_from_bindings(
+        bindings,
+        results=results,
+        artifact_lookup=artifact_lookup,
+        code_output_names=code_output_names,
+    )
 
 
 # Back-compat alias used by older tests/imports.
@@ -149,9 +223,16 @@ def digests_from_bindings(
     bindings: Sequence[Any] | None,
     *,
     artifact_lookup: Callable[[str], Any] | None = None,
+    code_output_names: Sequence[str] | None = None,
+    results: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> tuple[str | None, str | None]:
     """Deprecated shape: (folded_data, None). Prefer ``data_digests_from_bindings``."""
-    data = data_digests_from_bindings(bindings, artifact_lookup=artifact_lookup)
+    data = data_digests_from_bindings(
+        bindings,
+        artifact_lookup=artifact_lookup,
+        code_output_names=code_output_names,
+        results=results,
+    )
     if not data:
         return None, None
     if len(data) == 1:
@@ -159,16 +240,14 @@ def digests_from_bindings(
     return hashlib.sha256(canonical_json(data)).hexdigest(), None
 
 
-def normalized_task_spec_digest(spec: Any) -> str:
-    """Hash of TaskSpec excluding identity fields (task_key)."""
-    if hasattr(spec, "model_dump"):
-        raw = spec.model_dump(mode="json")
-    elif isinstance(spec, Mapping):
-        raw = dict(spec)
-    else:
-        raw = {}
-    raw.pop("task_key", None)
-    return spec_digest(raw)
+def structural_source_key(claim: Any) -> tuple[str, tuple[str, ...]] | None:
+    """(target, sorted criterion template ids) — no goal/title/plan_id."""
+    target = str(getattr(claim, "target", "") or "")
+    raw = getattr(claim, "criterion_template_ids", None) or ()
+    templates = tuple(sorted({str(x) for x in raw if x}))
+    if not target and not templates:
+        return None
+    return (target, templates)
 
 
 def independence_key_for(*, experiment_id: str | None = None) -> str:
@@ -181,14 +260,6 @@ def independence_key_for(*, experiment_id: str | None = None) -> str:
 def _claim_data_digests(claim: Any) -> frozenset[str]:
     raw = getattr(claim, "data_digests", None) or ()
     return frozenset(str(x) for x in raw if x)
-
-
-def _claim_spec_group(claim: Any) -> tuple[str, str] | None:
-    sd = getattr(claim, "spec_digest", None) or ""
-    if not sd:
-        return None
-    plan = str(getattr(claim, "plan_id", None) or getattr(claim, "study_id", None) or "")
-    return (plan, str(sd))
 
 
 def _union_find_parent(parent: dict[str, str], x: str) -> str:
@@ -205,13 +276,7 @@ def _union_find_merge(parent: dict[str, str], a: str, b: str) -> None:
 
 
 def source_id_for_claim(claim: Any) -> str:
-    """Effective independence source after overlap / identical-spec merge rules.
-
-    - Base: ``independence_key`` (experiment_id-derived).
-    - Merge experiments whose bound **data** digests overlap.
-    - No-input experiments: same plan/study + identical normalized spec → one source.
-    """
-    # distinct_by_key computes components; this helper is for single-claim fallback.
+    """Fallback singleton key (experiment_id-derived)."""
     return str(
         getattr(claim, "independence_key", None)
         or independence_key_for(
@@ -223,49 +288,47 @@ def source_id_for_claim(claim: Any) -> str:
 
 
 def distinct_by_key(claims: Sequence[Any]) -> list[Any]:
-    """Keep first claim per independence source (overlap-aware)."""
+    """Keep first claim per independence source.
+
+    Merge when:
+    1. root-data digest sets overlap (transitive provenance), or
+    2. same structural key (target + criterion templates) and neither has
+       distinct root data (both empty roots).
+    """
     items = list(claims)
     if not items:
         return []
 
-    # Node id per claim for union-find.
     ids = [f"c{i}" for i in range(len(items))]
     parent = {i: i for i in ids}
 
-    # Index digests → claim ids for overlap unions.
+    # (1) Overlap of root-data digests — one union per digest covers multi-digest
+    # claims transitively (A∈d1∩d2 links owners of d1 with owners of d2).
     digest_owners: dict[str, list[str]] = {}
-    spec_owners: dict[tuple[str, str], list[str]] = {}
     for cid, c in zip(ids, items, strict=True):
-        dig_set = _claim_data_digests(c)
-        if dig_set:
-            for d in dig_set:
-                digest_owners.setdefault(d, []).append(cid)
-        else:
-            grp = _claim_spec_group(c)
-            if grp is not None:
-                spec_owners.setdefault(grp, []).append(cid)
-
+        for d in _claim_data_digests(c):
+            digest_owners.setdefault(d, []).append(cid)
     for owners in digest_owners.values():
         for other in owners[1:]:
             _union_find_merge(parent, owners[0], other)
-    # Overlap across digests: if A has {d1,d2} and B has {d2,d3}, both listed under d2.
-    # Also connect claims that share any digest via transitive closure of per-digest unions.
-    for cid, c in zip(ids, items, strict=True):
-        dig_list = list(_claim_data_digests(c))
-        for i in range(1, len(dig_list)):
-            a = digest_owners[dig_list[0]][0]
-            b = digest_owners[dig_list[i]][0]
-            _union_find_merge(parent, a, b)
-            _union_find_merge(parent, cid, a)
 
-    for owners in spec_owners.values():
+    # (2) Structural: same hypothesis/target + same criterion templates, no root data.
+    struct_owners: dict[tuple[str, tuple[str, ...]], list[str]] = {}
+    for cid, c in zip(ids, items, strict=True):
+        if _claim_data_digests(c):
+            continue
+        sk = structural_source_key(c)
+        if sk is None:
+            continue
+        struct_owners.setdefault(sk, []).append(cid)
+    for owners in struct_owners.values():
         for other in owners[1:]:
             _union_find_merge(parent, owners[0], other)
 
-    # Claims with neither digests nor spec_digest: singleton by independence_key.
+    # Singletons by independence_key when neither rule applied a group.
     key_owners: dict[str, list[str]] = {}
     for cid, c in zip(ids, items, strict=True):
-        if _claim_data_digests(c) or _claim_spec_group(c) is not None:
+        if _claim_data_digests(c) or structural_source_key(c) is not None:
             continue
         key_owners.setdefault(source_id_for_claim(c), []).append(cid)
     for owners in key_owners.values():
@@ -302,10 +365,32 @@ def effective_validity(claim: Any) -> ClaimValidity:
     return "valid"
 
 
-def tost_holds(*, sesoi: float | None, effect: Mapping[str, Any] | None) -> bool:
-    """Equivalence / null claim: CI strictly inside (−sesoi, +sesoi)."""
-    if sesoi is None or effect is None:
+def effect_has_interval(effect: Mapping[str, Any] | None) -> bool:
+    """True when effect carries a real CI (ci_low < ci_high), not a point estimate."""
+    if not isinstance(effect, Mapping):
         return False
+    try:
+        lo = float(effect["ci_low"])  # type: ignore[index]
+        hi = float(effect["ci_high"])  # type: ignore[index]
+    except (KeyError, TypeError, ValueError):
+        return False
+    return lo < hi
+
+
+def effect_is_trusted(effect: Mapping[str, Any] | None) -> bool:
+    """TOST severity requires a trusted (core/sandbox) metric producer."""
+    if not isinstance(effect, Mapping):
+        return False
+    return effect.get("trusted") is True and effect_has_interval(effect)
+
+
+def tost_holds_numerically(
+    *, sesoi: float | None, effect: Mapping[str, Any] | None
+) -> bool:
+    """CI strictly inside (−sesoi, +sesoi). Requires a real interval, not a point."""
+    if sesoi is None or not effect_has_interval(effect):
+        return False
+    assert effect is not None
     try:
         lo = float(effect["ci_low"])  # type: ignore[index]
         hi = float(effect["ci_high"])  # type: ignore[index]
@@ -315,13 +400,20 @@ def tost_holds(*, sesoi: float | None, effect: Mapping[str, Any] | None) -> bool
     return (-s) < lo and hi < s
 
 
+def tost_holds(*, sesoi: float | None, effect: Mapping[str, Any] | None) -> bool:
+    """Severe-grade TOST: numerical hold + trusted (core/sandbox) metric producer."""
+    return effect_is_trusted(effect) and tost_holds_numerically(
+        sesoi=sesoi, effect=effect
+    )
+
+
 def effect_exceeds_sesoi(
     *,
     sesoi: float | None,
     effect: Mapping[str, Any] | None,
     direction: PredictedDirection | str | None = "two_sided",
 ) -> bool:
-    """Non-null prediction: core effect exceeds sesoi in the predicted direction."""
+    """Non-null prediction: core point-estimate effect exceeds sesoi (not TOST)."""
     if sesoi is None or effect is None:
         return False
     try:
@@ -338,11 +430,9 @@ def effect_exceeds_sesoi(
 
 
 def claim_is_severe(claim: Any) -> bool:
-    """Severe: consistent ∧ valid ∧ frozen ∧ catalog uses_sesoi ∧ check used sesoi ∧ effect gate.
+    """Severe from catalog + check results — never trust stored ``severe=True``.
 
-    ``min_power`` removed (nothing computes power in M1). Explicit ``severe=False``
-    is definitive (V5 legacy). Explicit ``severe=True`` from the core stamp is
-    honored after the base gates (executor never stamps True without the gate).
+    Explicit ``severe=False`` remains definitive (V5 legacy never supported).
     """
     if effective_outcome(claim) != "consistent":
         return False
@@ -357,9 +447,7 @@ def claim_is_severe(claim: Any) -> bool:
     first_ev = getattr(claim, "first_cited_evidence_seq", None)
     if frozen_at is not None and first_ev is not None and not (frozen_at < first_ev):
         return False
-    # Core-stamped True is authoritative (set only after the gate in executor).
-    if getattr(claim, "severe", None) is True:
-        return True
+    # Never honor severe=True from the journal — recompute below.
     sesoi = getattr(claim, "sesoi", None)
     uses = getattr(claim, "uses_sesoi", None)
     if uses is False:
@@ -369,11 +457,12 @@ def claim_is_severe(claim: Any) -> bool:
     if sesoi is None:
         return False
     used = getattr(claim, "used_sesoi", None)
-    if used is False:
+    if used is not True:
         return False
     effect = getattr(claim, "effect", None)
     predicts_null = bool(getattr(claim, "predicts_null", False))
     if predicts_null:
+        # TOST: trusted interval only; point estimates are never severe.
         return tost_holds(sesoi=float(sesoi), effect=effect)
     direction = getattr(claim, "predicted_direction", None) or "two_sided"
     return effect_exceeds_sesoi(
@@ -384,27 +473,27 @@ def claim_is_severe(claim: Any) -> bool:
 def refute_intent_counts(claim: Any) -> bool:
     """Refute intent counts toward supported only if the prediction could fail.
 
-    Requires: intent=refute, catalog uses_sesoi, frozen, prediction role, check used sesoi.
-    A planner label alone is not enough.
+    Never trusts stored ``refute_capable=True``. Recomputes from catalog + check.
     """
     if _intent(claim) != "refute":
         return False
+    # Explicit False (core) is definitive; True is ignored (legacy forgery).
     if getattr(claim, "refute_capable", None) is False:
         return False
-    if getattr(claim, "refute_capable", None) is True:
-        return True
     if not bool(getattr(claim, "frozen", False)):
         return False
     if getattr(claim, "check_role", "unknown") != "prediction":
         return False
     uses = getattr(claim, "uses_sesoi", None)
-    if uses is False:
+    if uses is not True:
         return False
-    if getattr(claim, "sesoi", None) is None and uses is not True:
+    if getattr(claim, "sesoi", None) is None:
         return False
-    used = getattr(claim, "used_sesoi", None)
-    if used is False:
+    if getattr(claim, "used_sesoi", None) is not True:
         return False
+    # Null/TOST claims need a trusted CI to be refute-capable.
+    if bool(getattr(claim, "predicts_null", False)):
+        return effect_is_trusted(getattr(claim, "effect", None))
     return True
 
 
@@ -428,7 +517,8 @@ def classify_outcome(
     else:
         outcome = "indeterminate"
     if predicts_null and outcome == "consistent":
-        if not tost_holds(sesoi=sesoi, effect=effect):
+        # Consistency uses numerical TOST; severity separately requires trusted CI.
+        if not tost_holds_numerically(sesoi=sesoi, effect=effect):
             outcome = "indeterminate"
     return "valid", outcome, outcome == "consistent"
 

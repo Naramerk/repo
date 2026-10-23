@@ -62,8 +62,7 @@ _CORE_CLAIM_ATTRS: frozenset[str] = frozenset(
         "predicts_null",
         "predicted_direction",
         "data_digests",
-        "spec_digest",
-        "plan_id",
+        "criterion_template_ids",
         "study_id",
         "effect",
         "alpha",
@@ -117,8 +116,7 @@ class RuntimeClaim:
     predicts_null: bool = False
     predicted_direction: str = "two_sided"
     data_digests: list[str] | None = None
-    spec_digest: str = ""
-    plan_id: str = ""
+    criterion_template_ids: list[str] | None = None
     study_id: str = ""
     effect: dict[str, Any] | None = None
     validity: str | None = None  # valid|invalid (mirrors validity_ok)
@@ -428,13 +426,8 @@ def runtime_claim_from_node(
             if claim_outcome_raw in ("consistent", "inconsistent", "indeterminate")
             else None
         )
-        # Absent severe ⇒ legacy claim (never severe / never supported — V5).
-        severe_coerced: bool
-        if "severe" not in attrs:
-            severe_coerced = False
-        else:
-            coerced = _coerce_bool(attrs.get("severe"))
-            severe_coerced = False if coerced is None else bool(coerced)
+        # Never trust stored severe/refute_capable — recompute after attrs load.
+        # Absent severe on legacy journals ⇒ treat as False until recomputed (V5).
         independence_key = (
             _coerce_str(attrs.get("independence_key"), allow_empty=True) or ""
         )
@@ -450,11 +443,6 @@ def runtime_claim_from_node(
                 aid = _coerce_str(attrs.get("attempt_id"), allow_empty=True) or ""
                 legacy_exp = aid.rsplit("#", 1)[0] if aid else node.node_id
             independence_key = independence_key_for(experiment_id=legacy_exp)
-        refute_capable_raw = attrs.get("refute_capable")
-        if refute_capable_raw is None:
-            refute_capable: bool | None = None
-        else:
-            refute_capable = bool(refute_capable_raw)
         p_value = attrs.get("p_value")
         if p_value is not None:
             try:
@@ -488,8 +476,12 @@ def runtime_claim_from_node(
             data_digests = [str(x) for x in raw_digests if x]
         else:
             data_digests = None
-        spec_digest = _coerce_str(attrs.get("spec_digest"), allow_empty=True) or ""
-        plan_id_s = _coerce_str(attrs.get("plan_id"), allow_empty=True) or ""
+        raw_tmpls = attrs.get("criterion_template_ids")
+        criterion_template_ids: list[str] | None
+        if isinstance(raw_tmpls, list):
+            criterion_template_ids = [str(x) for x in raw_tmpls if x]
+        else:
+            criterion_template_ids = None
         study_id_attr = _coerce_str(attrs.get("study_id"), allow_empty=True) or ""
         effect_raw = attrs.get("effect")
         effect: dict[str, Any] | None
@@ -553,48 +545,74 @@ def runtime_claim_from_node(
             target_kind=target_kind,
         )
         art = _coerce_str(attrs.get("artifact_id"), allow_empty=True) or node.node_id
-        return (
-            RuntimeClaim(
-                criterion_status=status,
-                accepted=accepted,
-                evidence_kind=ek,
-                provenance=str(prov),
-                frozen=frozen,
-                attempt_outcome=outcome,
-                attempt_id=aid or node.node_id,
-                artifact_id=art,
-                lit_own_criterion=lit_own,
-                intent=intent,
-                criterion_frozen_at_seq=frozen_seq,
-                first_cited_evidence_seq=first_ev,
-                confirming_evidence_ids=conf,
-                threshold_source_evidence_ids=thr,
-                target=target,
-                target_kind=target_kind,  # type: ignore[arg-type]
-                node_id=node.node_id,
-                validity_ok=bool(validity_ok),
-                check_role=check_role,
-                exclusion_reason=exclusion_reason,
-                claim_outcome=claim_outcome,
-                severe=severe_coerced,
-                independence_key=independence_key,
-                p_value=p_value if isinstance(p_value, float) else None,
-                power=power if isinstance(power, float) else None,
-                sesoi=sesoi if isinstance(sesoi, float) else None,
-                uses_sesoi=uses_sesoi,
-                used_sesoi=used_sesoi,
-                predicts_null=predicts_null,
-                predicted_direction=predicted_direction,
-                data_digests=data_digests,
-                spec_digest=spec_digest,
-                plan_id=plan_id_s,
-                study_id=study_id_attr or study_id,
-                effect=effect,
-                experiment_id=experiment_id,
-                refute_capable=refute_capable,
-            ),
-            None,
+        # Never trust stored severe/refute_capable=True (forged journals).
+        # Absent or explicit False ⇒ never-severe (V5); True is ignored and recomputed.
+        from coscientist.core.verdict import claim_is_severe, effect_is_trusted
+
+        sesoi_f = sesoi if isinstance(sesoi, float) else None
+        stored_severe = attrs.get("severe")
+        # Seed False when absent/explicit False so claim_is_severe short-circuits (V5).
+        # Seed None when stored True so forgery cannot win without check evidence.
+        probe_severe: bool | None
+        if stored_severe is False or "severe" not in attrs:
+            probe_severe = False
+        else:
+            probe_severe = None
+        stored_refute = attrs.get("refute_capable")
+        probe = RuntimeClaim(
+            criterion_status=status,
+            accepted=accepted,
+            evidence_kind=ek,
+            provenance=str(prov),
+            frozen=frozen,
+            attempt_outcome=outcome,
+            attempt_id=aid or node.node_id,
+            artifact_id=art,
+            lit_own_criterion=lit_own,
+            intent=intent,
+            criterion_frozen_at_seq=frozen_seq,
+            first_cited_evidence_seq=first_ev,
+            confirming_evidence_ids=conf,
+            threshold_source_evidence_ids=thr,
+            target=target,
+            target_kind=target_kind,  # type: ignore[arg-type]
+            node_id=node.node_id,
+            validity_ok=bool(validity_ok),
+            check_role=check_role,
+            exclusion_reason=exclusion_reason,
+            claim_outcome=claim_outcome,
+            severe=probe_severe,
+            independence_key=independence_key,
+            p_value=p_value if isinstance(p_value, float) else None,
+            power=power if isinstance(power, float) else None,
+            sesoi=sesoi_f,
+            uses_sesoi=uses_sesoi,
+            used_sesoi=used_sesoi,
+            predicts_null=predicts_null,
+            predicted_direction=predicted_direction,
+            data_digests=data_digests,
+            criterion_template_ids=criterion_template_ids,
+            study_id=study_id_attr or study_id,
+            effect=effect,
+            experiment_id=experiment_id,
+            refute_capable=False if stored_refute is False else None,
         )
+        severe_coerced = claim_is_severe(probe)
+        if stored_refute is False:
+            refute_capable = False
+        else:
+            # Recompute capability from catalog + check fields (ignore stored True).
+            refute_capable = bool(
+                frozen
+                and check_role == "prediction"
+                and uses_sesoi is True
+                and sesoi_f is not None
+                and used_sesoi is True
+                and (effect_is_trusted(effect) if predicts_null else True)
+            )
+        probe.severe = severe_coerced
+        probe.refute_capable = refute_capable
+        return probe, None
     except Exception:  # noqa: BLE001 — totality: never raise into finalize/view
         return None, "coerce_error"
 

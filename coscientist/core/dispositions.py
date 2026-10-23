@@ -211,13 +211,15 @@ def report_hypothesis_verdicts(
     study: Study | None,
     results: Mapping[str, Mapping[str, Any]] | None,
     tasks: Mapping[str, Task],
-) -> dict[str, dict[str, Any]]:
+) -> tuple[dict[str, dict[str, Any]], str | None]:
     """Hypothesis verdicts for StudyFinalized / minimal_report (PR8/PR8b).
 
-    Each entry is a ``hypothesis_report_row`` (hypotheses[] schema).
+    Returns ``(rows, hypotheses_unavailable)``. On failure ``rows`` is empty and
+    ``hypotheses_unavailable`` is the exception class name — never a fake
+    hypothesis id.
     """
     if graph is None or study is None:
-        return {}
+        return {}, None
     any_exp = any(
         t.state == TaskState.DONE
         and t.outcome in (TaskOutcome.SUCCESS, TaskOutcome.PARTIAL, TaskOutcome.FAILED)
@@ -294,20 +296,6 @@ def report_hypothesis_verdicts(
             if snap.get("excluded_claims"):
                 row.setdefault("excluded_claims", snap["excluded_claims"])
             out[hid] = row
-        return out
-    except Exception as exc:  # noqa: BLE001 — surface reason, do not swallow silently
-        return {
-            "_error": {
-                "hypothesis_id": "_error",
-                "question_id": "",
-                "verdict": "inconclusive",
-                "rule": "hypotheses_unavailable",
-                "counted": [],
-                "excluded": [],
-                "conflict": None,
-                "severity_note": f"hypotheses_unavailable:{type(exc).__name__}",
-                "auxiliary_assumptions": [],
-                "legacy_claims": 0,
-                "error_class": type(exc).__name__,
-            }
-        }
+        return out, None
+    except Exception as exc:  # noqa: BLE001 — dedicated field, not a fake hypothesis
+        return {}, type(exc).__name__

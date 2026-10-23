@@ -113,6 +113,7 @@
         }
       }
     },
+    "hypotheses_unavailable": {"type": ["string", "null"]},
     "sections": {
       "type": "object",
       "additionalProperties": false,

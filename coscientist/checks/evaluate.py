@@ -78,6 +78,36 @@ def _cmp(op: str, left: Any, right: Any, tolerance: float | None) -> bool:
     return ops[op](left, right)
 
 
+def _extract_ci(doc: Any, left: Any) -> dict[str, float] | None:
+    """Read a real CI from the metric document (ci_low < ci_high).
+
+    Accepts ``{est, ci_low, ci_high}`` at the document root, under ``effect``,
+    or when ``left`` itself is that mapping. Point estimates (missing CI or
+    ``ci_low >= ci_high``) return None — never invent CI from a point.
+    """
+    candidates: list[Any] = []
+    if isinstance(left, dict):
+        candidates.append(left)
+    if isinstance(doc, dict):
+        candidates.append(doc)
+        if isinstance(doc.get("effect"), dict):
+            candidates.append(doc["effect"])
+    for raw in candidates:
+        if not isinstance(raw, dict):
+            continue
+        if "ci_low" not in raw or "ci_high" not in raw:
+            continue
+        try:
+            lo = float(raw["ci_low"])
+            hi = float(raw["ci_high"])
+            est = float(raw["est"]) if raw.get("est") is not None else (lo + hi) / 2.0
+        except (TypeError, ValueError):
+            continue
+        if lo < hi:
+            return {"est": est, "ci_low": lo, "ci_high": hi}
+    return None
+
+
 def evaluate_code_check(
     check: CodeCheck,
     *,
@@ -156,27 +186,49 @@ def evaluate_code_check(
             if check.kind == "json_pointer":
                 ok = left is not None
             elif check.kind == "value_matches":
-                if uses_sesoi and sesoi is not None and isinstance(left, (int, float)):
-                    # SESOI as equality tolerance (null-style) or exact match otherwise.
-                    used_sesoi = True
-                    est = float(left) - float(check.target or 0)
-                    effect = {"est": est, "ci_low": est, "ci_high": est}
-                    if predicts_null:
-                        ok = abs(est) < float(sesoi)
-                    else:
-                        ok = left == check.target
-                else:
-                    ok = left == check.target
+                # Exact equality is a point check — never TOST, never used_sesoi.
+                ok = left == check.target
+                if isinstance(left, (int, float)):
+                    est = float(left)
+                    effect = {
+                        "est": est,
+                        "kind": "point",
+                        "trusted": False,
+                    }
             else:
-                # metric_threshold — when uses_sesoi, threshold is catalog sesoi.
+                # metric_threshold — point-estimate exceedance or TOST with real CI.
                 op = check.op or "=="
-                if uses_sesoi and sesoi is not None and isinstance(left, (int, float)):
+                ci = _extract_ci(doc, left)
+                if (
+                    uses_sesoi
+                    and sesoi is not None
+                    and predicts_null
+                ):
+                    # TOST: require a real interval from the metric artifact.
+                    if ci is not None:
+                        effect = {
+                            "est": ci["est"],
+                            "ci_low": ci["ci_low"],
+                            "ci_high": ci["ci_high"],
+                            "kind": "interval",
+                            # AgentTaskOutput artifacts are agent-written (see DESIGN).
+                            "trusted": False,
+                        }
+                        used_sesoi = True
+                        ok = (-float(sesoi)) < ci["ci_low"] and ci["ci_high"] < float(
+                            sesoi
+                        )
+                    else:
+                        # No CI → not a TOST result; equivalence not assessable.
+                        used_sesoi = False
+                        effect = None
+                        ok = False
+                elif uses_sesoi and sesoi is not None and isinstance(left, (int, float)):
+                    # Honest point-estimate check (not TOST).
                     used_sesoi = True
                     est = float(left)
-                    effect = {"est": est, "ci_low": est, "ci_high": est}
-                    if predicts_null:
-                        ok = abs(est) < float(sesoi)
-                    elif predicted_direction == "positive":
+                    effect = {"est": est, "kind": "point", "trusted": False}
+                    if predicted_direction == "positive":
                         ok = est > float(sesoi)
                     elif predicted_direction == "negative":
                         ok = est < -float(sesoi)
@@ -187,8 +239,8 @@ def evaluate_code_check(
                     if isinstance(left, (int, float)):
                         effect = {
                             "est": float(left),
-                            "ci_low": float(left),
-                            "ci_high": float(left),
+                            "kind": "point",
+                            "trusted": False,
                         }
 
             return CheckResult(
@@ -229,7 +281,7 @@ def evaluate_code_check(
                 status=ReqStatus.MET,
                 is_code=True,
                 required=True,
-                    role=role,
+                role=role,
                 evidence=[
                     EvidenceRef(artifact_id=handle.artifact_id, digest=sha256_hex(b"ok"))
                 ],
@@ -242,7 +294,7 @@ def evaluate_code_check(
                 status=ReqStatus.MET,
                 is_code=True,
                 required=True,
-                    role=role,
+                role=role,
             )
 
     except ArtifactCorrupt as e:
@@ -252,7 +304,7 @@ def evaluate_code_check(
             status=ReqStatus.FAILED,
             is_code=True,
             required=True,
-                    role=role,
+            role=role,
             detail=str(e),
         )
     except Exception as e:
@@ -262,7 +314,7 @@ def evaluate_code_check(
             status=ReqStatus.FAILED,
             is_code=True,
             required=True,
-                    role=role,
+            role=role,
             detail=str(e),
         )
 
@@ -272,7 +324,7 @@ def evaluate_code_check(
         status=ReqStatus.FAILED,
         is_code=True,
         required=True,
-                    role=role,
+        role=role,
         detail=f"unhandled kind {check.kind}",
     )
 

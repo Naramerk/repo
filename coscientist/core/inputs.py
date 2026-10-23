@@ -417,10 +417,10 @@ def claim_nodes_from_attempt(
             attrs["predicted_direction"] = str(core["predicted_direction"])
         if isinstance(core.get("data_digests"), list):
             attrs["data_digests"] = [str(x) for x in core["data_digests"]]
-        if core.get("spec_digest"):
-            attrs["spec_digest"] = str(core["spec_digest"])
-        if core.get("plan_id"):
-            attrs["plan_id"] = str(core["plan_id"])
+        if isinstance(core.get("criterion_template_ids"), list):
+            attrs["criterion_template_ids"] = [
+                str(x) for x in core["criterion_template_ids"] if x
+            ]
         if core.get("study_id"):
             attrs["study_id"] = str(core["study_id"])
         if core.get("experiment_id"):

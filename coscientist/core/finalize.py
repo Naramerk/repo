@@ -263,7 +263,7 @@ async def _build_rich_payload(
         study=runtime.study,
         results=getattr(runtime, "results", None),
     )
-    hyp_verdicts = report_hypothesis_verdicts(
+    hyp_verdicts, hyp_unavail = report_hypothesis_verdicts(
         graph=getattr(runtime, "graph", None),
         study=runtime.study,
         results=getattr(runtime, "results", None),
@@ -295,6 +295,7 @@ async def _build_rich_payload(
         verdict=verdict,
         qdisp=qdisp,
         hypothesis_verdicts=hyp_verdicts,
+        hypotheses_unavailable=hyp_unavail,
     )
     return _bound_rich_payload(payload)
 
@@ -329,6 +330,7 @@ async def _build_finalized_payload(
     verdict: str,
     qdisp: dict[str, dict[str, Any]],
     hypothesis_verdicts: dict[str, dict[str, Any]] | None = None,
+    hypotheses_unavailable: str | None = None,
 ) -> dict[str, Any]:
     fallback: str | None = None
     report_artifact_id: str | None = None
@@ -362,6 +364,7 @@ async def _build_finalized_payload(
                 fallback_reason=fallback,
                 refusal=refusal,
                 hypotheses=hypothesis_verdicts or {},
+                hypotheses_unavailable=hypotheses_unavailable,
             )
         except Exception as e2:  # noqa: BLE001
             raise RuntimeError(f"minimal_report:{type(e2).__name__}") from e2
@@ -372,6 +375,7 @@ async def _build_finalized_payload(
         "verdict": verdict,
         "question_dispositions": qdisp,
         "hypothesis_verdicts": hypothesis_verdicts or {},
+        "hypotheses_unavailable": hypotheses_unavailable,
         "report_artifact_id": report_artifact_id,
         "conclusion_ids": conclusion_ids,
         "minimal_report": minimal,

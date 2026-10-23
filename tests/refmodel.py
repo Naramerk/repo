@@ -221,12 +221,11 @@ def verdict(
     n_con = len(consistent_severe)
 
     def _refute_ok(c):
+        # Never trust stored refute_capable=True (forged journals).
         if c.intent != "refute":
             return False
         if c.refute_capable is False:
             return False
-        if c.refute_capable is True:
-            return True
         return bool(
             c.frozen
             and c.check_role == "prediction"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 from coscientist.checks.evaluate import evaluate_task_checks, role_from_catalog
@@ -223,15 +224,14 @@ def _effect_from_checks(checks: list[Any]) -> tuple[dict[str, Any] | None, bool]
         if not isinstance(data, dict):
             continue
         try:
-            effect = {
+            effect: dict[str, Any] = {
                 "est": float(data["est"]) if data.get("est") is not None else None,
-                "ci_low": float(data["ci_low"])
-                if data.get("ci_low") is not None
-                else None,
-                "ci_high": float(data["ci_high"])
-                if data.get("ci_high") is not None
-                else None,
+                "kind": str(data.get("kind") or "point"),
+                "trusted": bool(data.get("trusted")),
             }
+            if data.get("ci_low") is not None and data.get("ci_high") is not None:
+                effect["ci_low"] = float(data["ci_low"])
+                effect["ci_high"] = float(data["ci_high"])
         except (TypeError, ValueError, KeyError):
             continue
         used = bool(_check_field(c, "used_sesoi"))
@@ -251,7 +251,7 @@ def _derive_claim_core_attrs(
     catalog: Any | None = None,
     bindings: list[Any] | None = None,
     artifact_store: Any | None = None,
-    plan_id: str | None = None,
+    results_map: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Core-owned counting fields from plan/checks/freeze — never agent attrs.
 
@@ -294,8 +294,8 @@ def _derive_claim_core_attrs(
         claim_is_severe,
         classify_outcome,
         data_digests_from_bindings,
+        effect_is_trusted,
         independence_key_for,
-        normalized_task_spec_digest,
         outcome_to_status,
     )
 
@@ -345,18 +345,21 @@ def _derive_claim_core_attrs(
     arts = artifact_store
     if arts is not None and hasattr(arts, "get_meta"):
         lookup = arts.get_meta
-    data_digests = data_digests_from_bindings(bindings, artifact_lookup=lookup)
-    has_artifact_inputs = any(
-        (
-            (b.get("kind", "artifact") if isinstance(b, dict) else getattr(b, "kind", "artifact"))
-            == "artifact"
-        )
-        for b in (bindings or ())
+    code_names = list(getattr(catalog, "code_output_names", None) or [])
+    data_digests = data_digests_from_bindings(
+        bindings,
+        artifact_lookup=lookup,
+        code_output_names=code_names,
+        results=results_map,
     )
-    spec_dig = ""
-    if not data_digests and not has_artifact_inputs and spec is not None:
-        spec_dig = normalized_task_spec_digest(spec)
-    # Base key is experiment_id; overlap / identical-spec merge happens at count time.
+    criterion_template_ids = sorted(
+        {
+            str(getattr(r, "template_id", None) or r)
+            for r in criteria
+            if getattr(r, "template_id", None) or r
+        }
+    )
+    # Base key is experiment_id; overlap / structural merge happens at count time.
     indep = independence_key_for(experiment_id=exp_id or None)
     probe = type(
         "P",
@@ -371,19 +374,23 @@ def _derive_claim_core_attrs(
             "predicts_null": predicts_null,
             "predicted_direction": predicted_direction,
             "effect": effect,
-            "severe": None,
+            "severe": None,  # never pre-trust
+            "refute_capable": None,
+            "intent": "refute",  # probe capability gate only
+            "check_role": "prediction" if has_prediction_check else role,
             "criterion_frozen_at_seq": None,
             "first_cited_evidence_seq": None,
         },
     )()
     severe = claim_is_severe(probe)
-    # Capable refute: catalog uses_sesoi + prediction check that applied sesoi.
+    # Capable refute: recompute — never trust a stored True later on replay.
     refute_capable = bool(
         frozen
         and has_prediction_check
         and uses_sesoi
         and isinstance(sesoi, float)
         and used_sesoi
+        and (effect_is_trusted(effect) if predicts_null else True)
     )
     out: dict[str, Any] = {
         "criterion_status": status,
@@ -405,12 +412,9 @@ def _derive_claim_core_attrs(
         "predicts_null": predicts_null,
         "predicted_direction": predicted_direction,
         "data_digests": data_digests,
+        "criterion_template_ids": criterion_template_ids,
         "study_id": study_id,
     }
-    if spec_dig:
-        out["spec_digest"] = spec_dig
-    if plan_id:
-        out["plan_id"] = plan_id
     if isinstance(sesoi, float):
         out["sesoi"] = sesoi
     if isinstance(crit.get("alpha"), float):
@@ -437,7 +441,7 @@ class Executor:
         on_events: Any | None = None,
         review_statuses: dict[str, ReqStatus] | None = None,
         get_graph: Any | None = None,
-        get_plans: Any | None = None,
+        get_results: Any | None = None,
     ) -> None:
         self.writer = writer
         self.catalog = catalog
@@ -448,24 +452,8 @@ class Executor:
         self.on_events = on_events  # callback after successful append (project local)
         self.review_statuses = review_statuses or {}
         self.get_graph = get_graph
-        self.get_plans = get_plans
+        self.get_results = get_results
         self._scheduled_reviews: list[str] = []
-
-    def _latest_plan_id(self) -> str | None:
-        if self.get_plans is None:
-            return None
-        plans = self.get_plans() or {}
-        if not plans:
-            return None
-        # Prefer highest revision; fall back to any key.
-        best_id: str | None = None
-        best_rev = -1
-        for pid, row in plans.items():
-            rev = int((row or {}).get("revision") or 0)
-            if rev >= best_rev:
-                best_rev = rev
-                best_id = str(pid)
-        return best_id
 
     async def mark_route_returned(self, attempt_id: str, out: AgentTaskOutput) -> str:
         """Persist agent output in CAS and emit RouteReturned with its digest."""
@@ -758,7 +746,9 @@ class Executor:
                 catalog=self.catalog,
                 bindings=bindings,
                 artifact_store=self.artifacts,
-                plan_id=self._latest_plan_id(),
+                results_map=(
+                    self.get_results() if self.get_results is not None else None
+                ),
             ),
         )
         if drops:

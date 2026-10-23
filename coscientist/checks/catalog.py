@@ -161,6 +161,7 @@ def load_catalog(
             if tid not in tmpl_ids:
                 raise CatalogError(f"defaults[{kind}] unknown template {tid}")
 
+    code_outputs = [str(x) for x in data.get("code_output_names", []) or []]
     return Catalog(
         catalog_version=str(data["catalog_version"]),
         edition=str(data.get("edition", "")),
@@ -168,6 +169,7 @@ def load_catalog(
         rules=rules,
         templates=templates,
         defaults=defaults,
+        code_output_names=code_outputs,
     )
 
 
@@ -238,6 +240,30 @@ def minimal_test_catalog() -> Catalog:
                     "predicted_direction": "positive",
                 },
                 {
+                    "id": "tost_equivalence",
+                    "title": "TOST equivalence (null prediction)",
+                    "text_ru": "Эффект эквивалентен нулю по TOST (CI внутри SESOI).",
+                    "rule_ids": ["R23"],
+                    "method_sources": ["test"],
+                    "applies_to": ["experiment"],
+                    "check": {
+                        "kind": "metric_threshold",
+                        "output": "main",
+                        "metric": "effect",
+                        "pointer": "/effect",
+                        "op": "==",
+                        "target": 0,
+                    },
+                    "role": "prediction",
+                    "required": True,
+                    "uses_sesoi": True,
+                    "sesoi": 0.5,
+                    "sesoi_min": 0.0,
+                    "sesoi_max": 100.0,
+                    "predicts_null": True,
+                    "predicted_direction": "two_sided",
+                },
+                {
                     "id": "human_review",
                     "title": "Human/LLM review",
                     "text_ru": "Ревьюер оценивает качество результата.",
@@ -253,5 +279,7 @@ def minimal_test_catalog() -> Catalog:
                 },
             ],
             "defaults": {"experiment": ["artifact_present"]},
+            # Only catalog-declared names are code for independence; else DATA.
+            "code_output_names": ["code", "script", "program", "model", "source"],
         }
     )

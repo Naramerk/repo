@@ -34,8 +34,10 @@ from coscientist.core.verdict import (
     hypothesis_report_row,
     hypothesis_verdict,
     independence_key_for,
-    normalized_task_spec_digest,
     refute_intent_counts,
+    root_data_digests_from_bindings,
+    structural_source_key,
+    tost_holds,
 )
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
@@ -281,16 +283,24 @@ def test_report_hypotheses_payload_schema():
 
 
 def test_null_claim_requires_tost():
-    from coscientist.core.verdict import classify_outcome, tost_holds
+    from coscientist.core.verdict import (
+        classify_outcome,
+        tost_holds,
+        tost_holds_numerically,
+    )
 
-    assert not tost_holds(sesoi=None, effect={"ci_low": -0.1, "ci_high": 0.1})
-    assert tost_holds(sesoi=1.0, effect={"ci_low": -0.1, "ci_high": 0.1})
+    effect = {"ci_low": -0.1, "ci_high": 0.1, "est": 0.0, "trusted": False}
+    assert not tost_holds_numerically(sesoi=None, effect=effect)
+    assert tost_holds_numerically(sesoi=1.0, effect=effect)
+    # Severe-grade TOST also requires trusted producer.
+    assert not tost_holds(sesoi=1.0, effect=effect)
+    assert tost_holds(sesoi=1.0, effect={**effect, "trusted": True})
     v, oc, _ = classify_outcome(
         validity_ok=True,
         prediction_statuses=["PASSED"],
         predicts_null=True,
         sesoi=None,
-        effect={"ci_low": -0.1, "ci_high": 0.1},
+        effect=effect,
     )
     assert v == "valid" and oc == "indeterminate"
 
@@ -398,53 +408,22 @@ def test_data_digest_overlap_merges_sources():
     assert len(distinct_by_key([a, b, c])) == 2
 
 
-def test_no_input_identical_spec_one_source():
-    from coscientist.core.domain import ExperimentMethod
-
-    spec_a = TaskSpec(
-        task_key="E1",
-        title="t",
-        goal="g",
-        route="experiment",
-        method=ExperimentMethod.COMPUTATIONAL,
-        criteria=[RequirementRef(template_id="value_match")],
-        addresses=["Q1"],
-    )
-    spec_b = TaskSpec(
-        task_key="E2",
-        title="t",
-        goal="g",
-        route="experiment",
-        method=ExperimentMethod.COMPUTATIONAL,
-        criteria=[RequirementRef(template_id="value_match")],
-        addresses=["Q1"],
-    )
-    spec_c = TaskSpec(
-        task_key="E3",
-        title="other",
-        goal="g",
-        route="experiment",
-        method=ExperimentMethod.COMPUTATIONAL,
-        criteria=[RequirementRef(template_id="value_match")],
-        addresses=["Q1"],
-    )
-    sd = normalized_task_spec_digest(spec_a)
-    assert sd == normalized_task_spec_digest(spec_b)
-    assert sd != normalized_task_spec_digest(spec_c)
+def test_structural_empty_roots_same_templates_one_source():
+    """Same target + criterion templates + empty roots → one source (ignore goal)."""
     a = _c(
         experiment_id="E1",
         independence_key=independence_key_for(experiment_id="E1"),
         data_digests=[],
-        spec_digest=sd,
-        plan_id="P1",
+        target="H1",
+        criterion_template_ids=["value_match"],
         attempt_id="E1#1",
     )
     b = _c(
         experiment_id="E2",
         independence_key=independence_key_for(experiment_id="E2"),
         data_digests=[],
-        spec_digest=sd,
-        plan_id="P1",
+        target="H1",
+        criterion_template_ids=["value_match"],
         attempt_id="E2#1",
         artifact_id="Art2",
     )
@@ -452,13 +431,173 @@ def test_no_input_identical_spec_one_source():
         experiment_id="E3",
         independence_key=independence_key_for(experiment_id="E3"),
         data_digests=[],
-        spec_digest=normalized_task_spec_digest(spec_c),
-        plan_id="P1",
+        target="H1",
+        criterion_template_ids=["artifact_present"],
         attempt_id="E3#1",
         artifact_id="Art3",
     )
+    assert structural_source_key(a) == structural_source_key(b)
+    assert structural_source_key(a) != structural_source_key(c)
     assert len(distinct_by_key([a, b])) == 1
     assert len(distinct_by_key([a, b, c])) == 2
+
+
+def test_goal_reword_does_not_split_structural_source():
+    """Goal/title/plan_id are not part of the structural key."""
+    a = _c(
+        experiment_id="E1",
+        data_digests=[],
+        target="H1",
+        criterion_template_ids=["value_match_sesoi"],
+        attempt_id="E1#1",
+    )
+    b = _c(
+        experiment_id="E2",
+        data_digests=[],
+        target="H1",
+        criterion_template_ids=["value_match_sesoi"],
+        attempt_id="E2#1",
+        artifact_id="Art2",
+    )
+    assert len(distinct_by_key([a, b])) == 1
+
+
+def test_root_data_walk_through_intermediate():
+    """Dataset via intermediate producer merges with direct raw binding."""
+    raw_sha = "aa" * 32
+    mid_id = "art_mid"
+    raw_id = "art_raw"
+
+    class _Meta:
+        def __init__(self, sha: str) -> None:
+            self.sha256 = sha
+
+    def lookup(aid: str):
+        if aid == raw_id:
+            return _Meta(raw_sha)
+        if aid == mid_id:
+            return _Meta("bb" * 32)
+        return None
+
+    results = {
+        "MID#1": {
+            "artifacts": [mid_id],
+            "output_map": {"mid": mid_id},
+            "inputs": [
+                {"kind": "artifact", "input": "data", "artifact_id": raw_id},
+            ],
+        }
+    }
+    via_mid = root_data_digests_from_bindings(
+        [{"kind": "artifact", "input": "mid", "artifact_id": mid_id}],
+        results=results,
+        artifact_lookup=lookup,
+        code_output_names=["code"],
+    )
+    direct = root_data_digests_from_bindings(
+        [{"kind": "artifact", "input": "data", "artifact_id": raw_id}],
+        results=results,
+        artifact_lookup=lookup,
+        code_output_names=["code"],
+    )
+    assert via_mid == [raw_sha]
+    assert direct == [raw_sha]
+
+
+def test_planner_role_ignored_for_code_vs_data():
+    """Only catalog code_output_names mark code; OutputSpec.role is ignored."""
+    sha = "cc" * 32
+
+    class _Meta:
+        sha256 = sha
+        role = "code"  # planner/artifact role must not matter
+        media_type = "text/x-python"
+
+    digs = data_digests_from_bindings(
+        [{"kind": "artifact", "input": "data_a", "artifact_id": "art1"}],
+        artifact_lookup=lambda _a: _Meta(),
+        code_output_names=["code", "script"],
+    )
+    assert digs == [sha]
+    # Same bytes bound under a catalog code name → skipped.
+    digs_code = data_digests_from_bindings(
+        [{"kind": "artifact", "input": "code", "artifact_id": "art1"}],
+        artifact_lookup=lambda _a: _Meta(),
+        code_output_names=["code", "script"],
+    )
+    assert digs_code == []
+
+
+def test_tost_requires_real_ci_and_trusted():
+    """Point estimate / untrusted CI is not TOST-severe."""
+    sesoi = 0.5
+    point = {"est": 0.0, "ci_low": 0.0, "ci_high": 0.0, "kind": "point", "trusted": False}
+    assert tost_holds(sesoi=sesoi, effect=point) is False
+    agent_ci = {
+        "est": 0.0,
+        "ci_low": -0.1,
+        "ci_high": 0.1,
+        "kind": "interval",
+        "trusted": False,
+    }
+    assert tost_holds(sesoi=sesoi, effect=agent_ci) is False
+    trusted = {**agent_ci, "trusted": True}
+    assert tost_holds(sesoi=sesoi, effect=trusted) is True
+    c = _c(
+        predicts_null=True,
+        used_sesoi=True,
+        uses_sesoi=True,
+        sesoi=sesoi,
+        effect=agent_ci,
+        severe=None,
+    )
+    assert claim_is_severe(c) is False
+    assert refute_intent_counts(
+        _c(
+            intent="refute",
+            predicts_null=True,
+            used_sesoi=True,
+            uses_sesoi=True,
+            sesoi=sesoi,
+            effect=agent_ci,
+            refute_capable=True,  # forged True must not win
+        )
+    ) is False
+
+
+def test_value_matches_never_used_sesoi():
+    import tempfile
+    from pathlib import Path
+
+    from coscientist.checks.evaluate import evaluate_code_check
+    from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
+    from coscientist.core.domain import CodeCheck
+
+    with tempfile.TemporaryDirectory() as tmp:
+        arts = LocalArtifactStore(Path(tmp))
+        art = arts.put(
+            b'{"count": 225}',
+            make_tool_ref("t:1"),
+            name="main",
+            media_type="application/json",
+        )
+        cr = evaluate_code_check(
+            CodeCheck(kind="value_matches", output="main", pointer="/count", target=225),
+            template_id="value_match",
+            check_id="value_match#0",
+            out=AgentTaskOutput(
+                summary="ok",
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+                values={"count": 225},
+            ),
+            artifacts=arts,
+            values={"count": 225},
+            role="prediction",
+            uses_sesoi=True,
+            sesoi=0.5,
+            predicts_null=False,
+        )
+        assert cr.used_sesoi is False
 
 
 def test_legacy_independence_key_uses_experiment_id():
@@ -882,8 +1021,8 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
-async def test_e2e_independence_sources(tmp_path, clock, runtime_cls):
-    """Data-overlap merge; no-input identical specs; method ignored."""
+async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
+    """Role swap, goal reword, and intermediate-step provenance cannot split sources."""
     from coscientist.core.artifacts import make_tool_ref
     from coscientist.core.domain import ExperimentMethod
 
@@ -907,14 +1046,19 @@ async def test_e2e_independence_sources(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="P_DATA",
-                title="data",
-                goal="g",
+                task_key="P_RAW",
+                title="raw",
+                goal="produce raw dataset",
                 route="experiment",
                 depends_on=["PLAN"],
                 expected_outputs=[
-                    OutputSpec(name="data_a", media_type="application/json", role="data"),
-                    OutputSpec(name="data_b", media_type="application/json", role="data"),
+                    # Planner labels data as code — core must ignore role.
+                    OutputSpec(
+                        name="data_a", media_type="text/x-python", role="code"
+                    ),
+                    OutputSpec(
+                        name="data_b", media_type="application/json", role="data"
+                    ),
                     OutputSpec(
                         name="code", media_type="text/x-python", role="code"
                     ),
@@ -923,52 +1067,65 @@ async def test_e2e_independence_sources(tmp_path, clock, runtime_cls):
                 addresses=["Q1"],
             ),
             TaskSpec(
-                task_key="E1",
-                title="exp1",
-                goal="g",
+                task_key="P_MID",
+                title="intermediate",
+                goal="pass-through",
                 route="experiment",
-                depends_on=["P_DATA"],
+                depends_on=["P_RAW"],
+                inputs=[InputSpec(from_task="P_RAW", output="data_a")],
+                expected_outputs=[
+                    OutputSpec(name="mid", media_type="application/json", role="data"),
+                ],
+                criteria=[RequirementRef(template_id="artifact_present")],
+                addresses=["Q1"],
+            ),
+            TaskSpec(
+                task_key="E1",
+                title="via mid",
+                goal="goal wording A",
+                route="experiment",
+                depends_on=["P_MID"],
                 method=ExperimentMethod.COMPUTATIONAL,
                 inputs=[
-                    InputSpec(from_task="P_DATA", output="data_a"),
-                    InputSpec(from_task="P_DATA", output="code"),
+                    InputSpec(from_task="P_MID", output="mid"),
+                    InputSpec(from_task="P_RAW", output="code"),
                 ],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
             TaskSpec(
                 task_key="E2",
-                title="exp2",
-                goal="g",
+                title="direct raw",
+                goal="goal wording B — revised plan",
                 route="experiment",
-                depends_on=["P_DATA"],
-                method=ExperimentMethod.STATISTICAL,  # different method, same data as E3
+                depends_on=["P_RAW"],
+                method=ExperimentMethod.STATISTICAL,
                 inputs=[
-                    InputSpec(from_task="P_DATA", output="data_b"),
-                    InputSpec(from_task="P_DATA", output="code"),
+                    InputSpec(from_task="P_RAW", output="data_a"),
+                    InputSpec(from_task="P_RAW", output="code"),
                 ],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
             TaskSpec(
                 task_key="E3",
-                title="exp3_reuse",
+                title="other data",
                 goal="g",
                 route="experiment",
-                depends_on=["P_DATA"],
-                method=ExperimentMethod.SIMULATION,  # different method, same data as E1
+                depends_on=["P_RAW"],
+                method=ExperimentMethod.SIMULATION,
                 inputs=[
-                    InputSpec(from_task="P_DATA", output="data_a"),
-                    InputSpec(from_task="P_DATA", output="code"),
+                    InputSpec(from_task="P_RAW", output="data_b"),
+                    InputSpec(from_task="P_RAW", output="code"),
                 ],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
-            # No-input: identical specs (different task_key) → 1 source.
+            # No-input: goal/title reword + same templates → 1 source.
             TaskSpec(
                 task_key="N1",
-                title="same",
-                goal="g",
+                title="same-ish",
+                goal="original goal text",
                 route="experiment",
                 depends_on=["PLAN"],
                 method=ExperimentMethod.COMPUTATIONAL,
@@ -977,35 +1134,35 @@ async def test_e2e_independence_sources(tmp_path, clock, runtime_cls):
             ),
             TaskSpec(
                 task_key="N2",
-                title="same",
-                goal="g",
+                title="reworded title",
+                goal="completely different goal after plan revision",
                 route="experiment",
                 depends_on=["PLAN"],
                 method=ExperimentMethod.COMPUTATIONAL,
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
-            # No-input: different spec → 2nd source.
+            # Distinct criterion template → separate structural source.
             TaskSpec(
                 task_key="N3",
-                title="different",
+                title="other criterion",
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
                 method=ExperimentMethod.COMPUTATIONAL,
-                criteria=[RequirementRef(template_id="value_match")],
+                criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
-    aid_p = await rt.start_attempt("P_DATA")
+    aid_p = await rt.start_attempt("P_RAW")
     da = arts.put(
         b'{"count": 1}',
         make_tool_ref(f"{aid_p}:da"),
         name="data_a",
         media_type="application/json",
-        role="data",
+        role="code",  # forged planner role
     )
     db = arts.put(
         b'{"count": 2}',
@@ -1030,6 +1187,25 @@ async def test_e2e_independence_sources(tmp_path, clock, runtime_cls):
                 "data_a": ArtifactHandle(artifact_id=da.artifact_id, name="data_a"),
                 "data_b": ArtifactHandle(artifact_id=db.artifact_id, name="data_b"),
                 "code": ArtifactHandle(artifact_id=code.artifact_id, name="code"),
+            },
+            claims=[],
+        ),
+    )
+    aid_mid = await rt.start_attempt("P_MID")
+    mid = arts.put(
+        b'{"count": 1, "passed": true}',
+        make_tool_ref(f"{aid_mid}:m"),
+        name="mid",
+        media_type="application/json",
+        role="data",
+    )
+    await rt.executor.record(
+        aid_mid,
+        AgentTaskOutput(
+            summary="mid",
+            outputs={
+                "main": ArtifactHandle(artifact_id=mid.artifact_id, name="main"),
+                "mid": ArtifactHandle(artifact_id=mid.artifact_id, name="mid"),
             },
             claims=[],
         ),
@@ -1061,19 +1237,18 @@ async def test_e2e_independence_sources(tmp_path, clock, runtime_cls):
                 break
 
     e1, e2, e3 = claims_by_tk["E1"], claims_by_tk["E2"], claims_by_tk["E3"]
-    # Stamped keys are experiment-based (distinct), merge is at count time.
     assert e1.independence_key != e2.independence_key
-    assert e1.independence_key != e3.independence_key
-    # Different methods over same data → 1 source; different data → 2.
-    assert len(distinct_by_key([e1, e3])) == 1
-    assert len(distinct_by_key([e1, e2, e3])) == 2
-    # Code role ignored: data digests only.
+    # Intermediate + direct raw share root data_a → one source (bypass blocked).
     assert da.sha256 in (e1.data_digests or [])
+    assert da.sha256 in (e2.data_digests or [])
+    assert len(distinct_by_key([e1, e2])) == 1
+    assert len(distinct_by_key([e1, e2, e3])) == 2
+    # Catalog code name ignored as data; planner role=code on data_a did not hide it.
     assert code.sha256 not in (e1.data_digests or [])
 
     n1, n2, n3 = claims_by_tk["N1"], claims_by_tk["N2"], claims_by_tk["N3"]
-    assert n1.spec_digest and n1.spec_digest == n2.spec_digest
-    assert n1.spec_digest != n3.spec_digest
+    assert n1.criterion_template_ids == n2.criterion_template_ids
+    assert n1.criterion_template_ids != n3.criterion_template_ids
     assert len(distinct_by_key([n1, n2])) == 1
     assert len(distinct_by_key([n1, n2, n3])) == 2
     await close_runtime(rt)
@@ -1237,4 +1412,173 @@ async def test_aggregate_evalue_rejected_at_create(tmp_path, clock, runtime_cls)
             finalize_reserve_s=5,
             aggregate="evalue",
         )
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_forged_severe_refute_capable_recomputed_on_replay(
+    tmp_path, clock, runtime_cls
+):
+    """Legacy/forged severe=True / refute_capable=True must not survive read/replay."""
+    from coscientist.core.events import EventEnvelope, make_idem
+    from coscientist.core.graph import GraphEdge, GraphNode
+    from coscientist.core.ids import claim_node_id, question_node_id
+
+    sid = "st_forge"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=120),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E0",
+                title="t",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="artifact_present")],
+                addresses=["Q1"],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    cid = claim_node_id(sid, "forged")
+    qid = question_node_id(sid, "Q1")
+    aid = f"{sid}/E0#1"
+    await rt._append(
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="GraphNodeUpserted",
+                entity_key=cid,
+                idem_key=make_idem("GraphNodeUpserted", cid, "forge"),
+                payload=GraphNode(
+                    node_id=cid,
+                    kind="claim",
+                    study_id=sid,
+                    ref_id="forged",
+                    attrs={
+                        "provenance": "real",
+                        "attempt_id": aid,
+                        "attempt_outcome": "SUCCESS",
+                        "target": "Q1",
+                        "accepted": True,
+                        "criterion_status": "met",
+                        "claim_outcome": "consistent",
+                        "frozen": True,
+                        "evidence_kind": "computational",
+                        "validity_ok": True,
+                        "check_role": "prediction",
+                        # Forged legacy fields — must be ignored / recomputed False.
+                        "severe": True,
+                        "refute_capable": True,
+                        "independence_key": "forged-key",
+                        "experiment_id": f"{sid}/E0",
+                    },
+                ).model_dump(mode="json"),
+                ts=clock.now(),
+            ),
+            EventEnvelope(
+                study_id=sid,
+                type="GraphEdgeAdded",
+                entity_key=f"{cid}->about->{qid}",
+                idem_key=make_idem("GraphEdgeAdded", cid, "about"),
+                payload=GraphEdge(
+                    edge_id=f"{cid}:about:{qid}",
+                    kind="about",
+                    src_id=cid,
+                    dst_id=qid,
+                    study_id=sid,
+                ).model_dump(mode="json"),
+                ts=clock.now(),
+            ),
+        ]
+    )
+    by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
+    claim = by["question:Q1"][0]
+    assert claim.severe is False
+    assert claim.refute_capable is False
+    assert claim_is_severe(claim) is False
+    assert refute_intent_counts(claim) is False
+
+    await close_runtime(rt)
+    rt2 = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
+    )
+    by2 = filtered_claims_by_target(rt2.graph, study_id=sid, results=rt2.results)
+    claim2 = by2["question:Q1"][0]
+    assert claim2.severe is False
+    assert claim2.refute_capable is False
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_e2e_tost_agent_metric_not_severe(tmp_path, clock, runtime_cls):
+    """Agent-written CI may be numerically TOST but never severe / refute-capable."""
+    from coscientist.core.artifacts import make_tool_ref
+
+    sid = "st_tost"
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=180),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt.start_attempt(key)
+        await rt.cancel_task(key, reason="cancelled")
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E0",
+                title="tost",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="tost_equivalence")],
+                addresses=["Q1"],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    aid0 = await rt.start_attempt("E0")
+    art = arts.put(
+        b'{"effect": {"est": 0.0, "ci_low": -0.1, "ci_high": 0.1}}',
+        make_tool_ref(f"{aid0}:1"),
+        name="main",
+        media_type="application/json",
+    )
+    await rt.executor.record(
+        aid0,
+        AgentTaskOutput(
+            summary="ok",
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            values={},
+            claims=[{"id": "c1", "target": "Q1"}],
+        ),
+    )
+    by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
+    c = by["question:Q1"][0]
+    assert c.claim_outcome == "consistent"
+    assert c.used_sesoi is True
+    assert (c.effect or {}).get("trusted") is False
+    assert c.severe is False
+    assert c.refute_capable is False
     await close_runtime(rt)

@@ -4,11 +4,12 @@
 
 ### M1 PR8b
 - Hypothesis verdict model (`docs/DESIGN_HYP_DELTA.md`): claim `validity`/`outcome`/`severe`/`independence_key`; stub|partial|lit|invalid excluded **before** counting.
-- `independence_key` base = `experiment_id`; count-time merge when bound **data** digests overlap (Artifact.role/media_type, not input name) or no-input tasks share a normalized TaskSpec. Method is not in the key.
-- `severe` / TOST / capable refute: SESOI + `predicts_null` from **catalog template** only (`RequirementRef.params` rejected). Check must `used_sesoi`; effect from `CheckResult.effect`. `min_power` removed.
+- `independence_key` base = `experiment_id`; count-time merge by **transitive root-data** digest overlap (`Catalog.code_output_names` declares code; planner role/media_type ignored) or **structural** key (target + criterion templates, empty roots). No TaskSpec/goal/title/plan_id hash. Method is not in the key.
+- `severe` / TOST / capable refute: SESOI + `predicts_null` from **catalog template** only. TOST needs a real CI (`ci_low < ci_high`) and `effect.trusted`; agent-written metrics are untrusted. `value_matches` never sets `used_sesoi`. `min_power` removed.
+- On journal read/replay: **never trust** stored `severe`/`refute_capable=True` — recompute or reset to False.
 - Study: **`supported_needed`** (default 2, ≥2); `confirmations_needed` = PR8 snapshot `k`. StudyCreated **v6**.
 - `aggregate='evalue'` rejected at create (deferred until core computes p-values).
-- Report: `hypothesis_report_row` in finalize; failures record `hypotheses_unavailable` + error class. Bind snapshots win on replay; finalize recomputes report rows.
+- Report: `hypothesis_report_row` in finalize; failures set dedicated `hypotheses_unavailable` (not a fake hypothesis id). Bind snapshots win on replay; finalize recomputes report rows.
 - Keeps PR8: check roles, per-experiment `validity_failed` / `unknown_role`, `VerdictSnapshotsRecorded`.
 
 ### M1 PR8

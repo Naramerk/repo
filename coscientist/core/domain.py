@@ -492,6 +492,9 @@ class Catalog(Frozen):
     rules: list[RuleRef] = Field(default_factory=list)
     templates: list[RequirementTemplate] = Field(default_factory=list)
     defaults: dict[str, list[str]] = Field(default_factory=dict)  # node_kind -> template ids
+    # Independence: input artifacts are DATA unless listed here (catalog-authored).
+    # Planner OutputSpec.role / media_type are ignored for this decision.
+    code_output_names: list[str] = Field(default_factory=list)
 
 
 class NodeRequirement(Frozen):

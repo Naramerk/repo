@@ -205,8 +205,10 @@ def _study_finalized_v2_to_v3(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(mr, dict):
         mr = dict(mr)
         mr.setdefault("hypotheses", [])
+        mr.setdefault("hypotheses_unavailable", None)
         out["minimal_report"] = mr
     out.setdefault("hypothesis_report", out.get("hypothesis_report") or [])
+    out.setdefault("hypotheses_unavailable", None)
     return out
 
 
