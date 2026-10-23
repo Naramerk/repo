@@ -9,9 +9,11 @@ from coscientist.core.domain import StudyView, Task, TaskOutcome, TaskState
 
 
 def _task_is_stub(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> bool:
-    for aid in task.attempts:
-        if attempts.get(aid, {}).get("provenance") == "stub":
-            return True
+    """True iff the last closed attempt has provenance=stub."""
+    for aid in reversed(task.attempts):
+        att = attempts.get(aid, {})
+        if att.get("closed"):
+            return att.get("provenance") == "stub"
     return False
 
 

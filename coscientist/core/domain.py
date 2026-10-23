@@ -187,7 +187,7 @@ class Study(Frozen):
     created_at: datetime
     parent_study_id: str | None = None
     budget: Budget | None = None
-    finalize_reserve_s: int = 30
+    finalize_reserve_s: int = Field(default=30, ge=0)
 
     def effective_deadline(self) -> datetime:
         """Last instant usable by tasks/attempts/HITL (deadline − finalize reserve)."""

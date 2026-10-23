@@ -57,6 +57,8 @@ class LifecycleMixin:
         sid = sid or self.store.study_id or study_id()
         now = self.clock.now()
         dl = deadline or (now + timedelta(hours=2))
+        if finalize_reserve_s < 0:
+            raise ValueError(f"finalize_reserve_s must be >= 0, got {finalize_reserve_s}")
         duration_s = (dl - now).total_seconds()
         if duration_s <= finalize_reserve_s:
             raise ValueError(
@@ -84,6 +86,7 @@ class LifecycleMixin:
                 idem_key=make_idem("StudyCreated", sid),
                 payload=study.model_dump(mode="json"),
                 ts=now,
+                schema_version=2,
             ),
             EventEnvelope(
                 study_id=sid,

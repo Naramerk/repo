@@ -126,6 +126,8 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         for task in list(self.tasks.values()):
             if task.state == TaskState.DONE:
                 continue
+            # TODO(PR 2): P6 study_deadline / finalize trigger should fire at
+            # effective_deadline (study.deadline − finalize_reserve_s), not study.deadline.
             if now > task.deadline or now > self.study.deadline:
                 reason = (
                     TaskReason.DEADLINE

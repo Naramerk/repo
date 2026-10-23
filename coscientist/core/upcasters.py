@@ -38,6 +38,13 @@ def _task_created_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _study_created_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
+    """Old journals had no finalize_reserve_s; default 0 keeps pre-reserve deadlines."""
+    out = dict(payload)
+    out.setdefault("finalize_reserve_s", 0)
+    return out
+
+
 def _coerce_task_reason_field(payload: dict[str, Any]) -> dict[str, Any]:
     out = dict(payload)
     reason = out.get("reason")
@@ -82,6 +89,7 @@ def _rename_simulated_provenance(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 register_upcaster("TaskCreated", 1, _task_created_v1_to_v2)
+register_upcaster("StudyCreated", 1, _study_created_v1_to_v2)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)

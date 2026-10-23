@@ -193,6 +193,36 @@ def test_study_view_stubbed_computed():
     assert view2.stub_share == 0.5
 
 
+def test_task_is_stub_uses_last_closed_attempt():
+    """Earlier stub attempt must not mark the task stub if the last closed is real."""
+    t = _task("A", attempts=["a1", "a2"])
+    atts = {
+        "a1": {"provenance": "stub", "closed": True},
+        "a2": {"provenance": "real", "closed": True},
+    }
+    view = study_view([t], attempts=atts)
+    assert view.verdict == "fulfilled"
+    assert view.stub_share == 0.0
+
+    # Last closed is stub → stubbed
+    atts_rev = {
+        "a1": {"provenance": "real", "closed": True},
+        "a2": {"provenance": "stub", "closed": True},
+    }
+    t2 = _task("B", outcome=TaskOutcome.PARTIAL, attempts=["a1", "a2"])
+    view2 = study_view([t2], attempts=atts_rev)
+    assert view2.verdict == "stubbed"
+    assert view2.stub_share == 1.0
+
+    # Open (non-closed) stub after a real closed attempt → still real
+    atts_open = {
+        "a1": {"provenance": "real", "closed": True},
+        "a2": {"provenance": "stub", "closed": False},
+    }
+    view3 = study_view([_task("C", attempts=["a1", "a2"])], attempts=atts_open)
+    assert view3.verdict == "fulfilled"
+
+
 @pytest.mark.asyncio
 async def test_create_study_rejects_duration_le_reserve(tmp_path: Path, clock, runtime_cls):
     rt = await open_runtime(tmp_path, "st_rej", clock=clock, runtime_cls=runtime_cls)
@@ -204,6 +234,21 @@ async def test_create_study_rejects_duration_le_reserve(tmp_path: Path, clock, r
             deadline=clock.now() + timedelta(seconds=30),
             sid="st_rej",
             finalize_reserve_s=30,
+        )
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_create_study_rejects_negative_reserve(tmp_path: Path, clock, runtime_cls):
+    rt = await open_runtime(tmp_path, "st_neg", clock=clock, runtime_cls=runtime_cls)
+    with pytest.raises(ValueError, match="finalize_reserve_s must be >= 0"):
+        await rt.create_study(
+            profile="research",
+            request="q",
+            catalog_version="0.1.0",
+            deadline=clock.now() + timedelta(minutes=30),
+            sid="st_neg",
+            finalize_reserve_s=-1,
         )
     await close_runtime(rt)
 
@@ -252,3 +297,109 @@ async def test_plan_deadline_clipped_by_reserve(tmp_path: Path, clock, runtime_c
 def test_upcast_preserves_null_reason():
     v, p = upcast("TaskDone", 1, {"task_id": "t", "outcome": "SUCCESS", "reason": None})
     assert v == 2 and p["reason"] is None
+
+
+def test_upcast_study_created_sets_reserve_zero():
+    v, p = upcast(
+        "StudyCreated",
+        1,
+        {
+            "study_id": "st_old",
+            "profile": "research",
+            "request": "q",
+            "catalog_version": "0.1.0",
+            "hitl_policy": {},
+            "deadline": "2026-01-01T01:00:00+00:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
+    assert v == 2
+    assert p["finalize_reserve_s"] == 0
+    # Explicit value must not be overwritten
+    v2, p2 = upcast("StudyCreated", 1, {**p, "finalize_reserve_s": 30})
+    assert p2["finalize_reserve_s"] == 30
+
+
+@pytest.mark.asyncio
+async def test_old_journal_replay_keeps_deadlines_and_tick(
+    tmp_path: Path, clock, runtime_cls
+):
+    """StudyCreated v1 without finalize_reserve_s → reserve=0; deadlines unchanged; tick works."""
+    from coscientist.core.domain import HitlPolicy, TaskKind, TaskSpec, TaskState
+    from coscientist.core.events import EventEnvelope, make_idem
+    from coscientist.core.store import SqliteEventStore
+
+    sid = "st_legacy"
+    root = tmp_path / sid
+    root.mkdir(parents=True)
+    store = SqliteEventStore(sid, root / "events.db", clock=clock)
+    await store.acquire_lease("seeder")
+    now = clock.now()
+    # Keep under default lease TTL (30s) so clock.advance for tick does not expire the lease.
+    dl = now + timedelta(seconds=20)
+    # Pre-reserve journal: task deadlines equal study.deadline; no finalize_reserve_s.
+    study_payload = {
+        "study_id": sid,
+        "profile": "research",
+        "request": "legacy",
+        "catalog_version": "0.1.0",
+        "hitl_policy": HitlPolicy().model_dump(mode="json"),
+        "deadline": dl.isoformat(),
+        "created_at": now.isoformat(),
+        "parent_study_id": None,
+        "budget": None,
+    }
+    assert "finalize_reserve_s" not in study_payload
+    spec = TaskSpec(task_key="SPEC", title="SPEC", goal="SPEC", route="spec")
+    task_payload = {
+        "task_id": f"{sid}/SPEC",
+        "kind": TaskKind.SPEC.value,
+        "spec": spec.model_dump(mode="json"),
+        "state": TaskState.PENDING.value,
+        "outcome": None,
+        "reason": None,
+        "deadline": dl.isoformat(),
+        "attempts": [],
+        "inherited_from": None,
+    }
+    await store.append_many(
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="StudyCreated",
+                entity_key=sid,
+                idem_key=make_idem("StudyCreated", sid),
+                payload=study_payload,
+                ts=now,
+                schema_version=1,
+            ),
+            EventEnvelope(
+                study_id=sid,
+                type="TaskCreated",
+                entity_key=f"{sid}/SPEC",
+                idem_key=make_idem("TaskCreated", f"{sid}/SPEC"),
+                payload=task_payload,
+                ts=now,
+                schema_version=1,
+            ),
+        ]
+    )
+    await store.release_lease("seeder", store.epoch)
+    await store.close()
+
+    rt = await open_runtime(tmp_path, sid, clock=clock, runtime_cls=runtime_cls)
+    assert rt.study is not None
+    assert rt.study.finalize_reserve_s == 0
+    assert rt.study.effective_deadline() == rt.study.deadline
+    task = rt.tasks[f"{sid}/SPEC"]
+    assert task.deadline == rt.study.deadline
+    assert rt.invariant_deadlines()
+
+    await rt.ensure_lease(ttl_s=300)
+    clock.advance(timedelta(seconds=21))
+    await rt.tick()
+    done = rt.tasks[f"{sid}/SPEC"]
+    assert done.state == TaskState.DONE
+    # task.deadline == study.deadline → P5 (deadline) wins the or-branch
+    assert done.reason == TaskReason.DEADLINE
+    await close_runtime(rt)

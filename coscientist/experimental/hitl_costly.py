@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from coscientist.core.domain import HitlRequest, Task, TaskOutcome, TaskState
 from coscientist.core.events import EventEnvelope, make_idem
+from coscientist.core.reasons import TaskReason
 from coscientist.experimental.costly import DelegatedBudget, costly_gate, settle
 
 if TYPE_CHECKING:
@@ -26,7 +27,9 @@ class CostlyHitlMixin:
         raise NotImplementedError
 
     async def cancel_task(
-        self, task_key_or_id: str, reason: str = "cancelled"
+        self,
+        task_key_or_id: str,
+        reason: str | TaskReason = TaskReason.CANCELLED,
     ) -> None:
         raise NotImplementedError
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from coscientist.core.events import EventEnvelope
+from coscientist.core.reasons import TaskReason
 
 # table -> row_key -> data
 ProjectionMap = dict[str, dict[str, dict[str, Any]]]
@@ -56,7 +57,7 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
                     {
                         **task,
                         "state": "PENDING",
-                        "reason": "retry_scheduled",  # TaskReason.RETRY_SCHEDULED
+                        "reason": TaskReason.RETRY_SCHEDULED.value,
                         "retry_at": p["retry_at"],
                     },
                 )

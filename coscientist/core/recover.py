@@ -11,6 +11,7 @@ from coscientist.core.errors import ArtifactCorrupt
 from coscientist.core.hitl_guard import reject_open_hitl_if_unsupported
 from coscientist.core.ids import result_id
 from coscientist.core.machine import StudyRuntime
+from coscientist.core.reasons import TaskReason
 
 
 async def recover(runtime: StudyRuntime) -> dict[str, Any]:
@@ -74,7 +75,7 @@ def _retry_scheduled(runtime: StudyRuntime, task_id: str) -> bool:
     return (
         task is not None
         and task.state == TaskState.PENDING
-        and task.reason == "retry_scheduled"
+        and task.reason == TaskReason.RETRY_SCHEDULED
     )
 
 
