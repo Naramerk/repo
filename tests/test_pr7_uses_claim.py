@@ -281,7 +281,8 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
     assert len(started.payload["inputs"]) == 1
     assert started.payload["inputs"][0]["kind"] == "claim"
     assert started.payload["inputs"][0]["digest"]
-    assert started.payload.get("share_renorm") is True
+    # No plan shares → no P2 renorm (M1 PR12 / M3).
+    assert started.payload.get("share_renorm") is False
     await close_runtime(rt)
 
     # Replay: bindings survive reopen.

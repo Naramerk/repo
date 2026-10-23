@@ -83,6 +83,10 @@ def allocate_budget(
     bud = study.budget
     if bud is None or bud.max_cost_rub is None:
         return None
+    # Stage / non-plan keys (SPEC, REPORT, …) are outside the share pool — no task cap.
+    plan_keys = {t.task_key for t in plan_tasks}
+    if task_key not in plan_keys:
+        return None
     max_cost = Decimal(str(bud.max_cost_rub))
     remaining = max_cost - Decimal(str(spent_rub))
     if remaining <= 0:
@@ -116,7 +120,9 @@ def compute_p2_allocation(
     plan_tasks = _plan_specs_for_shares(runtime)
     not_started = _not_started_keys(runtime.tasks)
     not_started.add(task.spec.task_key)
-    do_renorm = shares_present(plan_tasks)
+    plan_keys = {t.task_key for t in plan_tasks}
+    # Renorm only for plan tasks when shares are present (stages keep wall deadline).
+    do_renorm = shares_present(plan_tasks) and task.spec.task_key in plan_keys
     if do_renorm:
         renormed = renorm_deadline(
             task.spec.task_key,
