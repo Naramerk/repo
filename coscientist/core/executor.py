@@ -5,13 +5,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from coscientist.checks.evaluate import evaluate_task_checks
+from coscientist.checks.evaluate import evaluate_task_checks, role_from_catalog
 from coscientist.core.artifacts import LocalArtifactStore
 from coscientist.core.digest import canonical_json, payload_digest
 from coscientist.core.domain import (
     VALID_PROVENANCE,
     AgentTaskOutput,
     Catalog,
+    ExperimentMethod,
     Outcome,
     Provenance,
     ReqStatus,
@@ -20,7 +21,7 @@ from coscientist.core.domain import (
 )
 from coscientist.core.errors import AttemptClosedError, CatalogError
 from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.ids import result_id
+from coscientist.core.ids import criterion_node_id, result_id
 from coscientist.core.inputs import claim_nodes_from_attempt
 from coscientist.core.outcome import compute_outcome
 from coscientist.core.reasons import CloseReason, TaskReason
@@ -38,6 +39,211 @@ def _provenance(attempt: Any) -> Provenance:
     return p  # type: ignore[return-value]
 
 
+def _req_to_criterion_status(status: ReqStatus) -> str:
+    if status in (ReqStatus.MET, ReqStatus.WAIVED, ReqStatus.NOT_APPLICABLE):
+        return "met"
+    if status in (ReqStatus.FAILED, ReqStatus.MIGRATION_ERROR):
+        return "not_met"
+    return "unassessed"
+
+
+def _check_field(c: Any, name: str) -> Any:
+    if isinstance(c, dict):
+        return c.get(name)
+    return getattr(c, name, None)
+
+
+def _normalize_to_template_id(
+    key: str, checks: list[Any], criteria: list[Any]
+) -> str:
+    """Map check_id (``value_match#0``) → template_id; leave template_id as-is."""
+    for c in checks:
+        tid = _check_field(c, "template_id")
+        cid = _check_field(c, "check_id")
+        if cid is not None and str(cid) == key and tid:
+            return str(tid)
+        if tid is not None and str(tid) == key:
+            return str(tid)
+    for ref in criteria:
+        tid = _check_field(ref, "template_id")
+        if tid is not None and str(tid) == key:
+            return str(tid)
+    return key
+
+
+def _criterion_key_for_claim(
+    raw: dict[str, Any], checks: list[Any], criteria: list[Any]
+) -> str | None:
+    """Resolve checked_against → template_id, else sole check / sole plan criterion."""
+    checked = raw.get("checked_against")
+    if checked:
+        return _normalize_to_template_id(str(checked), checks, criteria)
+    if len(checks) == 1:
+        tid = _check_field(checks[0], "template_id")
+        return str(tid) if tid else None
+    if len(criteria) == 1:
+        tid = _check_field(criteria[0], "template_id")
+        return str(tid) if tid else None
+    return None
+
+
+def _criterion_status_for_claim(
+    raw: dict[str, Any], checks: list[Any], criteria: list[Any] | None = None
+) -> str:
+    """Map claim.checked_against → ReqStatus of that criterion's check."""
+    crit = list(criteria or [])
+    key = _criterion_key_for_claim(raw, checks, crit)
+    if key:
+        for c in checks:
+            tid = _check_field(c, "template_id")
+            cid = _check_field(c, "check_id")
+            st = _check_field(c, "status")
+            # Exact match only (no endswith — avoids C11 matching ``1``).
+            if (tid is not None and str(tid) == key) or (
+                cid is not None and str(cid) == key
+            ):
+                if isinstance(st, ReqStatus):
+                    return _req_to_criterion_status(st)
+                try:
+                    return _req_to_criterion_status(ReqStatus(str(st)))
+                except ValueError:
+                    return "unassessed"
+        return "unassessed"
+    if len(checks) == 1:
+        st = _check_field(checks[0], "status")
+        if isinstance(st, ReqStatus):
+            return _req_to_criterion_status(st)
+    return "unassessed"
+
+
+def _check_role(c: Any) -> str:
+    role = _check_field(c, "role")
+    if role in ("prediction", "validity", "unknown"):
+        return str(role)
+    return "unknown"
+
+
+def _required_validity_failed(checks: list[Any]) -> bool:
+    """True when a required validity check FAILED (Duhem–Quine cap)."""
+    for c in checks:
+        if _check_role(c) != "validity":
+            continue
+        if not bool(_check_field(c, "required")):
+            continue
+        st = _check_field(c, "status")
+        if isinstance(st, ReqStatus):
+            failed = st in (ReqStatus.FAILED, ReqStatus.MIGRATION_ERROR)
+        else:
+            failed = str(st) in (
+                ReqStatus.FAILED.value,
+                ReqStatus.MIGRATION_ERROR.value,
+            )
+        if failed:
+            return True
+    return False
+
+
+def _role_for_claim_key(
+    raw: dict[str, Any],
+    checks: list[Any],
+    criteria: list[Any],
+    *,
+    catalog: Any | None = None,
+) -> str:
+    """Role of the check this claim is checked_against (catalog / CheckResult only)."""
+    key = _criterion_key_for_claim(raw, checks, criteria)
+    if key:
+        for c in checks:
+            tid = _check_field(c, "template_id")
+            cid = _check_field(c, "check_id")
+            if (tid is not None and str(tid) == key) or (
+                cid is not None and str(cid) == key
+            ):
+                return _check_role(c)
+        # Fall back to catalog by template_id (never plan RequirementRef.role).
+        return role_from_catalog(str(key), catalog)
+    if len(checks) == 1:
+        return _check_role(checks[0])
+    return "unknown"
+
+
+def _criterion_is_frozen(graph: Any, study_id: str, template_id: Any) -> bool:
+    """True when plan-accept freeze marked the criterion node (keyed by template_id)."""
+    if not template_id or graph is None:
+        return False
+    key = str(template_id)
+    node = graph.get_node(criterion_node_id(study_id, key))
+    if node is None:
+        node = graph.get_node(key)
+    if node is None or node.kind != "criterion":
+        return False
+    attrs = node.attrs or {}
+    return attrs.get("frozen_at_seq") is not None or bool(attrs.get("frozen"))
+
+
+def _derive_claim_core_attrs(
+    task: Any,
+    task_outcome: TaskOutcome,
+    *,
+    raw: dict[str, Any],
+    checks: list[Any],
+    graph: Any,
+    study_id: str,
+    validated: bool,
+    catalog: Any | None = None,
+) -> dict[str, Any]:
+    """Core-owned counting fields from plan/checks/freeze — never agent attrs.
+
+    ``accepted`` means the result was recorded and the claim is structurally
+    valid — **not** that criteria passed (graph_schema invariant 10).
+
+    Check ``role`` (catalog only, Duhem–Quine):
+    - ``prediction`` FAILED → ``criterion_status=not_met`` → counting refute.
+    - required ``validity`` FAILED → claim not counted (``validity_ok=False``);
+      excluded as ``validity_failed`` (per experiment; other valid claims still count).
+    - ``unknown`` → ``validity_ok=False``, excluded as ``unknown_role``; never
+      refutes, never validates, never forces a question/hypothesis verdict.
+    """
+    del task_outcome  # outcome is scientific whenever we derive; criteria ≠ accepted
+    spec = getattr(task, "spec", None)
+    method = getattr(spec, "method", None) if spec is not None else None
+    lit = method == ExperimentMethod.LITERATURE_SEARCH or str(method or "") == (
+        "literature_search"
+    )
+    criteria = list(getattr(spec, "criteria", None) or []) if spec is not None else []
+    key = _criterion_key_for_claim(raw, checks, criteria)
+    role = _role_for_claim_key(raw, checks, criteria, catalog=catalog)
+    status = _criterion_status_for_claim(raw, checks, criteria)
+    validity_ok = True
+    exclusion_reason: str | None = None
+    # Required validity failure invalidates this experiment's claims only.
+    if _required_validity_failed(checks):
+        validity_ok = False
+        status = "unassessed"
+        exclusion_reason = "validity_failed"
+    elif role == "unknown":
+        # Unknown role never refutes and never validates (own exclusion reason).
+        validity_ok = False
+        status = "unassessed"
+        exclusion_reason = "unknown_role"
+    elif role == "validity" and status == "not_met":
+        validity_ok = False
+        status = "unassessed"
+        exclusion_reason = "validity_failed"
+    out = {
+        "criterion_status": status,
+        "evidence_kind": "literature" if lit else "computational",
+        "frozen": _criterion_is_frozen(graph, study_id, key),
+        "lit_own_criterion": bool(lit and criteria),
+        "accepted": bool(validated),
+        "validity_ok": validity_ok,
+        "check_role": role,
+    }
+    if exclusion_reason is not None:
+        out["exclusion_reason"] = exclusion_reason
+    return out
+
+
 class Executor:
     def __init__(
         self,
@@ -50,6 +256,7 @@ class Executor:
         get_task: Any,
         on_events: Any | None = None,
         review_statuses: dict[str, ReqStatus] | None = None,
+        get_graph: Any | None = None,
     ) -> None:
         self.writer = writer
         self.catalog = catalog
@@ -59,6 +266,7 @@ class Executor:
         self.get_task = get_task
         self.on_events = on_events  # callback after successful append (project local)
         self.review_statuses = review_statuses or {}
+        self.get_graph = get_graph
         self._scheduled_reviews: list[str] = []
 
     async def mark_route_returned(self, attempt_id: str, out: AgentTaskOutput) -> str:
@@ -221,6 +429,9 @@ class Executor:
             ),
             "inputs": [],
         }
+        # Scientific result: criteria evaluated (SUCCESS / PARTIAL / FAILED).
+        # Keep claims so not_met can refute (invariant 10); only infra drops them.
+        payload["result_class"] = "scientific"
         payload["payload_digest"] = payload_digest(payload)
         return await self._commit_result(
             attempt_id,
@@ -230,6 +441,8 @@ class Executor:
             TaskOutcome(final.value),
             None,
             claims=list(out.claims or []),
+            checks=checks,
+            infra_failure=False,
         )
 
     async def _commit_failure(
@@ -244,6 +457,7 @@ class Executor:
         reason: str,
         detail: str,
     ) -> Result:
+        """Infra/execution failure (catalog, crash path) — drop claims."""
         rid = result_id(attempt_id)
         payload = {
             "result_id": rid,
@@ -258,6 +472,7 @@ class Executor:
             "agent_claim": claim.value if claim else None,
             "inputs": [],
             "detail": detail,
+            "result_class": "infra",
         }
         payload["payload_digest"] = payload_digest(payload)
         await self._append(
@@ -279,7 +494,9 @@ class Executor:
             payload,
             TaskOutcome.FAILED,
             reason,
-            claims=list(out.claims or []),
+            claims=[],
+            checks=[],
+            infra_failure=True,
         )
 
     async def _commit_result(
@@ -292,17 +509,39 @@ class Executor:
         reason: str | None,
         *,
         claims: list[dict[str, Any]] | None = None,
+        checks: list[Any] | None = None,
+        infra_failure: bool = False,
     ) -> Result:
         # Attempt-open check runs inside the write transaction (_append_many_sync).
         now = self.clock.now()
-        # PR7: claim nodes carry producing-attempt provenance (H-b).
-        claim_events = claim_nodes_from_attempt(
+        graph = self.get_graph() if self.get_graph is not None else None
+        task = self.get_task(task_id)
+        # PR7/PR8: claim nodes carry producing-attempt provenance (H-b);
+        # re-upsert keeps worst provenance; about edges + attr whitelist.
+        # Scientific FAILED/PARTIAL keep claims (not_met → refute); infra drops.
+        claim_events, drops = claim_nodes_from_attempt(
             study_id=study_id,
             attempt_id=attempt_id,
             provenance=payload["provenance"],
             claims=list(claims or []),
             now=now,
+            graph=graph,
+            attempt_outcome=task_outcome.value,
+            infra_failure=infra_failure,
+            derive_attrs=lambda raw, validated: _derive_claim_core_attrs(
+                task,
+                task_outcome,
+                raw=raw,
+                checks=list(checks or []),
+                graph=graph,
+                study_id=study_id,
+                validated=validated,
+                catalog=self.catalog,
+            ),
         )
+        if drops:
+            payload = {**payload, "claims_dropped": drops}
+            payload["payload_digest"] = payload_digest(payload)
         events = [
             *claim_events,
             EventEnvelope(

@@ -18,9 +18,8 @@ from coscientist.core.domain import (
 )
 from coscientist.core.inputs import InputUnavailable, bind_inputs
 from coscientist.core.reasons import TaskReason
-from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.upcasters import upcast
-from tests.helpers import attach_executor, record_success
+from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
 
 def _task(key: str, outcome: TaskOutcome | None, *, inputs=None, **spec_kw):
@@ -69,7 +68,7 @@ def test_upcast_input_mode_keeps_old_default():
             },
         },
     )
-    assert v == 5
+    assert v == 6
     assert p["spec"]["inputs"][0]["mode"] == "use_partial"
     assert p["spec"]["inputs"][0]["kind"] == "artifact"
 

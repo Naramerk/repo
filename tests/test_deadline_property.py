@@ -31,7 +31,7 @@ from coscientist.core.hitl_guard import supports_hitl
 from coscientist.core.inputs import InputUnavailable
 from coscientist.core.projections import fold_events
 from coscientist.core.recover import recover
-from coscientist.core.runtime_factory import close_runtime, open_runtime
+from tests.helpers import close_runtime, open_runtime
 
 # Expected failures when a random rule hits an invalid transition / missing key.
 # Do not include AssertionError — that would swallow production asserts.

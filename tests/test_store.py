@@ -13,8 +13,8 @@ from coscientist.core.digest import payload_digest
 from coscientist.core.errors import Conflict, Idempotent, LeaseLost
 from coscientist.core.events import EventEnvelope
 from coscientist.core.projections import fold_events
-from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.store import SqliteEventStore
+from tests.helpers import close_runtime, open_runtime
 
 
 @pytest.fixture

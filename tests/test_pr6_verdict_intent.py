@@ -14,8 +14,8 @@ from coscientist.core.r17 import (
     r17_threshold_source_not_counted,
 )
 from coscientist.core.reasons import TaskReason
-from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.upcasters import upcast
+from tests.helpers import close_runtime, open_runtime
 
 
 def test_refute_intent_met_is_survived(impl):
@@ -91,6 +91,8 @@ def test_refutation_priority_k_ref(impl):
 
 def test_priority_refuted_not_capped_by_stub_supports(impl):
     """≥ k_ref real refs stay refuted; stub/partial supports must not provenance-cap."""
+    from coscientist.core.rules import priority_refuted_support_note
+
     stub_sup = impl.Claim(
         "met", provenance="stub", attempt_id="S1", artifact_id="AS"
     )
@@ -108,6 +110,22 @@ def test_priority_refuted_not_capped_by_stub_supports(impl):
     )
     # Without priority, stub support + real ref → inconclusive (ceiling).
     assert impl.verdict([stub_sup, real_ref], True)[0] == "inconclusive"
+    note = priority_refuted_support_note(
+        [stub_sup, real_ref],
+        True,
+        refutations_needed=1,
+        refutation_priority=True,
+    )
+    assert note == "refuted; 1 supporting results were stub/partial"
+    assert (
+        priority_refuted_support_note(
+            [stub_sup, real_ref],
+            True,
+            refutations_needed=1,
+            refutation_priority=False,
+        )
+        is None
+    )
 
 
 def test_r17_criterion_after_lit_valid():
@@ -212,9 +230,29 @@ def test_upcast_study_created_k_ref_defaults():
             "finalize_reserve_s": 30,
         },
     )
-    assert v == 3
+    # v2→v3 (k_ref) then v3→v4 (confirmations_needed)
+    assert v == 4
     assert p["refutations_needed"] == 1
     assert p["refutation_priority"] is False
+    assert p["confirmations_needed"] == 1
+
+
+def test_upcast_study_created_confirmations_needed_v3_to_v4():
+    v, p = upcast(
+        "StudyCreated",
+        3,
+        {
+            "study_id": "s",
+            "profile": "research",
+            "finalize_reserve_s": 30,
+            "refutations_needed": 2,
+            "refutation_priority": True,
+        },
+    )
+    assert v == 4
+    assert p["confirmations_needed"] == 1
+    assert p["refutations_needed"] == 2
+    assert p["refutation_priority"] is True
 
 
 @pytest.mark.asyncio
@@ -237,8 +275,9 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
     assert rt.study.refutations_needed == 3
     assert rt.study.refutation_priority is True
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 3
+    assert created.schema_version == 4
     assert created.payload["refutations_needed"] == 3
+    assert created.payload["confirmations_needed"] == 1
     await close_runtime(rt)
 
 

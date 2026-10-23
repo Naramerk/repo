@@ -91,6 +91,51 @@ def _task_created_v4_to_v5_input_kind(payload: dict[str, Any]) -> dict[str, Any]
     return out
 
 
+def _strip_plan_criterion_roles(criteria: list[Any]) -> list[Any]:
+    """Drop plan-side role; catalog template is the sole authority at evaluate time."""
+    rewritten: list[Any] = []
+    for item in criteria:
+        if isinstance(item, dict):
+            item = dict(item)
+            item.pop("role", None)
+            rewritten.append(item)
+        else:
+            rewritten.append(item)
+    return rewritten
+
+
+def _task_created_v5_to_v6_check_role(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR8: strip plan criterion role (resolve from catalog by template_id)."""
+    out = dict(payload)
+    spec = out.get("spec")
+    if isinstance(spec, dict):
+        spec = dict(spec)
+        criteria = spec.get("criteria")
+        if isinstance(criteria, list):
+            spec["criteria"] = _strip_plan_criterion_roles(criteria)
+        out["spec"] = spec
+    return out
+
+
+def _plan_accepted_v2_to_v3_check_role(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR8: strip PlanAccepted.tasks[].criteria role (catalog is source of truth)."""
+    out = dict(payload)
+    tasks = out.get("tasks")
+    if isinstance(tasks, list):
+        rewritten: list[Any] = []
+        for t in tasks:
+            if isinstance(t, dict):
+                t = dict(t)
+                criteria = t.get("criteria")
+                if isinstance(criteria, list):
+                    t["criteria"] = _strip_plan_criterion_roles(criteria)
+                rewritten.append(t)
+            else:
+                rewritten.append(t)
+        out["tasks"] = rewritten
+    return out
+
+
 def _plan_accepted_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
     out = dict(payload)
     out.setdefault("questions", [])
@@ -120,6 +165,13 @@ def _study_created_v2_to_v3(payload: dict[str, Any]) -> dict[str, Any]:
     out = dict(payload)
     out.setdefault("refutations_needed", 1)
     out.setdefault("refutation_priority", False)
+    return out
+
+
+def _study_created_v3_to_v4(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR 8: confirmations_needed (k) as its own schema bump (not piggybacked on v3)."""
+    out = dict(payload)
+    out.setdefault("confirmations_needed", 1)
     return out
 
 
@@ -199,9 +251,12 @@ register_upcaster("TaskCreated", 1, _task_created_v1_to_v2)
 register_upcaster("TaskCreated", 2, _ensure_spec_addresses)
 register_upcaster("TaskCreated", 3, _task_created_v3_to_v4_input_mode)
 register_upcaster("TaskCreated", 4, _task_created_v4_to_v5_input_kind)
+register_upcaster("TaskCreated", 5, _task_created_v5_to_v6_check_role)
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)
+register_upcaster("PlanAccepted", 2, _plan_accepted_v2_to_v3_check_role)
 register_upcaster("StudyCreated", 1, _study_created_v1_to_v2)
 register_upcaster("StudyCreated", 2, _study_created_v2_to_v3)
+register_upcaster("StudyCreated", 3, _study_created_v3_to_v4)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)

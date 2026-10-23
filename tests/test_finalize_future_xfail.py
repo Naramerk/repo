@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 import pytest
 
 from coscientist.core.domain import (
+    HitlPolicy,
+    Study,
     Task,
     TaskKind,
     TaskOutcome,
@@ -41,13 +43,49 @@ def test_based_on_required_for_counted_dispositions():
     assert based, "answered conclusion must carry ≥1 based_on"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="PR 6/8: question disposition from verdict()",
-)
 def test_question_disposition_computed_from_verdict():
+    """PR8: counting claims on graph → answered via verdict()."""
     from coscientist.core.dispositions import dispositions
+    from coscientist.core.graph import GraphEdge, GraphNode, GraphStore, default_execution_registry
+    from coscientist.core.ids import question_node_id
+    from coscientist.core.inputs import claim_nodes_from_attempt
+
+    sid = "st"
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    g = GraphStore(default_execution_registry())
+    qnid = question_node_id(sid, "Q1")
+    g.upsert_node(
+        GraphNode(
+            node_id=qnid,
+            kind="question",
+            study_id=sid,
+            ref_id="Q1",
+            attrs={"formulation": "why"},
+        )
+    )
+    aid = f"{sid}/E1#1"
+    evs, drops = claim_nodes_from_attempt(
+        study_id=sid,
+        attempt_id=aid,
+        provenance="real",
+        claims=[{"id": "C1", "target": "Q1"}],
+        now=now,
+        graph=g,
+        derived={
+            "criterion_status": "met",
+            "evidence_kind": "computational",
+            "frozen": True,
+            "lit_own_criterion": False,
+            "accepted": True,
+            "artifact_id": "A1",
+        },
+    )
+    assert drops == []
+    for ev in evs:
+        if ev.type == "GraphNodeUpserted":
+            g.upsert_node(GraphNode.model_validate(ev.payload))
+        elif ev.type == "GraphEdgeAdded":
+            g.add_edge(GraphEdge.model_validate(ev.payload))
 
     t = Task(
         task_id="st/E1",
@@ -61,14 +99,29 @@ def test_question_disposition_computed_from_verdict():
         ),
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
-        deadline=datetime(2026, 1, 1, tzinfo=UTC),
+        deadline=now,
+    )
+    study = Study(
+        study_id=sid,
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        hitl_policy=HitlPolicy(),
+        deadline=now,
+        created_at=now,
     )
     plan = {
         "plan_id": "pl",
         "questions": [{"id": "Q1", "text": "why"}],
         "tasks": [{"task_key": "E1", "addresses": ["Q1"]}],
     }
-    d = dispositions(tasks={"st/E1": t}, plans={"pl": plan})
+    d = dispositions(
+        tasks={"st/E1": t},
+        plans={"pl": plan},
+        graph=g,
+        study=study,
+        results={aid: {"outcome": "SUCCESS"}},
+    )
     assert d["Q1"]["disposition"] == "answered"
 
 

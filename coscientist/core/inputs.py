@@ -1,4 +1,4 @@
-"""Minimal InputBinding / dependency resolution (DESIGN §3.4 + M1 PR7)."""
+"""Minimal InputBinding / dependency resolution (DESIGN §3.4 + M1 PR7/PR8)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,12 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from coscientist.core.claims import (
+    namespaced_claim_id,
+    producer_attempt_failed,
+    resolve_existing_target,
+    whitelist_claim_attrs,
+)
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import (
     VALID_PROVENANCE,
@@ -16,23 +22,32 @@ from coscientist.core.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
+    worst_provenance,
 )
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.graph import GraphEdge, GraphNode
-from coscientist.core.ids import claim_node_id, experiment_node_id
+from coscientist.core.ids import experiment_node_id
 
-PROVENANCE_RANK = {"real": 0, "partial": 1, "stub": 2}
+# Re-export for callers/tests that imported from inputs.
+__all__ = [
+    "InputMode",
+    "InputUnavailable",
+    "worst_provenance",
+    "normalize_input_mode",
+    "input_binding_digest",
+    "verdict_binding_digest",
+    "bind_inputs",
+    "claim_nodes_from_attempt",
+    "uses_claim_graph_events",
+    "validate_input_specs",
+    "collect_bindable_claims",
+]
 
 
 class InputMode(StrEnum):
     USE_PARTIAL = "use_partial"
     SIMULATE = "simulate"
     FORBID = "forbid"
-
-
-def worst_provenance(*values: Provenance) -> Provenance:
-    """Least favorable under real < partial < stub."""
-    return max(values, key=lambda p: PROVENANCE_RANK[p])
 
 
 def normalize_input_mode(spec: InputSpec) -> InputMode:
@@ -73,6 +88,24 @@ def input_binding_digest(
     )
 
 
+def verdict_binding_digest(*, ref: str, snapshot: dict[str, Any]) -> str:
+    """P2 digest of a persisted verdict snapshot (``InputSpec.kind=verdict``)."""
+    return sha256_hex(
+        canonical_json(
+            {
+                "kind": "verdict",
+                "ref": ref,
+                "verdict": snapshot.get("verdict"),
+                "by_literature": bool(snapshot.get("by_literature")),
+                "provenance": snapshot.get("provenance", "real"),
+                "refutations_needed": snapshot.get("refutations_needed", 1),
+                "refutation_priority": bool(snapshot.get("refutation_priority")),
+                "at": "P2",
+            }
+        )
+    )
+
+
 def _claim_source(
     ref: str,
     *,
@@ -96,22 +129,45 @@ def bind_inputs(
     dep_provenance: dict[str, Provenance],
     known_claim_ids: set[str] | None = None,
     claim_provenance: dict[str, Provenance] | None = None,
+    verdict_snapshots: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[InputBinding], Provenance]:
     """
-    Resolve TaskSpec.inputs (artifact | claim).
+    Resolve TaskSpec.inputs (artifact | claim | verdict).
 
-    ``kind=verdict`` is rejected at ``accept_plan`` (PR 8). Raises
-    InputUnavailable when mode=forbid and data missing / dep FAILED, or when
-    claim ``ref`` is missing / unknown.
+    Raises InputUnavailable when mode=forbid and data missing / dep FAILED, when
+    claim ``ref`` is missing / unknown / produced by a FAILED attempt, or when
+    a verdict snapshot for ``ref`` is unavailable.
     """
     bindings: list[InputBinding] = []
     provs: list[Provenance] = ["real"]
     claims = known_claim_ids or set()
     claim_prov = claim_provenance or {}
+    snapshots = verdict_snapshots or {}
     for spec in task.spec.inputs:
         kind = spec.kind
         if kind == "verdict":
-            raise InputUnavailable("verdict_kind_deferred_pr8")
+            if not spec.ref:
+                raise InputUnavailable("verdict_ref_missing")
+            snap = snapshots.get(spec.ref)
+            if snap is None:
+                raise InputUnavailable("verdict_unavailable")
+            source_raw = snap.get("provenance", "real")
+            source: Provenance = (
+                source_raw if source_raw in VALID_PROVENANCE else "stub"
+            )  # type: ignore[assignment]
+            digest = verdict_binding_digest(ref=spec.ref, snapshot=snap)
+            bindings.append(
+                InputBinding(
+                    input=spec.ref,
+                    artifact_id="",
+                    source=source,
+                    kind="verdict",
+                    ref=spec.ref,
+                    digest=digest,
+                )
+            )
+            provs.append(source)
+            continue
         if kind == "claim":
             if not spec.ref:
                 raise InputUnavailable("claim_ref_missing")
@@ -184,6 +240,29 @@ def bind_inputs(
     return bindings, worst_provenance(*provs)
 
 
+def _claim_structurally_ok(
+    *,
+    claim_id: str | None,
+    target: str,
+    target_id: str | None,
+    graph: Any | None,
+    id_collides: bool,
+    target_changed: bool,
+    about_retarget: bool,
+) -> bool:
+    """True when claim id/target/about are structurally sound for ``accepted``."""
+    if not claim_id or ":claim:" not in claim_id:
+        return False
+    if not target or not target_id:
+        return False
+    if id_collides or target_changed or about_retarget:
+        return False
+    if graph is None:
+        return False
+    dst = graph.get_node(target_id)
+    return dst is not None and dst.kind in ("question", "hypothesis")
+
+
 def claim_nodes_from_attempt(
     *,
     study_id: str,
@@ -191,24 +270,120 @@ def claim_nodes_from_attempt(
     provenance: Provenance,
     claims: list[dict[str, Any]],
     now: datetime,
-) -> list[EventEnvelope]:
-    """Emit ``GraphNodeUpserted`` for agent claims; provenance = producing attempt.
+    graph: Any | None = None,
+    attempt_outcome: str = "SUCCESS",
+    derived: dict[str, Any] | None = None,
+    derive_attrs: Any | None = None,
+    infra_failure: bool = False,
+) -> tuple[list[EventEnvelope], list[dict[str, str]]]:
+    """Emit ``GraphNodeUpserted`` (+ ``about`` edges) for agent claims.
 
-    Production path (Executor.record): every claim node carries
-    ``attrs.provenance`` from the attempt that produced it (H-b).
+    Returns ``(events, drops)`` where drops are ``{key, reason}`` for rejected
+    claims (never raises). Agent fields are whitelisted; counting fields come
+    from ``derive_attrs(raw, validated)`` or static ``derived`` (Executor).
+
+    ``infra_failure=True`` (crash / timeout / catalog / invalid output) drops
+    all claims. Scientific FAILED/PARTIAL (criteria not met) **keep** claims so
+    ``not_met`` can refute (graph_schema invariant 10).
     """
+    drops: list[dict[str, str]] = []
+    if infra_failure:
+        return [], drops
     if provenance not in VALID_PROVENANCE:
         provenance = "stub"  # type: ignore[assignment]
     events: list[EventEnvelope] = []
     for i, raw in enumerate(claims):
         if not isinstance(raw, dict):
+            drops.append({"key": str(i), "reason": "not_a_dict"})
             continue
-        key = str(raw.get("id") or raw.get("claim_id") or f"{attempt_id}:{i}")
-        # Allow full node ids or short keys.
-        cid = key if key.startswith(f"{study_id}:claim:") else claim_node_id(study_id, key)
-        attrs = {k: v for k, v in raw.items() if k not in ("id", "claim_id")}
-        attrs["provenance"] = provenance
+        agent_key = str(raw.get("id") or raw.get("claim_id") or f"idx{i}")
+        cid = namespaced_claim_id(study_id, attempt_id, agent_key)
+        if cid is None:
+            drops.append({"key": agent_key, "reason": "foreign_claim_id"})
+            continue
+        attrs = whitelist_claim_attrs(raw)
+        target = attrs.get("target")
+        if not target:
+            drops.append({"key": agent_key, "reason": "target_missing"})
+            continue
+        resolved = resolve_existing_target(study_id, str(target), graph)
+        if resolved is None:
+            drops.append({"key": agent_key, "reason": "target_unknown"})
+            continue
+        target_id, _target_kind = resolved
+
+        id_collides = False
+        target_changed = False
+        about_retarget = False
+        if graph is not None:
+            existing = graph.get_node(cid)
+            if existing is not None:
+                if existing.kind != "claim":
+                    id_collides = True
+                else:
+                    old_target = (existing.attrs or {}).get("target")
+                    if old_target is not None and str(old_target) != str(target):
+                        target_changed = True
+                    old_about = [e for e in graph.edges_from(cid) if e.kind == "about"]
+                    if old_about and old_about[0].dst_id != target_id:
+                        about_retarget = True
+        if id_collides:
+            drops.append({"key": agent_key, "reason": "id_collides_non_claim"})
+            continue
+        if target_changed:
+            drops.append({"key": agent_key, "reason": "target_change_forbidden"})
+            continue
+        if about_retarget:
+            drops.append({"key": agent_key, "reason": "about_retarget_forbidden"})
+            continue
+
+        # Re-verify structural gates independently (not control-flow tautology).
+        structurally_ok = _claim_structurally_ok(
+            claim_id=cid,
+            target=str(target) if target else "",
+            target_id=target_id,
+            graph=graph,
+            id_collides=id_collides,
+            target_changed=target_changed,
+            about_retarget=about_retarget,
+        )
+
+        new_prov: Provenance = provenance
+        if graph is not None:
+            existing = graph.get_node(cid)
+            if existing is not None:
+                old = (existing.attrs or {}).get("provenance")
+                if old in VALID_PROVENANCE:
+                    new_prov = worst_provenance(old, provenance)  # type: ignore[arg-type]
+
+        # Core-derived counting fields; derive_attrs must never raise into caller.
+        try:
+            if derive_attrs is not None:
+                core = dict(derive_attrs(raw, structurally_ok) or {})
+            else:
+                core = dict(derived or {})
+        except Exception:  # noqa: BLE001 — totality
+            drops.append({"key": agent_key, "reason": "derive_attrs_error"})
+            continue
+        attrs["provenance"] = new_prov
         attrs["attempt_id"] = attempt_id
+        attrs["attempt_outcome"] = attempt_outcome
+        attrs["criterion_status"] = core.get("criterion_status", "unassessed")
+        attrs["evidence_kind"] = core.get("evidence_kind", "computational")
+        attrs["frozen"] = bool(core.get("frozen", False))
+        attrs["lit_own_criterion"] = bool(core.get("lit_own_criterion", False))
+        attrs["accepted"] = bool(core.get("accepted", False))
+        attrs["validity_ok"] = bool(core.get("validity_ok", True))
+        role = core.get("check_role", "unknown")
+        attrs["check_role"] = (
+            role if role in ("prediction", "validity", "unknown") else "unknown"
+        )
+        excl = core.get("exclusion_reason")
+        if excl in ("validity_failed", "unknown_role"):
+            attrs["exclusion_reason"] = excl
+        if core.get("artifact_id"):
+            attrs["artifact_id"] = core["artifact_id"]
+
         node = GraphNode(
             node_id=cid,
             kind="claim",
@@ -228,7 +403,39 @@ def claim_nodes_from_attempt(
                 schema_version=1,
             )
         )
-    return events
+        have_about = False
+        if graph is not None:
+            have_about = any(e.kind == "about" for e in graph.edges_from(cid))
+        if any(
+            ev.type == "GraphEdgeAdded"
+            and (ev.payload or {}).get("src_id") == cid
+            and (ev.payload or {}).get("kind") == "about"
+            for ev in events
+        ):
+            have_about = True
+        if not have_about:
+            eid = f"about:{cid}:{target_id}"
+            edge = GraphEdge(
+                edge_id=eid,
+                kind="about",
+                study_id=study_id,
+                src_id=cid,
+                dst_id=target_id,
+                attrs={},
+                created_at=now,
+            )
+            events.append(
+                EventEnvelope(
+                    study_id=study_id,
+                    type="GraphEdgeAdded",
+                    entity_key=eid,
+                    idem_key=make_idem("GraphEdgeAdded", eid),
+                    payload=edge.model_dump(mode="json"),
+                    ts=now,
+                    schema_version=1,
+                )
+            )
+    return events, drops
 
 
 def uses_claim_graph_events(
@@ -248,13 +455,14 @@ def uses_claim_graph_events(
         return []
     exp_id = experiment_node_id(study_id, task.spec.task_key)
     events: list[EventEnvelope] = []
+    # Do not emit empty-attrs upserts that would clobber richer nodes.
     if graph is None or graph.get_node(exp_id) is None:
         node = GraphNode(
             node_id=exp_id,
             kind="experiment",
             study_id=study_id,
             ref_id=task.spec.task_key,
-            attrs={},
+            attrs={"task_key": task.spec.task_key},
             created_at=now,
         )
         events.append(
@@ -297,16 +505,17 @@ def uses_claim_graph_events(
 
 
 def validate_input_specs(tasks: list[TaskSpec]) -> None:
-    """Reject invalid InputSpec at accept_plan (kind-specific fields; verdict→PR8)."""
+    """Reject invalid InputSpec at accept_plan (kind-specific fields)."""
     for t in tasks:
         for inp in t.inputs:
             kind = inp.kind
             if kind == "verdict":
-                raise ValueError(
-                    "InputSpec.kind=verdict is deferred to PR 8 "
-                    "(runtime verdict() wiring); use artifact or claim"
-                )
-            if kind == "claim":
+                if not inp.ref:
+                    raise ValueError(
+                        f"InputSpec.kind=verdict requires ref "
+                        f"(task {t.task_key!r})"
+                    )
+            elif kind == "claim":
                 if not inp.ref:
                     raise ValueError(
                         f"InputSpec.kind=claim requires ref "
@@ -320,3 +529,62 @@ def validate_input_specs(tasks: list[TaskSpec]) -> None:
                     )
             else:
                 raise ValueError(f"unknown InputSpec.kind: {kind!r}")
+
+
+def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
+    """Reject unknown templates and plan roles that disagree with the catalog.
+
+    Role is catalog-authored; an explicit ``RequirementRef.role`` is accepted
+    only when it matches the template. Unknown ``template_id`` → reject.
+    """
+    if catalog is None:
+        raise ValueError("accept_plan requires catalog to validate criteria")
+    by_id = {t.id: t for t in getattr(catalog, "templates", []) or []}
+    for spec in tasks:
+        for ref in spec.criteria or []:
+            tid = getattr(ref, "template_id", None)
+            if not tid or tid not in by_id:
+                raise ValueError(
+                    f"unknown criterion template {tid!r} "
+                    f"(task {spec.task_key!r})"
+                )
+            tmpl = by_id[tid]
+            plan_role = getattr(ref, "role", None)
+            if plan_role is None:
+                continue
+            tmpl_role = getattr(tmpl, "role", None)
+            if plan_role != tmpl_role:
+                raise ValueError(
+                    f"criterion role {plan_role!r} disagrees with template "
+                    f"{tid!r} role {tmpl_role!r} (task {spec.task_key!r})"
+                )
+
+
+def collect_bindable_claims(
+    graph: Any,
+    *,
+    results: dict[str, dict[str, Any]] | None = None,
+) -> tuple[set[str], dict[str, Provenance]]:
+    """Claim ids eligible as ``kind=claim`` inputs + their provenance.
+
+    Skips claims whose producing attempt is an **infra** failure; scientific
+    FAILED (criteria not met) remains bindable.
+    """
+    known: set[str] = set()
+    claim_provenance: dict[str, Provenance] = {}
+    if graph is None:
+        return known, claim_provenance
+    try:
+        nodes = graph.nodes_by_kind("claim")
+    except KeyError:
+        return known, claim_provenance
+    for node in nodes:
+        attrs = node.attrs or {}
+        aid = attrs.get("attempt_id")
+        if producer_attempt_failed(str(aid) if aid else None, results=results):
+            continue
+        known.add(node.node_id)
+        p = attrs.get("provenance")
+        if p in VALID_PROVENANCE:
+            claim_provenance[node.node_id] = p  # type: ignore[assignment]
+    return known, claim_provenance

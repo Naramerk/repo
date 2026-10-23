@@ -28,6 +28,8 @@ class LocalProjectMixin:
     _budget_exceeded: bool
     _intake_refusal: IntakeRefuse | None
     _study_spent_rub: Decimal
+    verdict_snapshots: dict[str, dict[str, Any]]
+    hypothesis_verdicts: dict[str, dict[str, Any]]
 
     def _project_local(self, ev: EventEnvelope) -> None:
         p = ev.payload
@@ -108,10 +110,71 @@ class LocalProjectMixin:
             # TaskDone(reason=budget) is task-level only; study budget is
             # BudgetExceeded (folded above).
         elif ev.type == "GraphNodeUpserted":
-            self.graph.upsert_node(GraphNode.model_validate(p))
+            node = GraphNode.model_validate(p)
+            # Never clobber richer existing question/hypothesis attrs with empty.
+            existing = self.graph.get_node(node.node_id)
+            if (
+                existing is not None
+                and existing.kind in ("question", "hypothesis")
+                and node.kind == existing.kind
+                and not (node.attrs or {})
+                and (existing.attrs or {})
+            ):
+                pass  # keep existing
+            else:
+                # Plan-freeze: stamp frozen_at_seq from journal seq when missing.
+                if (
+                    node.kind == "criterion"
+                    and bool((node.attrs or {}).get("frozen"))
+                    and (node.attrs or {}).get("frozen_at_seq") is None
+                    and ev.seq is not None
+                ):
+                    node = node.model_copy(
+                        update={
+                            "attrs": {
+                                **(node.attrs or {}),
+                                "frozen_at_seq": int(ev.seq),
+                            }
+                        }
+                    )
+                self.graph.upsert_node(node)
+            if node.kind == "claim":
+                self._invalidate_verdict_snapshots_for_target(
+                    (node.attrs or {}).get("target")
+                )
         elif ev.type == "GraphEdgeAdded":
             # Fail loudly: missing endpoints / illegal pairs are journal bugs.
-            self.graph.add_edge(GraphEdge.model_validate(p))
+            edge = GraphEdge.model_validate(p)
+            self.graph.add_edge(edge)
+            if edge.kind == "about":
+                # Scope invalidation to the about target (not all snapshots).
+                dst = self.graph.get_node(edge.dst_id)
+                logical = None
+                if dst is not None:
+                    prefix = f"{ev.study_id}:{dst.kind}:"
+                    logical = (
+                        edge.dst_id[len(prefix) :]
+                        if edge.dst_id.startswith(prefix)
+                        else (dst.ref_id or edge.dst_id)
+                    )
+                self._invalidate_verdict_snapshots_for_target(logical)
+        elif ev.type == "VerdictSnapshotsRecorded":
+            snaps = p.get("snapshots") or {}
+            if isinstance(snaps, dict):
+                self.verdict_snapshots.update(
+                    {str(k): dict(v) for k, v in snaps.items() if isinstance(v, dict)}
+                )
+
+    def _invalidate_verdict_snapshots_for_target(self, target: Any) -> None:
+        """Drop journaled snapshots for one target ref (DESIGN_M1 PR8)."""
+        if target is None:
+            return
+        key = str(target)
+        self.verdict_snapshots.pop(key, None)
+        # Kind-prefixed keys (question:Q1 / hypothesis:H1) if present.
+        if ":" not in key or key.split(":", 1)[0] not in ("question", "hypothesis"):
+            self.verdict_snapshots.pop(f"question:{key}", None)
+            self.verdict_snapshots.pop(f"hypothesis:{key}", None)
 
     def _fold_finalized_graph(
         self, study_id: str, payload: dict[str, Any], *, created_at: datetime
@@ -122,10 +185,30 @@ class LocalProjectMixin:
             study_id, payload, created_at=created_at
         )
         for row in nodes.values():
-            self.graph.upsert_node(GraphNode.model_validate(row))
+            incoming = GraphNode.model_validate(row)
+            existing = self.graph.get_node(incoming.node_id)
+            if (
+                existing is not None
+                and existing.kind in ("question", "hypothesis")
+                and (existing.attrs or {})
+                and not (incoming.attrs or {}).get("formulation")
+            ):
+                # Preserve formulation from accept_plan when finalize row is sparse.
+                merged = incoming.model_copy(
+                    update={"attrs": {**(existing.attrs or {}), **(incoming.attrs or {})}}
+                )
+                self.graph.upsert_node(merged)
+            else:
+                self.graph.upsert_node(incoming)
         for row in edges.values():
             try:
                 self.graph.add_edge(GraphEdge.model_validate(row))
             except (KeyError, ValueError):
                 # study/question node may be missing in sparse journals
                 pass
+        # Keep hypothesis_verdicts separate from bind's verdict_snapshots cache.
+        hv = payload.get("hypothesis_verdicts")
+        if isinstance(hv, dict):
+            self.hypothesis_verdicts.update(
+                {str(k): dict(v) for k, v in hv.items() if isinstance(v, dict)}
+            )

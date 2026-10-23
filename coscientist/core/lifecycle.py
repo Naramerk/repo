@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+import coscientist.core.finalize as finalize_mod
 from coscientist.core.clock import Clock
 from coscientist.core.domain import (
     Budget,
@@ -22,10 +23,11 @@ from coscientist.core.domain import (
 )
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.graph import GraphNode
-from coscientist.core.ids import plan_id, study_id, task_id
-from coscientist.core.inputs import validate_input_specs
+from coscientist.core.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
+from coscientist.core.inputs import validate_input_specs, validate_plan_criteria
 from coscientist.core.intake import IntakeRefuse, SafetyPort, intake
 from coscientist.core.ports import EventStore
+from coscientist.core.question_tasks import questions_from_spec_output
 
 STAGE_KEYS = [
     ("SPEC", TaskKind.SPEC),
@@ -60,6 +62,7 @@ class LifecycleMixin:
         sid: str | None = None,
         budget: Budget | None = None,
         finalize_reserve_s: int = 30,
+        confirmations_needed: int = 1,
         refutations_needed: int = 1,
         refutation_priority: bool = False,
         inputs: list[Any] | None = None,
@@ -71,6 +74,10 @@ class LifecycleMixin:
         dl = deadline or (now + timedelta(hours=2))
         if finalize_reserve_s < 0:
             raise ValueError(f"finalize_reserve_s must be >= 0, got {finalize_reserve_s}")
+        if confirmations_needed < 1:
+            raise ValueError(
+                f"confirmations_needed must be >= 1, got {confirmations_needed}"
+            )
         if refutations_needed < 1:
             raise ValueError(
                 f"refutations_needed must be >= 1, got {refutations_needed}"
@@ -98,6 +105,7 @@ class LifecycleMixin:
             parent_study_id=parent_study_id,
             budget=budget,
             finalize_reserve_s=finalize_reserve_s,
+            confirmations_needed=confirmations_needed,
             refutations_needed=refutations_needed,
             refutation_priority=refutation_priority,
         )
@@ -110,7 +118,7 @@ class LifecycleMixin:
                 idem_key=make_idem("StudyCreated", sid),
                 payload=study.model_dump(mode="json"),
                 ts=now,
-                schema_version=3,
+                schema_version=4,
             ),
             EventEnvelope(
                 study_id=sid,
@@ -122,6 +130,7 @@ class LifecycleMixin:
                     kind="study",
                     study_id=sid,
                     ref_id=sid,
+                    attrs={"profile": profile},
                     created_at=now,
                 ).model_dump(mode="json"),
                 ts=now,
@@ -146,9 +155,8 @@ class LifecycleMixin:
             )
             await self._append(events)
             self.store.study_id = sid
-            from coscientist.core.finalize import finalize
-
-            await finalize(self, trigger="intake")  # type: ignore[arg-type]
+            # Via module attr so tests can monkeypatch finalize.finalize.
+            await finalize_mod.finalize(self, trigger="intake")  # type: ignore[arg-type]
             return sid
         plan_deadline = min(now + timedelta(seconds=600), effective)
         for key, kind in STAGE_KEYS:
@@ -183,7 +191,7 @@ class LifecycleMixin:
                     idem_key=make_idem("TaskCreated", tid),
                     payload=task.model_dump(mode="json"),
                     ts=now,
-                    schema_version=5,
+                    schema_version=6,
                 )
             )
             # Graph nodes for stages: only schema kinds. SPEC/HYP/LIT are DAG
@@ -210,8 +218,6 @@ class LifecycleMixin:
         sid = self.study.study_id
         now = self.clock.now()
         if questions is None and spec_output is not None:
-            from coscientist.core.question_tasks import questions_from_spec_output
-
             questions = [
                 QuestionSpec(**q) for q in questions_from_spec_output(spec_output)
             ]
@@ -222,6 +228,10 @@ class LifecycleMixin:
         known_texts = {**known_texts, **{q.id: q.text for q in questions}}
         self._validate_addresses(tasks, set(known_texts))
         validate_input_specs(tasks)
+        catalog = getattr(self, "catalog", None) or getattr(
+            getattr(self, "executor", None), "catalog", None
+        )
+        validate_plan_criteria(tasks, catalog)
         pid = plan_id()
         plan = Plan(
             plan_id=pid,
@@ -239,9 +249,67 @@ class LifecycleMixin:
                 idem_key=make_idem("PlanAccepted", pid),
                 payload=plan.model_dump(mode="json"),
                 ts=now,
-                schema_version=2,
+                schema_version=3,
             )
         ]
+        # Question nodes so claim ``about`` can bind without auto-creating targets.
+        graph = getattr(self, "graph", None)
+        for q in questions:
+            qnid = question_node_id(sid, q.id)
+            if graph is not None and graph.get_node(qnid) is not None:
+                continue  # never clobber existing attrs
+            events.append(
+                EventEnvelope(
+                    study_id=sid,
+                    type="GraphNodeUpserted",
+                    entity_key=qnid,
+                    idem_key=make_idem("GraphNodeUpserted", qnid, pid),
+                    payload=GraphNode(
+                        node_id=qnid,
+                        kind="question",
+                        study_id=sid,
+                        ref_id=q.id,
+                        attrs={"formulation": q.text},
+                        created_at=now,
+                    ).model_dump(mode="json"),
+                    ts=now,
+                    schema_version=1,
+                )
+            )
+        # Freeze plan criteria at accept (DESIGN_M1 §6 / frozen_at_seq).
+        seen_criteria: set[str] = set()
+        for spec in tasks:
+            for ref in spec.criteria or []:
+                key = str(getattr(ref, "template_id", None) or ref)
+                if not key or key in seen_criteria:
+                    continue
+                seen_criteria.add(key)
+                cnid = criterion_node_id(sid, key)
+                if graph is not None and graph.get_node(cnid) is not None:
+                    existing = graph.get_node(cnid)
+                    if existing is not None and (
+                        (existing.attrs or {}).get("frozen_at_seq") is not None
+                        or bool((existing.attrs or {}).get("frozen"))
+                    ):
+                        continue
+                events.append(
+                    EventEnvelope(
+                        study_id=sid,
+                        type="GraphNodeUpserted",
+                        entity_key=cnid,
+                        idem_key=make_idem("GraphNodeUpserted", cnid, pid),
+                        payload=GraphNode(
+                            node_id=cnid,
+                            kind="criterion",
+                            study_id=sid,
+                            ref_id=key,
+                            attrs={"frozen": True, "template_id": key},
+                            created_at=now,
+                        ).model_dump(mode="json"),
+                        ts=now,
+                        schema_version=1,
+                    )
+                )
         plan_tid = task_id(sid, "PLAN")
         if plan_tid in self.tasks and self.tasks[plan_tid].state != TaskState.DONE:
             events.append(
@@ -277,7 +345,7 @@ class LifecycleMixin:
                     idem_key=make_idem("TaskCreated", tid),
                     payload=task.model_dump(mode="json"),
                     ts=now,
-                    schema_version=5,
+                    schema_version=6,
                 )
             )
         await self._append(events)

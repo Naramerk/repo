@@ -20,8 +20,7 @@ from coscientist.core.domain import (
 from coscientist.core.errors import AttemptClosedError
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.recover import recover
-from coscientist.core.runtime_factory import close_runtime, open_runtime
-from tests.helpers import attach_executor, exp_spec, record_success
+from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success
 
 
 async def _boot(tmp_path: Path, clock: FakeClock, runtime_cls: type, seconds: int = 60, **kw):

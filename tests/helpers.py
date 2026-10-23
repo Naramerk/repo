@@ -15,6 +15,48 @@ from coscientist.core.domain import (
     TaskSpec,
 )
 from coscientist.core.executor import Executor
+from coscientist.core.runtime_factory import close_runtime as close_runtime
+from coscientist.core.runtime_factory import open_runtime as _open_runtime_core
+
+
+async def open_runtime(
+    data_root: Path | str,
+    study_id: str,
+    *,
+    catalog: Any | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Test wrapper: injects ``minimal_test_catalog`` when catalog omitted.
+
+    Production ``coscientist.core.runtime_factory.open_runtime`` requires
+    ``catalog=`` explicitly and never imports this helper.
+    """
+    return await _open_runtime_core(
+        data_root,
+        study_id,
+        catalog=catalog if catalog is not None else minimal_test_catalog(),
+        **kwargs,
+    )
+
+
+async def open_runtime_experimental(
+    data_root: Path | str,
+    study_id: str,
+    *,
+    catalog: Any | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Test wrapper for experimental factory (catalog required in production)."""
+    from coscientist.experimental.runtime_factory import (
+        open_runtime as _open_exp,
+    )
+
+    return await _open_exp(
+        data_root,
+        study_id,
+        catalog=catalog if catalog is not None else minimal_test_catalog(),
+        **kwargs,
+    )
 
 
 class RuntimeLike(Protocol):
@@ -30,17 +72,20 @@ class RuntimeLike(Protocol):
 
 
 def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifactStore]:
+    # Prefer Executor already wired by open_runtime.make_executor (live get_graph).
+    existing = getattr(rt, "executor", None)
+    existing_arts = getattr(rt, "artifacts", None)
+    if existing_arts is None and existing is not None:
+        existing_arts = getattr(existing, "artifacts", None)
+    if (
+        existing is not None
+        and getattr(existing, "get_graph", None) is not None
+        and existing_arts is not None
+    ):
+        return existing, existing_arts
+
     catalog = minimal_test_catalog()
     arts = LocalArtifactStore(tmp / "arts")
-    ex = Executor(
-        rt.writer,
-        catalog,
-        arts,
-        clock=rt.clock,
-        get_attempt=lambda aid: type("A", (), rt.attempts[aid])(),
-        get_task=lambda tid: rt.tasks[tid],
-        on_events=rt._project_local,
-    )
 
     def get_attempt(aid: str):
         d = rt.attempts[aid]
@@ -56,9 +101,32 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
             },
         )()
 
-    ex.get_attempt = get_attempt
-    rt.executor = ex
-    # finalize/_artifact_store prefers executor.artifacts; no runtime.artifacts assign.
+    make = getattr(rt, "make_executor", None)
+    if callable(make):
+        ex = make(
+            catalog,
+            arts,
+            get_attempt=get_attempt,
+            get_task=lambda tid: rt.tasks[tid],
+            on_events=rt._project_local,
+        )
+        return ex, arts
+
+    ex = Executor(
+        rt.writer,
+        catalog,
+        arts,
+        clock=rt.clock,
+        get_attempt=get_attempt,
+        get_task=lambda tid: rt.tasks[tid],
+        on_events=rt._project_local,
+    )
+    bind = getattr(rt, "bind_executor", None)
+    if callable(bind):
+        bind(ex)
+    else:
+        ex.get_graph = lambda: rt.graph
+        rt.executor = ex
     return ex, arts
 
 

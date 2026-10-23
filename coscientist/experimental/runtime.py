@@ -74,7 +74,17 @@ class StudyRuntime(CoreStudyRuntime, HitlForkMixin):
         from coscientist.core.dispositions import dispositions
 
         open_hitl = sum(1 for h in self.hitl.values() if h.open)
-        qdisp = dispositions(tasks=self.tasks, plans=self.plans) if self.plans else None
+        qdisp = (
+            dispositions(
+                tasks=self.tasks,
+                plans=self.plans,
+                graph=getattr(self, "graph", None),
+                study=self.study,
+                results=getattr(self, "results", None),
+            )
+            if self.plans
+            else None
+        )
         ed = self.study.effective_deadline() if self.study else None
         return study_view(
             self.tasks.values(),

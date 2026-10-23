@@ -23,9 +23,9 @@ from coscientist.core.reasons import (
     TerminalReason,
     intake,
 )
-from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.study_view import study_view
 from coscientist.core.upcasters import upcast
+from tests.helpers import close_runtime, open_runtime
 
 # Legacy reason strings from §0.1 that map to TaskReason / CloseReason.
 _TASK_REASON_STRINGS = [
@@ -324,11 +324,12 @@ def test_upcast_study_created_sets_reserve_zero():
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     )
-    # v1→v2 reserve, then v2→v3 k_ref defaults (PR 6).
-    assert v == 3
+    # v1→v2 reserve, v2→v3 k_ref, v3→v4 confirmations_needed (PR 8).
+    assert v == 4
     assert p["finalize_reserve_s"] == 0
     assert p["refutations_needed"] == 1
     assert p["refutation_priority"] is False
+    assert p["confirmations_needed"] == 1
     # Explicit value must not be overwritten
     v2, p2 = upcast("StudyCreated", 1, {**p, "finalize_reserve_s": 30})
     assert p2["finalize_reserve_s"] == 30

@@ -62,6 +62,14 @@ class ReqStatus(StrEnum):
 
 Provenance = Literal["real", "partial", "stub"]
 VALID_PROVENANCE: frozenset[str] = frozenset({"real", "partial", "stub"})
+PROVENANCE_RANK: dict[str, int] = {"real": 0, "partial": 1, "stub": 2}
+
+
+def worst_provenance(*values: Provenance) -> Provenance:
+    """Least favorable under real < partial < stub. Empty → stub."""
+    if not values:
+        return "stub"
+    return max(values, key=lambda p: PROVENANCE_RANK[p])
 OnTimeout = Literal["delegate", "delegate_capped", "fail"]
 HitlGateKind = Literal[
     "spec_approval",
@@ -147,9 +155,8 @@ class InputSpec(Frozen):
 
     ``kind=artifact`` (default): ``from_task`` + ``output`` resolve an artifact.
     ``kind=claim``: ``ref`` is a claim node id; core adds ``uses_claim`` at P2.
-    ``kind=verdict``: kept in the enum for forward compat but **rejected at
-    accept_plan** until PR 8 wires runtime ``verdict()`` (then P2 snapshots into
-    ``InputBinding.digest``).
+    ``kind=verdict``: ``ref`` is a hypothesis/question id; P2 binds a persisted
+    verdict snapshot digest (runtime ``verdict()``, M1 PR 8).
     """
 
     from_task: str = ""
@@ -161,10 +168,22 @@ class InputSpec(Frozen):
     ref: str | None = None
 
 
+CheckRole = Literal["prediction", "validity", "unknown"]
+
+
 class RequirementRef(Frozen):
+    """Plan criterion reference.
+
+    ``role`` is optional plan-side annotation only. The authoritative role comes
+    from the catalog ``RequirementTemplate``. If ``role`` is set and disagrees
+    with the template, ``accept_plan`` rejects the plan. Runtime evaluation
+    never trusts this field over the catalog.
+    """
+
     template_id: str
     params: dict[str, Any] = Field(default_factory=dict)
     required: bool = True
+    role: CheckRole | None = None
 
 
 class QuestionSpec(Frozen):
@@ -242,6 +261,7 @@ class Study(Frozen):
     budget: Budget | None = None
     finalize_reserve_s: int = Field(default=30, ge=0)
     # PR 6 / DESIGN_M1 §3: fixed at create (like catalog_version); change only via fork.
+    confirmations_needed: int = Field(default=1, ge=1)  # k for supported
     refutations_needed: int = Field(default=1, ge=1)  # k_ref
     refutation_priority: bool = False
 
@@ -329,6 +349,7 @@ class CheckResult(Frozen):
     status: ReqStatus
     is_code: bool
     required: bool
+    role: CheckRole  # from catalog template; never defaulted to validity
     evidence: list[EvidenceRef] = Field(default_factory=list)
     detail: str | None = None
 
@@ -418,7 +439,12 @@ class ReviewCheck(Frozen):
 
 
 class RequirementTemplate(Frozen):
-    """One source: human-readable text_ru + machine check together."""
+    """One source: human-readable text_ru + machine check together.
+
+    ``role`` (Duhem–Quine) is catalog-authored only:
+    - ``prediction`` — FAILED → ``not_met`` → counting refute
+    - ``validity`` — FAILED → claim invalid; experiment capped at inconclusive
+    """
 
     id: str
     title: str
@@ -427,6 +453,7 @@ class RequirementTemplate(Frozen):
     rule_ids: list[str] = Field(default_factory=list)
     applies_to: list[str]  # registered node kinds (strings), not a hard-coded ontology
     check: CodeCheck | ReviewCheck
+    role: Literal["prediction", "validity"]
     required: bool = True
     version: str = "1"
 

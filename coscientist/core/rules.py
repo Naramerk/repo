@@ -6,6 +6,7 @@ HITL costly gate / DelegatedBudget live in ``coscientist.experimental.costly`` (
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Literal, Protocol
 
 from coscientist.core.graph import load_schema
@@ -119,7 +120,7 @@ def _claim_counts(claim: _ClaimLike) -> bool:
 
 
 def verdict(
-    claims: list[_ClaimLike],
+    claims: Sequence[_ClaimLike],
     any_experiment_done: bool,
     k: int = 1,
     *,
@@ -128,8 +129,9 @@ def verdict(
 ):
     """Hypothesis/question verdict (RM §4.1 + DESIGN_M1 PR 6).
 
-    Pure rule function — runtime wiring of Study.k_ref / intent into finalize
-    lands in PR 8 (DESIGN_M1). ``tests.intent=refute`` + met → stance supports,
+    Pure rule function. Runtime finalize/report calls this via
+    ``dispositions()`` (M1 PR 8) with Study ``refutations_needed`` /
+    ``refutation_priority``. ``tests.intent=refute`` + met → stance supports,
     verdict ``survived``. With ``refutation_priority``, distinct real non-lit
     refs ≥ k_ref → ``refuted`` even with supports; that outcome is **not** capped
     by stub/partial supports. Lit/non-real refs never override real supports.
@@ -188,6 +190,47 @@ def verdict(
         v = "inconclusive"
     decisive = all_sup + ref
     return v, bool(decisive) and all(c.is_lit for c in decisive)
+
+
+def priority_refuted_support_note(
+    claims: Sequence[_ClaimLike],
+    any_experiment_done: bool,
+    k: int = 1,
+    *,
+    refutations_needed: int = 1,
+    refutation_priority: bool = False,
+) -> str | None:
+    """Report note when priority-win keeps ``refuted`` despite stub/partial supports.
+
+    Returns e.g. ``\"refuted; 2 supporting results were stub/partial\"``, or
+    ``None`` when the exception does not apply (no priority-win, or no
+    stub/partial counting supports).
+    """
+    if not refutation_priority:
+        return None
+    v, _ = verdict(
+        claims,
+        any_experiment_done,
+        k,
+        refutations_needed=refutations_needed,
+        refutation_priority=refutation_priority,
+    )
+    if v != "refuted":
+        return None
+    acc = [c for c in claims if c.accepted]
+    q = [c for c in acc if _claim_counts(c)]
+    supports = [c for c in q if c.stance == "supports"]
+    stub_partial = [c for c in supports if c.provenance in ("stub", "partial")]
+    if not stub_partial:
+        return None
+    # Distinct supporting results (same metric as verdict counts).
+    n = min(
+        len({c.attempt_id for c in stub_partial}),
+        len({c.artifact_id for c in stub_partial}),
+    )
+    if n < 1:
+        n = len(stub_partial)
+    return f"refuted; {n} supporting results were stub/partial"
 
 
 def study_fulfilled(question_verdicts: dict[str, str], all_required_success: bool) -> bool:

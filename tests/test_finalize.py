@@ -31,10 +31,9 @@ from coscientist.core.metrics import late_write_rejected_total
 from coscientist.core.minimal_report import MAX_BYTES, build_minimal_report
 from coscientist.core.question_tasks import question_tasks, questions_from_spec_output
 from coscientist.core.reasons import NotAttemptedReason, TaskReason, TerminalReason
-from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.study_view import study_view
 from coscientist.core.upcasters import upcast
-from tests.helpers import attach_executor, record_success
+from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
 _TS = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
 
@@ -182,8 +181,8 @@ def test_questions_from_spec_output_wired():
 
 def test_upcast_taskcreated_addresses_default():
     v, p = upcast("TaskCreated", 2, {"task_id": "t", "spec": {"task_key": "E1"}})
-    # v2→v3 addresses, v3→v4 input-mode, v4→v5 kind=artifact.
-    assert v == 5 and p["spec"]["addresses"] == []
+    # v2→v3 addresses … v5→v6 check role.
+    assert v == 6 and p["spec"]["addresses"] == []
 
 
 def test_upcast_taskcreated_input_mode_old_default():
@@ -199,14 +198,40 @@ def test_upcast_taskcreated_input_mode_old_default():
             },
         },
     )
-    assert v == 5
+    assert v == 6
     assert p["spec"]["inputs"][0]["mode"] == "use_partial"
     assert p["spec"]["inputs"][0]["kind"] == "artifact"
 
 
 def test_upcast_planaccepted_questions_default():
     v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
-    assert v == 2 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
+    assert v == 3 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
+
+
+def test_upcast_taskcreated_strips_plan_criterion_role():
+    """v5→v6 drops plan-side role; catalog is the authority at evaluate time."""
+    v, p = upcast(
+        "TaskCreated",
+        5,
+        {
+            "task_id": "t",
+            "spec": {
+                "task_key": "E1",
+                "addresses": [],
+                "criteria": [
+                    {
+                        "template_id": "value_match",
+                        "required": True,
+                        "role": "validity",  # stale / wrong — stripped
+                    },
+                    {"template_id": "artifact_present", "required": True},
+                ],
+            },
+        },
+    )
+    assert v == 6
+    for c in p["spec"]["criteria"]:
+        assert "role" not in c
 
 
 def test_upcast_study_finalized_v1_adds_counts_and_refusal():
@@ -677,7 +702,19 @@ async def test_finalize_total_on_render_failure(tmp_path, clock, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_finalize_total_on_cas_failure(tmp_path, clock):
+    from coscientist.core.errors import CASUnavailable
+
+    class _BoomArts:
+        """Realistic CAS failure: store attached but put raises CASUnavailable."""
+
+        def put(self, *_a, **_k):
+            raise CASUnavailable("cas unreachable")
+
     rt = await _boot(tmp_path, clock, "st_cas")
+    boom = _BoomArts()
+    rt.artifacts = boom
+    if rt.executor is not None:
+        rt.executor.artifacts = boom
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     ev = _fin(await rt.store.read_all())

@@ -7,6 +7,18 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
+from coscientist.core.ids import question_node_id, study_node_id
+
+__all__ = [
+    "conclusion_id_for_question",
+    "conclusion_id_for_study",
+    "report_node_id_for",
+    "question_node_id",
+    "study_node_id",
+    "conclusion_ids_for",
+    "graph_rows_from_finalized",
+]
+
 
 def conclusion_id_for_question(study_id: str, question_id: str) -> str:
     digest = hashlib.sha256(f"{study_id}:q:{question_id}".encode()).hexdigest()[:20]
@@ -21,14 +33,6 @@ def conclusion_id_for_study(study_id: str) -> str:
 def report_node_id_for(study_id: str) -> str:
     digest = hashlib.sha256(f"{study_id}:report".encode()).hexdigest()[:20]
     return f"rp_{digest}"
-
-
-def question_node_id(study_id: str, question_id: str) -> str:
-    return f"{study_id}:question:{question_id}"
-
-
-def study_node_id(study_id: str) -> str:
-    return f"{study_id}:study"
 
 
 def conclusion_ids_for(

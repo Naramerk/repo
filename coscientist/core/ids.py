@@ -49,3 +49,22 @@ def experiment_node_id(study_id: str, task_key: str) -> str:
 def claim_node_id(study_id: str, claim_key: str) -> str:
     """Stable graph node id for a claim (``{study}:claim:{key}``)."""
     return f"{study_id}:claim:{claim_key}"
+
+
+def question_node_id(study_id: str, question_id: str) -> str:
+    """Stable graph node id for a question (``{study}:question:{id}``)."""
+    return f"{study_id}:question:{question_id}"
+
+
+def hypothesis_node_id(study_id: str, hypothesis_id: str) -> str:
+    """Stable graph node id for a hypothesis (``{study}:hypothesis:{id}``)."""
+    return f"{study_id}:hypothesis:{hypothesis_id}"
+
+
+def study_node_id(study_id: str) -> str:
+    return f"{study_id}:study"
+
+
+def criterion_node_id(study_id: str, criterion_key: str) -> str:
+    """Stable graph node id for a criterion (``{study}:criterion:{key}``)."""
+    return f"{study_id}:criterion:{criterion_key}"

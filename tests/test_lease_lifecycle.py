@@ -12,9 +12,9 @@ import pytest
 from coscientist.core.clock import FakeClock
 from coscientist.core.errors import LeaseLost
 from coscientist.core.machine import StudyRuntime
-from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.store import SqliteEventStore
 from coscientist.core.writer import StudyWriter
+from tests.helpers import close_runtime, open_runtime
 
 
 async def _lease_owner(db: Path, study_id: str, clock: FakeClock) -> str | None:

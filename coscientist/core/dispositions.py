@@ -1,13 +1,22 @@
-"""Question dispositions (PR 2: all not_attempted; PR 6/8 add verdict paths)."""
+"""Question dispositions (PR 2 not_attempted baseline; PR 8 wires verdict())."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
 
-from coscientist.core.domain import Task, TaskState
+from coscientist.core.claims import (
+    claims_for_ref,
+    disposition_from_verdict,
+    excluded_claims_report,
+    filtered_claims_by_target,
+    hypothesis_verdicts,
+)
+from coscientist.core.domain import Study, Task, TaskOutcome, TaskState
+from coscientist.core.graph import GraphStore
 from coscientist.core.question_tasks import known_questions, question_tasks
 from coscientist.core.reasons import Disposition, NotAttemptedReason, TaskReason
+from coscientist.core.rules import priority_refuted_support_note, verdict
 
 
 def _task_by_key(tasks: Mapping[str, Task]) -> dict[str, Task]:
@@ -53,7 +62,6 @@ def _not_attempted_for_covering(
     done = [t for t in covering if t.state == TaskState.DONE]
     if not done:
         return NotAttemptedReason.NO_TASK, _reasons_for(covering)
-    # PR 6/8: answered/… from counting claims. Core has no claim pipeline.
     outcomes = [t.outcome.value if t.outcome is not None else None for t in done]
     return NotAttemptedReason(not_attempted_reason(outcomes)), _reasons_for(done)
 
@@ -62,24 +70,156 @@ def dispositions(
     *,
     tasks: Mapping[str, Task],
     plans: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]],
+    graph: GraphStore | None = None,
+    study: Study | None = None,
+    results: Mapping[str, Mapping[str, Any]] | None = None,
+    k: int | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Every question → not_attempted + NotAttemptedReason (PR 2).
+    """Per-question disposition.
 
-    TODO(PR 6/8): answered/refuted/survived/inconclusive from counting claims;
-    explicit QuestionDisposed; ill_posed from refuted premises.
+    With graph claims (PR 8): counting claims → ``verdict()`` → answered /
+    refuted / survived / inconclusive (Study ``refutations_needed`` /
+    ``refutation_priority``). Otherwise not_attempted + NotAttemptedReason.
+
+    Totality: never raises — graph/claim coerce failures fall back to
+    not_attempted.
     """
+    try:
+        return _dispositions_inner(
+            tasks=tasks,
+            plans=plans,
+            graph=graph,
+            study=study,
+            results=results,
+            k=k,
+        )
+    except Exception:  # noqa: BLE001 — finalize/view must never crash
+        qmap = known_questions(plans)
+        return {
+            qid: {
+                "disposition": Disposition.NOT_ATTEMPTED.value,
+                "reason": NotAttemptedReason.NO_COUNTING_CLAIMS.value,
+                "reason_detail": [],
+                "formulation": text,
+            }
+            for qid, text in qmap.items()
+        }
+
+
+def _dispositions_inner(
+    *,
+    tasks: Mapping[str, Task],
+    plans: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]],
+    graph: GraphStore | None,
+    study: Study | None,
+    results: Mapping[str, Mapping[str, Any]] | None,
+    k: int | None,
+) -> dict[str, dict[str, Any]]:
     qmap = known_questions(plans)
     cover = question_tasks(plans)
     by_key = _task_by_key(tasks)
+    by_target: dict[str, list] = {}
+    if graph is not None and study is not None:
+        by_target = filtered_claims_by_target(
+            graph, study_id=study.study_id, results=results
+        )
+
+    k_ref = study.refutations_needed if study is not None else 1
+    priority = study.refutation_priority if study is not None else False
+    conf_k = (
+        k
+        if k is not None
+        else (study.confirmations_needed if study is not None else 1)
+    )
+
     result: dict[str, dict[str, Any]] = {}
     for qid, text in qmap.items():
         keys = cover.get(qid, set())
-        covering = [by_key[k] for k in sorted(keys) if k in by_key]
+        covering = [by_key[kk] for kk in sorted(keys) if kk in by_key]
+        claims = claims_for_ref(by_target, qid, prefer="question")  # explicit kind
+        counting = [c for c in claims if c.counts()]
+        excluded = excluded_claims_report(claims)
+        validity_excl = [e for e in excluded if e["reason"] == "validity_failed"]
+        any_exp = any(t.state == TaskState.DONE for t in covering)
+        if counting:
+            # Per-experiment exclusion: verdict from valid claims only.
+            v, _by_lit = verdict(
+                claims,
+                any_exp,
+                conf_k,
+                refutations_needed=k_ref,
+                refutation_priority=priority,
+            )
+            disp = disposition_from_verdict(v)
+            if disp is not None:
+                row: dict[str, Any] = {
+                    "disposition": disp,
+                    "reason": None,
+                    "reason_detail": [],
+                    "formulation": text,
+                    "verdict": v,
+                }
+                note = priority_refuted_support_note(
+                    claims,
+                    any_exp,
+                    conf_k,
+                    refutations_needed=k_ref,
+                    refutation_priority=priority,
+                )
+                if note is not None:
+                    row["note"] = note
+                if excluded:
+                    row["excluded_claims"] = excluded
+                result[qid] = row
+                continue
+        # No valid claims: validity_failed → inconclusive; unknown_role alone
+        # never forces a verdict (falls through to not_attempted).
+        if validity_excl:
+            result[qid] = {
+                "disposition": Disposition.INCONCLUSIVE.value,
+                "reason": "validity_failed",
+                "reason_detail": ["validity_failed"],
+                "formulation": text,
+                "verdict": "inconclusive",
+                "excluded_claims": excluded,
+            }
+            continue
         reason, detail = _not_attempted_for_covering(covering)
-        result[qid] = {
+        row_na: dict[str, Any] = {
             "disposition": Disposition.NOT_ATTEMPTED.value,
             "reason": reason.value,
             "reason_detail": [r.value for r in detail],
             "formulation": text,
         }
+        if excluded:
+            row_na["excluded_claims"] = excluded
+        result[qid] = row_na
     return result
+
+
+def report_hypothesis_verdicts(
+    *,
+    graph: GraphStore | None,
+    study: Study | None,
+    results: Mapping[str, Mapping[str, Any]] | None,
+    tasks: Mapping[str, Task],
+) -> dict[str, dict[str, Any]]:
+    """Hypothesis verdicts for StudyFinalized / minimal_report (PR8)."""
+    if graph is None or study is None:
+        return {}
+    any_exp = any(
+        t.state == TaskState.DONE
+        and t.outcome in (TaskOutcome.SUCCESS, TaskOutcome.PARTIAL, TaskOutcome.FAILED)
+        for t in tasks.values()
+    )
+    try:
+        return hypothesis_verdicts(
+            graph,
+            study_id=study.study_id,
+            study=study,
+            results=results,
+            k=study.confirmations_needed,
+            any_experiment_done=any_exp,
+        )
+    except Exception:  # noqa: BLE001
+        return {}

@@ -11,6 +11,7 @@ from coscientist.core.domain import (
     AgentTaskOutput,
     Catalog,
     CheckResult,
+    CheckRole,
     CodeCheck,
     EvidenceRef,
     NodeRequirement,
@@ -21,6 +22,25 @@ from coscientist.core.domain import (
     TaskSpec,
 )
 from coscientist.core.errors import ArtifactCorrupt
+
+
+def role_from_template(tmpl: RequirementTemplate | None) -> CheckRole:
+    """Authoritative role from the catalog template only (no plan override)."""
+    if tmpl is None:
+        return "unknown"
+    if tmpl.role in ("prediction", "validity"):
+        return tmpl.role
+    return "unknown"
+
+
+def role_from_catalog(template_id: str, catalog: Catalog | None) -> CheckRole:
+    """Look up ``template_id`` in the catalog; missing → ``unknown``."""
+    if catalog is None:
+        return "unknown"
+    for tmpl in catalog.templates:
+        if tmpl.id == template_id:
+            return role_from_template(tmpl)
+    return "unknown"
 
 
 def _pointer_get(doc: Any, pointer: str | None) -> Any:
@@ -66,6 +86,7 @@ def evaluate_code_check(
     out: AgentTaskOutput,
     artifacts: LocalArtifactStore,
     values: dict[str, Any],
+    role: CheckRole,
 ) -> CheckResult:
     try:
         if check.kind == "artifact_exists":
@@ -77,6 +98,7 @@ def evaluate_code_check(
                     status=ReqStatus.FAILED,
                     is_code=True,
                     required=True,
+                    role=role,
                     detail="artifact missing",
                 )
             art = artifacts.get_meta(handle.artifact_id)
@@ -87,6 +109,7 @@ def evaluate_code_check(
                 status=ReqStatus.MET,
                 is_code=True,
                 required=True,
+                    role=role,
                 evidence=[
                     EvidenceRef(
                         artifact_id=art.artifact_id,
@@ -104,6 +127,7 @@ def evaluate_code_check(
                     status=ReqStatus.FAILED,
                     is_code=True,
                     required=True,
+                    role=role,
                     detail="output missing",
                 )
             raw = artifacts.read(handle.artifact_id)
@@ -137,6 +161,7 @@ def evaluate_code_check(
                 status=ReqStatus.MET if ok else ReqStatus.FAILED,
                 is_code=True,
                 required=True,
+                    role=role,
                 evidence=[
                     EvidenceRef(
                         artifact_id=handle.artifact_id,
@@ -156,6 +181,7 @@ def evaluate_code_check(
                     status=ReqStatus.FAILED,
                     is_code=True,
                     required=True,
+                    role=role,
                     detail="output missing",
                 )
             artifacts.read(handle.artifact_id)  # verify sha
@@ -165,6 +191,7 @@ def evaluate_code_check(
                 status=ReqStatus.MET,
                 is_code=True,
                 required=True,
+                    role=role,
                 evidence=[
                     EvidenceRef(artifact_id=handle.artifact_id, digest=sha256_hex(b"ok"))
                 ],
@@ -177,6 +204,7 @@ def evaluate_code_check(
                 status=ReqStatus.MET,
                 is_code=True,
                 required=True,
+                    role=role,
             )
 
     except ArtifactCorrupt as e:
@@ -186,6 +214,7 @@ def evaluate_code_check(
             status=ReqStatus.FAILED,
             is_code=True,
             required=True,
+                    role=role,
             detail=str(e),
         )
     except Exception as e:
@@ -195,6 +224,7 @@ def evaluate_code_check(
             status=ReqStatus.FAILED,
             is_code=True,
             required=True,
+                    role=role,
             detail=str(e),
         )
 
@@ -204,6 +234,7 @@ def evaluate_code_check(
         status=ReqStatus.FAILED,
         is_code=True,
         required=True,
+                    role=role,
         detail=f"unhandled kind {check.kind}",
     )
 
@@ -247,8 +278,22 @@ def evaluate_task_checks(
             refs.append(RequirementRef(template_id=tid))
 
     for i, ref in enumerate(refs):
-        tmpl = by_id[ref.template_id]
+        tmpl = by_id.get(ref.template_id)
         cid = f"{ref.template_id}#{i}"
+        role = role_from_template(tmpl)
+        if tmpl is None:
+            results.append(
+                CheckResult(
+                    check_id=cid,
+                    template_id=ref.template_id,
+                    status=ReqStatus.FAILED,
+                    is_code=True,
+                    required=ref.required,
+                    role="unknown",
+                    detail="unknown template",
+                )
+            )
+            continue
         if isinstance(tmpl.check, ReviewCheck):
             st = review_statuses.get(cid, ReqStatus.UNASSESSED)
             results.append(
@@ -258,6 +303,7 @@ def evaluate_task_checks(
                     status=st,
                     is_code=False,
                     required=ref.required and tmpl.required,
+                    role=role,
                     detail=tmpl.check.question,
                 )
             )
@@ -269,6 +315,7 @@ def evaluate_task_checks(
                 out=out,
                 artifacts=artifacts,
                 values=out.values,
+                role=role,
             )
             # respect required flag from ref
             results.append(
@@ -278,6 +325,7 @@ def evaluate_task_checks(
                     status=cr.status,
                     is_code=True,
                     required=ref.required and tmpl.required,
+                    role=role,
                     evidence=cr.evidence,
                     detail=cr.detail,
                 )

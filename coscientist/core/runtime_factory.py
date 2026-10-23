@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import Any
 
+from coscientist.core.artifacts import LocalArtifactStore
 from coscientist.core.clock import Clock, SystemClock
 from coscientist.core.errors import LeaseLost
 from coscientist.core.graph import KindRegistry, default_execution_registry
@@ -21,13 +23,19 @@ async def open_runtime(
     data_root: Path | str,
     study_id: str,
     *,
+    catalog: Any,
     owner: str | None = None,
     clock: Clock | None = None,
     registry: KindRegistry | None = None,
     acquire: bool = True,
     runtime_cls: type[StudyRuntime] | None = None,
+    artifacts: Any | None = None,
 ) -> StudyRuntime:
     """Open a study runtime. ``runtime_cls`` defaults to core ``StudyRuntime``.
+
+    ``catalog`` is **required** (production callers pass a real catalog; tests
+    use ``minimal_test_catalog`` via ``tests.helpers.open_runtime``). Test
+    helpers are never imported from this module.
 
     Core refuses journals that still have open HITL gates (use experimental).
 
@@ -43,6 +51,8 @@ async def open_runtime(
     lease (owner+epoch+nonce), and closes the store. Cleanup catches
     ``BaseException`` so ``CancelledError`` cannot leave the lease held.
     """
+    if catalog is None:
+        raise TypeError("open_runtime requires catalog= (no test-catalog fallback)")
     cls = runtime_cls or StudyRuntime
     clock = clock or SystemClock()
     owner = owner or new_owner()
@@ -95,6 +105,9 @@ async def open_runtime(
         )
         for ev in events:
             rt._project_local(ev)  # noqa: SLF001
+        # Production path: Executor always via make_executor (live get_graph).
+        arts = artifacts if artifacts is not None else LocalArtifactStore(root / "arts")
+        rt.make_executor(catalog, arts)
         return rt
     except BaseException:
         # Stop the writer first so in-flight appends cannot race release.

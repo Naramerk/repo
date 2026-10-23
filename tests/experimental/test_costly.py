@@ -46,10 +46,9 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
     from decimal import Decimal
 
     from coscientist.core.domain import Budget, GateConfig, HitlPolicy, TaskOutcome
-    from coscientist.core.runtime_factory import close_runtime, open_runtime
     from coscientist.experimental.report import render
     from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
-    from tests.helpers import attach_executor, record_success
+    from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
     policy = HitlPolicy(
         mode="interactive",
@@ -150,9 +149,8 @@ async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
     from decimal import Decimal
 
     from coscientist.core.domain import Budget, GateConfig, HitlPolicy
-    from coscientist.core.runtime_factory import close_runtime, open_runtime
     from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
-    from tests.helpers import attach_executor, record_success
+    from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
     policy = HitlPolicy(
         mode="interactive",
@@ -217,7 +215,7 @@ async def test_study_budget_exceeded_from_costly_spend(tmp_path, clock, runtime_
     from decimal import Decimal
 
     from coscientist.core.domain import Budget
-    from coscientist.core.runtime_factory import close_runtime, open_runtime
+    from tests.helpers import close_runtime, open_runtime
 
     budget = Budget(
         max_cost_rub=Decimal("100"),
@@ -257,9 +255,8 @@ async def test_settle_delegated_spend_emits_study_budget(tmp_path, clock):
     from decimal import Decimal
 
     from coscientist.core.domain import Budget, GateConfig, HitlPolicy
-    from coscientist.core.runtime_factory import close_runtime, open_runtime
     from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
-    from tests.helpers import attach_executor, record_success
+    from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
     policy = HitlPolicy(
         mode="interactive",

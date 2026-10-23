@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 
+from coscientist.core.claims import compute_verdict_snapshots
 from coscientist.core.domain import (
     VALID_PROVENANCE,
     Provenance,
@@ -19,6 +20,7 @@ from coscientist.core.ids import attempt_id, task_id
 from coscientist.core.inputs import (
     InputUnavailable,
     bind_inputs,
+    collect_bindable_claims,
     uses_claim_graph_events,
 )
 from coscientist.core.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
@@ -74,12 +76,39 @@ class AttemptsMixin:
     def _dep_map(self) -> dict[str, Task]:
         return {t.spec.task_key: t for t in self.tasks.values()}
 
+    def _hc_cascade_parent(self, dep: Task) -> bool:
+        """True when H-c should skip children of this DONE parent.
+
+        Scientific FAILED (``result_class=scientific``) does **not** cascade —
+        it is a valid research outcome. SKIPPED and infra FAILED still cascade.
+        ``fail_attempt`` without a ResultRecorded still cascades (legacy/infra).
+        """
+        if dep.outcome == TaskOutcome.SKIPPED:
+            return True
+        if dep.outcome != TaskOutcome.FAILED:
+            return False
+        results = getattr(self, "results", None) or {}
+        for aid in reversed(dep.attempts):
+            row = results.get(aid)
+            if not isinstance(row, dict):
+                continue
+            rc = str(row.get("result_class") or "")
+            if rc == "scientific":
+                return False
+            if rc == "infra":
+                return True
+            # Legacy FAILED row without class → treat as cascade.
+            return True
+        # No result row (e.g. fail_attempt) → cascade.
+        return True
+
     async def _skip_unavailable_dep_children(self) -> None:
         """H-c: FAILED/SKIPPED parent without InputSpec → SKIPPED(input_unavailable).
 
         Stage tasks are excluded (failed SPEC must not wipe PLAN/REPORT). Skipped
         when ``tolerate_failed_dep`` is set. Parents covered by an ``InputSpec``
-        are left to ``bind_inputs`` on start_attempt.
+        are left to ``bind_inputs`` on start_attempt. Scientific FAILED parents
+        do not cascade.
         """
         for task in list(self.tasks.values()):
             if task.state == TaskState.DONE:
@@ -95,7 +124,7 @@ class AttemptsMixin:
                 dep = self._lookup_dep(d)
                 if dep is None or dep.state != TaskState.DONE:
                     continue
-                if dep.outcome in (TaskOutcome.FAILED, TaskOutcome.SKIPPED):
+                if self._hc_cascade_parent(dep):
                     await self.cancel_task(
                         task.task_id, reason=TaskReason.INPUT_UNAVAILABLE
                     )
@@ -130,19 +159,56 @@ class AttemptsMixin:
             raise RuntimeError("max_attempts exceeded")
 
         graph = getattr(self, "graph", None)
-        known_claims: set[str] = set()
-        claim_provenance: dict[str, Provenance] = {}
-        if graph is not None:
+        results = getattr(self, "results", None) or {}
+        known_claims, claim_provenance = collect_bindable_claims(
+            graph, results=results
+        )
+        # Prefer journaled snapshots (replay); else compute scoped to this task.
+        stored = getattr(self, "verdict_snapshots", None) or {}
+        verdict_refs = [
+            inp.ref
+            for inp in task.spec.inputs
+            if inp.kind == "verdict" and inp.ref
+        ]
+        verdict_snapshots: dict[str, dict] = {
+            r: stored[r] for r in verdict_refs if r in stored
+        }
+        need = [r for r in verdict_refs if r not in verdict_snapshots]
+        if need and graph is not None and self.study is not None:
             try:
-                for node in graph.nodes_by_kind("claim"):
-                    known_claims.add(node.node_id)
-                    # Producing-attempt provenance on claim node attrs (H-b).
-                    # Invalid/missing → omitted; bind_inputs defaults to stub.
-                    p = (node.attrs or {}).get("provenance")
-                    if p in VALID_PROVENANCE:
-                        claim_provenance[node.node_id] = p  # type: ignore[assignment]
-            except KeyError:
-                known_claims = set()
+                # Scope any_exp to covering tasks for these question refs when possible.
+                cover_keys: set[str] = set()
+                for plan in (getattr(self, "plans", None) or {}).values():
+                    for spec in plan.get("tasks") or []:
+                        addrs = set(spec.get("addresses") or [])
+                        if addrs & set(need):
+                            cover_keys.add(str(spec.get("task_key") or ""))
+                cover_tasks = [
+                    t
+                    for t in self.tasks.values()
+                    if t.spec.task_key in cover_keys
+                ] or list(self.tasks.values())
+                any_exp = any(
+                    t.state == TaskState.DONE
+                    and t.outcome
+                    in (
+                        TaskOutcome.SUCCESS,
+                        TaskOutcome.PARTIAL,
+                        TaskOutcome.FAILED,
+                    )
+                    for t in cover_tasks
+                )
+                computed = compute_verdict_snapshots(
+                    graph,
+                    study_id=self.study.study_id,
+                    study=self.study,
+                    results=results,
+                    any_experiment_done=any_exp,
+                    refs=need,
+                )
+                verdict_snapshots.update(computed)
+            except Exception:  # noqa: BLE001 — start_attempt must not crash
+                verdict_snapshots = {**verdict_snapshots}
         try:
             bindings, derived = bind_inputs(
                 task,
@@ -151,6 +217,7 @@ class AttemptsMixin:
                 dep_provenance=self.dep_provenance,
                 known_claim_ids=known_claims,
                 claim_provenance=claim_provenance,
+                verdict_snapshots=verdict_snapshots,
             )
         except InputUnavailable:
             await self.cancel_task(task.task_id, reason=TaskReason.INPUT_UNAVAILABLE)
@@ -193,6 +260,29 @@ class AttemptsMixin:
                 schema_version=3,
             )
         ]
+        # Persist full verdict snapshots used at bind (not digest-only).
+        bound_verdicts = {
+            b.ref: verdict_snapshots[b.ref]
+            for b in bindings
+            if b.kind == "verdict" and b.ref and b.ref in verdict_snapshots
+        }
+        if bound_verdicts:
+            events.append(
+                EventEnvelope(
+                    study_id=sid,
+                    type="VerdictSnapshotsRecorded",
+                    entity_key=f"{sid}:verdicts:{aid}",
+                    idem_key=make_idem("VerdictSnapshotsRecorded", aid),
+                    payload={
+                        "study_id": sid,
+                        "attempt_id": aid,
+                        "scope": "bind",
+                        "snapshots": bound_verdicts,
+                    },
+                    ts=now,
+                    schema_version=1,
+                )
+            )
         # PR7: uses_claim edges for kind=claim inputs (DESIGN_M1 §3).
         events.extend(
             uses_claim_graph_events(

@@ -11,10 +11,9 @@ from coscientist.core.domain import GateConfig, HitlPolicy
 from coscientist.core.errors import HitlUnsupported
 from coscientist.core.machine import StudyRuntime as CoreStudyRuntime
 from coscientist.core.recover import recover
-from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.store import SqliteEventStore
 from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
-from tests.helpers import attach_executor, record_success
+from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
 
 async def _boot_exp(tmp_path: Path, clock, sid: str = "st_hitl", **study_kw):

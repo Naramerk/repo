@@ -1,0 +1,728 @@
+"""Runtime claim projection for verdict() / dispositions (M1 PR8)."""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, Literal
+
+from coscientist.core.domain import (
+    VALID_PROVENANCE,
+    Provenance,
+    Study,
+    worst_provenance,
+)
+from coscientist.core.graph import GraphStore
+from coscientist.core.ids import (
+    claim_node_id,
+    experiment_node_id,
+    hypothesis_node_id,
+    question_node_id,
+)
+from coscientist.core.rules import (
+    DEFAULT_TESTS_INTENT,
+    TestsIntent,
+    claim_stance,
+    priority_refuted_support_note,
+    verdict,
+)
+
+# Agent-supplied fields only. Counting controls (criterion_status, frozen,
+# evidence_kind, lit_own_criterion, intent, R17, accepted) are core-derived.
+CLAIM_ATTR_WHITELIST: frozenset[str] = frozenset(
+    {
+        "target",
+        "checked_against",
+        "reason",
+        "premise_idx",
+    }
+)
+
+# Core-owned attrs written by Executor (never agent whitelist).
+_CORE_CLAIM_ATTRS: frozenset[str] = frozenset(
+    {
+        "provenance",
+        "attempt_id",
+        "attempt_outcome",
+        "criterion_status",
+        "evidence_kind",
+        "frozen",
+        "lit_own_criterion",
+        "accepted",
+        "artifact_id",
+        "validity_ok",
+        "check_role",
+        "exclusion_reason",
+    }
+)
+
+_VERDICT_TO_DISPOSITION = {
+    "supported": "answered",
+    "refuted": "refuted",
+    "survived": "survived",
+    "inconclusive": "inconclusive",
+}
+
+
+@dataclass
+class RuntimeClaim:
+    """Minimal claim surface for ``rules.verdict`` / R17."""
+
+    criterion_status: str = "unassessed"
+    accepted: bool = False
+    evidence_kind: str = "computational"
+    provenance: str = "stub"
+    frozen: bool = False
+    attempt_outcome: str = "SUCCESS"
+    attempt_id: str = ""
+    artifact_id: str = ""
+    lit_own_criterion: bool = False
+    intent: TestsIntent = DEFAULT_TESTS_INTENT
+    criterion_frozen_at_seq: int | None = None
+    first_cited_evidence_seq: int | None = None
+    confirming_evidence_ids: set[str] | frozenset[str] | list[str] | None = None
+    threshold_source_evidence_ids: set[str] | frozenset[str] | list[str] | None = None
+    target: str = ""
+    target_kind: Literal["question", "hypothesis"] = "question"
+    node_id: str = ""
+    # Duhem–Quine: False when validity failed or role is unknown on this attempt.
+    validity_ok: bool = True
+    check_role: str = "unknown"
+    exclusion_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.intent not in ("confirm", "refute"):
+            self.intent = DEFAULT_TESTS_INTENT
+
+    @property
+    def group_key(self) -> str:
+        """Kind-prefixed target so Q and H with the same logical id do not merge."""
+        return f"{self.target_kind}:{self.target}"
+
+    @property
+    def stance(self) -> str:
+        try:
+            return claim_stance(self.criterion_status)
+        except KeyError:
+            return "inconclusive"
+
+    @property
+    def is_lit(self) -> bool:
+        return self.evidence_kind == "literature"
+
+    def counts(self) -> bool:
+        """Counting set q (RM §4.1 + PR8): accepted scientific result.
+
+        Attempt outcome may be SUCCESS / PARTIAL / FAILED when failure is
+        prediction not_met (scientific). Validity failures set ``validity_ok``
+        False so the claim never counts. Infra failures never set ``accepted``.
+        """
+        ok = self.evidence_kind in ("computational", "experimental") or (
+            self.is_lit and self.lit_own_criterion
+        )
+        return self.accepted and self.validity_ok and ok and self.frozen
+
+
+def whitelist_claim_attrs(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy only allowed agent fields (never stance / counting controls)."""
+    return {k: v for k, v in raw.items() if k in CLAIM_ATTR_WHITELIST}
+
+
+_INFRA_RESULT = "infra"
+_INFRA_REASONS = frozenset(
+    {
+        "catalog_error",
+        "crash",
+        "invalid_output",
+        "timeout",
+        "human_timeout",
+    }
+)
+
+
+def producer_attempt_failed(
+    attempt_id: str | None,
+    *,
+    results: Mapping[str, Mapping[str, Any]] | None,
+) -> bool:
+    """True when the producing attempt is an **infra** failure (not criteria).
+
+    Scientific FAILED (criteria not met) still yields bindable claims.
+    """
+    if not attempt_id or not results:
+        return False
+    row = results.get(attempt_id)
+    if not row:
+        return False
+    if str(row.get("result_class") or "") == _INFRA_RESULT:
+        return True
+    if str(row.get("result_class") or "") == "scientific":
+        return False
+    # Legacy journals without result_class: FAILED + infra reason only.
+    if str(row.get("outcome") or "") != "FAILED":
+        return False
+    reason = str(row.get("reason") or "")
+    return reason in _INFRA_REASONS or reason.endswith("timeout")
+
+
+def _coerce_str(val: Any, *, allow_empty: bool = False) -> str | None:
+    if val is None:
+        return "" if allow_empty else None
+    if isinstance(val, bool):
+        return None
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        return None
+    s = str(val).strip()
+    if not s and not allow_empty:
+        return None
+    return s
+
+
+def _coerce_bool(val: Any) -> bool | None:
+    if isinstance(val, bool):
+        return val
+    return None
+
+
+def _coerce_optional_int(val: Any) -> int | None | Literal[False]:
+    """None if absent; int if valid; False if present but garbage."""
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return False
+    if isinstance(val, int):
+        return val
+    if isinstance(val, str) and val.strip().lstrip("-").isdigit():
+        return int(val.strip())
+    return False
+
+
+def _coerce_id_set(val: Any) -> frozenset[str] | None | Literal[False]:
+    """None if absent; frozenset if valid; False if present but garbage."""
+    if val is None:
+        return None
+    if isinstance(val, (str, bytes, bytearray, Mapping)):
+        return False
+    if isinstance(val, (int, float, bool)):
+        return False
+    try:
+        return frozenset(str(x) for x in val)
+    except TypeError:
+        return False
+
+
+def _task_key_from_attempt_id(attempt_id: str) -> str | None:
+    """``{study}/{task_key}#{n}`` → ``task_key``."""
+    if not attempt_id or "#" not in attempt_id:
+        return None
+    left = attempt_id.rsplit("#", 1)[0]
+    if "/" not in left:
+        return None
+    return left.rsplit("/", 1)[-1]
+
+
+def intent_from_producing_experiment(
+    graph: GraphStore | None,
+    *,
+    study_id: str,
+    attempt_id: str,
+    target_logical: str,
+    target_kind: str,
+) -> TestsIntent:
+    """Read ``tests.intent`` from the producing experiment's tests edge.
+
+    Path: attempt_id → task_key → experiment node → that experiment's
+    ``tests`` edge to the hypothesis (DESIGN_M1 §3). Falls back to confirm.
+    """
+    if graph is None or target_kind != "hypothesis" or not target_logical:
+        return DEFAULT_TESTS_INTENT
+    task_key = _task_key_from_attempt_id(attempt_id)
+    if not task_key:
+        return DEFAULT_TESTS_INTENT
+    exp_id = experiment_node_id(study_id, task_key)
+    hid = (
+        target_logical
+        if target_logical.startswith(f"{study_id}:hypothesis:")
+        else hypothesis_node_id(study_id, target_logical)
+    )
+    for e in graph.edges_from(exp_id):
+        if e.kind != "tests" or e.dst_id != hid:
+            continue
+        raw = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)
+        if raw in ("confirm", "refute"):
+            return raw  # type: ignore[return-value]
+    return DEFAULT_TESTS_INTENT
+
+
+def intent_from_tests_edge(
+    graph: GraphStore | None,
+    *,
+    study_id: str,
+    target_logical: str,
+    target_kind: str,
+    attempt_id: str = "",
+) -> TestsIntent:
+    """Backward-compatible wrapper; prefer producing-experiment intent."""
+    if attempt_id:
+        return intent_from_producing_experiment(
+            graph,
+            study_id=study_id,
+            attempt_id=attempt_id,
+            target_logical=target_logical,
+            target_kind=target_kind,
+        )
+    # Legacy: first tests→hypothesis edge (tests only; prefer attempt_id path).
+    if graph is None or target_kind != "hypothesis" or not target_logical:
+        return DEFAULT_TESTS_INTENT
+    hid = (
+        target_logical
+        if target_logical.startswith(f"{study_id}:hypothesis:")
+        else hypothesis_node_id(study_id, target_logical)
+    )
+    for e in graph.all_edges():
+        if e.kind != "tests" or e.dst_id != hid:
+            continue
+        raw = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)
+        if raw in ("confirm", "refute"):
+            return raw  # type: ignore[return-value]
+    return DEFAULT_TESTS_INTENT
+
+
+def resolve_existing_target(
+    study_id: str,
+    target: str,
+    graph: GraphStore | None,
+) -> tuple[str, Literal["question", "hypothesis"]] | None:
+    """Map ``target`` to an **existing** graph node; never create / never H* guess."""
+    if not target or graph is None:
+        return None
+    if target.startswith(f"{study_id}:question:"):
+        if graph.get_node(target) is not None:
+            return target, "question"
+        return None
+    if target.startswith(f"{study_id}:hypothesis:"):
+        if graph.get_node(target) is not None:
+            return target, "hypothesis"
+        return None
+    qid = question_node_id(study_id, target)
+    if graph.get_node(qid) is not None:
+        return qid, "question"
+    hid = hypothesis_node_id(study_id, target)
+    if graph.get_node(hid) is not None:
+        return hid, "hypothesis"
+    return None
+
+
+def namespaced_claim_id(study_id: str, attempt_id: str, agent_key: str) -> str | None:
+    """Claim ids are namespaced per attempt; foreign full ids are rejected."""
+    key = str(agent_key)
+    prefix = f"{study_id}:claim:"
+    ns = f"{prefix}{attempt_id}:"
+    if key.startswith(prefix):
+        if key.startswith(ns):
+            return key
+        return None  # foreign / unscoped agent-chosen full id
+    # Short key → namespace under this attempt.
+    safe = key.replace("/", "_")
+    return claim_node_id(study_id, f"{attempt_id}:{safe}")
+
+
+def runtime_claim_from_node(
+    node: Any,
+    *,
+    study_id: str,
+    results: Mapping[str, Mapping[str, Any]] | None = None,
+    graph: GraphStore | None = None,
+) -> tuple[RuntimeClaim | None, str | None]:
+    """Build a RuntimeClaim; on garbage attrs return ``(None, reason)`` — never raise."""
+    try:
+        attrs = dict(node.attrs or {})
+        aid = _coerce_str(attrs.get("attempt_id"), allow_empty=True) or ""
+        outcome = _coerce_str(attrs.get("attempt_outcome"), allow_empty=True) or ""
+        if results and aid and aid in results:
+            outcome = str(results[aid].get("outcome") or outcome)
+        # Drop only infra failures; scientific FAILED (criteria) still counts.
+        if producer_attempt_failed(aid, results=results):
+            return None, "producer_failed"
+        if not outcome:
+            outcome = "SUCCESS"
+
+        prov = attrs.get("provenance")
+        if prov not in VALID_PROVENANCE:
+            prov = "stub"
+
+        # Core-derived counting fields (not agent whitelist).
+        status = _coerce_str(attrs.get("criterion_status"))
+        if status is None or status not in ("met", "not_met", "unassessed"):
+            return None, "bad_criterion_status"
+        accepted = _coerce_bool(attrs.get("accepted"))
+        if accepted is None:
+            return None, "bad_accepted"
+        # Absent on pre-role journals → treat as ok (prediction-era claims).
+        validity_ok_raw = attrs.get("validity_ok")
+        if validity_ok_raw is None:
+            validity_ok = True
+        else:
+            coerced_vok = _coerce_bool(validity_ok_raw)
+            if coerced_vok is None:
+                return None, "bad_validity_ok"
+            validity_ok = coerced_vok
+        check_role = _coerce_str(attrs.get("check_role"), allow_empty=True) or "unknown"
+        if check_role not in ("prediction", "validity", "unknown"):
+            check_role = "unknown"
+        excl_raw = _coerce_str(attrs.get("exclusion_reason"), allow_empty=True)
+        exclusion_reason = (
+            excl_raw if excl_raw in ("validity_failed", "unknown_role") else None
+        )
+        frozen = _coerce_bool(attrs.get("frozen"))
+        if frozen is None:
+            return None, "bad_frozen"
+        ek = _coerce_str(attrs.get("evidence_kind"))
+        if ek is None or ek not in (
+            "computational",
+            "experimental",
+            "literature",
+            "expert",
+        ):
+            return None, "bad_evidence_kind"
+        lit_own = _coerce_bool(attrs.get("lit_own_criterion"))
+        if lit_own is None:
+            lit_own = False
+
+        conf = _coerce_id_set(attrs.get("confirming_evidence_ids"))
+        if conf is False:
+            return None, "bad_confirming_evidence_ids"
+        thr = _coerce_id_set(attrs.get("threshold_source_evidence_ids"))
+        if thr is False:
+            return None, "bad_threshold_source_evidence_ids"
+        frozen_seq = _coerce_optional_int(attrs.get("criterion_frozen_at_seq"))
+        if frozen_seq is False:
+            return None, "bad_criterion_frozen_at_seq"
+        first_ev = _coerce_optional_int(attrs.get("first_cited_evidence_seq"))
+        if first_ev is False:
+            return None, "bad_first_cited_evidence_seq"
+
+        target = _coerce_str(attrs.get("target"), allow_empty=True) or ""
+        about = []
+        target_kind = "question"
+        if graph is not None:
+            about = [e for e in graph.edges_from(node.node_id) if e.kind == "about"]
+            if len(about) != 1:
+                return None, "about_cardinality"
+            dst = about[0].dst_id
+            dst_node = graph.get_node(dst)
+            if dst_node is None:
+                return None, "about_dst_missing"
+            if dst_node.kind == "question":
+                target_kind = "question"
+                target = _logical_id_from_node(dst, study_id, "question")
+            elif dst_node.kind == "hypothesis":
+                target_kind = "hypothesis"
+                target = _logical_id_from_node(dst, study_id, "hypothesis")
+            else:
+                return None, "about_dst_kind"
+
+        intent = intent_from_producing_experiment(
+            graph,
+            study_id=study_id,
+            attempt_id=aid or "",
+            target_logical=target,
+            target_kind=target_kind,
+        )
+        art = _coerce_str(attrs.get("artifact_id"), allow_empty=True) or node.node_id
+        return (
+            RuntimeClaim(
+                criterion_status=status,
+                accepted=accepted,
+                evidence_kind=ek,
+                provenance=str(prov),
+                frozen=frozen,
+                attempt_outcome=outcome,
+                attempt_id=aid or node.node_id,
+                artifact_id=art,
+                lit_own_criterion=lit_own,
+                intent=intent,
+                criterion_frozen_at_seq=frozen_seq,
+                first_cited_evidence_seq=first_ev,
+                confirming_evidence_ids=conf,
+                threshold_source_evidence_ids=thr,
+                target=target,
+                target_kind=target_kind,  # type: ignore[arg-type]
+                node_id=node.node_id,
+                validity_ok=bool(validity_ok),
+                check_role=check_role,
+                exclusion_reason=exclusion_reason,
+            ),
+            None,
+        )
+    except Exception:  # noqa: BLE001 — totality: never raise into finalize/view
+        return None, "coerce_error"
+
+
+def _logical_id_from_node(node_id: str, study_id: str, kind: str) -> str:
+    prefix = f"{study_id}:{kind}:"
+    if node_id.startswith(prefix):
+        return node_id[len(prefix) :]
+    return node_id
+
+
+def filtered_claims_by_target(
+    graph: GraphStore,
+    *,
+    study_id: str,
+    results: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, list[RuntimeClaim]]:
+    """Group claims by ``{kind}:{logical}``; about + coerce applied uniformly.
+
+    Keys are kind-prefixed (``question:Q1``, ``hypothesis:H1``) so a question
+    and hypothesis that share a logical id never merge. Used by both
+    ``dispositions`` and ``compute_verdict_snapshots``.
+    """
+    grouped: dict[str, list[RuntimeClaim]] = defaultdict(list)
+    for node in graph.nodes_by_kind("claim"):
+        rc, _reason = runtime_claim_from_node(
+            node, study_id=study_id, results=results, graph=graph
+        )
+        if rc is None or not rc.target:
+            continue
+        grouped[rc.group_key].append(rc)
+    return dict(grouped)
+
+
+def parse_target_ref(
+    ref: str,
+) -> tuple[Literal["question", "hypothesis"] | None, str]:
+    """Split ``question:Q1`` / ``hypothesis:H1``; bare logical → ``(None, ref)``."""
+    if ":" in ref:
+        kind, logical = ref.split(":", 1)
+        if kind in ("question", "hypothesis") and logical:
+            return kind, logical  # type: ignore[return-value]
+    return None, ref
+
+
+def resolve_verdict_ref_kind(
+    graph: GraphStore | None,
+    study_id: str,
+    ref: str,
+) -> Literal["question", "hypothesis"]:
+    """Explicit target kind for a bind/snapshot ref (never ``either``).
+
+    Kind-prefixed refs win. Otherwise unique graph presence; if both Q and H
+    exist for the same logical id, default to ``question`` (bind addresses).
+    """
+    kind, logical = parse_target_ref(ref)
+    if kind is not None:
+        return kind
+    if graph is None:
+        return "question"
+    q_exists = graph.get_node(question_node_id(study_id, logical)) is not None
+    h_exists = graph.get_node(hypothesis_node_id(study_id, logical)) is not None
+    if h_exists and not q_exists:
+        return "hypothesis"
+    return "question"
+
+
+def claims_for_ref(
+    by_target: Mapping[str, list[RuntimeClaim]],
+    ref: str,
+    *,
+    prefer: Literal["question", "hypothesis"],
+) -> list[RuntimeClaim]:
+    """Lookup claims for a bind/report ref with an **explicit** target kind."""
+    kind, logical = parse_target_ref(ref)
+    use = kind if kind is not None else prefer
+    return list(by_target.get(f"{use}:{logical}") or [])
+
+
+def claims_missing_about(graph: GraphStore) -> list[str]:
+    """Claim node ids that lack the required out-1 ``about`` edge."""
+    missing: list[str] = []
+    for node in graph.nodes_by_kind("claim"):
+        about = [e for e in graph.edges_from(node.node_id) if e.kind == "about"]
+        if len(about) != 1:
+            missing.append(node.node_id)
+    return missing
+
+
+def compute_verdict_snapshots(
+    graph: GraphStore,
+    *,
+    study_id: str,
+    study: Study | None = None,
+    results: Mapping[str, Mapping[str, Any]] | None = None,
+    k: int | None = None,
+    any_experiment_done: bool = False,
+    refs: Sequence[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """ref → snapshot dict used for ``InputSpec.kind=verdict`` P2 digests.
+
+    ``k`` defaults to Study ``confirmations_needed`` (same as ``dispositions``).
+    When ``refs`` is set, only those logical ids are computed (scoped bind).
+    Output keys are the caller's refs (logical ids), not kind-prefixed.
+    """
+    k_ref = study.refutations_needed if study is not None else 1
+    priority = study.refutation_priority if study is not None else False
+    conf_k = (
+        k
+        if k is not None
+        else (study.confirmations_needed if study is not None else 1)
+    )
+    by_target = filtered_claims_by_target(
+        graph, study_id=study_id, results=results
+    )
+    if refs is not None:
+        ref_list = list(refs)
+    else:
+        # One entry per kind-prefixed group (no Q/H merge).
+        ref_list = list(by_target.keys())
+    out: dict[str, dict[str, Any]] = {}
+    for ref in ref_list:
+        kind = resolve_verdict_ref_kind(graph, study_id, ref)
+        _, logical = parse_target_ref(ref)
+        claims = claims_for_ref(by_target, ref, prefer=kind)
+        if not claims and refs is None:
+            continue
+        # Verdict from counting (valid) claims only; invalid experiments are
+        # listed in excluded_claims and do not rewrite a normal verdict.
+        counting = [c for c in claims if c.counts()]
+        excluded = excluded_claims_report(claims)
+        v, by_lit = verdict(
+            claims,
+            any_experiment_done,
+            conf_k,
+            refutations_needed=k_ref,
+            refutation_priority=priority,
+        )
+        validity_excl = [e for e in excluded if e["reason"] == "validity_failed"]
+        # Only when no valid claims remain: inconclusive + validity_failed.
+        # unknown_role alone never forces a verdict (align with dispositions).
+        if not counting and validity_excl:
+            v = "inconclusive"
+        elif not counting and excluded:
+            v = "untested"
+        provs: list[Provenance] = [
+            c.provenance  # type: ignore[misc]
+            for c in counting
+            if c.provenance in VALID_PROVENANCE
+        ]
+        source = worst_provenance(*provs) if provs else "stub"
+        snap: dict[str, Any] = {
+            "ref": logical,
+            "target_kind": kind,
+            "verdict": v,
+            "by_literature": by_lit,
+            "provenance": source,
+            "refutations_needed": k_ref,
+            "refutation_priority": priority,
+            "k": conf_k,
+        }
+        if excluded:
+            snap["excluded_claims"] = excluded
+        if not counting and validity_excl:
+            snap["reason"] = "validity_failed"
+        note = priority_refuted_support_note(
+            claims,
+            any_experiment_done,
+            conf_k,
+            refutations_needed=k_ref,
+            refutation_priority=priority,
+        )
+        if note is not None:
+            snap["note"] = note
+        # Bind (refs set): key by InputSpec.ref logical id.
+        # Full dump (refs None): kind-prefixed keys so Q/H cannot collide.
+        if refs is None:
+            out[f"{kind}:{logical}"] = snap
+        else:
+            out[logical] = snap
+    return out
+
+
+def exclusion_reason_for_claim(claim: RuntimeClaim) -> str | None:
+    """Per-experiment exclusion: ``validity_failed`` or ``unknown_role``."""
+    if claim.counts() or getattr(claim, "validity_ok", True) is not False:
+        return None
+    stored = getattr(claim, "exclusion_reason", None)
+    if stored in ("validity_failed", "unknown_role"):
+        return stored
+    if getattr(claim, "check_role", "unknown") == "unknown":
+        return "unknown_role"
+    return "validity_failed"
+
+
+def excluded_claims_report(
+    claims: Sequence[RuntimeClaim],
+) -> list[dict[str, Any]]:
+    """List non-counting invalid claims for the report payload."""
+    out: list[dict[str, Any]] = []
+    for c in claims:
+        reason = exclusion_reason_for_claim(c)
+        if reason is None:
+            continue
+        out.append(
+            {
+                "attempt_id": c.attempt_id,
+                "node_id": c.node_id,
+                "reason": reason,
+            }
+        )
+    return out
+
+
+def disposition_from_verdict(v: str) -> str | None:
+    """Map RM verdict → question Disposition value; None if untested."""
+    if v == "untested":
+        return None
+    return _VERDICT_TO_DISPOSITION.get(v)
+
+
+def hypothesis_verdicts(
+    graph: GraphStore,
+    *,
+    study_id: str,
+    study: Study | None = None,
+    results: Mapping[str, Mapping[str, Any]] | None = None,
+    k: int | None = None,
+    any_experiment_done: bool = False,
+) -> dict[str, dict[str, Any]]:
+    """Verdicts for hypothesis targets (for report payload)."""
+    by_target = filtered_claims_by_target(
+        graph, study_id=study_id, results=results
+    )
+    hyp_refs = [
+        key.split(":", 1)[-1]
+        for key in by_target
+        if key.startswith("hypothesis:")
+    ]
+    # Also include hypothesis nodes that may lack claims yet.
+    for node in graph.nodes_by_kind("hypothesis"):
+        logical = _logical_id_from_node(node.node_id, study_id, "hypothesis")
+        if logical not in hyp_refs:
+            hyp_refs.append(logical)
+    # Pass kind-prefixed refs so bind-style lookup cannot pick up a question.
+    qualified = [f"hypothesis:{r}" for r in hyp_refs]
+    snaps = compute_verdict_snapshots(
+        graph,
+        study_id=study_id,
+        study=study,
+        results=results,
+        k=k,
+        any_experiment_done=any_experiment_done,
+        refs=qualified,
+    )
+    out: dict[str, dict[str, Any]] = {}
+    for ref in hyp_refs:
+        snap = snaps.get(ref) or snaps.get(f"hypothesis:{ref}")
+        if snap is None:
+            continue
+        hid = hypothesis_node_id(study_id, ref)
+        if graph.get_node(hid) is not None or ref.startswith(f"{study_id}:hypothesis:"):
+            out[ref] = snap
+            continue
+        for c in claims_for_ref(by_target, ref, prefer="hypothesis"):
+            about = [e for e in graph.edges_from(c.node_id) if e.kind == "about"]
+            if about and (n := graph.get_node(about[0].dst_id)) and n.kind == "hypothesis":
+                out[ref] = snap
+                break
+    return out

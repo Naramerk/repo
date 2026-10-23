@@ -15,8 +15,8 @@ from coscientist.core.inputs import (
     bind_inputs,
     input_binding_digest,
 )
-from coscientist.core.runtime_factory import close_runtime, open_runtime
 from coscientist.core.upcasters import upcast
+from tests.helpers import close_runtime, open_runtime
 from tests.test_inputs import _task
 
 
@@ -110,7 +110,7 @@ def test_upcast_task_created_input_kind_defaults():
             "deadline": "2026-01-01T00:00:00+00:00",
         },
     )
-    assert v == 5
+    assert v == 6
     inp = p["spec"]["inputs"][0]
     assert inp["kind"] == "artifact"
     assert inp["ref"] is None
@@ -134,8 +134,9 @@ def test_upcast_attempt_started_inputs_default():
 
 
 @pytest.mark.asyncio
-async def test_accept_plan_rejects_verdict_kind(tmp_path, clock, runtime_cls):
-    sid = "st_no_verdict"
+async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cls):
+    """PR8: kind=verdict is accepted; missing ref still rejected."""
+    sid = "st_verdict_ref"
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
@@ -150,7 +151,7 @@ async def test_accept_plan_rejects_verdict_kind(tmp_path, clock, runtime_cls):
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
-    with pytest.raises(ValueError, match="verdict.*PR 8"):
+    with pytest.raises(ValueError, match="verdict requires ref"):
         await rt.accept_plan(
             [
                 TaskSpec(
@@ -159,7 +160,7 @@ async def test_accept_plan_rejects_verdict_kind(tmp_path, clock, runtime_cls):
                     goal="g",
                     route="experiment",
                     depends_on=["PLAN"],
-                    inputs=[InputSpec(kind="verdict", ref="H1")],
+                    inputs=[InputSpec(kind="verdict")],
                 )
             ],
             questions=[],
@@ -310,7 +311,11 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
-    claim_id = claim_node_id(sid, "from_E0")
+    from coscientist.core.domain import QuestionSpec
+
+    # Claim ids are namespaced per attempt (PR8); first attempt id is deterministic.
+    aid0_expected = f"{sid}/E0#1"
+    claim_id = claim_node_id(sid, f"{aid0_expected}:from_E0")
     await rt.accept_plan(
         [
             TaskSpec(
@@ -320,6 +325,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
             ),
             TaskSpec(
                 task_key="E1",
@@ -330,9 +336,10 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
                 inputs=[InputSpec(kind="claim", ref=claim_id)],
             ),
         ],
-        questions=[],
+        questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid0 = await rt.start_attempt("E0", provenance="stub")
+    assert aid0 == aid0_expected
     content = b'{"count": 225}'
     art = arts.put(
         content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
@@ -343,7 +350,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": claim_id, "target": "H1"}],
+            claims=[{"id": "from_E0", "target": "Q1"}],
         ),
     )
     node = rt.graph.get_node(claim_id)
