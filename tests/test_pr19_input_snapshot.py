@@ -59,6 +59,20 @@ async def _create_with_inputs(rt, *, inputs, **kwargs):
     finally:
         release_user_put_capability(cap)
 
+
+def _assert_one_study_finalized(events: list) -> object:
+    """Exactly one StudyFinalized; report XOR minimal_report; non-empty conclusion_ids."""
+    fins = [e for e in events if e.type == "StudyFinalized"]
+    assert len(fins) == 1
+    fin = fins[0]
+    has_art = fin.payload.get("report_artifact_id") is not None
+    has_min = fin.payload.get("minimal_report") is not None
+    assert has_art ^ has_min, "report_artifact_id XOR minimal_report"
+    cids = fin.payload.get("conclusion_ids")
+    assert isinstance(cids, list) and len(cids) > 0, "conclusion_ids must be non-empty"
+    return fin
+
+
 def _zip_with_declared_size(*, compress_size: int, file_size: int, name: str = "bomb.bin") -> bytes:
     """Zip whose ZipInfo declares ``file_size`` (may disagree with payload)."""
     buf2 = io.BytesIO()
@@ -643,13 +657,9 @@ async def test_zip_bomb_refused_ends_in_study_finalized(tmp_path, clock, runtime
     )
     events = await rt.store.read_all()
     assert any(e.type == "StudyRefused" for e in events)
-    fin = next(e for e in events if e.type == "StudyFinalized")
+    fin = _assert_one_study_finalized(events)
     assert fin.payload["terminal_reason"] == TerminalReason.REFUSED.value
     assert fin.payload["trigger"] == "intake"
-    assert (
-        fin.payload.get("report_artifact_id") is not None
-        or fin.payload.get("minimal_report") is not None
-    )
     assert rt._finalized and rt.view().phase == "closed"
     refused = next(e for e in events if e.type == "StudyRefused")
     assert refused.payload["kind"] == RefusalKind.INPUT_TOO_LARGE.value
@@ -730,7 +740,7 @@ async def test_client_raising_limits_refuses_input_invalid(
     events = await rt.store.read_all()
     refused = next(e for e in events if e.type == "StudyRefused")
     assert refused.payload["kind"] == RefusalKind.INPUT_INVALID.value
-    assert any(e.type == "StudyFinalized" for e in events)
+    _assert_one_study_finalized(events)
     await close_runtime(rt)
 
 
@@ -1033,7 +1043,7 @@ async def test_adversarial_empty_garbage_still_finalizes(tmp_path, clock, runtim
             await rt.cancel_task(tid, reason="cancelled")
     await rt.tick()
     events = await rt.store.read_all()
-    assert any(e.type == "StudyFinalized" for e in events)
+    _assert_one_study_finalized(events)
     assert rt._finalized and rt.view().phase == "closed"
     await close_runtime(rt)
 
@@ -1157,7 +1167,7 @@ async def test_oversized_input_refused_via_create_study(tmp_path, clock, runtime
     )
     events = await rt.store.read_all()
     assert any(e.type == "StudyRefused" for e in events)
-    assert any(e.type == "StudyFinalized" for e in events)
+    _assert_one_study_finalized(events)
     assert not any(
         e.type == "TaskCreated" and (e.payload.get("spec") or {}).get("task_key") == "SPEC"
         for e in events
@@ -1188,7 +1198,7 @@ async def test_missing_artifact_store_refuses_user_inputs(
     refused = next(e for e in events if e.type == "StudyRefused")
     assert refused.payload["kind"] == RefusalKind.INPUT_INVALID.value
     assert "artifact_store_unavailable" in refused.payload["reason"]
-    assert any(e.type == "StudyFinalized" for e in events)
+    _assert_one_study_finalized(events)
     assert not any(e.type == "ArtifactRegistered" for e in events)
     await close_runtime(rt)
 
@@ -1243,7 +1253,7 @@ async def test_api_validation_error_becomes_study_finalized(tmp_path, catalog):
     events = await rt.store.read_all()
     refused = next(e for e in events if e.type == "StudyRefused")
     assert refused.payload["kind"] == RefusalKind.INPUT_INVALID.value
-    assert any(e.type == "StudyFinalized" for e in events)
+    _assert_one_study_finalized(events)
     await close_runtime(rt)
 
 
@@ -1367,7 +1377,7 @@ async def test_api_corrupt_deflate_study_finalized_not_500(tmp_path, catalog):
     events = await rt.store.read_all()
     refused = next(e for e in events if e.type == "StudyRefused")
     assert refused.payload["kind"] == RefusalKind.INPUT_INVALID.value
-    assert any(e.type == "StudyFinalized" for e in events)
+    _assert_one_study_finalized(events)
     await close_runtime(rt)
 
 
@@ -1799,7 +1809,7 @@ async def test_api_zip_member_errors_study_finalized_not_500(tmp_path, catalog):
         events = await rt.store.read_all()
         refused = next(e for e in events if e.type == "StudyRefused")
         assert refused.payload["kind"] == RefusalKind.INPUT_INVALID.value
-        assert any(e.type == "StudyFinalized" for e in events)
+        _assert_one_study_finalized(events)
         await close_runtime(rt)
 
 
@@ -2011,11 +2021,12 @@ def test_pax_path_traversal_tgz_rejected():
         max_bytes=1_000_000,
         max_unpack_ratio=100.0,
         max_zip_members=100,
-        name="evil.tgz",
+        name="upload.tgz",
         mode="r:gz",
     )
     assert bad is not None and bad[0] == RefusalKind.INPUT_INVALID
-    assert "unsafe" in bad[1] or "evil" in bad[1]
+    assert "unsafe tar path" in bad[1]
+    assert "../../etc/evil" in bad[1]
 
 
 def test_pax_abs_path_txz_rejected():
@@ -2434,7 +2445,7 @@ def test_pax_keys_smuggled_in_padding_rejected(
     )
     elapsed = time.perf_counter() - t0
     assert bad is not None and bad[0] == RefusalKind.INPUT_INVALID
-    assert needle in bad[1] or "non-zero padding" in bad[1]
+    assert needle in bad[1]
     assert elapsed < 2.0
 
 
@@ -2483,7 +2494,7 @@ def test_dir_body_smuggled_longname_rejected(mode, wrap, v7_dir, long_size):
     )
     elapsed = time.perf_counter() - t0
     assert bad is not None and bad[0] == RefusalKind.INPUT_INVALID
-    assert "longname" in bad[1] or "pax" in bad[1]
+    assert "tar longname/pax" in bad[1]
     assert elapsed < 2.0
 
 
@@ -2707,14 +2718,86 @@ def test_many_small_pax_headers_budget_too_large():
         mode="r:",
     )
     assert bad is not None and bad[0] == RefusalKind.INPUT_TOO_LARGE
-    assert "max_bytes" in bad[1] or "uncompressed" in bad[1]
+    assert "uncompressed" in bad[1] and "max_bytes" in bad[1]
 
-    # Same via check_user_inputs_limits.
+    # Via check_user_inputs_limits: use tgz so wire/blob size is under max_bytes
+    # and the streaming count (not the outer len(data) gate) fires.
+    tgz = gzip.compress(raw)
+    assert len(tgz) < 8_000
     bad2 = check_user_inputs_limits(
-        [UserInput(name="many_pax.tar", content=raw, media_type="application/x-tar")],
+        [UserInput(name="many_pax.tgz", content=tgz, media_type="application/gzip")],
         InputLimits(max_bytes=8_000, max_unpack_ratio=100.0, max_zip_members=10_000),
     )
     assert bad2 is not None and bad2[0] == RefusalKind.INPUT_TOO_LARGE
+    assert "uncompressed" in bad2[1] and "max_bytes" in bad2[1]
+
+
+@pytest.mark.parametrize("typeflag", ["x", "L", "K", "g"])
+@pytest.mark.parametrize("via", ["inspect_tar_streaming", "check_user_inputs_limits"])
+def test_z13_z14_nested_meta_2000_both_paths(via, typeflag):
+    """z13/z14: ~2000 consecutive x/L/K/g → INPUT_INVALID, no RecursionError.
+
+    Both ``inspect_tar_streaming`` and ``check_user_inputs_limits``.
+    """
+    from coscientist.core.archive_limits import inspect_tar_streaming
+
+    raw = _nested_meta_chain(2000, typeflag=typeflag)
+    data = gzip.compress(raw)
+    lim = InputLimits(max_bytes=50_000_000, max_unpack_ratio=100.0, max_zip_members=10_000)
+    if via == "inspect_tar_streaming":
+        bad = inspect_tar_streaming(
+            data,
+            max_bytes=lim.max_bytes,
+            max_unpack_ratio=lim.max_unpack_ratio,
+            max_zip_members=lim.max_zip_members,
+            name="z13.tgz",
+            mode="r:gz",
+        )
+    else:
+        bad = check_user_inputs_limits(
+            [UserInput(name="z14.tgz", content=data, media_type="application/gzip")],
+            lim,
+        )
+    assert bad is not None and bad[0] == RefusalKind.INPUT_INVALID
+    assert "meta chain" in bad[1]
+
+
+@pytest.mark.parametrize("typeflag", ["L", "K", "g"])
+@pytest.mark.parametrize(
+    "mode,wrap,fname,mt",
+    [
+        ("r:xz", lambda raw: __import__("lzma").compress(raw), "b.txz", "application/x-xz"),
+        ("r:bz2", lambda raw: __import__("bz2").compress(raw), "b.tbz2", "application/x-bzip2"),
+    ],
+)
+@pytest.mark.parametrize("via", ["inspect_tar_streaming", "check_user_inputs_limits"])
+@pytest.mark.parametrize("depth,ok", [(8, True), (9, False)])
+def test_meta_chain_boundary_8_9_lk_g_xz_bz2(via, mode, wrap, fname, mt, typeflag, depth, ok):
+    """Boundary: depth 8 accepts, depth 9 rejects — L/K/g on xz and bz2, both paths."""
+    from coscientist.core.archive_limits import inspect_tar_streaming
+
+    raw = _nested_meta_chain(depth, typeflag=typeflag)
+    data = wrap(raw)
+    lim = InputLimits(max_bytes=10_000_000, max_unpack_ratio=100.0, max_zip_members=10_000)
+    if via == "inspect_tar_streaming":
+        bad = inspect_tar_streaming(
+            data,
+            max_bytes=lim.max_bytes,
+            max_unpack_ratio=lim.max_unpack_ratio,
+            max_zip_members=lim.max_zip_members,
+            name=fname,
+            mode=mode,  # type: ignore[arg-type]
+        )
+    else:
+        bad = check_user_inputs_limits(
+            [UserInput(name=fname, content=data, media_type=mt)],
+            lim,
+        )
+    if ok:
+        assert bad is None, bad
+    else:
+        assert bad is not None and bad[0] == RefusalKind.INPUT_INVALID
+        assert "meta chain" in bad[1]
 
 
 @pytest.mark.asyncio
@@ -2750,10 +2833,9 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
     events = await rt.store.read_all()
     types = [e.type for e in events]
     assert "StudyRefused" in types
-    fins = [e for e in events if e.type == "StudyFinalized"]
-    assert len(fins) == 1
-    assert fins[0].payload["terminal_reason"] == TerminalReason.REFUSED.value
-    assert fins[0].payload["trigger"] == "intake"
+    fin = _assert_one_study_finalized(events)
+    assert fin.payload["terminal_reason"] == TerminalReason.REFUSED.value
+    assert fin.payload["trigger"] == "intake"
     # StudyFinalized is last — PR19 must not append after it.
     assert types[-1] == "StudyFinalized"
     n_before = len(events)
@@ -2769,5 +2851,5 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
         await rt.store.append(late)
     events2 = await rt.store.read_all()
     assert len(events2) == n_before
-    assert len([e for e in events2 if e.type == "StudyFinalized"]) == 1
+    _assert_one_study_finalized(events2)
     await close_runtime(rt)

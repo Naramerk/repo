@@ -479,6 +479,12 @@ class _PrefixFileobj:
     Used so ``_proc_pax`` can inspect pax bytes then let stdlib
     ``TarInfo._proc_pax`` re-read them without poking ``tarfile._Stream``
     private ``buf``/``pos``.
+
+    Contract: only ``read`` is overridden. ``tell``/``seek`` (via
+    ``__getattr__``) ignore the unread prefix and must not be relied on
+    while prefix bytes remain. Callers install this wrapper for a single
+    stdlib ``_proc_pax`` re-read of the just-inspected block, then restore
+    the inner fileobj.
     """
 
     def __init__(self, prefix: bytes, inner: Any) -> None:
