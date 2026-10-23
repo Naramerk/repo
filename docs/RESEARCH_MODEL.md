@@ -17,7 +17,7 @@
 | Литературный поиск | Эксперимент с `method=literature_search` (отдельного типа узла нет): по вопросам, гипотезам и плану запросов (query_plan) найти статьи и выписать цитаты-доказательства. Планируется и повторяется как любой эксперимент (LIT-n), проверяется своими критериями: min_sources, question_coverage, recency, quote_valid. Бывшая стадия literature — просто первая такая задача LIT-0. | plan (LIT-n), в т.ч. до гипотез | planner планирует; выполняет researcher через инструменты поиска; узлы создаёт код | artifact(role=paper), evidence(literature), claim; эксперименты могут depends_on LIT-n |
 | План | Маршрут: решения plan.literature/plan.hypotheses с причинами + задачи LIT/HYP/EXP с зависимостями. Правка = новая ревизия (supersedes). | plan, перепланирование | planner + critic → код; одобряет человек или critic | Эксперименты |
 | Эксперимент (задача) | Один шаг плана: метод, инструмент, данные, критерии; попытки (attempts[]) и ограничения (limitations[]) — внутри узла. | plan | planner → код (ключ даёт код) | Артефакты, доказательства |
-| Попытка (attempt) | Одно выполнение эксперимента: outcome, provenance real/partial/simulated, config_digest. Не узел. | выполнение | Код | Outcome задачи |
+| Попытка (attempt) | Одно выполнение эксперимента: outcome, provenance real/partial/stub, config_digest. Не узел. | выполнение | Код | Outcome задачи |
 | Артефакт | Файл или статья с ролью paper/data/code/figure/table/log/report. У paper идентичность — DOI/URL (дедупликация); у data — version и hash. Заменяет прежний узел source. | любая | Слой инструментов (код) | Доказательства ссылаются на него |
 | Доказательство (evidence) | Наблюдение с адресом: computational/experimental — artifact_id + JSON-указатель + digest; literature — SourceQuote (статья, страница/раздел, цитата, digest). | LIT-n, EXP-n | Агент указывает адрес, код проверяет | Утверждения |
 | Утверждение (claim) | «Доказательство поддерживает/опровергает гипотезу или ответ на вопрос». Агент указывает цель, доказательства и замороженный критерий; позицию (stance) вычисляет код из статуса критерия: met→supports, not_met→refutes, unassessed→inconclusive. | LIT-n, EXP-n | Агент предлагает, код принимает и вычисляет stance | Вердикт, вывод |
@@ -25,7 +25,7 @@
 | Отчёт | Документ из графа. | report | Код + reporter | Конечный продукт |
 | HITL-шлюз | Точка, где человек одобряет/правит или говорит «реши сам» (тогда решает critic). Шлюзы: plan, hypotheses, costly/non-real эксперимент, report; включает профиль; по таймауту — delegate, кроме costly_or_nonreal (fail, §5.2). Решение — событие с автором, на узле `approved_by` (human/critic), `delegated_by`. | plan, после HYP, перед дорогим EXP, report | Человек или critic; код записывает | Продолжение DAG |
 | Требование (NodeRequirement) | Пункт каталога (Том Б / R / критерий), привязанный к узлу; статус MET/FAILED/… | при создании узла | Код (по каталогу) | Статус узла и критерия |
-| Provenance real/partial/simulated | Метка попытки: посчитано на реальных, неполных данных или заглушке. | выполнение | Код | Потолок outcome PARTIAL; вердикт не выше inconclusive |
+| Provenance real/partial/stub | Метка попытки: посчитано на реальных, неполных данных или заглушке. | выполнение | Код | Потолок outcome PARTIAL; вердикт не выше inconclusive |
 
 ## 1. Принципы
 
@@ -45,7 +45,7 @@
 
 ## 2. Узлы (NodeKind)
 
-Общие поля: `node_id` (префикс+ulid, код), `kind`, `study_id`, `task_id` (кто создал), `attempt_n | None`, `revision`, `created_seq`, `provenance: real|partial|simulated` (вычисляется, §6). Узлов `goal`, `source`, `run` больше нет: goal/constraints[] — поля study, source = artifact(role=paper), run = experiment.attempts[].
+Общие поля: `node_id` (префикс+ulid, код), `kind`, `study_id`, `task_id` (кто создал), `attempt_n | None`, `revision`, `created_seq`, `provenance: real|partial|stub` (вычисляется, §6). Узлов `goal`, `source`, `run` больше нет: goal/constraints[] — поля study, source = artifact(role=paper), run = experiment.attempts[].
 
 <!-- gen:nodes:start -->
 | NodeKind | Префикс | Поля (обязательные — жирным) | Создаёт задача | Из вывода | Смысл |
@@ -56,7 +56,7 @@
 | `criterion` | CR | **metric**: str; **op**: enum(<\|<=\|==\|>=\|>\|in); **target**: str; tolerance: float; **check**: enum(code\|review); frozen_at_seq: int | spec (study), plan (experiment) | ResearchSpecOut.success_metrics[], TaskSpec.criteria | Измеримая планка; статус = NodeRequirement (met/not_met/unassessed) |
 | `hypothesis` | H | **statement**: str; **prediction**: str; rationale: str; rank: int; **selected**: bool; approved_by: enum(human\|critic); delegated_by: enum(human\|timeout) | задача HYP-n (опционально) | HypothesesOut (+ правка в HITL-шлюзе hypotheses) | Проверяемое утверждение; вердикт вычисляется |
 | `plan` | PL | **revision**: int; **hypotheses**: obj(Need) ({needed, reason}); **literature**: obj(Need) ({needed, reason}); critic_decision: enum(accept\|revise\|reject); approved_by: enum(human\|critic); delegated_by: enum(human\|timeout) | задача PLAN-0 и перепланирования PLAN-1..n (n ≤ max_replans) | PlanOut + CriticVerdict + HitlDecision | Ревизия плана (маршрута); правка = новая ревизия + supersedes |
-| `experiment` | X | **task_key**: str (LIT-n \| EXP-n); **title**: str; **goal**: str; **method**: enum(computational\|statistical\|laboratory\|literature_search\|expert); query_plan: list(str) (для literature_search); **route**: str; **required**: bool; costly: bool; baselines: list(str); tool_resolution: enum(tool_found\|tool_built\|coder\|tool_missing); **attempts**: list(obj(Attempt)) (n, outcome, close_reason, provenance, config_digest); limitations: list(obj(Limitation)) | PLAN-n (при accept) | TaskSpec | Задача DAG (LIT-n/EXP-n) с попытками внутри |
+| `experiment` | X | **task_key**: str (LIT-n \| EXP-n); **title**: str; **goal**: str; **method**: enum(computational\|statistical\|laboratory\|literature_search\|expert); query_plan: list(str) (для literature_search); **route**: str; **required**: bool; costly: bool; baselines: list(str); tool_resolution: enum(tool_found\|tool_built\|coder\|tool_missing); **attempts**: list(obj(Attempt)) (n, outcome, close_reason, provenance=real\|partial\|stub, config_digest); limitations: list(obj(Limitation)) | PLAN-n (при accept) | TaskSpec | Задача DAG (LIT-n/EXP-n) с попытками внутри |
 | `artifact` | A | **artifact_id**: str; **role**: enum(paper\|data\|code\|figure\|table\|log\|report); media_type: str; sha256: digest; doi_or_url: str (обяз. для paper; идентичность); title: str; year: int; status: enum(parsed\|download_failed) (paper); version: str (обяз. для data); hash: digest (обяз. для data) | любая (слой инструментов) | ToolOutput; LiteratureOut.papers (только найденные инструментом) | Файл или статья (бывший source); paper дедуплицируется по DOI/URL |
 | `evidence` | E | **kind**: enum(literature\|computational\|experimental\|expert); **statement**: str; **ref**: obj(EvidenceRef\|SourceQuote); measured_on: str | experiment (LIT-n, EXP-n) | LiteratureOut.quotes, AgentTaskOutput.evidence | Адресуемое наблюдение |
 | `claim` | CL | **target**: ref(hypothesis\|question); **checked_against**: ref(criterion); **stance**: enum(supports\|refutes\|inconclusive) [computed] (вычисляет код: met→supports, not_met→refutes, unassessed→inconclusive; во входе роли запрещено); reason: str | experiment (LIT-n, EXP-n) | AgentTaskOutput.claims[], LiteratureOut.claims[] (target + cites + checked_against; stance вычисляет код) | Утверждение со ссылкой на доказательство и критерий |
@@ -186,8 +186,8 @@ Study `fulfilled` только если все required задачи SUCCESS и 
 
 ## 6. Провенанс и валидность доказательств
 
-- Источник истины — `Attempt.provenance: real | partial | simulated` (DESIGN §2, §3.4); порядок real < partial < simulated. Не-real ограничивает outcome попытки до PARTIAL.
-- `provenance(n)`: artifact, evidence — от попытки-производителя (`produced`.attempt_n / `derived_from`); claim — max по `cites`; вердикт — max по accepted claims; conclusion — max по `based_on`; study verdict `simulated` (DESIGN §3.2).
+- Источник истины — `Attempt.provenance: real | partial | stub` (DESIGN §2, §3.4); порядок real < partial < stub. Не-real ограничивает outcome попытки до PARTIAL.
+- `provenance(n)`: artifact, evidence — от попытки-производителя (`produced`.attempt_n / `derived_from`); claim — max по `cites`; вердикт — max по accepted claims; conclusion — max по `based_on`; study verdict `stubbed` (DESIGN §3.2).
 - Ребро `uses_input` хранит provenance входа; по нему вычисляется provenance попытки.
 - Evidence с provenance≠real: criterion не сильнее PARTIAL у задачи, вердикт не выше inconclusive (§4.1), в отчёте — раздел «Выполнено на заглушках».
 
@@ -256,7 +256,7 @@ Study `fulfilled` только если все required задачи SUCCESS и 
 |---|---|
 | Колонки (ELK layered, слева направо) | 0 study/constraint · 1 question/criterion · 2 plan/hypothesis · 3 experiment (LIT-n — отдельная дорожка) · 4 artifact/evidence · 5 claim · 6 conclusion/report |
 | Цвет рамки | node_status (§4) |
-| Штриховка/значок | provenance partial/simulated; «по литературе» на вердикте |
+| Штриховка/значок | provenance partial/stub; «по литературе» на вердикте |
 | Значки | NodeRequirement: MET/FAILED/UNASSESSED/STALE; HITL: approved_by human/critic, «timeout→agent» |
 | Свёртка | attempts[] и artifact сворачиваются в experiment; constraints[] — в чип study |
 | API | `GET /studies/{id}/graph` → `{nodes: NodeView[], edges: EdgeView[]}` — та же проекция |
@@ -292,7 +292,7 @@ Study `fulfilled` только если все required задачи SUCCESS и 
 | Micropublications (Clark et al., J Biomed Semantics 2014) | claim → cites → evidence → derived_from data |
 | Nanopublications (Groth et al. 2010) | атомарный claim + provenance как единица |
 | SEPIO (monarch-initiative) | evidence line с stance supports/refutes |
-| W3C PROV-O | produced / derived_from / attempt как Activity; провенанс simulated |
+| W3C PROV-O | produced / derived_from / attempt как Activity; провенанс stub |
 | OBI / EXPO (Soldatova & King 2006) | experiment: goal, method, baselines, criterion |
 | Google AI co-scientist (2025) | hypothesis rank, критик/турнир → plan critic |
 | Sakana AI Scientist (2024), Agent Laboratory (2025) | линейный пайплайн idea→experiment→paper ≈ наш DAG; вердикт по метрикам кода |
