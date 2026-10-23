@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from coscientist.core.digest import canonical_json
@@ -168,8 +168,8 @@ def render_markdown_report(
     question_dispositions: Mapping[str, Mapping[str, Any]],
     tasks: Mapping[str, Task],
     refusal: str | None = None,
-    custom_checks: list[Mapping[str, Any]] | None = None,
-    observations: list[Mapping[str, Any] | str] | None = None,
+    custom_checks: Sequence[Mapping[str, Any]] | None = None,
+    observations: Sequence[Mapping[str, Any] | str] | None = None,
 ) -> str:
     """Deterministic MD report (no LLM)."""
     lines = [

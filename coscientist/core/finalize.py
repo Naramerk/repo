@@ -718,7 +718,7 @@ async def _primary_report_path(
         question_dispositions=qdisp,
         tasks=runtime.tasks,
         refusal=refusal,
-        custom_checks=custom_checks_report(runtime),
+        custom_checks=list(custom_checks_report(runtime)),
         observations=list(getattr(runtime, "_observations", None) or []),
     )
     # Surface infra details (sandbox reason + soft-isolation note) in report text.
