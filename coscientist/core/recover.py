@@ -7,7 +7,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from coscientist.core.domain import AgentTaskOutput, TaskState
-from coscientist.core.errors import ArtifactCorrupt
+from coscientist.core.errors import ArtifactCorrupt, LeaseLost
 from coscientist.core.hitl_guard import reject_open_hitl_if_unsupported
 from coscientist.core.ids import result_id
 from coscientist.core.machine import StudyRuntime
@@ -74,6 +74,8 @@ async def recover(runtime: StudyRuntime) -> dict[str, Any]:
     foreach_n = await resume_pending_foreach(runtime)
     try:
         loop_n = await resume_pending_loops(runtime)
+    except LeaseLost:
+        raise
     except Exception as e:  # noqa: BLE001 — never abort recover before tick/finalize
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
         loop_n = 0

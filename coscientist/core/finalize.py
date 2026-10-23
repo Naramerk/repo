@@ -222,13 +222,6 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
             _append_loop_refused_report_line(seen, ev.payload)
         elif ev.type == "LoopCompleted":
             _append_loop_completed_report_line(seen, ev.payload)
-        elif ev.type == "PlanRefused":
-            # Temporary until rebase on #21 — then drop this branch and use PR13's.
-            line = (ev.payload or {}).get("report_line") or (
-                "не выполнено: план отклонён"
-            )
-            if str(line) not in seen:
-                seen.append(str(line))
         elif ev.type == "SideEffectDenied":
             tool = str(ev.payload.get("tool") or "?")
             reason = str(ev.payload.get("reason") or "")
@@ -408,6 +401,8 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     refusal = _refusal_payload(runtime, trigger)
     try:
         payload = await _build_rich_payload(runtime, sid=sid, trigger=trigger)
+    except LeaseLost:
+        raise
     except Exception as e:  # noqa: BLE001 — last-resort totality
         log.warning("finalize rich path failed: %s", e, exc_info=True)
         payload = last_resort_payload(
@@ -435,10 +430,10 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
                     refusal=refusal,
                 ),
             )
-        except Conflict as err:
-            await _sync_finalized_from_store(runtime, sid=sid, conflict=err)
         except LeaseLost:
             raise
+        except Conflict as err:
+            await _sync_finalized_from_store(runtime, sid=sid, conflict=err)
     runtime._finalized = True  # noqa: SLF001
 
 

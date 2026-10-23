@@ -19,7 +19,12 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.events import EventEnvelope, make_idem
+from coscientist.core.events import (
+    PLAN_EXPANDED_SCHEMA_VERSION,
+    TASK_CREATED_SCHEMA_VERSION,
+    EventEnvelope,
+    make_idem,
+)
 from coscientist.core.expand_critic import critic_gate, prepare_request_for_apply
 from coscientist.core.expand_graph import (
     plan_graph_events,
@@ -407,7 +412,7 @@ async def _expand_plan(
                 idem_key=make_idem("TaskCreated", tid, pid),
                 payload=task.model_dump(mode="json"),
                 ts=now,
-                schema_version=10,
+                schema_version=TASK_CREATED_SCHEMA_VERSION,
             )
         )
 
@@ -435,7 +440,7 @@ async def _expand_plan(
             idem_key=make_idem("PlanExpanded", pid),
             payload=payload,
             ts=now,
-            schema_version=2,
+            schema_version=PLAN_EXPANDED_SCHEMA_VERSION,
         )
     )
     await runtime._append(events)  # noqa: SLF001

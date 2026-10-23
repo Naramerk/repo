@@ -1167,7 +1167,7 @@ def test_upcast_plan_accepted_loops_default():
             "tasks": [],
         },
     )
-    assert v == 8
+    assert v == 9
     assert p["loops"] == []
 
 
@@ -1188,7 +1188,7 @@ def test_upcast_task_created_loop_fields():
             "deadline": "2026-01-01T01:00:00+00:00",
         },
     )
-    assert v == 10
+    assert v == 11
     assert p["spec"]["loop_id"] is None
     assert p["spec"]["loop_iter"] is None
 
@@ -1566,9 +1566,314 @@ async def test_loop_unexpected_error_finalizes_on_recover(
         fins = [e for e in events if e.type == "StudyFinalized"]
         assert len(fins) == 1
         assert fins[0].payload["terminal_reason"] == TerminalReason.INTERNAL_ERROR.value
-        # Second recover must not hang / raise.
+        has_art = fins[0].payload.get("report_artifact_id") is not None
+        has_min = fins[0].payload.get("minimal_report") is not None
+        assert has_art ^ has_min, "report_artifact_id XOR minimal_report"
+        # Second recover must not hang / raise; still exactly one StudyFinalized.
         await recover(rt2)
         assert rt2._finalized is True
+        events2 = await rt2.store.read_all()
+        assert len([e for e in events2 if e.type == "StudyFinalized"]) == 1
         await close_runtime(rt2)
+    finally:
+        lp._REGISTRY.pop(name, None)
+
+
+def test_count_survivors_and_validate_loop_specs_plan_invalid():
+    """Unit: count_survivors + validate_loop_specs → PlanInvalid (no runtime)."""
+    from coscientist.core.loop import validate_loop_specs
+    from coscientist.core.rules import PlanInvalid
+
+    class RT:
+        tasks = {}
+        study = None
+        graph = None
+        results = {}
+        attempts = {}
+        plans = {}
+
+    loop = _loop(
+        until=LoopPredicate(name="survivors_le", params={"n": 0}),
+        scope_hypotheses=[],
+        scope_questions=[],
+    )
+    assert count_survivors(RT(), loop, upto_iter=1) == 0
+    with pytest.raises(PlanInvalid, match="max_iter is required"):
+        validate_loop_specs(
+            [{"loop_id": "L1", "body": [], "until": {"name": "no_change", "params": {}}}],
+            known_keys=set(),
+            max_loop_iter=8,
+            known_questions=set(),
+            known_hypotheses=set(),
+        )
+    with pytest.raises(PlanInvalid, match="body empty"):
+        validate_loop_specs(
+            [
+                LoopSpec(
+                    loop_id="L1",
+                    body=[],
+                    until=LoopPredicate(name="no_change", params={}),
+                    max_iter=1,
+                )
+            ],
+            known_keys=set(),
+            max_loop_iter=8,
+            known_questions=set(),
+            known_hypotheses=set(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_materialize_loop_iter_writes_plan_expanded(tmp_path, clock, runtime_cls):
+    """materialize_loop_iter emits PlanExpanded(loop=true) at writer schema."""
+    from coscientist.core.events import PLAN_EXPANDED_SCHEMA_VERSION
+    from coscientist.core.loop import materialize_loop_iter
+
+    rt, arts = await _open_study(
+        tmp_path, clock, "st_loop_mat", runtime_cls=runtime_cls
+    )
+    await rt.accept_plan(
+        [],
+        questions=[QuestionSpec(id="Q1", text="q")],
+        loops=[],
+    )
+    # Direct materialize (accept with empty loops leaves no auto-iter).
+    loop = _loop(
+        max_iter=2,
+        until=LoopPredicate(name="survivors_le", params={"n": 0}),
+        scope_hypotheses=[],
+    )
+    pid = await materialize_loop_iter(rt, loop, iter_n=1)
+    assert pid
+    expanded = [
+        e
+        for e in await rt.store.read_all()
+        if e.type == "PlanExpanded" and e.payload.get("loop")
+    ]
+    assert expanded
+    assert all(e.schema_version == PLAN_EXPANDED_SCHEMA_VERSION for e in expanded)
+    assert current_loop_iter_tasks(rt, "L1", 1)
+    await rt.cancel_study(by="test")
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_loop_validation_error_on_restart_no_monkeypatch(
+    tmp_path, clock, runtime_cls
+):
+    """Corrupt plan loops → real pydantic ValidationError → internal_error finalize."""
+    import coscientist.core.loop_predicates as lp
+    from coscientist.core.events import (
+        PLAN_ACCEPTED_SCHEMA_VERSION,
+        EventEnvelope,
+        make_idem,
+    )
+    from coscientist.core.reasons import TerminalReason
+
+    name = f"test_plugin_keep_running_{runtime_cls.__name__}"
+    lp._REGISTRY.pop(name, None)
+    register_loop_predicate(name, lambda *_a, **_k: False)
+    try:
+        rt, arts = await _open_study(
+            tmp_path, clock, "st_loop_val_re", runtime_cls=runtime_cls
+        )
+        await rt.accept_plan(
+            [],
+            questions=[QuestionSpec(id="Q1", text="q")],
+            loops=[
+                _loop(
+                    max_iter=5,
+                    until=LoopPredicate(name=name, params={}),
+                    scope_hypotheses=[],
+                )
+            ],
+        )
+        for t in current_loop_iter_tasks(rt, "L1", 1):
+            aid = await rt.start_attempt(t.spec.task_key)
+            await _ok(rt, arts, aid)
+        assert loop_status(rt, "L1") == "running"
+        await close_runtime(rt)
+
+        rt2 = await open_runtime(
+            tmp_path,
+            "st_loop_val_re",
+            clock=clock,
+            owner="t2",
+            runtime_cls=runtime_cls,
+        )
+        attach_executor(rt2, tmp_path)
+        sid = rt2.study.study_id
+        # Inject a higher-revision PlanAccepted whose loops fail LoopSpec.model_validate.
+        await rt2._append(  # noqa: SLF001
+            [
+                EventEnvelope(
+                    study_id=sid,
+                    type="PlanAccepted",
+                    entity_key="pl_corrupt_loops",
+                    idem_key=make_idem("PlanAccepted", sid, "corrupt_loops"),
+                    payload={
+                        "plan_id": "pl_corrupt_loops",
+                        "study_id": sid,
+                        "revision": 9999,
+                        "hypothesis_id": None,
+                        "tasks": [],
+                        "questions": [{"id": "Q1", "text": "q"}],
+                        "expand_after": [],
+                        "loops": [
+                            {
+                                "loop_id": "L1",
+                                "body": "not-a-list",
+                                "until": {"name": "no_change", "params": {}},
+                                "max_iter": 2,
+                            }
+                        ],
+                    },
+                    ts=rt2.clock.now(),
+                    schema_version=PLAN_ACCEPTED_SCHEMA_VERSION,
+                )
+            ]
+        )
+        await recover(rt2)
+        assert rt2._finalized is True
+        events = await rt2.store.read_all()
+        fins = [e for e in events if e.type == "StudyFinalized"]
+        assert len(fins) == 1
+        assert fins[0].payload["terminal_reason"] == TerminalReason.INTERNAL_ERROR.value
+        has_art = fins[0].payload.get("report_artifact_id") is not None
+        has_min = fins[0].payload.get("minimal_report") is not None
+        assert has_art ^ has_min
+        await recover(rt2)
+        assert (
+            len([e for e in await rt2.store.read_all() if e.type == "StudyFinalized"])
+            == 1
+        )
+        await close_runtime(rt2)
+    finally:
+        lp._REGISTRY.pop(name, None)
+
+
+@pytest.mark.asyncio
+async def test_refuse_loop_failure_in_expected_branch_finalizes(
+    tmp_path, clock, runtime_cls, monkeypatch
+):
+    """Exception inside _refuse_loop (expected-eval branch) still finalizes."""
+    import coscientist.core.loop as loop_mod
+    import coscientist.core.loop_predicates as lp
+    from coscientist.core.reasons import TerminalReason
+
+    name = f"test_plugin_gone_live_{runtime_cls.__name__}"
+    lp._REGISTRY.pop(name, None)
+    register_loop_predicate(name, lambda *_a, **_k: False)
+    try:
+        rt, arts = await _open_study(
+            tmp_path, clock, "st_loop_refuse_boom", runtime_cls=runtime_cls
+        )
+        await rt.accept_plan(
+            [],
+            questions=[QuestionSpec(id="Q1", text="q")],
+            loops=[
+                _loop(
+                    max_iter=5,
+                    until=LoopPredicate(name=name, params={}),
+                    scope_hypotheses=[],
+                )
+            ],
+        )
+        # Unregister so eval raises UnknownLoopPredicateError (expected branch).
+        lp._REGISTRY.pop(name, None)
+
+        async def _refuse_boom(*_a, **_k):
+            raise RuntimeError("refuse journal failed")
+
+        monkeypatch.setattr(loop_mod, "_refuse_loop", _refuse_boom)
+        for t in current_loop_iter_tasks(rt, "L1", 1):
+            aid = await rt.start_attempt(t.spec.task_key)
+            await _ok(rt, arts, aid)
+        assert rt._finalized is True
+        events = await rt.store.read_all()
+        fins = [e for e in events if e.type == "StudyFinalized"]
+        assert len(fins) == 1
+        assert fins[0].payload["terminal_reason"] == TerminalReason.INTERNAL_ERROR.value
+        has_art = fins[0].payload.get("report_artifact_id") is not None
+        has_min = fins[0].payload.get("minimal_report") is not None
+        assert has_art ^ has_min
+        await close_runtime(rt)
+    finally:
+        lp._REGISTRY.pop(name, None)
+
+
+@pytest.mark.asyncio
+async def test_internal_error_closes_running_tasks_and_attempts(
+    tmp_path, clock, runtime_cls
+):
+    """RUNNING task + open attempt are closed (CORE_BUG / CRASHED) on internal_error."""
+    import coscientist.core.loop_predicates as lp
+    from coscientist.core.domain import TaskState
+    from coscientist.core.reasons import CloseReason, TaskReason, TerminalReason
+
+    name = f"test_plugin_boom_running_{runtime_cls.__name__}"
+    lp._REGISTRY.pop(name, None)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("predicate body boom")
+
+    register_loop_predicate(name, boom)
+    try:
+        rt, arts = await _open_study(
+            tmp_path, clock, "st_loop_run_close", runtime_cls=runtime_cls
+        )
+        await rt.accept_plan(
+            [
+                TaskSpec(
+                    task_key="OUT",
+                    title="outside",
+                    goal="g",
+                    route="experiment",
+                    addresses=["Q1"],
+                    criteria=[RequirementRef(template_id="value_match")],
+                    required=False,
+                )
+            ],
+            questions=[QuestionSpec(id="Q1", text="q")],
+            loops=[
+                _loop(
+                    max_iter=5,
+                    until=LoopPredicate(name=name, params={}),
+                    scope_hypotheses=[],
+                )
+            ],
+        )
+        out = next(t for t in rt.tasks.values() if t.spec.task_key == "OUT")
+        out_aid = await rt.start_attempt("OUT")
+        assert out_aid
+        assert rt.tasks[out.task_id].state == TaskState.RUNNING
+        assert rt.attempts[out_aid].get("closed") is not True
+        for t in current_loop_iter_tasks(rt, "L1", 1):
+            aid = await rt.start_attempt(t.spec.task_key)
+            await _ok(rt, arts, aid)
+        assert rt._finalized is True
+        events = await rt.store.read_all()
+        fins = [e for e in events if e.type == "StudyFinalized"]
+        assert len(fins) == 1
+        assert fins[0].payload["terminal_reason"] == TerminalReason.INTERNAL_ERROR.value
+        out_done = [
+            e
+            for e in events
+            if e.type == "TaskDone" and e.entity_key == out.task_id
+        ]
+        assert out_done
+        assert out_done[-1].payload.get("reason") == TaskReason.CORE_BUG.value
+        closed = [
+            e
+            for e in events
+            if e.type == "AttemptClosed" and e.entity_key == out_aid
+        ]
+        assert closed
+        assert closed[-1].payload.get("close_reason") == CloseReason.CRASHED.value
+        assert rt.tasks[out.task_id].state == TaskState.DONE
+        has_art = fins[0].payload.get("report_artifact_id") is not None
+        has_min = fins[0].payload.get("minimal_report") is not None
+        assert has_art ^ has_min
+        await close_runtime(rt)
     finally:
         lp._REGISTRY.pop(name, None)

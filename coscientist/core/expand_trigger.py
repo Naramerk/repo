@@ -18,7 +18,7 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.events import EventEnvelope, make_idem
+from coscientist.core.events import TASK_CREATED_SCHEMA_VERSION, EventEnvelope, make_idem
 from coscientist.core.expand_critic import PLAN_N_CRITIC_CRITERIA
 from coscientist.core.ids import task_id
 
@@ -232,7 +232,7 @@ async def ensure_plan_n_task(
                 idem_key=make_idem("TaskCreated", tid, "expand_trigger"),
                 payload=payload,
                 ts=now,
-                schema_version=10,
+                schema_version=TASK_CREATED_SCHEMA_VERSION,
             )
         ]
     )

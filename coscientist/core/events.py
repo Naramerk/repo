@@ -25,8 +25,9 @@ class EventEnvelope(BaseModel):
 
 # Typed payload helpers used by the machine / executor.
 
-# Writer constants (bump + upcaster on rebase after #21/#23 → TaskCreated v11 etc.).
-PLAN_EXPANDED_SCHEMA_VERSION = 1
+# Writer constants (#21 PlanExpanded v2 / TaskCreated v10 / PlanAccepted v8;
+# this PR stacks TaskCreated v11 + PlanAccepted v9; StudyCreated stays v10 until #23).
+PLAN_EXPANDED_SCHEMA_VERSION = 2
 STUDY_CREATED_SCHEMA_VERSION = 10
 PLAN_ACCEPTED_SCHEMA_VERSION = 9
 TASK_CREATED_SCHEMA_VERSION = 11

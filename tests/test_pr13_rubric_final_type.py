@@ -927,7 +927,7 @@ def test_upcast_taskcreated_v10_and_plan_expanded_v2():
             },
         },
     )
-    assert v == 10
+    assert v == 11
     assert p["spec"]["expected_outputs"][0]["rubric"] is None
     v2, p2 = upcast(
         "PlanExpanded",
@@ -956,8 +956,9 @@ def test_upcast_taskcreated_v10_and_plan_expanded_v2():
             "tasks": [],
         },
     )
-    assert v3 == 8
+    assert v3 == 9
     assert p3["questions"][0]["final_type"] == "verdict"
+    assert p3.get("loops") == []
 
 
 def test_study_view_uses_study_fulfilled_final_types():

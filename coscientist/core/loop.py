@@ -7,6 +7,7 @@ exceptions become refuse-style report lines — never crash finalize.
 
 from __future__ import annotations
 
+import logging
 import unicodedata
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +21,7 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
+from coscientist.core.errors import LeaseLost
 from coscientist.core.events import (
     PLAN_EXPANDED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
@@ -36,9 +38,11 @@ from coscientist.core.loop_predicates import (
     eval_loop_predicate,
     validate_loop_predicate,
 )
-from coscientist.core.reasons import TaskReason
+from coscientist.core.reasons import CloseReason, TaskReason
 from coscientist.core.rules import PlanInvalid
 from coscientist.core.shares import critic_plan_shares
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from coscientist.core.machine import StudyRuntime
@@ -735,6 +739,7 @@ async def finalize_loop_internal_error(
 
     Terminal reason is ``internal_error`` (public ``TerminalReason.INTERNAL_ERROR``,
     same as #21). Expected predicate failures use ``_refuse_loop`` instead.
+    Closes any RUNNING tasks/attempts before finalize so the journal is honest.
     """
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return
@@ -750,8 +755,31 @@ async def finalize_loop_internal_error(
             )
         else:
             await _emit_loop_advance_failed(runtime, detail=detail)
-    except Exception:  # noqa: BLE001 — still must finalize
-        pass
+    except LeaseLost:
+        raise
+    except Exception as journal_exc:  # noqa: BLE001 — still must finalize
+        log.warning(
+            "finalize_loop_internal_error journal failed: %s",
+            journal_exc,
+            exc_info=True,
+        )
+    # Close open work so RUNNING tasks/attempts do not survive StudyFinalized.
+    try:
+        from coscientist.core.cancel import _close_open_work
+
+        close_events = _close_open_work(
+            runtime, reason=TaskReason.CORE_BUG, close=CloseReason.CRASHED
+        )
+        if close_events:
+            await runtime._append(close_events)  # noqa: SLF001
+    except LeaseLost:
+        raise
+    except Exception as close_exc:  # noqa: BLE001 — still must finalize
+        log.warning(
+            "finalize_loop_internal_error close_open_work failed: %s",
+            close_exc,
+            exc_info=True,
+        )
     import coscientist.core.finalize as finalize_mod
 
     await finalize_mod.finalize(runtime, trigger="internal_error")
@@ -835,6 +863,8 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
     try:
         await refuse_orphaned_loop_barriers(runtime)
         loops = _loops_from_plans(runtime)
+    except LeaseLost:
+        raise
     except Exception as e:  # noqa: BLE001 — journal + finalize, never hang
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
         return done
@@ -846,12 +876,22 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
             if pid:
                 done.append(pid)
         except (LoopPredicateEvalError, UnknownLoopPredicateError) as e:
-            await _refuse_loop(
-                runtime,
-                loop,
-                detail=f"loop_predicate:{type(e).__name__}:{e}"[:200],
-                reason=LOOP_REASON_ERROR,
-            )
+            try:
+                await _refuse_loop(
+                    runtime,
+                    loop,
+                    detail=f"loop_predicate:{type(e).__name__}:{e}"[:200],
+                    reason=LOOP_REASON_ERROR,
+                )
+            except LeaseLost:
+                raise
+            except Exception as refuse_exc:  # noqa: BLE001 — refuse path must not hang
+                await finalize_loop_internal_error(
+                    runtime, exc=refuse_exc, loop=loop
+                )
+                break
+        except LeaseLost:
+            raise
         except Exception as e:  # noqa: BLE001 — unexpected: finalize study
             await finalize_loop_internal_error(runtime, exc=e, loop=loop)
             break
@@ -878,6 +918,8 @@ async def resume_pending_loops(runtime: StudyRuntime) -> int:
     try:
         got = await maybe_advance_loops(runtime)
         return len(got)
+    except LeaseLost:
+        raise
     except Exception as e:  # noqa: BLE001 — belt-and-suspenders for recover
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
         return 0
