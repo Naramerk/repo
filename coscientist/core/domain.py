@@ -146,10 +146,11 @@ class HitlPolicy(Frozen):
 
 
 ArtifactRole = Literal["paper", "data", "code", "figure", "table", "log", "report"]
-# Who stored the artifact bytes. Sets effect.trusted (reporting tag); M1
-# verdicts gate on countable core catalog eval, not trusted. Catalog sandbox
-# checks store via put_sandbox (producer=sandbox → trusted=True).
+# Who stored the artifact bytes. effect.trusted is a reporting tag (M1 verdicts
+# gate on countable). Sandbox puts are trusted only when catalog limits fully
+# held — soft net_isolation ⇒ trusted=False (still core_evaluated/countable).
 ArtifactProducer = Literal["agent", "core", "sandbox"]
+NetIsolation = Literal["hard", "soft", "none"]
 
 
 class OutputSpec(Frozen):
@@ -451,6 +452,8 @@ class Artifact(Frozen):
     role: ArtifactRole | None = None
     # Core-stamped; agent ``put`` always ``agent``. Never settable by AgentTaskOutput.
     producer: ArtifactProducer = "agent"
+    # Sandbox only: isolation actually achieved (PR17). soft ⇒ not trusted.
+    net_isolation: NetIsolation | None = None
 
 
 class Clarification(Frozen):

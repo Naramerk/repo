@@ -405,6 +405,7 @@ class CodeCheck(BaseModel):
     min_tests: int | None = None
     holdout_output: str | None = None; holdout_digest: str | None = None
     rerun_tol: float | None = None
+# Sandbox net_isolation hard|soft|none on Artifact + SandboxResult; trusted only if limits fully held (soft ⇒ trusted=false + note).
 
 class ReviewCheck(BaseModel):
     reviewer_role: Literal["reviewer","critic","human"]

@@ -132,7 +132,7 @@ def _effect_provenance_fields(
 ) -> dict[str, Any]:
     """Core-stamped producer/trusted/countable from artifact meta (agent cannot set).
 
-    ``trusted`` = producer core|sandbox (executable kinds stamp via put_sandbox).
+    ``trusted`` = producer core, or sandbox with net_isolation != soft.
     ``countable`` = core catalog evaluation on an artifact bound to this attempt.
     """
     meta = artifacts.get_meta(artifact_id) if artifact_id else None
@@ -438,9 +438,8 @@ def evaluate_code_check(
             prov = _effect_provenance_fields(
                 artifacts, None, attempt_id=attempt_id
             )
-            # Executable kinds always write via put_sandbox; override agent default.
+            # Executable kinds stamp producer/trusted/net_isolation themselves.
             prov["producer"] = "sandbox"
-            prov["trusted"] = True
             return evaluate_executable(
                 check,
                 template_id=template_id,

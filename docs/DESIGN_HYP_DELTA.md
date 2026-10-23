@@ -85,11 +85,16 @@ Study disposition / `StudyFinalized.question_dispositions[].reason` and `exclude
 
 ### Sandbox producer wired (M1 PR 17)
 
-Executable catalog CodeCheck kinds (`exec_runs`, `tests_pass`, `metric_on_holdout`, `reproducible_rerun`) run in a **core-owned** local sandbox (`coscientist.checks.sandbox`) and store logs/metrics via `put_sandbox` (`Artifact.producer=sandbox` → `effect.trusted=true`). Agent `put` + non-executable catalog eval still yields `trusted=false`.
+Executable catalog CodeCheck kinds (`exec_runs`, `tests_pass`, `metric_on_holdout`, `reproducible_rerun`) run in a **core-owned** local sandbox (`coscientist.checks.sandbox`) and store logs via `put_sandbox` (`Artifact.producer=sandbox`). Agent `put` + non-executable catalog eval still yields `trusted=false`.
 
+- **`net_isolation: hard | soft | none`** is recorded on every `SandboxResult` and on sandbox `Artifact` meta (and stamped into `effect`).
+  - `allow_network=True` → `none` (network permitted by catalog).
+  - `allow_network=False` + working `unshare` netns → `hard`.
+  - `allow_network=False` + unshare forbidden (e.g. GitHub Actions `uid_map` EPERM) → `soft` (proxy poison + curl/wget blocklist); **warning logged**.
+- **`trusted=true` only when catalog limits fully held**, including hard network isolation when `allow_network=False`. Soft isolation stores `trusted=false` (still `core_evaluated` / **countable**) and adds a report note (`net_isolation=soft; … evidence not trusted`). There is no silent downgrade to trusted.
 - **trusted** remains a severity **tag** for reporting only — it does **not** gate `refuted` / `supported` (countable does).
 - Sandbox infra failures (timeout, OOM, crash, output exceeded, unavailable, blocked) close the attempt as `result_class=infra` with a stable reason; they never hang or crash the host. `StudyFinalized` still holds.
-- Enforced limits: time, memory (`RLIMIT_AS`), output size, no network unless the catalog check sets `allow_network=True`. Hard isolation uses `unshare` netns when the host allows it; otherwise soft isolation (proxy poison + curl/wget blocklist) so CI runners without userns still run checks.
+- Enforced limits: time, memory (`RLIMIT_AS`), output size, network policy as above.
 
 ### M1 limits (call_id + catalog kinds)
 

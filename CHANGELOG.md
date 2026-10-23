@@ -4,8 +4,9 @@
 
 ### M1 PR17
 - Executable CodeCheck kinds + sandbox limits (B7, B8, K5): `exec_runs`, `tests_pass`, `metric_on_holdout`, `reproducible_rerun`.
-- Core-owned local sandbox (`coscientist.checks.sandbox`) mirrors old CoScientist code-exec: subprocess + SIGKILL on timeout, output cap, clean statuses; enforces time / memory (`RLIMIT_AS`) / output size; no network unless catalog `allow_network=True` (user+net `unshare`).
-- Catalog check outputs stored via `put_sandbox` (`producer=sandbox` → `effect.trusted=true`). **Countable** gate unchanged (core eval + attempt-bound artifact).
+- Core-owned local sandbox (`coscientist.checks.sandbox`) mirrors old CoScientist code-exec: subprocess + SIGKILL on timeout, output cap, clean statuses; enforces time / memory (`RLIMIT_AS`) / output size; network policy via catalog `allow_network`.
+- **`net_isolation` (`hard`|`soft`|`none`)** recorded on `SandboxResult` and sandbox `Artifact` meta / effect. Soft fallback (unshare forbidden) logs a warning — never a silent trusted downgrade.
+- `put_sandbox` stamps `producer=sandbox`; **`trusted=true` only when limits fully held** (soft ⇒ `trusted=false` + report note; still core-evaluated / countable).
 - Sandbox infra failures (timeout/OOM/crash/unavailable/blocked/output_exceeded) → `result_class=infra` with reason; never hang/crash; StudyFinalized still holds.
 - Docs: `DESIGN_HYP_DELTA` / CHANGELOG no longer say “sandbox not wired in M1”.
 
@@ -32,7 +33,7 @@
 ### M1 PR8b
 - Hypothesis verdict model (`docs/DESIGN_HYP_DELTA.md`): claim `validity`/`outcome`/`severe`/`independence_key`; stub|partial|lit|invalid excluded **before** counting.
 - `independence_key` base = `experiment_id`; count-time merge by **transitive root-data** digest overlap (code vs data from **`ResultRecorded.output_kinds`** via catalog **`code_output_names`** — planner `OutputSpec.role` and agent `media_type` ignored; all-code upstream → intermediate is a root; diamond DFS uses on_stack vs done) or **structural** share-any criterion template (same target, empty roots; empty plan criteria → `catalog.defaults["experiment"]`). No TaskSpec/goal/title/plan_id hash. Method is not in the key.
-- **Countable vs trusted:** evidence is **countable** when the core evaluates a catalog check on an artifact bound to the **current attempt** (`produced_by.call_id`). Countable gates **both** `refuted` (`k_ref`) and severe/`supported` symmetrically. Foreign artifacts are rejected. `effect.trusted` (`Artifact.producer` core|sandbox) is a separate stronger tag for reporting — **PR 17** wires executable kinds to `put_sandbox` (trusted on that path; countable unchanged).
+- **Countable vs trusted:** evidence is **countable** when the core evaluates a catalog check on an artifact bound to the **current attempt** (`produced_by.call_id`). Countable gates **both** `refuted` (`k_ref`) and severe/`supported` symmetrically. Foreign artifacts are rejected. `effect.trusted` is a separate stronger tag — **PR 17** wires executable kinds to `put_sandbox`; trusted only when sandbox limits fully held (`net_isolation != soft`).
 - **No numeric effect → indeterminate** (deliberate safe weakening vs main): missing output / missing artifact / empty json_pointer / `foreign_artifact` never refute. Report carries a **specific** reason (`output_not_submitted`, `artifact_missing`, `pointer_empty`, `foreign_artifact`) — not generic `unclear`.
 - On journal read/replay: recompute `severe`/`refute_capable`/`trusted`/`countable` from artifact metadata when the store is attached, else from effect-stamped provenance facts — never journal bits. **Compat:** old `inconsistent` journals without countable provenance may recompute differently (indeterminate / not toward `k_ref`).
 - `ResultRecorded` **v3** + v2→v3 upcaster for `output_kinds`. M1: caller passes `attempt_id` for call_id binding; production catalogs have empty `code_output_names` (conservative → all data).

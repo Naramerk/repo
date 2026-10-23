@@ -6,7 +6,13 @@ import re
 import xml.etree.ElementTree as ET
 from typing import Any
 
-from coscientist.checks.sandbox import INFRA_STATUSES, SandboxStatus
+from coscientist.checks.sandbox import (
+    INFRA_STATUSES,
+    SOFT_ISOLATION_NOTE,
+    NetIsolation,
+    SandboxStatus,
+    limits_fully_held,
+)
 from coscientist.core.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.domain import CheckResult, CheckRole, EvidenceRef, ReqStatus
 from coscientist.core.errors import SandboxInfraError
@@ -26,8 +32,12 @@ def store_log(
     check_id: str,
     body: bytes,
     name: str = "sandbox.log",
-) -> tuple[str, str]:
-    """Write sandbox/check log with producer=sandbox; return (artifact_id, digest)."""
+    net_isolation: NetIsolation = "none",
+) -> tuple[str, str, bool]:
+    """Write via put_sandbox; return (artifact_id, digest, trusted).
+
+    ``trusted`` is False when ``net_isolation=soft`` (limits not fully held).
+    """
     call = f"{attempt_id or 'noattempt'}:sandbox:{check_id}"
     art = artifacts.put_sandbox(
         body,
@@ -35,8 +45,23 @@ def store_log(
         name=name,
         media_type="text/plain",
         role="log",
+        net_isolation=net_isolation,
     )
-    return art.artifact_id, art.sha256
+    return art.artifact_id, art.sha256, limits_fully_held(net_isolation)
+
+
+def soft_note(net_isolation: NetIsolation) -> str | None:
+    if net_isolation == "soft":
+        return SOFT_ISOLATION_NOTE
+    return None
+
+
+def merge_detail(detail: str | None, note: str | None) -> str | None:
+    if note is None:
+        return detail
+    if detail is None or detail == "":
+        return note
+    return f"{detail}; {note}"
 
 
 def base_result(

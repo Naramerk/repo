@@ -634,7 +634,8 @@ def recompute_effect_provenance(
     written at eval from that same meta (``producer``, ``produced_by_call_id``,
     ``core_evaluated``). Journal ``trusted``/``countable`` bits are never trusted.
 
-    ``trusted`` = producer ∈ {core, sandbox} (executable CodeChecks use put_sandbox).
+    ``trusted`` = producer core, or sandbox with ``net_isolation != soft``.
+    Soft sandbox evidence stays core_evaluated/countable but not trusted.
     ``countable`` = core-evaluated catalog check on an artifact bound to the attempt.
     """
     if not isinstance(effect, Mapping):
@@ -642,6 +643,7 @@ def recompute_effect_provenance(
     out = dict(effect)
     producer = out.get("producer", "agent")
     call_id = str(out.get("produced_by_call_id") or "")
+    net_isolation = out.get("net_isolation")
     if artifact_meta is not None:
         meta_prod = getattr(artifact_meta, "producer", None)
         if meta_prod in ("agent", "core", "sandbox"):
@@ -654,10 +656,20 @@ def recompute_effect_provenance(
         aid = getattr(artifact_meta, "artifact_id", None)
         if aid:
             out["artifact_id"] = str(aid)
+        meta_ni = getattr(artifact_meta, "net_isolation", None)
+        if meta_ni in ("hard", "soft", "none"):
+            net_isolation = meta_ni
     if producer not in ("agent", "core", "sandbox"):
         producer = "agent"
     out["producer"] = producer
-    out["trusted"] = producer in ("core", "sandbox")
+    if net_isolation in ("hard", "soft", "none"):
+        out["net_isolation"] = net_isolation
+    if producer == "core":
+        out["trusted"] = True
+    elif producer == "sandbox":
+        out["trusted"] = net_isolation != "soft"
+    else:
+        out["trusted"] = False
     core_eval = bool(out.get("core_evaluated"))
     if attempt_id and call_id:
         out["countable"] = core_eval and call_id_belongs_to_attempt(

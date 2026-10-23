@@ -60,21 +60,75 @@ def test_sandbox_ok_exit_zero():
     r = run_sandbox(["/bin/true"], limits=SandboxLimits(timeout_s=5, memory_mb=64))
     assert r.status is SandboxStatus.OK
     assert r.exit_code == 0
+    assert r.net_isolation in ("hard", "soft")  # host-dependent
+    assert r.limits_fully_held == (r.net_isolation != "soft")
 
 
-def test_sandbox_soft_net_fallback_when_unshare_unavailable(monkeypatch):
-    """CI runners often forbid userns; soft isolation must still run checks."""
+def test_sandbox_hard_isolation_when_unshare_available(monkeypatch):
+    """Mock a working unshare prefix → hard isolation + trusted path."""
+    monkeypatch.setattr(
+        "coscientist.checks.sandbox._network_prefix",
+        lambda: ["/usr/bin/env", "--"],  # no-op prefix that still runs the guest
+    )
+    r = run_sandbox(
+        ["/bin/true"],
+        limits=SandboxLimits(timeout_s=5, memory_mb=64, allow_network=False),
+    )
+    assert r.status is SandboxStatus.OK
+    assert r.net_isolation == "hard"
+    assert r.limits_fully_held is True
+
+
+def test_sandbox_soft_isolation_when_unshare_forbidden(monkeypatch, caplog, tmp_path):
+    """Mock unshare forbidden → soft isolation; trusted=False; warning logged."""
+    import logging
+
     monkeypatch.setattr(
         "coscientist.checks.sandbox._network_prefix", lambda: None
     )
-    r = run_sandbox(["/bin/true"], limits=SandboxLimits(timeout_s=5, memory_mb=64))
+    with caplog.at_level(logging.WARNING, logger="coscientist.checks.sandbox"):
+        r = run_sandbox(
+            ["/bin/true"],
+            limits=SandboxLimits(timeout_s=5, memory_mb=64, allow_network=False),
+        )
     assert r.status is SandboxStatus.OK
+    assert r.net_isolation == "soft"
+    assert r.limits_fully_held is False
+    assert any("soft net_isolation" in m for m in caplog.messages)
+
+    # Catalog exec_runs on soft path: MET + countable but not trusted + note.
+    arts = LocalArtifactStore(tmp_path)
+    check = CodeCheck(
+        kind="exec_runs", argv=["/bin/true"], timeout_s=5, memory_mb=64
+    )
+    cr = evaluate_code_check(
+        check,
+        template_id="exec",
+        check_id="exec#soft",
+        out=AgentTaskOutput(outputs={}),
+        artifacts=arts,
+        values={},
+        role="validity",
+        attempt_id="st/E1#1",
+    )
+    assert cr.status is ReqStatus.MET
+    meta = arts.get_meta(cr.evidence[0].artifact_id)
+    assert meta is not None
+    assert meta.producer == "sandbox"
+    assert meta.net_isolation == "soft"
+    assert cr.effect is not None
+    assert cr.effect.get("trusted") is False
+    assert cr.effect.get("countable") is True
+    assert cr.effect.get("net_isolation") == "soft"
+    assert cr.detail and "net_isolation=soft" in cr.detail
+    assert cr.effect.get("note") and "soft" in cr.effect["note"]
+
     r2 = run_sandbox(
         ["python3", "-c", "import time; time.sleep(5)"],
         limits=SandboxLimits(timeout_s=0.25, memory_mb=64),
     )
     assert r2.status is SandboxStatus.TIMEOUT
-    assert r2.reason == "sandbox_timeout"
+    assert r2.net_isolation == "soft"
 
 
 def test_sandbox_timeout_is_infra_status():
@@ -101,7 +155,12 @@ def test_sandbox_blocks_network_fetchers_by_default():
     assert r2.status is not SandboxStatus.BLOCKED
 
 
-def test_exec_runs_exit_code(tmp_path):
+def test_exec_runs_exit_code(tmp_path, monkeypatch):
+    # Force hard isolation so trusted assertion is host-independent.
+    monkeypatch.setattr(
+        "coscientist.checks.sandbox._network_prefix",
+        lambda: ["/usr/bin/env", "--"],
+    )
     arts = LocalArtifactStore(tmp_path)
     check = CodeCheck(kind="exec_runs", argv=["/bin/true"], timeout_s=5, memory_mb=64)
     cr = evaluate_code_check(
@@ -119,6 +178,10 @@ def test_exec_runs_exit_code(tmp_path):
     meta = arts.get_meta(cr.evidence[0].artifact_id)
     assert meta is not None
     assert meta.producer == "sandbox"
+    assert meta.net_isolation == "hard"
+    assert cr.effect is not None
+    assert cr.effect.get("trusted") is True
+    assert cr.effect.get("net_isolation") == "hard"
 
     check_fail = CodeCheck(
         kind="exec_runs", argv=["/bin/false"], timeout_s=5, memory_mb=64
@@ -261,7 +324,11 @@ def test_holdout_digest_frozen(tmp_path):
     assert cr2.detail == "holdout_digest_mismatch"
 
 
-def test_reproducible_rerun_tolerance(tmp_path):
+def test_reproducible_rerun_tolerance(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "coscientist.checks.sandbox._network_prefix",
+        lambda: ["/usr/bin/env", "--"],
+    )
     arts = LocalArtifactStore(tmp_path)
     check = CodeCheck(
         kind="reproducible_rerun",
@@ -282,6 +349,7 @@ def test_reproducible_rerun_tolerance(tmp_path):
     )
     assert cr.status is ReqStatus.MET
     assert cr.effect and cr.effect.get("trusted") is True
+    assert cr.effect.get("net_isolation") == "hard"
 
 
 def test_exec_runs_timeout_raises_infra(tmp_path):
@@ -372,8 +440,12 @@ async def test_sandbox_infra_failure_still_finalizes(tmp_path, clock, runtime_cl
 
 
 @pytest.mark.asyncio
-async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
-    """Production executor path: exec_runs → put_sandbox → trusted evidence."""
+async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls, monkeypatch):
+    """Production executor path: hard isolation → put_sandbox → trusted evidence."""
+    monkeypatch.setattr(
+        "coscientist.checks.sandbox._network_prefix",
+        lambda: ["/usr/bin/env", "--"],
+    )
     cat = _catalog_with(
         {
             "id": "exec_ok",
@@ -421,4 +493,5 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
     assert result.outcome is Outcome.SUCCESS
     sandbox_arts = [a for a in arts._index.values() if a.producer == "sandbox"]
     assert sandbox_arts, "production path must call put_sandbox"
+    assert all(a.net_isolation == "hard" for a in sandbox_arts)
     await close_runtime(rt)
