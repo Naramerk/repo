@@ -201,8 +201,8 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         except LeaseLost:
             self._lease_lost = True
             raise
-        # After fsync: yield so the writer can dequeue the next append before
-        # in-memory projection holds the event loop (see executor._append).
+        # Yield after durable append so the writer can start the next fsync
+        # before in-memory projection (experimental fold is heavier).
         await asyncio.sleep(0)
         done_ids: list[str] = []
         for ev in events:
@@ -256,6 +256,11 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                 loop_capped_questions=capped_scope_questions(self),
             )
         ed = self.study.effective_deadline() if self.study else None
+        ftypes = None
+        if self.plans:
+            from coscientist.core.rubric import question_final_types
+
+            ftypes = question_final_types(self.plans)
         return study_view(
             self.tasks.values(),
             open_hitl=0,
@@ -264,6 +269,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             now=self.clock.now(),
             effective_deadline=ed,
             question_dispositions=qdisp,
+            question_final_types=ftypes,
         )
 
     def invariant_open_attempts(self) -> bool:
@@ -522,6 +528,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             self._retry_at.pop(tid, None)
             # None = honest refuse (zero share / empty pool); task already SKIPPED.
             await self.start_attempt(tid, provenance=prov)
+
 
 def new_owner() -> str:
     return str(uuid.uuid4())
