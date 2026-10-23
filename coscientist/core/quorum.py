@@ -1,13 +1,12 @@
-"""Fan-in quorum binding (M1 PR10 / S9) — per-input, never silent.
+"""Fan-in quorum binding (M1 PR10 / S9) — explicit pools, never silent.
 
-Each ``InputSpec`` is its own pool (keyed by input / foreach template id after
-``expand_input_groups``) — never merged by equal ``quorum`` value:
-- ``quorum is None`` → every member must bind real/partial (required).
-- ``quorum == "all"`` → same.
-- ``quorum: int`` (≥1) → need ≥ that many real/partial members of **this** input.
+Pool keys (not equal ``quorum`` value):
+- **Static** inputs with explicit quorum on one fan-in task → **one** shared pool.
+- **Each foreach template** → its own pool (children of that template only).
+- ``quorum is None`` → that input's members are all required (never softened).
 
-A required input is never softened by another input's quorum. Zero counted
-bindings never yield provenance ``real``.
+``quorum: int`` (≥1) or ``"all"``. Zero counted bindings never yield provenance
+``real``. Empty foreach members → miss.
 """
 
 from __future__ import annotations
@@ -37,15 +36,39 @@ from coscientist.core.inputs import (
 
 
 def validate_quorum_specs(tasks: list[TaskSpec]) -> None:
+    """Reject bad quorum and static pools where quorum > member count.
+
+    Foreach child counts are unknown at plan accept — checked at expansion /
+    bind (honest miss if quorum > children).
+    """
+    fe_keys = {t.task_key for t in tasks if t.foreach is not None}
     for t in tasks:
+        static_q: list[InputSpec] = []
         for inp in t.inputs:
             q = inp.quorum
-            if q is None or q == "all":
+            if q is None:
                 continue
-            if not isinstance(q, int) or q < 1:
+            if q != "all" and (not isinstance(q, int) or q < 1):
                 raise ValueError(
                     f"InputSpec.quorum must be >=1 or 'all' (task {t.task_key!r})"
                 )
+            if inp.from_task in fe_keys:
+                continue
+            static_q.append(inp)
+        if not static_q:
+            continue
+        vals = {inp.quorum for inp in static_q}
+        ints = {v for v in vals if v != "all"}
+        if len(ints) > 1:
+            raise ValueError(
+                f"static InputSpec.quorum values must agree (task {t.task_key!r})"
+            )
+        q0 = next(iter(vals))
+        if isinstance(q0, int) and q0 > len(static_q):
+            raise ValueError(
+                f"InputSpec.quorum {q0} > static pool size {len(static_q)} "
+                f"(task {t.task_key!r})"
+            )
 
 
 def has_quorum_spec(inputs: list[InputSpec]) -> bool:
@@ -53,7 +76,7 @@ def has_quorum_spec(inputs: list[InputSpec]) -> bool:
 
 
 def group_needed(orig: InputSpec, n_members: int) -> int:
-    """How many real/partial members this InputSpec group requires."""
+    """How many real/partial members this pool requires."""
     q = orig.quorum
     if q is None or q == "all":
         return n_members
@@ -252,6 +275,7 @@ def _bind_members(
 def bind_input_groups(
     groups: list[tuple[InputSpec, list[InputSpec]]],
     *,
+    foreach_from_tasks: set[str] | None = None,
     dep_tasks: dict[str, Task],
     dep_outputs: dict[str, dict[str, str]],
     dep_provenance: dict[str, Provenance],
@@ -259,22 +283,42 @@ def bind_input_groups(
     claim_provenance: dict[str, Provenance] | None = None,
     verdict_snapshots: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[InputBinding], Provenance, list[Limitation]]:
-    """Bind each InputSpec group independently (pool key = input/template id).
+    """Bind with explicit pool keys: one static pool + one pool per foreach.
 
-    Never pool by equal ``quorum`` value: foreach X q=2 and Y q=2 stay separate.
-    ``quorum is None`` → all members required; explicit quorum → that many of
-    **this** input's members. Empty members (foreach → 0 children) is a miss.
-    Zero counted bindings never return provenance ``real``.
+    Required (``quorum is None``) inputs stay fully required. Empty foreach
+    members → miss. ``quorum > len(members)`` → miss (foreach checked at bind /
+    expansion). Zero counted bindings never return provenance ``real``.
     """
     claims = known_claim_ids or set()
     claim_prov = claim_provenance or {}
     snapshots = verdict_snapshots or {}
+    fe_from = foreach_from_tasks or set()
 
     bindings: list[InputBinding] = []
     provs: list[Provenance] = []
     limitations: list[Limitation] = []
 
+    required: list[tuple[InputSpec, list[InputSpec]]] = []
+    foreach_pools: list[tuple[InputSpec, list[InputSpec]]] = []
+    static_quorum: list[tuple[InputSpec, list[InputSpec]]] = []
+
     for orig, members in groups:
+        if orig.quorum is None:
+            required.append((orig, members))
+        elif orig.from_task in fe_from:
+            foreach_pools.append((orig, members))
+        else:
+            static_quorum.append((orig, members))
+
+    def _run(
+        orig: InputSpec,
+        members: list[InputSpec],
+        *,
+        needed: int,
+        miss: str,
+        empty_as: str,
+    ) -> None:
+        nonlocal bindings, provs, limitations
         label = orig.from_task or orig.ref or "?"
         if not members:
             limitations.append(
@@ -283,15 +327,56 @@ def bind_input_groups(
                     ref=orig.from_task or orig.ref,
                 )
             )
-            raise InputUnavailable(
-                "quorum" if orig.quorum is not None else "input_unavailable"
-            )
-        needed = group_needed(orig, len(members))
-        miss = "quorum" if orig.quorum is not None else "input_unavailable"
+            raise InputUnavailable(empty_as)
+        if isinstance(orig.quorum, int) and orig.quorum > len(members):
+            raise InputUnavailable(miss)
         b, p, lims = _bind_members(
             members,
             needed=needed,
             miss_reason=miss,
+            dep_tasks=dep_tasks,
+            dep_outputs=dep_outputs,
+            dep_provenance=dep_provenance,
+            known_claim_ids=claims,
+            claim_provenance=claim_prov,
+            verdict_snapshots=snapshots,
+        )
+        bindings.extend(b)
+        provs.extend(p)
+        limitations.extend(lims)
+
+    for orig, members in required:
+        _run(
+            orig,
+            members,
+            needed=len(members),
+            miss="input_unavailable",
+            empty_as="input_unavailable",
+        )
+
+    for orig, members in foreach_pools:
+        _run(
+            orig,
+            members,
+            needed=group_needed(orig, len(members)),
+            miss="quorum",
+            empty_as="quorum",
+        )
+
+    if static_quorum:
+        flat: list[InputSpec] = []
+        for orig, members in static_quorum:
+            flat.extend(members)
+        q0 = static_quorum[0][0].quorum
+        needed = len(flat) if q0 == "all" else max(1, int(q0 or 1))
+        if isinstance(q0, int) and q0 > len(flat):
+            raise InputUnavailable("quorum")
+        if not flat:
+            raise InputUnavailable("quorum")
+        b, p, lims = _bind_members(
+            flat,
+            needed=needed,
+            miss_reason="quorum",
             dep_tasks=dep_tasks,
             dep_outputs=dep_outputs,
             dep_provenance=dep_provenance,

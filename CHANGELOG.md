@@ -5,9 +5,9 @@
 ### M1 PR10
 - `TaskSpec.foreach` (selected/all hypothesis|question of a source task): core materializes N `EXP-<n>` via `PlanExpanded(foreach=true)` — no planner, no expansion quota; restart/recover resumes; report lines in Russian.
 - Expand at source `TaskDone` **and** at `accept_plan` / after `PlanExpanded` when `of_task` is already DONE (B1; live == replay). `validate_foreach_specs` in `validate_expansion`.
-- Selector requires `source_task == of_task`; cap keeps best **rank** (nat-id tiebreak), journals `foreach_total`/`foreach_dropped`, report names dropped ids (+ per-id refute miss); kept children nat-sorted (`H2 < H10`); deterministic `pl_foreach_*` + idem; `Study.max_foreach_children` (StudyCreated **v8**).
-- Foreach errors → `ExpansionRefused` + template `TaskDone SKIPPED(refused)`; driver cannot `start_attempt` a foreach template.
-- `InputSpec.quorum` (≥1 or `"all"`) fan-in **per input/template id** (never pool by equal quorum value; required never softened): 0 children / 0 counted → `SKIPPED` (never provenance `real`); gaps → limitations (RU); miss → `не выполнено: кворум входов`.
+- Selector requires `source_task == of_task`; cap keeps best **rank** (missing/non-numeric rank **last**, report note; never SKIP template); journals `foreach_total`/`foreach_dropped`/`foreach_rank_notes`; kept children nat-sorted; deterministic `pl_foreach_*`; `max_foreach_children` (StudyCreated **v8**).
+- Foreach errors → `ExpansionRefused` + `TaskDone SKIPPED(refused)`; `iter_dispatchable_tasks` excludes templates; `start_attempt` rejects them.
+- Quorum pools: **one static pool** per fan-in task + **one pool per foreach template** (never by equal quorum value). `validate_quorum_specs` rejects quorum > static pool size; foreach quorum > children → honest bind miss.
 - Upcasters: TaskCreated v7, PlanAccepted v5, AttemptStarted v4, StudyCreated v8.
 
 ### M1 PR9

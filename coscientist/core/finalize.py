@@ -165,6 +165,9 @@ def _append_foreach_report_lines(seen: list[str], p: dict[str, Any]) -> None:
             r = f"{refute} ({did})"
             if r not in seen:
                 seen.append(r)
+    for s in (str(n) for n in (p.get("foreach_rank_notes") or []) if n):
+        if s not in seen:
+            seen.append(s)
 
 
 def last_resort_payload(
@@ -174,13 +177,7 @@ def last_resort_payload(
     fallback_reason: str,
     refusal: str | None = None,
 ) -> dict[str, Any]:
-    """Constant-only StudyFinalized payload (no tasks/plans/store access).
-
-    I2 deviation: ``question_dispositions`` is empty, so fold emits only the
-    study-level conclusion via ``conclusion_ids_for(study_id, {})``. Questions
-    have no per-question conclusion on this path (nor entries in
-    ``minimal_report.questions``). Prefer the rich/minimal paths when possible.
-    """
+    """Constant-only StudyFinalized payload (no tasks/plans/store access)."""
     term = _TRIGGER_TERMINAL.get(trigger, TerminalReason.COMPLETED.value)
     minimal: dict[str, Any] = {
         "study_id": study_id,

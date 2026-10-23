@@ -145,6 +145,28 @@ class AttemptsMixin:
             raise KeyError(key_or_id)
         return matches[0]
 
+    def iter_dispatchable_tasks(self) -> list[Task]:
+        """PENDING tasks a driver may start (excludes foreach templates).
+
+        External drivers should iterate this list — never call ``start_attempt``
+        on a template with ``spec.foreach`` set.
+        """
+        out: list[Task] = []
+        for task in self.tasks.values():
+            if task.state != TaskState.PENDING:
+                continue
+            if task.spec.foreach is not None:
+                continue
+            if not self._deps_done(task):
+                continue
+            open_atts = [
+                a for a in task.attempts if not self.attempts.get(a, {}).get("closed")
+            ]
+            if open_atts:
+                continue
+            out.append(task)
+        return out
+
     async def start_attempt(
         self,
         task_key_or_id: str,
@@ -209,17 +231,22 @@ class AttemptsMixin:
                 verdict_snapshots = {**verdict_snapshots}
         from coscientist.core.foreach import expand_input_groups
 
-        # PR10: per-input groups (foreach children keep the original quorum).
+        # PR10: foreach children expand; static quorum inputs share one pool.
         groups = expand_input_groups(self, list(task.spec.inputs))
         children_map = getattr(self, "_foreach_children", None) or {}
+        fe_from = set(children_map)
+        for t in self.tasks.values():
+            if t.spec.foreach is not None:
+                fe_from.add(t.spec.task_key)
         use_groups = any(
-            inp.from_task in children_map or inp.quorum is not None for inp, _ in groups
+            inp.from_task in fe_from or inp.quorum is not None for inp, _ in groups
         )
         limitations: list[Any] = []
         try:
             if use_groups:
                 bindings, derived, limitations = bind_input_groups(
                     groups,
+                    foreach_from_tasks=fe_from,
                     dep_tasks=self._dep_map(),
                     dep_outputs=self.dep_outputs,
                     dep_provenance=self.dep_provenance,

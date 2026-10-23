@@ -1,10 +1,7 @@
 """Foreach materialization (M1 PR10 / S9).
 
-Expands ``TaskSpec.foreach`` into N concrete tasks without planner or expansion
-quota. Journaled as ``PlanExpanded`` with ``foreach=true`` (replay == live).
-
-Fires on source ``TaskDone``, at ``accept_plan`` when ``of_task`` is already
-DONE, and after ``PlanExpanded`` when newly added templates have a DONE source.
+``PlanExpanded(foreach=true)`` — no planner/quota. Fires on source TaskDone,
+at accept_plan / after PlanExpanded when of_task already DONE.
 """
 
 from __future__ import annotations
@@ -39,7 +36,6 @@ if TYPE_CHECKING:
 
 _NAT_SPLIT = re.compile(r"(\d+)")
 
-
 def _nat_key(s: str) -> tuple:
     """Numerically aware sort key: H2 < H10."""
     parts = _NAT_SPLIT.split(str(s))
@@ -51,11 +47,9 @@ def _nat_key(s: str) -> tuple:
             out.append(p.casefold())
     return tuple(out)
 
-
 def foreach_plan_id(study_id: str, template_key: str, rev: int) -> str:
     """Deterministic plan id (no random) so idem/replay match live."""
     return f"pl_foreach_{study_id}_{template_key}_r{rev}"
-
 
 def foreach_templates(runtime: StudyRuntime) -> list[Task]:
     """PENDING tasks whose spec.foreach is set."""
@@ -67,24 +61,41 @@ def foreach_templates(runtime: StudyRuntime) -> list[Task]:
             out.append(t)
     return out
 
+def _rank_key(logical: str, attrs: dict[str, Any]) -> tuple[tuple, str | None]:
+    """Sort key: numeric rank first; missing/non-numeric rank sorts LAST.
+
+    Never raises — non-numeric yields a report note.
+    """
+    raw = attrs.get("rank", None)
+    if raw is None:
+        return (1, 0, _nat_key(logical)), None
+    try:
+        if isinstance(raw, bool):
+            raise TypeError("bool")
+        r = int(raw)
+    except (TypeError, ValueError):
+        note = f"foreach: нечисловой rank у {logical} ({raw!r})"
+        return (1, 0, _nat_key(logical)), note
+    return (0, r, _nat_key(logical)), None
 
 def select_foreach_items(
     runtime: StudyRuntime,
     fe: ForEachSpec,
-) -> list[str]:
-    """Logical ids with ``source_task == of_task`` matching the selector.
+) -> tuple[list[str], list[str]]:
+    """Logical ids + rank notes; ``source_task == of_task`` required.
 
-    Nodes without ``source_task`` are rejected. Order is rank ascending, then
-    numerically aware id (H2 < H10) — cap keeps the head of this order.
+    Cap keeps the head of rank order (missing/non-numeric last). Notes list
+    non-numeric ranks for the report (template is never SKIPPED for bad rank).
     """
     graph = getattr(runtime, "graph", None)
     if graph is None:
-        return []
+        return [], []
     try:
         nodes = list(graph.nodes_by_kind(fe.kind))
     except KeyError:
-        return []
-    items: list[tuple[str, dict[str, Any]]] = []
+        return [], []
+    scored: list[tuple[tuple, str]] = []
+    notes: list[str] = []
     for node in nodes:
         attrs = dict(node.attrs or {})
         src = attrs.get("source_task")
@@ -98,10 +109,12 @@ def select_foreach_items(
             continue
         if fe.selector == "selected" and not bool(attrs.get("selected", False)):
             continue
-        items.append((logical, attrs))
-    items.sort(key=lambda x: (int(x[1].get("rank") or 0), _nat_key(x[0])))
-    return [i[0] for i in items]
-
+        key, note = _rank_key(logical, attrs)
+        if note:
+            notes.append(note)
+        scored.append((key, logical))
+    scored.sort(key=lambda x: x[0])
+    return [s[1] for s in scored], notes
 
 def _concrete_from_template(
     template: TaskSpec,
@@ -124,7 +137,6 @@ def _concrete_from_template(
         }
     )
 
-
 def expand_input_groups(
     runtime: Any, specs: list[InputSpec]
 ) -> list[tuple[InputSpec, list[InputSpec]]]:
@@ -144,7 +156,6 @@ def expand_input_groups(
             groups.append((inp, [inp]))
     return groups
 
-
 def foreach_already_done(runtime: StudyRuntime, template_key: str) -> bool:
     """True when a foreach PlanExpanded already superseded this template."""
     for p in runtime.plans.values():
@@ -157,7 +168,6 @@ def foreach_already_done(runtime: StudyRuntime, template_key: str) -> bool:
             return True
     return False
 
-
 def _source_ready(runtime: StudyRuntime, of_task: str) -> Task | None:
     """Return DONE source task if present (any outcome); else None."""
     for t in runtime.tasks.values():
@@ -167,12 +177,12 @@ def _source_ready(runtime: StudyRuntime, of_task: str) -> Task | None:
             return t
     return None
 
-
-def _items_for_source(runtime: StudyRuntime, src: Task, fe: ForEachSpec) -> list[str]:
+def _items_for_source(
+    runtime: StudyRuntime, src: Task, fe: ForEachSpec
+) -> tuple[list[str], list[str]]:
     if src.outcome in (TaskOutcome.SUCCESS, TaskOutcome.PARTIAL):
         return select_foreach_items(runtime, fe)
-    return []
-
+    return [], []
 
 async def _refuse_and_skip_foreach(
     runtime: StudyRuntime,
@@ -192,12 +202,12 @@ async def _refuse_and_skip_foreach(
             detail=detail[:200],
         )
 
-
 async def materialize_foreach(
     runtime: StudyRuntime,
     *,
     template: Task,
     items: list[str],
+    rank_notes: list[str] | None = None,
 ) -> str | None:
     """Write PlanExpanded(foreach=true). Returns plan_id, or None if refused/closed."""
     if runtime.study is None or getattr(runtime, "_finalized", False):
@@ -212,7 +222,7 @@ async def materialize_foreach(
     fe = template.spec.foreach
     after = fe.of_task if fe else tkey
     cap = int(getattr(study, "max_foreach_children", 32) or 32)
-    # ``items`` arrive rank-ordered; cap keeps head, drop natural-sort would be wrong.
+    # ``items`` arrive rank-ordered; cap keeps head (missing rank already last).
     foreach_total = len(items)
     dropped: list[str] = []
     capped = False
@@ -220,8 +230,8 @@ async def materialize_foreach(
         dropped = list(items[cap:])
         items = list(items[:cap])
         capped = True
-    # Child dispatch order: numerically aware (H2 < H10).
-    items = sorted(items, key=_nat_key)
+    items = sorted(items, key=_nat_key)  # H2 < H10 among kept
+    notes = list(rank_notes or [])
 
     prototypes = [
         _concrete_from_template(template.spec, item_id=item, task_key=f"TMP-{i}")
@@ -304,14 +314,16 @@ async def materialize_foreach(
         if spec.task_key in existing_keys and spec.task_key not in superseded:
             continue
         tid = task_id(sid, spec.task_key)
-        kind = TaskKind.EXPERIMENT
         route = (spec.route or "").lower()
-        if route in ("literature", "lit"):
-            kind = TaskKind.LITERATURE
-        elif route in ("hypotheses", "hypothesis", "hyp"):
-            kind = TaskKind.HYPOTHESES
-        elif route in ("planner", "plan"):
-            kind = TaskKind.PLAN
+        kind = {
+            "literature": TaskKind.LITERATURE,
+            "lit": TaskKind.LITERATURE,
+            "hypotheses": TaskKind.HYPOTHESES,
+            "hypothesis": TaskKind.HYPOTHESES,
+            "hyp": TaskKind.HYPOTHESES,
+            "planner": TaskKind.PLAN,
+            "plan": TaskKind.PLAN,
+        }.get(route, TaskKind.EXPERIMENT)
         task = Task(
             task_id=tid,
             kind=kind,
@@ -354,6 +366,7 @@ async def materialize_foreach(
         "foreach_cap": cap,
         "foreach_total": foreach_total,
         "foreach_dropped": list(dropped),
+        "foreach_rank_notes": notes,
         "foreach_refute": (template.spec.tests_intent == "refute"),
     }
     events.append(
@@ -361,7 +374,6 @@ async def materialize_foreach(
             study_id=sid,
             type="PlanExpanded",
             entity_key=pid,
-            # Deterministic: template id only (no random pid).
             idem_key=make_idem("PlanExpanded", "foreach", sid, tkey),
             payload=payload,
             ts=now,
@@ -376,7 +388,6 @@ async def materialize_foreach(
     children[tkey] = list(new_keys)
     return pid
 
-
 async def _materialize_one(runtime: StudyRuntime, tmpl: Task) -> str | None:
     fe = tmpl.spec.foreach
     if fe is None:
@@ -386,9 +397,10 @@ async def _materialize_one(runtime: StudyRuntime, tmpl: Task) -> str | None:
     src = _source_ready(runtime, fe.of_task)
     if src is None:
         return None
-    items = _items_for_source(runtime, src, fe)
-    return await materialize_foreach(runtime, template=tmpl, items=items)
-
+    items, notes = _items_for_source(runtime, src, fe)
+    return await materialize_foreach(
+        runtime, template=tmpl, items=items, rank_notes=notes
+    )
 
 async def maybe_foreach_after_task_done(
     runtime: StudyRuntime, task_id_full: str
@@ -422,7 +434,6 @@ async def maybe_foreach_after_task_done(
             )
     return done
 
-
 async def materialize_ready_foreach(runtime: StudyRuntime) -> list[str]:
     """Expand every PENDING foreach whose ``of_task`` is already DONE.
 
@@ -447,14 +458,12 @@ async def materialize_ready_foreach(runtime: StudyRuntime) -> list[str]:
             )
     return done
 
-
 async def resume_pending_foreach(runtime: StudyRuntime) -> int:
     """Re-run foreach after crash / reopen (live == replay)."""
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return 0
     got = await materialize_ready_foreach(runtime)
     return len(got)
-
 
 def validate_foreach_specs(tasks: list[TaskSpec], *, known_keys: set[str]) -> None:
     """Reject invalid foreach at accept_plan / validate_expansion."""
