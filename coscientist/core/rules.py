@@ -6,6 +6,7 @@ HITL costly gate / DelegatedBudget live in ``coscientist.experimental.costly`` (
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Literal, Protocol
 
 from coscientist.core.graph import load_schema
@@ -119,7 +120,7 @@ def _claim_counts(claim: _ClaimLike) -> bool:
 
 
 def verdict(
-    claims: list[_ClaimLike],
+    claims: Sequence[_ClaimLike],
     any_experiment_done: bool,
     k: int = 1,
     *,

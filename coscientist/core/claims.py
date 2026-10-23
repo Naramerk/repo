@@ -61,8 +61,8 @@ class RuntimeClaim:
     intent: TestsIntent = DEFAULT_TESTS_INTENT
     criterion_frozen_at_seq: int | None = None
     first_cited_evidence_seq: int | None = None
-    confirming_evidence_ids: frozenset[str] | None = None
-    threshold_source_evidence_ids: frozenset[str] | None = None
+    confirming_evidence_ids: set[str] | frozenset[str] | list[str] | None = None
+    threshold_source_evidence_ids: set[str] | frozenset[str] | list[str] | None = None
     target: str = ""
     node_id: str = ""
 
