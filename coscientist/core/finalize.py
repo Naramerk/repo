@@ -164,7 +164,14 @@ def sandbox_timeout_report_line(reason: str | None, detail: str | None = None) -
 def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
     """TaskReason + ExpansionRefused / foreach / quorum / timeout lines (by seq)."""
     seen: list[str] = []
+    sf_count = 0
     for ev in sorted(events, key=lambda e: e.seq or 0):
+        if ev.type == "StudyFinalized":
+            sf_count += 1
+            # Legacy dual-SF journals: surface I3 breach in the report.
+            if sf_count > 1 and "internal_error" not in seen:
+                seen.append("internal_error")
+            continue
         if ev.type == "TaskDone":
             reason = ev.payload.get("reason")
             if reason and reason not in seen:
@@ -582,13 +589,24 @@ async def _build_rich_payload(
     term = terminal_reason_for(trigger, tasks=runtime.tasks, question_dispositions=qdisp)
     events = await runtime.store.read_all()
     contrib = contributing_reasons_ordered(events)
-    # If journaling failed/skipped, fold still surfaces fetch_integrity → reason.
+    # If journaling failed/skipped, fold still surfaces fetch_integrity / dual-SF taint.
     if "internal_error" not in contrib:
         folded = fold_events(events)
         if folded.get("fetch_integrity"):
             contrib.append("internal_error")
+        else:
+            folded_meta = (folded.get("meta") or {}).get(sid) or {}
+            if folded_meta.get("duplicate_study_finalized") or folded_meta.get(
+                "tainted"
+            ):
+                contrib.append("internal_error")
     # PR15: stamped ArtifactRegistered with missing meta on replay → tainted mark.
     if "internal_error" not in contrib and getattr(runtime, "_stamp_meta_missing", None):
+        contrib.append("internal_error")
+    # Legacy dual StudyFinalized folded into local reopen → report.
+    if "internal_error" not in contrib and getattr(
+        runtime, "_duplicate_study_finalized", None
+    ):
         contrib.append("internal_error")
     # PR13: disposition report_line (e.g. «не выполнено: рубрика не принята»).
     for d in qdisp.values():

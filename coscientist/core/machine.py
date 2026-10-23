@@ -83,6 +83,8 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         self._disposal_rejects: list[dict] = []
         # PR15: stamped kind with missing meta on replay (tainted / internal_error).
         self._stamp_meta_missing: list[dict] = []
+        # Legacy journals with a second StudyFinalized (I3 breach) → taint mark.
+        self._duplicate_study_finalized: list[dict] = []
         self._pending_kind_stamps: list[tuple[str, str]] = []
         self._study_cancelled = False
         self._budget_exceeded = False

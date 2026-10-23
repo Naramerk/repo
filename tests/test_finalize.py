@@ -1118,14 +1118,22 @@ async def test_legacy_two_study_finalized_fold_first_wins(tmp_path, clock):
     import json
 
     from coscientist.core.digest import payload_digest
+    from coscientist.core.finalize_nodes import (
+        conclusion_id_for_study,
+        graph_rows_from_finalized,
+    )
     from coscientist.core.projections import apply_event
     from coscientist.core.store import SqliteEventStore
 
     sid = "st_sf_legacy_dup"
     rt = await _boot(tmp_path, clock, sid)
     await _skip_all(rt)
+    # Distinct terminal_reason so first-wins graph synthesis can be distinguished
+    # from a last-wins cancel payload.
     payload_a = _fin_payload(trigger="all_done", study_id=sid)
+    payload_a["terminal_reason"] = "completed"
     payload_b = _fin_payload(trigger="cancel", study_id=sid)
+    payload_b["terminal_reason"] = "cancelled"
     # Bypass store guard: insert two SF rows via raw SQL (legacy corruption).
     conn = rt.store._conn  # noqa: SLF001
     for key, payload in (
@@ -1164,31 +1172,36 @@ async def test_legacy_two_study_finalized_fold_first_wins(tmp_path, clock):
     folded = fold_events(events)
     first_payload = folded["studies"][sid]["finalized_payload"]
     assert first_payload["trigger"] == "all_done"
+    assert first_payload["terminal_reason"] == "completed"
 
     study_row = await store.get_row("studies", sid)
     assert study_row is not None and study_row.get("finalized") is True
     assert study_row["finalized_payload"] == first_payload
     meta_row = await store.get_row("meta", sid)
     assert meta_row is not None and meta_row.get("finalized") is True
-    assert "duplicate_study_finalized" not in (meta_row or {})
+    assert meta_row.get("duplicate_study_finalized") is True
+    assert meta_row.get("tainted") is True
 
     fold_nodes = folded.get("graph_nodes") or {}
     fold_edges = folded.get("graph_edges") or {}
+    assert fold_nodes and fold_edges
     proj_nodes = {
         r["node_id"]: r
         for r in await store.get_projection("graph_nodes")
         if isinstance(r, dict) and "node_id" in r
     }
     proj_edges = {
-        f"{r.get('src_id')}:{r.get('dst_id')}:{r.get('kind')}": r
+        str(r.get("edge_id") or f"{r.get('src_id')}:{r.get('dst_id')}:{r.get('kind')}"): r
         for r in await store.get_projection("graph_edges")
         if isinstance(r, dict)
     }
-    for nid, row in fold_nodes.items():
-        assert proj_nodes.get(nid) == row
-    for _ek, row in fold_edges.items():
-        key = f"{row.get('src_id')}:{row.get('dst_id')}:{row.get('kind')}"
-        assert proj_edges.get(key) == row
+    # Bidirectional equivalence: fold ↔ store projections, both directions.
+    assert set(fold_nodes) == set(proj_nodes)
+    assert set(fold_edges) == set(proj_edges)
+    for nid in set(fold_nodes) | set(proj_nodes):
+        assert fold_nodes[nid] == proj_nodes[nid]
+    for eid in set(fold_edges) | set(proj_edges):
+        assert fold_edges[eid] == proj_edges[eid]
 
     await store.release_lease(store.owner, store.epoch)
     await store.close()
@@ -1198,14 +1211,89 @@ async def test_legacy_two_study_finalized_fold_first_wins(tmp_path, clock):
     study2 = await rt2.store.get_row("studies", sid)
     assert study2 is not None
     assert study2["finalized_payload"] == first_payload
-    for cid in first_payload["conclusion_ids"]:
-        assert rt2.graph.get_node(cid) is not None
-    report_id = first_payload.get("report_artifact_id")
-    if report_id:
-        # minimal_report path has no report artifact; otherwise graph may hold report node
-        pass
-    # Second SF must not have won: cancel trigger absent from live payload/graph fold.
     assert study2["finalized_payload"]["trigger"] != "cancel"
+    # rt2 graph must match first SF (not cancel/cancelled last-wins).
+    expected_nodes, expected_edges = graph_rows_from_finalized(
+        sid, first_payload, created_at=fins[0].ts
+    )
+    assert expected_nodes and expected_edges
+    live_nodes = {n.node_id: n for n in rt2.graph.all_nodes()}
+    live_edges = {e.edge_id: e for e in rt2.graph.all_edges()}
+    assert set(expected_nodes) <= set(live_nodes)
+    assert set(expected_edges) <= set(live_edges)
+    scid = conclusion_id_for_study(sid)
+    live_study = live_nodes[scid]
+    synth = (live_study.attrs or {}).get("synthesis") or ""
+    assert synth == expected_nodes[scid]["attrs"]["synthesis"]
+    assert "terminal:completed" in synth
+    assert "terminal:cancelled" not in synth
+    await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_legacy_duplicate_study_finalized_taints_and_report(tmp_path, clock):
+    """Second SF in a legacy journal taints meta/local fold and report reasons."""
+    import json
+
+    from coscientist.core.digest import payload_digest
+    from coscientist.core.finalize import contributing_reasons_ordered
+    from coscientist.core.projections import apply_event
+    from coscientist.core.store import SqliteEventStore
+
+    sid = "st_sf_legacy_taint"
+    rt = await _boot(tmp_path, clock, sid)
+    await _skip_all(rt)
+    payload_a = _fin_payload(trigger="all_done", study_id=sid)
+    payload_b = _fin_payload(trigger="cancel", study_id=sid)
+    conn = rt.store._conn  # noqa: SLF001
+    for key, payload in (
+        (f"StudyFinalized:{sid}:a", payload_a),
+        (f"StudyFinalized:{sid}:b", payload_b),
+    ):
+        conn.execute(
+            "INSERT INTO events(study_id, type, entity_key, idem_key, payload, ts, "
+            "schema_version, epoch, payload_digest) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                sid,
+                "StudyFinalized",
+                sid,
+                key,
+                json.dumps(payload, sort_keys=True),
+                clock.now().isoformat(),
+                1,
+                rt.store.epoch,
+                payload_digest(payload),
+            ),
+        )
+    conn.commit()
+    db = rt.store.db_path
+    await close_runtime(rt)
+
+    store = SqliteEventStore(sid, db, clock=clock)
+    await store.acquire_lease("taint")
+    events = await store.read_all()
+    fins = [e for e in events if e.type == "StudyFinalized"]
+    assert len(fins) == 2
+    for ev in fins:
+        apply_event(store, ev)
+    store._conn.commit()  # noqa: SLF001
+
+    meta = await store.get_row("meta", sid)
+    assert meta is not None
+    assert meta.get("duplicate_study_finalized") is True
+    assert meta.get("tainted") is True
+    folded = fold_events(events)
+    assert folded["meta"][sid]["duplicate_study_finalized"] is True
+    assert folded["meta"][sid]["tainted"] is True
+    # Report path: dual SF → internal_error in contributing_reasons.
+    assert "internal_error" in contributing_reasons_ordered(events)
+    await store.release_lease(store.owner, store.epoch)
+    await store.close()
+
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    dups = getattr(rt2, "_duplicate_study_finalized", None) or []
+    assert dups and dups[0].get("tainted") is True
+    assert rt2.view().phase == "closed"
     await close_runtime(rt2)
 
 

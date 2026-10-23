@@ -50,6 +50,7 @@ class LocalProjectMixin:
     artifact_kinds: dict[str, str]
     _disposal_rejects: list[dict[str, Any]]
     _stamp_meta_missing: list[dict[str, Any]]
+    _duplicate_study_finalized: list[dict[str, Any]]
     _pending_kind_stamps: list[tuple[str, str]]
 
     def _apply_kind_stamp_soft(self, artifact_id: str, kind: str) -> bool:
@@ -276,12 +277,24 @@ class LocalProjectMixin:
             fold_question_dispose_rejected(notes, p if isinstance(p, dict) else {})
         elif ev.type == "StudyFinalized":
             # First-wins: ignore duplicate StudyFinalized on replay (legacy journals).
+            # Record a taint mark so reopen/report can surface the I3 breach.
             if self._finalized:
                 log.warning(
                     "ignoring duplicate StudyFinalized study_id=%s seq=%s "
-                    "(first-wins; local fold skipped)",
+                    "(first-wins; local fold skipped; tainted)",
                     ev.study_id,
                     getattr(ev, "seq", None),
+                )
+                dups = getattr(self, "_duplicate_study_finalized", None)
+                if not isinstance(dups, list):
+                    self._duplicate_study_finalized = []
+                    dups = self._duplicate_study_finalized
+                dups.append(
+                    {
+                        "study_id": ev.study_id,
+                        "seq": getattr(ev, "seq", None),
+                        "tainted": True,
+                    }
                 )
             else:
                 self._finalized = True

@@ -254,6 +254,14 @@ class SqliteEventStore:
         return await self._read_thread(_read)
 
     def _fence(self, ttl_s: float | None = None) -> None:
+        """Renew lease under the current write transaction.
+
+        The ``UPDATE lease …`` is what serializes peer writers: SQLite locks the
+        row/page for the duration of the surrounding transaction, so a second
+        connection's fence waits until we commit/rollback. ``BEGIN IMMEDIATE`` on
+        the append paths is only a defensive early lock so the finalized probe
+        cannot race before this UPDATE runs.
+        """
         if self.owner is None or not self.owner_nonce:
             raise LeaseLost("no lease owner set")
         ttl = self.lease_ttl_s if ttl_s is None else ttl_s
@@ -331,8 +339,8 @@ class SqliteEventStore:
     def _append_locked(self, event: EventEnvelope) -> EventEnvelope:
         mutated = False
         try:
-            # IMMEDIATE so a peer writer's fence/insert waits until we commit —
-            # otherwise two connections can both observe "not finalized".
+            # Defensive: take the write lock before fence/probe. Peer serialization
+            # itself is the lease UPDATE inside ``_fence`` (see that docstring).
             self._conn.execute("BEGIN IMMEDIATE")
             self._fence()
             self._ensure_append_allowed(event)
@@ -386,6 +394,7 @@ class SqliteEventStore:
         out: list[EventEnvelope] = []
         mutated = False
         try:
+            # Defensive early write lock; ``_fence`` UPDATE is the real serializer.
             self._conn.execute("BEGIN IMMEDIATE")
             self._fence()
             # Probe finalized only after fence so lease ownership is confirmed.
