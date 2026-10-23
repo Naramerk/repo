@@ -27,7 +27,7 @@ async def recover(runtime: StudyRuntime) -> dict[str, Any]:
         await recover_idle()
     else:
         # Core has no HITL: refuse journals that still have open gates.
-        reject_open_hitl_if_unsupported(runtime, runtime.store.read_all())
+        reject_open_hitl_if_unsupported(runtime, await runtime.store.read_all())
 
     for aid, att in list(runtime.attempts.items()):
         if att.get("closed"):

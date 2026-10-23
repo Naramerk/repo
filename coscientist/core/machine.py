@@ -179,7 +179,12 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         await self._fire_due_retries(now)
 
     async def _fire_due_retries(self, now: datetime) -> None:
-        """Start attempts whose persisted ``retry_at`` is due (P3)."""
+        """Start attempts whose persisted ``retry_at`` is due (P3).
+
+        Clears ``_retry_at[tid]`` when firing so a retry runs at most once per
+        scheduled ``retry_at`` (even if ``tick`` is called again before
+        ``AttemptStarted`` is projected).
+        """
         if self._lease_lost:
             return
         for tid, retry_at in list(self._retry_at.items()):
@@ -194,14 +199,16 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             if now > task.deadline or (
                 self.study is not None and now > self.study.deadline
             ):
-                # Deadline path above should have closed it; skip if still pending.
+                self._retry_at.pop(tid, None)
                 continue
             open_atts = [
                 a for a in task.attempts if not self.attempts.get(a, {}).get("closed")
             ]
             if open_atts:
+                self._retry_at.pop(tid, None)
                 continue
             prov = self._provenance_for_retry(tid)
+            self._retry_at.pop(tid, None)
             await self.start_attempt(tid, provenance=prov)
 
 

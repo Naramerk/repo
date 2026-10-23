@@ -210,7 +210,7 @@ async def test_b2_matching_value_in_raw_artifact_is_success(tmp_path, catalog):
     )
     assert result.outcome == Outcome.SUCCESS
     await writer.stop()
-    store.close()
+    await store.close()
 
 
 @pytest.mark.asyncio
@@ -266,10 +266,10 @@ async def test_review_scheduled_on_every_record_path(tmp_path, catalog):
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")}
         ),
     )
-    assert any(e.type == "ReviewScheduled" for e in store.read_all())
+    assert any(e.type == "ReviewScheduled" for e in await store.read_all())
     assert result.outcome == Outcome.SUCCESS
     await writer.stop()
-    store.close()
+    await store.close()
 
 
 @pytest.mark.asyncio
@@ -298,9 +298,9 @@ async def test_closed_attempt_rejects_record(tmp_path, catalog):
     )
     with pytest.raises(AttemptClosedError):
         await ex.record("a#1", AgentTaskOutput(summary="late"))
-    assert any(e.type == "LateWriteRejected" for e in store.read_all())
+    assert any(e.type == "LateWriteRejected" for e in await store.read_all())
     await writer.stop()
-    store.close()
+    await store.close()
 
 
 @pytest.mark.asyncio
@@ -348,7 +348,7 @@ async def test_downgrade_without_refs_rejected(tmp_path, catalog):
             downgrade=DowngradeClaim(to=Outcome.PARTIAL, refs=[], reason="no refs"),
         ),
     )
-    assert any(e.type == "DowngradeRejected" for e in store.read_all())
+    assert any(e.type == "DowngradeRejected" for e in await store.read_all())
     assert result.outcome == Outcome.SUCCESS
     await writer.stop()
-    store.close()
+    await store.close()

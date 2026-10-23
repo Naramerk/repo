@@ -80,7 +80,7 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
     rid0 = await rt0.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=100)
     await rt0.answer_hitl(rid0, "delegate")
     assert rt0.hitl[rid0].open is True
-    note0 = [e for e in rt0.store.read_all() if e.payload.get("request_id") == rid0]
+    note0 = [e for e in await rt0.store.read_all() if e.payload.get("request_id") == rid0]
     assert any(e.payload.get("reason") == "delegation_disabled" for e in note0)
     assert any(e.payload.get("human_message") == "нет бюджета" for e in note0)
     await close_runtime(rt0)
@@ -106,14 +106,14 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
     assert rt.hitl[rid].open is False
     decided = [
         e
-        for e in rt.store.read_all()
+        for e in await rt.store.read_all()
         if e.type == "HitlDecided" and e.payload.get("request_id") == rid
     ]
     assert decided and decided[-1].payload.get("delegated_by") == "human"
     settled = await rt.settle_delegated_spend(rid, actual_rub=350)
     assert settled["spent_rub"] == 350
     assert rt.delegated_budget is not None and rt.delegated_budget.spent_rub == 350
-    report = render(rt.store.read_all())
+    report = render(await rt.store.read_all())
     assert report["hitl_spend"]["total_spent_rub"] == 350.0
     assert any(d["spent_rub"] == 350.0 for d in report["hitl_spend"]["decisions"])
     assert "350" in report["summary"]
@@ -126,7 +126,7 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
     rid3 = await rt.open_hitl("HYP", kind="costly_or_nonreal", cost_rub=10)
     await rt.answer_hitl(rid3, "delegate")
     assert rt.hitl[rid3].open is True
-    notice = [e for e in rt.store.read_all() if e.payload.get("request_id") == rid3]
+    notice = [e for e in await rt.store.read_all() if e.payload.get("request_id") == rid3]
     assert any(e.payload.get("reason") == "delegation_disabled" for e in notice)
     assert any("перерасход" in (e.payload.get("human_message") or "") for e in notice)
 
@@ -142,7 +142,10 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
 
 @pytest.mark.asyncio
 async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
-    """Settled spend is journaled; reopen restores DelegatedBudget.remaining_rub."""
+    """Regression: settled spend in BudgetDebited restores remaining after reopen.
+
+    Also asserts post-recover gating: cost_rub > remaining (650) is blocked.
+    """
     from datetime import timedelta
     from decimal import Decimal
 
@@ -190,5 +193,18 @@ async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
     assert rt2.delegated_budget is not None
     assert rt2.delegated_budget.spent_rub == 350
     assert rt2.delegated_budget.remaining_rub == 650
+    # cost_rub > 650 remaining → blocked (WAIT / exceeds remainder)
+    rid_blocked = await rt2.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=651)
+    await rt2.answer_hitl(rid_blocked, "delegate")
+    assert rt2.hitl[rid_blocked].open is True
+    notices = [
+        e
+        for e in await rt2.store.read_all()
+        if e.payload.get("request_id") == rid_blocked
+    ]
+    assert any(e.payload.get("reason") == "delegation_disabled" for e in notices)
+    assert any(
+        e.payload.get("human_message") == "превышает остаток" for e in notices
+    )
     await close_runtime(rt2)
 

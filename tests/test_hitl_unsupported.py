@@ -63,7 +63,7 @@ async def test_core_recover_rejects_open_hitl_journal(tmp_path, clock):
         root, "st_hitl", clock=clock, runtime_cls=ExpStudyRuntime, owner=owner
     )
     core = CoreStudyRuntime(exp.store, exp.writer, clock=clock, owner=exp.owner)
-    for ev in exp.store.read_all():
+    for ev in await exp.store.read_all():
         core._project_local(ev)  # noqa: SLF001
     with pytest.raises(HitlUnsupported, match="open HITL"):
         await recover(core)
@@ -142,8 +142,8 @@ async def test_hitl_unsupported_does_not_hold_lease(tmp_path, clock):
 
     # No lease row held by core-x; experimental can acquire immediately.
     store = SqliteEventStore("st_lease", root / "st_lease" / "events.db", clock=clock)
-    owner, epoch, expires = store.current_lease()
-    store.close()
+    owner, epoch, expires = await store.current_lease()
+    await store.close()
     assert owner != "core-x"
     # And a fresh experimental open with a new owner succeeds without clock advance.
     exp = await open_runtime(
@@ -166,7 +166,7 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
     from coscientist.core.ids import hitl_request_id
 
     root, rt = await _boot_exp(tmp_path, clock, sid="st_race")
-    n_before = len(rt.store.read_all())
+    n_before = len(await rt.store.read_all())
     owner = await _close_and_expire(rt, clock)
     db_path = root / "st_race" / "events.db"
 
@@ -216,7 +216,7 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
                 ]
             )
             await racer.release_lease("racer", racer.epoch)
-            racer.close()
+            await racer.close()
         return await real_acquire(self, acq_owner, ttl_s=ttl_s)
 
     monkeypatch.setattr(SqliteEventStore, "acquire_lease", acquire_after_race)
@@ -226,15 +226,15 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
             root, "st_race", clock=clock, runtime_cls=CoreStudyRuntime, owner="core-race"
         )
     store = SqliteEventStore("st_race", db_path, clock=clock)
-    held_owner, _, _ = store.current_lease()
-    store.close()
+    held_owner, _, _ = await store.current_lease()
+    await store.close()
     assert held_owner != "core-race"
 
     # Experimental accepts the raced journal and rebuilds from the post-lease read.
     exp = await open_runtime(
         root, "st_race", clock=clock, runtime_cls=ExpStudyRuntime, owner=owner
     )
-    events = exp.store.read_all()
+    events = await exp.store.read_all()
     assert len(events) == n_before + 2
     assert any(e.type == "HitlOpened" for e in events)
     assert any(

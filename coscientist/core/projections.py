@@ -107,9 +107,19 @@ def fold_events(events: list[EventEnvelope]) -> ProjectionMap:
 
 
 def apply_event(store: Any, event: EventEnvelope) -> None:
-    """Apply one event into the store's projection table."""
+    """Apply one event into the store's projection table (in-txn write connection).
+
+    Uses ``_get_projection_write`` / ``_upsert_projection_write`` when present so
+    projection updates stay on the fenced writer connection inside append.
+    """
+    get_rows = getattr(store, "_get_projection_write", None)
+    put_row = getattr(store, "_upsert_projection_write", None)
+    if get_rows is None or put_row is None:
+        raise TypeError(
+            "apply_event requires a write-capable store "
+            "(_get_projection_write / _upsert_projection_write)"
+        )
     scratch: ProjectionMap = {}
-    # seed from existing rows touched by this event
     for table in (
         "studies",
         "plans",
@@ -122,17 +132,15 @@ def apply_event(store: Any, event: EventEnvelope) -> None:
         "graph_nodes",
         "graph_edges",
     ):
-        for row in store.get_projection(table):
+        for row in get_rows(table):
             key = _row_key(table, row)
             if key:
                 scratch.setdefault(table, {})[key] = row
     apply_to_map(scratch, event)
-    # write back only tables that appear in scratch after apply
-    # Re-read which keys changed: simplest — upsert all of scratch for affected tables
     affected = _affected_tables(event.type)
     for table in affected:
         for key, data in scratch.get(table, {}).items():
-            store.upsert_projection(table, key, data)
+            put_row(table, key, data)
 
 
 def _row_key(table: str, row: dict[str, Any]) -> str | None:

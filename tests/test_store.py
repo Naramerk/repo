@@ -41,7 +41,7 @@ async def test_idempotent_same_payload(tmp_path: Path, clock: FakeClock):
     with pytest.raises(Idempotent) as ei:
         await store.append(ev)
     assert ei.value.seq == 1
-    store.close()
+    await store.close()
 
 
 @pytest.mark.asyncio
@@ -54,14 +54,14 @@ async def test_same_owner_reacquire_keeps_epoch(tmp_path: Path, clock: FakeClock
     epoch2 = await store.acquire_lease("o1", ttl_s=30)
     assert epoch2 == 1
     assert store.owner_nonce == nonce
-    store.close()
+    await store.close()
 
 
 @pytest.mark.asyncio
 async def test_store_close_idempotent(tmp_path: Path, clock: FakeClock):
     store = SqliteEventStore("st1", tmp_path / "close.db", clock=clock)
-    store.close()
-    store.close()
+    await store.close()
+    await store.close()
     assert store.closed is True
 
 
@@ -89,7 +89,7 @@ async def test_writer_idempotent_append_returns_existing(
     b = await writer.append(ev)
     assert a.seq == b.seq == 1
     await writer.stop()
-    store.close()
+    await store.close()
 
 
 @pytest.mark.asyncio
@@ -111,7 +111,7 @@ async def test_conflict_different_payload(tmp_path: Path, clock: FakeClock):
     )
     with pytest.raises(Conflict):
         await store.append(ev2)
-    store.close()
+    await store.close()
 
 
 @pytest.mark.asyncio
@@ -141,7 +141,7 @@ async def test_lease_epoch_fencing(tmp_path: Path, clock: FakeClock):
                 ts=clock.now(),
             )
         )
-    store.close()
+    await store.close()
 
 
 @pytest.mark.asyncio
@@ -163,7 +163,7 @@ async def test_seeded_owner_epoch_without_nonce_cannot_write(
                 ts=clock.now(),
             )
         )
-    store.close()
+    await store.close()
 
 
 @pytest.mark.asyncio
@@ -191,9 +191,9 @@ async def test_replay_equals_projection(
     await record_success(rt, aid, arts)
     await rt.cancel_task("REPORT", reason="budget")
 
-    folded = fold_events(rt.store.read_all())
+    folded = fold_events(await rt.store.read_all())
     for table, rows in folded.items():
-        proj = {_key(table, r): r for r in rt.store.get_projection(table)}
+        proj = {_key(table, r): r for r in await rt.store.get_projection(table)}
         for key, data in rows.items():
             assert key in proj, f"missing {table}/{key}"
             for k, v in data.items():
@@ -221,12 +221,29 @@ def _key(table: str, row: dict) -> str:
     return str(row)
 
 
+def _assert_json_values(obj: object) -> None:
+    """Projection/event data must be plain JSON types (no datetime/Decimal/…)."""
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return
+    if isinstance(obj, list):
+        for x in obj:
+            _assert_json_values(x)
+        return
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            assert isinstance(k, str)
+            _assert_json_values(v)
+        return
+    raise AssertionError(f"non-JSON type in projection: {type(obj).__name__}={obj!r}")
+
+
 @pytest.mark.asyncio
 async def test_upsert_projection_rejects_datetime(tmp_path: Path, clock: FakeClock):
-    """Strict serialization: unknown/non-JSON types raise at write (no _json_default)."""
+    """Strict JSON: datetime in projection data raises (would have been ISO via _json_default)."""
     store = SqliteEventStore("st_json", tmp_path / "json.db", clock=clock)
+    await store.acquire_lease("o1")
     with pytest.raises(TypeError, match="not JSON serializable|datetime"):
-        store.upsert_projection(
+        await store.upsert_projection(
             "tasks",
             "t1",
             {
@@ -234,40 +251,63 @@ async def test_upsert_projection_rejects_datetime(tmp_path: Path, clock: FakeClo
                 "deadline": datetime(2026, 1, 1, tzinfo=UTC),
             },
         )
-    store.close()
+    await store.close()
 
 
 @pytest.mark.asyncio
-async def test_append_rejects_datetime_in_payload(tmp_path: Path, clock: FakeClock):
-    """Datetime in payload fails at write (digest/JCS or json.dumps) — never stringified."""
-    from rfc8785 import CanonicalizationError
+async def test_attempt_closed_tasks_projection_is_strict_json(
+    tmp_path: Path, clock: FakeClock, runtime_cls: type
+):
+    """AttemptClosed writes tasks (incl. retry_at); all projection values are JSON types."""
+    from coscientist.core.attempts import RETRY_BACKOFF_S
+    from tests.helpers import attach_executor
 
-    store = SqliteEventStore("st_json2", tmp_path / "json2.db", clock=clock)
-    await store.acquire_lease("o1")
-    with pytest.raises((TypeError, CanonicalizationError)):
-        await store.append(
-            EventEnvelope(
-                study_id="st_json2",
-                type="StudyCreated",
-                entity_key="st_json2",
-                idem_key="StudyCreated:st_json2",
-                payload={"study_id": "st_json2", "created_at": clock.now()},
-                ts=clock.now(),
-            )
+    rt = await open_runtime(
+        tmp_path, "st_json_p3", clock=clock, runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(minutes=30),
+        sid="st_json_p3",
+    )
+    attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("SPEC")
+    await rt.fail_attempt(aid, retryable=True)
+    task_row = await rt.store.get_row("tasks", "st_json_p3/SPEC")
+    assert task_row is not None
+    assert task_row.get("reason") == "retry_scheduled"
+    assert isinstance(task_row.get("retry_at"), str)
+    _assert_json_values(task_row)
+    att_row = await rt.store.get_row("attempts", aid)
+    assert att_row is not None
+    assert isinstance(att_row.get("retry_at"), str)
+    _assert_json_values(att_row)
+    # In-txn write path also rejects datetime (no silent stringify).
+    with pytest.raises(TypeError, match="not JSON serializable|datetime"):
+        rt.store._upsert_projection_write(  # noqa: SLF001
+            "tasks",
+            "st_json_p3/SPEC",
+            {**task_row, "deadline": clock.now()},
         )
-    store.close()
+    clock.advance(timedelta(seconds=RETRY_BACKOFF_S))
+    await close_runtime(rt)
 
 
 @pytest.mark.asyncio
 async def test_event_loop_progresses_during_slow_write(
-    tmp_path: Path, clock: FakeClock, runtime_cls: type
+    tmp_path: Path, clock: FakeClock, monkeypatch
 ):
-    """SQLite write I/O runs off-loop: a concurrent tick runs while a write sleeps."""
+    """Write sleeps off-loop; concurrent tick stays schedulable mid-write."""
     import threading
 
-    rt = await open_runtime(
-        tmp_path, "st_slow", clock=clock, runtime_cls=runtime_cls
-    )
+    from coscientist.core import runtime_factory as rf
+    from tests.store_doubles import SlowWriteStore
+
+    monkeypatch.setattr(rf, "SqliteEventStore", SlowWriteStore)
+    rt = await open_runtime(tmp_path, "st_slow", clock=clock)
+    assert isinstance(rt.store, SlowWriteStore)
     await rt.create_study(
         profile="research",
         request="q",
@@ -276,19 +316,17 @@ async def test_event_loop_progresses_during_slow_write(
         sid="st_slow",
     )
     entered = threading.Event()
-    rt.store._write_delay_s = 0.35  # noqa: SLF001
-    rt.store._write_delay_entered = entered  # noqa: SLF001
+    rt.store.write_delay_s = 0.35
+    rt.store.write_delay_entered = entered
 
     peer_saw_in_flight = False
 
     async def _peer_tick() -> None:
         nonlocal peer_saw_in_flight
-        # Wait until the write thread is inside its delay (loop must stay responsive).
         while not entered.is_set():
             await asyncio.sleep(0.01)
         assert not write_task.done(), "write should still be in flight"
         peer_saw_in_flight = True
-        # Concurrent tick: schedules, awaits lease (queues behind write), completes.
         await rt.tick()
 
     write_task = asyncio.create_task(
@@ -314,6 +352,68 @@ async def test_event_loop_progresses_during_slow_write(
     await asyncio.wait_for(asyncio.gather(write_task, tick_task), timeout=3.0)
     assert peer_saw_in_flight
     assert entered.is_set()
-    rt.store._write_delay_s = 0.0  # noqa: SLF001
-    rt.store._write_delay_entered = None  # noqa: SLF001
+    rt.store.write_delay_s = 0.0
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_read_during_slow_write_does_not_stall_loop(
+    tmp_path: Path, clock: FakeClock, monkeypatch
+):
+    """WAL read connection: read_all completes while a slow write still holds the write lock."""
+    import threading
+
+    from coscientist.core import runtime_factory as rf
+    from tests.store_doubles import SlowWriteStore
+
+    monkeypatch.setattr(rf, "SqliteEventStore", SlowWriteStore)
+    rt = await open_runtime(tmp_path, "st_rd", clock=clock)
+    assert isinstance(rt.store, SlowWriteStore)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(minutes=30),
+        sid="st_rd",
+    )
+    entered = threading.Event()
+    rt.store.write_delay_s = 0.4
+    rt.store.write_delay_entered = entered
+    read_finished_during_write = False
+
+    async def _peer_read() -> None:
+        nonlocal read_finished_during_write
+        while not entered.is_set():
+            await asyncio.sleep(0.01)
+        assert not write_task.done()
+        events = await rt.store.read_all()
+        assert isinstance(events, list)
+        assert len(events) >= 1
+        # Still in flight: read did not wait for the write lock / delay.
+        assert not write_task.done()
+        read_finished_during_write = True
+
+    write_task = asyncio.create_task(
+        rt._append(  # noqa: SLF001
+            [
+                EventEnvelope(
+                    study_id="st_rd",
+                    type="GraphNodeUpserted",
+                    entity_key="st_rd:probe",
+                    idem_key="GraphNodeUpserted:st_rd:probe",
+                    payload={
+                        "node_id": "st_rd:probe",
+                        "kind": "study",
+                        "study_id": "st_rd",
+                        "ref_id": "st_rd",
+                    },
+                    ts=clock.now(),
+                )
+            ]
+        )
+    )
+    read_task = asyncio.create_task(_peer_read())
+    await asyncio.wait_for(asyncio.gather(write_task, read_task), timeout=3.0)
+    assert read_finished_during_write
+    rt.store.write_delay_s = 0.0
     await close_runtime(rt)

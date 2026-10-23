@@ -253,7 +253,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
         try:
             self._run(close_runtime(other))
         except (LeaseLost, RuntimeError, OSError):
-            other.store.close()
+            self._run(other.store.close())
 
     @rule()
     def crash_and_recover(self):
@@ -282,10 +282,10 @@ class StudyClosesMachine(RuleBasedStateMachine):
     def replay_equals_projection(self):
         if self.rt is None or self.lost_lease:
             return
-        events = self.rt.store.read_all()
+        events = self._run(self.rt.store.read_all())
         folded = fold_events(events)
         for table, rows in folded.items():
-            proj_rows = self.rt.store.get_projection(table)
+            proj_rows = self._run(self.rt.store.get_projection(table))
             proj = {}
             for r in proj_rows:
                 for f in (
@@ -317,7 +317,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
             self._run(close_runtime(old))
         except Exception:
             try:
-                old.store.close()
+                self._run(old.store.close())
             except Exception:
                 pass
         target = max(self.clock.now(), self.study_deadline) + timedelta(seconds=35)

@@ -1,7 +1,8 @@
 """SQLite WAL EventStore: lease fencing, idempotency, projections (DESIGN §3.5 / §3.5a).
 
-Async write/lease APIs run sqlite under ``threading.RLock`` via ``asyncio.to_thread``.
-Payload/projection JSON is strict (no ``_json_default``).
+Writes/leases run under ``threading.RLock`` via ``asyncio.to_thread``.
+Reads use a separate read-only connection (WAL-safe) also via ``to_thread``,
+so a concurrent read does not wait on a slow write / fsync.
 """
 
 from __future__ import annotations
@@ -10,7 +11,6 @@ import asyncio
 import json
 import sqlite3
 import threading
-import time
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -54,11 +54,18 @@ def _parse_iso(s: str) -> datetime:
     return datetime.fromisoformat(s)
 
 
-class SqliteEventStore:
-    """One DB per study. Writes need ``(owner, epoch, owner_nonce)`` fencing.
+def _open_conn(path: Path, *, readonly: bool = False) -> sqlite3.Connection:
+    if readonly:
+        uri = f"file:{path.resolve().as_posix()}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+    else:
+        conn = sqlite3.connect(str(path), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-    Prefer ``acquire_lease``. Seeded owner/epoch without nonce cannot write.
-    """
+
+class SqliteEventStore:
+    """One DB per study. Writes need ``(owner, epoch, owner_nonce)`` fencing."""
 
     def __init__(
         self,
@@ -80,19 +87,17 @@ class SqliteEventStore:
         self.epoch = epoch
         self.lease_ttl_s = lease_ttl_s
         self._closed = False
-        # Test hooks: sleep inside a write txn (off the event loop) and signal entry.
-        self._write_delay_s: float = 0.0
-        self._write_delay_entered: threading.Event | None = None
         self._db_lock = threading.RLock()
         with self._db_lock:
-            self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-            self._conn.row_factory = sqlite3.Row
+            self._conn = _open_conn(self.db_path)
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=FULL")
             self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.executescript(_SCHEMA)
             self._ensure_lease_nonce_column()
             self._conn.commit()
+        # Separate reader: WAL allows concurrent reads without the write lock.
+        self._read_conn = _open_conn(self.db_path, readonly=True)
 
     def _ensure_lease_nonce_column(self) -> None:
         cols = {
@@ -104,32 +109,32 @@ class SqliteEventStore:
             )
 
     async def _to_thread(self, fn: Callable[[], T]) -> T:
-        """Run ``fn`` under the DB lock on a worker thread (does not block the loop)."""
-
         def _run() -> T:
             with self._db_lock:
                 return fn()
 
         return await asyncio.to_thread(_run)
 
-    def _with_lock(self, fn: Callable[[], T]) -> T:
-        with self._db_lock:
-            return fn()
+    async def _read_thread(self, fn: Callable[[], T]) -> T:
+        """Off-loop read on the read-only connection (does not take the write lock)."""
+        return await asyncio.to_thread(fn)
 
     @property
     def closed(self) -> bool:
         return self._closed
 
-    def close(self) -> None:
-        """Close the underlying connection. Safe to call more than once."""
+    async def close(self) -> None:
+        """Close connections. Safe to call more than once."""
         if self._closed:
             return
         self._closed = True
 
         def _close() -> None:
-            self._conn.close()
+            with self._db_lock:
+                self._conn.close()
+            self._read_conn.close()
 
-        self._with_lock(_close)
+        await asyncio.to_thread(_close)
 
     async def acquire_lease(self, owner: str, ttl_s: float | None = None) -> int:
         """Acquire/renew lease; same owner name + different nonce → LeaseLost while live."""
@@ -163,7 +168,6 @@ class SqliteEventStore:
                         f"lease held by {row['owner']} until {row['expires_at']}"
                     )
                 if exp > now and row["owner"] == owner:
-                    # Same owner name: renew only when nonce matches this instance.
                     nonce = self.owner_nonce or _new_owner_nonce()
                     if held_nonce != nonce:
                         raise LeaseLost(
@@ -200,7 +204,6 @@ class SqliteEventStore:
         *,
         nonce: str | None = None,
     ) -> None:
-        """Extend lease or raise ``LeaseLost`` on missing/mismatched nonce or expiry."""
         ttl = self.lease_ttl_s if ttl_s is None else ttl_s
         nonce = self.owner_nonce if nonce is None else nonce
         if not nonce:
@@ -233,7 +236,6 @@ class SqliteEventStore:
         *,
         nonce: str | None = None,
     ) -> None:
-        """Delete lease row if identity matches; else ``LeaseLost`` (same as renew)."""
         nonce = self.owner_nonce if nonce is None else nonce
         if not nonce:
             raise LeaseLost("release failed: missing owner nonce")
@@ -253,9 +255,9 @@ class SqliteEventStore:
             self.owner_nonce = None
             self.epoch = 0
 
-    def current_lease(self) -> tuple[str | None, int, datetime | None]:
+    async def current_lease(self) -> tuple[str | None, int, datetime | None]:
         def _read() -> tuple[str | None, int, datetime | None]:
-            cur = self._conn.execute(
+            cur = self._read_conn.execute(
                 "SELECT owner, epoch, expires_at FROM lease WHERE study_id=?",
                 (self.study_id,),
             )
@@ -264,7 +266,7 @@ class SqliteEventStore:
                 return None, 0, None
             return row["owner"], int(row["epoch"]), _parse_iso(row["expires_at"])
 
-        return self._with_lock(_read)
+        return await self._read_thread(_read)
 
     def _fence(self, ttl_s: float | None = None) -> None:
         if self.owner is None or not self.owner_nonce:
@@ -288,12 +290,10 @@ class SqliteEventStore:
             raise LeaseLost("epoch fencing rejected write")
 
     async def append(self, event: EventEnvelope) -> EventEnvelope:
-        """Append one event. Idempotent replay raises Idempotent(stored_seq)."""
         return await self._to_thread(lambda: self._append_locked(event))
 
     def _append_locked(self, event: EventEnvelope) -> EventEnvelope:
         try:
-            self._maybe_write_delay()
             self._fence()
             stored, idem = self._insert_one(event)
             self._conn.commit()
@@ -326,13 +326,6 @@ class SqliteEventStore:
             raise KeyError(idem_key)
         return self._row_to_event(row)
 
-    def _maybe_write_delay(self) -> None:
-        delay = self._write_delay_s
-        if delay and delay > 0:
-            if self._write_delay_entered is not None:
-                self._write_delay_entered.set()
-            time.sleep(delay)
-
     def _append_many_sync(
         self,
         events: list[EventEnvelope],
@@ -341,10 +334,9 @@ class SqliteEventStore:
     ) -> list[EventEnvelope]:
         out: list[EventEnvelope] = []
         try:
-            self._maybe_write_delay()
             self._fence()
             if require_open_attempt is not None:
-                row = self.get_row("attempts", require_open_attempt)
+                row = self._get_row_write("attempts", require_open_attempt)
                 if row is None or row.get("closed"):
                     raise AttemptClosedError(require_open_attempt)
             for ev in events:
@@ -399,18 +391,18 @@ class SqliteEventStore:
         self._apply_projection(stored)
         return stored, None
 
-    def read_all(self) -> list[EventEnvelope]:
-        return self.read_after(0)
+    async def read_all(self) -> list[EventEnvelope]:
+        return await self.read_after(0)
 
-    def read_after(self, seq: int) -> list[EventEnvelope]:
+    async def read_after(self, seq: int) -> list[EventEnvelope]:
         def _read() -> list[EventEnvelope]:
-            cur = self._conn.execute(
+            cur = self._read_conn.execute(
                 "SELECT * FROM events WHERE study_id=? AND seq>? ORDER BY seq",
                 (self.study_id, seq),
             )
             return [self._row_to_event(r) for r in cur.fetchall()]
 
-        return self._with_lock(_read)
+        return await self._read_thread(_read)
 
     def _row_to_event(self, row: sqlite3.Row) -> EventEnvelope:
         payload = json.loads(row["payload"])
@@ -428,42 +420,73 @@ class SqliteEventStore:
             payload_digest=row["payload_digest"],
         )
 
-    def get_projection(self, table: str) -> list[dict[str, Any]]:
+    def _get_projection_write(self, table: str) -> list[dict[str, Any]]:
+        """Write-connection projection read (same txn as append). Lock must be held."""
+        cur = self._conn.execute(
+            "SELECT data FROM projections WHERE table_name=?", (table,)
+        )
+        return [json.loads(r["data"]) for r in cur.fetchall()]
+
+    def _get_row_write(self, table: str, key: str) -> dict[str, Any] | None:
+        cur = self._conn.execute(
+            "SELECT data FROM projections WHERE table_name=? AND row_key=?",
+            (table, key),
+        )
+        row = cur.fetchone()
+        return json.loads(row["data"]) if row else None
+
+    def _upsert_projection_write(
+        self, table: str, key: str, data: dict[str, Any]
+    ) -> None:
+        """Projection upsert on the write connection (in-txn, already fenced)."""
+        self._conn.execute(
+            "INSERT INTO projections(table_name, row_key, data) VALUES (?,?,?) "
+            "ON CONFLICT(table_name, row_key) DO UPDATE SET data=excluded.data",
+            (table, key, json.dumps(data, sort_keys=True)),
+        )
+
+    async def get_projection(self, table: str) -> list[dict[str, Any]]:
         def _read() -> list[dict[str, Any]]:
-            cur = self._conn.execute(
+            cur = self._read_conn.execute(
                 "SELECT data FROM projections WHERE table_name=?", (table,)
             )
             return [json.loads(r["data"]) for r in cur.fetchall()]
 
-        return self._with_lock(_read)
+        return await self._read_thread(_read)
 
-    def get_row(self, table: str, key: str) -> dict[str, Any] | None:
+    async def get_row(self, table: str, key: str) -> dict[str, Any] | None:
         def _read() -> dict[str, Any] | None:
-            cur = self._conn.execute(
+            cur = self._read_conn.execute(
                 "SELECT data FROM projections WHERE table_name=? AND row_key=?",
                 (table, key),
             )
             row = cur.fetchone()
             return json.loads(row["data"]) if row else None
 
-        return self._with_lock(_read)
+        return await self._read_thread(_read)
 
-    def upsert_projection(self, table: str, key: str, data: dict[str, Any]) -> None:
+    async def upsert_projection(
+        self, table: str, key: str, data: dict[str, Any]
+    ) -> None:
+        """Fenced projection write via the writer connection (not a free sync path)."""
+
         def _write() -> None:
-            self._conn.execute(
-                "INSERT INTO projections(table_name, row_key, data) VALUES (?,?,?) "
-                "ON CONFLICT(table_name, row_key) DO UPDATE SET data=excluded.data",
-                (table, key, json.dumps(data, sort_keys=True)),
-            )
+            try:
+                self._fence()
+                self._upsert_projection_write(table, key, data)
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
-        self._with_lock(_write)
+        await self._to_thread(_write)
 
     def _apply_projection(self, event: EventEnvelope) -> None:
         from coscientist.core.projections import apply_event
 
         apply_event(self, event)
 
-    def fold_from_events(self) -> dict[str, dict[str, dict[str, Any]]]:
+    async def fold_from_events(self) -> dict[str, dict[str, dict[str, Any]]]:
         from coscientist.core.projections import fold_events
 
-        return fold_events(self.read_all())
+        return fold_events(await self.read_all())

@@ -47,24 +47,22 @@ async def open_runtime(
 
     # Fast path: refuse before taking the lease when the journal is already dirty.
     try:
-        reject_open_hitl_if_unsupported(cls, store.read_all())
+        reject_open_hitl_if_unsupported(cls, await store.read_all())
     except BaseException:
         try:
-            store.close()
+            await store.close()
         except BaseException:
             log.warning("store.close failed during pre-lease cleanup", exc_info=True)
         raise
 
-    acquired = False
     writer: StudyWriter | None = None
     writer_started = False
     try:
         if acquire:
             await store.acquire_lease(owner)
-            acquired = True
 
         # Authoritative read under the lease — never rebuild from the pre-lease snapshot.
-        events = store.read_all()
+        events = await store.read_all()
         reject_open_hitl_if_unsupported(cls, events)
 
         writer = StudyWriter(store)
@@ -87,7 +85,9 @@ async def open_runtime(
                 await writer.stop()
             except BaseException:
                 log.warning("writer.stop failed during open_runtime cleanup", exc_info=True)
-        if acquired:
+        # to_thread may have committed the lease before CancelledError reached us —
+        # release based on whether the store actually holds a nonce, not a local flag.
+        if store.owner_nonce is not None:
             try:
                 await store.release_lease(owner, store.epoch)
             except BaseException:
@@ -95,7 +95,7 @@ async def open_runtime(
                     "release_lease failed during open_runtime cleanup", exc_info=True
                 )
         try:
-            store.close()
+            await store.close()
         except BaseException:
             # Never mask the original exception that triggered cleanup.
             log.warning("store.close failed during open_runtime cleanup", exc_info=True)
@@ -115,4 +115,4 @@ async def close_runtime(rt: StudyRuntime) -> None:
             # Lease already gone or identity mismatch — still close the store.
             log.warning("release_lease during close_runtime", exc_info=True)
         finally:
-            rt.store.close()
+            await rt.store.close()
