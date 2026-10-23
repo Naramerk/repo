@@ -159,7 +159,7 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         "TaskInherited": ("tasks",),
         "PlanAccepted": ("plans",),
         "AttemptStarted": ("attempts", "tasks"),
-        "AttemptClosed": ("attempts",),
+        "AttemptClosed": ("attempts", "tasks"),
         "RouteReturned": ("attempts",),
         "ResultRecorded": ("results",),
         "TaskDone": ("tasks",),

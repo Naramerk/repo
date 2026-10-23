@@ -11,6 +11,7 @@ from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.ids import attempt_id, task_id
 from coscientist.core.inputs import InputUnavailable, bind_inputs
 
+# Persisted on AttemptClosed.retry_at; fired by StudyRuntime.tick vs injected Clock.
 RETRY_BACKOFF_S = 0.05
 
 
@@ -25,7 +26,6 @@ class AttemptsMixin:
     dep_outputs: dict[str, dict[str, str]]
     dep_provenance: dict[str, Provenance]
     _attempt_tasks: dict[str, asyncio.Task[Any]]
-    _retry_tasks: dict[str, asyncio.Task[Any]]
     _lease_lost: bool
     _retry_at: dict[str, datetime]
 
@@ -174,28 +174,21 @@ class AttemptsMixin:
                 }
             )
         await self._append(events)
-        if can_retry:
-            self._schedule_retry(tid, str(att.get("provenance", "real")))
+        # P3: retry_at is persisted on AttemptClosed and folded into ``_retry_at``;
+        # ``tick()`` starts the next attempt when ``clock.now() >= retry_at``.
 
-    def _schedule_retry(self, tid: str, provenance: str) -> None:
-        async def _retry() -> None:
-            await asyncio.sleep(RETRY_BACKOFF_S)
-            if self._lease_lost:
-                return
-            task = self.tasks.get(tid)
-            if task is None or task.state == TaskState.DONE:
-                return
-            open_atts = [
-                a for a in task.attempts if not self.attempts.get(a, {}).get("closed")
-            ]
-            if open_atts:
-                return
-            await self.start_attempt(tid, provenance=provenance)  # type: ignore[arg-type]
-
-        old = self._retry_tasks.pop(tid, None)
-        if old:
-            old.cancel()
-        self._retry_tasks[tid] = asyncio.create_task(_retry())
+    def _provenance_for_retry(self, tid: str) -> Provenance:
+        """Last closed attempt's provenance (survives crash/reopen via the journal)."""
+        task = self.tasks.get(tid)
+        if task is None:
+            return "real"
+        for aid in reversed(task.attempts):
+            att = self.attempts.get(aid, {})
+            if att.get("closed"):
+                prov = att.get("provenance", "real")
+                if prov in ("real", "partial", "simulated"):
+                    return prov  # type: ignore[return-value]
+        return "real"
 
     async def cancel_task(self, task_key_or_id: str, reason: str = "cancelled") -> None:
         task = self._resolve_task(task_key_or_id)

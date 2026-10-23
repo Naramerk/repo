@@ -103,8 +103,6 @@ async def open_runtime(
 
 
 async def close_runtime(rt: StudyRuntime) -> None:
-    for t in list(rt._retry_tasks.values()):  # noqa: SLF001
-        t.cancel()
     for t in list(rt._attempt_tasks.values()):  # noqa: SLF001
         t.cancel()
     try:

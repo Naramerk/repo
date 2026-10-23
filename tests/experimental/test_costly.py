@@ -139,3 +139,56 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
     assert rt.tasks["st_cost/LIT"].reason == "human_timeout"
     await close_runtime(rt)
 
+
+@pytest.mark.asyncio
+async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
+    """Settled spend is journaled; reopen restores DelegatedBudget.remaining_rub."""
+    from datetime import timedelta
+    from decimal import Decimal
+
+    from coscientist.core.domain import Budget, GateConfig, HitlPolicy
+    from coscientist.core.runtime_factory import close_runtime, open_runtime
+    from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
+    from tests.helpers import attach_executor, record_success
+
+    policy = HitlPolicy(
+        mode="interactive",
+        gates={
+            "costly_or_nonreal": GateConfig(
+                enabled=True, timeout_s=30, on_timeout="fail"
+            )
+        },
+    )
+    budget = Budget(
+        delegated_costly=Decimal("1000"), deadline=clock.now() + timedelta(hours=1)
+    )
+    rt = await open_runtime(
+        tmp_path, "st_bud_rec", clock=clock, runtime_cls=ExpStudyRuntime
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(minutes=30),
+        sid="st_bud_rec",
+        hitl_policy=policy,
+        budget=budget,
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    await record_success(rt, await rt.start_attempt("SPEC"), arts)
+    rid = await rt.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=400)
+    await rt.answer_hitl(rid, "delegate")
+    await rt.settle_delegated_spend(rid, actual_rub=350)
+    assert rt.delegated_budget is not None
+    assert rt.delegated_budget.spent_rub == 350
+    assert rt.delegated_budget.remaining_rub == 650
+    await close_runtime(rt)
+
+    rt2 = await open_runtime(
+        tmp_path, "st_bud_rec", clock=clock, runtime_cls=ExpStudyRuntime
+    )
+    assert rt2.delegated_budget is not None
+    assert rt2.delegated_budget.spent_rub == 350
+    assert rt2.delegated_budget.remaining_rub == 650
+    await close_runtime(rt2)
+

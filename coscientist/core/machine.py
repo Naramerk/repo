@@ -52,11 +52,11 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
         self.attempts: dict[str, dict[str, Any]] = {}
         self.results: dict[str, dict[str, Any]] = {}
         self._attempt_tasks: dict[str, asyncio.Task[Any]] = {}
-        self._retry_tasks: dict[str, asyncio.Task[Any]] = {}
         self._lease_lost = False
         self.executor: Any | None = None
         self.dep_outputs: dict[str, dict[str, str]] = {}
         self.dep_provenance: dict[str, Provenance] = {}
+        # task_id → retry_at (from AttemptClosed); armed by fold / fail, fired by tick.
         self._retry_at: dict[str, datetime] = {}
 
     async def _append(self, events: list[EventEnvelope]) -> None:
@@ -121,7 +121,11 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             raise
 
     async def tick(self) -> None:
-        """Apply task/study deadline cancellations (P5/P6). HITL timeouts are experimental."""
+        """Apply P5/P6 deadline cancellations and due P3 retries (vs injected Clock).
+
+        HITL timeouts are experimental. No asyncio sleeps/timers for retries —
+        ``retry_at`` is journaled and honored after crash/reopen when tick runs.
+        """
         if self.study is None or self._lease_lost:
             return
         await self.ensure_lease()
@@ -171,6 +175,34 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                     )
                 )
                 await self._append(events)
+
+        await self._fire_due_retries(now)
+
+    async def _fire_due_retries(self, now: datetime) -> None:
+        """Start attempts whose persisted ``retry_at`` is due (P3)."""
+        if self._lease_lost:
+            return
+        for tid, retry_at in list(self._retry_at.items()):
+            if self._lease_lost:
+                return
+            if now < retry_at:
+                continue
+            task = self.tasks.get(tid)
+            if task is None or task.state == TaskState.DONE:
+                self._retry_at.pop(tid, None)
+                continue
+            if now > task.deadline or (
+                self.study is not None and now > self.study.deadline
+            ):
+                # Deadline path above should have closed it; skip if still pending.
+                continue
+            open_atts = [
+                a for a in task.attempts if not self.attempts.get(a, {}).get("closed")
+            ]
+            if open_atts:
+                continue
+            prov = self._provenance_for_retry(tid)
+            await self.start_attempt(tid, provenance=prov)
 
 
 def new_owner() -> str:

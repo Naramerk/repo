@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -218,3 +219,101 @@ def _key(table: str, row: dict) -> str:
         if f in row:
             return str(row[f])
     return str(row)
+
+
+@pytest.mark.asyncio
+async def test_upsert_projection_rejects_datetime(tmp_path: Path, clock: FakeClock):
+    """Strict serialization: unknown/non-JSON types raise at write (no _json_default)."""
+    store = SqliteEventStore("st_json", tmp_path / "json.db", clock=clock)
+    with pytest.raises(TypeError, match="not JSON serializable|datetime"):
+        store.upsert_projection(
+            "tasks",
+            "t1",
+            {
+                "task_id": "t1",
+                "deadline": datetime(2026, 1, 1, tzinfo=UTC),
+            },
+        )
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_append_rejects_datetime_in_payload(tmp_path: Path, clock: FakeClock):
+    """Datetime in payload fails at write (digest/JCS or json.dumps) — never stringified."""
+    from rfc8785 import CanonicalizationError
+
+    store = SqliteEventStore("st_json2", tmp_path / "json2.db", clock=clock)
+    await store.acquire_lease("o1")
+    with pytest.raises((TypeError, CanonicalizationError)):
+        await store.append(
+            EventEnvelope(
+                study_id="st_json2",
+                type="StudyCreated",
+                entity_key="st_json2",
+                idem_key="StudyCreated:st_json2",
+                payload={"study_id": "st_json2", "created_at": clock.now()},
+                ts=clock.now(),
+            )
+        )
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_event_loop_progresses_during_slow_write(
+    tmp_path: Path, clock: FakeClock, runtime_cls: type
+):
+    """SQLite write I/O runs off-loop: a concurrent tick runs while a write sleeps."""
+    import threading
+
+    rt = await open_runtime(
+        tmp_path, "st_slow", clock=clock, runtime_cls=runtime_cls
+    )
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(minutes=30),
+        sid="st_slow",
+    )
+    entered = threading.Event()
+    rt.store._write_delay_s = 0.35  # noqa: SLF001
+    rt.store._write_delay_entered = entered  # noqa: SLF001
+
+    peer_saw_in_flight = False
+
+    async def _peer_tick() -> None:
+        nonlocal peer_saw_in_flight
+        # Wait until the write thread is inside its delay (loop must stay responsive).
+        while not entered.is_set():
+            await asyncio.sleep(0.01)
+        assert not write_task.done(), "write should still be in flight"
+        peer_saw_in_flight = True
+        # Concurrent tick: schedules, awaits lease (queues behind write), completes.
+        await rt.tick()
+
+    write_task = asyncio.create_task(
+        rt._append(  # noqa: SLF001
+            [
+                EventEnvelope(
+                    study_id="st_slow",
+                    type="GraphNodeUpserted",
+                    entity_key="st_slow:probe",
+                    idem_key="GraphNodeUpserted:st_slow:probe",
+                    payload={
+                        "node_id": "st_slow:probe",
+                        "kind": "study",
+                        "study_id": "st_slow",
+                        "ref_id": "st_slow",
+                    },
+                    ts=clock.now(),
+                )
+            ]
+        )
+    )
+    tick_task = asyncio.create_task(_peer_tick())
+    await asyncio.wait_for(asyncio.gather(write_task, tick_task), timeout=3.0)
+    assert peer_saw_in_flight
+    assert entered.is_set()
+    rt.store._write_delay_s = 0.0  # noqa: SLF001
+    rt.store._write_delay_entered = None  # noqa: SLF001
+    await close_runtime(rt)
