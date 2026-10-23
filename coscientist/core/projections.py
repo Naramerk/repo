@@ -147,19 +147,18 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
             if kept_reason is not None:
                 row["reason"] = kept_reason
             _put(proj, "attempts", aid, row)
-        # Pairing marker for SourceFetched ↔ fetch ToolCall (call_id + tool).
-        call_id = str(p.get("call_id") or "")
-        tool = str(p.get("tool") or "")
-        if call_id and tool and str(p.get("reason") or "") == "source_fetch":
-            from coscientist.core.tool_registry import resolve_is_fetch
+        # Pairing marker: trust journaled tool + is_fetch (see note_fetch_call…).
+        from coscientist.core.source_fetch import note_fetch_call_from_attempt_tainted
 
-            if bool(p.get("is_fetch")) and resolve_is_fetch(tool):
-                _put(
-                    proj,
-                    "fetch_calls",
-                    call_id,
-                    {"call_id": call_id, "tool": tool, "attempt_id": aid},
-                )
+        marked = note_fetch_call_from_attempt_tainted(p if isinstance(p, dict) else {})
+        if marked is not None:
+            call_id, tool = marked
+            _put(
+                proj,
+                "fetch_calls",
+                call_id,
+                {"call_id": call_id, "tool": tool, "attempt_id": aid},
+            )
     elif t == "SourceFetched":
         # Only fold when paired with a journaled fetch ToolCall (AttemptTainted).
         from coscientist.core.source_fetch import source_fetched_paired_with_fetch_call

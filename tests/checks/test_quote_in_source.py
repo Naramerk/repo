@@ -72,20 +72,26 @@ def _put_paper(
     tool: str = "papers_get",
     study_id: str = "st_test",
 ):
+    from coscientist.tools.effects import _invalidate_fetch_capability
+
     cap = _cap(call, tool, study_id=study_id)
     attempt_id = call.rsplit(":", 1)[0] if ":" in call else call
-    return arts.put_fetched(
-        content,
-        make_tool_ref(call, tool=tool),
-        name="paper.txt",
-        media_type="text/plain",
-        role="paper",
-        capability=cap,
-        expected_tool=tool,
-        expected_call_id=call,
-        expected_study_id=study_id,
-        expected_attempt_id=attempt_id,
-    )
+    try:
+        return arts.put_fetched(
+            content,
+            make_tool_ref(call, tool=tool),
+            name="paper.txt",
+            media_type="text/plain",
+            role="paper",
+            capability=cap,
+            expected_tool=tool,
+            expected_call_id=call,
+            expected_study_id=study_id,
+            expected_attempt_id=attempt_id,
+        )
+    finally:
+        # Unit helper: put only asserts (no consume) — drop the test mint.
+        _invalidate_fetch_capability(cap)
 
 
 def _catalog_quote() -> object:
@@ -1637,7 +1643,7 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
         writer=rt.writer,
         artifacts=arts,
     )
-    assert out.artifacts == [] or out.artifacts is None or not out.artifacts
+    assert not out.artifacts
     events = await rt.store.read_all()
     assert any(
         e.type == "AttemptTainted"
@@ -1652,6 +1658,10 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
 @pytest.mark.asyncio
 async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry):
     """Two tool-producer artifacts in one fetch → remint + both SourceFetched."""
+    from coscientist.tools import effects as effects_mod
+
+    effects_mod._ISSUED_FETCH_CAPS.clear()
+    effects_mod._SOURCE_FETCHED_WRITE_PERMITS.clear()
 
     class _MultiFetch:
         def __init__(self, arts: LocalArtifactStore):
@@ -1738,6 +1748,11 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
         if e.type == "SourceFetched" and e.payload.get("digest") in digests
     ]
     assert len(sf) == 2
+    from coscientist.tools import effects as effects_mod
+
+    # Caps minted for this invoke_tool call must be gone (issued + write permits).
+    assert effects_mod._ISSUED_FETCH_CAPS == {}
+    assert effects_mod._SOURCE_FETCHED_WRITE_PERMITS == {}
     await close_runtime(rt)
 
 
@@ -1784,3 +1799,218 @@ def test_core_cannot_bypass_source_fetched_with_bool_flag(tmp_path: Path, clock)
         await close_runtime(rt)
 
     asyncio.run(_run())
+
+
+@pytest.mark.asyncio
+async def test_append_failure_on_second_digest_clears_permits(
+    tmp_path: Path, clock, fetch_registry, monkeypatch
+):
+    """Second digest append fails → write permit released; registries empty."""
+    from coscientist.core.source_fetch import append_source_fetched
+    from coscientist.tools import effects as effects_mod
+
+    effects_mod._ISSUED_FETCH_CAPS.clear()
+    effects_mod._SOURCE_FETCHED_WRITE_PERMITS.clear()
+    catalog = _catalog_quote()
+    sid = "st_append_fail"
+    rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0-pr14",
+        deadline=clock.now() + timedelta(seconds=60),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    _ex, arts = attach_executor(rt, tmp_path)
+    rt.artifacts = arts
+    for key in ("SPEC", "HYP", "LIT"):
+        await record_success(rt, await rt.start_attempt(key), arts)
+    await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="LIT-0",
+                title="lit",
+                goal="g",
+                route="literature",
+                depends_on=["PLAN"],
+                criteria=[RequirementRef(template_id="quote_ok")],
+            )
+        ],
+        questions=[],
+    )
+    aid = await rt.start_attempt("LIT-0")
+    assert aid is not None
+    call_id = f"{aid}:1"
+    # Journal AttemptTainted + first successful SourceFetched via invoke.
+    out = await invoke_tool(
+        _FetchTool(arts, b"First paper has four word tokens right here now."),
+        {"url": "https://agent.example/a"},
+        CallCtx(
+            study_id=sid,
+            task_key="LIT-0",
+            attempt_id=aid,
+            hitl_policy=HitlPolicy(),
+            call_seq=1,
+        ),
+        writer=rt.writer,
+        artifacts=arts,
+    )
+    assert out.artifacts
+    assert effects_mod._ISSUED_FETCH_CAPS == {}
+    assert effects_mod._SOURCE_FETCHED_WRITE_PERMITS == {}
+
+    # Remint for a second digest; make writer.append fail after verify.
+    cap2 = _cap(call_id, "papers_get", study_id=sid)
+    assert cap2.id in effects_mod._ISSUED_FETCH_CAPS
+
+    async def _boom(*_a, **_k):
+        raise RuntimeError("simulated append failure")
+
+    monkeypatch.setattr(rt.writer, "append", _boom)
+    with pytest.raises(RuntimeError, match="simulated append failure"):
+        await append_source_fetched(
+            rt.writer,
+            study_id=sid,
+            call_id=call_id,
+            tool="papers_get",
+            digest="deadbeef" * 8,
+            url="https://normalized.example/x",
+            capability=cap2,
+        )
+    assert effects_mod._ISSUED_FETCH_CAPS == {}
+    assert effects_mod._SOURCE_FETCHED_WRITE_PERMITS == {}
+    await close_runtime(rt)
+
+
+def test_attempt_tainted_without_is_fetch_does_not_pair():
+    """Negative: AttemptTainted missing is_fetch must not create fetch_calls."""
+    from coscientist.core.events import EventEnvelope
+    from coscientist.core.projections import apply_to_map
+    from coscientist.core.source_fetch import (
+        SourceFetchIndex,
+        apply_source_fetch_events,
+        note_fetch_call_from_attempt_tainted,
+    )
+
+    payload = {
+        "attempt_id": "att",
+        "reason": "source_fetch",
+        "call_id": "att:1",
+        "tool": "papers_get",
+        # is_fetch omitted
+    }
+    assert note_fetch_call_from_attempt_tainted(payload) is None
+    idx = SourceFetchIndex()
+    apply_source_fetch_events(
+        idx,
+        [
+            EventEnvelope(
+                study_id="s",
+                type="AttemptTainted",
+                entity_key="att",
+                idem_key="AttemptTainted:att:att:1",
+                payload=payload,
+                ts=datetime.now(UTC),
+                schema_version=1,
+                seq=1,
+            ),
+            EventEnvelope(
+                study_id="s",
+                type="SourceFetched",
+                entity_key="x",
+                idem_key="SourceFetched:x",
+                payload={
+                    "call_id": "att:1",
+                    "tool": "papers_get",
+                    "digest": "deadbeef",
+                    "url": "https://x",
+                },
+                ts=datetime.now(UTC),
+                schema_version=1,
+                seq=2,
+            ),
+        ],
+    )
+    assert "deadbeef" not in idx.digests()
+    proj: dict = {}
+    apply_to_map(
+        proj,
+        EventEnvelope(
+            study_id="s",
+            type="AttemptTainted",
+            entity_key="att",
+            idem_key="AttemptTainted:att:att:1b",
+            payload=payload,
+            ts=datetime.now(UTC),
+            schema_version=1,
+            seq=1,
+        ),
+    )
+    assert not proj.get("fetch_calls")
+
+
+def test_attempt_tainted_renamed_tool_still_pairs_from_journal(fetch_registry):
+    """Unregistered (renamed) tool with journaled is_fetch still pairs — no silent drop."""
+    from coscientist.core.source_fetch import note_fetch_call_from_attempt_tainted
+
+    marked = note_fetch_call_from_attempt_tainted(
+        {
+            "reason": "source_fetch",
+            "is_fetch": True,
+            "tool": "papers_get_old_name",
+            "call_id": "att:9",
+        }
+    )
+    assert marked == ("att:9", "papers_get_old_name")
+
+
+def test_attempt_tainted_reclassified_tool_fails_loudly(fetch_registry):
+    """Registered tool with is_fetch=False vs journaled True → RuntimeError."""
+    from coscientist.core.source_fetch import note_fetch_call_from_attempt_tainted
+
+    # catalog_read is registered is_fetch=False by fetch_registry fixture.
+    with pytest.raises(RuntimeError, match="refusing silent drop"):
+        note_fetch_call_from_attempt_tainted(
+            {
+                "reason": "source_fetch",
+                "is_fetch": True,
+                "tool": "catalog_read",
+                "call_id": "att:1",
+            }
+        )
+
+
+def test_fetch_capability_mismatch_on_wrong_bind(fetch_registry):
+    """verify/assert raise fetch_capability_mismatch on wrong tool/call/study."""
+    from coscientist.core.errors import ArtifactRejected
+    from coscientist.core.source_fetch import (
+        assert_fetch_capability_bound,
+        verify_fetch_capability,
+    )
+    from coscientist.tools import effects as effects_mod
+
+    effects_mod._ISSUED_FETCH_CAPS.clear()
+    effects_mod._SOURCE_FETCHED_WRITE_PERMITS.clear()
+    cap = _cap("att:1", "papers_get", study_id="st_x")
+    with pytest.raises(ArtifactRejected, match="fetch_capability_mismatch"):
+        assert_fetch_capability_bound(
+            cap,
+            tool="wrong_tool",
+            call_id="att:1",
+            study_id="st_x",
+            attempt_id="att",
+        )
+    with pytest.raises(ArtifactRejected, match="fetch_capability_mismatch"):
+        verify_fetch_capability(
+            cap,
+            tool="papers_get",
+            call_id="att:99",
+            study_id="st_x",
+            attempt_id="att",
+        )
+    # Cap still issued (mismatch fails in lookup before consume).
+    assert cap.id in effects_mod._ISSUED_FETCH_CAPS
+    effects_mod._invalidate_fetch_capability(cap)
+    assert effects_mod._ISSUED_FETCH_CAPS == {}
+    assert effects_mod._SOURCE_FETCHED_WRITE_PERMITS == {}

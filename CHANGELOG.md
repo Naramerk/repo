@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### M1 PR14 follow-up
+- `append_source_fetched`: try/finally releases write permit if append fails after verify.
+- Replay pairing trusts journaled `AttemptTainted.{tool,is_fetch}`; reclassified same-name `is_fetch=False` fails loudly (no silent drop of old SourceFetched).
+
 ### Sandbox (host CPU sample order)
 - `_watch_process`: sample host-tree CPU via `/proc` **before** `poll()` (poll reaps the child and `/proc` vanishes). Keeps no-cgroup SIGXCPU classification accurate; retains the max sample while the guest is alive. Split out of PR14 so quote work stays focused.
 - **M2 notes:** `_host_tree_cpu_s` returns `0.0` (not `None`) when `/proc` is readable but idle; missing `CONFIG_PROC_CHILDREN` silently drops descendants; cgroup idle path untested on CI without delegation.

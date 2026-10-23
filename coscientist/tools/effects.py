@@ -172,10 +172,16 @@ def _take_source_fetched_write_permit(
         raise ArtifactRejected("fetch_capability_mismatch")
 
 
+def _release_source_fetched_write_permit(cap_id: str) -> None:
+    """Drop write permit without take (append failed after verify)."""
+    _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id, None)
+
+
 register_fetch_capability_verifier(
     _verify_fetch_capability,
     assert_fn=_assert_fetch_capability,
     take_write_permit_fn=_take_source_fetched_write_permit,
+    release_write_permit_fn=_release_source_fetched_write_permit,
 )
 
 
