@@ -25,12 +25,13 @@ class EventEnvelope(BaseModel):
 
 # Typed payload helpers used by the machine / executor.
 
-# Writer constants (#21 PlanExpanded v2 / TaskCreated v10 / PlanAccepted v8;
-# this PR stacks TaskCreated v11 + PlanAccepted v9 + PlanExpanded v3 loop fields.
-# StudyCreated v10 (max_loop_iter) stays here — #24 merges before #23 (v11).
-PLAN_EXPANDED_SCHEMA_VERSION = 3
+# Writer constants after main 83949bb (#24 LoopSpec):
+#   TaskCreated v11, PlanAccepted v9, PlanExpanded v3, StudyCreated v10.
+# PR16 stacks PlanAccepted v10 + PlanExpanded v4 (decomposes/rollup).
+# StudyCreated stays v10 — #23 takes v11.
+PLAN_EXPANDED_SCHEMA_VERSION = 4
 STUDY_CREATED_SCHEMA_VERSION = 10
-PLAN_ACCEPTED_SCHEMA_VERSION = 9
+PLAN_ACCEPTED_SCHEMA_VERSION = 10
 TASK_CREATED_SCHEMA_VERSION = 11
 
 EventType = Literal[

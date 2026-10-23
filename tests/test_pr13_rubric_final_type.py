@@ -943,10 +943,11 @@ def test_upcast_taskcreated_v10_and_plan_expanded_v2():
             "added_questions": [{"id": "Q1", "text": "q"}],
         },
     )
-    assert v2 == 3
+    assert v2 == 4  # PR16 PlanExpanded v4 after PR11 loop v3
     assert p2["added_tasks"][0]["expected_outputs"][0]["rubric"] is None
     assert p2["added_tasks"][0]["loop_id"] is None
     assert p2["added_questions"][0]["final_type"] == "verdict"
+    assert p2.get("rollup") == "all"
     # Legacy unknown final_type coerced to verdict (current unknown → PlanRefused).
     v3, p3 = upcast(
         "PlanAccepted",
@@ -957,9 +958,10 @@ def test_upcast_taskcreated_v10_and_plan_expanded_v2():
             "tasks": [],
         },
     )
-    assert v3 == 9
+    assert v3 == 10  # PR16 PlanAccepted v10 after PR11 loops v9
     assert p3["questions"][0]["final_type"] == "verdict"
     assert p3.get("loops") == []
+    assert p3.get("rollup") == "all"
 
 
 def test_study_view_uses_study_fulfilled_final_types():

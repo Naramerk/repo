@@ -1188,8 +1188,9 @@ def test_upcast_plan_accepted_loops_default():
             "tasks": [],
         },
     )
-    assert v == 9
+    assert v == 10  # PR16 stacks decomposes after PR11 loops v9
     assert p["loops"] == []
+    assert p.get("rollup") == "all"
 
 
 def test_upcast_task_created_loop_fields():

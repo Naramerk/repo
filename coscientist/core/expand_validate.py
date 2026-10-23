@@ -210,23 +210,78 @@ def _validate(
     )
     if ft_err is not None:
         return ft_err
-    # max_depth: decomposes chain via QuestionSpec.parent_id (optional).
+    # max_depth + acyclicity: decomposes via parent_id ∪ graph (DESIGN_M1 §10).
+    from coscientist.core.decomposes import assert_decomposes_acyclic, max_decomposes_depth
+    from coscientist.core.plan_validate import validate_decomposes
+
     max_depth = int(getattr(study, "max_depth", 8) or 8)
-    parent_of = {q.id: getattr(q, "parent_id", None) for q in added_questions}
-    for _qid, parent in parent_of.items():
-        if not parent:
-            continue
-        depth = 1
-        walk = parent
-        guard = 0
-        while walk:
-            depth += 1
-            if depth > max_depth:
-                return f"max_depth:{max_depth}"
-            walk = parent_of.get(walk) or _parent_from_graph(runtime, sid, walk)
-            guard += 1
-            if guard > max_depth + 2:
-                return "max_depth:cycle"
+    parent_of: dict[str, str | None] = {
+        q.id: getattr(q, "parent_id", None) for q in added_questions
+    }
+    # Prior plan questions may already carry parent_id.
+    for plan in plan_rows:
+        qs = plan.get("questions") if isinstance(plan, dict) else getattr(plan, "questions", None)
+        for q in qs or []:
+            if isinstance(q, dict) and q.get("id"):
+                qid = str(q["id"])
+                parent = q.get("parent_id")
+                if qid not in parent_of or parent_of[qid] is None:
+                    parent_of[qid] = str(parent) if parent else parent_of.get(qid)
+            elif hasattr(q, "id"):
+                qid = str(q.id)
+                parent = getattr(q, "parent_id", None)
+                if qid not in parent_of or parent_of[qid] is None:
+                    parent_of[qid] = str(parent) if parent else parent_of.get(qid)
+    for qid in texts:
+        if qid not in parent_of:
+            parent_of[qid] = _parent_from_graph(runtime, sid, qid)
+        elif parent_of[qid] is None:
+            parent_of[qid] = _parent_from_graph(runtime, sid, qid)
+    for qid, parent in list(parent_of.items()):
+        if parent and parent not in parent_of:
+            parent_of[parent] = _parent_from_graph(runtime, sid, parent)
+    try:
+        assert_decomposes_acyclic(parent_of)
+        depth = max_decomposes_depth(parent_of) if any(parent_of.values()) else 0
+    except ValueError as e:
+        return str(e) or "max_depth:cycle"
+    if depth > max_depth:
+        return f"max_depth:{max_depth}"
+    if not any(parent_of.values()):
+        return None
+    try:
+        by_id = {q.id: q for q in q_for_validate}
+        q_all: list[QuestionSpec] = []
+        for qid, parent in parent_of.items():
+            existing = by_id.get(qid)
+            if existing is not None:
+                if parent and not getattr(existing, "parent_id", None):
+                    q_all.append(existing.model_copy(update={"parent_id": parent}))
+                else:
+                    q_all.append(existing)
+            else:
+                q_all.append(
+                    QuestionSpec(
+                        id=qid,
+                        text=texts.get(qid, ""),
+                        parent_id=parent,
+                        final_type=prev_final.get(qid, "verdict"),  # type: ignore[arg-type]
+                    )
+                )
+        rollup = "all"
+        if plan_rows:
+            last = plan_rows[-1] if isinstance(plan_rows[-1], dict) else None
+            if isinstance(last, dict) and last.get("rollup") in ("all", "any", "majority", "rubric"):
+                rollup = str(last["rollup"])
+        validate_decomposes(
+            merged,
+            q_all,
+            rollup=rollup,
+            max_depth=max_depth,
+            max_tasks=int(getattr(study, "max_tasks", 64) or 64),
+        )
+    except ValueError as e:
+        return str(e) or "invalid_decomposes"
     return None
 
 

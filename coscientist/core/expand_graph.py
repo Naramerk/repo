@@ -133,6 +133,12 @@ def question_graph_events(
         )
         parent = getattr(q, "parent_id", None)
         if parent:
+            from coscientist.core.decomposes import assert_decomposes_acyclic
+
+            # Acyclicity on every decomposes write (DESIGN_M1 §10).
+            q_origin = getattr(q, "origin", None)
+            edge_origin = q_origin if q_origin in ("explicit", "implicit", "emergent") else "emergent"
+            assert_decomposes_acyclic({q.id: str(parent), str(parent): None})
             pn = question_node_id(sid, str(parent))
             eid = f"decomposes:{qnid}:{pn}"
             events.append(
@@ -147,7 +153,7 @@ def question_graph_events(
                         study_id=sid,
                         src_id=qnid,
                         dst_id=pn,
-                        attrs={"origin": "emergent"},
+                        attrs={"origin": edge_origin},
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,

@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from coscientist.core.decomposes import DecomposeOrigin, RollupRule
 from coscientist.core.reasons import CloseReason, TaskReason
 from coscientist.core.rubric_types import FinalType, Rubric
 
@@ -243,6 +244,8 @@ class QuestionSpec(Frozen):
     text: str
     # Optional parent for decomposes / max_depth (DESIGN_M1 §10).
     parent_id: str | None = None
+    # M1 PR16: decomposes edge attrs.origin (explicit|implicit|emergent).
+    origin: DecomposeOrigin | None = None
     # M1 PR13: verdict (claims) | artifact (rubric) | both (DESIGN_M1 §6.1).
     final_type: FinalType = "verdict"
 
@@ -411,6 +414,9 @@ class Plan(Frozen):
     expand_after: list[str] = Field(default_factory=list)
     # M1 PR11 / S10: bounded loops (body not in tasks[]; core materializes iters).
     loops: list[LoopSpec] = Field(default_factory=list)
+    # M1 PR16 / PlanOut: named subquestions (parent_id required) + rollup rule.
+    subquestions: list[QuestionSpec] = Field(default_factory=list)
+    rollup: RollupRule = "all"
 
 
 class Task(Frozen):

@@ -336,6 +336,21 @@ async def _expand_plan(
         for q in (prev.get("questions") if prev else []) or []
     ]
     all_questions = [q for q in prev_questions if q.id not in superseded_old] + added_questions
+    # Stamp expansion origin onto new child questions when unset (PR16).
+    stamped: list[QuestionSpec] = []
+    for q in all_questions:
+        if q.id in {aq.id for aq in added_questions} and getattr(q, "origin", None) is None:
+            edge_origin = "emergent" if origin == "emergent" else "explicit"
+            if getattr(q, "parent_id", None):
+                stamped.append(q.model_copy(update={"origin": edge_origin}))
+            else:
+                stamped.append(q)
+        else:
+            stamped.append(q)
+    all_questions = stamped
+    prev_rollup = (prev or {}).get("rollup") if prev else None
+    rollup = prev_rollup if prev_rollup in ("all", "any", "majority", "rubric") else "all"
+    named_subs = [q for q in all_questions if getattr(q, "parent_id", None)]
 
     pid = plan_id()
     from coscientist.core.domain import LoopSpec
@@ -353,6 +368,8 @@ async def _expand_plan(
         questions=all_questions,
         expand_after=expand_after,
         loops=prev_loops,
+        subquestions=named_subs,
+        rollup=rollup,  # type: ignore[arg-type]
     )
     events: list[EventEnvelope] = []
     events.extend(

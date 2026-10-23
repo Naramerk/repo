@@ -379,6 +379,38 @@ def _plan_accepted_v7_to_v8_rubric(payload: dict[str, Any]) -> dict[str, Any]:
     return _ensure_rubric_final_type_fields(payload)
 
 
+def _ensure_decomposes_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR16: Plan.rollup / subquestions + QuestionSpec.origin defaults."""
+    out = dict(payload)
+    out.setdefault("rollup", "all")
+    out.setdefault("subquestions", [])
+    for bucket in ("questions", "subquestions", "added_questions"):
+        rows = out.get(bucket)
+        if not isinstance(rows, list):
+            continue
+        rewritten: list[Any] = []
+        for q in rows:
+            if isinstance(q, dict):
+                q = dict(q)
+                q.setdefault("parent_id", None)
+                q.setdefault("origin", None)
+                rewritten.append(q)
+            else:
+                rewritten.append(q)
+        out[bucket] = rewritten
+    return out
+
+
+def _plan_accepted_v9_to_v10_decomposes(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR16: rollup + subquestions on PlanAccepted v10 (after PR11 loops v9)."""
+    return _ensure_decomposes_fields(payload)
+
+
+def _plan_expanded_v3_to_v4_decomposes(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR16: rollup/subquestions/origin on PlanExpanded v4 (after PR11 loop v3)."""
+    return _ensure_decomposes_fields(payload)
+
+
 def _attempt_started_v4_to_v5_shares(payload: dict[str, Any]) -> dict[str, Any]:
     """PR12: P2 share allocation fields on AttemptStarted."""
     out = dict(payload)
@@ -676,8 +708,10 @@ register_upcaster("PlanAccepted", 5, _plan_accepted_v5_to_v6_sandbox)
 register_upcaster("PlanAccepted", 6, _plan_accepted_v6_to_v7_shares)
 register_upcaster("PlanAccepted", 7, _plan_accepted_v7_to_v8_rubric)
 register_upcaster("PlanAccepted", 8, _plan_accepted_v8_to_v9_loops)
+register_upcaster("PlanAccepted", 9, _plan_accepted_v9_to_v10_decomposes)
 register_upcaster("PlanExpanded", 1, _plan_expanded_v1_to_v2_rubric)
 register_upcaster("PlanExpanded", 2, _plan_expanded_v2_to_v3_loop)
+register_upcaster("PlanExpanded", 3, _plan_expanded_v3_to_v4_decomposes)
 register_upcaster("StudyCreated", 1, _study_created_v1_to_v2)
 register_upcaster("StudyCreated", 2, _study_created_v2_to_v3)
 register_upcaster("StudyCreated", 3, _study_created_v3_to_v4)

@@ -69,5 +69,8 @@ def questions_from_spec_output(spec_out: Mapping[str, Any] | None) -> list[dict[
         parent = item.get("parent_id")
         if parent:
             row["parent_id"] = str(parent)
+        origin = item.get("origin")
+        if origin is not None and origin != "":
+            row["origin"] = origin
         out.append(row)
     return out
