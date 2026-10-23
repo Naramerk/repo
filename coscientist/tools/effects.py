@@ -205,10 +205,14 @@ async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
 
     Incremental fold cached on the writer (same pattern as the effect index) so
     each ``invoke_tool`` is O(Δ) rather than a full ``read_all``.
+
+    Fail-closed: missing store or unknown ``attempt_id`` → tainted (deny writes).
     """
     store = getattr(writer, "store", None)
     if store is None or not hasattr(store, "read_all"):
-        return False
+        return True
+    if not attempt_id:
+        return True
     cache: dict[str, bool] | None = getattr(writer, "_pr18_taint_by_attempt", None)
     after = int(getattr(writer, "_pr18_taint_seq", 0) or 0)
     if cache is None:
@@ -237,7 +241,9 @@ async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
             _note_attempt_taint(cache, ev)
     writer._pr18_taint_by_attempt = cache  # type: ignore[attr-defined]
     writer._pr18_taint_seq = after  # type: ignore[attr-defined]
-    return bool(cache.get(attempt_id, False))
+    if attempt_id not in cache:
+        return True  # unknown attempt — fail closed
+    return bool(cache[attempt_id])
 
 
 def _restore_output(

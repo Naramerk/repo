@@ -24,6 +24,8 @@ from coscientist.core.runtime_factory import close_runtime, open_runtime
 
 # Default wait for another worker to finish create_study before takeover.
 _WAIT_COMPLETE_S = 2.0
+# Only reclaim a non-empty unreadable reservation if older than this (or owner dead).
+_STALE_RESERVATION_S = 60.0
 
 
 class CreateStudyBody(BaseModel):
@@ -63,8 +65,45 @@ def _read_mapping(path: Path) -> dict[str, Any] | None:
         if not raw:
             return None  # empty file from crash between O_EXCL and write
         return json.loads(raw)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return None
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists but not owned by us
+    except OSError:
+        return False
+    return True
+
+
+def _reservation_reclaimable(path: Path) -> bool:
+    """True only for empty crash stubs or provably stale/dead-owner reservations.
+
+    Never unlink a recent non-empty file — it may be a live neighbour mid-write.
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return False
+    if st.st_size == 0:
+        return True
+    age = time.time() - st.st_mtime
+    if age >= _STALE_RESERVATION_S:
+        return True
+    existing = _read_mapping(path)
+    if existing is not None:
+        pid = existing.get("owner_pid")
+        if isinstance(pid, int) and not _pid_alive(pid):
+            return True
+        return False  # readable live mapping — not a reclaim candidate here
+    return False
 
 
 def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
@@ -99,8 +138,9 @@ async def _reserve_key(
 ) -> tuple[dict[str, Any], bool]:
     """O_EXCL create the mapping file.
 
-    Returns ``(mapping, created)``. Empty/corrupt reservation left by a crash
-    between O_EXCL and write is unlinked and retried (recoverable).
+    Returns ``(mapping, created)``. Empty crash stubs (O_EXCL then die) and
+    *provably stale* unreadable files may be reclaimed. A recent non-empty
+    unreadable file is treated as a live neighbour write → ``Conflict`` (retry).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -108,6 +148,8 @@ async def _reserve_key(
         "request_digest": request_digest,
         "idempotency_key": key,
         "status": "pending",
+        "owner_pid": os.getpid(),
+        "created_at": time.time(),
     }
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
 
@@ -117,25 +159,21 @@ async def _reserve_key(
         except FileExistsError:
             existing = _read_mapping(path)
             if existing is None:
-                # Empty (crash between O_EXCL and write) or corrupt JSON.
-                try:
-                    st = path.stat()
-                    if st.st_size == 0:
-                        path.unlink(missing_ok=True)
-                        await asyncio.sleep(0)
-                        continue
-                except OSError:
-                    pass
+                # Brief wait — neighbour may still be writing the first bytes.
                 await asyncio.sleep(0.05)
                 existing = _read_mapping(path)
             if existing is None:
-                # Still unreadable — recover by unlinking and retrying O_EXCL.
-                try:
-                    path.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                await asyncio.sleep(0.05)
-                continue
+                if _reservation_reclaimable(path):
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    await asyncio.sleep(0)
+                    continue
+                raise Conflict(
+                    f"Idempotency-Key reservation busy or unreadable "
+                    f"(not yet stale); retry later (key={key!r})"
+                ) from None
             if existing.get("request_digest") != request_digest:
                 raise Conflict(
                     f"Idempotency-Key reused with a different POST /studies body "
@@ -257,6 +295,8 @@ async def post_studies(
                 "request_digest": req_digest,
                 "idempotency_key": idempotency_key,
                 "status": "complete",
+                "owner_pid": os.getpid(),
+                "created_at": time.time(),
             },
         )
     return {"study_id": created_id}

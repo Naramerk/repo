@@ -102,6 +102,18 @@ def test_registry_freeze_forbids_replace_and_spoof():
     assert resolve_effect("x") == "write"
 
 
+@pytest.mark.asyncio
+async def test_register_tool_after_runtime_start_raises(tmp_path: Path):
+    """open_runtime freezes the registry after built-ins (B2)."""
+    rt = await open_runtime(tmp_path, "st_freeze")
+    try:
+        assert is_registry_frozen()
+        with pytest.raises(RegistryFrozenError):
+            register_tool(RegisteredToolSpec(name="late_tool", effect="read"))
+    finally:
+        await close_runtime(rt)
+
+
 @dataclass
 class _CountingTool:
     spec: ToolSpec
@@ -426,6 +438,31 @@ async def test_taint_from_journal_not_caller(tmp_path: Path):
         await close_runtime(rt)
 
 
+@pytest.mark.asyncio
+async def test_unknown_attempt_id_fail_closed_taint(tmp_path: Path):
+    """Missing AttemptStarted for attempt_id → treat as tainted (deny writes)."""
+    rt = await _runtime_with_writer(tmp_path, sid="st_pr18_unknown")
+    arts = LocalArtifactStore(tmp_path / "arts")
+    try:
+        write = _CountingTool(ToolSpec(name="mutate", effect="write"))
+        ctx = CallCtx(
+            study_id="st_pr18_unknown",
+            task_key="EXP-0",
+            attempt_id="never-started#1",
+            hitl_policy=_allow_side_effect(),
+            tainted_context=False,
+        )
+        with pytest.raises(ToolError) as ei:
+            await invoke_tool(write, {}, ctx, writer=rt.writer, artifacts=arts)
+        assert ei.value.kind == "local"
+        assert "tainted" in ei.value.detail
+        assert write.calls == []
+        deny = next(e for e in await rt.store.read_all() if e.type == "SideEffectDenied")
+        assert deny.payload.get("reason") == "taint_deny"
+    finally:
+        await close_runtime(rt)
+
+
 def test_attempt_taint_contextvar_isolation():
     """Nested ContextVar tokens isolate taint (not shared store state)."""
     token_a = push_attempt_taint(True)
@@ -516,6 +553,43 @@ async def test_post_studies_empty_reservation_recoverable(tmp_path: Path):
     path = _idem_path(Path(tmp_path), key)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"")  # empty reservation
+    r = await post_studies(tmp_path, body, idempotency_key=key, catalog=catalog)
+    assert r["study_id"] == study_id_from_idempotency_key(key)
+    assert json.loads(path.read_text())["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_post_studies_recent_corrupt_reservation_conflict(tmp_path: Path):
+    """Fresh non-empty unreadable file may be a live neighbour — Conflict, do not unlink."""
+    import os
+    import time
+
+    catalog = minimal_test_catalog()
+    body = CreateStudyBody(request="live neighbour", profile="research")
+    key = "live-corrupt-key"
+    path = _idem_path(Path(tmp_path), key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"{not-json-yet")
+    os.utime(path, (time.time(), time.time()))
+    with pytest.raises(Conflict, match="not yet stale"):
+        await post_studies(tmp_path, body, idempotency_key=key, catalog=catalog)
+    assert path.exists() and path.read_bytes().startswith(b"{not-json")
+
+
+@pytest.mark.asyncio
+async def test_post_studies_stale_corrupt_reservation_reclaimed(tmp_path: Path):
+    """Old unreadable reservation is reclaimable (crash mid-write, owner gone)."""
+    import os
+    import time
+
+    catalog = minimal_test_catalog()
+    body = CreateStudyBody(request="stale corrupt", profile="research")
+    key = "stale-corrupt-key"
+    path = _idem_path(Path(tmp_path), key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"{truncated")
+    old = time.time() - 120.0
+    os.utime(path, (old, old))
     r = await post_studies(tmp_path, body, idempotency_key=key, catalog=catalog)
     assert r["study_id"] == study_id_from_idempotency_key(key)
     assert json.loads(path.read_text())["status"] == "complete"

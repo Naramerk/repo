@@ -97,3 +97,14 @@ forbidden_modules = [
   "coscientist.tools.gate",
   "coscientist.tools.taint",
 ]
+
+[[tool.importlinter.contracts]]
+name = "agents must use invoke_tool (no contract / registry / gate)"
+type = "forbidden"
+source_modules = ["coscientist.agents"]
+forbidden_modules = [
+  "coscientist.tools.contract",
+  "coscientist.tools.gate",
+  "coscientist.tools.taint",
+  "coscientist.core.tool_registry",
+]

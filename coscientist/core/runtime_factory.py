@@ -14,6 +14,7 @@ from coscientist.core.graph import KindRegistry, default_execution_registry
 from coscientist.core.hitl_guard import reject_open_hitl_if_unsupported
 from coscientist.core.machine import StudyRuntime, new_owner
 from coscientist.core.store import SqliteEventStore
+from coscientist.core.tool_loader import ensure_core_tools_ready
 from coscientist.core.writer import StudyWriter
 
 log = logging.getLogger(__name__)
@@ -108,6 +109,8 @@ async def open_runtime(
         # Production path: Executor always via make_executor (live get_graph).
         arts = artifacts if artifacts is not None else LocalArtifactStore(root / "arts")
         rt.make_executor(catalog, arts)
+        # PR18: seal tool registry after built-ins — no late register_tool at runtime.
+        ensure_core_tools_ready()
         return rt
     except BaseException:
         # Stop the writer first so in-flight appends cannot race release.
