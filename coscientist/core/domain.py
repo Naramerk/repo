@@ -84,6 +84,7 @@ HitlGateKind = Literal[
     "result_acceptance",
     "skip_task",
     "budget",  # M1 PR12: budget_share checkpoint («реши сам» → critic)
+    "side_effect",  # PR18: write/external_effect tools (DESIGN_M1 §8)
 ]
 
 
@@ -108,6 +109,8 @@ def _default_gates() -> dict[str, GateConfig]:
         "result_acceptance": GateConfig(timeout_s=1800, on_timeout="delegate"),
         "skip_task": GateConfig(timeout_s=1800, on_timeout="delegate"),
         "budget": GateConfig(timeout_s=1800, on_timeout="delegate"),
+        # Headless default decision is deny (HitlPolicy.defaults); gate itself stays enabled.
+        "side_effect": GateConfig(timeout_s=1800, on_timeout="fail"),
     }
 
 
@@ -130,6 +133,8 @@ class HitlPolicy(Frozen):
             "plan_approval": "human_timeout",
             "result_acceptance": "accept_computed",
             "skip_task": "deny",
+            # K4/K5: write|external_effect tools require an explicit allow (DESIGN_M1 §8).
+            "side_effect": "deny",
         }
     )
 
@@ -471,6 +476,8 @@ class Artifact(Frozen):
     # Sandbox only: isolation actually achieved (PR17). trusted only if both hard.
     net_isolation: NetIsolation | None = None
     fs_isolation: FsIsolation | None = None
+    # PR18 / K5: web/tool-output artifacts are tainted; blocks write tools in context.
+    tainted: bool = False
 
 
 class Clarification(Frozen):

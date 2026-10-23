@@ -84,6 +84,7 @@ class LocalArtifactStore:
         attempt_closed: bool = False,
         net_isolation: NetIsolation | None = None,
         fs_isolation: FsIsolation | None = None,
+        tainted: bool = False,
     ) -> Artifact:
         if attempt_closed:
             raise ArtifactRejected("attempt_closed")
@@ -112,6 +113,7 @@ class LocalArtifactStore:
             producer=producer,
             net_isolation=net_isolation if producer == "sandbox" else None,
             fs_isolation=fs_isolation if producer == "sandbox" else None,
+            tainted=bool(tainted),
         )
         self._index[artifact_id] = art
         (self.meta / f"{artifact_id}.json").write_text(
@@ -129,6 +131,7 @@ class LocalArtifactStore:
         schema_ref: str | None = None,
         role: str | None = None,
         attempt_closed: bool = False,
+        tainted: bool = False,
     ) -> Artifact:
         """Agent-controlled path — always ``producer=agent`` (never trusted)."""
         return self._store(
@@ -140,6 +143,30 @@ class LocalArtifactStore:
             role=role,
             attempt_closed=attempt_closed,
             producer="agent",
+            tainted=tainted,
+        )
+
+    def put_tool(
+        self,
+        content: bytes,
+        produced_by: ToolCallRef,
+        *,
+        name: str,
+        media_type: str,
+        schema_ref: str | None = None,
+        role: str | None = None,
+        attempt_closed: bool = False,
+    ) -> Artifact:
+        """Web/tool output — always ``tainted=True`` (DESIGN_M1 §8)."""
+        return self.put(
+            content,
+            produced_by,
+            name=name,
+            media_type=media_type,
+            schema_ref=schema_ref,
+            role=role,
+            attempt_closed=attempt_closed,
+            tainted=True,
         )
 
     def put_core(

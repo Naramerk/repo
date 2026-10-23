@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### M1 PR18
+- `ToolSpec.effect: read | write | external_effect` (default `read`; replaces `read_only`) in `coscientist.tools`.
+- HITL gate `side_effect` (headless default `deny` → `ToolError(local)`); allow via `HitlPolicy.defaults["side_effect"]="allow"`.
+- `effect_idem_key` + journal events `EffectIntended` / `EffectDone`; retry returns stored result; Intended-without-Done without `supports_idem_key` → `ToolError(opaque)`.
+- `Artifact.tainted`; `put_tool` marks web/tool output; tainted context filters out write/external_effect tools.
+- `POST /studies` Idempotency-Key via `coscientist.api.post_studies` (repeat → same `study_id`; body mismatch → `Conflict`).
+
 ### M1 PR12
 - `TaskSpec.budget_share` / `deadline_share` (None = equal remainder of undistributed pool).
 - Validators / plan critic: Σ `budget_share` ≤ (1−`replan_reserve`); per-task range + `Study.max_task_budget_share`; critical-path Σ `deadline_share` ≤ (1−reserve). Same critic on `accept_plan`, expansions, foreach, and HITL budget apply.

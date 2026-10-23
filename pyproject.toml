@@ -76,6 +76,7 @@ forbidden_modules = [
   "httpx",
   "fastapi",
   "coscientist.api",
+  "coscientist.tools",
   "coscientist.agents",
   "web",
 ]

@@ -480,7 +480,10 @@ class ReviewVerdict(BaseModel):
 class ToolSpec(BaseModel):
     name: str; provider: Literal["mcp","local","coder","alembic"]
     input_schema: dict; output_schema: dict | None
-    read_only: bool = False; idempotent: bool = False
+    # PR18 / DESIGN_M1 §8: effect replaces read_only (default read).
+    effect: Literal["read","write","external_effect"] = "read"
+    idempotent: bool = False
+    supports_idem_key: bool = False   # recover may re-call after EffectIntended without Done
     timeout_s: float = 120; max_retries: int = 2
 
 class ToolError(Exception):
@@ -498,6 +501,9 @@ class Tool(Protocol):
 class ToolOutput(BaseModel):
     data: Any; artifacts: list[Artifact]    # обёртка сама регистрирует артефакты и считает sha256
 ```
+- `write` / `external_effect` только через HITL-гейт `side_effect` (headless default `deny` → `ToolError(local)`).
+- `effect_idem_key = sha256(JCS({study_id, task_key, tool, args_digest}))`; события `EffectIntended` / `EffectDone`.
+- Артефакты web/tool-вывода: `tainted=true`; в tainted-контексте write/external_effect инструменты не выдаются.
 
 ### 6.2 Правила повтора
 
@@ -505,7 +511,7 @@ class ToolOutput(BaseModel):
 |---|---|---|
 | local | ошибка аргументов/схемы | нет; ошибка возвращается агенту один раз |
 | transport_unsent | запрос точно не ушёл (connect refused, DNS) | да, backoff, до max_retries |
-| transport_sent | запрос ушёл, ответа нет (timeout, reset) | только если idempotent=True или read_only=True |
+| transport_sent | запрос ушёл, ответа нет (timeout, reset) | только если idempotent=True или effect=read |
 | opaque | непонятно | нет; попытка → failure(retryable=True) |
 
 Таймаут на вызов — `timeout_s`; таймаут попытки — `Attempt.deadline` (сумма бюджета маршрута).
@@ -589,7 +595,7 @@ class HitlPolicy(BaseModel):
     mode: Literal["interactive","auto","headless"]
     gates: dict[str, GateConfig]       # включённые шлюзы, профиль; RESEARCH_MODEL.md §5.2
     # spec_approval, plan (маршрут), hypotheses (после HYP-n), costly_or_nonreal (перед EXP costly или provenance≠real),
-    # report, result_acceptance, skip_task
+    # report, result_acceptance, skip_task, side_effect (write/external_effect tools; headless default deny)
 
 class GateConfig(BaseModel):
     enabled: bool = True
@@ -657,6 +663,7 @@ class ProfilePlugin(Protocol):
 FastAPI, только чтение проекции и журнала + команды.
 ```
 POST /studies                          {profile, request, hitl_policy} -> {study_id}
+                                       # Idempotency-Key: repeat → same study_id (K13 / PR18)
 GET  /studies/{id}                     -> StudyView (проекция)
 GET  /studies/{id}/nodes               -> list[NodeView]  (статус + requirements)
 GET  /studies/{id}/artifacts/{aid}     -> файл | 302 presigned S3
