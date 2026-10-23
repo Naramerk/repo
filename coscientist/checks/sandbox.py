@@ -87,6 +87,10 @@ DEFAULT_TIMEOUT_S = 30.0
 DEFAULT_MEMORY_MB = 256
 DEFAULT_MAX_OUTPUT_BYTES = 1_000_000
 _TERM_GRACE_S = 0.5
+# Host post-exit: wait for SIGKILL reap of the process group (independent of guest wall).
+DEFAULT_REAP_TIMEOUT_S = 5.0
+# Shared budget to join both stdout/stderr drain threads after wait/reap.
+DEFAULT_OUTPUT_DRAIN_JOIN_S = 5.0
 # Host-side idle detection: cpu_usage/wall below this → idle_timeout (sabotage).
 IDLE_CPU_WALL_RATIO = 0.05
 TIMEOUT_KINDS = frozenset({"idle_timeout", "cpu_timeout", "wall_timeout"})
@@ -136,9 +140,19 @@ class SandboxLimits:
     memory_mb: int = DEFAULT_MEMORY_MB
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
     allow_network: bool = False
-    # Shared budget to join both stdout/stderr drain threads after wait.
-    # ``None`` → same as ``timeout_s`` (no separate magic constant).
-    output_drain_join_s: float | None = None
+    # Host post-exit SIGKILL reap budget (not derived from ``timeout_s``).
+    reap_timeout_s: float = DEFAULT_REAP_TIMEOUT_S
+    # Shared join budget for both stdout/stderr drain threads (not derived
+    # from ``timeout_s``).
+    output_drain_join_s: float = DEFAULT_OUTPUT_DRAIN_JOIN_S
+
+    def __post_init__(self) -> None:
+        for name in ("reap_timeout_s", "output_drain_join_s"):
+            v = float(getattr(self, name))
+            if not math.isfinite(v) or v <= 0.0:
+                raise ValueError(
+                    f"SandboxLimits.{name} must be finite and > 0, got {v!r}"
+                )
 
 
 @dataclass(frozen=True)
@@ -220,13 +234,6 @@ def _kill_group_term_then_kill(
         proc.wait(timeout=float(reap_timeout_s))
     except Exception:  # noqa: BLE001
         pass
-
-
-def _drain_join_budget_s(lim: SandboxLimits) -> float:
-    """Join budget for both drain threads; defaults to the guest wall limit."""
-    if lim.output_drain_join_s is not None:
-        return float(lim.output_drain_join_s)
-    return float(lim.timeout_s)
 
 
 def _read_capped(
@@ -668,12 +675,12 @@ def _watch_process(
         if proc.poll() is not None:
             break
         if overflow[0]:
-            _kill_group_term_then_kill(proc, reap_timeout_s=float(lim.timeout_s))
+            _kill_group_term_then_kill(proc, reap_timeout_s=float(lim.reap_timeout_s))
             break
         if time.monotonic() >= deadline:
             timed_out = True
             kill_cause = "wall"
-            _kill_group_term_then_kill(proc, reap_timeout_s=float(lim.timeout_s))
+            _kill_group_term_then_kill(proc, reap_timeout_s=float(lim.reap_timeout_s))
             break
         usage = _cgroup_cpu_usage_usec(cgroup_leaf)
         if usage is not None:
@@ -681,16 +688,16 @@ def _watch_process(
             if usage >= cpu_budget_usec:
                 timed_out = True
                 kill_cause = "cpu"
-                _kill_group_term_then_kill(proc, reap_timeout_s=float(lim.timeout_s))
+                _kill_group_term_then_kill(proc, reap_timeout_s=float(lim.reap_timeout_s))
                 break
         time.sleep(0.02)
     try:
-        proc.wait(timeout=float(lim.timeout_s))
+        proc.wait(timeout=float(lim.reap_timeout_s))
     except Exception:  # noqa: BLE001
         pass
     # Process exit alone does not mean readers have appended — join first.
-    # One shared deadline for both threads (from limits, not sequential doubles).
-    join_deadline = time.monotonic() + _drain_join_budget_s(lim)
+    # One shared deadline for both threads (explicit limit, not sequential doubles).
+    join_deadline = time.monotonic() + float(lim.output_drain_join_s)
     for t in (out_t, err_t):
         remaining = join_deadline - time.monotonic()
         if remaining > 0:
@@ -1329,6 +1336,8 @@ def limits_from_check(
     memory_mb: int | None,
     max_output_bytes: int | None,
     allow_network: bool = False,
+    reap_timeout_s: float | None = None,
+    output_drain_join_s: float | None = None,
 ) -> SandboxLimits:
     return SandboxLimits(
         timeout_s=float(timeout_s) if timeout_s is not None else DEFAULT_TIMEOUT_S,
@@ -1339,6 +1348,16 @@ def limits_from_check(
             else DEFAULT_MAX_OUTPUT_BYTES
         ),
         allow_network=bool(allow_network),
+        reap_timeout_s=(
+            float(reap_timeout_s)
+            if reap_timeout_s is not None
+            else DEFAULT_REAP_TIMEOUT_S
+        ),
+        output_drain_join_s=(
+            float(output_drain_join_s)
+            if output_drain_join_s is not None
+            else DEFAULT_OUTPUT_DRAIN_JOIN_S
+        ),
     )
 
 
