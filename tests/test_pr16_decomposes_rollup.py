@@ -30,7 +30,6 @@ from coscientist.core.events import (
     PLAN_ACCEPTED_SCHEMA_VERSION,
     PLAN_EXPANDED_SCHEMA_VERSION,
 )
-from coscientist.core.finalize import finalize
 from coscientist.core.minimal_report import render_markdown_report
 from coscientist.core.plan_validate import validate_decomposes
 from coscientist.core.reasons import Disposition, TaskReason, TerminalReason
@@ -388,23 +387,29 @@ def test_majority_ties_do_not_win():
     assert rolled_22["Q"]["reason"] == "rollup_no_majority"
 
 
+def _tree_plans(rollup: str, *, extra_q: list[dict] | None = None) -> dict:
+    qs = [
+        {"id": "Q", "text": "root", "parent_id": None},
+        {"id": "Q.a", "text": "a", "parent_id": "Q"},
+        {"id": "Q.b", "text": "b", "parent_id": "Q"},
+    ]
+    if extra_q:
+        qs = qs + list(extra_q)
+    return {
+        "p1": {
+            "plan_id": "p1",
+            "revision": 1,
+            "rollup": rollup,
+            "questions": qs,
+            "tasks": [],
+        }
+    }
+
+
 def test_rollup_any_never_raises_above_parent_claims():
     """Adversarial PR 8b: parent claims=refuted + child answered → stay refuted."""
     from coscientist.core.rollup import apply_rollup
 
-    plans = {
-        "p1": {
-            "plan_id": "p1",
-            "revision": 1,
-            "rollup": "any",
-            "questions": [
-                {"id": "Q", "text": "root", "parent_id": None},
-                {"id": "Q.a", "text": "a", "parent_id": "Q"},
-                {"id": "Q.b", "text": "b", "parent_id": "Q"},
-            ],
-            "tasks": [],
-        }
-    }
     leaves = {
         "Q": {
             "disposition": Disposition.REFUTED.value,
@@ -419,29 +424,75 @@ def test_rollup_any_never_raises_above_parent_claims():
             "formulation": "b",
         },
     }
-    rolled = apply_rollup(leaves, plans=plans)
+    rolled = apply_rollup(leaves, plans=_tree_plans("any"))
     assert rolled["Q"]["disposition"] == Disposition.REFUTED.value
     assert rolled["Q"].get("rollup_clamped") is True
     assert rolled["Q"].get("rollup_would_have") == Disposition.ANSWERED.value
+
+
+@pytest.mark.parametrize("rule", ["all", "any", "majority"])
+def test_rollup_never_raises_rubric_not_met_parent(rule: str):
+    """Blocker: rubric_not_met parent + answered child must stay rubric_not_met."""
+    from coscientist.core.rollup import apply_rollup
+
+    # majority needs ≥2 answering children to meet n//2+1 on 2 kids → both answered.
+    leaves = {
+        "Q": {
+            "disposition": Disposition.RUBRIC_NOT_MET.value,
+            "reason": "rubric_rejected",
+            "verdict": Disposition.RUBRIC_NOT_MET.value,
+            "formulation": "root",
+        },
+        "Q.a": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "a"},
+        "Q.b": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "b"},
+    }
+    rolled = apply_rollup(leaves, plans=_tree_plans(rule))
+    assert rolled["Q"]["disposition"] == Disposition.RUBRIC_NOT_MET.value
+    assert rolled["Q"].get("rollup_clamped") is True
+    assert rolled["Q"].get("rollup_would_have") == Disposition.ANSWERED.value
+
+
+def test_rollup_incomplete_keeps_own_terminal_all_and_majority():
+    """rollup_incomplete / no_majority must not wipe a terminal parent verdict."""
+    from coscientist.core.rollup import apply_rollup
+
+    own = {
+        "disposition": Disposition.REFUTED.value,
+        "reason": None,
+        "verdict": "refuted",
+        "formulation": "root",
+    }
+    # all + one child not_attempted → rollup_incomplete
+    leaves_all = {
+        "Q": dict(own),
+        "Q.a": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "a"},
+        "Q.b": {
+            "disposition": Disposition.NOT_ATTEMPTED.value,
+            "reason": "no_task",
+            "formulation": "b",
+        },
+    }
+    rolled_all = apply_rollup(leaves_all, plans=_tree_plans("all"))
+    assert rolled_all["Q"]["disposition"] == Disposition.REFUTED.value
+    assert rolled_all["Q"].get("rollup_clamped") is True
+    assert rolled_all["Q"].get("rollup_would_have") == Disposition.NOT_ATTEMPTED.value
+
+    # majority 1:1 → no majority
+    leaves_maj = {
+        "Q": dict(own),
+        "Q.a": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "a"},
+        "Q.b": {"disposition": Disposition.REFUTED.value, "reason": None, "formulation": "b"},
+    }
+    rolled_maj = apply_rollup(leaves_maj, plans=_tree_plans("majority"))
+    assert rolled_maj["Q"]["disposition"] == Disposition.REFUTED.value
+    assert rolled_maj["Q"].get("rollup_clamped") is True
+    assert rolled_maj["Q"].get("rollup_would_have") == Disposition.NOT_ATTEMPTED.value
 
 
 def test_rollup_can_lower_parent_claims():
     """Children rollup may lower a claims-based parent (answered → refuted via all)."""
     from coscientist.core.rollup import apply_rollup
 
-    plans = {
-        "p1": {
-            "plan_id": "p1",
-            "revision": 1,
-            "rollup": "all",
-            "questions": [
-                {"id": "Q", "text": "root", "parent_id": None},
-                {"id": "Q.a", "text": "a", "parent_id": "Q"},
-                {"id": "Q.b", "text": "b", "parent_id": "Q"},
-            ],
-            "tasks": [],
-        }
-    }
     leaves = {
         "Q": {
             "disposition": Disposition.ANSWERED.value,
@@ -452,12 +503,13 @@ def test_rollup_can_lower_parent_claims():
         "Q.a": {"disposition": Disposition.REFUTED.value, "reason": None, "formulation": "a"},
         "Q.b": {"disposition": Disposition.REFUTED.value, "reason": None, "formulation": "b"},
     }
-    rolled = apply_rollup(leaves, plans=plans)
+    rolled = apply_rollup(leaves, plans=_tree_plans("all"))
     assert rolled["Q"]["disposition"] == Disposition.REFUTED.value
     assert rolled["Q"]["reason"] == "rollup_all"
 
 
-def test_rollup_depth_guard_rejects_cycle():
+def test_rollup_cycle_localized_not_study_wide():
+    """Cycle must tag only the cyclic subtree — unrelated questions still roll up."""
     from coscientist.core.rollup import apply_rollup
 
     plans = {
@@ -468,6 +520,8 @@ def test_rollup_depth_guard_rejects_cycle():
             "questions": [
                 {"id": "A", "text": "a", "parent_id": "B"},
                 {"id": "B", "text": "b", "parent_id": "A"},
+                {"id": "Q", "text": "root", "parent_id": None},
+                {"id": "Q.a", "text": "child", "parent_id": "Q"},
             ],
             "tasks": [],
         }
@@ -475,9 +529,21 @@ def test_rollup_depth_guard_rejects_cycle():
     leaves = {
         "A": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "a"},
         "B": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "b"},
+        "Q": {
+            "disposition": Disposition.NOT_ATTEMPTED.value,
+            "reason": "no_task",
+            "formulation": "root",
+        },
+        "Q.a": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "a"},
     }
-    with pytest.raises(ValueError, match="cyclic"):
-        apply_rollup(leaves, plans=plans)
+    rolled = apply_rollup(leaves, plans=plans)
+    assert rolled["A"]["reason"] == "rollup_cycle"
+    assert rolled["B"]["reason"] == "rollup_cycle"
+    assert rolled["Q"]["disposition"] == Disposition.ANSWERED.value
+    assert rolled["Q"]["reason"] == "rollup_all"
+    assert rolled["Q.a"]["disposition"] == Disposition.ANSWERED.value
+    # Must not raise into dispositions()' broad except (study-wide wipe).
+    apply_rollup(leaves, plans=plans)  # idempotent, no ValueError
 
 
 def test_question_origin_implicit_vs_explicit():
@@ -789,7 +855,10 @@ async def test_rollup_run_finalizes_with_single_study_finalized(tmp_path, clock)
 
 
 @pytest.mark.asyncio
-async def test_internal_error_finalizes_once(tmp_path, clock):
+async def test_internal_error_finalizes_once(tmp_path, clock, monkeypatch):
+    """Real raised exception on recover → StudyFinalized(internal_error)."""
+    import coscientist.core.loop as loop_mod
+
     rt = await _boot(tmp_path, clock, "pr16-internal")
     rub = _decomp_rubric()
     await rt.accept_plan(
@@ -799,15 +868,25 @@ async def test_internal_error_finalizes_once(tmp_path, clock):
         rollup="any",
     )
     attach_executor(rt, tmp_path)
-    await finalize(rt, trigger="internal_error")
-    events = await rt.store.read_all()
+    await close_runtime(rt)
+
+    rt2 = await open_runtime(tmp_path, "pr16-internal", clock=clock, owner="t2")
+    attach_executor(rt2, tmp_path)
+
+    async def _boom(_runtime):
+        raise RuntimeError("pr16_injected_loop_resume_boom")
+
+    monkeypatch.setattr(loop_mod, "resume_pending_loops", _boom)
+    await recover(rt2)
+    events = await rt2.store.read_all()
     payload = _assert_single_finalized(events)
     assert payload.get("terminal_reason") == TerminalReason.INTERNAL_ERROR.value
-    await close_runtime(rt)
+    await close_runtime(rt2)
 
 
 @pytest.mark.asyncio
 async def test_recover_then_finalize_single(tmp_path, clock):
+    """Crash mid-attempt → reopen/recover → complete → one StudyFinalized."""
     rt = await _boot(tmp_path, clock, "pr16-recover")
     rub = freeze_rubric(
         Rubric(
@@ -829,7 +908,12 @@ async def test_recover_then_finalize_single(tmp_path, clock):
         subquestions=[_q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="all",
     )
+    attach_executor(rt, tmp_path)
+    aid0 = await rt.start_attempt("E0")
+    assert aid0 is not None
+    # Crash with an open attempt (no ResultRecorded).
     await close_runtime(rt)
+
     rt2 = await open_runtime(tmp_path, "pr16-recover", clock=clock, owner="t2")
     attach_executor(rt2, tmp_path)
     await recover(rt2)
@@ -855,7 +939,10 @@ async def test_recover_then_finalize_single(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_expand_plan_propagates_lease_lost(tmp_path, clock):
+async def test_expand_plan_propagates_lease_lost(tmp_path, clock, monkeypatch):
+    """LeaseLost from _expand_plan must propagate — no ExpansionRefused mask."""
+    import coscientist.core.expand as expand_mod
+
     rt = await _boot(tmp_path, clock, "pr16-lease")
     rub = _decomp_rubric()
     await rt.accept_plan(
@@ -867,16 +954,14 @@ async def test_expand_plan_propagates_lease_lost(tmp_path, clock):
         subquestions=[_q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="all",
     )
-    # Expire + steal lease so expand_plan's append raises LeaseLost (must not swallow).
-    stale_nonce = rt.store.owner_nonce
-    stale_epoch = rt.store.epoch
-    clock.advance(timedelta(seconds=31))
-    interloper = await open_runtime(tmp_path, "pr16-lease", clock=clock, owner="thief")
-    await close_runtime(interloper)
-    rt.store.owner = "t1"
-    rt.store.epoch = stale_epoch
-    rt.store.owner_nonce = stale_nonce
-    with pytest.raises(LeaseLost):
+
+    async def _boom(*_a, **_k):
+        raise LeaseLost("mocked lease loss inside _expand_plan")
+
+    monkeypatch.setattr(expand_mod, "_expand_plan", _boom)
+    before = await rt.store.read_all()
+    n_refused_before = sum(1 for e in before if e.type == "ExpansionRefused")
+    with pytest.raises(LeaseLost, match="mocked lease loss"):
         await rt.expand_plan(
             after_task="E0",
             added_tasks=[_exp("E2", addresses=["Q.b"], rubric=rub)],
@@ -885,8 +970,10 @@ async def test_expand_plan_propagates_lease_lost(tmp_path, clock):
             origin="emergent",
             reason="should lose lease",
         )
-    # Runtime lease is dead — do not close_runtime (would try release).
-    await rt.store.close()
+    after = await rt.store.read_all()
+    n_refused_after = sum(1 for e in after if e.type == "ExpansionRefused")
+    assert n_refused_after == n_refused_before, "LeaseLost must not write ExpansionRefused"
+    await close_runtime(rt)
 
 
 def test_graph_edge_decomposes_in_affected_tables():
