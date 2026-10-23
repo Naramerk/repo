@@ -8,11 +8,12 @@
 
 ### M1 PR11
 - `LoopSpec` on `Plan.loops` (body templates, `scope_*`, mandatory `max_iter` ≤ `Study.max_loop_iter`, `until` predicate).
-- Built-in predicates: `survivors_le`, `criterion_met`, `no_change` (scope-restricted); plugins via `register_loop_predicate`.
-- Core materializes each iter as `PlanExpanded(loop=true)` → fresh `EXP-<n>` with `loop_id`/`loop_iter` (no planner / expansion quota); `depends_on=["loop:<id>"]` barrier for post-loop tasks.
-- Until-met → journaled **`LoopCompleted`** (fold restores `status=done`; live ≡ replay without re-eval). Cap → `LoopCapped{loop_id, iter, survivors}` + report «цикл остановлен лимитом…»; scope questions get disposition reason `iteration_cap` (not study `terminal_reason`). Predicate/advance bugs → ExpansionRefused + LoopCapped (never masked as until=False).
-- Upcasters: StudyCreated **v10** (`max_loop_iter`), PlanAccepted **v8** (`loops`), TaskCreated **v10** (`loop_id`/`loop_iter`/`loop_template_key`).
-- **Version collision note:** open PR #21 (rubric) also writes TaskCreated v10 / PlanAccepted v8; PR #23 (inputs) writes StudyCreated v10. Later merge renumbers upcasters — rebase required.
+- Built-in predicates: `survivors_le`, `criterion_met`, `no_change` (scope-restricted); plugins via `register_loop_predicate` (built-ins non-overridable; `survivors_le.n` exact int ≥ 0).
+- Invalid LoopSpec → typed **`PlanInvalid`** → **`PlanRefused` + immediate `StudyFinalized`** (`plan_refuse.apply_plan_refused`; plugs into PR13 plan_validate). Fail-closed: unknown predicate / unparsable spec / unknown `scope_*` — never silent.
+- Core materializes each iter as `PlanExpanded(loop=true)` at `PLAN_EXPANDED_SCHEMA_VERSION` → fresh `EXP-<n>` with `loop_id`/`loop_iter` (no planner / expansion quota); `depends_on=["loop:<id>"]` barrier for post-loop tasks; orphan barriers → SKIPPED refuse.
+- Until-met → journaled **`LoopCompleted`**; refuse/cap → **`ExpansionRefused{loop_id}` + `LoopCapped`** (both fold; live ≡ replay). Cap report «цикл остановлен лимитом…»; disposition `iteration_cap` only for genuinely unresolved questions (never erases infeasible/needs_more_data).
+- Upcasters: StudyCreated **v10** (`max_loop_iter`), PlanAccepted **v8** (`loops`), TaskCreated **v10** (`loop_id`/`loop_iter`/`loop_template_key`); `register_upcaster` rejects duplicates; continuous-chain guard.
+- **Version collision note:** open PR #21/#23 bump the same writers — rebase LAST after those merge (then StudyCreated v11 / TaskCreated v11 / PlanAccepted v9).
 
 ### M1 PR14
 - `quote_in_source` (K9): token-boundary + digit-edge; CJK/Thai; super/sub before NFKC; norm cache; presence≠polarity.

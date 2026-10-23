@@ -156,6 +156,11 @@ class LocalProjectMixin:
                 after_task=str(p.get("after_task") or "") or None,
                 plan_key=p.get("plan_key"),
             )
+            # PR11: loop refuse must restore capped status on replay.
+            if p.get("loop") or p.get("loop_id"):
+                from coscientist.core.loop import fold_loop_expansion_refused
+
+                fold_loop_expansion_refused(self, p)
         elif ev.type == "HitlOpened":
             rid = str(p.get("request_id") or ev.entity_key)
             opens = getattr(self, "_hitl_requests", None)

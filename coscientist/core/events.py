@@ -25,6 +25,9 @@ class EventEnvelope(BaseModel):
 
 # Typed payload helpers used by the machine / executor.
 
+# Writer constant for PlanExpanded (PR13 bumps to 2 via upcaster; rebase updates here).
+PLAN_EXPANDED_SCHEMA_VERSION = 1
+
 EventType = Literal[
     "StudyCreated",
     "TaskCreated",
@@ -37,6 +40,7 @@ EventType = Literal[
     "PlanAccepted",
     "PlanExpanded",
     "ExpansionRefused",
+    "PlanRefused",
     "LoopCapped",
     "LoopCompleted",
     "HitlOpened",

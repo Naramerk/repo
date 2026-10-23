@@ -7,8 +7,10 @@ exceptions become refuse-style report lines — never crash finalize.
 
 from __future__ import annotations
 
+import unicodedata
 from typing import TYPE_CHECKING, Any
 
+from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 from coscientist.core.domain import (
     LoopSpec,
     Plan,
@@ -18,7 +20,11 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.events import EventEnvelope, make_idem
+from coscientist.core.events import (
+    PLAN_EXPANDED_SCHEMA_VERSION,
+    EventEnvelope,
+    make_idem,
+)
 from coscientist.core.expand_graph import plan_graph_events, question_graph_events
 from coscientist.core.expand_validate import active_plan_blob, assign_core_keys
 from coscientist.core.ids import task_id
@@ -27,11 +33,25 @@ from coscientist.core.loop_predicates import (
     eval_loop_predicate,
     validate_loop_predicate,
 )
+from coscientist.core.reasons import TaskReason
+from coscientist.core.rules import PlanInvalid
+from coscientist.core.shares import critic_plan_shares
 
 if TYPE_CHECKING:
     from coscientist.core.machine import StudyRuntime
 
 LOOP_DEP_PREFIX = "loop:"
+
+
+def normalize_loop_id(raw: str) -> str:
+    """NFKC-normalize loop_id; reject empty / invisible-only ids."""
+    s = unicodedata.normalize("NFKC", str(raw or ""))
+    if not s or not s.strip():
+        raise PlanInvalid("LoopSpec.loop_id required")
+    # Reject format/control chars (Cf/Cc/Cs) that survive strip.
+    if any(unicodedata.category(ch) in {"Cf", "Cc", "Cs"} for ch in s):
+        raise PlanInvalid(f"LoopSpec.loop_id has invisible/control chars: {raw!r}")
+    return s.strip()
 
 
 def loop_dep_key(loop_id: str) -> str:
@@ -115,87 +135,106 @@ def validate_loop_specs(
     known_keys: set[str],
     max_loop_iter: int,
     known_questions: set[str] | None = None,
-) -> None:
-    """Reject invalid LoopSpec at accept_plan (honest refusal / ValueError)."""
+    known_hypotheses: set[str] | None = None,
+) -> list[LoopSpec]:
+    """Validate LoopSpecs; raise ``PlanInvalid`` (accept_plan → PlanRefused).
+
+    Returns normalized ``LoopSpec`` list (NFKC loop_id). ``known_questions`` is
+    always enforced when provided (including empty set). ``known_hypotheses``
+    enforced when provided (including empty).
+    """
     if not loops:
-        return
-    qids = known_questions or set()
+        return []
+    qids = known_questions  # None = skip; set (even empty) = enforce
+    hyps = known_hypotheses
     seen_ids: set[str] = set()
+    out: list[LoopSpec] = []
+    stage = {"SPEC", "HYP", "LIT", "PLAN", "REPORT"}
     for raw in loops:
         if isinstance(raw, dict):
             if "max_iter" not in raw or raw.get("max_iter") is None:
-                raise ValueError(
-                    "LoopSpec.max_iter is required (honest refusal: unbounded loops forbidden)"
+                raise PlanInvalid(
+                    "LoopSpec.max_iter is required "
+                    "(honest refusal: unbounded loops forbidden)"
                 )
             try:
                 ls = LoopSpec.model_validate(raw)
+            except PlanInvalid:
+                raise
             except Exception as e:
-                raise ValueError(f"invalid LoopSpec: {e}") from e
+                raise PlanInvalid(f"invalid LoopSpec: {e}") from e
         else:
             ls = raw
-            if ls.max_iter is None:  # pragma: no cover — pydantic Field(ge=1)
-                raise ValueError(
-                    "LoopSpec.max_iter is required (honest refusal: unbounded loops forbidden)"
-                )
-        if not ls.loop_id or not str(ls.loop_id).strip():
-            raise ValueError("LoopSpec.loop_id required")
-        if ls.loop_id in seen_ids:
-            raise ValueError(f"duplicate loop_id: {ls.loop_id!r}")
-        seen_ids.add(ls.loop_id)
+        lid = normalize_loop_id(ls.loop_id)
+        if lid != ls.loop_id:
+            ls = ls.model_copy(update={"loop_id": lid})
+        if lid in seen_ids:
+            raise PlanInvalid(f"duplicate loop_id: {lid!r}")
+        seen_ids.add(lid)
         if int(ls.max_iter) < 1:
-            raise ValueError(f"LoopSpec.max_iter must be >= 1 (loop {ls.loop_id!r})")
+            raise PlanInvalid(f"LoopSpec.max_iter must be >= 1 (loop {lid!r})")
         if int(ls.max_iter) > int(max_loop_iter):
-            raise ValueError(
-                f"LoopSpec.max_iter {ls.max_iter} > study.max_loop_iter {max_loop_iter} "
-                f"(loop {ls.loop_id!r})"
+            raise PlanInvalid(
+                f"LoopSpec.max_iter {ls.max_iter} > study.max_loop_iter "
+                f"{max_loop_iter} (loop {lid!r})"
             )
         if not ls.body:
-            raise ValueError(f"LoopSpec.body empty (loop {ls.loop_id!r})")
+            raise PlanInvalid(f"LoopSpec.body empty (loop {lid!r})")
         validate_loop_predicate(ls.until)
         body_keys = {t.task_key for t in ls.body}
         if len(body_keys) != len(ls.body):
-            raise ValueError(f"LoopSpec.body duplicate task_key (loop {ls.loop_id!r})")
+            raise PlanInvalid(f"LoopSpec.body duplicate task_key (loop {lid!r})")
         for t in ls.body:
             if t.foreach is not None:
-                raise ValueError(
+                raise PlanInvalid(
                     f"loop body task {t.task_key!r} must not set foreach "
-                    f"(loop {ls.loop_id!r})"
+                    f"(loop {lid!r})"
                 )
             if t.loop_id is not None or t.loop_iter is not None:
-                raise ValueError(
+                raise PlanInvalid(
                     f"loop body template {t.task_key!r} must not set loop_id/loop_iter"
                 )
             for d in t.depends_on:
                 if d.startswith(LOOP_DEP_PREFIX):
                     continue
-                if d not in body_keys and d not in known_keys and d not in {
-                    "SPEC",
-                    "HYP",
-                    "LIT",
-                    "PLAN",
-                    "REPORT",
-                }:
-                    raise ValueError(
+                if d not in body_keys and d not in known_keys and d not in stage:
+                    raise PlanInvalid(
                         f"loop body {t.task_key!r} depends_on unknown {d!r} "
-                        f"(loop {ls.loop_id!r})"
+                        f"(loop {lid!r})"
                     )
         for d in ls.depends_on:
-            if d not in known_keys and d not in {
-                "SPEC",
-                "HYP",
-                "LIT",
-                "PLAN",
-                "REPORT",
-            }:
-                raise ValueError(
-                    f"LoopSpec.depends_on unknown task {d!r} (loop {ls.loop_id!r})"
+            if d not in known_keys and d not in stage:
+                raise PlanInvalid(
+                    f"LoopSpec.depends_on unknown task {d!r} (loop {lid!r})"
                 )
-        for qid in ls.scope_questions:
-            if qids and qid not in qids:
-                raise ValueError(
-                    f"LoopSpec.scope_questions unknown question {qid!r} "
-                    f"(loop {ls.loop_id!r})"
+        if qids is not None:
+            for qid in ls.scope_questions:
+                if qid not in qids:
+                    raise PlanInvalid(
+                        f"LoopSpec.scope_questions unknown question {qid!r} "
+                        f"(loop {lid!r})"
+                    )
+        for hid in ls.scope_hypotheses:
+            hid_n = unicodedata.normalize("NFKC", str(hid or "")).strip()
+            if not hid_n:
+                raise PlanInvalid(
+                    f"LoopSpec.scope_hypotheses empty id (loop {lid!r})"
                 )
+            if hyps is not None and hid_n not in hyps:
+                raise PlanInvalid(
+                    f"LoopSpec.scope_hypotheses unknown hypothesis {hid!r} "
+                    f"(loop {lid!r})"
+                )
+        out.append(ls)
+    return out
+
+
+def loop_known(runtime: StudyRuntime, loop_id: str) -> bool:
+    """True when a LoopSpec with this id exists in accepted/expanded plans."""
+    for ls in _loops_from_plans(runtime):
+        if ls.loop_id == loop_id:
+            return True
+    return False
 
 
 def _deps_ready(runtime: StudyRuntime, keys: list[str]) -> bool:
@@ -326,8 +365,6 @@ async def materialize_loop_iter(
     ]
     prev_loops = list(prev.get("loops") or [])
     merged = list(prev_tasks) + added
-    from coscientist.core.shares import critic_plan_shares
-
     share_err = critic_plan_shares(merged, study=study)
     if share_err is not None:
         await _refuse_loop(runtime, loop, detail=f"loop_shares:{share_err}")
@@ -373,8 +410,6 @@ async def materialize_loop_iter(
             now=now,
         )
     )
-    from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
-
     catalog = getattr(runtime, "catalog", None)
     existing_keys = {t.spec.task_key for t in runtime.tasks.values()}
     for spec in added:
@@ -442,7 +477,7 @@ async def materialize_loop_iter(
             idem_key=make_idem("PlanExpanded", "loop", sid, loop.loop_id, str(iter_n)),
             payload=payload,
             ts=now,
-            schema_version=1,
+            schema_version=PLAN_EXPANDED_SCHEMA_VERSION,
         )
     )
     await runtime._append(events)  # noqa: SLF001
@@ -528,14 +563,75 @@ async def _emit_loop_completed(
 async def _refuse_loop(
     runtime: StudyRuntime, loop: LoopSpec, *, detail: str
 ) -> None:
-    """Journal ExpansionRefused + LoopCapped so dependents proceed after reopen."""
-    from coscientist.core.expand_trigger import refuse_expansion
-
+    """Journal LoopCapped then ExpansionRefused(loop_id=…) for live ≡ replay."""
+    if runtime.study is None or getattr(runtime, "_finalized", False):
+        return
+    sid = runtime.study.study_id
+    now = runtime.clock.now()
     after = loop.depends_on[0] if loop.depends_on else loop.loop_id
-    await refuse_expansion(runtime, after, reason="invalid", detail=detail[:200])
-    # Cap in the journal (not memory-only) so live ≡ replay after crash.
+    detail_s = detail[:200]
+    # LoopCapped first (dispositions / report); ExpansionRefused carries loop_id
+    # so a partial journal without LoopCapped still restores status=capped.
     cur = current_iter(runtime, loop.loop_id) or 0
-    await _emit_loop_capped(runtime, loop, iter_n=max(cur, 1), refuse_detail=detail[:200])
+    await _emit_loop_capped(
+        runtime, loop, iter_n=max(cur, 1), refuse_detail=detail_s
+    )
+    await runtime._append(  # noqa: SLF001
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="ExpansionRefused",
+                entity_key=f"{sid}:loop:{loop.loop_id}:invalid",
+                idem_key=make_idem(
+                    "ExpansionRefused", sid, f"loop:{loop.loop_id}", "invalid", detail_s
+                ),
+                payload={
+                    "after_task": after,
+                    "reason": "invalid",
+                    "detail": detail_s,
+                    "plan_key": None,
+                    "loop_id": loop.loop_id,
+                    "loop": True,
+                },
+                ts=now,
+                schema_version=1,
+            )
+        ]
+    )
+
+
+async def refuse_orphaned_loop_barriers(runtime: StudyRuntime) -> int:
+    """SKIPPED-refuse tasks waiting on unknown/dropped ``loop:<id>`` barriers.
+
+    A dropped / never-accepted LoopSpec must not leave dependents PENDING forever.
+    """
+    if runtime.study is None or getattr(runtime, "_finalized", False):
+        return 0
+    n = 0
+    for task in list(runtime.tasks.values()):
+        if task.state == TaskState.DONE:
+            continue
+        for d in task.spec.depends_on:
+            if not is_loop_dep(d):
+                continue
+            lid = parse_loop_dep(d)
+            if lid is None:
+                continue
+            if loop_is_complete(runtime, lid):
+                continue
+            if loop_known(runtime, lid):
+                continue
+            # Unknown loop id — refuse the waiter (honest, not a hang).
+            cancel = getattr(runtime, "cancel_task", None)
+            if callable(cancel):
+                await cancel(
+                    task.task_id,
+                    reason=TaskReason.SCHEMA_INVALID,
+                    detail=f"unknown loop barrier {d}",
+                )
+                n += 1
+            break
+    return n
 
 
 async def _advance_one(runtime: StudyRuntime, loop: LoopSpec) -> str | None:
@@ -577,6 +673,7 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
     done: list[str] = []
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return done
+    await refuse_orphaned_loop_barriers(runtime)
     for loop in _loops_from_plans(runtime):
         try:
             pid = await _advance_one(runtime, loop)
@@ -677,6 +774,26 @@ def fold_loop_completed(runtime: Any, payload: dict[str, Any]) -> None:
         runtime._loop_done = set()
         done = runtime._loop_done
     done.add(lid)
+
+
+def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
+    """ExpansionRefused for a loop restores status=capped (barrier / no re-advance).
+
+    Does not populate ``_loop_capped`` (that is LoopCapped's job) so emitting
+    ExpansionRefused after LoopCapped cannot suppress the LoopCapped write.
+    """
+    if not payload.get("loop") and not payload.get("loop_id"):
+        return
+    lid = str(payload.get("loop_id") or "")
+    if not lid:
+        return
+    st = _loop_state(runtime)
+    row = dict(st.get(lid) or {})
+    if row.get("status") in ("done", "capped"):
+        return
+    row["status"] = "capped"
+    row["refuse_detail"] = str(payload.get("detail") or "")[:200]
+    st[lid] = row
 
 
 def capped_scope_questions(runtime: Any) -> dict[str, dict[str, Any]]:

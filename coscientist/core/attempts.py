@@ -71,6 +71,8 @@ class AttemptsMixin:
         children_map = getattr(self, "_foreach_children", None) or {}
         for d in task.spec.depends_on:
             # PR11: loop:<id> barrier — ready after until-met or LoopCapped.
+            # Unknown / dropped loop never becomes ready; ``refuse_orphaned_loop_barriers``
+            # SKIPPED-refuses dependents (fail-closed, no hang).
             if str(d).startswith("loop:"):
                 from coscientist.core.loop import loop_is_complete, parse_loop_dep
 

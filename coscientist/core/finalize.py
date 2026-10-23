@@ -216,6 +216,12 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
             _append_loop_capped_report_line(seen, ev.payload)
         elif ev.type == "LoopCompleted":
             _append_loop_completed_report_line(seen, ev.payload)
+        elif ev.type == "PlanRefused":
+            line = (ev.payload or {}).get("report_line") or (
+                "не выполнено: план отклонён"
+            )
+            if str(line) not in seen:
+                seen.append(str(line))
         elif ev.type == "SideEffectDenied":
             tool = str(ev.payload.get("tool") or "?")
             reason = str(ev.payload.get("reason") or "")

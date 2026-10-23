@@ -271,22 +271,23 @@ class LifecycleMixin:
         now = self.clock.now()
         from pydantic import ValidationError
 
-        from coscientist.core.domain import LoopSpec
         from coscientist.core.foreach import validate_foreach_specs
-        from coscientist.core.loop import is_loop_dep, validate_loop_specs
+        from coscientist.core.loop import is_loop_dep, normalize_loop_id, validate_loop_specs
         from coscientist.core.plan_validate import (
             PLAN_REFUSED_LINE,
             apply_plan_refused,
             freeze_plan_rubrics,
             refuse_detail,
         )
+        from coscientist.core.rules import PlanInvalid
         from coscientist.core.shares import critic_plan_shares
 
+        LOOP_PLAN_REFUSED_LINE = "не выполнено: план отклонён (LoopSpec)"
+
         # All plan validation → PlanRefused (never raw ValueError to callers).
-        # Catch only expected validation failures — not TypeError (bugs).
-        loop_specs: list[LoopSpec] = []
+        raw_loops = list(loops or [])
+        loop_specs: list = []
         try:
-            # Planner may hand dicts; pydantic ValidationError → PlanRefused.
             tasks = [
                 t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t)
                 for t in (tasks or [])
@@ -298,18 +299,6 @@ class LifecycleMixin:
                 ]
             questions = list(questions or [])
             expand_after = list(expand_after or [])
-            for item in list(loops or []):
-                if isinstance(item, LoopSpec):
-                    loop_specs.append(item)
-                elif isinstance(item, dict):
-                    if "max_iter" not in item or item.get("max_iter") is None:
-                        raise ValueError(
-                            "LoopSpec.max_iter is required "
-                            "(honest refusal: unbounded loops forbidden)"
-                        )
-                    loop_specs.append(LoopSpec.model_validate(item))
-                else:
-                    loop_specs.append(LoopSpec.model_validate(item))
             self._validate_dag(tasks)
             known_texts = await self._known_question_texts()
             self._validate_questions(questions, known_texts)
@@ -320,11 +309,19 @@ class LifecycleMixin:
                 if k not in task_keys:
                     raise ValueError(f"expand_after unknown task_key: {k!r}")
             known_keys = {t.spec.task_key for t in self.tasks.values()} | task_keys
-            validate_loop_specs(
-                loop_specs,
+            graph = getattr(self, "graph", None)
+            known_hyps: set[str] = set()
+            if graph is not None:
+                for node in graph.nodes_by_kind("hypothesis"):
+                    hid = str(getattr(node, "ref_id", None) or "")
+                    if hid:
+                        known_hyps.add(hid)
+            loop_specs = validate_loop_specs(
+                raw_loops,
                 known_keys=known_keys,
                 max_loop_iter=int(getattr(self.study, "max_loop_iter", 8) or 8),
                 known_questions=set(known_texts),
+                known_hypotheses=known_hyps,
             )
             validate_input_specs(tasks)
             validate_foreach_specs(
@@ -340,17 +337,51 @@ class LifecycleMixin:
             validate_plan_criteria(tasks, catalog)
             tasks, questions = freeze_plan_rubrics(tasks, questions, catalog=catalog)
             loop_ids = {ls.loop_id for ls in loop_specs}
+            # NFKC-normalize loop:<id> barriers and store normalized deps on tasks.
+            rewritten: list[TaskSpec] = []
             for t in tasks:
+                new_deps: list[str] = []
+                changed = False
                 for d in t.depends_on:
                     if not is_loop_dep(d):
+                        new_deps.append(d)
                         continue
-                    lid = d[len("loop:") :]
+                    try:
+                        lid = normalize_loop_id(d[len("loop:") :])
+                    except PlanInvalid as e:
+                        raise PlanInvalid(
+                            f"depends_on invalid loop barrier {d!r}: {e}"
+                        ) from e
                     if lid not in loop_ids:
-                        raise ValueError(f"depends_on unknown loop barrier {d!r}")
-        except (ValueError, ValidationError) as e:
+                        raise PlanInvalid(f"depends_on unknown loop barrier {d!r}")
+                    nd = f"loop:{lid}"
+                    if nd != d:
+                        changed = True
+                    new_deps.append(nd)
+                rewritten.append(
+                    t.model_copy(update={"depends_on": new_deps}) if changed else t
+                )
+            tasks = rewritten
+        except PlanInvalid as e:
             return await apply_plan_refused(
-                self, detail=refuse_detail(e), report_line=PLAN_REFUSED_LINE
+                self,
+                detail=refuse_detail(e),
+                report_line=LOOP_PLAN_REFUSED_LINE,
             )
+        except (ValueError, ValidationError) as e:
+            line = LOOP_PLAN_REFUSED_LINE if raw_loops else PLAN_REFUSED_LINE
+            return await apply_plan_refused(
+                self, detail=refuse_detail(e), report_line=line
+            )
+        except TypeError as e:
+            # LoopSpec pydantic / type errors at accept → same refuse path.
+            if raw_loops:
+                return await apply_plan_refused(
+                    self,
+                    detail=refuse_detail(e),
+                    report_line=LOOP_PLAN_REFUSED_LINE,
+                )
+            raise
         pid = plan_id()
         plan = Plan(
             plan_id=pid,

@@ -1,17 +1,20 @@
 """Loop until-predicates (M1 PR11 / S10).
 
 Built-ins see only ``scope_*`` and claims/verdicts from tasks of the same
-``loop_id``. Plugins register like CodeCheck kinds via ``register_loop_predicate``.
+``loop_id``. Plugins register via ``register_loop_predicate`` (cannot override
+built-ins).
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from math import isfinite
 from typing import Any, Protocol
 
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import LoopPredicate, LoopSpec, ReqStatus, Study
 from coscientist.core.reasons import Disposition
+from coscientist.core.rules import PlanInvalid
 
 
 class LoopPredicateFn(Protocol):
@@ -26,17 +29,25 @@ class LoopPredicateFn(Protocol):
 
 
 _REGISTRY: dict[str, LoopPredicateFn] = {}
+BUILTIN_LOOP_PREDICATES: frozenset[str] = frozenset(
+    {"survivors_le", "criterion_met", "no_change"}
+)
 
 
-class UnknownLoopPredicateError(ValueError):
-    """Raised at plan validation when ``until.name`` is not registered."""
+class UnknownLoopPredicateError(PlanInvalid):
+    """Unknown until.name — fail-closed at accept / eval."""
 
 
 def register_loop_predicate(name: str, fn: LoopPredicateFn) -> None:
-    """Register or replace a loop predicate (profile plugins / tests)."""
+    """Register a loop predicate. Built-ins cannot be overridden after first load."""
     if not name or not str(name).strip():
         raise ValueError("loop predicate name required")
-    _REGISTRY[str(name)] = fn
+    key = str(name)
+    if key in BUILTIN_LOOP_PREDICATES and key in _REGISTRY:
+        raise ValueError(f"cannot override built-in loop predicate: {key!r}")
+    if key in _REGISTRY and key in BUILTIN_LOOP_PREDICATES:
+        raise ValueError(f"cannot override built-in loop predicate: {key!r}")
+    _REGISTRY[key] = fn
 
 
 def known_loop_predicates() -> frozenset[str]:
@@ -54,21 +65,36 @@ def eval_loop_predicate(
     iter_n: int,
     ctx: Mapping[str, Any] | None = None,
 ) -> bool:
-    """Evaluate ``loop.until``.
-
-    Unknown name raises (fail-closed — never silently ``False``). Predicate
-    body exceptions propagate to the caller (honest refuse / study fallback).
-    """
+    """Evaluate ``loop.until``. Unknown name raises; body exceptions propagate."""
     fn = _REGISTRY.get(loop.until.name)
     if fn is None:
-        raise UnknownLoopPredicateError(f"unknown loop predicate: {loop.until.name!r}")
+        raise UnknownLoopPredicateError(
+            f"unknown loop predicate: {loop.until.name!r}"
+        )
     return bool(fn(runtime, loop, iter_n=iter_n, ctx=ctx or {}))
 
 
+def _require_int_n(params: dict[str, Any]) -> int:
+    """survivors_le params.n: exact int >= 0 (reject bool, float, inf)."""
+    if "n" not in params:
+        raise PlanInvalid("survivors_le requires params.n")
+    n = params["n"]
+    if isinstance(n, bool) or not isinstance(n, int):
+        raise PlanInvalid(
+            f"survivors_le params.n must be int >= 0 (got {type(n).__name__})"
+        )
+    if n < 0:
+        raise PlanInvalid("survivors_le params.n must be >= 0")
+    # Guard against non-finite sneaking in via weird subclasses.
+    if not isfinite(float(n)):
+        raise PlanInvalid("survivors_le params.n must be finite")
+    return n
+
+
 def validate_loop_predicate(pred: LoopPredicate | dict[str, Any] | None) -> None:
-    """Raise ValueError if predicate missing/unknown or params invalid."""
+    """Raise PlanInvalid if predicate missing/unknown or params invalid."""
     if pred is None:
-        raise ValueError("LoopSpec.until is required")
+        raise PlanInvalid("LoopSpec.until is required")
     params: dict[str, Any]
     if isinstance(pred, dict):
         name = str(pred.get("name") or "")
@@ -78,22 +104,15 @@ def validate_loop_predicate(pred: LoopPredicate | dict[str, Any] | None) -> None
         name = str(pred.name or "")
         params = dict(pred.params or {})
     if not name:
-        raise ValueError("LoopSpec.until.name is required")
+        raise PlanInvalid("LoopSpec.until.name is required")
     if name not in _REGISTRY:
-        raise ValueError(f"unknown loop predicate: {name!r}")
+        raise UnknownLoopPredicateError(f"unknown loop predicate: {name!r}")
     if name == "survivors_le":
-        if "n" not in params:
-            raise ValueError("survivors_le requires params.n")
-        try:
-            n = int(params["n"])
-        except (TypeError, ValueError) as e:
-            raise ValueError("survivors_le params.n must be int") from e
-        if n < 0:
-            raise ValueError("survivors_le params.n must be >= 0")
+        _require_int_n(params)
     elif name == "criterion_met":
         cid = params.get("criterion_id")
         if not cid or not str(cid).strip():
-            raise ValueError("criterion_met requires params.criterion_id")
+            raise PlanInvalid("criterion_met requires params.criterion_id")
 
 
 def loop_task_keys(runtime: Any, loop_id: str, *, upto_iter: int | None = None) -> set[str]:
@@ -130,7 +149,6 @@ def _claims_for_loop_scope(runtime: Any, loop: LoopSpec, *, upto_iter: int) -> d
         results=getattr(runtime, "results", None),
         artifact_lookup=lookup if callable(lookup) else None,
     )
-    # Filter claims whose experiment/source task is in this loop.
     scoped: dict[str, list] = {}
     for ref in list(loop.scope_hypotheses) + list(loop.scope_questions):
         prefer_h = ref in loop.scope_hypotheses
@@ -227,10 +245,15 @@ def scope_fingerprint(runtime: Any, loop: LoopSpec, *, upto_iter: int) -> str:
     """sha256(JCS(sorted (h,verdict)/(q,disposition) pairs)) for no_change."""
     pairs: list[list[str]] = []
     for hid in sorted(loop.scope_hypotheses):
-        pairs.append([f"h:{hid}", hypothesis_verdict_scoped(runtime, loop, hid, upto_iter=upto_iter)])
+        pairs.append(
+            [f"h:{hid}", hypothesis_verdict_scoped(runtime, loop, hid, upto_iter=upto_iter)]
+        )
     for qid in sorted(loop.scope_questions):
         pairs.append(
-            [f"q:{qid}", question_disposition_scoped(runtime, loop, qid, upto_iter=upto_iter)]
+            [
+                f"q:{qid}",
+                question_disposition_scoped(runtime, loop, qid, upto_iter=upto_iter),
+            ]
         )
     return sha256_hex(canonical_json(pairs))
 
@@ -248,7 +271,7 @@ def count_survivors(runtime: Any, loop: LoopSpec, *, upto_iter: int) -> int:
 def _pred_survivors_le(
     runtime: Any, loop: LoopSpec, *, iter_n: int, ctx: Mapping[str, Any]
 ) -> bool:
-    n = int(loop.until.params.get("n", 0))
+    n = _require_int_n(dict(loop.until.params or {}))
     return count_survivors(runtime, loop, upto_iter=iter_n) <= n
 
 
@@ -265,7 +288,6 @@ def _pred_criterion_met(
     for _aid, row in results.items():
         if not isinstance(row, dict):
             continue
-        # Result rows keyed by attempt_id; resolve task via attempts map.
         att = (getattr(runtime, "attempts", None) or {}).get(_aid)
         tid = None
         if isinstance(att, dict):
@@ -298,7 +320,7 @@ def _pred_no_change(
     return fp_cur == fp_prev
 
 
-# Built-ins (DESIGN_M1 §4).
+# Built-ins (DESIGN_M1 §4) — registered once; overrides raise.
 register_loop_predicate("survivors_le", _pred_survivors_le)
 register_loop_predicate("criterion_met", _pred_criterion_met)
 register_loop_predicate("no_change", _pred_no_change)

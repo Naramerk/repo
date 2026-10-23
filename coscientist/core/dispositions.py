@@ -322,25 +322,41 @@ def _dispositions_inner(
             row_na["excluded_claims"] = excluded
         result[qid] = row_na
 
-    # PR11: LoopCapped scope questions — disposition from verdicts, reason=iteration_cap.
-    capped_q = {
-        str(k): v for k, v in (loop_capped_questions or {}).items()
-    }
+    apply_loop_cap_dispositions(result, loop_capped_questions)
+    return result
+
+
+def apply_loop_cap_dispositions(
+    result: dict[str, dict[str, Any]],
+    loop_capped_questions: Mapping[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    """Tag LoopCapped scope questions; never erase infeasible/needs_more_data/ill_posed."""
+    capped_q = {str(k): v for k, v in (loop_capped_questions or {}).items()}
+    if not capped_q:
+        return result
+    keep = (
+        Disposition.ANSWERED.value,
+        Disposition.REFUTED.value,
+        Disposition.SURVIVED.value,
+        Disposition.INCONCLUSIVE.value,
+    )
+    preserve = (
+        Disposition.INFEASIBLE.value,
+        Disposition.NEEDS_MORE_DATA.value,
+        Disposition.ILL_POSED.value,
+    )
     for qid, row in list(result.items()):
         if qid not in capped_q:
             continue
         disp = str(row.get("disposition") or "")
-        if disp in (
-            Disposition.ANSWERED.value,
-            Disposition.REFUTED.value,
-            Disposition.SURVIVED.value,
-            Disposition.INCONCLUSIVE.value,
-        ):
+        if disp in preserve:
+            continue
+        if disp in keep:
             row = dict(row)
             row["reason"] = TaskReason.ITERATION_CAP.value
             result[qid] = row
         else:
-            # No counting verdict: honest inconclusive + iteration_cap.
+            # not_attempted / empty: unresolved because the loop hit the cap.
             row = dict(row)
             row["disposition"] = Disposition.INCONCLUSIVE.value
             row["reason"] = TaskReason.ITERATION_CAP.value
