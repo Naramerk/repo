@@ -14,7 +14,33 @@ UPCASTERS: dict[str, dict[int, Upcaster]] = {}
 
 
 def register_upcaster(event_type: str, from_version: int, fn: Upcaster) -> None:
-    UPCASTERS.setdefault(event_type, {})[from_version] = fn
+    """Register ``from_version → from_version+1``. Duplicate (type, from_version) raises."""
+    bucket = UPCASTERS.setdefault(event_type, {})
+    if from_version in bucket:
+        raise ValueError(
+            f"duplicate upcaster for {event_type!r} from_version={from_version}"
+        )
+    bucket[from_version] = fn
+
+
+def writer_schema_version(event_type: str) -> int:
+    """Current writer version = 1 + max registered from_version (or 1 if none)."""
+    versions = UPCASTERS.get(event_type) or {}
+    if not versions:
+        return 1
+    return max(versions) + 1
+
+
+def assert_upcaster_chain_continuous(event_type: str, writer_version: int) -> None:
+    """Require upcasters for every v in 1..writer_version-1 (no gaps)."""
+    if writer_version < 1:
+        raise ValueError(f"{event_type}: writer_version must be >= 1")
+    bucket = UPCASTERS.get(event_type) or {}
+    missing = [v for v in range(1, writer_version) if v not in bucket]
+    if missing:
+        raise AssertionError(
+            f"{event_type}: upcaster chain gaps before v{writer_version}: missing {missing}"
+        )
 
 
 def upcast(event_type: str, schema_version: int, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -248,6 +274,21 @@ def _plan_expanded_v1_to_v2_rubric(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _plan_expanded_v2_to_v3_loop(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR11: loop_id / loop_iter / loop_template_key defaults on PlanExpanded.added_tasks."""
+    out = dict(payload)
+    added = out.get("added_tasks")
+    if isinstance(added, list):
+        rewritten: list[Any] = []
+        for t in added:
+            if isinstance(t, dict):
+                rewritten.append(_ensure_loop_fields(dict(t)))
+            else:
+                rewritten.append(t)
+        out["added_tasks"] = rewritten
+    return out
+
+
 def _plan_accepted_v4_to_v5_foreach_quorum(payload: dict[str, Any]) -> dict[str, Any]:
     out = dict(payload)
     tasks = out.get("tasks")
@@ -468,6 +509,47 @@ def _study_created_v8_to_v9(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _study_created_v9_to_v10(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR11: max_loop_iter default 8."""
+    out = dict(payload)
+    out.setdefault("max_loop_iter", 8)
+    return out
+
+
+def _ensure_loop_fields(spec: dict[str, Any]) -> dict[str, Any]:
+    """PR11: loop_id / loop_iter / loop_template_key defaults on old TaskSpec."""
+    spec = dict(spec)
+    spec.setdefault("loop_id", None)
+    spec.setdefault("loop_iter", None)
+    spec.setdefault("loop_template_key", None)
+    return spec
+
+
+def _task_created_v10_to_v11_loop(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR11: loop_id / loop_iter / loop_template_key on TaskCreated v11 (after #21 rubric v10)."""
+    out = dict(payload)
+    spec = out.get("spec")
+    if isinstance(spec, dict):
+        out["spec"] = _ensure_loop_fields(spec)
+    return out
+
+
+def _plan_accepted_v8_to_v9_loops(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR11: Plan.loops default [] on PlanAccepted v9 (after #21 rubric v8)."""
+    out = dict(payload)
+    out.setdefault("loops", [])
+    tasks = out.get("tasks")
+    if isinstance(tasks, list):
+        rewritten: list[Any] = []
+        for t in tasks:
+            if isinstance(t, dict):
+                rewritten.append(_ensure_loop_fields(dict(t)))
+            else:
+                rewritten.append(t)
+        out["tasks"] = rewritten
+    return out
+
+
 def _plan_accepted_v3_to_v4_expand_after(payload: dict[str, Any]) -> dict[str, Any]:
     """PR9: PlanAccepted.expand_after defaults to []."""
     out = dict(payload)
@@ -585,6 +667,7 @@ register_upcaster("TaskCreated", 6, _task_created_v6_to_v7_foreach_quorum)
 register_upcaster("TaskCreated", 7, _task_created_v7_to_v8_sandbox)
 register_upcaster("TaskCreated", 8, _task_created_v8_to_v9_shares)
 register_upcaster("TaskCreated", 9, _task_created_v9_to_v10_rubric)
+register_upcaster("TaskCreated", 10, _task_created_v10_to_v11_loop)
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)
 register_upcaster("PlanAccepted", 2, _plan_accepted_v2_to_v3_check_role)
 register_upcaster("PlanAccepted", 3, _plan_accepted_v3_to_v4_expand_after)
@@ -592,7 +675,9 @@ register_upcaster("PlanAccepted", 4, _plan_accepted_v4_to_v5_foreach_quorum)
 register_upcaster("PlanAccepted", 5, _plan_accepted_v5_to_v6_sandbox)
 register_upcaster("PlanAccepted", 6, _plan_accepted_v6_to_v7_shares)
 register_upcaster("PlanAccepted", 7, _plan_accepted_v7_to_v8_rubric)
+register_upcaster("PlanAccepted", 8, _plan_accepted_v8_to_v9_loops)
 register_upcaster("PlanExpanded", 1, _plan_expanded_v1_to_v2_rubric)
+register_upcaster("PlanExpanded", 2, _plan_expanded_v2_to_v3_loop)
 register_upcaster("StudyCreated", 1, _study_created_v1_to_v2)
 register_upcaster("StudyCreated", 2, _study_created_v2_to_v3)
 register_upcaster("StudyCreated", 3, _study_created_v3_to_v4)
@@ -601,6 +686,7 @@ register_upcaster("StudyCreated", 5, _study_created_v5_to_v6)
 register_upcaster("StudyCreated", 6, _study_created_v6_to_v7)
 register_upcaster("StudyCreated", 7, _study_created_v7_to_v8)
 register_upcaster("StudyCreated", 8, _study_created_v8_to_v9)
+register_upcaster("StudyCreated", 9, _study_created_v9_to_v10)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)

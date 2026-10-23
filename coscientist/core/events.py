@@ -25,6 +25,14 @@ class EventEnvelope(BaseModel):
 
 # Typed payload helpers used by the machine / executor.
 
+# Writer constants (#21 PlanExpanded v2 / TaskCreated v10 / PlanAccepted v8;
+# this PR stacks TaskCreated v11 + PlanAccepted v9 + PlanExpanded v3 loop fields.
+# StudyCreated v10 (max_loop_iter) stays here — #24 merges before #23 (v11).
+PLAN_EXPANDED_SCHEMA_VERSION = 3
+STUDY_CREATED_SCHEMA_VERSION = 10
+PLAN_ACCEPTED_SCHEMA_VERSION = 9
+TASK_CREATED_SCHEMA_VERSION = 11
+
 EventType = Literal[
     "StudyCreated",
     "TaskCreated",
@@ -37,6 +45,10 @@ EventType = Literal[
     "PlanAccepted",
     "PlanExpanded",
     "ExpansionRefused",
+    "PlanRefused",
+    "LoopCapped",
+    "LoopCompleted",
+    "LoopRefused",
     "HitlOpened",
     "HitlDecided",
     "HitlTimedOut",

@@ -110,7 +110,7 @@ def test_upcast_task_created_input_kind_defaults():
             "deadline": "2026-01-01T00:00:00+00:00",
         },
     )
-    assert v == 10
+    assert v == 11
     inp = p["spec"]["inputs"][0]
     assert inp["kind"] == "artifact"
     assert inp["ref"] is None

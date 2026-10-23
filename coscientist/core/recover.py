@@ -7,7 +7,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from coscientist.core.domain import AgentTaskOutput, TaskState
-from coscientist.core.errors import ArtifactCorrupt
+from coscientist.core.errors import ArtifactCorrupt, LeaseLost
 from coscientist.core.hitl_guard import reject_open_hitl_if_unsupported
 from coscientist.core.ids import result_id
 from coscientist.core.machine import StudyRuntime
@@ -66,18 +66,28 @@ async def recover(runtime: StudyRuntime) -> dict[str, Any]:
         if _retry_scheduled(runtime, att["task_id"]):
             retried += 1
 
-    # Crash between TaskDone and expand/foreach: re-queue PLAN-n / materialize.
+    # Crash between TaskDone and expand/foreach/loop: re-queue PLAN-n / materialize.
     from coscientist.core.expand_trigger import resume_pending_expansions
     from coscientist.core.foreach import resume_pending_foreach
+    from coscientist.core.loop import finalize_loop_internal_error, resume_pending_loops
 
     foreach_n = await resume_pending_foreach(runtime)
+    try:
+        loop_n = await resume_pending_loops(runtime)
+    except LeaseLost:
+        raise
+    except Exception as e:  # noqa: BLE001 — never abort recover before tick/finalize
+        await finalize_loop_internal_error(runtime, exc=e, loop=None)
+        loop_n = 0
     resumed = await resume_pending_expansions(runtime)
-    await runtime.tick()
+    if not getattr(runtime, "_finalized", False):
+        await runtime.tick()
     return {
         "closed": closed,
         "retried": retried,
         "expansions_resumed": resumed,
         "foreach_resumed": foreach_n,
+        "loops_resumed": loop_n,
     }
 
 

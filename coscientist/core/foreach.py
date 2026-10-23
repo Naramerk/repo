@@ -16,7 +16,12 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.events import EventEnvelope, make_idem
+from coscientist.core.events import (
+    PLAN_EXPANDED_SCHEMA_VERSION,
+    TASK_CREATED_SCHEMA_VERSION,
+    EventEnvelope,
+    make_idem,
+)
 from coscientist.core.expand_graph import (
     plan_graph_events,
     question_graph_events,
@@ -277,6 +282,12 @@ async def materialize_foreach(
         )
         return None
     pid = foreach_plan_id(sid, tkey, new_rev)
+    from coscientist.core.domain import LoopSpec
+
+    prev_loops = [
+        LoopSpec.model_validate(x) if isinstance(x, dict) else x
+        for x in (prev.get("loops") or [])
+    ]
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -285,6 +296,7 @@ async def materialize_foreach(
         tasks=merged,
         questions=list(prev_questions),
         expand_after=list(prev.get("expand_after") or []),
+        loops=prev_loops,
     )
     ed = study.effective_deadline()
     events: list[EventEnvelope] = []
@@ -351,7 +363,7 @@ async def materialize_foreach(
                 idem_key=make_idem("TaskCreated", tid, pid),
                 payload=task.model_dump(mode="json"),
                 ts=now,
-                schema_version=10,
+                schema_version=TASK_CREATED_SCHEMA_VERSION,
             )
         )
 
@@ -389,7 +401,7 @@ async def materialize_foreach(
             idem_key=make_idem("PlanExpanded", "foreach", sid, tkey),
             payload=payload,
             ts=now,
-            schema_version=2,
+            schema_version=PLAN_EXPANDED_SCHEMA_VERSION,
         )
     )
     await runtime._append(events)  # noqa: SLF001

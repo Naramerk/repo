@@ -19,7 +19,12 @@ from coscientist.core.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.events import EventEnvelope, make_idem
+from coscientist.core.events import (
+    PLAN_EXPANDED_SCHEMA_VERSION,
+    TASK_CREATED_SCHEMA_VERSION,
+    EventEnvelope,
+    make_idem,
+)
 from coscientist.core.expand_critic import critic_gate, prepare_request_for_apply
 from coscientist.core.expand_graph import (
     plan_graph_events,
@@ -333,6 +338,12 @@ async def _expand_plan(
     all_questions = [q for q in prev_questions if q.id not in superseded_old] + added_questions
 
     pid = plan_id()
+    from coscientist.core.domain import LoopSpec
+
+    prev_loops = [
+        LoopSpec.model_validate(x) if isinstance(x, dict) else x
+        for x in ((prev.get("loops") if prev else None) or [])
+    ]
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -341,6 +352,7 @@ async def _expand_plan(
         tasks=merged_tasks,
         questions=all_questions,
         expand_after=expand_after,
+        loops=prev_loops,
     )
     events: list[EventEnvelope] = []
     events.extend(
@@ -400,7 +412,7 @@ async def _expand_plan(
                 idem_key=make_idem("TaskCreated", tid, pid),
                 payload=task.model_dump(mode="json"),
                 ts=now,
-                schema_version=10,
+                schema_version=TASK_CREATED_SCHEMA_VERSION,
             )
         )
 
@@ -428,7 +440,7 @@ async def _expand_plan(
             idem_key=make_idem("PlanExpanded", pid),
             payload=payload,
             ts=now,
-            schema_version=2,
+            schema_version=PLAN_EXPANDED_SCHEMA_VERSION,
         )
     )
     await runtime._append(events)  # noqa: SLF001

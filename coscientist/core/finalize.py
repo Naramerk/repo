@@ -204,14 +204,24 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
             if TASK_BUDGET_OVERRUN_LINE not in seen:
                 seen.append(TASK_BUDGET_OVERRUN_LINE)
         elif ev.type == "ExpansionRefused":
-            line = expansion_not_done_line(
-                str(ev.payload.get("reason") or ""),
-                str(ev.payload.get("detail") or ""),
-            )
+            custom = (ev.payload or {}).get("report_line")
+            if custom:
+                line = str(custom)
+            else:
+                line = expansion_not_done_line(
+                    str(ev.payload.get("reason") or ""),
+                    str(ev.payload.get("detail") or ""),
+                )
             if line not in seen:
                 seen.append(line)
         elif ev.type == "PlanExpanded" and ev.payload.get("foreach"):
             _append_foreach_report_lines(seen, ev.payload)
+        elif ev.type == "LoopCapped":
+            _append_loop_capped_report_line(seen, ev.payload)
+        elif ev.type == "LoopRefused":
+            _append_loop_refused_report_line(seen, ev.payload)
+        elif ev.type == "LoopCompleted":
+            _append_loop_completed_report_line(seen, ev.payload)
         elif ev.type == "SideEffectDenied":
             tool = str(ev.payload.get("tool") or "?")
             reason = str(ev.payload.get("reason") or "")
@@ -242,6 +252,63 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
         if line not in seen:
             seen.append(line)
     return seen
+
+def _append_loop_capped_report_line(seen: list[str], p: dict[str, Any]) -> None:
+    """DESIGN_M1 §4: iteration_cap vs refuse/error (never disguise bugs as cap)."""
+    try:
+        i = int(p.get("iter") or 0)
+    except (TypeError, ValueError):
+        i = 0
+    try:
+        raw_m = p.get("survivors")
+        m = int(raw_m) if raw_m is not None else 0  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        m = 0
+    reason = str(p.get("reason") or "iteration_cap")
+    detail = str(p.get("detail") or p.get("refuse_detail") or "")
+    if reason in ("error", "refused") or detail.startswith("loop_predicate:"):
+        line = f"цикл остановлен ошибкой после {i} итераций: {detail or reason}"
+        if line not in seen:
+            seen.append(line)
+        if reason not in seen:
+            seen.append(reason)
+        return
+    line = f"цикл остановлен лимитом после {i} итераций, осталось {m}"
+    if line not in seen:
+        seen.append(line)
+    if "iteration_cap" not in seen:
+        seen.append("iteration_cap")
+
+
+def _append_loop_refused_report_line(seen: list[str], p: dict[str, Any]) -> None:
+    """LoopRefused: honest error/refuse line (not iteration_cap)."""
+    try:
+        i = int(p.get("iter") or 0)
+    except (TypeError, ValueError):
+        i = 0
+    reason = str(p.get("reason") or "error")
+    detail = str(p.get("detail") or "")
+    line = f"цикл остановлен ошибкой после {i} итераций: {detail or reason}"
+    if line not in seen:
+        seen.append(line)
+    if reason not in seen:
+        seen.append(reason)
+
+
+def _append_loop_completed_report_line(seen: list[str], p: dict[str, Any]) -> None:
+    """Until-met completion line (journaled LoopCompleted)."""
+    try:
+        i = int(p.get("iter") or 0)
+    except (TypeError, ValueError):
+        i = 0
+    try:
+        raw_m = p.get("survivors")
+        m = int(raw_m) if raw_m is not None else 0  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        m = 0
+    line = f"цикл завершён после {i} итераций, осталось {m}"
+    if line not in seen:
+        seen.append(line)
 
 
 def _append_foreach_report_lines(seen: list[str], p: dict[str, Any]) -> None:
@@ -334,6 +401,8 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     refusal = _refusal_payload(runtime, trigger)
     try:
         payload = await _build_rich_payload(runtime, sid=sid, trigger=trigger)
+    except LeaseLost:
+        raise
     except Exception as e:  # noqa: BLE001 — last-resort totality
         log.warning("finalize rich path failed: %s", e, exc_info=True)
         payload = last_resort_payload(
@@ -361,10 +430,10 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
                     refusal=refusal,
                 ),
             )
-        except Conflict as err:
-            await _sync_finalized_from_store(runtime, sid=sid, conflict=err)
         except LeaseLost:
             raise
+        except Conflict as err:
+            await _sync_finalized_from_store(runtime, sid=sid, conflict=err)
     runtime._finalized = True  # noqa: SLF001
 
 
@@ -456,6 +525,8 @@ def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
 async def _build_rich_payload(runtime: StudyRuntime, *, sid: str, trigger: FinalizeTrigger) -> dict[str, Any]:
     plans = await _load_plans(runtime)
     lookup = _artifact_lookup(runtime)
+    from coscientist.core.loop import capped_scope_questions
+
     qdisp = dispositions(
         tasks=runtime.tasks,
         plans=plans,
@@ -463,6 +534,7 @@ async def _build_rich_payload(runtime: StudyRuntime, *, sid: str, trigger: Final
         study=runtime.study,
         results=getattr(runtime, "results", None),
         artifact_lookup=lookup,
+        loop_capped_questions=capped_scope_questions(runtime),
     )
     hyp_verdicts, hyp_unavail = report_hypothesis_verdicts(
         graph=getattr(runtime, "graph", None),
