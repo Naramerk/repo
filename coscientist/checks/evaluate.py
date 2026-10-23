@@ -300,9 +300,7 @@ def evaluate_code_check(
                         left = _pointer_get(doc, pointer)
                         evid_digest = sha256_hex(canonical_json(left))
                 else:
-                    if check.kind == "json_pointer" and (
-                        pointer is None or pointer == "" or pointer == "/"
-                    ):
+                    if check.kind == "json_pointer" and (pointer is None or pointer == "" or pointer == "/"):
                         return _no_effect_result(
                             check_id=check_id,
                             template_id=template_id,
@@ -321,9 +319,7 @@ def evaluate_code_check(
 
             effect: dict[str, Any] | None = None
             used_sesoi = False
-            prov = _effect_provenance_fields(
-                artifacts, handle.artifact_id, attempt_id=attempt_id
-            )
+            prov = _effect_provenance_fields(artifacts, handle.artifact_id, attempt_id=attempt_id)
             if check.kind == "json_pointer":
                 # Missing / null / empty-string at pointer → no numeric effect.
                 if left is None or left == "":
@@ -344,11 +340,7 @@ def evaluate_code_check(
                 # metric_threshold — point-estimate exceedance or TOST with real CI.
                 op = check.op or "=="
                 ci = _extract_ci(doc, left)
-                if (
-                    uses_sesoi
-                    and sesoi is not None
-                    and predicts_null
-                ):
+                if uses_sesoi and sesoi is not None and predicts_null:
                     # TOST: require a real interval from the metric artifact.
                     if ci is not None:
                         effect = {
@@ -359,9 +351,7 @@ def evaluate_code_check(
                             **prov,
                         }
                         used_sesoi = True
-                        ok = (-float(sesoi)) < ci["ci_low"] and ci["ci_high"] < float(
-                            sesoi
-                        )
+                        ok = (-float(sesoi)) < ci["ci_low"] and ci["ci_high"] < float(sesoi)
                     else:
                         # No CI → not a TOST result; equivalence not assessable.
                         used_sesoi = False
@@ -434,9 +424,7 @@ def evaluate_code_check(
                 is_code=True,
                 required=True,
                 role=role,
-                evidence=[
-                    EvidenceRef(artifact_id=handle.artifact_id, digest=sha256_hex(b"ok"))
-                ],
+                evidence=[EvidenceRef(artifact_id=handle.artifact_id, digest=sha256_hex(b"ok"))],
             )
 
         if check.kind == "source_link":
@@ -484,6 +472,21 @@ def evaluate_code_check(
                 prov_fields={},
             )
 
+        if check.kind == "rubric":
+            from coscientist.checks.kinds.rubric import evaluate_rubric
+
+            # Role forced to validity inside evaluate_rubric (stance invariant).
+            return evaluate_rubric(
+                check,
+                template_id=template_id,
+                check_id=check_id,
+                out=out,
+                artifacts=artifacts,
+                role=role,
+                attempt_id=attempt_id,
+                evaluate_code_check=evaluate_code_check,
+            )
+
     except ArtifactCorrupt as e:
         return CheckResult(
             check_id=check_id,
@@ -509,9 +512,7 @@ def evaluate_code_check(
             "metric_on_holdout",
             "reproducible_rerun",
         ):
-            raise SandboxInfraError(
-                f"sandbox_unavailable:host_io:{e.__class__.__name__}"
-            ) from e
+            raise SandboxInfraError(f"sandbox_unavailable:host_io:{e.__class__.__name__}") from e
         return CheckResult(
             check_id=check_id,
             template_id=template_id,
@@ -565,8 +566,7 @@ def agent_facing_template_view(tmpl: RequirementTemplate) -> dict[str, Any]:
         "required": tmpl.required,
         "role": tmpl.role,
         "is_code": isinstance(tmpl.check, CodeCheck),
-        "check_kind": getattr(tmpl.check, "kind", None)
-        or getattr(tmpl.check, "reviewer_role", None),
+        "check_kind": getattr(tmpl.check, "kind", None) or getattr(tmpl.check, "reviewer_role", None),
     }
 
 
@@ -609,14 +609,24 @@ def evaluate_task_checks(
     artifacts: LocalArtifactStore,
     *,
     review_statuses: dict[str, ReqStatus] | None = None,
+    judge_retry: dict[str, int] | None = None,
+    failure_kinds: dict[str, str] | None = None,
     attempt_id: str | None = None,
+    task_id: str | None = None,
+    output_digest: str | None = None,
     task_kind: str | None = None,
     task_key: str | None = None,
     fetched_digests: frozenset[str] | Collection[str] | None = None,
 ) -> list[CheckResult]:
-    """Evaluate criteria on the task; review checks become UNASSESSED unless overridden."""
+    """Evaluate criteria on the task; review checks become UNASSESSED unless overridden.
+
+    Joint with PR14: ``fetched_digests`` forwarded to executable kinds.
+    PR13: ``judge_retry`` / ``failure_kinds`` / ``task_id`` / ``output_digest``.
+    """
     by_id = {t.id: t for t in catalog.templates}
     review_statuses = review_statuses or {}
+    judge_retry = judge_retry or {}
+    failure_kinds = failure_kinds or {}
     results: list[CheckResult] = []
     refs = list(spec.criteria)
     if not refs:
@@ -676,13 +686,24 @@ def evaluate_task_checks(
         if isinstance(tmpl.check, CodeCheck):
             from coscientist.checks.sandbox_limits import apply_frozen_limits
 
-            check = apply_frozen_limits(
-                tmpl.check, spec, template_id=tmpl.id
-            )
+            check = apply_frozen_limits(tmpl.check, spec, template_id=tmpl.id)
         else:
             check = tmpl.check
         if isinstance(check, ReviewCheck):
-            st = review_statuses.get(cid, ReqStatus.UNASSESSED)
+            from coscientist.core.reviews import review_key
+
+            # Scoped key only — never bare check_id / empty-field substitution.
+            if not task_id or not attempt_id or not output_digest:
+                st = ReqStatus.UNASSESSED
+            else:
+                rkey = review_key(
+                    task_id=task_id,
+                    attempt_id=attempt_id,
+                    check_id=cid,
+                    item_id="",
+                    output_digest=output_digest,
+                )
+                st = review_statuses.get(rkey, ReqStatus.UNASSESSED)
             results.append(
                 CheckResult(
                     check_id=cid,
@@ -692,6 +713,46 @@ def evaluate_task_checks(
                     required=ref.required and tmpl.required,
                     role=role,
                     detail=check.question,
+                )
+            )
+        elif isinstance(check, CodeCheck) and check.kind == "rubric":
+            from coscientist.checks.kinds.rubric import evaluate_rubric
+            from coscientist.core.rubric import freeze_rubric
+
+            # Prefer OutputSpec.rubric for the named output (plan-frozen).
+            out_rubric = None
+            for o in spec.expected_outputs or []:
+                if o.name == (check.output or "main") and o.rubric is not None:
+                    out_rubric = freeze_rubric(o.rubric)
+                    break
+            cr = evaluate_rubric(
+                check,
+                template_id=tmpl.id,
+                check_id=cid,
+                out=out,
+                artifacts=artifacts,
+                role="validity",
+                review_statuses=review_statuses,
+                judge_retry=judge_retry,
+                failure_kinds=failure_kinds,
+                output_rubric=out_rubric,
+                attempt_id=attempt_id,
+                task_id=task_id,
+                output_digest=output_digest,
+                evaluate_code_check=evaluate_code_check,
+            )
+            results.append(
+                CheckResult(
+                    check_id=cr.check_id,
+                    template_id=cr.template_id,
+                    status=cr.status,
+                    is_code=cr.is_code,
+                    required=ref.required and tmpl.required,
+                    role="validity",
+                    evidence=cr.evidence,
+                    detail=cr.detail,
+                    effect=cr.effect,
+                    used_sesoi=False,
                 )
             )
         else:
@@ -725,4 +786,30 @@ def evaluate_task_checks(
                     used_sesoi=cr.used_sesoi,
                 )
             )
+
+    # Plan-frozen OutputSpec.rubric without an explicit rubric criterion still runs
+    # (artifact deliverables: literature review, design doc, …).
+    from coscientist.checks.kinds.rubric import evaluate_output_spec_rubrics
+
+    already: set[str] = {r.template_id for r in results}
+    for r in results:
+        effect = r.effect if isinstance(r.effect, dict) else {}
+        dig = effect.get("rubric_digest")
+        if dig:
+            already.add(f"rubric:{dig}")
+    results.extend(
+        evaluate_output_spec_rubrics(
+            spec,
+            out=out,
+            artifacts=artifacts,
+            review_statuses=review_statuses,
+            attempt_id=attempt_id,
+            already=already,
+            evaluate_code_check=evaluate_code_check,
+            judge_retry=judge_retry,
+            failure_kinds=failure_kinds,
+            task_id=task_id,
+            output_digest=output_digest,
+        )
+    )
     return results

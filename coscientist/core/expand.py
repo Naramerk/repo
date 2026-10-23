@@ -400,7 +400,7 @@ async def _expand_plan(
                 idem_key=make_idem("TaskCreated", tid, pid),
                 payload=task.model_dump(mode="json"),
                 ts=now,
-                schema_version=9,
+                schema_version=10,
             )
         )
 
@@ -428,7 +428,7 @@ async def _expand_plan(
             idem_key=make_idem("PlanExpanded", pid),
             payload=payload,
             ts=now,
-            schema_version=1,
+            schema_version=2,
         )
     )
     await runtime._append(events)  # noqa: SLF001

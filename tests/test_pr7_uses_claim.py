@@ -110,7 +110,7 @@ def test_upcast_task_created_input_kind_defaults():
             "deadline": "2026-01-01T00:00:00+00:00",
         },
     )
-    assert v == 9
+    assert v == 10
     inp = p["spec"]["inputs"][0]
     assert inp["kind"] == "artifact"
     assert inp["ref"] is None
@@ -145,9 +145,7 @@ def test_upcast_attempt_started_inputs_default():
 async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cls):
     """PR8: kind=verdict is accepted; missing ref still rejected."""
     sid = "st_verdict_ref"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -159,29 +157,31 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
-    with pytest.raises(ValueError, match="verdict requires ref"):
-        await rt.accept_plan(
-            [
-                TaskSpec(
-                    task_key="E1",
-                    title="e",
-                    goal="g",
-                    route="experiment",
-                    depends_on=["PLAN"],
-                    inputs=[InputSpec(kind="verdict")],
-                )
-            ],
-            questions=[],
-        )
+    pid = await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E1",
+                title="e",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                inputs=[InputSpec(kind="verdict")],
+            )
+        ],
+        questions=[],
+    )
+    assert pid == ""
+    events = await rt.store.read_all()
+    refused = [e for e in events if e.type == "PlanRefused"]
+    assert refused and "verdict requires ref" in str(refused[0].payload.get("detail") or "")
+    assert any(e.type == "StudyFinalized" for e in events)
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
 async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_cls):
     sid = "st_inp_val"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -193,35 +193,56 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
-    with pytest.raises(ValueError, match="artifact requires from_task"):
-        await rt.accept_plan(
-            [
-                TaskSpec(
-                    task_key="E1",
-                    title="e",
-                    goal="g",
-                    route="experiment",
-                    depends_on=["PLAN"],
-                    inputs=[InputSpec(kind="artifact")],
-                )
-            ],
-            questions=[],
-        )
-    with pytest.raises(ValueError, match="claim requires ref"):
-        await rt.accept_plan(
-            [
-                TaskSpec(
-                    task_key="E1",
-                    title="e",
-                    goal="g",
-                    route="experiment",
-                    depends_on=["PLAN"],
-                    inputs=[InputSpec(kind="claim")],
-                )
-            ],
-            questions=[],
-        )
+    pid = await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E1",
+                title="e",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                inputs=[InputSpec(kind="artifact")],
+            )
+        ],
+        questions=[],
+    )
+    assert pid == ""
+    events = await rt.store.read_all()
+    refused = [e for e in events if e.type == "PlanRefused"]
+    assert refused and "artifact requires from_task" in str(refused[0].payload.get("detail") or "")
     await close_runtime(rt)
+
+    sid2 = "st_inp_val2"
+    rt2 = await open_runtime(tmp_path, sid2, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt2.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=60),
+        sid=sid2,
+        finalize_reserve_s=5,
+    )
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt2.start_attempt(key)
+        await rt2.cancel_task(key, reason="cancelled")
+    pid2 = await rt2.accept_plan(
+        [
+            TaskSpec(
+                task_key="E1",
+                title="e",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                inputs=[InputSpec(kind="claim")],
+            )
+        ],
+        questions=[],
+    )
+    assert pid2 == ""
+    events2 = await rt2.store.read_all()
+    refused2 = [e for e in events2 if e.type == "PlanRefused"]
+    assert refused2 and "claim requires ref" in str(refused2[0].payload.get("detail") or "")
+    await close_runtime(rt2)
 
 
 @pytest.mark.asyncio

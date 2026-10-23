@@ -233,6 +233,11 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
                 artifact_lookup=lookup if callable(lookup) else None,
             )
         ed = self.study.effective_deadline() if self.study else None
+        ftypes = None
+        if self.plans:
+            from coscientist.core.rubric import question_final_types
+
+            ftypes = question_final_types(self.plans)
         return study_view(
             self.tasks.values(),
             open_hitl=0,
@@ -241,6 +246,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             now=self.clock.now(),
             effective_deadline=ed,
             question_dispositions=qdisp,
+            question_final_types=ftypes,
         )
 
     def invariant_open_attempts(self) -> bool:
@@ -499,6 +505,7 @@ class StudyRuntime(LifecycleMixin, LocalProjectMixin, AttemptsMixin):
             self._retry_at.pop(tid, None)
             # None = honest refuse (zero share / empty pool); task already SKIPPED.
             await self.start_attempt(tid, provenance=prov)
+
 
 def new_owner() -> str:
     return str(uuid.uuid4())

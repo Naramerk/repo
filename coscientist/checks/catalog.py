@@ -29,6 +29,7 @@ KNOWN_CODE_KINDS = frozenset(
         "tests_pass",
         "metric_on_holdout",
         "reproducible_rerun",
+        "rubric",
     }
 )
 KNOWN_REVIEW_ROLES = frozenset({"reviewer", "critic", "human"})
@@ -304,6 +305,33 @@ def minimal_test_catalog() -> Catalog:
                         "reviewer_role": "reviewer",
                         "question": "Is the result adequate?",
                     },
+                    "role": "validity",
+                    "required": True,
+                },
+                {
+                    "id": "rubric_check",
+                    "title": "Rubric (qualitative deliverable)",
+                    "text_ru": "Артефакт удовлетворяет замороженной рубрике плана.",
+                    "rule_ids": ["R23"],
+                    "method_sources": ["test"],
+                    "applies_to": ["experiment"],
+                    "check": {
+                        "kind": "rubric",
+                        "output": "main",
+                        "rubric": {
+                            "items": [
+                                {
+                                    "id": "exists",
+                                    "text": "Deliverable artifact exists",
+                                    "required": True,
+                                    "check": "code",
+                                    "code_kind": "artifact_exists",
+                                }
+                            ],
+                            "aggregate": "all_required",
+                        },
+                    },
+                    # validity only — never feeds claim stance (PR13 invariant)
                     "role": "validity",
                     "required": True,
                 },

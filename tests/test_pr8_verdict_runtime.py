@@ -403,9 +403,7 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
     from coscientist.core.domain import AgentTaskOutput
 
     sid = "st_fail_cl"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -426,14 +424,15 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[],
+                # Explicit criterion (PlanValidator ignores catalog defaults).
+                criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid0 = await rt.start_attempt("E0")
-    # No artifact → default artifact_present (validity) FAILED → scientific.
+    # No artifact → artifact_present (validity) FAILED → scientific.
     result = await ex.record(
         aid0,
         AgentTaskOutput(
@@ -1193,14 +1192,10 @@ async def test_validity_failed_claim_invalid_inconclusive(
 
 
 @pytest.mark.asyncio
-async def test_plan_rejects_role_disagreeing_with_catalog(
-    tmp_path, clock, runtime_cls
-):
+async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runtime_cls):
     """Plan claiming validity for a prediction template is rejected."""
     sid = "st_role_rej"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -1212,45 +1207,67 @@ async def test_plan_rejects_role_disagreeing_with_catalog(
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
-    with pytest.raises(ValueError, match="disagrees with template"):
-        await rt.accept_plan(
-            [
-                TaskSpec(
-                    task_key="E0",
-                    title="dodge",
-                    goal="g",
-                    route="experiment",
-                    depends_on=["PLAN"],
-                    criteria=[
-                        RequirementRef(
-                            template_id="value_match",
-                            required=True,
-                            role="validity",  # catalog says prediction
-                        ),
-                    ],
-                    addresses=["Q1"],
-                )
-            ],
-            questions=[QuestionSpec(id="Q1", text="why")],
-        )
-    with pytest.raises(ValueError, match="unknown criterion template"):
-        await rt.accept_plan(
-            [
-                TaskSpec(
-                    task_key="E0",
-                    title="unknown",
-                    goal="g",
-                    route="experiment",
-                    depends_on=["PLAN"],
-                    criteria=[
-                        RequirementRef(template_id="no_such_template", required=True),
-                    ],
-                    addresses=["Q1"],
-                )
-            ],
-            questions=[QuestionSpec(id="Q1", text="why")],
-        )
+    pid = await rt.accept_plan(
+        [
+            TaskSpec(
+                task_key="E0",
+                title="dodge",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[
+                    RequirementRef(
+                        template_id="value_match",
+                        required=True,
+                        role="validity",  # catalog says prediction
+                    ),
+                ],
+                addresses=["Q1"],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    assert pid == ""
+    events = await rt.store.read_all()
+    refused = [e for e in events if e.type == "PlanRefused"]
+    assert refused and "disagrees with template" in str(refused[0].payload.get("detail") or "")
+    assert any(e.type == "StudyFinalized" for e in events)
     await close_runtime(rt)
+
+    sid2 = "st_role_rej2"
+    rt2 = await open_runtime(tmp_path, sid2, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt2.create_study(
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        deadline=clock.now() + timedelta(seconds=120),
+        sid=sid2,
+        finalize_reserve_s=5,
+    )
+    for key in ("SPEC", "HYP", "LIT"):
+        await rt2.start_attempt(key)
+        await rt2.cancel_task(key, reason="cancelled")
+    pid2 = await rt2.accept_plan(
+        [
+            TaskSpec(
+                task_key="E0",
+                title="unknown",
+                goal="g",
+                route="experiment",
+                depends_on=["PLAN"],
+                criteria=[
+                    RequirementRef(template_id="no_such_template", required=True),
+                ],
+                addresses=["Q1"],
+            )
+        ],
+        questions=[QuestionSpec(id="Q1", text="why")],
+    )
+    assert pid2 == ""
+    events2 = await rt2.store.read_all()
+    refused2 = [e for e in events2 if e.type == "PlanRefused"]
+    assert refused2 and "unknown criterion template" in str(refused2[0].payload.get("detail") or "")
+    await close_runtime(rt2)
 
 
 @pytest.mark.asyncio

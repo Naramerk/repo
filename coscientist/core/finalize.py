@@ -21,7 +21,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-FinalizeTrigger = Literal["cancel", "budget", "deadline", "all_done", "intake"]
+FinalizeTrigger = Literal["cancel", "budget", "deadline", "all_done", "intake", "internal_error"]
+
 
 def _escape_report_text(value: object) -> str:
     """Escape agent/host detail so it cannot inject markdown/HTML structure.
@@ -41,6 +42,7 @@ def _escape_report_text(value: object) -> str:
         .replace("https://", "hxxps://")
     )
 
+
 # Bound rich StudyFinalized payload (JCS); oversized → last-resort.
 MAX_FINALIZED_PAYLOAD_BYTES = 65_536
 
@@ -50,6 +52,7 @@ _TRIGGER_TERMINAL: dict[str, str] = {
     "deadline": TerminalReason.DEADLINE.value,
     "intake": TerminalReason.REFUSED.value,
     "all_done": TerminalReason.COMPLETED.value,
+    "internal_error": TerminalReason.INTERNAL_ERROR.value,
 }
 _TASKDONE_DETAIL_LINES = {
     "foreach_quorum_gt_children": "не выполнено: кворум > числа детей",
@@ -60,8 +63,10 @@ _TASKDONE_DETAIL_LINES = {
     "zero_share_or_pool": "не выполнено: бюджет задачи исчерпан",
 }
 
+
 def is_finalized(runtime: StudyRuntime) -> bool:
     return bool(getattr(runtime, "_finalized", False))
+
 
 def pick_finalize_trigger(
     *,
@@ -88,6 +93,7 @@ def pick_finalize_trigger(
         return "all_done"
     return None
 
+
 def terminal_reason_for(
     trigger: FinalizeTrigger,
     *,
@@ -103,14 +109,14 @@ def terminal_reason_for(
         return TerminalReason.DEADLINE
     if trigger == "intake":
         return TerminalReason.REFUSED
+    if trigger == "internal_error":
+        return TerminalReason.INTERNAL_ERROR
     req = [t for t in tasks.values() if t.spec.required and t.state == TaskState.DONE]
-    if any(
-        t.outcome == TaskOutcome.FAILED and t.reason == TaskReason.HUMAN_TIMEOUT
-        for t in req
-    ):
+    if any(t.outcome == TaskOutcome.FAILED and t.reason == TaskReason.HUMAN_TIMEOUT for t in req):
         return TerminalReason.HUMAN_TIMEOUT
     _ = question_dispositions
     return TerminalReason.COMPLETED
+
 
 def expansion_not_done_line(reason: str, detail: str) -> str:
     """Report line for ExpansionRefused (DESIGN_M1 §4 — Russian wording)."""
@@ -126,6 +132,7 @@ def expansion_not_done_line(reason: str, detail: str) -> str:
     if r == "critic_rejected":
         return "не выполнено: отказ критика"
     return "не выполнено: лимит расширений"  # quota / reserve / expansion_limit
+
 
 # Guest sandbox timeout exhaustion (PR17) — Russian report lines.
 TIMEOUT_BUDGET_RU = "не проверено в пределах бюджета"
@@ -236,6 +243,7 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
             seen.append(line)
     return seen
 
+
 def _append_foreach_report_lines(seen: list[str], p: dict[str, Any]) -> None:
     items, added = p.get("foreach_items") or [], p.get("added_tasks") or []
     dropped = [str(x) for x in (p.get("foreach_dropped") or [])]
@@ -266,6 +274,7 @@ def _append_foreach_report_lines(seen: list[str], p: dict[str, Any]) -> None:
     for n in p.get("foreach_rank_notes") or []:
         if n and str(n) not in seen:
             seen.append(str(n))
+
 
 def last_resort_payload(
     *,
@@ -310,6 +319,7 @@ def last_resort_payload(
         "fallback_reason": fallback_reason,
         "refusal": refusal,
     }
+
 
 async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     """Write StudyFinalized (idempotent). Always attempts a write; LeaseLost propagates.
@@ -357,9 +367,8 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
             raise
     runtime._finalized = True  # noqa: SLF001
 
-async def _sync_finalized_from_store(
-    runtime: StudyRuntime, *, sid: str, conflict: Conflict
-) -> None:
+
+async def _sync_finalized_from_store(runtime: StudyRuntime, *, sid: str, conflict: Conflict) -> None:
     """On Conflict: succeed only if StudyFinalized idem event exists; else re-raise."""
     expected = make_idem("StudyFinalized", sid)
     for ev in await runtime.store.read_all():
@@ -369,9 +378,8 @@ async def _sync_finalized_from_store(
             return
     raise conflict
 
-async def _append_finalized(
-    runtime: StudyRuntime, *, sid: str, payload: dict[str, Any]
-) -> None:
+
+async def _append_finalized(runtime: StudyRuntime, *, sid: str, payload: dict[str, Any]) -> None:
     now = runtime.clock.now()
     await runtime._append(  # noqa: SLF001
         [
@@ -387,9 +395,8 @@ async def _append_finalized(
         ]
     )
 
-def truncate_contributing_reasons(
-    reasons: list[str] | None, *, limit: int = 10
-) -> list[str]:
+
+def truncate_contributing_reasons(reasons: list[str] | None, *, limit: int = 10) -> list[str]:
     """Truncate contributing_reasons while keeping timeout RU lines.
 
     ``TIMEOUT_BUDGET_RU`` / ``IDLE_TIMEOUT_RU`` are non-truncatable: they are
@@ -425,19 +432,16 @@ def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
     qdisp = {
         qid: {
             **(d if isinstance(d, dict) else {}),
-            "formulation": str((d or {}).get("formulation", ""))[:80]
-            if isinstance(d, dict)
-            else "",
+            "formulation": str((d or {}).get("formulation", ""))[:80] if isinstance(d, dict) else "",
         }
         for qid, d in (out.get("question_dispositions") or {}).items()
     }
     out["question_dispositions"] = qdisp
-    out["contributing_reasons"] = truncate_contributing_reasons(
-        list(out.get("contributing_reasons") or [])
-    )
+    out["contributing_reasons"] = truncate_contributing_reasons(list(out.get("contributing_reasons") or []))
     if len(canonical_json(out)) <= MAX_FINALIZED_PAYLOAD_BYTES:
         return out
     raise RuntimeError("finalized_payload_too_large")
+
 
 def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
     """``get_meta`` when an artifact store is attached (live replay); else None."""
@@ -448,9 +452,8 @@ def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
     lookup = getattr(arts, "get_meta", None)
     return lookup if callable(lookup) else None
 
-async def _build_rich_payload(
-    runtime: StudyRuntime, *, sid: str, trigger: FinalizeTrigger
-) -> dict[str, Any]:
+
+async def _build_rich_payload(runtime: StudyRuntime, *, sid: str, trigger: FinalizeTrigger) -> dict[str, Any]:
     plans = await _load_plans(runtime)
     lookup = _artifact_lookup(runtime)
     qdisp = dispositions(
@@ -468,13 +471,38 @@ async def _build_rich_payload(
         tasks=runtime.tasks,
         artifact_lookup=lookup,
     )
-    term = terminal_reason_for(
-        trigger, tasks=runtime.tasks, question_dispositions=qdisp
-    )
+    term = terminal_reason_for(trigger, tasks=runtime.tasks, question_dispositions=qdisp)
     events = await runtime.store.read_all()
     contrib = contributing_reasons_ordered(events)
+    # PR13: disposition report_line (e.g. «не выполнено: рубрика не принята»).
+    for d in qdisp.values():
+        line = d.get("report_line") if isinstance(d, dict) else None
+        if line and line not in contrib:
+            contrib.append(str(line))
+    # PlanRefused / invalid final_type lines folded from events.
+    for ev in events:
+        if ev.type == "PlanRefused":
+            line = (ev.payload or {}).get("report_line") or ("не выполнено: план отклонён")
+            if line not in contrib:
+                contrib.append(str(line))
+        if ev.type == "JudgeCasCorrupt":
+            line = (ev.payload or {}).get("report_line") or ("не выполнено: внутренняя ошибка (judge CAS)")
+            if line not in contrib:
+                contrib.append(str(line))
+    # Upcaster-coerced unknown final_type → report line on plan questions.
+    for plan in plans or []:
+        qs = plan.get("questions") if isinstance(plan, dict) else getattr(plan, "questions", None)
+        for q in qs or []:
+            if isinstance(q, dict):
+                line = q.get("final_type_report_line")
+                if line and line not in contrib:
+                    contrib.append(str(line))
     study = runtime.study
     assert study is not None
+    # PR13 §6.1: final_types into study_view; view uses study_fulfilled (single source).
+    from coscientist.core.rubric import question_final_types
+
+    ftypes = question_final_types(plans)
     view = study_view(
         runtime.tasks.values(),
         open_hitl=0,
@@ -483,7 +511,9 @@ async def _build_rich_payload(
         now=runtime.clock.now(),
         effective_deadline=study.effective_deadline(),
         question_dispositions=qdisp,
+        question_final_types=dict(ftypes),
     )
+    # Never raise above study_view — it already applied study_fulfilled.
     verdict = view.verdict or "partial"
     payload = await _build_finalized_payload(
         runtime,
@@ -498,12 +528,14 @@ async def _build_rich_payload(
     )
     return _bound_rich_payload(payload)
 
+
 async def _load_plans(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
     local = getattr(runtime, "plans", None)
     if isinstance(local, dict) and local:
         return local
     rows = await runtime.store.get_projection("plans")
     return {str(r.get("plan_id") or i): r for i, r in enumerate(rows)}
+
 
 def _refusal_payload(runtime: StudyRuntime, trigger: FinalizeTrigger) -> str | None:
     if trigger != "intake":
@@ -515,6 +547,7 @@ def _refusal_payload(runtime: StudyRuntime, trigger: FinalizeTrigger) -> str | N
     reason = getattr(ref, "reason", "")
     kv = getattr(kind, "value", kind)
     return f"{kv}:{reason}" if kv else str(reason)
+
 
 async def _build_finalized_payload(
     runtime: StudyRuntime,
@@ -579,6 +612,7 @@ async def _build_finalized_payload(
         "refusal": refusal,
     }
 
+
 async def _primary_report_path(
     runtime: StudyRuntime,
     *,
@@ -611,14 +645,10 @@ async def _primary_report_path(
             continue
         detail = res.get("detail")
         if detail:
-            detail_lines.append(
-                f"- result `{rid}` detail: {_escape_report_text(detail)}"
-            )
+            detail_lines.append(f"- result `{rid}` detail: {_escape_report_text(detail)}")
         reason = res.get("reason")
         if reason:
-            detail_lines.append(
-                f"- result `{rid}` reason: {_escape_report_text(reason)}"
-            )
+            detail_lines.append(f"- result `{rid}` reason: {_escape_report_text(reason)}")
     if detail_lines:
         md = md + "\n## Infra / result details\n" + "\n".join(detail_lines) + "\n"
     arts = _artifact_store(runtime)
@@ -633,6 +663,7 @@ async def _primary_report_path(
         media_type="text/markdown",
     )
     return art.artifact_id
+
 
 def _artifact_store(runtime: StudyRuntime) -> Any:
     ex = getattr(runtime, "executor", None)

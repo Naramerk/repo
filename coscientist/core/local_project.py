@@ -239,6 +239,13 @@ class LocalProjectMixin:
                 "agent_output_digest": p.get("agent_output_digest"),
             }
             self.attempts[aid] = att
+        elif ev.type == "ResultPending":
+            # PR13: keep agent_output_digest on the open attempt for judge restart.
+            aid = p.get("attempt_id") or ev.entity_key
+            dig = p.get("agent_output_digest")
+            if aid and dig:
+                att = self.attempts.get(aid, {})
+                self.attempts[aid] = {**att, "agent_output_digest": dig}
         elif ev.type == "ResultRecorded":
             self.results[p["result_id"]] = dict(p)
             self.results[p["attempt_id"]] = dict(p)

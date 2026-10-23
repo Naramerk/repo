@@ -14,6 +14,7 @@ from coscientist.core.digest import canonical_json
 from coscientist.core.dispositions import dispositions
 from coscientist.core.domain import (
     QuestionSpec,
+    RequirementRef,
     Task,
     TaskKind,
     TaskOutcome,
@@ -84,6 +85,8 @@ def _spec(key, addresses=None, deps=None):
     return TaskSpec(
         task_key=key, title=key, goal="g", route="experiment",
         depends_on=deps or ["PLAN"], addresses=addresses or [],
+    # Explicit criterion — PlanValidator does not credit catalog defaults.
+    criteria=[RequirementRef(template_id="artifact_present")] if addresses else [],
     )
 
 
@@ -104,6 +107,15 @@ def test_terminal_reason_trigger_budget():
 
 def test_terminal_reason_trigger_deadline():
     assert terminal_reason_for("deadline", tasks={}, question_dispositions={}) == TerminalReason.DEADLINE
+
+
+def test_terminal_reason_trigger_intake_refused():
+    assert terminal_reason_for("intake", tasks={}, question_dispositions={}) == TerminalReason.REFUSED
+
+
+def test_terminal_reason_trigger_internal_error():
+    """Public payload: trigger=internal_error → TerminalReason.INTERNAL_ERROR (PR13)."""
+    assert terminal_reason_for("internal_error", tasks={}, question_dispositions={}) == TerminalReason.INTERNAL_ERROR
 
 
 def test_terminal_reason_trigger_all_done_completed():
@@ -182,7 +194,7 @@ def test_questions_from_spec_output_wired():
 def test_upcast_taskcreated_addresses_default():
     v, p = upcast("TaskCreated", 2, {"task_id": "t", "spec": {"task_key": "E1"}})
     # v2→…→v7 foreach/quorum → v8 sandbox → v9 shares.
-    assert v == 9 and p["spec"]["addresses"] == []
+    assert v == 10 and p["spec"]["addresses"] == []
     assert p["spec"]["foreach"] is None
     assert p["spec"]["sandbox_timeout_s"] is None
     assert p["spec"]["budget_share"] is None
@@ -201,7 +213,7 @@ def test_upcast_taskcreated_input_mode_old_default():
             },
         },
     )
-    assert v == 9
+    assert v == 10
     assert p["spec"]["inputs"][0]["mode"] == "use_partial"
     assert p["spec"]["inputs"][0]["kind"] == "artifact"
     assert p["spec"]["inputs"][0]["quorum"] is None
@@ -211,7 +223,26 @@ def test_upcast_taskcreated_input_mode_old_default():
 
 def test_upcast_planaccepted_questions_default():
     v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
-    assert v == 7 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
+    assert v == 8 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
+
+    # PR13: final_type / rubric defaults
+    v2, p2 = upcast(
+        "PlanAccepted",
+        7,
+        {
+            "plan_id": "p",
+            "questions": [{"id": "Q1", "text": "q"}],
+            "tasks": [
+                {
+                    "task_key": "E1",
+                    "expected_outputs": [{"name": "main", "media_type": "text/plain"}],
+                }
+            ],
+        },
+    )
+    assert v2 == 8
+    assert p2["questions"][0]["final_type"] == "verdict"
+
     assert p["expand_after"] == []
     assert p["tasks"][0]["foreach"] is None
     assert p["tasks"][0]["sandbox_timeout_s"] is None
@@ -239,7 +270,7 @@ def test_upcast_taskcreated_strips_plan_criterion_role():
             },
         },
     )
-    assert v == 9
+    assert v == 10
     for c in p["spec"]["criteria"]:
         assert "role" not in c
     assert p["spec"]["foreach"] is None
@@ -827,10 +858,12 @@ async def test_p5_after_long_downtime_uses_task_deadline(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_ua")
-    with pytest.raises(ValueError, match="unknown question"):
-        await rt.accept_plan(
-            [_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")]
-        )
+    pid = await rt.accept_plan([_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")])
+    assert pid == ""
+    events = await rt.store.read_all()
+    refused = [e for e in events if e.type == "PlanRefused"]
+    assert refused and "unknown question" in str(refused[0].payload.get("detail") or "")
+    assert any(e.type == "StudyFinalized" for e in events)
     await close_runtime(rt)
 
 
@@ -838,10 +871,12 @@ async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
 async def test_accept_plan_rejects_question_text_conflict(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_qc")
     await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="one")], revision=1)
-    with pytest.raises(ValueError, match="text conflict"):
-        await rt.accept_plan(
-            [], questions=[QuestionSpec(id="Q1", text="other")], revision=2
-        )
+    pid = await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="other")], revision=2)
+    assert pid == ""
+    events = await rt.store.read_all()
+    refused = [e for e in events if e.type == "PlanRefused"]
+    assert refused and "text conflict" in str(refused[0].payload.get("detail") or "")
+    assert any(e.type == "StudyFinalized" for e in events)
     await close_runtime(rt)
 
 

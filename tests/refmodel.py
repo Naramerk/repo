@@ -268,8 +268,22 @@ def verdict(
         return "survived", False
     return "inconclusive", False
 
+_FULFILLMENT_BLOCKING = frozenset(
+    {
+        "untested",
+        "not_attempted",
+        "inconclusive",
+        "rubric_not_met",
+        "rubric_pending",
+    }
+)
+
+
 def study_fulfilled(question_verdicts, all_required_success):
-    return all_required_success and all(v != "untested" for v in question_verdicts.values())
+    """Oracle: same blocking set as coscientist.core.rules.study_fulfilled."""
+    return all_required_success and all(
+        v not in _FULFILLMENT_BLOCKING for v in question_verdicts.values()
+    )
 
 
 # --- PR 2 finalize oracle (independent of coscientist.core) -----------------

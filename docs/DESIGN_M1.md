@@ -69,6 +69,7 @@ class CloseReason(StrEnum):  # Attempt.close_reason
 | `deadline` — `now ≥ study.deadline − finalize_reserve_s` | `deadline` |
 | `all_done` — все задачи DONE естественно | по порядку: `human_timeout` (≥1 required DONE(FAILED, human_timeout)) → `infeasible` (≥1 question с disposition ∈ {infeasible, ill_posed} и ни одного answered/refuted/survived/inconclusive; **not_attempted не считается** — исправление M1:70) → `completed` |
 | (intake, PR 4) | `refused` |
+| `internal_error` — honest study-level failure (PR13: judge CAS / corrupt retry; not cancel) | `internal_error` |
 
 - `contributing_reasons: list[TaskReason]` — все прочие причины, встретившиеся в study (budget, deadline, human_timeout, expansion_limit…), без повторов, **по seq первого появления**.
 - Тай-брейк, если в одном тике сработали несколько триггеров: `cancelled > budget > deadline` (all_done проигрывает любому).
@@ -84,8 +85,8 @@ JSON Schema (draft 2020-12), хранится в `coscientist/schema/minimal_rep
  "required":["study_id","terminal_reason","trigger","contributing_reasons","summary","fallback_reason","verdict","tasks","questions","sections","truncated"],
  "properties":{
   "study_id":{"type":"string"},
-  "terminal_reason":{"enum":["refused","human_timeout","budget","deadline","infeasible","cancelled","completed"]},
-  "trigger":{"enum":["cancel","budget","deadline","all_done","intake"]},
+  "terminal_reason":{"enum":["refused","human_timeout","budget","deadline","infeasible","cancelled","completed","internal_error"]},
+  "trigger":{"enum":["cancel","budget","deadline","all_done","intake","internal_error"]},
   "contributing_reasons":{"type":"array","items":{"type":"string"},"maxItems":20},
   "summary":{"type":"string","maxLength":1000},
   "fallback_reason":{"type":["string","null"],"maxLength":200},
@@ -158,7 +159,7 @@ JSON Schema (draft 2020-12), хранится в `coscientist/schema/minimal_rep
 
 ```python
 class TerminalReason(StrEnum):   # уровень study; приоритет — §0.2
-    REFUSED; HUMAN_TIMEOUT; BUDGET; DEADLINE; EXPANSION_LIMIT; INFEASIBLE; CANCELLED; COMPLETED
+    REFUSED; HUMAN_TIMEOUT; BUDGET; DEADLINE; EXPANSION_LIMIT; INFEASIBLE; CANCELLED; COMPLETED; INTERNAL_ERROR
 class RefusalKind(StrEnum): SAFETY; OUT_OF_SCOPE; EMPTY_REQUEST; UNSUPPORTED_OUTPUT; BUDGET_ZERO; CONTRADICTORY; EGRESS_POLICY; INPUT_TOO_LARGE; DURATION_TOO_SHORT
 class Disposition(StrEnum):
     ANSWERED; REFUTED; SURVIVED; INCONCLUSIVE             # вычисляемые (из вердикта)
@@ -271,6 +272,7 @@ class RubricItem(BaseModel): id: str; text: str; required: bool; check: Literal[
 class Rubric(BaseModel): items: list[RubricItem]; aggregate: Literal["all_required","k_of_n"]; k: int | None; digest: str  # sha256(JCS(items+aggregate))
 ```
 - Замораживается в PLAN: `frozen_at_seq` = seq принятия ревизии плана; digest в событии. Менять можно только через PlanExpanded или HITL; «реши сам» = PlanExpanded с `delegated_by=human`. Новая рубрика `supersedes` старую; NodeRequirement по старой → STALE.
+- **M1 gap (STALE on supersede):** в M1 при supersede старой рубрики NodeRequirement **не** помечаются `STALE` автоматически — смена идёт через PlanExpanded + новый digest / новые задачи; статус `STALE` на NodeRequirement при supersede рубрики = M2 (как catalog_version STALE в D §3.6).
 - Пункты атомарные и бинарные. Агрегация: required — все MET; optional влияют только на score в отчёте.
 - Рубрика влияет только на outcome задачи и приёмку question с final_type=artifact; **никогда** на claim stance (stance — только от criterion с metric/op/target). Инвариант проверяется тестом.
 - Judge failure (таймаут, невалидный JSON, отказ) → пункт UNASSESSED + 1 повтор; не FAILED (R23).

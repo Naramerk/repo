@@ -37,6 +37,7 @@ STAGE_KEYS = [
     ("REPORT", TaskKind.REPORT),
 ]
 
+
 class LifecycleMixin:
     """Attribute stubs so mypy accepts mixin use on StudyRuntime."""
 
@@ -234,7 +235,7 @@ class LifecycleMixin:
                     idem_key=make_idem("TaskCreated", tid),
                     payload=task.model_dump(mode="json"),
                     ts=now,
-                    schema_version=9,
+                    schema_version=10,
                 )
             )
             # Graph nodes for stages: only schema kinds. SPEC/HYP/LIT are DAG
@@ -262,32 +263,48 @@ class LifecycleMixin:
         assert self.study is not None
         sid = self.study.study_id
         now = self.clock.now()
-        if questions is None and spec_output is not None:
-            questions = [QuestionSpec(**q) for q in questions_from_spec_output(spec_output)]
-        questions = list(questions or [])
-        expand_after = list(expand_after or [])
-        self._validate_dag(tasks)
-        known_texts = await self._known_question_texts()
-        self._validate_questions(questions, known_texts)
-        known_texts = {**known_texts, **{q.id: q.text for q in questions}}
-        self._validate_addresses(tasks, set(known_texts))
-        task_keys = {t.task_key for t in tasks}
-        for k in expand_after:
-            if k not in task_keys:
-                raise ValueError(f"expand_after unknown task_key: {k!r}")
-        validate_input_specs(tasks)
+        from pydantic import ValidationError
+
         from coscientist.core.foreach import validate_foreach_specs
+        from coscientist.core.plan_validate import (
+            PLAN_REFUSED_LINE,
+            apply_plan_refused,
+            freeze_plan_rubrics,
+            refuse_detail,
+        )
         from coscientist.core.shares import critic_plan_shares
 
-        validate_foreach_specs(
-            tasks,
-            known_keys={t.spec.task_key for t in self.tasks.values()},
-        )
-        share_err = critic_plan_shares(tasks, study=self.study)
-        if share_err is not None:
-            raise ValueError(share_err)
-        catalog = getattr(self, "catalog", None) or getattr(getattr(self, "executor", None), "catalog", None)
-        validate_plan_criteria(tasks, catalog)
+        # All plan validation → PlanRefused (never raw ValueError to callers).
+        # Catch only expected validation failures — not TypeError (bugs).
+        try:
+            # Planner may hand dicts; pydantic ValidationError → PlanRefused.
+            tasks = [t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t) for t in (tasks or [])]
+            if questions is None and spec_output is not None:
+                questions = [QuestionSpec.model_validate(q) for q in questions_from_spec_output(spec_output)]
+            questions = list(questions or [])
+            expand_after = list(expand_after or [])
+            self._validate_dag(tasks)
+            known_texts = await self._known_question_texts()
+            self._validate_questions(questions, known_texts)
+            known_texts = {**known_texts, **{q.id: q.text for q in questions}}
+            self._validate_addresses(tasks, set(known_texts))
+            task_keys = {t.task_key for t in tasks}
+            for k in expand_after:
+                if k not in task_keys:
+                    raise ValueError(f"expand_after unknown task_key: {k!r}")
+            validate_input_specs(tasks)
+            validate_foreach_specs(
+                tasks,
+                known_keys={t.spec.task_key for t in self.tasks.values()},
+            )
+            share_err = critic_plan_shares(tasks, study=self.study)
+            if share_err is not None:
+                raise ValueError(share_err)
+            catalog = getattr(self, "catalog", None) or getattr(getattr(self, "executor", None), "catalog", None)
+            validate_plan_criteria(tasks, catalog)
+            tasks, questions = freeze_plan_rubrics(tasks, questions, catalog=catalog)
+        except (ValueError, ValidationError) as e:
+            return await apply_plan_refused(self, detail=refuse_detail(e), report_line=PLAN_REFUSED_LINE)
         pid = plan_id()
         plan = Plan(
             plan_id=pid,
@@ -306,7 +323,7 @@ class LifecycleMixin:
                 idem_key=make_idem("PlanAccepted", pid),
                 payload=plan.model_dump(mode="json"),
                 ts=now,
-                schema_version=7,
+                schema_version=8,
             )
         ]
         # Question nodes so claim ``about`` can bind without auto-creating targets.
@@ -315,6 +332,10 @@ class LifecycleMixin:
             qnid = question_node_id(sid, q.id)
             if graph is not None and graph.get_node(qnid) is not None:
                 continue  # never clobber existing attrs
+            q_attrs: dict[str, Any] = {
+                "formulation": q.text,
+                "final_type": getattr(q, "final_type", None) or "verdict",
+            }
             events.append(
                 EventEnvelope(
                     study_id=sid,
@@ -326,13 +347,52 @@ class LifecycleMixin:
                         kind="question",
                         study_id=sid,
                         ref_id=q.id,
-                        attrs={"formulation": q.text},
+                        attrs=q_attrs,
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
                     schema_version=1,
                 )
             )
+        # Freeze rubric digests onto criterion-like nodes (frozen_at_seq via projection).
+        seen_rubrics: set[str] = set()
+        for spec in tasks:
+            for o in spec.expected_outputs or []:
+                rub = getattr(o, "rubric", None)
+                if rub is None:
+                    continue
+                dig = str(getattr(rub, "digest", "") or "")
+                if not dig or dig in seen_rubrics:
+                    continue
+                seen_rubrics.add(dig)
+                rnid = criterion_node_id(sid, f"rubric:{dig}")
+                if graph is not None and graph.get_node(rnid) is not None:
+                    continue
+                events.append(
+                    EventEnvelope(
+                        study_id=sid,
+                        type="GraphNodeUpserted",
+                        entity_key=rnid,
+                        idem_key=make_idem("GraphNodeUpserted", rnid, pid),
+                        payload=GraphNode(
+                            node_id=rnid,
+                            kind="criterion",
+                            study_id=sid,
+                            ref_id=f"rubric:{dig}",
+                            attrs={
+                                "frozen": True,
+                                "template_id": f"rubric:{dig}",
+                                "rubric_digest": dig,
+                                "check": "rubric",
+                                # Qualitative — never a stance source.
+                                "affects_stance": False,
+                            },
+                            created_at=now,
+                        ).model_dump(mode="json"),
+                        ts=now,
+                        schema_version=1,
+                    )
+                )
         # Freeze plan criteria at accept (DESIGN_M1 §6 / frozen_at_seq).
         seen_criteria: set[str] = set()
         for spec in tasks:
@@ -419,7 +479,7 @@ class LifecycleMixin:
                     idem_key=make_idem("TaskCreated", tid),
                     payload=task.model_dump(mode="json"),
                     ts=now,
-                    schema_version=9,
+                    schema_version=10,
                 )
             )
         await self._append(events)

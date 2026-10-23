@@ -251,7 +251,7 @@ DONE финален; повторный запуск — только через
 - `compute_outcome`: при Attempt.provenance ≠ real outcome = min(outcome, PARTIAL). SUCCESS на заглушках или частичных данных невозможен.
 - `StudyView` содержит `stub_share` (доля DONE-задач с provenance=stub) и verdict `stubbed` ⇔ все required ∈ {SUCCESS, PARTIAL} ∧ ∃ required с provenance=stub. Нерequired-заглушки влияют только на stub_share.
 - Задача `report` — `required=False` (PR 2): пишет только прозу; HITL-шлюз report относится только к прозе и не блокирует finalize. FAILED/отсутствие report не понижает verdict; study без required-задач (только report) → verdict `partial` (`test_report_not_required_verdict`).
-- Вопросы: при ≥1 disposition `not_attempted` verdict не выше `partial` (до PR 6/8 в core все вопросы not_attempted — study с вопросами не бывает `fulfilled`).
+- Вопросы: при ≥1 disposition `not_attempted` verdict не выше `partial`. PR13: `final_type=artifact` ⇔ рубрика MET → disposition `answered` (без claim); study может быть `fulfilled` на качественном артефакте.
 - Отчёт (§10) обязательно содержит три раздела: «Сделано» (real), «Выполнено на заглушках» (задачи и входы stub/partial), «Требует доработки человеком» (FAILED, SKIPPED, stub-цепочки с причинами).
 Тесты: `test_failed_dep_runs_dependent_on_partial_data`, `test_simulated_input_caps_at_partial` (provenance=stub), `test_simulated_flag_propagates`, `test_report_lists_stub_and_human_sections`.
 
@@ -403,7 +403,8 @@ class CodeCheck(BaseModel):
     kind: Literal["artifact_exists","schema_valid","json_pointer","source_link",
                   "metric_threshold","value_matches","graph_shape","quote_in_source",
                   "min_sources","question_coverage","recency",
-                  "exec_runs","tests_pass","metric_on_holdout","reproducible_rerun"]  # = schema/graph_schema.yaml code_check_kinds
+                  "exec_runs","tests_pass","metric_on_holdout","reproducible_rerun",
+                  "rubric"]  # = schema/graph_schema.yaml code_check_kinds; rubric = M1 PR13
     output: str | None; schema_ref: str | None; pointer: str | None
     metric: str | None; op: Literal["<","<=","==",">=",">","in"] | None; target: Any = None
     tolerance: float | None = None
@@ -890,7 +891,7 @@ web/           отдельно (M6)
 | # | Замечание | Статус |
 |---|---|---|
 | 1 | stance вычисляется; k из разных попыток/артефактов; потолок по q; «по литературе» на пустом списке; claim не создаётся задачей report | сделано (RESEARCH_MODEL §4.1, tests/refmodel.py) |
-| 2 | PlanValidator: каждый question покрыт LIT/EXP; fulfilled ⇔ нет untested | сделано (§3.2, RESEARCH_MODEL §5) |
+| 2 | PlanValidator: каждый question покрыт LIT/EXP; fulfilled ⇔ нет untested (PR13: `final_type=artifact` ⇔ рубрика MET) | сделано (§3.2, RESEARCH_MODEL §5, DESIGN_M1 §6) |
 | 3 | max_replans, задачи PLAN-n с deadline и долей бюджета | сделано (§2, §7.3) |
 | 4 | HITL по умолчанию; строка 8 §15 | решено пользователем; строка 8 обновлена |
 | 5 | CI, вендоринг с sha256, пары рёбер, структурированные поля | сделано (.github/workflows/ci.yml, vendor/ai4research, schema) |

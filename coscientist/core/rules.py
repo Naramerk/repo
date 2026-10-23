@@ -160,13 +160,76 @@ def priority_refuted_support_note(
     return excluded_confirmations_note(claims, verdict_value=v)
 
 
-def study_fulfilled(question_verdicts: dict[str, str], all_required_success: bool) -> bool:
-    return all_required_success and all(v != "untested" for v in question_verdicts.values())
+# Caps fulfilled for every final_type (single source used by study_view + finalize).
+_FULFILLMENT_BLOCKING = frozenset(
+    {
+        "untested",
+        "not_attempted",
+        "inconclusive",
+        "rubric_not_met",
+        "rubric_pending",
+    }
+)
+# Disposition values that settle a question (not raw claim "supported").
+# ``inconclusive`` is intentionally excluded — it blocks fulfilled (PR13).
+_SETTLED_DISPOSITIONS = frozenset(
+    {
+        "answered",
+        "refuted",
+        "survived",
+        "needs_more_data",
+        "infeasible",
+        "ill_posed",
+    }
+)
 
 
-def study_view_verdict(all_required_success: bool, question_verdicts: dict[str, str]) -> str:
+def study_fulfilled(
+    question_verdicts: dict[str, str],
+    all_required_success: bool,
+    *,
+    question_final_types: dict[str, str] | None = None,
+) -> bool:
+    """Fulfilled when required tasks succeed and every question is settled.
+
+    Always blocked by not_attempted / inconclusive / rubric_not_met /
+    rubric_pending / untested (never raise study_view past partial).
+
+    ``final_type=artifact``: settled ⇔ disposition is answered (rubric MET).
+    ``final_type=both``: settled ⇔ disposition in answered/refuted/survived/….
+    ``final_type=verdict``: blocking set above; other settled values ok.
+    """
+    if not all_required_success:
+        return False
+    ftypes = question_final_types or {}
+    for qid, v in question_verdicts.items():
+        if v in _FULFILLMENT_BLOCKING:
+            return False
+        ft = ftypes.get(qid, "verdict")
+        if ft == "artifact":
+            if v != "answered":
+                return False
+            continue
+        if ft == "both":
+            if v not in _SETTLED_DISPOSITIONS:
+                return False
+            continue
+        # verdict: blocking already applied; remaining values may fulfill
+    return True
+
+
+def study_view_verdict(
+    all_required_success: bool,
+    question_verdicts: dict[str, str],
+    *,
+    question_final_types: dict[str, str] | None = None,
+) -> str:
     """Wrapper aligned with study_view(): fulfilled iff study_fulfilled(...)."""
-    if study_fulfilled(question_verdicts, all_required_success):
+    if study_fulfilled(
+        question_verdicts,
+        all_required_success,
+        question_final_types=question_final_types,
+    ):
         return "fulfilled"
     if not all_required_success:
         return "failed"

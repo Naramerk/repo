@@ -9,7 +9,7 @@ version: 0.4
 provenance: [real, partial, stub]
 code_check_kinds: [artifact_exists, schema_valid, json_pointer, source_link, metric_threshold, value_matches,
   graph_shape, quote_in_source, min_sources, question_coverage, recency,
-  exec_runs, tests_pass, metric_on_holdout, reproducible_rerun]
+  exec_runs, tests_pass, metric_on_holdout, reproducible_rerun, rubric]
 nodes:
   - kind: study
     prefix: ST
@@ -43,6 +43,7 @@ nodes:
       - {name: formulation, type: str, required: true}
       - {name: gap, type: str, required: false}
       - {name: scope, type: str, required: false}
+      - {name: final_type, type: enum(verdict|artifact|both), required: false, default: verdict, note: "M1 PR13; artifact ⇔ рубрика MET; verdict ⇔ claim; both — оба"}
   - kind: criterion
     prefix: CR
     created_by: spec (study), plan (experiment)
@@ -53,8 +54,9 @@ nodes:
       - {name: op, type: "enum(<|<=|==|>=|>|in)", required: true}
       - {name: target, type: str, required: true}
       - {name: tolerance, type: float, required: false}
-      - {name: check, type: enum(code|review), required: true}
+      - {name: check, type: enum(code|review|rubric), required: true, note: "rubric = qualitative OutputSpec.rubric (PR13); never feeds claim stance"}
       - {name: frozen_at_seq, type: int, required: false}
+      - {name: rubric_digest, type: digest, required: false, note: "M1 PR13 sha256(JCS(items+aggregate))"}
       - {name: sesoi, type: float, required: false, note: "PR8b smallest effect size of interest"}
       - {name: min_power, type: float, required: false, note: "PR8b e.g. 0.8; frozen with criterion"}
       - {name: alpha, type: float, required: false, default: 0.05, note: "PR8b"}
@@ -209,7 +211,7 @@ edges:
 volume_b:
   - {num: 1, id: problem, nodes: [study, question, hypothesis, experiment], check_kinds: [graph_shape], check: "≥1 question; у каждого непустой gap и ≥1 входящее addresses; Review: проблема сформулирована"}
   - {num: 2, id: goals, nodes: [study, criterion], check_kinds: [graph_shape], check: "study.goal непуст; study −measured_by→ ≥1 criterion с metric/op/target"}
-  - {num: 3, id: planning, nodes: [plan, experiment, question], check_kinds: [graph_shape], check: "DAG ацикличен; у required experiment ≥1 criterion и ≥1 из tests/addresses; каждый question покрыт ≥1 LIT/EXP (PlanValidator); plan.hypotheses/literature с reason"}
+  - {num: 3, id: planning, nodes: [plan, experiment, question], check_kinds: [graph_shape, rubric], check: "DAG ацикличен; у required experiment ≥1 criterion и ≥1 из tests/addresses; каждый question покрыт ≥1 LIT/EXP (PlanValidator); final_type=artifact ⇒ OutputSpec.rubric; final_type=verdict ⇒ ≥1 criterion; plan.hypotheses/literature с reason"}
   - {num: 4, id: resources, nodes: [constraint, experiment], check_kinds: [graph_shape], check: "tool_resolution ≠ tool_missing у required; бюджет не превышен"}
   - {num: 5, id: knowledge, nodes: [experiment, artifact, evidence], check_kinds: [min_sources, question_coverage, recency, quote_in_source], check: "если plan.literature.needed: §5.1 на LIT-n"}
   - {num: 6, id: data, nodes: [artifact, experiment], check_kinds: [schema_valid], check: "входы schema_valid; data имеет version и hash; provenance=real у required"}
