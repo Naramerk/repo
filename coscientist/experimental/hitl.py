@@ -1,15 +1,15 @@
-"""HITL + fork extensions for StudyRuntime (keeps machine.py under size budget)."""
+"""HITL + fork extensions (experimental / pre-M2)."""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Self
 
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import Clarification, HitlRequest, Task
 from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.hitl_costly import CostlyHitlMixin
 from coscientist.core.ids import hitl_request_id, study_id
+from coscientist.experimental.hitl_costly import CostlyHitlMixin
 
 
 class HitlForkMixin(CostlyHitlMixin):
@@ -269,33 +269,3 @@ class HitlForkMixin(CostlyHitlMixin):
             "idem": f"fork:{self.study.study_id}:{digest}:{nonce}",
         }
         return self
-
-    def invariant_open_attempts(self) -> bool:
-        for t in self.tasks.values():
-            open_n = 0
-            for a in t.attempts:
-                if not self.attempts.get(a, {}).get("closed"):
-                    open_n += 1
-            if open_n > 1:
-                return False
-        return True
-
-    def invariant_deadlines(self) -> bool:
-        if self.study is None:
-            return True
-        sd = self.study.deadline
-        for t in self.tasks.values():
-            if t.deadline > sd:
-                return False
-            for a in t.attempts:
-                ad = self.attempts.get(a, {}).get("deadline")
-                if ad is None:
-                    continue
-                if isinstance(ad, str):
-                    ad = datetime.fromisoformat(ad)
-                if ad > sd:
-                    return False
-        for h in self.hitl.values():
-            if h.deadline > sd:
-                return False
-        return True

@@ -154,6 +154,18 @@ class SqliteEventStore:
             self._conn.commit()
             self.lease_ttl_s = ttl
 
+    async def release_lease(self, owner: str, epoch: int) -> None:
+        """Drop the lease row only if ``owner``+``epoch`` still hold it."""
+        async with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM lease WHERE study_id=? AND owner=? AND epoch=?",
+                (self.study_id, owner, epoch),
+            )
+            self._conn.commit()
+            if cur.rowcount and self.owner == owner and self.epoch == epoch:
+                self.owner = None
+                self.epoch = 0
+
     def current_lease(self) -> tuple[str | None, int, datetime | None]:
         cur = self._conn.execute(
             "SELECT owner, epoch, expires_at FROM lease WHERE study_id=?",

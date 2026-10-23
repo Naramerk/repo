@@ -1,7 +1,9 @@
-"""Adapter: runtime `coscientist.core.rules` + refmodel Graph/Claim for impl=core.
+"""Adapter: runtime rules + experimental costly + refmodel Graph/Claim for impl=core.
 
 Graph / Claim / add_paper stay in the independent oracle; core.verdict,
 validate_plan, check_cardinality accept those objects by duck typing.
+DelegatedBudget / costly_gate / settle come from ``coscientist.experimental``
+(pre-M2), not from the M0 core API.
 """
 
 from __future__ import annotations
@@ -13,8 +15,9 @@ import refmodel
 
 
 def make_core_impl() -> Any:
-    """Build an impl surface: core rule functions + refmodel Graph/Claim."""
+    """Build an impl surface: core rule functions + experimental costly + refmodel Graph/Claim."""
     import coscientist.core.rules as core
+    import coscientist.experimental.costly as costly
 
     return SimpleNamespace(
         Graph=refmodel.Graph,
@@ -27,7 +30,7 @@ def make_core_impl() -> Any:
         verdict=core.verdict,
         study_fulfilled=core.study_fulfilled,
         study_view_verdict=core.study_view_verdict,
-        DelegatedBudget=core.DelegatedBudget,
-        costly_gate=core.costly_gate,
-        settle=core.settle,
+        DelegatedBudget=costly.DelegatedBudget,
+        costly_gate=costly.costly_gate,
+        settle=costly.settle,
     )

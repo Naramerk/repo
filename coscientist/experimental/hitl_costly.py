@@ -1,4 +1,4 @@
-"""Costly_or_nonreal HITL gate: DelegatedBudget, settle, fail/skip dependents."""
+"""Costly_or_nonreal HITL gate (experimental / pre-M2)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from coscientist.core.domain import HitlRequest, Task, TaskOutcome, TaskState
 from coscientist.core.events import EventEnvelope, make_idem
-from coscientist.core.rules import DelegatedBudget, costly_gate, settle
+from coscientist.experimental.costly import DelegatedBudget, costly_gate, settle
 
 if TYPE_CHECKING:
     pass

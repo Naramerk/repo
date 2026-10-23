@@ -129,10 +129,14 @@ async def test_lease_epoch_fencing(tmp_path: Path, clock: FakeClock):
 
 
 @pytest.mark.asyncio
-async def test_replay_equals_projection(tmp_path: Path, clock: FakeClock):
+async def test_replay_equals_projection(
+    tmp_path: Path, clock: FakeClock, runtime_cls: type
+):
     from tests.helpers import attach_executor, exp_spec, record_success
 
-    rt = await open_runtime(tmp_path, "st_replay", owner="o", clock=clock)
+    rt = await open_runtime(
+        tmp_path, "st_replay", owner="o", clock=clock, runtime_cls=runtime_cls
+    )
     await rt.create_study(
         profile="research",
         request="q",

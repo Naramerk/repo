@@ -13,7 +13,6 @@ from coscientist.core.clock import FakeClock
 from coscientist.core.domain import (
     AgentTaskOutput,
     ArtifactHandle,
-    HitlPolicy,
     RequirementRef,
     TaskOutcome,
     TaskState,
@@ -25,8 +24,8 @@ from coscientist.core.runtime_factory import close_runtime, open_runtime
 from tests.helpers import attach_executor, exp_spec, record_success
 
 
-async def _boot(tmp_path: Path, clock: FakeClock, seconds: int = 60, **kw):
-    rt = await open_runtime(tmp_path, "st_tr", clock=clock)
+async def _boot(tmp_path: Path, clock: FakeClock, runtime_cls: type, seconds: int = 60, **kw):
+    rt = await open_runtime(tmp_path, "st_tr", clock=clock, runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -40,8 +39,8 @@ async def _boot(tmp_path: Path, clock: FakeClock, seconds: int = 60, **kw):
 
 
 @pytest.mark.asyncio
-async def test_p1_p2_p4_happy_path(tmp_path, clock):
-    rt = await _boot(tmp_path, clock)
+async def test_p1_p2_p4_happy_path(tmp_path, clock, runtime_cls):
+    rt = await _boot(tmp_path, clock, runtime_cls)
     _, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
     assert rt.tasks["st_tr/SPEC"].state == TaskState.RUNNING
@@ -52,8 +51,8 @@ async def test_p1_p2_p4_happy_path(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_p3_retry_then_done(tmp_path, clock):
-    rt = await _boot(tmp_path, clock, seconds=120)
+async def test_p3_retry_then_done(tmp_path, clock, runtime_cls):
+    rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
     _, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
     await rt.fail_attempt(aid, retryable=True)
@@ -83,8 +82,8 @@ async def test_p3_retry_then_done(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_p5_deadline_fails_task(tmp_path, clock):
-    rt = await _boot(tmp_path, clock, seconds=10)
+async def test_p5_deadline_fails_task(tmp_path, clock, runtime_cls):
+    rt = await _boot(tmp_path, clock, runtime_cls, seconds=10)
     await rt.start_attempt("SPEC")
     clock.advance(timedelta(seconds=11))
     await rt.tick()
@@ -96,8 +95,8 @@ async def test_p5_deadline_fails_task(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_p6_cancel_skipped(tmp_path, clock):
-    rt = await _boot(tmp_path, clock)
+async def test_p6_cancel_skipped(tmp_path, clock, runtime_cls):
+    rt = await _boot(tmp_path, clock, runtime_cls)
     await rt.cancel_task("SPEC", reason="cancelled")
     t = rt.tasks["st_tr/SPEC"]
     assert t.state == TaskState.DONE
@@ -106,16 +105,16 @@ async def test_p6_cancel_skipped(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_deps_must_be_done(tmp_path, clock):
-    rt = await _boot(tmp_path, clock)
+async def test_deps_must_be_done(tmp_path, clock, runtime_cls):
+    rt = await _boot(tmp_path, clock, runtime_cls)
     with pytest.raises(RuntimeError, match="dependencies"):
         await rt.start_attempt("HYP")
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
-async def test_recover_closes_open_attempt(tmp_path, clock):
-    rt = await _boot(tmp_path, clock, seconds=120)
+async def test_recover_closes_open_attempt(tmp_path, clock, runtime_cls):
+    rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
     await rt.start_attempt("SPEC")
     result = await recover(rt)
     assert result["closed"] >= 1
@@ -147,9 +146,9 @@ def _success_output(art_id: str, *, summary: str = "ok") -> AgentTaskOutput:
 
 
 @pytest.mark.asyncio
-async def test_recover_records_from_cas_route_returned(tmp_path, clock):
+async def test_recover_records_from_cas_route_returned(tmp_path, clock, runtime_cls):
     """RouteReturned + CAS digest → recover rebuilds AgentTaskOutput (no invented summary)."""
-    rt = await _boot(tmp_path, clock, seconds=120)
+    rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
     art = arts.put(
@@ -175,9 +174,9 @@ async def test_recover_records_from_cas_route_returned(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_recover_missing_cas_crashes_retryable(tmp_path, clock):
+async def test_recover_missing_cas_crashes_retryable(tmp_path, clock, runtime_cls):
     """route_returned without CAS blob → crashed/retryable, no invented AgentTaskOutput."""
-    rt = await _boot(tmp_path, clock, seconds=120)
+    rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
     attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
     await rt._append(
@@ -201,9 +200,9 @@ async def test_recover_missing_cas_crashes_retryable(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_recover_corrupt_cas_crashes_retryable(tmp_path, clock):
+async def test_recover_corrupt_cas_crashes_retryable(tmp_path, clock, runtime_cls):
     """Corrupt CAS blob must not raise out of recover — close as crashed/retryable."""
-    rt = await _boot(tmp_path, clock, seconds=120)
+    rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
     art = arts.put(
@@ -226,9 +225,9 @@ async def test_recover_corrupt_cas_crashes_retryable(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_record_vs_deadline_race(tmp_path, clock):
+async def test_record_vs_deadline_race(tmp_path, clock, runtime_cls):
     """Stale in-memory attempt still open: store txn must reject record after deadline close."""
-    rt = await _boot(tmp_path, clock, seconds=30)
+    rt = await _boot(tmp_path, clock, runtime_cls, seconds=30)
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
     art = arts.put(
@@ -283,9 +282,9 @@ async def test_record_vs_deadline_race(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_mark_route_returned_vs_deadline_race(tmp_path, clock):
+async def test_mark_route_returned_vs_deadline_race(tmp_path, clock, runtime_cls):
     """mark_route_returned also checks require_open_attempt inside the write txn."""
-    rt = await _boot(tmp_path, clock, seconds=30)
+    rt = await _boot(tmp_path, clock, runtime_cls, seconds=30)
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
     art = arts.put(
@@ -321,9 +320,9 @@ async def test_mark_route_returned_vs_deadline_race(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_repeated_record_after_success_raises_attempt_closed(tmp_path, clock):
+async def test_repeated_record_after_success_raises_attempt_closed(tmp_path, clock, runtime_cls):
     """Second record after Result+Close+Done is AttemptClosedError, not Idempotent."""
-    rt = await _boot(tmp_path, clock, seconds=120)
+    rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
     await record_success(rt, aid, arts)
@@ -337,9 +336,9 @@ async def test_repeated_record_after_success_raises_attempt_closed(tmp_path, clo
 
 
 @pytest.mark.asyncio
-async def test_llm_hang_past_deadline(tmp_path, clock):
+async def test_llm_hang_past_deadline(tmp_path, clock, runtime_cls):
     """Test double: cancel attempt work via deadline (no hang flag in prod API)."""
-    rt = await _boot(tmp_path, clock, seconds=5)
+    rt = await _boot(tmp_path, clock, runtime_cls, seconds=5)
     aid = await rt.start_attempt("SPEC")
 
     async def _work():
@@ -361,8 +360,8 @@ async def test_llm_hang_past_deadline(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_accept_plan_creates_experiments(tmp_path, clock):
-    rt = await _boot(tmp_path, clock, seconds=300)
+async def test_accept_plan_creates_experiments(tmp_path, clock, runtime_cls):
+    rt = await _boot(tmp_path, clock, runtime_cls, seconds=300)
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
         aid = await rt.start_attempt(key)
@@ -370,44 +369,4 @@ async def test_accept_plan_creates_experiments(tmp_path, clock):
     await rt.accept_plan([exp_spec("EXP-1"), exp_spec("EXP-2", ["EXP-1"])])
     assert "st_tr/EXP-1" in rt.tasks
     assert rt.tasks["st_tr/PLAN"].state == TaskState.DONE
-    await close_runtime(rt)
-
-
-@pytest.mark.asyncio
-async def test_hitl_delegate_records_critic(tmp_path, clock):
-    rt = await _boot(
-        tmp_path,
-        clock,
-        seconds=60,
-        hitl_policy=HitlPolicy(on_timeout="delegate"),
-    )
-    _, arts = attach_executor(rt, tmp_path)
-    aid = await rt.start_attempt("SPEC")
-    await record_success(rt, aid, arts)
-    rid = await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=1)
-    clock.advance(timedelta(seconds=2))
-    await rt.tick()
-    assert rt.hitl[rid].open is False
-    decided = [e for e in rt.store.read_all() if e.type == "HitlDecided"]
-    assert any(e.payload.get("approved_by") == "critic" for e in decided)
-    assert any(e.payload.get("delegated_by") == "timeout" for e in decided)
-    await close_runtime(rt)
-
-
-@pytest.mark.asyncio
-async def test_hitl_human_delegate_records_critic(tmp_path, clock):
-    """Non-costly answer_hitl('delegate') → critic + delegated_by=human (§7.3)."""
-    rt = await _boot(tmp_path, clock, seconds=120)
-    _, arts = attach_executor(rt, tmp_path)
-    aid = await rt.start_attempt("SPEC")
-    await record_success(rt, aid, arts)
-    rid = await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
-    await rt.answer_hitl(rid, "delegate")
-    assert rt.hitl[rid].open is False
-    decided = [
-        e for e in rt.store.read_all() if e.type == "HitlDecided" and e.entity_key == rid
-    ]
-    assert len(decided) == 1
-    assert decided[0].payload.get("approved_by") == "critic"
-    assert decided[0].payload.get("delegated_by") == "human"
     await close_runtime(rt)
