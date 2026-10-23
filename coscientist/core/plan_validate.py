@@ -34,7 +34,6 @@ from coscientist.core.decomposes import (
     parent_map_from_questions,
 )
 from coscientist.core.derivation import EVIDENCE_KIND_DERIVATION, VALID_EVIDENCE_KINDS
-
 from coscientist.core.domain import QuestionSpec, TaskSpec
 from coscientist.core.experiment_design import (
     ARTIFACT_KIND_CONTRADICTION_MAP,
