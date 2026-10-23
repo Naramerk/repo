@@ -1186,7 +1186,7 @@ async def test_legacy_two_study_finalized_fold_first_wins(tmp_path, clock):
     }
     for nid, row in fold_nodes.items():
         assert proj_nodes.get(nid) == row
-    for ek, row in fold_edges.items():
+    for _ek, row in fold_edges.items():
         key = f"{row.get('src_id')}:{row.get('dst_id')}:{row.get('kind')}"
         assert proj_edges.get(key) == row
 
