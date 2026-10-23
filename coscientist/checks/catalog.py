@@ -335,6 +335,25 @@ def minimal_test_catalog() -> Catalog:
                     "role": "validity",
                     "required": True,
                 },
+                {
+                    # Meta-template: body comes from an approved CheckProposal (PR20).
+                    # Sentinel check is never evaluated; evaluate.py special-cases this id.
+                    "id": "proposed_check",
+                    "title": "Agent-proposed check",
+                    "text_ru": (
+                        "Проверка, предложенная агентом, когда ни один шаблон "
+                        "каталога не покрывает задачу (требует HITL-одобрения)."
+                    ),
+                    "rule_ids": ["R23"],
+                    "method_sources": ["DESIGN_M1 §16"],
+                    "applies_to": ["experiment"],
+                    "check": {
+                        "kind": "artifact_exists",
+                        "output": "main",
+                    },
+                    "role": "prediction",
+                    "required": True,
+                },
             ],
             "defaults": {"experiment": ["artifact_present"]},
             # Only catalog-declared names are code for independence; else DATA.

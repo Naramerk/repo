@@ -214,6 +214,7 @@ source_modules = [
   "coscientist.core.plan_validate",
   "coscientist.core.ports",
   "coscientist.core.projections",
+  "coscientist.core.proposed_check",
   "coscientist.core.question_tasks",
   "coscientist.core.quorum",
   "coscientist.core.r17",
@@ -253,6 +254,7 @@ source_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
+  "coscientist.tools.propose_check_tool",
   "coscientist.tools.taint",
 ]
 forbidden_modules = [
@@ -332,6 +334,7 @@ source_modules = [
   "coscientist.core.plan_validate",
   "coscientist.core.ports",
   "coscientist.core.projections",
+  "coscientist.core.proposed_check",
   "coscientist.core.question_tasks",
   "coscientist.core.quorum",
   "coscientist.core.r17",
@@ -371,6 +374,7 @@ source_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
+  "coscientist.tools.propose_check_tool",
   "coscientist.tools.taint",
 ]
 forbidden_modules = ["coscientist.core.lifecycle"]
@@ -443,6 +447,7 @@ source_modules = [
   "coscientist.core.plan_validate",
   "coscientist.core.ports",
   "coscientist.core.projections",
+  "coscientist.core.proposed_check",
   "coscientist.core.question_tasks",
   "coscientist.core.quorum",
   "coscientist.core.r17",
@@ -482,6 +487,7 @@ source_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
+  "coscientist.tools.propose_check_tool",
   "coscientist.tools.taint",
 ]
 forbidden_modules = ["coscientist.core._attempt_frame"]

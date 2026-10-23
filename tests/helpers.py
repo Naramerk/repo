@@ -128,7 +128,9 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
         get_attempt=get_attempt,
         get_task=lambda tid: rt.tasks[tid],
         on_events=rt._project_local,
+        get_proposals=lambda: getattr(rt, "_check_proposals", {}) or {},
     )
+    ex._runtime_attempts = rt.attempts  # type: ignore[attr-defined]
     bind = getattr(rt, "bind_executor", None)
     if callable(bind):
         bind(ex)

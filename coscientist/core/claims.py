@@ -163,7 +163,7 @@ class RuntimeClaim:
         k_sup/k_ref. Validity failures never count. PR9/C10: claims whose
         target (or checked_against) is superseded are out.
         """
-        if self.exclusion_reason == "superseded":
+        if self.exclusion_reason in ("superseded", "unapproved_check"):
             return False
         if not (self.accepted and self.validity_ok and self.frozen):
             return False

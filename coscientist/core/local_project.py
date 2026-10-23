@@ -236,6 +236,21 @@ class LocalProjectMixin:
                 self._hitl_decisions = {}
                 decisions = self._hitl_decisions
             decisions[rid] = dict(p)
+            # Close the open gate unless keep_open / WAIT. Do not merge decision
+            # payload fields into the HitlOpened row (request ≠ decision).
+            opens = getattr(self, "_hitl_requests", None)
+            if isinstance(opens, dict) and rid in opens:
+                keep_open = bool(p.get("keep_open") or p.get("effect") == "WAIT")
+                opens[rid] = {**opens[rid], "open": keep_open}
+        elif ev.type in (
+            "CheckProposed",
+            "CheckApproved",
+            "CheckRejected",
+            "ReviewScheduled",
+        ):
+            from coscientist.core.proposed_check import fold_proposed_check_event
+
+            fold_proposed_check_event(self, ev)
         elif ev.type == "StudyCancelled":
             self._study_cancelled = True
         elif ev.type == "ArtifactRegistered":
@@ -327,7 +342,11 @@ class LocalProjectMixin:
                 else:
                     self._expand_pending = {str(after)}
         elif ev.type == "AttemptStarted":
-            self.attempts[p["attempt_id"]] = dict(p)
+            row = dict(p)
+            row.setdefault("attempt_role", "agent")
+            if getattr(ev, "seq", None) is not None:
+                row["_seq"] = ev.seq
+            self.attempts[p["attempt_id"]] = row
             t = self.tasks[p["task_id"]]
             attempts = list(t.attempts)
             if p["attempt_id"] not in attempts:
@@ -388,8 +407,11 @@ class LocalProjectMixin:
                 att = self.attempts.get(aid, {})
                 self.attempts[aid] = {**att, "agent_output_digest": dig}
         elif ev.type == "ResultRecorded":
-            self.results[p["result_id"]] = dict(p)
-            self.results[p["attempt_id"]] = dict(p)
+            row = dict(p)
+            if getattr(ev, "seq", None) is not None:
+                row["_seq"] = ev.seq
+            self.results[p["result_id"]] = row
+            self.results[p["attempt_id"]] = row
             # Populate dep_outputs from named outputs for InputSpec.bind.
             dep_outputs = getattr(self, "dep_outputs", None)
             dep_provenance = getattr(self, "dep_provenance", None)

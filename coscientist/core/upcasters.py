@@ -650,6 +650,13 @@ def _study_created_v10_to_v11(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _study_created_v11_to_v12(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR20: max_proposals (agent CheckProposed quota; default 3)."""
+    out = dict(payload)
+    out.setdefault("max_proposals", 3)
+    return out
+
+
 def _ensure_loop_fields(spec: dict[str, Any]) -> dict[str, Any]:
     """PR11: loop_id / loop_iter / loop_template_key defaults on old TaskSpec."""
     spec = dict(spec)
@@ -681,6 +688,20 @@ def _plan_accepted_v8_to_v9_loops(payload: dict[str, Any]) -> dict[str, Any]:
             else:
                 rewritten.append(t)
         out["tasks"] = rewritten
+    return out
+
+
+def _study_finalized_v3_to_v4(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR20: custom_checks[] + observations[] on StudyFinalized / minimal_report."""
+    out = dict(payload)
+    out.setdefault("custom_checks", [])
+    out.setdefault("observations", [])
+    mr = out.get("minimal_report")
+    if isinstance(mr, dict):
+        mr = dict(mr)
+        mr.setdefault("custom_checks", [])
+        mr.setdefault("observations", [])
+        out["minimal_report"] = mr
     return out
 
 
@@ -817,6 +838,13 @@ def _attempt_started_v7_to_v8_inputs_digest(payload: dict[str, Any]) -> dict[str
     return out
 
 
+def _attempt_started_v8_to_v9_role(payload: dict[str, Any]) -> dict[str, Any]:
+    """PR20: attempt_role default agent (reviewer bind is ReviewScheduled)."""
+    out = dict(payload)
+    out.setdefault("attempt_role", "agent")
+    return out
+
+
 register_upcaster("TaskCreated", 1, _task_created_v1_to_v2)
 register_upcaster("TaskCreated", 2, _ensure_spec_addresses)
 register_upcaster("TaskCreated", 3, _task_created_v3_to_v4_input_mode)
@@ -853,6 +881,7 @@ register_upcaster("StudyCreated", 7, _study_created_v7_to_v8)
 register_upcaster("StudyCreated", 8, _study_created_v8_to_v9)
 register_upcaster("StudyCreated", 9, _study_created_v9_to_v10)
 register_upcaster("StudyCreated", 10, _study_created_v10_to_v11)
+register_upcaster("StudyCreated", 11, _study_created_v11_to_v12)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)
@@ -862,6 +891,7 @@ register_upcaster("AttemptStarted", 4, _attempt_started_v4_to_v5_shares)
 register_upcaster("AttemptStarted", 5, _attempt_started_v5_to_v6_budget_limit)
 register_upcaster("AttemptStarted", 6, _attempt_started_v6_to_v7_tainted)
 register_upcaster("AttemptStarted", 7, _attempt_started_v7_to_v8_inputs_digest)
+register_upcaster("AttemptStarted", 8, _attempt_started_v8_to_v9_role)
 
 
 def _result_recorded_v2_to_v3_output_kinds(payload: dict[str, Any]) -> dict[str, Any]:
@@ -875,3 +905,4 @@ register_upcaster("ResultRecorded", 1, _rename_simulated_provenance)
 register_upcaster("ResultRecorded", 2, _result_recorded_v2_to_v3_output_kinds)
 register_upcaster("StudyFinalized", 1, _study_finalized_v1_to_v2)
 register_upcaster("StudyFinalized", 2, _study_finalized_v2_to_v3)
+register_upcaster("StudyFinalized", 3, _study_finalized_v3_to_v4)

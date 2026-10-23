@@ -254,21 +254,23 @@ def test_refuted_with_confirmations_reports_conflict_note():
 
 def test_upcaster_studycreated_v5_to_v6_supported_needed():
     v, out = upcast("StudyCreated", 5, {"study_id": "s"})
-    assert v == 11
+    assert v == 12
     assert out["supported_needed"] == 2
     assert out.get("aggregate", "count") == "count"
     assert out.get("user_input_ids") == []
     assert out["max_expansions"] == 2
+    assert out["max_proposals"] == 3
 
 
 def test_upcaster_studycreated_v4_to_v5_defaults():
     v, out = upcast("StudyCreated", 4, {"study_id": "s", "confirmations_needed": 1})
-    assert v == 11
+    assert v == 12
     assert out["aggregate"] == "count"
     assert out["supported_needed"] == 2
     assert out.get("as_of") is None
     assert "min_independent_support" not in out
     assert out["replan_reserve"] == 0.1
+    assert out["max_proposals"] == 3
 
 
 def test_report_hypotheses_payload_schema():

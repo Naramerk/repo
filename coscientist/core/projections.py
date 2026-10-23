@@ -286,6 +286,37 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
     elif t == "ReviewScheduled":
         # tracked on requirements / results; keep a lightweight row
         _put(proj, "requirements", f"review:{event.entity_key}", dict(p))
+    elif t == "CheckProposed":
+        pid = str(p.get("proposal_id") or event.entity_key)
+        _put(proj, "check_proposals", pid, {**p, "proposal_id": pid, "status": "proposed"})
+    elif t == "CheckApproved":
+        pid = str(p.get("proposal_id") or event.entity_key)
+        prev = _get(proj, "check_proposals", pid) or {"proposal_id": pid}
+        _put(
+            proj,
+            "check_proposals",
+            pid,
+            {
+                **prev,
+                **p,
+                "status": "approved",
+                "delegated": bool(p.get("delegated")),
+            },
+        )
+    elif t == "CheckRejected":
+        pid = str(p.get("proposal_id") or event.entity_key)
+        prev = _get(proj, "check_proposals", pid) or {"proposal_id": pid}
+        _put(
+            proj,
+            "check_proposals",
+            pid,
+            {
+                **prev,
+                **p,
+                "status": "rejected",
+                "reject_reason": p.get("reason"),
+            },
+        )
 
 
 def fold_events(events: list[EventEnvelope]) -> ProjectionMap:
@@ -364,6 +395,7 @@ def _row_key(table: str, row: dict[str, Any]) -> str | None:
         "fetch_calls": "call_id",
         "requirements": "id",
         "hitl_requests": "request_id",
+        "check_proposals": "proposal_id",
         "graph_nodes": "node_id",
         "graph_edges": "edge_id",
         "question_disposals": "question_id",
@@ -415,6 +447,9 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         "HitlDecided": ("hitl_requests",),
         "HitlTimedOut": ("hitl_requests",),
         "HitlDeadlineExtended": ("hitl_requests",),
+        "CheckProposed": ("check_proposals",),
+        "CheckApproved": ("check_proposals",),
+        "CheckRejected": ("check_proposals",),
         "GraphNodeUpserted": ("graph_nodes",),
         # kind=decomposes (PR16) writes graph_edges; keep in the set so #27's
         # dirty-key apply_event path still projects those edges.

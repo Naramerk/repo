@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from typing import Any, Self
 
 from coscientist.core.digest import canonical_json, sha256_hex
 from coscientist.core.domain import Clarification, HitlRequest, Task
+from coscientist.core.errors import Conflict
 from coscientist.core.events import EventEnvelope, make_idem
 from coscientist.core.ids import hitl_request_id, study_id
 from coscientist.experimental.hitl_costly import CostlyHitlMixin
@@ -19,6 +21,14 @@ class HitlForkMixin(CostlyHitlMixin):
 
     def _resolve_task(self, task_key_or_id: str) -> Task:
         raise NotImplementedError
+
+    def _proposed_check_decision_lock(
+        self, proposal_id: str
+    ) -> AbstractAsyncContextManager[None]:
+        """Per-proposal lock: accept/delegate/reject/timeout/stale serialize side effects."""
+        from coscientist.core.proposed_check import hold_proposed_check_decision_lock
+
+        return hold_proposed_check_decision_lock(self, proposal_id)
 
     async def open_hitl(
         self,
@@ -96,6 +106,12 @@ class HitlForkMixin(CostlyHitlMixin):
             }.get(decision, decision)
             await self._apply_costly_or_nonreal(
                 h, answer=answer, critic_accepts=critic_accepts  # type: ignore[arg-type]
+            )
+            return
+        # PR20: proposed_check HITL — CheckApproved / CheckRejected (core decides counts).
+        if h.kind == "proposed_check":
+            await self._answer_proposed_check(
+                h, request_id, decision=decision, expansion=expansion
             )
             return
         # DESIGN §7.3 / PR12 budget gate: «реши сам» → critic; mark HITL node only.
@@ -214,9 +230,191 @@ class HitlForkMixin(CostlyHitlMixin):
             assign_keys=bool(expansion.get("assign_keys", False)),
         )
 
+    async def _answer_proposed_check(
+        self,
+        h: HitlRequest,
+        request_id: str,
+        *,
+        decision: str,
+        expansion: dict[str, Any] | None = None,
+    ) -> None:
+        """HITL gate for proposed_check → core CheckApproved / CheckRejected.
+
+        ``delegate`` schedules a separate reviewer (``delegated=true``); the
+        reviewer must call ``approve_check`` / ``reject_check`` with a different
+        ``reviewer_attempt_id`` than the proposer (DESIGN_M1 §16).
+        """
+        from coscientist.core.proposed_check import approve_check, reject_check
+
+        ref_pid = str(getattr(h, "payload_ref", None) or "").strip()
+        exp_pid = str((expansion or {}).get("proposal_id") or "").strip()
+        if not ref_pid:
+            opens = getattr(self, "_hitl_requests", {}) or {}
+            row = opens.get(request_id) if isinstance(opens, dict) else None
+            if isinstance(row, dict):
+                ref_pid = str(
+                    row.get("payload_ref") or row.get("proposal_id") or ""
+                ).strip()
+        # Fail-closed: expansion must not retarget a different proposal than HitlOpened.
+        if ref_pid and exp_pid and ref_pid != exp_pid:
+            raise ValueError(
+                f"proposed_check HITL {request_id!r} payload_ref={ref_pid!r} "
+                f"!= proposal_id={exp_pid!r}"
+            )
+        pid = ref_pid or exp_pid
+        if not h.open:
+            return
+        if not str(pid).strip():
+            raise ValueError(
+                f"proposed_check HITL {request_id!r} missing proposal_id/payload_ref"
+            )
+
+        # Serialize accept/delegate/reject: only the journal winner runs side effects.
+        async with self._proposed_check_decision_lock(pid):
+            # Refresh open flag under the lock (concurrent answer may have closed it).
+            live = self.hitl.get(request_id) if hasattr(self, "hitl") else h
+            if live is not None and not getattr(live, "open", True):
+                return
+            existing = getattr(self, "_hitl_decisions", None) or {}
+            if isinstance(existing, dict) and request_id in existing:
+                return
+
+            now = self.clock.now()
+            decided_idem = make_idem("HitlDecided", request_id)
+            if decision in ("accept", "approve"):
+                want = "accept"
+                payload: dict[str, Any] = {
+                    "request_id": request_id,
+                    "decision": "accept",
+                    "by": "human",
+                    "approved_by": "human",
+                    "delegated_by": None,
+                    "reason": "proposed_check_approved",
+                    "proposal_id": pid,
+                    "spent_rub": 0.0,
+                }
+            elif decision == "delegate":
+                want = "delegate"
+                payload = {
+                    "request_id": request_id,
+                    "decision": "delegate",
+                    "by": "human",
+                    "delegated_by": "human",
+                    "reason": "delegate→reviewer",
+                    "proposal_id": pid,
+                    "spent_rub": 0.0,
+                    "keep_open": False,
+                    "effect": "WAIT_REVIEWER",
+                }
+            else:
+                want = "reject"
+                payload = {
+                    "request_id": request_id,
+                    "decision": "reject",
+                    "by": "human",
+                    "reason": "rejected",
+                    "proposal_id": pid,
+                    "spent_rub": 0.0,
+                }
+
+            try:
+                await self._append(
+                    [
+                        EventEnvelope(
+                            study_id=h.study_id,
+                            type="HitlDecided",
+                            entity_key=request_id,
+                            idem_key=decided_idem,
+                            payload=payload,
+                            ts=now,
+                        )
+                    ]
+                )
+            except Conflict:
+                # Idem collapse / loser — do not run side effects.
+                return
+
+            # Journal is authority: only the folded winner may approve/reject/schedule.
+            folded = (getattr(self, "_hitl_decisions", None) or {}).get(request_id)
+            if not isinstance(folded, dict) or str(folded.get("decision") or "") != want:
+                return
+
+            if want == "accept":
+                await approve_check(
+                    self,
+                    pid,
+                    source="hitl",
+                    hitl_request_id_s=request_id,
+                )
+                return
+            if want == "delegate":
+                from coscientist.core.proposed_check import schedule_proposed_check_review
+
+                rev_tid = None
+                if isinstance(expansion, dict):
+                    rev_tid = expansion.get("reviewer_task_id")
+                await schedule_proposed_check_review(
+                    self,
+                    pid,
+                    hitl_request_id_s=request_id,
+                    reviewer_task_id=str(rev_tid) if rev_tid else None,
+                )
+                return
+            await reject_check(
+                self,
+                pid,
+                source="hitl",
+                reason="rejected",
+                hitl_request_id_s=request_id,
+            )
+
     async def _hitl_timeout(self, h: HitlRequest) -> None:
         if h.kind == "costly_or_nonreal":
             await self._apply_costly_or_nonreal(h, answer=None)
+            return
+        # PR20: HITL timeout on proposed_check ≡ reject (StudyFinalized still runs).
+        # Must take the same per-proposal lock as answer_hitl — otherwise timeout can
+        # write CheckRejected while a human accept is still inside _append.
+        if h.kind == "proposed_check":
+            from coscientist.core.proposed_check import reject_check
+
+            pid = str(getattr(h, "payload_ref", None) or "").strip()
+            if not pid:
+                return
+            async with self._proposed_check_decision_lock(pid):
+                live = self.hitl.get(h.request_id) if hasattr(self, "hitl") else h
+                if live is not None and not getattr(live, "open", True):
+                    return
+                # Journal wins before any side effect.
+                existing = getattr(self, "_hitl_decisions", None) or {}
+                dec = (
+                    existing.get(h.request_id) if isinstance(existing, dict) else None
+                )
+                if isinstance(dec, dict):
+                    d = str(dec.get("decision") or "").strip()
+                    decided_by = str(
+                        dec.get("by") or dec.get("decided_by") or ""
+                    ).strip()
+                    if decided_by == "human" and d in (
+                        "accept",
+                        "approve",
+                        "delegate",
+                        "reject",
+                    ):
+                        return
+                row = (getattr(self, "_check_proposals", None) or {}).get(pid)
+                if isinstance(row, dict) and row.get("status") in (
+                    "approved",
+                    "rejected",
+                ):
+                    return
+                await reject_check(
+                    self,
+                    pid,
+                    source="timeout",
+                    reason="human_timeout",
+                    hitl_request_id_s=h.request_id,
+                )
             return
         now = self.clock.now()
         await self._append(

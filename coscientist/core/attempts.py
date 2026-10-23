@@ -30,6 +30,20 @@ from coscientist.core.reasons import CloseReason, TaskReason, coerce_close_reaso
 # Persisted on AttemptClosed.retry_at; fired by StudyRuntime.tick vs injected Clock.
 RETRY_BACKOFF_S = 0.05
 
+
+def _attempt_role_from_reviews(runtime: Any, task_id: str) -> str:
+    """Derive AttemptStarted.attempt_role from pending ReviewScheduled rows."""
+    reviews = getattr(runtime, "_proposed_check_reviews", None) or {}
+    tid = str(task_id)
+    for rev in reviews.values():
+        if not isinstance(rev, dict):
+            continue
+        if str(rev.get("status") or "pending") != "pending":
+            continue
+        if str(rev.get("reviewer_task_id") or "") == tid:
+            return "reviewer"
+    return "agent"
+
 # Stage DAG (SPEC→…→REPORT): H-c must not cascade — DESIGN §7.5: failed SPEC
 # → plan is built from the raw request; later stages still run.
 _STAGE_KINDS = frozenset(
@@ -188,6 +202,10 @@ class AttemptsMixin:
 
         Callers must treat ``None`` as a successful refusal (task already
         ``SKIPPED(budget)`` / similar) — never pass it to ``Executor.record``.
+
+        Reviewer role for proposed_check is **not** caller-chosen: when this
+        task is ``ReviewScheduled.reviewer_task_id`` for a pending review,
+        AttemptStarted journals ``attempt_role=reviewer``; otherwise ``agent``.
         """
         task = self._resolve_task(task_key_or_id)
         # Foreach templates are materialization placeholders — never dispatched.
@@ -396,6 +414,9 @@ class AttemptsMixin:
             "tainted_context": tainted_context,
             # PR10: fan-in gaps (inputs below quorum / failed deps).
             "limitations": lim_payload,
+            # PR20: attempt_role from journal ReviewScheduled.reviewer_task_id
+            # (never a start_attempt kwarg).
+            "attempt_role": _attempt_role_from_reviews(self, task.task_id),
             **share_fields,
         }
         events: list[EventEnvelope] = [
@@ -406,7 +427,7 @@ class AttemptsMixin:
                 idem_key=make_idem("AttemptStarted", aid),
                 payload=payload,
                 ts=now,
-                # v7 = PR18 tainted; v8 = PR19 inputs_digest + binding snapshot fields.
+                # v8 = #23 inputs_digest; v9 = PR20 attempt_role (schema_versions).
                 schema_version=ATTEMPT_STARTED_SCHEMA_VERSION,
             )
         ]

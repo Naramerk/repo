@@ -25,13 +25,13 @@ class EventEnvelope(BaseModel):
 
 # Typed payload helpers used by the machine / executor.
 
-# Writer constants: #24 TC11 / StudyCreated v10 (max_loop_iter);
-# #29 PA10 + PE4; #28 TC13 / PA11 / PE5 (needs_more_data / evidence_kind);
-# #23 StudyCreated **v11** (as_of / user_input_ids).
+# Writer: #24 TC11 / #29 PA10+PE4 / #28 TC13/PA11/PE5 / #23 StudyCreated v11;
+# PR20 stacks StudyCreated **v12** (max_proposals).
 PLAN_EXPANDED_SCHEMA_VERSION = 5
-STUDY_CREATED_SCHEMA_VERSION = 11
+STUDY_CREATED_SCHEMA_VERSION = 12  # PR20: max_proposals (#23 owns v11)
 PLAN_ACCEPTED_SCHEMA_VERSION = 11
 TASK_CREATED_SCHEMA_VERSION = 13
+STUDY_FINALIZED_SCHEMA_VERSION = 4  # PR20: custom_checks / observations
 
 EventType = Literal[
     "StudyCreated",
@@ -79,6 +79,10 @@ EventType = Literal[
     "FetchIntegrityRaised",
     "QuestionDisposed",
     "QuestionDisposeRejected",
+    # M1 PR20: agent-proposed catalog meta-check (DESIGN_M1 §16).
+    "CheckProposed",
+    "CheckApproved",
+    "CheckRejected",
 ]
 
 
