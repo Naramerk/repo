@@ -633,7 +633,7 @@ def run_verifier(
             if scorer_path is not None:
                 guest_argv = [
                     "/scorer"
-                    if (a == str(scorer_path) or a.endswith("scorer.py"))
+                    if (a == str(scorer_path) or a.endswith("scorer.py") or a == "/scorer")
                     else a
                     for a in guest_argv
                 ]
@@ -647,6 +647,14 @@ def run_verifier(
             popen_cwd = None
             popen_env = None
         else:
+            # Soft: remap guest paths (/scorer, /results/…) to host paths.
+            if scorer_path is not None:
+                guest_argv = [
+                    str(scorer_path)
+                    if (a == "/scorer" or a.endswith("scorer.py"))
+                    else a
+                    for a in guest_argv
+                ]
             cmd = ["python3", str(wrapper), *guest_argv]
             popen_cwd = str(results_dir)
             popen_env = {

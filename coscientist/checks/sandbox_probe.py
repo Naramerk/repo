@@ -83,9 +83,16 @@ def probe_bwrap_hard(*, allow_network: bool) -> bool:
                 "sys.exit(0)\n",
                 encoding="utf-8",
             )
+            # --unshare-user is required on GHA/CI: unshare-net alone fails
+            # with "loopback: Failed RTM_NEWADDR: Operation not permitted".
             argv = [
                 bwrap,
                 "--die-with-parent",
+                "--unshare-user",
+                "--uid",
+                "0",
+                "--gid",
+                "0",
                 "--unshare-pid",
                 "--clearenv",
                 *_system_ro_binds(),
@@ -167,6 +174,11 @@ def build_agent_bwrap(
     argv = [
         bwrap,
         "--die-with-parent",
+        "--unshare-user",
+        "--uid",
+        "0",
+        "--gid",
+        "0",
         "--unshare-pid",
         "--clearenv",
         *_system_ro_binds(),
@@ -226,6 +238,11 @@ def build_verifier_bwrap(
     argv = [
         bwrap,
         "--die-with-parent",
+        "--unshare-user",
+        "--uid",
+        "0",
+        "--gid",
+        "0",
         "--unshare-pid",
         "--unshare-net",
         "--clearenv",
