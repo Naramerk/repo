@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ CREATE TABLE IF NOT EXISTS events(
 CREATE TABLE IF NOT EXISTS lease(
   study_id TEXT PRIMARY KEY,
   owner TEXT NOT NULL,
+  owner_nonce TEXT NOT NULL,
   epoch INT NOT NULL,
   expires_at TEXT NOT NULL
 );
@@ -41,6 +43,10 @@ CREATE TABLE IF NOT EXISTS projections(
   PRIMARY KEY (table_name, row_key)
 );
 """
+
+
+def _new_owner_nonce() -> str:
+    return str(uuid.uuid4())
 
 
 def _iso(dt: datetime) -> str:
@@ -60,7 +66,13 @@ def _json_default(obj: Any) -> str:
 
 
 class SqliteEventStore:
-    """One DB per study. All writes go through append/append_many under lease fencing."""
+    """One DB per study. All writes go through append/append_many under lease fencing.
+
+    Write fencing requires a full holder identity ``(owner, epoch, owner_nonce)``.
+    Prefer ``acquire_lease`` to mint that identity. Seeding ``owner``/``epoch`` on
+    the constructor without a matching ``owner_nonce`` (and a matching lease row)
+    cannot write — ``_fence`` raises ``LeaseLost``.
+    """
 
     def __init__(
         self,
@@ -70,6 +82,7 @@ class SqliteEventStore:
         *,
         owner: str | None = None,
         epoch: int = 0,
+        owner_nonce: str | None = None,
         lease_ttl_s: float = 30.0,
     ) -> None:
         self.study_id = study_id
@@ -77,21 +90,48 @@ class SqliteEventStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.clock = clock or SystemClock()
         self.owner = owner
+        self.owner_nonce = owner_nonce
         self.epoch = epoch
         self.lease_ttl_s = lease_ttl_s
+        self._closed = False
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=FULL")
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.executescript(_SCHEMA)
+        self._ensure_lease_nonce_column()
         self._conn.commit()
         self._lock = asyncio.Lock()
 
+    def _ensure_lease_nonce_column(self) -> None:
+        cols = {
+            str(r[1]) for r in self._conn.execute("PRAGMA table_info(lease)").fetchall()
+        }
+        if "owner_nonce" not in cols:
+            self._conn.execute(
+                "ALTER TABLE lease ADD COLUMN owner_nonce TEXT NOT NULL DEFAULT ''"
+            )
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
     def close(self) -> None:
+        """Close the underlying connection. Safe to call more than once."""
+        if self._closed:
+            return
+        self._closed = True
         self._conn.close()
 
     async def acquire_lease(self, owner: str, ttl_s: float | None = None) -> int:
+        """Acquire or renew the study lease for this runtime instance.
+
+        Each holder mints a unique ``owner_nonce``. While a lease is still live,
+        a *new* process that reuses the same owner name (different nonce) gets
+        ``LeaseLost`` instead of renewing in place — crash recovery and migrated
+        rows with ``owner_nonce=''`` must wait for TTL before re-acquire.
+        """
         ttl = self.lease_ttl_s if ttl_s is None else ttl_s
         async with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
@@ -99,25 +139,33 @@ class SqliteEventStore:
                 now = self.clock.now()
                 expires = now + timedelta(seconds=ttl)
                 cur = self._conn.execute(
-                    "SELECT owner, epoch, expires_at FROM lease WHERE study_id=?",
+                    "SELECT owner, owner_nonce, epoch, expires_at FROM lease "
+                    "WHERE study_id=?",
                     (self.study_id,),
                 )
                 row = cur.fetchone()
                 if row is None:
                     epoch = 1
+                    nonce = self.owner_nonce or _new_owner_nonce()
                     self._conn.execute(
-                        "INSERT INTO lease(study_id, owner, epoch, expires_at) "
-                        "VALUES (?,?,?,?)",
-                        (self.study_id, owner, epoch, _iso(expires)),
+                        "INSERT INTO lease(study_id, owner, owner_nonce, epoch, "
+                        "expires_at) VALUES (?,?,?,?,?)",
+                        (self.study_id, owner, nonce, epoch, _iso(expires)),
                     )
                 else:
                     exp = _parse_iso(row["expires_at"])
-                    if row["owner"] != owner and exp > now:
+                    held_nonce = str(row["owner_nonce"] or "")
+                    if exp > now and row["owner"] != owner:
                         raise LeaseLost(
                             f"lease held by {row['owner']} until {row['expires_at']}"
                         )
-                    if row["owner"] == owner and exp > now:
-                        # Same owner still holding: renew in place, do not bump epoch.
+                    if exp > now and row["owner"] == owner:
+                        # Same owner name: renew only when nonce matches this instance.
+                        nonce = self.owner_nonce or _new_owner_nonce()
+                        if held_nonce != nonce:
+                            raise LeaseLost(
+                                "lease held by same owner name with different nonce"
+                            )
                         epoch = int(row["epoch"])
                         self._conn.execute(
                             "UPDATE lease SET expires_at=? WHERE study_id=?",
@@ -125,12 +173,15 @@ class SqliteEventStore:
                         )
                     else:
                         epoch = int(row["epoch"]) + 1
+                        nonce = _new_owner_nonce()
                         self._conn.execute(
-                            "UPDATE lease SET owner=?, epoch=?, expires_at=? WHERE study_id=?",
-                            (owner, epoch, _iso(expires), self.study_id),
+                            "UPDATE lease SET owner=?, owner_nonce=?, epoch=?, "
+                            "expires_at=? WHERE study_id=?",
+                            (owner, nonce, epoch, _iso(expires), self.study_id),
                         )
                 self._conn.commit()
                 self.owner = owner
+                self.owner_nonce = nonce
                 self.epoch = epoch
                 self.lease_ttl_s = ttl
                 return epoch
@@ -138,32 +189,63 @@ class SqliteEventStore:
                 self._conn.rollback()
                 raise
 
-    async def renew_lease(self, owner: str, epoch: int, ttl_s: float | None = None) -> None:
+    async def renew_lease(
+        self,
+        owner: str,
+        epoch: int,
+        ttl_s: float | None = None,
+        *,
+        nonce: str | None = None,
+    ) -> None:
+        """Extend the lease. Raises ``LeaseLost`` if nonce is missing or the row
+        does not match ``owner``+``epoch``+``nonce`` (or is expired)."""
         ttl = self.lease_ttl_s if ttl_s is None else ttl_s
+        nonce = self.owner_nonce if nonce is None else nonce
+        if not nonce:
+            raise LeaseLost("renew failed: missing owner nonce")
         async with self._lock:
             now = self.clock.now()
             expires = now + timedelta(seconds=ttl)
             cur = self._conn.execute(
                 "UPDATE lease SET expires_at=? "
-                "WHERE study_id=? AND owner=? AND epoch=? AND expires_at>?",
-                (_iso(expires), self.study_id, owner, epoch, _iso(now)),
+                "WHERE study_id=? AND owner=? AND epoch=? AND owner_nonce=? "
+                "AND expires_at>?",
+                (_iso(expires), self.study_id, owner, epoch, nonce, _iso(now)),
             )
             if cur.rowcount == 0:
                 self._conn.rollback()
-                raise LeaseLost("renew failed: lease lost or epoch mismatch")
+                raise LeaseLost("renew failed: lease lost or epoch/nonce mismatch")
             self._conn.commit()
             self.lease_ttl_s = ttl
 
-    async def release_lease(self, owner: str, epoch: int) -> None:
-        """Drop the lease row only if ``owner``+``epoch`` still hold it."""
+    async def release_lease(
+        self,
+        owner: str,
+        epoch: int,
+        *,
+        nonce: str | None = None,
+    ) -> None:
+        """Drop the lease row only if ``owner``+``epoch``+``nonce`` still hold it.
+
+        Raises ``LeaseLost`` when nonce is missing or the DELETE matches no row —
+        the same failure mode as ``renew_lease`` (callers must not assume a silent
+        no-op).
+        """
+        nonce = self.owner_nonce if nonce is None else nonce
+        if not nonce:
+            raise LeaseLost("release failed: missing owner nonce")
         async with self._lock:
             cur = self._conn.execute(
-                "DELETE FROM lease WHERE study_id=? AND owner=? AND epoch=?",
-                (self.study_id, owner, epoch),
+                "DELETE FROM lease WHERE study_id=? AND owner=? AND epoch=? "
+                "AND owner_nonce=?",
+                (self.study_id, owner, epoch, nonce),
             )
             self._conn.commit()
-            if cur.rowcount and self.owner == owner and self.epoch == epoch:
+            if cur.rowcount == 0:
+                raise LeaseLost("release failed: lease lost or epoch/nonce mismatch")
+            if self.owner == owner and self.epoch == epoch:
                 self.owner = None
+                self.owner_nonce = None
                 self.epoch = 0
 
     def current_lease(self) -> tuple[str | None, int, datetime | None]:
@@ -177,18 +259,20 @@ class SqliteEventStore:
         return row["owner"], int(row["epoch"]), _parse_iso(row["expires_at"])
 
     def _fence(self, ttl_s: float | None = None) -> None:
-        if self.owner is None:
+        if self.owner is None or not self.owner_nonce:
             raise LeaseLost("no lease owner set")
         ttl = self.lease_ttl_s if ttl_s is None else ttl_s
         now = self.clock.now()
         cur = self._conn.execute(
             "UPDATE lease SET expires_at=? "
-            "WHERE study_id=? AND owner=? AND epoch=? AND expires_at>?",
+            "WHERE study_id=? AND owner=? AND epoch=? AND owner_nonce=? "
+            "AND expires_at>?",
             (
                 _iso(now + timedelta(seconds=ttl)),
                 self.study_id,
                 self.owner,
                 self.epoch,
+                self.owner_nonce,
                 _iso(now),
             ),
         )

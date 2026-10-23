@@ -251,8 +251,8 @@ CREATE TABLE events(
 ### 3.5a Писатель, лок, проекции (к концу M1)
 
 - `EventStore` — порт; реализация SQLite WAL, одна БД на study, `busy_timeout=5000`, `synchronous=FULL`.
-- Lease на study: строка `lease(study_id, owner, epoch, expires_at)`, продление каждые 10 с, TTL 30 с. Захват lease увеличивает `epoch`.
-- Fencing: каждая транзакция записи начинается с `UPDATE lease SET expires_at=? WHERE study_id=? AND owner=? AND epoch=? AND expires_at>now`; 0 строк → откат и `LeaseLost` (процесс прекращает запись по study). Поэтому владелец, «проснувшийся» после TTL, не может записать ни одного события. Каждое событие хранит `epoch`.
+- Lease на study: строка `lease(study_id, owner, owner_nonce, epoch, expires_at)`, продление каждые 10 с, TTL 30 с. Захват lease увеличивает `epoch` (кроме renew того же экземпляра). Каждый runtime-экземпляр держит уникальный `owner_nonce`; renew / release / fencing требуют совпадения `owner`+`epoch`+`owner_nonce`. Пока lease жив, **новый** процесс с тем же `owner` (другой nonce) получает `LeaseLost` и **не** продлевает lease на месте — после crash (и для мигрированных БД с `owner_nonce=''` на живом lease) повторный захват ждёт TTL. `renew_lease` и `release_lease` при отсутствии nonce или несовпадении строки оба поднимают `LeaseLost` (без тихого no-op).
+- Fencing: каждая транзакция записи начинается с `UPDATE lease SET expires_at=? WHERE study_id=? AND owner=? AND epoch=? AND owner_nonce=? AND expires_at>now`; 0 строк → откат и `LeaseLost` (процесс прекращает запись по study). Поэтому владелец, «проснувшийся» после TTL, не может записать ни одного события. Каждое событие хранит `epoch`.
 - Один писатель: все события идут через одну `asyncio.Queue` на study; таймеры, recover, API-команды, JobStore — только через неё. JobStore пишет `JobSubmitted/JobStatusChanged/JobTimedOut/JobCancelled` через ту же очередь (сам воркер джоба в БД не пишет, только отдаёт статус по опросу).
 - Проекции (в той же БД, обновляются в транзакции события): `studies, plans, tasks, attempts, results, artifacts, requirements, jobs, hitl_requests, usage, tool_calls`.
 - `schema_version` у события; старые payload неизменяемы; чтение через `upcasters[type][v] -> v+1`. Тест `test_replay_equals_projection`: fold всего журнала с нуля == текущие проекции (на каждом фикстурном журнале и после property-теста).
@@ -811,6 +811,7 @@ web/           отдельно (M6)
 | 11 | `costly_gate(..., critic_accepts=True)` is a **stub**: no real critic agent until M2; the bool simulates accept/reject. Documented on the function and in oracle `tests/refmodel.py`. | Explicit until M2 critic role. |
 | 12 | `test_paper_dedupe_two_lits_same_doi` is refmodel-only (`Graph.add_paper`); dual `impl=core` would still call refmodel.Graph. Core paper dedupe lands with GraphBuilder in M1. | Honest skip of false dual-impl. |
 | 13 | **Core drops HITL; experimental is unchanged.** Core `tick` does not process HITL timeouts; `view()` always reports `open_hitl=0`; there is no `recover_after_idle`. Opening/recovering a journal that still has open HITL gates with core raises `HitlUnsupported` (checked **before** lease acquire). `invariant_open_attempts` / `invariant_deadlines` live on core `StudyRuntime`. Dual `runtime_kind` covers integration + deadline property; pure HITL tests stay experimental-only (no artificial core skips). | Review fix on PR #2. |
+| 14 | **Owner nonce on lease.** Same owner name with a different process nonce cannot renew/steal a live lease (`LeaseLost`); crash reopen and migrated `owner_nonce=''` wait for TTL. `release_lease`/`renew_lease` both raise `LeaseLost` on missing/mismatched nonce; fencing includes `owner_nonce`. | PR #3. |
 
 ## 16. Научная модель (граф)
 
