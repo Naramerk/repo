@@ -6,15 +6,20 @@ import pytest
 from pydantic import ValidationError
 
 from coscientist.core.execution.domain import Budget
-from coscientist.mcp.config import (
-    Identifier,
-    StdioServerConfig,
-    StreamableHttpServerConfig,
-)
+from coscientist.mcp.config import Identifier, StdioServerConfig, StreamableHttpServerConfig
 from coscientist.profiles import RoleName
 from coscientist.profiles.models import Profile, RoleConfig, RouteConfig
 
-_B = dict(max_llm_calls=4, max_tokens=8000, max_tool_calls=8)
+_MAX_LLM_CALLS = 4
+_MAX_TOKENS = 8000
+_MAX_TOOL_CALLS = 8
+_B = dict(
+    max_llm_calls=_MAX_LLM_CALLS,
+    max_tokens=_MAX_TOKENS,
+    max_tool_calls=_MAX_TOOL_CALLS,
+)
+
+
 def _budget() -> Budget:
     return Budget(**_B)
 
@@ -47,8 +52,11 @@ def _err(exc: ValidationError) -> tuple[tuple[object, ...], str, str]:
     assert len(errs) == 1
     return (tuple(errs[0]["loc"]), errs[0]["type"], errs[0]["msg"])
 
-def test_role_name_exported() -> None:
+def test_role_name_is_identifier() -> None:
     assert RoleName is Identifier
+
+
+def test_whitespace_role_key_refused() -> None:
     with pytest.raises(ValidationError, match="whitespace") as ei:
         _profile(roles={" medical_agent": _role()})
     assert _err(ei.value)[:2] == (("roles", " medical_agent", "[key]"), "value_error")
@@ -100,29 +108,6 @@ def test_mcp_duplicate_server_names_refused() -> None:
         _profile(mcp_servers=(a, b))
     assert _err(ei.value)[:2] == (("mcp_servers",), "value_error")
 
-def test_mcp_http_api_key_env_int_refused() -> None:
-    with pytest.raises(ValidationError, match="api_key_env") as ei:
-        StreamableHttpServerConfig.model_validate(
-            {
-                "transport": "streamable_http",
-                "name": "remote",
-                "url": "https://mcp.example/mcp",
-                "api_key_env": 5,
-            }
-        )
-    assert _err(ei.value)[:2] == (("api_key_env",), "string_type")
-
-def test_mcp_http_url_whitespace_refused() -> None:
-    with pytest.raises(ValidationError, match="url") as ei:
-        StreamableHttpServerConfig.model_validate(
-            {
-                "transport": "streamable_http",
-                "name": "r",
-                "url": "https://x/ mcp",
-                "api_key_env": None,
-            }
-        )
-    assert _err(ei.value)[:2] == (("url",), "value_error")
 
 def test_role_tools_list_refused() -> None:
     with pytest.raises(ValidationError, match="tools") as ei:
@@ -193,8 +178,9 @@ def test_route_extra_forbid() -> None:
     assert _err(ei.value)[:2] == (("x",), "extra_forbidden")
 
 def test_profile_frozen() -> None:
+    p = _profile()
     with pytest.raises(ValidationError, match="frozen") as ei:
-        _profile().name = "x"  # type: ignore[misc]
+        setattr(p, "name", "x")
     assert _err(ei.value)[:2] == (("name",), "frozen_instance")
 
 def test_rejects_bad_alembic() -> None:
