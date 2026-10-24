@@ -2,23 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StrictInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 from coscientist.core.execution.domain import Budget
-from coscientist.mcp.config import McpServerConfig
+from coscientist.mcp.config import Identifier, McpServerConfig
 
 AlembicMode = Literal["enabled", "disabled"]
-
-
-def _identifier(value: str) -> str:
-    if not value or any(ch.isspace() for ch in value):
-        raise ValueError(f"must be non-empty without whitespace: {value!r}")
-    return value
-
-
-Identifier = Annotated[str, AfterValidator(_identifier)]
 RoleName = Identifier  # Profile.roles key; G1/#66 imports this — not ``str``.
 
 

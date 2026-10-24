@@ -6,9 +6,13 @@ import pytest
 from pydantic import ValidationError
 
 from coscientist.core.execution.domain import Budget
-from coscientist.mcp.config import StdioServerConfig, StreamableHttpServerConfig
+from coscientist.mcp.config import (
+    Identifier,
+    StdioServerConfig,
+    StreamableHttpServerConfig,
+)
 from coscientist.profiles import RoleName
-from coscientist.profiles.models import Identifier, Profile, RoleConfig, RouteConfig
+from coscientist.profiles.models import Profile, RoleConfig, RouteConfig
 
 _B = dict(max_llm_calls=4, max_tokens=8000, max_tool_calls=8)
 def _budget() -> Budget:
@@ -83,7 +87,6 @@ def test_mcp_in_profile_dict_tuple_ok() -> None:
     }
     assert _profile(mcp_servers=(srv,)).mcp_servers[0].args == ("-m", "x")
 
-@pytest.mark.xfail(reason="MCP strict=#77; list args coerce until then", strict=True)
 def test_mcp_in_profile_list_args_refused() -> None:
     srv = {"transport": "stdio", "name": "med", "command": "python", "args": ["-m", "x"], "env_keys": ()}
     with pytest.raises(ValidationError) as ei:
