@@ -27,7 +27,10 @@ async def open_runtime(
     artifacts: Any | None = None,
 ) -> StudyRuntime:
     """Open experimental runtime; clock/owner/registry/catalog required."""
-    cls = runtime_cls if runtime_cls is not None else StudyRuntime
+    if runtime_cls is None:
+        cls: type[StudyRuntime] = StudyRuntime
+    else:
+        cls = runtime_cls
     rt = await open_runtime_core(
         data_root,
         study_id,
