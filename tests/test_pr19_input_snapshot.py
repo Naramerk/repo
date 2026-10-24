@@ -1186,7 +1186,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
 
 
 def test_upcast_attempt_started_v7_to_v8():
-    """#23 v7→v8 inputs_digest; PR20 v9 role; R16a v10 provenance."""
+    """#23 v7→v8 inputs_digest; PR20 v9 role; R16a v10 provenance required."""
     v, p = upcast(
         "AttemptStarted",
         7,
@@ -1194,6 +1194,7 @@ def test_upcast_attempt_started_v7_to_v8():
             "attempt_id": "a",
             "inputs": [{"input": "x", "artifact_id": "", "source": "real"}],
             "tainted_context": False,
+            "provenance": "real",
         },
     )
     assert v == 10

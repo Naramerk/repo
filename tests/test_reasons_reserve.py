@@ -141,7 +141,7 @@ async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
 
 def test_upcast_provenance_simulated_to_stub():
     v, p = upcast("AttemptStarted", 1, {"provenance": "simulated", "attempt_id": "a"})
-    # …v7 tainted → …v9 attempt_role → v10 provenance (absent→real; here already set).
+    # …v7 tainted → …v9 attempt_role → v10 provenance required (already set).
     assert v == 10 and p["provenance"] == "stub" and p["inputs"] == []
     assert p["limitations"] == []
     assert p["allocated_budget_rub"] is None
@@ -149,9 +149,6 @@ def test_upcast_provenance_simulated_to_stub():
     assert p["tainted_context"] is False
     assert p["attempt_role"] == "agent"
     assert p.get("inputs_digest") is None
-    # Absent provenance key on legacy AttemptStarted → materialize real (v10).
-    v_abs, p_abs = upcast("AttemptStarted", 1, {"attempt_id": "legacy"})
-    assert v_abs == 10 and p_abs["provenance"] == "real"
     v, p = upcast(
         "ResultRecorded",
         1,
@@ -167,6 +164,29 @@ def test_upcast_provenance_simulated_to_stub():
     assert p["inputs"][0]["source"] == "stub"
     assert p["verdict"] == "stubbed"
     assert p["output_kinds"] == {}
+
+
+def test_upcast_attempt_started_v9_to_v10_provenance_required():
+    """v9→v10: absent / null / unknown provenance → CatalogError (no invent real)."""
+    from coscientist.core.events.errors import CatalogError
+    from coscientist.core.events.upcasters import _attempt_started_v9_to_v10_provenance
+
+    ok = _attempt_started_v9_to_v10_provenance(
+        {"attempt_id": "a", "provenance": "partial"}
+    )
+    assert ok["provenance"] == "partial"
+    with pytest.raises(CatalogError, match="provenance_required"):
+        _attempt_started_v9_to_v10_provenance({"attempt_id": "a"})
+    with pytest.raises(CatalogError, match="provenance_required"):
+        _attempt_started_v9_to_v10_provenance(
+            {"attempt_id": "a", "provenance": None}
+        )
+    with pytest.raises(CatalogError, match="provenance_unknown"):
+        _attempt_started_v9_to_v10_provenance(
+            {"attempt_id": "a", "provenance": "simulated"}
+        )
+    with pytest.raises(CatalogError, match="provenance_required"):
+        upcast("AttemptStarted", 1, {"attempt_id": "legacy"})
 
 
 def _task(

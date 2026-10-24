@@ -891,20 +891,22 @@ def _attempt_started_v8_to_v9_role(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _attempt_started_v9_to_v10_provenance(payload: dict[str, Any]) -> dict[str, Any]:
-    """R16a / DESIGN_M1 §6.7: materialize absent AttemptStarted.provenance.
+    """R16a / DESIGN_M1 §6.7: AttemptStarted.provenance required at v10.
 
-    Pre-field journals omitted the key; runtime historically treated that as
-    ``real``. Writers already send an explicit value. Present-but-null is
-    corrupt → CatalogError (never invent here either).
+    Absent / null / unknown → ``CatalogError`` (never invent ``real``).
+    Legacy rename ``simulated``→``stub`` stays at v1; writers already send
+    an explicit value. Pre-field journals must be completed outside the
+    upcaster (same pattern as TaskCreated v14 freeze).
     """
     from coscientist.core.events.errors import CatalogError
+    from coscientist.core.execution.domain import VALID_PROVENANCE
 
     out = dict(payload)
-    if "provenance" not in out:
-        out["provenance"] = "real"
-        return out
-    if out["provenance"] is None:
+    if "provenance" not in out or out["provenance"] is None:
         raise CatalogError("AttemptStarted.v10:provenance_required")
+    raw = out["provenance"]
+    if not isinstance(raw, str) or raw not in VALID_PROVENANCE:
+        raise CatalogError(f"AttemptStarted.v10:provenance_unknown:{raw!r}")
     return out
 
 

@@ -2214,9 +2214,11 @@ def _complete_legacy_freeze_fields(db_path: Path) -> None:
 
     ``TaskCreated`` v13→v14 refuses a missing / null / empty
     ``sandbox_check_limits``; ``Study.catalog_version`` must be StrictInt;
-    ``Study.require_hypotheses`` is required at StudyCreated v14. Committed
-    rows stay old; patches apply only on the temp copy. Event types / raw
-    schema versions stay old, so every other upcaster still runs on open.
+    ``Study.require_hypotheses`` is required at StudyCreated v14;
+    ``AttemptStarted`` v9→v10 refuses absent / null provenance (no invent
+    ``real``). Committed rows stay old; patches apply only on the temp
+    copy. Event types / raw schema versions stay old, so every other
+    upcaster still runs on open.
     """
     import sqlite3
 
@@ -2240,6 +2242,10 @@ def _complete_legacy_freeze_fields(db_path: Path) -> None:
         p["catalog_version"] = 3
         p["require_hypotheses"] = False
 
+    def _patch_attempt_started(p: dict) -> None:
+        # Explicit provenance for the open path; upcaster never invents it.
+        p["provenance"] = "real"
+
     conn = sqlite3.connect(db_path)
     try:
         for etype, patch in (
@@ -2250,6 +2256,7 @@ def _complete_legacy_freeze_fields(db_path: Path) -> None:
                     "sandbox_check_limits", dict(_LEGACY_FREEZE)
                 ),
             ),
+            ("AttemptStarted", _patch_attempt_started),
         ):
             row = conn.execute(
                 "SELECT seq, payload FROM events WHERE type=?", (etype,)
