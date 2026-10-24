@@ -7,7 +7,7 @@ from datetime import timedelta
 import pytest
 
 from tests.checks.minimal_test_catalog import minimal_test_catalog
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import TEST_NEED_KW, close_runtime, open_runtime
 
 
 @pytest.mark.asyncio
@@ -27,6 +27,7 @@ async def test_accept_plan_agent_exempt_from_freeze_is_plan_refused(tmp_path, cl
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -47,7 +48,8 @@ async def test_accept_plan_agent_exempt_from_freeze_is_plan_refused(tmp_path, cl
                     }
                 ],
             }
-        ]
+        ],
+        **TEST_NEED_KW,
     )
     assert pid == ""
     events = await rt.store.read_all()

@@ -60,7 +60,7 @@ from coscientist.core.execution.domain import (
     TaskSpec,
 )
 from coscientist.core.plan.plan_validate import validate_evidence_kinds, validate_output_kinds
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import TEST_NEED_KW, attach_executor, close_runtime, open_runtime
 
 
 def _assert_terminated(events: list[Any]) -> Any:
@@ -111,6 +111,7 @@ async def _boot(tmp_path, clock, sid: str):
         deadline=clock.now() + timedelta(hours=1),
         finalize_reserve_s=30,
         sid=sid,
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -495,6 +496,7 @@ async def test_needs_more_data_requires_design(tmp_path, clock):
     await rt.accept_plan(
         tasks=[_exp_design("E0", addresses=["Q1"])],
         questions=[QuestionSpec(id="Q1", text="dose?", final_type="artifact")],
+        **TEST_NEED_KW,
     )
     # Bind artifacts store on runtime for dispose validation.
     ex, arts = attach_executor(rt, tmp_path)
@@ -585,7 +587,7 @@ async def test_disposal_unknown_question_fail_closed_empty_graph(tmp_path, clock
     """Empty graph must not invent known ids from the disposal payload."""
     rt = await _boot(tmp_path, clock, "st_unk")
     # Plan with no questions / addresses — disposal must reject.
-    await rt.accept_plan(tasks=[], questions=[])
+    await rt.accept_plan(tasks=[], questions=[], **TEST_NEED_KW)
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("REPORT")
     assert aid is not None
@@ -631,6 +633,7 @@ async def test_dispose_rejected_survives_restart(tmp_path, clock):
     await rt.accept_plan(
         tasks=[_exp_design("E0", addresses=["Q1"])],
         questions=[QuestionSpec(id="Q1", text="dose?", final_type="artifact")],
+        **TEST_NEED_KW,
     )
     got = await rt.dispose_question(
         {
@@ -868,7 +871,7 @@ def test_upcaster_chains_continuous_and_no_overwrite():
         assert_upcaster_chain_continuous(et, w)
     # Writers for plan events match registered chain ends (PR15 OutputSpec.kind).
     assert writer_schema_version("TaskCreated") == TASK_CREATED_SCHEMA_VERSION == 14
-    assert writer_schema_version("PlanAccepted") == PLAN_ACCEPTED_SCHEMA_VERSION == 11
+    assert writer_schema_version("PlanAccepted") == PLAN_ACCEPTED_SCHEMA_VERSION == 12
     assert writer_schema_version("PlanExpanded") == PLAN_EXPANDED_SCHEMA_VERSION == 5
     assert writer_schema_version("QuestionDisposed") == 1
     assert writer_schema_version("QuestionDisposeRejected") == 1
@@ -910,7 +913,7 @@ async def test_impossible_task_still_closes_with_report(tmp_path, clock):
     """Every study closes with a report even for nonsensical plans."""
     rt = await _boot(tmp_path, clock, "st_imp")
     # Empty plan (no questions) — still finalizes with a report.
-    await rt.accept_plan(tasks=[], questions=[])
+    await rt.accept_plan(tasks=[], questions=[], **TEST_NEED_KW)
     await _complete_report_and_finalize(rt, tmp_path)
     assert rt.view().phase == "closed"
     assert rt.view().verdict is not None
@@ -925,6 +928,7 @@ async def test_stamp_kind_not_applied_before_commit_failure(tmp_path, clock):
     await rt.accept_plan(
         tasks=[_exp_design("E0", addresses=["Q1"])],
         questions=[QuestionSpec(id="Q1", text="dose?", final_type="artifact")],
+        **TEST_NEED_KW,
     )
     ex, arts = attach_executor(rt, tmp_path)
     # Start the design task attempt.
@@ -969,6 +973,7 @@ async def test_stamp_kind_e2e_replay_and_missing_meta_marks_internal_error(tmp_p
     await rt.accept_plan(
         tasks=[_exp_design("E0", addresses=["Q1"])],
         questions=[QuestionSpec(id="Q1", text="dose?", final_type="verdict")],
+        **TEST_NEED_KW,
     )
     ex, arts = attach_executor(rt, tmp_path)
     tid = next(t.task_id for t in rt.tasks.values() if t.spec.task_key == "E0")

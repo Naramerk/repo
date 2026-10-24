@@ -57,7 +57,7 @@ from coscientist.tools.effects import (
 from coscientist.tools.gate import side_effect_allowed, side_effect_decision
 from coscientist.tools.taint import context_is_tainted, filter_tools_for_context
 from tests.checks.minimal_test_catalog import minimal_test_catalog
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import TEST_CREATE_KW, close_runtime, open_runtime
 
 
 @pytest.fixture(autouse=True)
@@ -160,6 +160,7 @@ async def _runtime_with_writer(tmp_path: Path, sid: str = "st_pr18"):
         catalog_version=3,
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     return rt
 
@@ -554,13 +555,13 @@ async def test_side_effect_deny_in_report(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_post_studies_idempotent(tmp_path: Path):
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="idempotent create", profile="research", catalog_version=3)
+    body = CreateStudyBody(request="idempotent create", profile="research", catalog_version=3, **TEST_CREATE_KW)
     key = "client-key-001"
     expected = study_id_from_idempotency_key(key)
     r1 = await post_studies(tmp_path, body, idempotency_key=key, catalog=catalog)
     r2 = await post_studies(tmp_path, body, idempotency_key=key, catalog=catalog)
     assert r1["study_id"] == r2["study_id"] == expected
-    other = CreateStudyBody(request="different body", profile="research", catalog_version=3)
+    other = CreateStudyBody(request="different body", profile="research", catalog_version=3, **TEST_CREATE_KW)
     with pytest.raises(Conflict):
         await post_studies(tmp_path, other, idempotency_key=key, catalog=catalog)
 
@@ -569,7 +570,7 @@ async def test_post_studies_idempotent(tmp_path: Path):
 async def test_post_studies_empty_reservation_recoverable(tmp_path: Path):
     """Crash between O_EXCL and write leaves empty file — must not permanent Conflict."""
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="empty reserve", profile="research", catalog_version=3)
+    body = CreateStudyBody(request="empty reserve", profile="research", catalog_version=3, **TEST_CREATE_KW)
     key = "empty-key"
     path = _idem_path(Path(tmp_path), key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -583,7 +584,7 @@ async def test_post_studies_empty_reservation_recoverable(tmp_path: Path):
 async def test_post_studies_recent_corrupt_reservation_conflict(tmp_path: Path):
     """Fresh non-empty unreadable file may be a live neighbour — Conflict, do not unlink."""
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="live neighbour", profile="research", catalog_version=3)
+    body = CreateStudyBody(request="live neighbour", profile="research", catalog_version=3, **TEST_CREATE_KW)
     key = "live-corrupt-key"
     path = _idem_path(Path(tmp_path), key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -599,7 +600,7 @@ async def test_post_studies_recent_corrupt_reservation_conflict(tmp_path: Path):
 async def test_post_studies_stale_corrupt_reservation_reclaimed(tmp_path: Path):
     """Old unreadable reservation is reclaimable (crash mid-write, owner gone)."""
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="stale corrupt", profile="research", catalog_version=3)
+    body = CreateStudyBody(request="stale corrupt", profile="research", catalog_version=3, **TEST_CREATE_KW)
     key = "stale-corrupt-key"
     path = _idem_path(Path(tmp_path), key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -615,7 +616,7 @@ async def test_post_studies_stale_corrupt_reservation_reclaimed(tmp_path: Path):
 async def test_post_studies_dead_owner_sidecar_reclaimed(tmp_path: Path):
     """Corrupt body + same-host dead pid in .owner sidecar → reclaim (pid branch)."""
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="dead owner sidecar", profile="research", catalog_version=3)
+    body = CreateStudyBody(request="dead owner sidecar", profile="research", catalog_version=3, **TEST_CREATE_KW)
     key = "dead-owner-key"
     path = _idem_path(Path(tmp_path), key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -631,7 +632,7 @@ async def test_post_studies_dead_owner_sidecar_reclaimed(tmp_path: Path):
 async def test_post_studies_foreign_hostname_no_pid_reclaim(tmp_path: Path):
     """Different hostname: never reclaim by pid — only by age."""
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="foreign host", profile="research", catalog_version=3)
+    body = CreateStudyBody(request="foreign host", profile="research", catalog_version=3, **TEST_CREATE_KW)
     key = "foreign-host-key"
     path = _idem_path(Path(tmp_path), key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -648,7 +649,7 @@ async def test_post_studies_restart_after_pending(tmp_path: Path):
     from coscientist.api.studies import _atomic_write
 
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="restart safe", profile="research", catalog_version=3)
+    body = CreateStudyBody(request="restart safe", profile="research", catalog_version=3, **TEST_CREATE_KW)
     key = "restart-key"
     sid = study_id_from_idempotency_key(key)
     path = _idem_path(Path(tmp_path), key)
@@ -674,7 +675,7 @@ async def test_post_studies_takeover_after_wait_timeout(tmp_path: Path):
     from coscientist.api.studies import _atomic_write
 
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="takeover after wait", profile="research", catalog_version=3)
+    body = CreateStudyBody(request="takeover after wait", profile="research", catalog_version=3, **TEST_CREATE_KW)
     key = "takeover-key"
     sid = study_id_from_idempotency_key(key)
     path = _idem_path(Path(tmp_path), key)
@@ -699,7 +700,7 @@ async def test_post_studies_takeover_after_wait_timeout(tmp_path: Path):
 async def test_post_studies_loser_sees_complete_during_wait(tmp_path: Path):
     """Concurrent loser waiting for complete observes winner finish (no double create)."""
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="wait sees complete", profile="research", catalog_version=3)
+    body = CreateStudyBody(request="wait sees complete", profile="research", catalog_version=3, **TEST_CREATE_KW)
     key = "wait-complete-key"
     expected = study_id_from_idempotency_key(key)
 
@@ -727,7 +728,7 @@ async def test_post_studies_loser_sees_complete_during_wait(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_post_studies_concurrent_race(tmp_path: Path):
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="concurrent", profile="research", catalog_version=3)
+    body = CreateStudyBody(request="concurrent", profile="research", catalog_version=3, **TEST_CREATE_KW)
     key = "race-key"
     expected = study_id_from_idempotency_key(key)
 
@@ -749,7 +750,7 @@ def _mp_post(data_root: str, key: str) -> str:
     async def _run() -> str:
         r = await post_studies(
             data_root,
-            CreateStudyBody(request="mp race", profile="research", catalog_version=3),
+            CreateStudyBody(request="mp race", profile="research", catalog_version=3, **TEST_CREATE_KW),
             idempotency_key=key,
             catalog=minimal_test_catalog(),
         )

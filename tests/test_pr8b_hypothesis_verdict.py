@@ -38,7 +38,7 @@ from coscientist.core.execution.domain import (
     RequirementRef,
     TaskSpec,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import TEST_NEED_KW, attach_executor, close_runtime, open_runtime
 
 
 def _c(**kw) -> RuntimeClaim:
@@ -254,7 +254,7 @@ def test_refuted_with_confirmations_reports_conflict_note():
 
 def test_upcaster_studycreated_v5_to_v6_supported_needed():
     v, out = upcast("StudyCreated", 5, {"catalog_version": 3, "study_id": "s"})
-    assert v == 13
+    assert v == 14
     assert out["supported_needed"] == 2
     assert out.get("aggregate", "count") == "count"
     assert out.get("user_input_ids") == []
@@ -264,7 +264,7 @@ def test_upcaster_studycreated_v5_to_v6_supported_needed():
 
 def test_upcaster_studycreated_v4_to_v5_defaults():
     v, out = upcast("StudyCreated", 4, {"catalog_version": 3, "study_id": "s", "confirmations_needed": 1})
-    assert v == 13
+    assert v == 14
     assert out["aggregate"] == "count"
     assert out["supported_needed"] == 2
     assert out.get("as_of") is None
@@ -738,6 +738,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -772,6 +773,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     aid_p = await rt.start_attempt("P0")
     # Spoof: agent labels bytes as python; planner role=code — catalog still data.
@@ -1326,6 +1328,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1345,6 +1348,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
@@ -1391,6 +1395,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1510,6 +1515,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     aid_p = await rt.start_attempt("P_RAW")
     da = arts.put(
@@ -1628,6 +1634,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1646,6 +1653,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     aid0 = await rt.start_attempt("E0", provenance="real")
     art = arts.put(
@@ -1691,6 +1699,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1709,6 +1718,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     aid = await rt.start_attempt("E0")
     foreign = arts.put(
@@ -1764,6 +1774,7 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1782,6 +1793,7 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     aid = await rt.start_attempt("E0")
     await rt.executor.record(
@@ -1841,6 +1853,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
         supported_needed=2,
         refutations_needed=1,
         refutation_priority=True,
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1894,6 +1907,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     now = datetime.now(UTC)
     hid = hypothesis_node_id(sid, "H1")
@@ -2017,6 +2031,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
         supported_needed=2,
         refutations_needed=1,
         refutation_priority=True,
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -2076,6 +2091,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     # Hypothesis + tests.intent=refute so capable refute counts toward supported.
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -2172,6 +2188,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid2,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _, arts2 = attach_executor(rt2, tmp_path / "ref")
     for key in ("SPEC", "HYP", "LIT"):
@@ -2190,6 +2207,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     aid_f = await rt2.start_attempt("E0", provenance="real")
     art_f = arts2.put_sandbox(
@@ -2244,6 +2262,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
         finalize_reserve_s=5,
         confirmations_needed=1,
         supported_needed=2,
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -2272,6 +2291,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
@@ -2320,6 +2340,7 @@ async def test_aggregate_evalue_rejected_at_create(tmp_path, clock, runtime_cls)
             sid=sid,
             finalize_reserve_s=5,
             aggregate="evalue",
+            require_hypotheses=False,
         )
     await close_runtime(rt)
 
@@ -2344,6 +2365,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -2361,6 +2383,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     cid = claim_node_id(sid, "forged")
     qid = question_node_id(sid, "Q1")
@@ -2461,6 +2484,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -2479,6 +2503,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(

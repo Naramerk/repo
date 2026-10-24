@@ -36,7 +36,7 @@ from coscientist.core.execution.inputs import (
     collect_bindable_claims,
     verdict_binding_digest,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import TEST_NEED_KW, attach_executor, close_runtime, open_runtime
 from tests.test_inputs import _task
 
 _DERIVED_OK = {
@@ -261,6 +261,7 @@ def test_garbage_attrs_dropped_not_raised():
         hitl_policy=HitlPolicy(),
         deadline=datetime(2026, 1, 2, tzinfo=UTC),
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        require_hypotheses=False,
     )
     t = Task(
         task_id=f"{sid}/E1",
@@ -350,6 +351,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     ex, arts = attach_executor(rt, tmp_path)
     assert ex.get_graph is not None
@@ -369,6 +371,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     assert rt.graph.get_node(question_node_id(sid, "Q1")) is not None
     aid0 = await rt.start_attempt("E0")
@@ -411,6 +414,7 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     ex, _arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -430,6 +434,7 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     aid0 = await rt.start_attempt("E0")
     # No artifact → artifact_present (validity) FAILED → scientific.
@@ -467,6 +472,7 @@ async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -581,6 +587,7 @@ async def test_accept_plan_allows_verdict_kind(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -598,6 +605,7 @@ async def test_accept_plan_allows_verdict_kind(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     await close_runtime(rt)
 
@@ -618,6 +626,7 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -645,6 +654,7 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     aid0 = await rt.start_attempt("E0", provenance="real")
     content = b'{"count": 225}'
@@ -719,6 +729,7 @@ def test_dispositions_from_verdict_counting_claims():
         confirmations_needed=1,
         refutations_needed=1,
         refutation_priority=False,
+        require_hypotheses=False,
     )
     plan = {
         "plan_id": "pl",
@@ -756,6 +767,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -774,6 +786,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     aid0 = await rt.start_attempt("E0")
     content = b'{"effect": 2.0}'
@@ -1046,6 +1059,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -1065,6 +1079,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     assert any(n.kind == "criterion" for n in rt.graph.nodes_by_kind("criterion"))
     aid0 = await rt.start_attempt("E0", provenance="real")
@@ -1132,6 +1147,7 @@ async def test_validity_failed_claim_invalid_inconclusive(
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -1151,6 +1167,7 @@ async def test_validity_failed_claim_invalid_inconclusive(
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     aid0 = await rt.start_attempt("E0", provenance="real")
     # No artifact → artifact_present FAILED (validity).
@@ -1203,6 +1220,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -1226,6 +1244,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     assert pid == ""
     events = await rt.store.read_all()
@@ -1243,6 +1262,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid2,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt2.start_attempt(key)
@@ -1262,6 +1282,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     assert pid2 == ""
     events2 = await rt2.store.read_all()
@@ -1298,6 +1319,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
         sid=sid,
         finalize_reserve_s=5,
         budget=Budget(max_llm_calls=50, max_cost_rub=Decimal("100")),
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -1324,6 +1346,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     aid = await rt.start_attempt("E_ref", provenance="real")
     await rt.record_budget_debit(spent_rub=Decimal("1.00"), request_id="debit-1")
@@ -1484,6 +1507,7 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
         deadline=now + timedelta(seconds=60),
         created_at=now,
         confirmations_needed=3,
+        require_hypotheses=False,
     )
     snaps = compute_verdict_snapshots(
         g,
@@ -1557,6 +1581,7 @@ def test_unknown_role_exclusion_never_forces_verdict():
         deadline=now + timedelta(seconds=60),
         created_at=now,
         confirmations_needed=1,
+        require_hypotheses=False,
     )
     snaps = compute_verdict_snapshots(
         g,
@@ -1608,6 +1633,7 @@ def test_validity_only_evidence_inconclusive():
         deadline=now + timedelta(seconds=60),
         created_at=now,
         confirmations_needed=1,
+        require_hypotheses=False,
     )
     snaps = compute_verdict_snapshots(
         g,
@@ -1658,6 +1684,7 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
             deadline=clock.now() + timedelta(seconds=180),
             sid=sid,
             finalize_reserve_s=5,
+            require_hypotheses=False,
         )
         for key in ("SPEC", "HYP", "LIT"):
             await rt.start_attempt(key)
@@ -1675,6 +1702,7 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
                 )
             ],
             questions=[QuestionSpec(id="Q1", text="why")],
+            **TEST_NEED_KW,
         )
         aid0 = await rt.start_attempt("E0")
         art = rt.artifacts.put(
@@ -1754,6 +1782,7 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         confirmations_needed=1,
         refutations_needed=1,
         refutation_priority=True,
+        require_hypotheses=False,
     )
     results = {
         aid_sup: {"outcome": "SUCCESS"},
@@ -1885,6 +1914,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1912,6 +1942,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     aid0 = await rt.start_attempt("E0", provenance="real")
     art = arts.put(
@@ -1997,6 +2028,7 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -2015,6 +2047,7 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(

@@ -16,7 +16,7 @@ from coscientist.core.execution.inputs import (
     bind_inputs,
     input_binding_digest,
 )
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import TEST_NEED_KW, close_runtime, open_runtime
 from tests.test_inputs import _task
 
 
@@ -168,6 +168,7 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -184,6 +185,7 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
             )
         ],
         questions=[],
+        **TEST_NEED_KW,
     )
     assert pid == ""
     events = await rt.store.read_all()
@@ -204,6 +206,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -220,6 +223,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
             )
         ],
         questions=[],
+        **TEST_NEED_KW,
     )
     assert pid == ""
     events = await rt.store.read_all()
@@ -236,6 +240,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid2,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt2.start_attempt(key)
@@ -252,6 +257,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
             )
         ],
         questions=[],
+        **TEST_NEED_KW,
     )
     assert pid2 == ""
     events2 = await rt2.store.read_all()
@@ -274,6 +280,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -309,6 +316,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
             )
         ],
         questions=[],
+        **TEST_NEED_KW,
     )
     aid = await rt.start_attempt("E1")
     exp_id = experiment_node_id(sid, "E1")
@@ -356,6 +364,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -387,6 +396,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
+        **TEST_NEED_KW,
     )
     aid0 = await rt.start_attempt("E0", provenance="stub")
     assert aid0 == aid0_expected
@@ -427,6 +437,7 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     with pytest.raises(KeyError, match="edge src missing|edge dst missing"):
         await rt._append(
@@ -468,6 +479,7 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     # Inject a v4 TaskCreated as written before PR7 (no InputSpec.kind).
     tid = f"{sid}/LEGACY"
@@ -542,6 +554,7 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     # Seed a task, then inject a pre-PR7 AttemptStarted (v2, no inputs field).
     for key in ("SPEC", "HYP", "LIT"):
@@ -558,6 +571,7 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[],
+        **TEST_NEED_KW,
     )
     tid = f"{sid}/E1"
     aid = f"{tid}#1"

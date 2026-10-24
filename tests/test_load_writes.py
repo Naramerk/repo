@@ -21,7 +21,7 @@ from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.projections import _row_key, fold_events
 from coscientist.core.execution.source_fetch import verify_fetch_capability
 from coscientist.tools.effects import _mint_fetch_capability_for_tests
-from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success
+from tests.helpers import TEST_NEED_KW, attach_executor, close_runtime, exp_spec, open_runtime, record_success
 
 # DESIGN §3.5a absolute SLO defaults. Override via env in either direction;
 # loosening (weaker than defaults) always warns + prints PERF GATE WEAKENED.
@@ -286,13 +286,14 @@ async def _run_load(
         catalog_version=3,
         deadline=clock.now() + timedelta(hours=1),
         sid="st_load",
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
         aid = await rt.start_attempt(key)
         await record_success(rt, aid, arts)
 
-    await rt.accept_plan([exp_spec(f"EXP-{i}") for i in range(1, 21)])
+    await rt.accept_plan([exp_spec(f"EXP-{i}") for i in range(1, 21)], **TEST_NEED_KW)
 
     async def one(i: int) -> None:
         await asyncio.sleep(random.uniform(0, 0.05))
@@ -698,6 +699,7 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
             catalog_version=3,
             deadline=clock.now() + timedelta(hours=1),
             sid=sid,
+            require_hypotheses=False,
         )
         for i in range(20):
             await rt.writer.append(

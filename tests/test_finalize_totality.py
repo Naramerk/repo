@@ -16,7 +16,7 @@ from coscientist.core.finalize.finalize_nodes import (
     conclusion_id_for_study,
     conclusion_ids_for,
 )
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import TEST_NEED_KW, close_runtime, open_runtime
 from tests.test_finalize import _boot, _fin, _skip_all, _spec
 
 
@@ -145,7 +145,7 @@ async def test_i2_conclusions_after_restart(tmp_path, clock):
     sid = "st_i2"
     rt = await _boot(tmp_path, clock, sid)
     qs = [QuestionSpec(id="Q1", text="one"), QuestionSpec(id="Q2", text="two")]
-    await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs)
+    await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs, **TEST_NEED_KW)
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     ev = _fin(await rt.store.read_all())

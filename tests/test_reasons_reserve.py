@@ -124,6 +124,7 @@ async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_v2",
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     await rt.cancel_task("SPEC", reason=TaskReason.CANCELLED)
     events = await rt.store.read_all()
@@ -254,6 +255,7 @@ async def test_create_study_rejects_duration_le_reserve(tmp_path: Path, clock, r
         deadline=clock.now() + timedelta(seconds=30),
         sid="st_rej",
         finalize_reserve_s=30,
+        require_hypotheses=False,
     )
     events = await rt.store.read_all()
     assert any(e.type == "StudyRefused" for e in events)
@@ -273,6 +275,7 @@ async def test_create_study_rejects_negative_reserve(tmp_path: Path, clock, runt
             deadline=clock.now() + timedelta(minutes=30),
             sid="st_neg",
             finalize_reserve_s=-1,
+            require_hypotheses=False,
         )
     await close_runtime(rt)
 
@@ -287,6 +290,7 @@ async def test_all_deadlines_le_effective(tmp_path: Path, clock, runtime_cls):
         deadline=clock.now() + timedelta(minutes=10),
         sid="st_eff",
         finalize_reserve_s=30,
+        require_hypotheses=False,
     )
     assert rt.study is not None
     ed = rt.study.effective_deadline()
@@ -308,6 +312,7 @@ async def test_plan_deadline_clipped_by_reserve(tmp_path: Path, clock, runtime_c
         deadline=clock.now() + timedelta(seconds=120),
         sid="st_plan",
         finalize_reserve_s=30,
+        require_hypotheses=False,
     )
     assert rt.study is not None
     ed = rt.study.effective_deadline()
@@ -338,7 +343,7 @@ def test_upcast_study_created_sets_reserve_zero():
         },
     )
     # v1→…→v10 max_loop_iter (PR11) → v11 as_of (#23) → v12 max_proposals (PR20).
-    assert v == 13
+    assert v == 14
     assert p["max_foreach_children"] == 32
     assert p["max_loop_iter"] == 8
     assert p.get("as_of") is None

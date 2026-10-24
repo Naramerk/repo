@@ -13,7 +13,7 @@ from coscientist.core.events.errors import Conflict, Idempotent, LeaseLost
 from coscientist.core.events.events import EventEnvelope
 from coscientist.core.events.projections import fold_events
 from coscientist.core.events.store import SqliteEventStore
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import TEST_NEED_KW, close_runtime, open_runtime
 
 
 @pytest.fixture
@@ -175,12 +175,13 @@ async def test_replay_equals_projection(
         catalog_version=3,
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_replay",
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
         aid = await rt.start_attempt(key)
         await record_success(rt, aid, arts)
-    await rt.accept_plan([exp_spec("EXP-1")])
+    await rt.accept_plan([exp_spec("EXP-1")], **TEST_NEED_KW)
     aid = await rt.start_attempt("EXP-1")
     await record_success(rt, aid, arts)
     await rt.cancel_task("REPORT", reason="budget")
@@ -265,6 +266,7 @@ async def test_attempt_closed_tasks_projection_is_strict_json(
         catalog_version=3,
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_json_p3",
+        require_hypotheses=False,
     )
     attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
@@ -308,6 +310,7 @@ async def test_event_loop_progresses_during_slow_write(
         catalog_version=3,
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_slow",
+        require_hypotheses=False,
     )
     entered = threading.Event()
     rt.store.write_delay_s = 0.35
@@ -369,6 +372,7 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(
         catalog_version=3,
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_rd",
+        require_hypotheses=False,
     )
     entered = threading.Event()
     rt.store.write_delay_s = 0.4
@@ -462,6 +466,7 @@ async def test_concurrent_reads_under_read_lock(tmp_path: Path, clock: FakeClock
         catalog_version=3,
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_cread",
+        require_hypotheses=False,
     )
 
     async def _one(i: int) -> int:

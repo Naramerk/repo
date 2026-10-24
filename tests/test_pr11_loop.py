@@ -40,7 +40,7 @@ from coscientist.core.plan.loop_predicates import (
     scope_fingerprint,
     validate_loop_predicate,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import TEST_NEED_KW, attach_executor, close_runtime, open_runtime
 
 
 def _body(key: str = "BODY", *, depends_on: list[str] | None = None) -> list[TaskSpec]:
@@ -151,6 +151,7 @@ async def _open_study(
         finalize_reserve_s=5,
         max_expansions=max_expansions,
         max_loop_iter=max_loop_iter,
+        require_hypotheses=False,
     )
     arts = attach_executor(rt, tmp_path)[1]
     await _complete_stages(rt, arts)
@@ -276,6 +277,7 @@ async def test_loop_max_iter_missing_honest_refusal(tmp_path, clock, runtime_cls
                 "scope_questions": ["Q1"],
             }
         ],
+        **TEST_NEED_KW,
     )
     assert pid == ""
     await _assert_plan_refused(rt, match="max_iter")
@@ -302,6 +304,7 @@ async def test_loop_max_iter_exceeds_profile_rejected(tmp_path, clock, runtime_c
         ],
         questions=[QuestionSpec(id="Q1", text="q")],
         loops=[_loop(max_iter=9)],
+        **TEST_NEED_KW,
     )
     assert pid == ""
     await _assert_plan_refused(rt, match="max_loop_iter")
@@ -317,6 +320,7 @@ async def test_loop_unknown_predicate_rejected(tmp_path, clock, runtime_cls):
         [],
         questions=[QuestionSpec(id="Q1", text="q")],
         loops=[_loop(until=LoopPredicate(name="not_a_real_pred", params={}))],
+        **TEST_NEED_KW,
     )
     assert pid == ""
     await _assert_plan_refused(rt, match="unknown loop predicate")
@@ -333,6 +337,7 @@ async def test_loop_unknown_scope_question_refused(tmp_path, clock, runtime_cls)
         [],
         questions=[QuestionSpec(id="Q1", text="q")],
         loops=[_loop(scope_questions=["Q_MISSING"])],
+        **TEST_NEED_KW,
     )
     assert pid == ""
     await _assert_plan_refused(rt, match="scope_questions")
@@ -348,6 +353,7 @@ async def test_loop_unknown_scope_hypothesis_refused(tmp_path, clock, runtime_cl
         [],
         questions=[QuestionSpec(id="Q1", text="q")],
         loops=[_loop(scope_hypotheses=["H_MISSING"])],
+        **TEST_NEED_KW,
     )
     assert pid == ""
     await _assert_plan_refused(rt, match="scope_hypotheses")
@@ -381,6 +387,7 @@ async def test_loop_until_empty_scope_completes(tmp_path, clock, runtime_cls):
                 scope_hypotheses=[],
             )
         ],
+        **TEST_NEED_KW,
     )
     assert getattr(rt, "_agent_expansions", 0) == 0
     assert len(current_loop_iter_tasks(rt, "L1", 1)) == 1
@@ -439,6 +446,7 @@ async def test_loop_iteration_cap_honest_final(tmp_path, clock, runtime_cls):
                 scope_questions=["Q1"],
             )
         ],
+        **TEST_NEED_KW,
     )
 
     for it in (1, 2):
@@ -489,6 +497,7 @@ async def test_loop_infinite_guard_max_iter(tmp_path, clock, runtime_cls):
                 scope_hypotheses=["H1"],
             )
         ],
+        **TEST_NEED_KW,
     )
     for it in (1, 2, 3):
         tasks = current_loop_iter_tasks(rt, "L1", it)
@@ -529,6 +538,7 @@ async def test_loop_completed_survives_restart(tmp_path, clock, runtime_cls):
                 scope_hypotheses=[],
             )
         ],
+        **TEST_NEED_KW,
     )
     for t in current_loop_iter_tasks(rt, "L1", 1):
         aid = await rt.start_attempt(t.spec.task_key)
@@ -584,6 +594,7 @@ async def test_loop_capped_survives_restart(tmp_path, clock, runtime_cls):
                 scope_hypotheses=["H1"],
             )
         ],
+        **TEST_NEED_KW,
     )
     for it in (1, 2):
         for t in current_loop_iter_tasks(rt, "L1", it):
@@ -639,6 +650,7 @@ async def test_loop_refuse_error_survives_restart(tmp_path, clock, runtime_cls):
                 scope_questions=["Q1"],
             )
         ],
+        **TEST_NEED_KW,
     )
     for t in current_loop_iter_tasks(rt, "L1", 1):
         aid = await rt.start_attempt(t.spec.task_key)
@@ -692,6 +704,7 @@ async def test_loop_no_change_stops_on_stable_scope(tmp_path, clock, runtime_cls
         [],
         questions=[QuestionSpec(id="Q1", text="q")],
         loops=[loop],
+        **TEST_NEED_KW,
     )
     assert len(current_loop_iter_tasks(rt, "L1", 1)) == 1
     for t in current_loop_iter_tasks(rt, "L1", 1):
@@ -728,6 +741,7 @@ async def test_loop_criterion_met(tmp_path, clock, runtime_cls):
                 scope_questions=["Q1"],
             )
         ],
+        **TEST_NEED_KW,
     )
     assert len(current_loop_iter_tasks(rt, "L1", 1)) == 1
     for t in current_loop_iter_tasks(rt, "L1", 1):
@@ -807,6 +821,7 @@ async def test_loop_restart_idempotent(tmp_path, clock, runtime_cls):
                 scope_hypotheses=["H1"],
             )
         ],
+        **TEST_NEED_KW,
     )
     for t in current_loop_iter_tasks(rt, "L1", 1):
         aid = await rt.start_attempt(t.spec.task_key)
@@ -961,6 +976,7 @@ def test_survivors_le_real_graph_scope_filter():
                 refutation_priority=True,
                 confirmations_needed=1,
                 supported_needed=2,
+                require_hypotheses=False,
             )
             self.graph = GraphStore(default_execution_registry())
             self.artifacts = None
@@ -1048,6 +1064,7 @@ async def test_survivors_le_e2e_real_graph_runtime(tmp_path, clock, runtime_cls)
                 scope_questions=[],
             )
         ],
+        **TEST_NEED_KW,
     )
     body = current_loop_iter_tasks(rt, "L1", 1)
     assert len(body) == 1
@@ -1179,7 +1196,7 @@ def test_upcast_study_created_max_loop_iter():
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     )
-    assert v == 13
+    assert v == 14
     # #24 v10 setdefault(max_loop_iter, 8); #23 v11 preserves it; PR20 v12 max_proposals.
     assert p["max_loop_iter"] == 8
     assert p["as_of"] is None
@@ -1202,7 +1219,7 @@ def test_upcast_plan_accepted_loops_default():
             "tasks": [],
         },
     )
-    assert v == 11  # PR15 kind after PR16 decomposes v10
+    assert v == 12  # PR15 kind after PR16 decomposes v10; G4 Need v12
     assert p["loops"] == []
     assert p.get("rollup") == "all"
 
@@ -1313,6 +1330,7 @@ async def test_survivors_le_huge_n_plan_refused(tmp_path, clock, runtime_cls):
                 scope_hypotheses=[],
             )
         ],
+        **TEST_NEED_KW,
     )
     assert pid == ""
     await _assert_plan_refused(rt, match="10000")
@@ -1398,6 +1416,7 @@ async def test_fullwidth_loop_dep_normalized_on_accept(tmp_path, clock, runtime_
                 scope_hypotheses=[],
             )
         ],
+        **TEST_NEED_KW,
     )
     post = next(t for t in rt.tasks.values() if t.spec.task_key == "POST")
     assert post.spec.depends_on == ["loop:L1"]
@@ -1450,6 +1469,7 @@ async def test_unregistered_plugin_predicate_fail_closed_on_restart(
                 scope_hypotheses=[],
             )
         ],
+        **TEST_NEED_KW,
     )
     for t in current_loop_iter_tasks(rt, "L1", 1):
         aid = await rt.start_attempt(t.spec.task_key)
@@ -1499,6 +1519,7 @@ async def test_plan_expanded_uses_writer_constant(tmp_path, clock, runtime_cls):
                 scope_hypotheses=[],
             )
         ],
+        **TEST_NEED_KW,
     )
     expanded = [
         e
@@ -1541,6 +1562,7 @@ async def test_loop_unexpected_error_finalizes_live(tmp_path, clock, runtime_cls
                     scope_hypotheses=[],
                 )
             ],
+            **TEST_NEED_KW,
         )
         for t in current_loop_iter_tasks(rt, "L1", 1):
             aid = await rt.start_attempt(t.spec.task_key)
@@ -1587,6 +1609,7 @@ async def test_loop_unexpected_error_finalizes_on_recover(
                     scope_hypotheses=[],
                 )
             ],
+            **TEST_NEED_KW,
         )
         for t in current_loop_iter_tasks(rt, "L1", 1):
             aid = await rt.start_attempt(t.spec.task_key)
@@ -1682,6 +1705,7 @@ async def test_materialize_loop_iter_writes_plan_expanded(tmp_path, clock, runti
         [],
         questions=[QuestionSpec(id="Q1", text="q")],
         loops=[],
+        **TEST_NEED_KW,
     )
     # Direct materialize (accept with empty loops leaves no auto-iter).
     loop = _loop(
@@ -1733,6 +1757,7 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
                     scope_hypotheses=[],
                 )
             ],
+            **TEST_NEED_KW,
         )
         for t in current_loop_iter_tasks(rt, "L1", 1):
             aid = await rt.start_attempt(t.spec.task_key)
@@ -1824,6 +1849,7 @@ async def test_refuse_loop_failure_in_expected_branch_finalizes(
                     scope_hypotheses=[],
                 )
             ],
+            **TEST_NEED_KW,
         )
         # Unregister so eval raises UnknownLoopPredicateError (expected branch).
         lp._REGISTRY.pop(name, None)
@@ -1889,6 +1915,7 @@ async def test_internal_error_closes_running_tasks_and_attempts(
                     scope_hypotheses=[],
                 )
             ],
+            **TEST_NEED_KW,
         )
         out = next(t for t in rt.tasks.values() if t.spec.task_key == "OUT")
         out_aid = await rt.start_attempt("OUT")
@@ -1980,6 +2007,7 @@ async def test_internal_error_close_does_not_reenter_hooks(
                     scope_hypotheses=[],
                 )
             ],
+            **TEST_NEED_KW,
         )
         out_aid = await rt.start_attempt("OUT")
         assert out_aid
@@ -2031,6 +2059,7 @@ async def test_count_survivors_failure_finalizes_internal_error(
                 scope_hypotheses=[],
             )
         ],
+        **TEST_NEED_KW,
     )
     for t in current_loop_iter_tasks(rt, "L1", 1):
         aid = await rt.start_attempt(t.spec.task_key)
@@ -2066,6 +2095,7 @@ async def test_materialize_loop_iter_failure_finalizes_internal_error(
                     scope_hypotheses=[],
                 )
             ],
+            **TEST_NEED_KW,
         )
 
         async def boom_mat(*_a, **_k):
@@ -2112,6 +2142,7 @@ async def test_plan_invalid_from_predicate_body_finalizes(
                     scope_hypotheses=[],
                 )
             ],
+            **TEST_NEED_KW,
         )
         for t in current_loop_iter_tasks(rt, "L1", 1):
             aid = await rt.start_attempt(t.spec.task_key)

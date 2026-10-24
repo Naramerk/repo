@@ -36,7 +36,7 @@ from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
 from coscientist.core.finalize.minimal_report import MAX_BYTES, build_minimal_report
 from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.question_tasks import question_tasks, questions_from_spec_output
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
+from tests.helpers import TEST_NEED_KW, attach_executor, close_runtime, open_runtime, record_success
 
 _TS = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
 
@@ -57,6 +57,7 @@ async def _boot(
         profile="research", request="q", catalog_version=3,
         deadline=clock.now() + timedelta(seconds=seconds), sid=sid,
         finalize_reserve_s=reserve,
+        require_hypotheses=False,
     )
     return rt
 
@@ -269,7 +270,7 @@ def test_upcast_taskcreated_input_mode_old_default():
 
 def test_upcast_planaccepted_questions_default():
     v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
-    assert v == 11 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
+    assert v == 12 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
     assert p.get("rollup") == "all" and p.get("subquestions") == []
 
     # PR13 rubric (v8); PR11 loops (v9); PR16 rollup (v10); PR15 kind (v11).
@@ -287,7 +288,7 @@ def test_upcast_planaccepted_questions_default():
             ],
         },
     )
-    assert v2 == 11
+    assert v2 == 12
     assert p2["questions"][0]["final_type"] == "verdict"
     assert p2["loops"] == []
     assert p2.get("rollup") == "all"
@@ -510,6 +511,7 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
+        **TEST_NEED_KW,
     )
     a = rt.tasks[f"{sid}/A"]
     events: list[EventEnvelope] = []
@@ -569,6 +571,7 @@ async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     await rt.note_budget_exceeded()
     assert rt._budget_exceeded
@@ -607,6 +610,7 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
         sid=sid,
         budget=budget,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     # Public debit without BudgetExceeded (crash before producer tick).
     await rt.record_budget_debit(spent_rub=Decimal("50"), request_id="debit-crash")
@@ -648,6 +652,7 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
                 delegated_costly=Decimal("101"),
             ),
             finalize_reserve_s=5,
+            require_hypotheses=False,
         )
     await close_runtime(rt)
 
@@ -690,6 +695,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
             "delegated_costly": "999",
         },
         "finalize_reserve_s": 5,
+        "require_hypotheses": False,
     }
     # Pin: fold path uses the same Study.model_validate as local_project.
     folded = Study.model_validate(payload)
@@ -751,7 +757,7 @@ async def test_all_done_budget_reasons_finalize_all_done(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_finalize_zero_questions(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_zq")
-    await rt.accept_plan([_spec("E1")], questions=[], revision=1)
+    await rt.accept_plan([_spec("E1")], questions=[], revision=1, **TEST_NEED_KW)
     await _skip_all(rt)
     await rt.tick()
     assert _fin(await rt.store.read_all()).payload["question_dispositions"] == {}
@@ -765,7 +771,7 @@ async def test_report_task_failed_still_report(tmp_path, clock):
     rt.artifacts = arts
     for key in ("SPEC", "HYP", "LIT"):
         await record_success(rt, await rt.start_attempt(key), arts)
-    await rt.accept_plan([])
+    await rt.accept_plan([], **TEST_NEED_KW)
     await rt.fail_attempt(await rt.start_attempt("REPORT"), retryable=False)
     await rt.tick()
     ev = _fin(await rt.store.read_all())
@@ -788,7 +794,7 @@ async def test_conclusion_per_question(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_cq")
     rt.artifacts = LocalArtifactStore(tmp_path / "arts")
     qs = [QuestionSpec(id="Q1", text="one"), QuestionSpec(id="Q2", text="two")]
-    await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs)
+    await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs, **TEST_NEED_KW)
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     ev = _fin(await rt.store.read_all())
@@ -841,7 +847,7 @@ async def test_finalize_total_on_cas_failure(tmp_path, clock):
 async def test_finalized_dispositions_replay(tmp_path, clock):
     sid = "st_rep"
     rt = await _boot(tmp_path, clock, sid)
-    await rt.accept_plan([_spec("E1", ["Q1"])], questions=[QuestionSpec(id="Q1", text="why")])
+    await rt.accept_plan([_spec("E1", ["Q1"])], questions=[QuestionSpec(id="Q1", text="why")], **TEST_NEED_KW)
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     payload = _fin(await rt.store.read_all()).payload["question_dispositions"]
@@ -1408,7 +1414,8 @@ async def test_plan_refused_and_normal_finalize_exactly_one(tmp_path, clock):
     """PlanRefused path and normal finalize each leave exactly one StudyFinalized."""
     rt = await _boot(tmp_path, clock, "st_sf_plan")
     await rt.accept_plan(
-        [_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")]
+        [_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")],
+        **TEST_NEED_KW,
     )
     events = await rt.store.read_all()
     assert any(e.type == "PlanRefused" for e in events)
@@ -1583,7 +1590,7 @@ async def test_p5_after_long_downtime_uses_task_deadline(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_ua")
-    pid = await rt.accept_plan([_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")])
+    pid = await rt.accept_plan([_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")], **TEST_NEED_KW)
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
@@ -1595,8 +1602,8 @@ async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_accept_plan_rejects_question_text_conflict(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_qc")
-    await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="one")], revision=1)
-    pid = await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="other")], revision=2)
+    await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="one")], revision=1, **TEST_NEED_KW)
+    pid = await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="other")], revision=2, **TEST_NEED_KW)
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
