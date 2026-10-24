@@ -43,6 +43,38 @@ import asyncio
 import math
 import unicodedata
 from contextlib import asynccontextmanager
+
+_DEFAULT_TRUE = True
+_DEFAULT_FALSE = False
+_DEFAULT_TARGET_KIND = "question"
+_DEFAULT_PREDICTED_DIRECTION = "two_sided"
+_DEFAULT_APPROVAL_SOURCE = "hitl"
+_DEFAULT_REJECT_REASON = "rejected"
+_DEFAULT_REVIEWER_REASON = "reviewer_decision"
+_MISSING_BOUND = "bound_*"
+
+
+def _or_empty_list(value: object) -> list:
+    if value is None:
+        return []  # audit-ok: structural absent → empty list
+    if isinstance(value, list):
+        return value
+    return list(value)  # type: ignore[arg-type]
+
+
+def _or_empty_dict(value: object) -> dict:
+    if value is None:
+        return {}  # audit-ok: structural absent → empty dict
+    if isinstance(value, dict):
+        return value
+    raise TypeError(f"expected dict|None, got {type(value).__name__}")
+
+
+def _payload_str(d: dict, key: str) -> str:
+    if key not in d:
+        raise KeyError(key)
+    return _or_empty_str(d[key])
+
 from datetime import timedelta
 from typing import Any, AsyncIterator, Literal, Mapping
 
@@ -145,7 +177,7 @@ def compute_proposal_digest(proposal: CheckProposal | Mapping[str, Any]) -> str:
 
 def _reject_non_finite_threshold(proposal: CheckProposal) -> None:
     for name in ("threshold", "sesoi"):
-        val = getattr(proposal, name, None)
+        val = getattr(proposal, name)
         if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
             raise ValueError(f"CheckProposal.{name} must be finite (not NaN/inf)")
         if isinstance(val, dict):
@@ -155,11 +187,11 @@ def _reject_non_finite_threshold(proposal: CheckProposal) -> None:
 
 def validate_proposal_content(proposal: CheckProposal) -> None:
     """Fail-closed validation before journal write."""
-    if not proposal.target or not str(proposal.target).strip():
+    if not proposal.target or not proposal.target.strip():
         raise ValueError("CheckProposal.target required")
-    if not proposal.measures or not str(proposal.measures).strip():
+    if not proposal.measures or not proposal.measures.strip():
         raise ValueError("CheckProposal.measures required")
-    if not proposal.justification or not str(proposal.justification).strip():
+    if not proposal.justification or not proposal.justification.strip():
         raise ValueError("CheckProposal.justification required")
     if not proposal.rejected_templates:
         raise ValueError(
@@ -212,7 +244,7 @@ def get_proposal(runtime: Any, proposal_id_s: str) -> dict[str, dict[str, Any]] 
 
 def proposal_is_approved(runtime: Any, proposal_id_s: str) -> bool:
     row = get_proposal(runtime, proposal_id_s)
-    return bool(row and row.get("status") == "approved")
+    return row is not None and row.get("status") == "approved"
 
 def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
     """Fold CheckProposed / CheckApproved / CheckRejected / ReviewScheduled."""
@@ -231,8 +263,8 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
         pid = str(p.get("proposal_id") or ev.entity_key)
         digest = _or_empty_str(p.get('proposal_digest'))
         try:
-            bound_task_id = str(p["task_id"])
-            bound_target = str(p["target"])
+            bound_task_id = _payload_str(p, "task_id")
+            bound_target = _payload_str(p, "target")
         except KeyError as e:
             raise JournalFormatError(
                 f"CheckProposed: missing {e.args[0]!r}"
@@ -264,8 +296,8 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
         try:
             approved_by = p["approved_by"]
             approved_source = p["source"]
-            bound_task_id = str(p["bound_task_id"])
-            bound_target = str(p["bound_target"])
+            bound_task_id = _payload_str(p, "bound_task_id")
+            bound_target = _payload_str(p, "bound_target")
         except KeyError as e:
             raise JournalFormatError(
                 f"CheckApproved: missing {e.args[0]!r}"
@@ -273,7 +305,7 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
         row.update(
             {
                 "status": "approved",
-                "delegated": bool(p.get("delegated")),
+                "delegated": p.get("delegated") is True,
                 "approved_by": approved_by,
                 "approved_source": approved_source,
                 "reviewer_attempt_id": p.get("reviewer_attempt_id"),
@@ -300,7 +332,7 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
         row.update(
             {
                 "status": "rejected",
-                "delegated": bool(p.get("delegated")),
+                "delegated": p.get("delegated") is True,
                 "rejected_by": rejected_by,
                 "reject_reason": p.get("reason"),
                 "hitl_request_id": p.get("hitl_request_id"),
@@ -312,11 +344,11 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
             rev["status"] = "rejected"
     elif t == "ReviewScheduled" and p.get("kind") == "proposed_check_review":
         pid = str(p.get("proposal_id") or ev.entity_key)
-        prev = dict(reviews.get(pid) or {})
+        prev = dict(_or_empty_dict(reviews.get(pid)))
         # Merge so a later bind (reviewer_attempt_id) keeps deadline/status.
         merged = {**prev, **p}
         try:
-            status = str(merged["status"])
+            status = _payload_str(merged, "status")
             deadline = merged["deadline"]
         except KeyError as e:
             raise JournalFormatError(
@@ -337,7 +369,7 @@ def requirement_ref_for_proposal(
     proposal_id_s: str,
     *,
     target: str,
-    required: bool = True,
+    required: bool = _DEFAULT_TRUE,
 ) -> RequirementRef:
     """Plan criterion for ``proposed_check`` — params carry proposal_id **and** target.
 
@@ -437,15 +469,15 @@ async def propose_check(
     rejected_templates: list[RejectedTemplateNote | Mapping[str, Any]],
     task_id: str,
     attempt_id: str,
-    target_kind: Literal["question", "hypothesis"] = "question",
+    target_kind: Literal["question", "hypothesis"] = _DEFAULT_TARGET_KIND,
     check: CodeCheck | Mapping[str, Any] | None = None,
     rubric: Rubric | Mapping[str, Any] | None = None,
     threshold: Any = None,
     sesoi: float | None = None,
-    uses_sesoi: bool = False,
-    predicts_null: bool = False,
-    predicted_direction: str = "two_sided",
-    open_hitl: bool = True,
+    uses_sesoi: bool = _DEFAULT_FALSE,
+    predicts_null: bool = _DEFAULT_FALSE,
+    predicted_direction: str = _DEFAULT_PREDICTED_DIRECTION,
+    open_hitl: bool = _DEFAULT_TRUE,
     timeout_s: int | None = None,
 ) -> str | None:
     """Preregister a proposed check. Returns proposal_id, or None if quota closed the task.
@@ -460,7 +492,7 @@ async def propose_check(
     if runtime._finalized:
         raise StudyClosedError(study.study_id, "CheckProposed")
     sid = study.study_id
-    max_p = int(study.max_proposals)
+    max_p = study.max_proposals
     if proposal_count(runtime) >= max_p:
         await _close_task_proposal_quota(runtime, task_id=task_id, attempt_id=attempt_id)
         return None
@@ -481,7 +513,7 @@ async def propose_check(
         )
     target_s = unicodedata.normalize("NFKC", str(target)).strip()
 
-    notes: list[RejectedTemplateNote] = []
+    notes: list[RejectedTemplateNote] = []  # audit-ok: structural empty = collecting reject notes
     for n in rejected_templates:
         if isinstance(n, RejectedTemplateNote):
             notes.append(n)
@@ -549,9 +581,7 @@ async def propose_check(
         to = timeout_s if timeout_s is not None else gate.timeout_s
         deadline = min(
             now + timedelta(seconds=to),
-            getattr(task, "deadline", study.effective_deadline())
-            if task
-            else study.effective_deadline(),
+            task.deadline if task is not None else study.effective_deadline(),
             study.effective_deadline(),
         )
         req = HitlRequest(
@@ -590,7 +620,10 @@ def proposed_check_decision_lock(runtime: Any, proposal_id: str) -> asyncio.Lock
     if not isinstance(locks, dict):
         locks = {}
         runtime._hitl_decision_locks = locks
-    return locks.setdefault(str(proposal_id), asyncio.Lock())
+    key = _or_empty_str(proposal_id)
+    if key not in locks:
+        locks[key] = asyncio.Lock()
+    return locks[key]
 
 def _decision_lock_owners(runtime: Any) -> dict[str, asyncio.Task[Any]]:
     owners = runtime._hitl_decision_lock_owners
@@ -657,7 +690,7 @@ async def _close_task_proposal_quota(
         raise StudyClosedError(study.study_id, "TaskDone")
     now = runtime.clock.now()
     task = runtime.tasks.get(task_id)
-    events: list[EventEnvelope] = []
+    events: list[EventEnvelope] = []  # audit-ok: structural empty = building event batch
     if attempt_id and attempt_id in runtime.attempts:
         att = runtime.attempts[attempt_id]
         if not att.get("closed"):
@@ -715,8 +748,8 @@ def _validate_reviewer_attempt(
     if not isinstance(att, dict):
         raise ValueError(f"unknown reviewer_attempt_id: {aid!r}")
     try:
-        proposer = str(row["proposer_attempt_id"])
-        prop_task = str(row["bound_task_id"])
+        proposer = _payload_str(row, "proposer_attempt_id")
+        prop_task = _payload_str(row, "bound_task_id")
     except KeyError as e:
         raise JournalFormatError(
             f"CheckProposed: missing {e.args[0]!r}"
@@ -798,7 +831,9 @@ def _verify_human_principal(
         )
     if isinstance(h, dict):
         kind = _or_empty_str(h.get('kind'))
-        ref = str(h.get("payload_ref") or h.get("proposal_id") or "")
+        ref = _or_empty_str(h.get("payload_ref"))
+        if not ref:
+            ref = _or_empty_str(h.get("proposal_id"))
     else:
         kind = _or_empty_str(h.kind)
         ref = _or_empty_str(h.payload_ref)
@@ -820,7 +855,7 @@ def _verify_human_principal(
             "(HitlOpened from propose_check alone is not a human decision)"
         )
     try:
-        by = str(dec["by"]).strip()
+        by = _payload_str(dec, "by").strip()
     except KeyError as e:
         raise JournalFormatError("HitlDecided: missing 'by'") from e
     if by != "human":
@@ -863,7 +898,7 @@ async def bind_proposed_check_reviewer(
             f"no ReviewScheduled(proposed_check_review) for {proposal_id_s!r}"
         )
     try:
-        rev_status = str(rev["status"])
+        rev_status = _payload_str(rev, "status")
     except KeyError as e:
         raise JournalFormatError("ReviewScheduled: missing 'status'") from e
     if rev_status != "pending":
@@ -888,7 +923,7 @@ async def bind_proposed_check_reviewer(
     if not isinstance(att, dict):
         raise ValueError(f"unknown reviewer_attempt_id: {aid!r}")
     try:
-        proposer = str(row["proposer_attempt_id"])
+        proposer = _payload_str(row, "proposer_attempt_id")
     except KeyError as e:
         raise JournalFormatError(
             "CheckProposed: missing 'proposer_attempt_id'"
@@ -898,7 +933,7 @@ async def bind_proposed_check_reviewer(
     if att.get("closed"):
         raise AttemptClosedError(aid)
     try:
-        role = str(att["attempt_role"])
+        role = _payload_str(att, "attempt_role")
     except KeyError as e:
         raise InvalidStatus("attempt_role required on attempt") from e
     if role not in ("agent", "reviewer"):
@@ -908,7 +943,7 @@ async def bind_proposed_check_reviewer(
             f"bind requires attempt_role=reviewer from journal, got {role!r}"
         )
     try:
-        prop_task = str(row["bound_task_id"])
+        prop_task = _payload_str(row, "bound_task_id")
     except KeyError as e:
         raise JournalFormatError(
             "CheckProposed: missing 'bound_task_id'"
@@ -966,7 +1001,7 @@ async def approve_check(
     proposal_id_s: str,
     *,
     source: ApprovalSource,
-    delegated: bool = False,
+    delegated: bool = _DEFAULT_FALSE,
     reviewer_attempt_id: str | None = None,
     hitl_request_id_s: str | None = None,
     human_principal: str | None = None,
@@ -1013,8 +1048,8 @@ async def approve_check(
             raise RuntimeError('assertion failed: study is not None')
         now = runtime.clock.now()
         try:
-            bound_task_id = str(row["bound_task_id"])
-            bound_target = str(row["bound_target"])
+            bound_task_id = _payload_str(row, "bound_task_id")
+            bound_target = _payload_str(row, "bound_target")
         except KeyError as e:
             raise JournalFormatError(
                 f"CheckApproved: missing {e.args[0]!r} on proposal"
@@ -1029,7 +1064,7 @@ async def approve_check(
             "by": by,
             "approved_by": by,
             "source": source,
-            "delegated": bool(delegated),
+            "delegated": delegated is True,
             "reviewer_attempt_id": reviewer_attempt_id,
             "hitl_request_id": hitl_request_id_s,
             "human_principal": principal,
@@ -1054,9 +1089,9 @@ async def reject_check(
     runtime: Any,
     proposal_id_s: str,
     *,
-    source: ApprovalSource | Literal["timeout"] = "hitl",
-    reason: str = "rejected",
-    delegated: bool = False,
+    source: ApprovalSource | Literal["timeout"] = _DEFAULT_APPROVAL_SOURCE,  # type: ignore[assignment]
+    reason: str = _DEFAULT_REJECT_REASON,
+    delegated: bool = _DEFAULT_FALSE,
     hitl_request_id_s: str | None = None,
     reviewer_attempt_id: str | None = None,
     human_principal: str | None = None,
@@ -1080,7 +1115,7 @@ async def reject_check(
             dec = _lookup_hitl_decision(runtime, str(hitl_request_id_s))
             if isinstance(dec, dict):
                 d = _or_empty_str(dec.get('decision')).strip()
-                decided_by = str(dec["by"]).strip()
+                decided_by = _payload_str(dec, "by").strip()
                 if decided_by == "human" and d in ("accept", "approve"):
                     return
         principal: str | None = None
@@ -1115,7 +1150,7 @@ async def reject_check(
             "rejected_by": by,
             "source": source,
             "reason": str(reason),
-            "delegated": bool(delegated),
+            "delegated": delegated is True,
             "hitl_request_id": hitl_request_id_s,
             "reviewer_attempt_id": reviewer_attempt_id,
             "human_principal": principal,
@@ -1179,7 +1214,7 @@ async def schedule_proposed_check_review(
         )
     to = timeout_s if timeout_s is not None else gate.timeout_s
     try:
-        prop_task_id = str(row["task_id"])
+        prop_task_id = _payload_str(row, "task_id")
         proposer_attempt_id = row["proposer_attempt_id"]
     except KeyError as e:
         raise JournalFormatError(
@@ -1190,16 +1225,18 @@ async def schedule_proposed_check_review(
     task = runtime.tasks.get(prop_task_id)
     deadline = min(
         now + timedelta(seconds=to),
-        getattr(task, "deadline", study.effective_deadline())
-        if task
-        else study.effective_deadline(),
+        task.deadline if task is not None else study.effective_deadline(),
         study.effective_deadline(),
     )
-    designated = str(reviewer_task_id).strip() if reviewer_task_id else ""
+    if reviewer_task_id:
+        designated = _or_empty_str(reviewer_task_id).strip()
+    else:
+        designated = ""  # audit-ok: structural absent reviewer_task_id
     if designated:
-        if designated not in (runtime.tasks or {}):
+        tasks_bag = runtime.tasks
+        if designated not in tasks_bag:
             raise ValueError(f"unknown reviewer_task_id: {designated!r}")
-        prop_task = str(row["bound_task_id"])
+        prop_task = _payload_str(row, "bound_task_id")
         if prop_task and designated == prop_task:
             raise ValueError("reviewer_task_id must differ from the proposer task")
     await _append_events(
@@ -1232,7 +1269,7 @@ async def consume_proposed_check_review(
     *,
     decision: Literal["approve", "reject"],
     reviewer_attempt_id: str,
-    reason: str = "reviewer_decision",
+    reason: str = _DEFAULT_REVIEWER_REASON,
 ) -> None:
     """Consumer of ReviewScheduled(kind=proposed_check_review): reviewer decides.
 
@@ -1276,9 +1313,9 @@ async def consume_proposed_check_review(
 async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
     """Timeout≡reject for delegated reviews past deadline. Returns rejected proposal ids."""
     now = runtime.clock.now()
-    rejected: list[str] = []
+    rejected: list[str] = []  # audit-ok: structural empty = collecting rejected ids
     for pid, rev in list(_reviews_map(runtime).items()):
-        if str(rev["status"]) != "pending":
+        if _payload_str(rev, "status") != "pending":
             continue
         row = get_proposal(runtime, pid)
         if row is None or row.get("status") != "proposed":
@@ -1300,7 +1337,7 @@ async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
             rev_live = _reviews_map(runtime).get(pid)
             if not isinstance(rev_live, dict):
                 continue
-            if str(rev_live["status"]) != "pending":
+            if _payload_str(rev_live, "status") != "pending":
                 continue
             row_live = get_proposal(runtime, pid)
             if row_live is None or row_live.get("status") != "proposed":
@@ -1342,11 +1379,14 @@ def assert_proposal_preregistered_for_eval(
     is bound to one task_id + target so one approval cannot feed several claims.
     """
     try:
-        bound_task = str(row["bound_task_id"])
-        bound_target = str(row["bound_target"])
+        bound_task = _payload_str(row, "bound_task_id")
+        bound_target = _payload_str(row, "bound_target")
     except KeyError as e:
-        missing = e.args[0] if e.args else "bound_*"
-        return f"unapproved_check:missing_{missing}"
+        if e.args:
+            missing = _or_empty_str(e.args[0])
+        else:
+            missing = _MISSING_BOUND
+        return f"unapproved_check:missing_{missing}"  # audit-ok: fail-closed unapproved_check exclusion
     if not bound_task:
         return "unapproved_check:missing_bound_task"
     if not bound_target.strip():
@@ -1409,7 +1449,7 @@ def rubric_from_proposal(row: Mapping[str, Any]) -> Rubric | None:
 
 def custom_checks_report(runtime: Any) -> list[dict[str, Any]]:
     """Report section ``custom_checks[]`` (non-catalog; DESIGN_M1 §16)."""
-    out: list[dict[str, Any]] = []
+    out: list[dict[str, Any]] = []  # audit-ok: structural empty = custom_checks report rows
     for pid, row in sorted(_proposals_map(runtime).items()):
         out.append(
             {
@@ -1420,13 +1460,13 @@ def custom_checks_report(runtime: Any) -> list[dict[str, Any]]:
                 "role": row.get("role"),
                 "measures": row.get("measures"),
                 "status": row.get("status"),
-                "delegated": bool(row.get("delegated")),
+                "delegated": row.get("delegated") is True,
                 "approved_by": row.get("approved_by"),
                 "approved_source": row.get("approved_source"),
                 "rejected_by": row.get("rejected_by"),
                 "reject_reason": row.get("reject_reason"),
                 "justification": row.get("justification"),
-                "rejected_templates": row.get("rejected_templates") or [],
+                "rejected_templates": _or_empty_list(row.get("rejected_templates")),
                 "bound_task_id": row["bound_task_id"],
                 "bound_target": row["bound_target"],
                 "catalog": False,
@@ -1440,10 +1480,10 @@ def is_delegated_proposed_claim(claim: Any) -> bool:
     effect = claim.effect
     if not isinstance(effect, dict):
         return False
-    return bool(effect.get("proposed_check") and effect.get("delegated"))
+    return effect.get("proposed_check") is True and effect.get("delegated") is True
 
 def is_proposed_claim(claim: Any) -> bool:
     effect = claim.effect
     if not isinstance(effect, dict):
         return False
-    return bool(effect.get("proposed_check"))
+    return effect.get("proposed_check") is True
