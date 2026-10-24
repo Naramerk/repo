@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import inspect
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
@@ -19,9 +18,8 @@ from coscientist.core.claims.verdict import (
 from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
-    Catalog,
-    RequirementRef,
     ReqStatus,
+    RequirementRef,
     TaskSpec,
 )
 from coscientist.core.plan import plan_n_alloc
@@ -103,8 +101,8 @@ def test_evaluate_plan_expansion_uses_frozenset_not_prefix():
 
 def test_evaluate_plan_n_marker_requires_plan_role(tmp_path):
     """Markers MET only when plan_role=replan — not via PLAN- key prefix."""
-    from tests.checks.minimal_test_catalog import minimal_test_catalog
     from coscientist.core.execution.artifacts import LocalArtifactStore
+    from tests.checks.minimal_test_catalog import minimal_test_catalog
 
     cat = minimal_test_catalog()
     arts = LocalArtifactStore(tmp_path)
@@ -225,9 +223,10 @@ async def test_ensure_plan_n_stamps_plan_role(tmp_path, clock, runtime_cls):
         max_expansions=3,
     )
     # Seed a PLAN-7 so allocator must pick PLAN-8 (not count-based).
-    from coscientist.core.execution.domain import Task, TaskKind, TaskState
-    from coscientist.core.events.ids import task_id
     from datetime import datetime, timezone
+
+    from coscientist.core.events.ids import task_id
+    from coscientist.core.execution.domain import Task, TaskKind, TaskState
 
     tid7 = task_id(sid, "PLAN-7")
     rt.tasks[tid7] = Task(

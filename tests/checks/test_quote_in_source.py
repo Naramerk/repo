@@ -723,7 +723,7 @@ class _FetchTool:
         call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
         art = self.arts.put_fetched(
             self.body,
-            make_tool_ref(call_id, tool=self.spec.name),
+            make_tool_ref(call_id, tool=self.spec.name, attempt_id=ctx.attempt_id),
             name="paper.txt",
             media_type="text/plain",
             role="paper",

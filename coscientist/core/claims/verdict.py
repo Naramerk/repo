@@ -652,9 +652,13 @@ def call_id_belongs_to_attempt(
         return stamped == aid
     # Object/mapping without attempt_id: equality on call_id if present.
     if isinstance(call_or_produced, Mapping):
-        cid = str(call_or_produced.get("call_id") or call_or_produced.get("produced_by_call_id") or "")
+        raw_cid = call_or_produced.get("call_id")
+        if raw_cid is None:
+            raw_cid = call_or_produced.get("produced_by_call_id")
+        cid = "" if raw_cid is None else str(raw_cid)
     else:
-        cid = str(getattr(call_or_produced, "call_id", "") or "")
+        raw_cid = getattr(call_or_produced, "call_id", None)
+        cid = "" if raw_cid is None else str(raw_cid)
     return bool(cid) and cid == aid
 
 
@@ -679,7 +683,8 @@ def recompute_effect_provenance(
         return None
     out = dict(effect)
     producer = out.get("producer", "agent")
-    call_id = str(out.get("produced_by_call_id") or "")
+    _pb_raw = out.get("produced_by_call_id")
+    call_id = "" if _pb_raw is None else str(_pb_raw)
     # Isolation + core_evaluated: journal effect only (never artifact meta).
     net_isolation = out.get("net_isolation")
     fs_isolation = out.get("fs_isolation")
@@ -689,7 +694,8 @@ def recompute_effect_provenance(
         if meta_prod in ("agent", "core", "sandbox"):
             producer = meta_prod
         produced_by = getattr(artifact_meta, "produced_by", None)
-        meta_call = str(getattr(produced_by, "call_id", "") or "")
+        _mc = getattr(produced_by, "call_id", None)
+        meta_call = "" if _mc is None else str(_mc)
         if meta_call:
             call_id = meta_call
             out["produced_by_call_id"] = meta_call

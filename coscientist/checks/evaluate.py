@@ -950,7 +950,8 @@ def evaluate_task_checks(
             )
             continue
         # Exact PLAN-n critic template ids (not plan_expansion_* prefix).
-        if str(ref.template_id or "") in PLAN_N_CRITIC_TEMPLATE_IDS:
+        tid = ref.template_id
+        if isinstance(tid, str) and tid in PLAN_N_CRITIC_TEMPLATE_IDS:
             if is_core_plan_n:
                 results.append(
                     CheckResult(

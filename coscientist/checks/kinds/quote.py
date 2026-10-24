@@ -290,7 +290,11 @@ def _match_one(
         "trusted": False,
         "tainted": bool(getattr(meta, "tainted", False)),
         "core_evaluated": True,
-        "produced_by_call_id": str(getattr(pb, "call_id", "") or ""),
+        "produced_by_call_id": (
+            ""
+            if pb is None or getattr(pb, "call_id", None) is None
+            else str(pb.call_id)
+        ),
         "artifact_id": sq.artifact_id,
         "countable": True,
         "source_sha256": meta.sha256,

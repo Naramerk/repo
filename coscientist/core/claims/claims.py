@@ -311,15 +311,20 @@ def intent_from_producing_experiment(
             field="intent",
         )
     exp_id = experiment_node_id(study_id, task_key)
-    hid = (
-        target_logical
-        if target_logical.startswith(f"{study_id}:hypothesis:")
-        else hypothesis_node_id(study_id, target_logical)
-    )
+    if target_logical.startswith(f"{study_id}:hypothesis:"):
+        hid = target_logical
+    else:
+        hid = hypothesis_node_id(study_id, target_logical)
     for e in graph.edges_from(exp_id):
         if e.kind != "tests" or e.dst_id != hid:
             continue
-        raw = (e.attrs or {}).get("intent")
+        attrs = e.attrs
+        if not isinstance(attrs, dict):
+            raise JournalFormatError(
+                "tests edge attrs missing or not a mapping",
+                field="intent",
+            )
+        raw = attrs.get("intent")
         if raw in ("confirm", "refute"):
             return raw  # type: ignore[return-value]
         raise JournalFormatError(
@@ -353,15 +358,20 @@ def intent_from_tests_edge(
         )
     if graph is None or target_kind != "hypothesis" or not target_logical:
         return DEFAULT_TESTS_INTENT
-    hid = (
-        target_logical
-        if target_logical.startswith(f"{study_id}:hypothesis:")
-        else hypothesis_node_id(study_id, target_logical)
-    )
+    if target_logical.startswith(f"{study_id}:hypothesis:"):
+        hid = target_logical
+    else:
+        hid = hypothesis_node_id(study_id, target_logical)
     for e in graph.all_edges():
         if e.kind != "tests" or e.dst_id != hid:
             continue
-        raw = (e.attrs or {}).get("intent")
+        attrs = e.attrs
+        if not isinstance(attrs, dict):
+            raise JournalFormatError(
+                "tests edge attrs missing or not a mapping",
+                field="intent",
+            )
+        raw = attrs.get("intent")
         if raw in ("confirm", "refute"):
             return raw  # type: ignore[return-value]
         raise JournalFormatError(

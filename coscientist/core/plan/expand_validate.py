@@ -136,7 +136,7 @@ def _validate(
     } | {
         t.task_key
         for t in merged
-        if str(getattr(t, "route", "") or "").lower() in ("planner", "plan")
+        if str(getattr(t, "route", "")).lower() in ("planner", "plan")
     }
     for t in merged:
         for d in t.depends_on:
@@ -330,14 +330,16 @@ def task_produced_countable_claims(runtime: StudyRuntime, tkey: str) -> bool:
         return False
     by = filtered_claims_by_target(graph, study_id=sid, results=runtime.results)
     attempt_task: dict[str, str] = {}
-    for aid, row in (runtime.attempts or {}).items():
-        if isinstance(row, Mapping):
-            at = row.get("task_id")
-            if at:
-                attempt_task[str(aid)] = str(at)
+    attempts = runtime.attempts
+    if isinstance(attempts, Mapping):
+        for aid, row in attempts.items():
+            if isinstance(row, Mapping):
+                at = row.get("task_id")
+                if at:
+                    attempt_task[str(aid)] = str(at)
     for claims in by.values():
         for c in claims:
-            aid = getattr(c, "attempt_id", None) or ""
+            aid = getattr(c, "attempt_id", None)
             if not aid or not c.counts():
                 continue
             # Structural attempt→task binding (never attempt_id startswith task_id).

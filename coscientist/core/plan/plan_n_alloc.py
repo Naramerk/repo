@@ -48,14 +48,19 @@ def is_replan_container(task: Any) -> bool:
     from coscientist.core.execution.domain import TaskKind
 
     kind = getattr(task, "kind", None)
-    if kind != TaskKind.PLAN and str(getattr(kind, "value", kind) or "") != "plan":
-        return False
-    return getattr(task, "plan_role", None) == "replan"
+    if kind == TaskKind.PLAN:
+        return getattr(task, "plan_role", None) == "replan"
+    kind_val = getattr(kind, "value", kind)
+    if kind_val == "plan":
+        return getattr(task, "plan_role", None) == "replan"
+    return False
 
 
 def parse_kind_key(task_key: str) -> tuple[str, int] | None:
     """Return ``(prefix, n)`` for ``PREFIX-n`` keys; else None (no invent)."""
-    m = _KIND_INDEX.match(str(task_key or ""))
+    if not isinstance(task_key, str) or not task_key:
+        return None
+    m = _KIND_INDEX.match(task_key)
     if not m:
         return None
     return m.group(1), int(m.group(2))
