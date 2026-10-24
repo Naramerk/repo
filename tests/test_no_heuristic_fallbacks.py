@@ -1302,6 +1302,190 @@ def test_hitl_policy_gate_unknown_kind_returns_none():
     assert HitlPolicy().gate("not_a_real_gate") is None
 
 
+def test_hitl_policy_gate_plan_plan_approval_alias_removed():
+    """gate('plan') must not resolve a plan_approval-only map (and vice versa)."""
+    from coscientist.core.execution.domain import GateConfig, HitlPolicy
+
+    only_approval = HitlPolicy(gates={"plan_approval": GateConfig(timeout_s=42)})
+    assert only_approval.gate("plan_approval") is not None
+    assert only_approval.gate("plan") is None
+
+    only_plan = HitlPolicy(gates={"plan": GateConfig(timeout_s=42)})
+    assert only_plan.gate("plan") is not None
+    assert only_plan.gate("plan_approval") is None
+
+
+@pytest.mark.asyncio
+async def test_costly_hitl_rejects_accept_alias():
+    """Costly path accepts approve|reject|delegate only — no accept→approve alias."""
+    from datetime import UTC, datetime
+
+    from coscientist.core.execution.domain import HitlRequest
+    from coscientist.experimental.hitl import HitlForkMixin
+
+    class _RT(HitlForkMixin):
+        def __init__(self) -> None:
+            self.hitl = {
+                "r1": HitlRequest(
+                    request_id="r1",
+                    kind="costly_or_nonreal",
+                    payload_ref="t1",
+                    deadline=datetime.now(UTC),
+                    study_id="s",
+                    task_id="t1",
+                    open=True,
+                    cost_rub=1.0,
+                )
+            }
+
+    with pytest.raises(ValueError, match="unknown costly HITL decision"):
+        await _RT().answer_hitl("r1", "accept")
+
+
+@pytest.mark.asyncio
+async def test_open_hitl_plan_requires_expand_after_task():
+    """plan / plan_approval / plan_expansion must not fall back to task_key."""
+    from datetime import UTC, datetime, timedelta
+
+    from coscientist.core.execution.domain import (
+        GateConfig,
+        HitlPolicy,
+        HitlRequest,
+        Task,
+        TaskKind,
+        TaskSpec,
+        TaskState,
+        PlanRole,
+    )
+    from coscientist.experimental.hitl import HitlForkMixin
+
+    class _RT(HitlForkMixin):
+        def __init__(self) -> None:
+            now = datetime.now(UTC)
+            self.clock = SimpleNamespace(now=lambda: now)
+            self.study = SimpleNamespace(
+                study_id="s",
+                hitl_policy=HitlPolicy(
+                    gates={"plan_approval": GateConfig(timeout_s=60)}
+                ),
+                effective_deadline=lambda: now + timedelta(hours=1),
+            )
+            self.hitl: dict[str, HitlRequest] = {}
+            self.tasks = {
+                "s/E0": Task(
+                    task_id="s/E0",
+                    kind=TaskKind.EXPERIMENT,
+                    spec=TaskSpec(
+                        task_key="E0", title="t", goal="g", route="experiment"
+                    ),
+                    state=TaskState.PENDING,
+                    deadline=now + timedelta(hours=1),
+                    plan_role=PlanRole.NONE,
+                )
+            }
+
+        def _resolve_task(self, task_key_or_id: str):
+            return self.tasks["s/E0"]
+
+        async def _append(self, events):
+            return None
+
+    rt = _RT()
+    with pytest.raises(ValueError, match="expand_after_task"):
+        await rt.open_hitl("E0", kind="plan_approval")
+    with pytest.raises(ValueError, match="expand_after_task"):
+        await rt.open_hitl("E0", kind="plan")
+    with pytest.raises(ValueError, match="expand_after_task"):
+        await rt.open_hitl("E0", kind="plan_expansion")
+
+
+@pytest.mark.asyncio
+async def test_hitl_no_gate_timeout_fails():
+    """Unknown gate: open_hitl refuses; _hitl_timeout with gate None fails (no invented on_timeout).
+
+    open_hitl already raises when hitl_policy.gate(kind) is None, so a timeout path
+    with gate None can only arise from a journaled request whose kind was later
+    removed from policy — exercise _hitl_timeout directly and assert fail, not
+    critic delegate.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from coscientist.core.execution.domain import (
+        GateConfig,
+        HitlPolicy,
+        HitlRequest,
+        Task,
+        TaskKind,
+        TaskSpec,
+        TaskState,
+        PlanRole,
+    )
+    from coscientist.experimental.hitl import HitlForkMixin
+
+    now = datetime.now(UTC)
+
+    class _RT(HitlForkMixin):
+        def __init__(self) -> None:
+            self.clock = SimpleNamespace(now=lambda: now)
+            # Policy has plan_approval only — kind "plan" has no gate (alias removed).
+            self.study = SimpleNamespace(
+                study_id="s",
+                hitl_policy=HitlPolicy(
+                    gates={"plan_approval": GateConfig(timeout_s=60, on_timeout="delegate")}
+                ),
+            )
+            self.hitl: dict[str, HitlRequest] = {}
+            self.tasks = {
+                "s/E0": Task(
+                    task_id="s/E0",
+                    kind=TaskKind.EXPERIMENT,
+                    spec=TaskSpec(
+                        task_key="E0", title="t", goal="g", route="experiment"
+                    ),
+                    state=TaskState.RUNNING,
+                    deadline=now + timedelta(hours=1),
+                    plan_role=PlanRole.NONE,
+                )
+            }
+            self._appended: list = []
+            self._failed: list[str] = []
+
+        def _resolve_task(self, task_key_or_id: str):
+            return self.tasks["s/E0"]
+
+        async def _append(self, events):
+            self._appended.extend(events)
+
+        async def _fail_task_human_timeout(self, h, task):
+            self._failed.append(h.request_id)
+
+        async def _critic_decide(self, h, *, decision, delegated_by):
+            raise AssertionError(
+                "must not invent on_timeout=delegate when gate is None"
+            )
+
+    rt = _RT()
+    # open_hitl already refuses unknown / unmapped kinds.
+    with pytest.raises(ValueError, match="no gate"):
+        await rt.open_hitl("E0", kind="plan", expand_after_task="E0")
+
+    h = HitlRequest(
+        request_id="r_orphan",
+        kind="plan",  # no gate in policy (alias removed)
+        payload_ref="s/E0",
+        deadline=now - timedelta(seconds=1),
+        study_id="s",
+        task_id="s/E0",
+        open=True,
+        expand_after_task="E0",
+    )
+    rt.hitl[h.request_id] = h
+    await rt._hitl_timeout(h)  # noqa: SLF001
+    assert rt._failed == ["r_orphan"]
+    assert any(getattr(e, "type", None) == "HitlTimedOut" for e in rt._appended)
+    assert not any(getattr(e, "type", None) == "HitlDecided" for e in rt._appended)
+
+
 def test_expand_refuses_timeout_delegated_by():
     from coscientist.core.plan.expand import _delegated_by_from_hitl
 

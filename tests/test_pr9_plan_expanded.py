@@ -1410,7 +1410,9 @@ async def test_hitl_open_plan_approval_keeps_kind_and_binds(tmp_path, clock):
         tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
-    rid = await rt.open_hitl("E0", kind="plan_approval")
+    rid = await rt.open_hitl(
+        "E0", kind="plan_approval", expand_after_task="E0"
+    )
     h = rt.hitl[rid]
     assert h.kind == "plan_approval"
     assert h.expand_after_task == "E0"
@@ -1547,7 +1549,9 @@ async def test_hitl_decide_yourself_delegation_marked(tmp_path, clock):
         tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
-    rid = await rt.open_hitl("E0", kind="plan_approval", timeout_s=60)
+    rid = await rt.open_hitl(
+        "E0", kind="plan_approval", timeout_s=60, expand_after_task="E0"
+    )
     await rt.answer_hitl(
         rid,
         "delegate",
@@ -1616,7 +1620,9 @@ async def test_hitl_plan_approval_timeout_fail_no_auto_accept(tmp_path, clock):
         tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
-    rid = await rt.open_hitl("E0", kind="plan_approval")
+    rid = await rt.open_hitl(
+        "E0", kind="plan_approval", expand_after_task="E0"
+    )
     assert rt.hitl[rid].kind == "plan_approval"
     clock.advance(timedelta(seconds=2))
     await rt.tick()

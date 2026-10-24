@@ -176,7 +176,10 @@ class StudyClosesMachine(RuleBasedStateMachine):
     @rule(key=task_keys, target=hitl_ids)
     def open_hitl(self, key):
         return self._call(
-            self.rt.open_hitl(key, kind="plan_approval", timeout_s=15), default="none"
+            self.rt.open_hitl(
+                key, kind="plan_approval", timeout_s=15, expand_after_task=key
+            ),
+            default="none",
         ) or "none"
 
     @precondition(lambda self: self._hitl_ok())

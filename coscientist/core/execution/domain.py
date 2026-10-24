@@ -231,11 +231,6 @@ class HitlPolicy(Frozen):
         """Return configured gate, or None when kind is unknown (fail-closed)."""
         if kind in self.gates:
             return self.gates[kind]
-        # Sole alias: historical ``plan`` ↔ ``plan_approval`` wire names.
-        if kind == "plan" and "plan_approval" in self.gates:
-            return self.gates["plan_approval"]
-        if kind == "plan_approval" and "plan" in self.gates:
-            return self.gates["plan"]
         return None
 
 

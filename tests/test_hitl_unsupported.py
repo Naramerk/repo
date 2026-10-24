@@ -46,7 +46,9 @@ async def _close_and_expire(rt, clock) -> str:
 @pytest.mark.asyncio
 async def test_core_open_runtime_rejects_open_hitl_journal(tmp_path, clock):
     root, rt = await _boot_exp(tmp_path, clock)
-    await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
+    await rt.open_hitl(
+        "PLAN", kind="plan_approval", timeout_s=60, expand_after_task="PLAN"
+    )
     assert any(h.open for h in rt.hitl.values())
     await _close_and_expire(rt, clock)
     with pytest.raises(HitlUnsupported, match="open HITL"):
@@ -58,7 +60,9 @@ async def test_core_open_runtime_rejects_open_hitl_journal(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_core_recover_rejects_open_hitl_journal(tmp_path, clock):
     root, rt = await _boot_exp(tmp_path, clock)
-    await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
+    await rt.open_hitl(
+        "PLAN", kind="plan_approval", timeout_s=60, expand_after_task="PLAN"
+    )
     owner = await _close_and_expire(rt, clock)
     exp = await open_runtime(
         root, "st_hitl", clock=clock, runtime_cls=ExpStudyRuntime, owner=owner
@@ -74,7 +78,9 @@ async def test_core_recover_rejects_open_hitl_journal(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_experimental_open_runtime_accepts_open_hitl_journal(tmp_path, clock):
     root, rt = await _boot_exp(tmp_path, clock)
-    await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
+    await rt.open_hitl(
+        "PLAN", kind="plan_approval", timeout_s=60, expand_after_task="PLAN"
+    )
     owner = await _close_and_expire(rt, clock)
     rt2 = await open_runtime(
         root, "st_hitl", clock=clock, runtime_cls=ExpStudyRuntime, owner=owner
@@ -89,7 +95,9 @@ async def test_core_opens_when_all_hitl_gates_closed(tmp_path, clock):
     from coscientist.core.execution.domain import TaskState
 
     root, rt = await _boot_exp(tmp_path, clock)
-    rid = await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
+    rid = await rt.open_hitl(
+        "PLAN", kind="plan_approval", timeout_s=60, expand_after_task="PLAN"
+    )
     await rt.answer_hitl(rid, "accept")
     assert rt.hitl[rid].open is False
     owner = await _close_and_expire(rt, clock)
@@ -139,7 +147,9 @@ async def test_core_rejects_wait_keep_open_hitl_gate(tmp_path, clock):
 async def test_hitl_unsupported_does_not_hold_lease(tmp_path, clock):
     """Refused core open must not acquire a lease (journal checked first)."""
     root, rt = await _boot_exp(tmp_path, clock, sid="st_lease")
-    await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
+    await rt.open_hitl(
+        "PLAN", kind="plan_approval", timeout_s=60, expand_after_task="PLAN"
+    )
     await _close_and_expire(rt, clock)
 
     with pytest.raises(HitlUnsupported):

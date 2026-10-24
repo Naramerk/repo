@@ -57,7 +57,11 @@ class HitlForkMixin(CostlyHitlMixin):
         # Policy always by the original kind (do NOT rename to plan_expansion).
         after: str | None = expand_after_task
         if kind in ("plan", "plan_approval", "plan_expansion"):
-            after = after or task.spec.task_key
+            if after is None:
+                raise ValueError(
+                    f"expand_after_task required for HITL kind {kind!r} "
+                    "(no fallback to task_key)"
+                )
         gate = self.study.hitl_policy.gate(kind)
         if gate is None:
             raise ValueError(f"HITL kind {kind!r} has no gate in hitl_policy")
@@ -106,15 +110,11 @@ class HitlForkMixin(CostlyHitlMixin):
         if not h.open:
             return
         if h.kind == "costly_or_nonreal":
-            # Costly path wire tokens: approve|reject|delegate (accept maps to approve).
-            if decision == "accept":
-                answer = "approve"
-            elif decision in ("approve", "reject", "delegate"):
-                answer = decision
-            else:
+            # Costly path wire tokens: approve|reject|delegate only (no accept alias).
+            if decision not in ("approve", "reject", "delegate"):
                 raise ValueError(f"unknown costly HITL decision: {decision!r}")
             await self._apply_costly_or_nonreal(
-                h, answer=answer, critic_accepts=critic_accepts  # type: ignore[arg-type]
+                h, answer=decision, critic_accepts=critic_accepts  # type: ignore[arg-type]
             )
             return
         # Canonical decision tokens for non-costly gates (no accept↔approve alias).
@@ -333,21 +333,11 @@ class HitlForkMixin(CostlyHitlMixin):
         # Serialize accept/delegate/reject: only the journal winner runs side effects.
         async with self._proposed_check_decision_lock(pid):
             # Refresh open flag under the lock (concurrent answer may have closed it).
-            if not hasattr(self, "hitl"):
-                raise JournalFormatError("HITL map missing on runtime")
-            live = self.hitl.get(request_id)
-            if live is None:
-                live = h
-            if not hasattr(live, "open"):
-                raise JournalFormatError(
-                    f"HITL request {request_id!r} missing required 'open'"
-                )
+            live = self.hitl[request_id]
             if not live.open:
                 return
-            existing = getattr(self, "_hitl_decisions", None)
-            if existing is None:
-                existing = {}
-            elif not isinstance(existing, dict):
+            existing = self._hitl_decisions
+            if not isinstance(existing, dict):
                 raise JournalFormatError(
                     f"_hitl_decisions must be dict, got {type(existing).__name__}"
                 )
@@ -415,12 +405,14 @@ class HitlForkMixin(CostlyHitlMixin):
                 return
 
             # Journal is authority: only the folded winner may approve/reject/schedule.
-            decisions = getattr(self, "_hitl_decisions", None)
+            decisions = self._hitl_decisions
             if not isinstance(decisions, dict):
                 raise JournalFormatError("_hitl_decisions missing after HitlDecided")
             folded = decisions.get(request_id)
             if not isinstance(folded, dict):
-                return
+                raise JournalFormatError(
+                    f"HitlDecided fold for {request_id!r} missing or not dict"
+                )
             if "decision" not in folded:
                 raise JournalFormatError("HitlDecided fold missing 'decision'")
             if str(folded["decision"]) != want:
@@ -471,22 +463,12 @@ class HitlForkMixin(CostlyHitlMixin):
                 )
             pid = h.payload_ref.strip()
             async with self._proposed_check_decision_lock(pid):
-                if not hasattr(self, "hitl"):
-                    raise JournalFormatError("HITL map missing on runtime")
-                live = self.hitl.get(h.request_id)
-                if live is None:
-                    live = h
-                if not hasattr(live, "open"):
-                    raise JournalFormatError(
-                        f"HITL request {h.request_id!r} missing required 'open'"
-                    )
+                live = self.hitl[h.request_id]
                 if not live.open:
                     return
                 # Journal wins before any side effect.
-                existing = getattr(self, "_hitl_decisions", None)
-                if existing is None:
-                    existing = {}
-                elif not isinstance(existing, dict):
+                existing = self._hitl_decisions
+                if not isinstance(existing, dict):
                     raise JournalFormatError(
                         f"_hitl_decisions must be dict, got {type(existing).__name__}"
                     )
@@ -504,10 +486,8 @@ class HitlForkMixin(CostlyHitlMixin):
                         "reject",
                     ):
                         return
-                proposals = getattr(self, "_check_proposals", None)
-                if proposals is None:
-                    proposals = {}
-                elif not isinstance(proposals, dict):
+                proposals = self._check_proposals
+                if not isinstance(proposals, dict):
                     raise JournalFormatError(
                         f"_check_proposals must be dict, got {type(proposals).__name__}"
                     )
