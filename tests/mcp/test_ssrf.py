@@ -162,6 +162,8 @@ async def test_hard_deny_non_http_schemes(uri: str) -> None:
         "64:ff9b::7f00:1",  # NAT64 → 127.0.0.1
         "::127.0.0.1",  # IPv4-compatible
         "::7f00:1",
+        "::ffff:0:7f00:1",  # SIIT → 127.0.0.1
+        "::ffff:0:a00:1",  # SIIT → 10.0.0.1
     ],
 )
 def test_blocked_ip_literals(ip: str) -> None:
@@ -592,6 +594,17 @@ async def test_e2e_fetcher_dns_rebinding_denied_over_real_socket() -> None:
 
 @pytest.mark.asyncio
 async def test_e2e_fetcher_mixed_answer_denied_over_real_socket() -> None:
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "application/pdf")
+            self.end_headers()
+            self.wfile.write(b"%PDF")
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+            return
+
+    server, port, thread = _start_http_server(Handler)
     transport = HttpxTransport()
     resolver = FakeResolver({"files.test": ("127.0.0.1", "10.0.0.1")})
     fetcher = _fetcher(
@@ -601,9 +614,100 @@ async def test_e2e_fetcher_mixed_answer_denied_over_real_socket() -> None:
     )
     try:
         with pytest.raises(McpSsrfError):
-            await fetcher.fetch("http://files.test/a", max_bytes=1000, timeout_s=2.0)
+            await fetcher.fetch(f"http://files.test:{port}/a", max_bytes=1000, timeout_s=2.0)
     finally:
         await transport.aclose()
+        server.shutdown()
+        thread.join(timeout=2.0)
+        server.server_close()
+
+
+@pytest.mark.asyncio
+async def test_e2e_slow_drip_honors_overall_fetch_deadline() -> None:
+    """1 byte / 0.3s must not outlive timeout_s=1.0 (overall wait_for deadline)."""
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            import time
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", "40")
+            self.end_headers()
+            for _ in range(40):
+                self.wfile.write(b"x")
+                self.wfile.flush()
+                time.sleep(0.3)
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+            return
+
+    server, port, thread = _start_http_server(Handler)
+    transport = HttpxTransport()
+    resolver = FakeResolver({"files.test": ("127.0.0.1",)})
+    fetcher = _fetcher(
+        transport,
+        resolver=resolver,
+        address_policy=AllowLoopbackPolicy(),
+    )
+    import time
+
+    started = time.monotonic()
+    try:
+        with pytest.raises(McpTimeoutError):
+            await fetcher.fetch(f"http://files.test:{port}/drip", max_bytes=1000, timeout_s=1.0)
+        elapsed = time.monotonic() - started
+        assert elapsed < 3.0, f"overall deadline not enforced: {elapsed:.2f}s"
+    finally:
+        await transport.aclose()
+        server.shutdown()
+        thread.join(timeout=2.0)
+        server.server_close()
+
+
+@pytest.mark.asyncio
+async def test_deflate_zlib_ok_raw_deflate_is_protocol_error() -> None:
+    import zlib as zlib_mod
+
+    # zlib-wrapped deflate (RFC 1950) — the only accepted deflate form
+    wrapped = zlib_mod.compress(b"hello-pdf")
+    http = FakeHttp(
+        [
+            _BufStream(
+                200,
+                {
+                    "content-type": "application/octet-stream",
+                    "content-encoding": "deflate",
+                },
+                wrapped,
+            )
+        ]
+    )
+    resolver = FakeResolver({"cdn.example": ("8.8.8.8",)})
+    fetcher = _fetcher(http, resolver=resolver, encodings=("deflate",))
+    got = await fetcher.fetch("https://cdn.example/a", max_bytes=100, timeout_s=1.0)
+    assert got == b"hello-pdf"
+
+    # raw deflate (RFC 1951) must NOT silently succeed
+    raw = zlib_mod.compress(b"hello-pdf")[2:-4]  # strip zlib header/trailer approx
+    # Use wbits=-15 produce raw:
+    c = zlib_mod.compressobj(wbits=-zlib_mod.MAX_WBITS)
+    raw = c.compress(b"hello-pdf") + c.flush()
+    http2 = FakeHttp(
+        [
+            _BufStream(
+                200,
+                {
+                    "content-type": "application/octet-stream",
+                    "content-encoding": "deflate",
+                },
+                raw,
+            )
+        ]
+    )
+    fetcher2 = _fetcher(http2, resolver=resolver, encodings=("deflate",))
+    with pytest.raises(McpProtocolError, match="deflate"):
+        await fetcher2.fetch("https://cdn.example/b", max_bytes=100, timeout_s=1.0)
 
 
 @pytest.mark.asyncio
@@ -637,6 +741,24 @@ async def test_httpx_timeout_maps_to_mcp_timeout() -> None:
         server.shutdown()
         thread.join(timeout=3.0)
         server.server_close()
+
+
+@pytest.mark.asyncio
+async def test_httpx_connect_error_maps_to_mcp_transport_error() -> None:
+    transport = HttpxTransport()
+    try:
+        with pytest.raises(McpTransportError):
+            await transport.open(
+                "GET",
+                "http://files.test:1/",
+                headers={},
+                body=None,
+                timeout_s=1.0,
+                connect_ip="127.0.0.1",
+                server_hostname="files.test",
+            )
+    finally:
+        await transport.aclose()
 
 
 @pytest.mark.asyncio

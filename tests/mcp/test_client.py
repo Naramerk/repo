@@ -658,66 +658,102 @@ async def test_streamable_http_response_limit_closes_session(
 
 
 @pytest.mark.asyncio
-async def test_streamable_http_overall_deadline_ignores_sse_keepalives(
+async def test_streamable_http_overall_deadline_ignores_sse_keepalives_real_socket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """SSE comment keepalives must not extend the per-request wait_for deadline."""
+    """SSE comment keepalives on a real socket must not extend wait_for deadline."""
+    import http.server
+    import socket
+    import threading
+    import time
+
+    from coscientist.mcp import McpTimeoutError
+    from coscientist.mcp.httpx_transport import HttpxTransport
+
     monkeypatch.setenv("COSCI_TEST_MCP_KEY", "k")
-    init = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "result": {
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "serverInfo": {"name": "r", "version": "1"},
-        },
-    }
 
-    class SlowKeepaliveStream:
-        def __init__(self) -> None:
-            self.status_code = 200
-            self.headers = {"content-type": "text/event-stream"}
-            self._n = 0
-            self.closed = False
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length)
+            msg = json.loads(body.decode())
+            method = msg.get("method")
+            if method == "initialize":
+                reply = {
+                    "jsonrpc": "2.0",
+                    "id": msg["id"],
+                    "result": {
+                        "protocolVersion": msg["params"]["protocolVersion"],
+                        "capabilities": {},
+                        "serverInfo": {"name": "k", "version": "0"},
+                    },
+                }
+                raw = json.dumps(reply).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Mcp-Session-Id", "keep")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            if method == "notifications/initialized" or method == "notifications/cancelled":
+                self.send_response(202)
+                self.end_headers()
+                return
+            if method == "tools/list":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                for _ in range(200):
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+                    time.sleep(0.05)
+                return
+            self.send_response(202)
+            self.end_headers()
 
-        async def read(self, n: int) -> bytes:
-            import asyncio
+        def do_DELETE(self) -> None:  # noqa: N802
+            self.send_response(200)
+            self.end_headers()
 
-            self._n += 1
-            await asyncio.sleep(0.05)
-            return b": keepalive\n\n"
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+            return
 
-        async def aclose(self) -> None:
-            self.closed = True
-
-    http = FakeHttp(
-        [
-            _BufStream(
-                200,
-                {"content-type": "application/json", "mcp-session-id": "s"},
-                json.dumps(init).encode(),
-            ),
-            _BufStream(202, {}, b""),
-            SlowKeepaliveStream(),  # type: ignore[list-item]
-        ]
-    )
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.listen(8)
+    server = http.server.HTTPServer(("127.0.0.1", port), Handler, bind_and_activate=False)
+    server.socket = sock
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    transport = HttpxTransport()
     cfg = make_config(
         servers=(
             StreamableHttpServerConfig(
                 transport="streamable_http",
                 name="remote",
-                url="https://mcp.example/mcp",
+                url=f"http://127.0.0.1:{port}/mcp",
                 api_key_env="COSCI_TEST_MCP_KEY",
             ),
         ),
-        list_tools_timeout_s=0.15,
+        list_tools_timeout_s=0.4,
+        notification_timeout_s=0.4,
     )
-    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
-    session = await client.connect("remote")
-    from coscientist.mcp import McpTimeoutError
-
-    with pytest.raises(McpTimeoutError):
-        await session.list_tools()
+    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=transport)
+    try:
+        session = await client.connect("remote")
+        started = time.monotonic()
+        with pytest.raises(McpTimeoutError):
+            await session.list_tools()
+        assert time.monotonic() - started < 2.0
+        assert session._http._closed is True  # noqa: SLF001
+    finally:
+        await transport.aclose()
+        server.shutdown()
+        thread.join(timeout=2.0)
+        server.server_close()
 
 
 @pytest.mark.asyncio
@@ -784,7 +820,213 @@ async def test_sse_parser_cr_only_and_single_leading_space() -> None:
     # CR-only line endings; exactly one leading space after data: stripped
     body = b"data:  keep-two-spaces\r\rdata: one\r\r"
     events = parser.feed(body)
+    events.extend(parser.finish())
     assert events == [" keep-two-spaces", "one"]
+
+
+@pytest.mark.asyncio
+async def test_sse_parser_cr_at_chunk_end_then_lf_next_chunk() -> None:
+    """Exact split: CR ends chunk N; LF arrives in chunk N+1 (CRLF pair)."""
+    from coscientist.mcp.http_transport import _SseParser
+
+    parser = _SseParser()
+    assert parser.feed(b"data: hello\r") == []
+    assert parser.feed(b"\n\r") == []  # CRLF ends data line; CR of blank waits
+    assert parser.feed(b"\n") == ["hello"]
+
+
+@pytest.mark.asyncio
+async def test_sse_duplicate_id_across_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COSCI_TEST_MCP_KEY", "k")
+    init = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "serverInfo": {"name": "r", "version": "1"},
+        },
+    }
+
+    class ChunkedSseStream:
+        """Yields precise SSE chunks: incomplete event, then completion + duplicate."""
+
+        def __init__(self) -> None:
+            self.status_code = 200
+            self.headers = {"content-type": "text/event-stream"}
+            self._chunks = [
+                b'data: {"jsonrpc":"2.0","id":2,"result":{"tools":[]}}\n',
+                b'\ndata: {"jsonrpc":"2.0","id":2,"result":{"tools":[]}}\n\n',
+            ]
+
+        async def read(self, n: int) -> bytes:
+            if not self._chunks:
+                return b""
+            return self._chunks.pop(0)
+
+        async def aclose(self) -> None:
+            return None
+
+    http = FakeHttp(
+        [
+            _BufStream(
+                200,
+                {"content-type": "application/json", "mcp-session-id": "s"},
+                json.dumps(init).encode(),
+            ),
+            _BufStream(202, {}, b""),
+            ChunkedSseStream(),  # type: ignore[list-item]
+        ]
+    )
+    cfg = make_config(
+        servers=(
+            StreamableHttpServerConfig(
+                transport="streamable_http",
+                name="remote",
+                url="https://mcp.example/mcp",
+                api_key_env="COSCI_TEST_MCP_KEY",
+            ),
+        ),
+        http_read_chunk_bytes=64,
+    )
+    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    session = await client.connect("remote")
+    with pytest.raises(McpProtocolError, match="duplicate"):
+        await session.list_tools()
+
+
+@pytest.mark.asyncio
+async def test_null_response_id_is_protocol_error() -> None:
+    def handler(method: str, params: dict[str, Any] | None) -> Any:
+        if method == "tools/list":
+            return [{"jsonrpc": "2.0", "id": None, "result": {"tools": []}}]
+        return default_handler(method, params)
+
+    async with FakeStdioServer(handler) as server:
+        client = McpClient(make_config(), file_fetcher=RecordingFetcher({}))
+        session = await client.connect_memory("fake", server.client)
+        with pytest.raises(McpProtocolError, match="null"):
+            await session.list_tools()
+
+
+@pytest.mark.asyncio
+async def test_unknown_response_id_is_protocol_error() -> None:
+    def handler(method: str, params: dict[str, Any] | None) -> Any:
+        if method == "tools/list":
+            return [{"jsonrpc": "2.0", "id": 999, "result": {"tools": []}}]
+        return default_handler(method, params)
+
+    async with FakeStdioServer(handler) as server:
+        client = McpClient(make_config(), file_fetcher=RecordingFetcher({}))
+        session = await client.connect_memory("fake", server.client)
+        with pytest.raises(McpProtocolError, match="does not match"):
+            await session.list_tools()
+
+
+@pytest.mark.asyncio
+async def test_http_transport_error_closes_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COSCI_TEST_MCP_KEY", "k")
+    init = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "serverInfo": {"name": "r", "version": "1"},
+        },
+    }
+    from coscientist.mcp import McpTransportError
+
+    http = FakeHttp(
+        [
+            _BufStream(
+                200,
+                {"content-type": "application/json", "mcp-session-id": "s"},
+                json.dumps(init).encode(),
+            ),
+            _BufStream(202, {}, b""),
+            McpTransportError("httpx boom", retryable=False),
+        ]
+    )
+    cfg = make_config(
+        servers=(
+            StreamableHttpServerConfig(
+                transport="streamable_http",
+                name="remote",
+                url="https://mcp.example/mcp",
+                api_key_env="COSCI_TEST_MCP_KEY",
+            ),
+        )
+    )
+    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    session = await client.connect("remote")
+    with pytest.raises(McpTransportError, match="httpx boom"):
+        await session.list_tools()
+    assert session._http._closed is True  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_cancel_notify_failure_still_closes_on_timeout() -> None:
+    """aclose runs even if cancelled notification raises."""
+
+    class HangServer(FakeStdioServer):
+        async def _run(self) -> None:  # type: ignore[override]
+            while True:
+                raw = await self._to_server.get()
+                try:
+                    message = json.loads(raw.decode("utf-8"))
+                    method = message.get("method")
+                    if method == "initialize":
+                        reply = {
+                            "jsonrpc": "2.0",
+                            "id": message["id"],
+                            "result": {
+                                "protocolVersion": message["params"]["protocolVersion"],
+                                "capabilities": {},
+                                "serverInfo": {"name": "h", "version": "0"},
+                            },
+                        }
+                        await self._to_client.put(json.dumps(reply).encode())
+                        continue
+                    if method in ("notifications/initialized", "tools/list"):
+                        continue
+                finally:
+                    self._to_server.task_done()
+
+    class FailCancelTransport:
+        def __init__(self, inner: Any) -> None:
+            self._inner = inner
+            self.closed = False
+
+        async def send(self, message: bytes) -> None:
+            payload = json.loads(message.decode())
+            if payload.get("method") == "notifications/cancelled":
+                raise RuntimeError("notify failed")
+            await self._inner.send(message)
+
+        async def receive(self, *, max_bytes: int, timeout_s: float) -> bytes:
+            return await self._inner.receive(max_bytes=max_bytes, timeout_s=timeout_s)
+
+        async def aclose(self) -> None:
+            self.closed = True
+            await self._inner.aclose()
+
+        def reset_receive_buffer(self) -> None:
+            self._inner.reset_receive_buffer()
+
+        async def join_outbound(self) -> None:
+            await self._inner.join_outbound()
+
+    async with HangServer(default_handler) as server:
+        tracked = FailCancelTransport(server.client)
+        client = McpClient(
+            make_config(list_tools_timeout_s=0.15),
+            file_fetcher=RecordingFetcher({}),
+        )
+        session = await client.connect_memory("fake", tracked)  # type: ignore[arg-type]
+        with pytest.raises(RuntimeError, match="notify failed"):
+            await session.list_tools()
+        assert tracked.closed is True
 
 
 @pytest.mark.asyncio

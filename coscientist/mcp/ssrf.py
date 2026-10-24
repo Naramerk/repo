@@ -84,10 +84,12 @@ def parse_host_port(uri: str) -> tuple[str, int | None, str]:
 
 
 _NAT64_WELL_KNOWN = ipaddress.IPv6Network("64:ff9b::/96")
+# RFC 2765 IPv4-translated / SIIT prefix (::ffff:0:0:0/96), e.g. ::ffff:0:7f00:1.
+_SIIT_TRANSLATED = ipaddress.IPv6Network("::ffff:0:0:0/96")
 
 
 def unwrap_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
-    """Unwrap embedded IPv4 from mapped, 6to4, NAT64, and IPv4-compatible forms."""
+    """Unwrap embedded IPv4 from mapped, 6to4, NAT64, SIIT, and IPv4-compatible forms."""
     if isinstance(ip, ipaddress.IPv6Address):
         mapped = ip.ipv4_mapped
         if mapped is not None:
@@ -95,7 +97,7 @@ def unwrap_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> ipaddress.IP
         sixtofour = ip.sixtofour
         if sixtofour is not None:
             return sixtofour
-        if ip in _NAT64_WELL_KNOWN:
+        if ip in _NAT64_WELL_KNOWN or ip in _SIIT_TRANSLATED:
             return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
         # Deprecated IPv4-compatible ::/96 (e.g. ::127.0.0.1). Exclude :: and ::1.
         packed = int(ip)
@@ -110,8 +112,8 @@ def ip_is_blocked(ip_str: str) -> bool:
     Uses ``not ip.is_global`` (covers RFC1918, loopback, link-local, CGNAT
     100.64/10, unspecified, reserved). Also blocks multicast (CPython reports
     many multicast addresses as ``is_global``) and deprecated IPv6 site-local
-    ``fec0::/10``. NAT64 ``64:ff9b::/96`` and IPv4-compatible ``::/96`` are
-    unwrapped before the check.
+    ``fec0::/10``. NAT64 ``64:ff9b::/96``, SIIT ``::ffff:0:0:0/96``, and
+    IPv4-compatible ``::/96`` are unwrapped before the check.
     """
     try:
         ip = unwrap_ip(ipaddress.ip_address(ip_str))

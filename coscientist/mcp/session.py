@@ -197,10 +197,28 @@ class McpSession:
         if params is not None:
             message["params"] = params
         if self._http is not None:
-            await self._http.request(message, timeout_s=self._config.notification_timeout_s)
+            try:
+                await asyncio.wait_for(
+                    self._http.request(message, timeout_s=self._config.notification_timeout_s),
+                    timeout=self._config.notification_timeout_s,
+                )
+            except TimeoutError as exc:
+                raise McpTimeoutError(
+                    "streamable HTTP notification exceeded notification_timeout_s"
+                ) from exc
             return
         await self._write(message)
         await self._drain_outbound()
+
+    async def _cancel_and_close(self, req_id: int) -> None:
+        """Send cancelled notification, always aclose; preserve the caller's error."""
+        try:
+            await self._notify(
+                "notifications/cancelled",
+                {"requestId": req_id, "reason": "timeout"},
+            )
+        finally:
+            await self.aclose()
 
     async def _rpc(
         self,
@@ -229,11 +247,7 @@ class McpSession:
         try:
             return await self._read_until_response(req_id=req_id, timeout_s=timeout_s)
         except McpTimeoutError:
-            await self._notify(
-                "notifications/cancelled",
-                {"requestId": req_id, "reason": "timeout"},
-            )
-            await self.aclose()
+            await self._cancel_and_close(req_id)
             raise
         except McpResponseLimitError:
             await self._fail_close()
@@ -254,18 +268,10 @@ class McpSession:
                 timeout=timeout_s,
             )
         except TimeoutError as exc:
-            await self._notify(
-                "notifications/cancelled",
-                {"requestId": req_id, "reason": "timeout"},
-            )
-            await self.aclose()
+            await self._cancel_and_close(req_id)
             raise McpTimeoutError("streamable HTTP request exceeded configured timeout") from exc
         except McpTimeoutError:
-            await self._notify(
-                "notifications/cancelled",
-                {"requestId": req_id, "reason": "timeout"},
-            )
-            await self.aclose()
+            await self._cancel_and_close(req_id)
             raise
         except (McpProtocolError, McpTransportError, McpResponseLimitError):
             await self._fail_close()
@@ -333,8 +339,19 @@ class McpSession:
                     }
                 )
                 continue
-            if message.get("id") != req_id:
-                continue
+            msg_id = message.get("id")
+            if msg_id is None:
+                await self._fail_close()
+                raise McpProtocolError(
+                    "JSON-RPC response id must not be null",
+                    raw_bytes=raw,
+                )
+            if msg_id != req_id:
+                await self._fail_close()
+                raise McpProtocolError(
+                    "JSON-RPC response id does not match request",
+                    raw_bytes=raw,
+                )
             try:
                 return _extract_result(message, req_id=req_id, raw=raw), raw
             except McpProtocolError:

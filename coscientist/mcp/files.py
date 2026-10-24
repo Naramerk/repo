@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 import zlib
 from typing import Mapping
 
@@ -52,9 +54,27 @@ class SafeHttpFileFetcher:
         self._address_policy = address_policy
 
     async def fetch(self, url: str, *, max_bytes: int, timeout_s: float) -> bytes:
+        """Fetch ``url`` under a single overall deadline (all redirects + body)."""
+        try:
+            return await asyncio.wait_for(
+                self._fetch_within_deadline(url, max_bytes=max_bytes, timeout_s=timeout_s),
+                timeout=timeout_s,
+            )
+        except TimeoutError as exc:
+            raise McpTimeoutError("file fetch exceeded file_fetch_timeout_s") from exc
+
+    async def _fetch_within_deadline(
+        self,
+        url: str,
+        *,
+        max_bytes: int,
+        timeout_s: float,
+    ) -> bytes:
         assert_fetch_scheme(url, allowed_schemes=self._allowed_schemes)
+        deadline = time.monotonic() + timeout_s
         current = url
         for hop in range(self._max_redirect_hops + 1):
+            remaining = _remaining(deadline)
             _uri, connect_ip, server_hostname = await resolve_and_pin(
                 current,
                 resolver=self._resolver,
@@ -67,14 +87,12 @@ class SafeHttpFileFetcher:
                 "Accept-Encoding": "identity",
             }
             try:
-                # Pass the original URL (hostname intact). Transport connects to
-                # connect_ip while SNI/cert/Host use server_hostname.
                 stream = await self._http.open(
                     "GET",
                     current,
                     headers=headers,
                     body=None,
-                    timeout_s=timeout_s,
+                    timeout_s=remaining,
                     connect_ip=connect_ip,
                     server_hostname=server_hostname,
                 )
@@ -103,11 +121,14 @@ class SafeHttpFileFetcher:
                 _check_content_type(stream.headers, self._allowed_content_types, uri=current)
                 encoding = _content_encoding(stream.headers)
                 if encoding is not None and encoding not in self._allowed_content_encodings:
-                    raise McpProtocolError(f"Content-Encoding {encoding!r} not in allowed_content_encodings")
+                    raise McpProtocolError(
+                        f"Content-Encoding {encoding!r} not in allowed_content_encodings"
+                    )
                 raw = await _read_limited(
                     stream,
                     max_bytes=max_bytes,
                     chunk_bytes=self._read_chunk_bytes,
+                    deadline=deadline,
                 )
                 if encoding in ("gzip", "x-gzip"):
                     return _gunzip_limited(raw, max_bytes=max_bytes)
@@ -143,18 +164,29 @@ async def fetch_files(
     return tuple(files)
 
 
+def _remaining(deadline: float) -> float:
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise McpTimeoutError("file fetch exceeded file_fetch_timeout_s")
+    return left
+
+
 async def _read_limited(
     stream: HttpStream,
     *,
     max_bytes: int,
     chunk_bytes: int,
+    deadline: float,
 ) -> bytes:
     chunks: list[bytes] = []
     total = 0
     while True:
+        _remaining(deadline)
         piece = await stream.read(min(chunk_bytes, max_bytes - total + 1))
         if not piece:
             break
+        if time.monotonic() >= deadline:
+            raise McpTimeoutError("file fetch exceeded file_fetch_timeout_s")
         total += len(piece)
         if total > max_bytes:
             raise McpResponseLimitError(
@@ -169,48 +201,46 @@ def _gunzip_limited(data: bytes, *, max_bytes: int) -> bytes:
     """Decompress gzip, including multi-member streams, under ``max_bytes``."""
     out = bytearray()
     remaining = data
-    while remaining:
-        dec = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
-        room = max_bytes - len(out) + 1
-        piece = dec.decompress(remaining, max_length=room)
-        out.extend(piece)
-        if len(out) > max_bytes:
-            raise McpResponseLimitError(
-                "decompressed file exceeds max_file_bytes",
-                limit=max_bytes,
-            )
-        if dec.unconsumed_tail and len(out) >= max_bytes:
-            raise McpResponseLimitError(
-                "decompressed file exceeds max_file_bytes",
-                limit=max_bytes,
-            )
-        out.extend(dec.flush())
-        if len(out) > max_bytes:
-            raise McpResponseLimitError(
-                "decompressed file exceeds max_file_bytes",
-                limit=max_bytes,
-            )
-        remaining = dec.unused_data
-        if not remaining:
-            break
-        if not dec.eof:
-            raise McpProtocolError("truncated gzip member")
+    try:
+        while remaining:
+            dec = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
+            room = max_bytes - len(out) + 1
+            piece = dec.decompress(remaining, max_length=room)
+            out.extend(piece)
+            if len(out) > max_bytes:
+                raise McpResponseLimitError(
+                    "decompressed file exceeds max_file_bytes",
+                    limit=max_bytes,
+                )
+            if dec.unconsumed_tail and len(out) >= max_bytes:
+                raise McpResponseLimitError(
+                    "decompressed file exceeds max_file_bytes",
+                    limit=max_bytes,
+                )
+            out.extend(dec.flush())
+            if len(out) > max_bytes:
+                raise McpResponseLimitError(
+                    "decompressed file exceeds max_file_bytes",
+                    limit=max_bytes,
+                )
+            remaining = dec.unused_data
+            if not remaining:
+                break
+            if not dec.eof:
+                raise McpProtocolError("truncated gzip member")
+    except zlib.error as exc:
+        raise McpProtocolError("gzip decompression failed") from exc
     return bytes(out)
 
 
 def _inflate_limited(data: bytes, *, max_bytes: int) -> bytes:
+    """Decompress zlib-wrapped deflate only (no silent raw-deflate fallback)."""
     try:
-        dec = zlib.decompressobj()
+        dec = zlib.decompressobj()  # zlib wrapper (RFC 1950) — exactly one decoder
         out = dec.decompress(data, max_length=max_bytes + 1)
-    except zlib.error:
-        dec = zlib.decompressobj(wbits=-zlib.MAX_WBITS)
-        out = dec.decompress(data, max_length=max_bytes + 1)
-    if len(out) > max_bytes:
-        raise McpResponseLimitError(
-            "decompressed file exceeds max_file_bytes",
-            limit=max_bytes,
-        )
-    out += dec.flush()
+        out += dec.flush()
+    except zlib.error as exc:
+        raise McpProtocolError("deflate decompression failed") from exc
     if len(out) > max_bytes:
         raise McpResponseLimitError(
             "decompressed file exceeds max_file_bytes",
@@ -231,7 +261,6 @@ def _content_encoding(headers: Mapping[str, str]) -> str | None:
     raw = _header(headers, "content-encoding")
     if raw is None or raw.strip() == "":
         return None
-    # First coding only; multi-coding chains are rejected unless a single allowed token.
     parts = [p.strip().lower() for p in raw.split(",")]
     if len(parts) != 1:
         raise McpProtocolError("Content-Encoding must be a single coding")

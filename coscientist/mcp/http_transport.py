@@ -210,21 +210,21 @@ class StreamableHttpSession:
         matched: dict[str, Any] | None = None
         matched_raw: bytes | None = None
         while True:
-            remaining = _remaining(deadline)
+            _remaining(deadline)
             piece = await stream.read(self._read_chunk_bytes)
             if not piece:
-                break
-            # Re-check after blocking read: keepalive traffic must not outlive deadline.
-            if time.monotonic() >= deadline:
-                raise McpTimeoutError("streamable HTTP SSE exceeded configured timeout")
-            _ = remaining  # remaining enforced by session wait_for + deadline check
-            total += len(piece)
-            if total > self._max_response_bytes:
-                raise McpResponseLimitError(
-                    "HTTP SSE body exceeds max_response_bytes while streaming",
-                    limit=self._max_response_bytes,
-                )
-            for data in parser.feed(piece):
+                events = parser.finish()
+            else:
+                if time.monotonic() >= deadline:
+                    raise McpTimeoutError("streamable HTTP SSE exceeded configured timeout")
+                total += len(piece)
+                if total > self._max_response_bytes:
+                    raise McpResponseLimitError(
+                        "HTTP SSE body exceeds max_response_bytes while streaming",
+                        limit=self._max_response_bytes,
+                    )
+                events = parser.feed(piece)
+            for data in events:
                 raw = data.encode("utf-8")
                 message = _parse_json_rpc(raw)
                 if "method" in message and "id" in message:
@@ -235,8 +235,17 @@ class StreamableHttpSession:
                     continue
                 if "id" not in message:
                     continue
-                if message.get("id") != req_id:
-                    continue
+                msg_id = message.get("id")
+                if msg_id is None:
+                    raise McpProtocolError(
+                        "SSE JSON-RPC response id must not be null",
+                        raw_bytes=raw,
+                    )
+                if msg_id != req_id:
+                    raise McpProtocolError(
+                        "SSE JSON-RPC response id does not match request",
+                        raw_bytes=raw,
+                    )
                 if matched is not None:
                     raise McpProtocolError(
                         "SSE stream contained duplicate JSON-RPC response id",
@@ -244,8 +253,12 @@ class StreamableHttpSession:
                     )
                 matched = message
                 matched_raw = raw
+            # Return after finishing this feed batch so duplicates in the same
+            # batch (incl. events completed across prior chunks) are detected.
             if matched is not None and matched_raw is not None:
                 return matched, matched_raw
+            if not piece:
+                break
         if matched is None or matched_raw is None:
             raise McpProtocolError(
                 "SSE stream ended without JSON-RPC response for request id",
@@ -358,11 +371,6 @@ class _SseParser:
             self._buf += self._decoder.decode(b"", final=True)
         except UnicodeDecodeError as exc:
             raise McpProtocolError("SSE body is not UTF-8", raw_bytes=b"") from exc
-        # Flush a trailing CR-terminated line if present.
-        if self._buf.endswith("\r"):
-            line = self._buf[:-1]
-            self._buf = ""
-            return self._handle_line(line)
         return self._drain_lines(flush_cr=True)
 
     def _drain_lines(self, *, flush_cr: bool = False) -> list[str]:
@@ -379,10 +387,11 @@ class _SseParser:
                 self._buf = self._buf[lf + 1 :]
                 events.extend(self._handle_line(line))
                 continue
-            # CR at cr; if last char, wait for possible LF unless we already have
-            # a pending data event (blank-line terminator) or flushing.
+            # CR at end of buffer: always wait for the next chunk — it may be
+            # the CR of a CRLF pair (LF arrives next). Only flush_cr (EOF) treats
+            # a trailing CR as a CR-only line terminator.
             if cr == len(self._buf) - 1:
-                if not (flush_cr or self._data_lines):
+                if not flush_cr:
                     break
                 line = self._buf[:cr]
                 self._buf = self._buf[cr + 1 :]
@@ -392,6 +401,7 @@ class _SseParser:
                 line = self._buf[:cr]
                 self._buf = self._buf[cr + 2 :]
             else:
+                # CR not followed by LF → CR-only line ending (SSE allows this).
                 line = self._buf[:cr]
                 self._buf = self._buf[cr + 1 :]
             events.extend(self._handle_line(line))

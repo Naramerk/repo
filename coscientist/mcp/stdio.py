@@ -269,7 +269,7 @@ async def _close_subprocess_pipes(proc: asyncio.subprocess.Process) -> None:
     try:
         proc.stdin.close()
         await proc.stdin.wait_closed()
-    except (OSError, AttributeError):
+    except OSError:
         try:
             proc.stdin.close()
         except OSError:
