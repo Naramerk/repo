@@ -30,7 +30,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["coscientist", "bench"]
+packages = ["coscientist"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "coscientist/schema/graph_schema.yaml" = "coscientist/schema/graph_schema.yaml"
@@ -52,12 +52,18 @@ filterwarnings = [
 
 [tool.mypy]
 python_version = "3.11"
+files = ["coscientist", "bench", "tests", "web"]
+explicit_package_bases = true
 ignore_missing_imports = true
 warn_unused_ignores = false
 
 [[tool.mypy.overrides]]
 module = "yaml"
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_errors = true
 
 [tool.ruff]
 line-length = 100

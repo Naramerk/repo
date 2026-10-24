@@ -24,7 +24,7 @@ in code** — tasks are versioned data only.
 | 12 | `feat(bench): old-system adapter` | Explicit local checkout + `module:attr`; **branch always verified** against `expected_branch` (refuse on mismatch or missing `.git` — not a config flag) for `aimclub/CoScientist_dev` `dev_1` — no path/name heuristics + tests + short doc | 5 merged |
 | 13 | `feat(bench): new-system adapter` | Wire `BenchRunner` to agent-layer **`Orchestrator`** (G1/G1b, [#66](https://github.com/Naramerk/repo/pull/66)) when ready — **no `new_runner_unwired` shim**; block until Orchestrator exists | 5 merged + Orchestrator |
 | 14 | `feat(bench): CLI entry` | `python -m bench run`, `scripts/run_bench.py`, `runners.example.yaml` (always verifies old checkout branch) + CLI tests | 11+12 merged (13 when ready) |
-| 15 | `docs(bench): BENCHMARK.md + packaging` | User docs (HER provenance), README/CHANGELOG, hatch package / task YAML `force-include` | 6+14 merged |
+| 15 | `docs(bench): BENCHMARK.md + packaging` | User docs (HER provenance), README/CHANGELOG; **hatch wheel `packages` includes `bench`** + task YAML `force-include` | 6+14 merged |
 
 ## HER task set source (`runs_final_20261023`)
 
