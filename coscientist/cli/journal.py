@@ -32,8 +32,14 @@ class _ExecutorPort(Protocol):
 
 class _RuntimePort(Protocol):
     executor: _ExecutorPort | None
-    attempts: Mapping[str, object]
-    tasks: Mapping[str, Task]
+
+    # Read-only properties so StudyRuntime's dict[...] attributes satisfy the Protocol
+    # (mutable Mapping attributes are invariant under mypy structural checks).
+    @property
+    def attempts(self) -> Mapping[str, object]: ...
+
+    @property
+    def tasks(self) -> Mapping[str, Task]: ...
 
 
 def _parse_values(entries: tuple[JsonEntry, ...]) -> dict[str, object]:
