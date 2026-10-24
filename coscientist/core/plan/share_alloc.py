@@ -18,9 +18,17 @@ from coscientist.core.plan.shares import (
 )
 
 
+def _as_decimal(value: object, *, what: str) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    if type(value) is bool or not isinstance(value, (int, float, str)):
+        raise JournalFormatError(f"{what} must be Decimal-compatible, got {type(value).__name__}")
+    return Decimal(str(value))  # audit-ok: float→Decimal via str (stdlib exactness)
+
+
 def _spent_for_cap(spent_map: dict[str, Any], tid: str) -> Decimal:
     try:
-        return Decimal(str(spent_map[tid]))
+        return _as_decimal(spent_map[tid], what=f"task spent {tid!r}")
     except KeyError as e:
         raise JournalFormatError(
             f"task spent missing for capped task {tid!r}"
@@ -28,8 +36,8 @@ def _spent_for_cap(spent_map: dict[str, Any], tid: str) -> Decimal:
 
 
 def _raw_budget(spec: TaskSpec) -> float | None:
-    v = getattr(spec, "budget_share", None)
-    return None if v is None else float(v)
+    return spec.budget_share
+
 
 def renorm_deadline(
     task_key: str,
@@ -42,25 +50,26 @@ def renorm_deadline(
     """P2 deadline: share_i / Σ(CP∩not_started) × remaining (minus replan reserve)."""
     ed = study.effective_deadline()
     wall = max(0.0, (ed - now).total_seconds())
-    reserve_frac = float(study.replan_reserve)
+    reserve_frac = study.replan_reserve
     remaining = wall * (1.0 - reserve_frac)
     shares = resolve_shares(plan_tasks, "deadline_share")
-    share_i = float(shares[task_key])
+    share_i = shares[task_key]
     cp = critical_path_from(task_key, plan_tasks)
     peers = [k for k in cp if k in not_started or k == task_key]
     if task_key not in peers:
         peers.append(task_key)
-    denom = sum(float(shares[k]) for k in peers)
+    denom = sum(shares[k] for k in peers)
     if denom <= 0.0 or remaining <= 0.0:
         return min(now, ed) if remaining <= 0.0 else min(now + timedelta(seconds=remaining), ed)
     span = remaining * (share_i / denom)
     return min(now + timedelta(seconds=span), ed)
 
+
 def outstanding_task_allocations(runtime: Any) -> Decimal:
     """Sum of (alloc − spent) for non-DONE tasks with a journaled cap (open reservations)."""
-    caps = getattr(runtime, "_task_budget_alloc", None) or {}
-    spent_map = getattr(runtime, "_task_spent_rub", None) or {}
-    tasks = getattr(runtime, "tasks", None) or {}
+    caps = runtime._task_budget_alloc
+    spent_map = runtime._task_spent_rub
+    tasks = runtime.tasks
     total = Decimal("0")
     for tid, cap in caps.items():
         if cap is None:
@@ -69,10 +78,11 @@ def outstanding_task_allocations(runtime: Any) -> Decimal:
         if task is None or task.state == TaskState.DONE:
             continue
         used = _spent_for_cap(spent_map, tid)
-        rem = Decimal(str(cap)) - used
+        rem = _as_decimal(cap, what=f"task alloc {tid!r}") - used
         if rem > 0:
             total += rem
     return total
+
 
 def allocate_budget(
     task_key: str,
@@ -95,24 +105,25 @@ def allocate_budget(
     plan_keys = {t.task_key for t in plan_tasks}
     if task_key not in plan_keys:
         return None
-    max_cost = Decimal(str(bud.max_cost_rub))
-    remaining = max_cost - Decimal(str(spent_rub))
+    max_cost = _as_decimal(bud.max_cost_rub, what="study.max_cost_rub")
+    remaining = max_cost - spent_rub
     if remaining <= 0:
         return Decimal("0")
-    reserve = remaining * Decimal(str(study.replan_reserve))
-    pool = remaining - reserve - Decimal(str(outstanding))
+    reserve = remaining * _as_decimal(study.replan_reserve, what="study.replan_reserve")
+    pool = remaining - reserve - outstanding
     if pool <= 0:
         return Decimal("0")
     shares = resolve_shares(plan_tasks, "budget_share")
-    share_i = Decimal(str(shares[task_key]))
+    share_i = _as_decimal(shares[task_key], what=f"budget_share[{task_key}]")
     if share_i <= 0:
         return Decimal("0")
     # Only plan keys appear in ``shares``; stage/non-plan not_started keys are out of pool.
     peers = (set(not_started) | {task_key}) & set(shares)
-    denom = sum(Decimal(str(shares[k])) for k in peers)
+    denom = sum(_as_decimal(shares[k], what=f"budget_share[{k}]") for k in peers)
     if denom <= 0:
         return Decimal("0")
     return (pool * share_i / denom).quantize(Decimal("0.0001"))
+
 
 def compute_p2_allocation(
     runtime: Any, task: Task
@@ -121,7 +132,8 @@ def compute_p2_allocation(
 
     Retries: caller must reuse a prior journaled cap (no re-allocation).
     """
-    assert runtime.study is not None
+    if runtime.study is None:
+        raise RuntimeError("P2 allocation requires an open study")
     study: Study = runtime.study
     now = runtime.clock.now()
     ed = study.effective_deadline()
@@ -142,16 +154,16 @@ def compute_p2_allocation(
         deadline = min(task.deadline, renormed, ed)
     else:
         deadline = min(task.deadline, ed)
-    spent = Decimal(str(runtime._study_spent_rub))
+    spent = _as_decimal(runtime._study_spent_rub, what="study_spent_rub")
     outstanding = outstanding_task_allocations(runtime)
     # Do not count self if somehow already capped (retry path uses fixed cap).
-    caps = getattr(runtime, "_task_budget_alloc", None) or {}
-    spent_map = getattr(runtime, "_task_spent_rub", None) or {}
+    caps = runtime._task_budget_alloc
+    spent_map = runtime._task_spent_rub
     prior = caps.get(task.task_id)
     if prior is not None:
         self_rem = max(
             Decimal("0"),
-            Decimal(str(prior)) - _spent_for_cap(spent_map, task.task_id),
+            _as_decimal(prior, what="prior alloc") - _spent_for_cap(spent_map, task.task_id),
         )
         outstanding = max(Decimal("0"), outstanding - self_rem)
     budget = allocate_budget(
@@ -164,6 +176,7 @@ def compute_p2_allocation(
     )
     return deadline, budget, do_renorm
 
+
 def p2_share_payload_fields(runtime: Any, task: Task) -> dict[str, Any]:
     """Fields merged into AttemptStarted for journaled share allocation.
 
@@ -173,12 +186,12 @@ def p2_share_payload_fields(runtime: Any, task: Task) -> dict[str, Any]:
     use ``would_exceed_budget_limit`` in M2. Until then overrun is recorded
     post-hoc and the cap only forbids retries.
     """
-    caps = getattr(runtime, "_task_budget_alloc", None) or {}
-    spent_map = getattr(runtime, "_task_spent_rub", None) or {}
+    caps = runtime._task_budget_alloc
+    spent_map = runtime._task_spent_rub
     prior = caps.get(task.task_id)
     deadline, budget, renormed = compute_p2_allocation(runtime, task)
     if prior is not None:
-        budget = Decimal(str(prior))
+        budget = _as_decimal(prior, what="prior alloc")
         spent = _spent_for_cap(spent_map, task.task_id)
     elif task.task_id in spent_map:
         spent = _spent_for_cap(spent_map, task.task_id)
@@ -188,13 +201,14 @@ def p2_share_payload_fields(runtime: Any, task: Task) -> dict[str, Any]:
     if budget is None:
         limit: Decimal | None = None
     else:
-        limit = max(Decimal("0"), Decimal(str(budget)) - spent)
+        limit = max(Decimal("0"), _as_decimal(budget, what="budget") - spent)
     return {
         "deadline": deadline.isoformat(),
         "allocated_budget_rub": None if budget is None else str(budget),
         "budget_limit_rub": None if limit is None else str(limit),
         "share_renorm": renormed,
     }
+
 
 def agent_raises_budget_share(
     *,
@@ -204,7 +218,12 @@ def agent_raises_budget_share(
 ) -> str | None:
     """Reject agent expansions that raise their own (or total) budget_share."""
     prev_res = resolve_shares(prev_tasks, "budget_share")
-    after_cap = float(prev_res.get(after_task or "", 0.0)) if after_task else None
+    if after_task is None:
+        after_cap = None
+    elif after_task in prev_res:
+        after_cap = prev_res[after_task]
+    else:
+        after_cap = 0.0
     explicit_added = 0.0
     any_explicit = False
     for t in added_tasks:
@@ -233,12 +252,13 @@ def agent_raises_budget_share(
         return f"agent_share_raise:total:{explicit_added}>{prev_explicit}"
     return None
 
+
 async def enforce_task_budget_share(runtime: Any, task_id: str) -> None:
     """If task spend > allocated share → SKIPPED(budget). Does not close study."""
     from coscientist.core.claims.reasons import TaskReason
 
-    caps = getattr(runtime, "_task_budget_alloc", None) or {}
-    spent_map = getattr(runtime, "_task_spent_rub", None) or {}
+    caps = runtime._task_budget_alloc
+    spent_map = runtime._task_spent_rub
     if task_id not in caps:
         return
     cap = caps[task_id]
@@ -246,14 +266,15 @@ async def enforce_task_budget_share(runtime: Any, task_id: str) -> None:
         return
     spent = _spent_for_cap(spent_map, task_id)
     # Exceed only when spent > cap (equality is still within share).
-    if spent <= Decimal(str(cap)):
+    if spent <= _as_decimal(cap, what=f"task alloc {task_id!r}"):
         return
-    task = (getattr(runtime, "tasks", None) or {}).get(task_id)
+    task = runtime.tasks.get(task_id)
     if task is None or task.state == TaskState.DONE:
         return
     await runtime.cancel_task(
         task_id, reason=TaskReason.BUDGET, detail="task_share_exhausted"
     )
+
 
 async def attempt_share_fields_or_refuse(
     runtime: Any, task: Task
@@ -267,12 +288,13 @@ async def attempt_share_fields_or_refuse(
 
     fields = p2_share_payload_fields(runtime, task)
     alloc = fields.get("allocated_budget_rub")
-    if alloc is not None and Decimal(str(alloc)) <= 0:
+    if alloc is not None and _as_decimal(alloc, what="allocated_budget_rub") <= 0:
         await runtime.cancel_task(
             task.task_id, reason=TaskReason.BUDGET, detail="zero_share_or_pool"
         )
         return None
     return fields
+
 
 def would_exceed_budget_limit(
     *,
@@ -287,7 +309,12 @@ def would_exceed_budget_limit(
     """
     if limit is None:
         return False
-    return Decimal(str(spent_so_far)) + Decimal(str(next_cost)) > Decimal(str(limit))
+    return (
+        _as_decimal(spent_so_far, what="spent_so_far")
+        + _as_decimal(next_cost, what="next_cost")
+        > _as_decimal(limit, what="budget_limit")
+    )
+
 
 def budget_debit_event(
     *,
@@ -301,16 +328,18 @@ def budget_debit_event(
     """Build ``BudgetDebited`` for the same append batch as the attempt result."""
     from coscientist.core.events.events import EventEnvelope, make_idem
 
-    spent = Decimal(str(spent_rub))
+    spent = _as_decimal(spent_rub, what="spent_rub")
     if spent <= 0:
         return None
     payload: dict[str, Any] = {
         "spent_rub": str(spent),
         "request_id": request_id,
-        **(extra or {}),
     }
+    if extra is not None:
+        payload.update(extra)
     if task_id:
         payload["task_id"] = task_id
+    actual_rub = payload["actual_rub"] if "actual_rub" in payload else spent
     return EventEnvelope(
         study_id=study_id,
         type="BudgetDebited",
@@ -319,12 +348,13 @@ def budget_debit_event(
             "BudgetDebited",
             request_id,
             str(spent),
-            str(payload.get("actual_rub", spent)),
+            str(actual_rub),
         ),
         payload=payload,
         ts=ts,
         schema_version=writer_schema_version('BudgetDebited'),
     )
+
 
 def make_budget_debit_cb(runtime: Any) -> Any:
     """Post-append hook after atomic ``BudgetDebited`` (enforce + study exhaust).
@@ -350,6 +380,7 @@ def make_budget_debit_cb(runtime: Any) -> Any:
 
     return _cb
 
+
 def build_budget_shares_payload(
     runtime: Any,
     *,
@@ -360,51 +391,101 @@ def build_budget_shares_payload(
     """Critic-validate HITL budget shares; return (error, payload) for journaling."""
     from coscientist.core.plan.shares import critic_plan_shares
 
-    plans = getattr(runtime, "plans", None) or {}
+    plans = runtime.plans
     if not plans:
         return "no_plan", None
-    prev = max(plans.values(), key=lambda p: int(p.get("revision") or 0))
-    raw_tasks = list(prev.get("tasks") or [])
-    bmap = {str(k): float(v) for k, v in budget_shares.items()}
-    dmap = {str(k): float(v) for k, v in (deadline_shares or {}).items()}
-    specs: list[TaskSpec] = []
+    def _revision(p: dict[str, Any]) -> int:
+        raw = p.get("revision")
+        if raw is None:
+            raise JournalFormatError("plan revision missing")
+        if type(raw) is bool or not isinstance(raw, int):
+            raise JournalFormatError(f"plan revision must be int, got {type(raw).__name__}")
+        return raw
+
+    prev = max(plans.values(), key=_revision)
+    raw_tasks = prev.get("tasks")
+    if raw_tasks is None:
+        raise JournalFormatError("plan tasks missing")
+    if not isinstance(raw_tasks, list):
+        raise JournalFormatError("plan tasks must be a list")
+    bmap = {}
+    for k, v in budget_shares.items():
+        if not isinstance(k, str):
+            raise JournalFormatError(f"budget_shares key must be str, got {type(k).__name__}")
+        if type(v) is bool or not isinstance(v, (int, float)):
+            raise JournalFormatError(f"budget_shares[{k!r}] must be numeric")
+        bmap[k] = float(v)  # audit-ok: coerce after int|float type gate
+    dmap = {}
+    if deadline_shares is not None:
+        for k, v in deadline_shares.items():
+            if not isinstance(k, str):
+                raise JournalFormatError(
+                    f"deadline_shares key must be str, got {type(k).__name__}"
+                )
+            if type(v) is bool or not isinstance(v, (int, float)):
+                raise JournalFormatError(f"deadline_shares[{k!r}] must be numeric")
+            dmap[k] = float(v)  # audit-ok: coerce after int|float type gate
+    specs = []
     for t in raw_tasks:
         spec = t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t)
         key = spec.task_key
-        upd: dict[str, Any] = {}
+        upd = {}
         if key in bmap:
             upd["budget_share"] = bmap[key]
         if key in dmap:
             upd["deadline_share"] = dmap[key]
         specs.append(spec.model_copy(update=upd) if upd else spec)
-    err = critic_plan_shares(specs, study=getattr(runtime, "study", None))
+    err = critic_plan_shares(specs, study=runtime.study)
     if err is not None:
         return err, None
+    plan_id = prev.get("plan_id")
+    if plan_id is None:
+        raise JournalFormatError("plan_id missing")
+    if not isinstance(plan_id, str):
+        raise JournalFormatError(f"plan_id must be str, got {type(plan_id).__name__}")
     return None, {
         "request_id": request_id,
-        "plan_id": str(prev.get("plan_id") or ""),
+        "plan_id": plan_id,
         "budget_shares": bmap,
         "deadline_shares": dmap,
         "tasks": [s.model_dump(mode="json") for s in specs],
     }
 
+
 def fold_budget_shares_adjusted(runtime: Any, payload: dict[str, Any]) -> None:
     """Fold BudgetSharesAdjusted into active plan blob + live Task.spec (replay==live)."""
-    tasks_payload = payload.get("tasks") or []
+    tasks_payload = payload.get("tasks")
+    if tasks_payload is None:
+        return
+    if not isinstance(tasks_payload, list):
+        raise JournalFormatError("BudgetSharesAdjusted.tasks must be a list")
     if not tasks_payload:
         return
     specs = [
         t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t) for t in tasks_payload
     ]
     by_key = {s.task_key: s for s in specs}
-    plans = getattr(runtime, "plans", None) or {}
-    pid = str(payload.get("plan_id") or "")
-    target = plans.get(pid) if pid else None
+    plans = runtime.plans
+    pid_raw = payload.get("plan_id")
+    if isinstance(pid_raw, str) and pid_raw:
+        target = plans.get(pid_raw)
+    else:
+        target = None
     if target is None and plans:
-        target = max(plans.values(), key=lambda p: int(p.get("revision") or 0))
+        def _revision(p: dict[str, Any]) -> int:
+            raw = p.get("revision")
+            if raw is None:
+                raise JournalFormatError("plan revision missing")
+            if type(raw) is bool or not isinstance(raw, int):
+                raise JournalFormatError(
+                    f"plan revision must be int, got {type(raw).__name__}"
+                )
+            return raw
+
+        target = max(plans.values(), key=_revision)
     if isinstance(target, dict):
         target["tasks"] = [s.model_dump(mode="json") for s in specs]
-    live = getattr(runtime, "tasks", None) or {}
+    live = runtime.tasks
     for tid, task in list(live.items()):
         ns = by_key.get(task.spec.task_key)
         if ns is not None:
