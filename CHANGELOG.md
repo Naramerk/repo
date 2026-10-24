@@ -53,16 +53,17 @@
   `env_keys` / `api_key_env` via `Identifier`; `command` via `Executable`
   (inner spaces OK for paths like `Program Files`; no leading/trailing).
   Shared types in `mcp/config.py`. Parity:
-  [DESIGN §6.0](docs/DESIGN.md#60-тонкий-mcp-клиент-coscientistmcp-m2-prep-a7) /
+  [DESIGN §6.0](docs/DESIGN.md#60-тонкий-mcp-клиент-coscientistmcp-m2-prep--a7) /
   [CAPABILITIES #8/#21](docs/CAPABILITIES.md).
 - `McpServers` = unique-name `tuple[McpServerConfig, ...]` (single uniqueness
   owner for `McpClientConfig.servers`).
 - Tests: list `args` refused; Identifier empty vs whitespace messages split;
-  Executable empty / leading / trailing; inner spaces OK; `api_key_env=5`;
-  URL whitespace.
+  Executable empty / leading / trailing; inner spaces OK; `api_key_env` int /
+  empty / `"MY KEY"`; URL whitespace.
 - **Follow-up:** YAML profile loader (P3) must use `model_validate_json` (no
-  list→tuple shim); owner after [#62](https://github.com/Naramerk/repo/pull/62)
-  + N1 in [#70](https://github.com/Naramerk/repo/pull/70).
+  list→tuple shim); opens after [#62](https://github.com/Naramerk/repo/pull/62)
+  + N1 [#70](https://github.com/Naramerk/repo/pull/70) (loader PR number TBD
+  when filed).
 
 
 ### Docs — capability #21 A2A/MCP handoff

@@ -145,6 +145,26 @@ def test_http_api_key_env_int_refused() -> None:
     assert _err(ei.value) == (("api_key_env",), "string_type")
 
 
+@pytest.mark.parametrize(
+    ("bad", "msg"),
+    [
+        pytest.param("", "must be non-empty", id="empty"),
+        pytest.param("MY KEY", "must not contain whitespace", id="inner_ws"),
+    ],
+)
+def test_http_api_key_env_identifier_refused(bad: str, msg: str) -> None:
+    with pytest.raises(ValidationError, match=msg) as ei:
+        StreamableHttpServerConfig.model_validate(
+            {
+                "transport": "streamable_http",
+                "name": "remote",
+                "url": "https://mcp.example/mcp",
+                "api_key_env": bad,
+            }
+        )
+    assert _err(ei.value) == (("api_key_env",), "value_error")
+
+
 def test_http_url_whitespace_refused() -> None:
     with pytest.raises(ValidationError, match="url") as ei:
         StreamableHttpServerConfig.model_validate(
