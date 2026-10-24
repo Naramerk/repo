@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+<<<<<<< HEAD
 ### G6 JobStore + Job* events [M3]
 - `coscientist.tools.jobs`: `Job` / `JobStore` Protocol + journaled `InMemoryJobStore` (DESIGN §6.4).
 - FakeClock `on_change` + unsubscribe; JobStore takes explicit `on_clock_change` (core `Clock` stays `now()`-only); `close()` unsubscribes.
@@ -9,6 +10,10 @@
 - Contract: idempotent submit by `(attempt_id, spec_digest)`; one live job per attempt → `ToolError(local)`; deadline → `JobTimedOut` + `cancel` → `JobCancelled` (or `JobCancelFailed`); `wait` does not revive `timed_out`.
 - No `core/ports.py` change; coder/alembic backends and jobs projection fold = follow-ups (C1 / G19).
 - Parity: [DESIGN §6.4](docs/DESIGN.md#64-coder-и-alembic-как-асинхронные-задачи-r4), [CAP #11](docs/CAPABILITIES.md), issue [#130](https://github.com/Naramerk/repo/issues/130).
+=======
+### MCP live servers (literature) [M1]
+- `mcp_live`: `literature_live_bundle` → HTTP `papers-search`/`paper-analysis` + `open_tool_router`; `mcp-servers/docker-compose.yml` (`COSCIENTIST_DEV_ROOT`). [DESIGN §13](docs/DESIGN.md#13-вехи), [§12.2](docs/DESIGN.md#122-сценарии-и-пороги), [CAP #3/#8](docs/CAPABILITIES.md).
+>>>>>>> 487b396 ([M1] mcp_live: literature HTTP bundle + docker-compose for legacy servers)
 
 ### ToolRouter(MCP) [M1]
 - `coscientist.tools.router.ToolRouter`: explicit `ToolRouterConfig` / `McpServerRoute` (no discovery); routes `(server, tool)` calls through `mcp_adapter` → `McpClient`; fail-closed on unknown server/tool; `ToolRouterCloseError` with required `causes`. [DESIGN §6.3](docs/DESIGN.md#63-маршрутизация-и-alembic-fallback), [CAP #8](docs/CAPABILITIES.md?plain=1#L17).
