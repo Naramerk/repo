@@ -67,8 +67,9 @@ def _unrec(rt: Any) -> None:
         ({"needed": True, "reason": ""}, "at least 1 character"),
         ({"needed": True, "reason": "  "}, r"Need\.reason must be non-empty"),
         ({"needed": "yes", "reason": "x"}, "valid boolean"),
+        ({"needed": 1, "reason": "x"}, "valid boolean"),
     ],
-    ids=["empty_reason", "whitespace_reason", "str_bool"],
+    ids=["empty_reason", "whitespace_reason", "str_bool", "int_bool"],
 )
 def test_need_rejects_bad_shape(kwargs: dict, match: str) -> None:
     with pytest.raises(ValidationError, match=match):
@@ -162,41 +163,58 @@ def test_require_need_refuses_parsed_unrecorded() -> None:
         require_need(parse_plan_need(NEED_UNRECORDED))
 
 
+async def _assert_one_refuse(rt: Any, etype: str) -> None:
+    refused = [e for e in await rt.store.read_all() if e.type == etype]
+    assert len(refused) == 1
+    assert refused[0].payload["detail"] == _DETAIL
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path", ["expand", "foreach", "loop"], ids=["expand", "foreach", "loop"])
-async def test_prod_path_refuses_need_unrecorded(tmp_path, path: str) -> None:
-    """NeedUnrecorded on active plan → typed refuse in journal (expand/foreach/loop)."""
-    rt = await open_runtime(tmp_path, f"g4-{path}")
+async def test_expand_refuses_need_unrecorded(tmp_path) -> None:
+    rt = await open_runtime(tmp_path, "g4-exp-unrec")
     try:
         await rt.create_study(profile="t", request="q", catalog_version=3)
-        if path == "expand":
-            await rt.accept_plan([_EXP], hypotheses=NEED_OFF, literature=NEED_OFF)
-            _unrec(rt)
-            pid = await rt.expand_plan(
-                after_task="EXP-1",
-                added_tasks=[TaskSpec(task_key="EXP-2", title="e2", goal="e2", route="experiment")],
-            )
-            etype = "ExpansionRefused"
-        elif path == "foreach":
-            await rt.accept_plan(
-                [_E0, _FE], questions=_Q1, hypotheses=NEED_OFF, literature=NEED_OFF
-            )
-            _unrec(rt)
-            pid = await materialize_foreach(
-                rt, template=rt.tasks[task_id(f"g4-{path}", "FE")], items=["H1"]
-            )
-            etype = "ExpansionRefused"
-        else:
-            await rt.accept_plan(
-                [], questions=_Q1, loops=[], hypotheses=NEED_OFF, literature=NEED_OFF
-            )
-            _unrec(rt)
-            pid = await materialize_loop_iter(rt, _LOOP, iter_n=1)
-            etype = "LoopRefused"
+        await rt.accept_plan([_EXP], hypotheses=NEED_OFF, literature=NEED_OFF)
+        _unrec(rt)
+        pid = await rt.expand_plan(
+            after_task="EXP-1",
+            added_tasks=[TaskSpec(task_key="EXP-2", title="e2", goal="e2", route="experiment")],
+        )
         assert pid is None
-        refused = [e for e in await rt.store.read_all() if e.type == etype]
-        assert len(refused) == 1
-        assert refused[0].payload["detail"] == _DETAIL
+        await _assert_one_refuse(rt, "ExpansionRefused")
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_foreach_refuses_need_unrecorded(tmp_path) -> None:
+    rt = await open_runtime(tmp_path, "g4-fe-unrec")
+    try:
+        await rt.create_study(profile="t", request="q", catalog_version=3)
+        await rt.accept_plan(
+            [_E0, _FE], questions=_Q1, hypotheses=NEED_OFF, literature=NEED_OFF
+        )
+        _unrec(rt)
+        pid = await materialize_foreach(
+            rt, template=rt.tasks[task_id("g4-fe-unrec", "FE")], items=["H1"]
+        )
+        assert pid is None
+        await _assert_one_refuse(rt, "ExpansionRefused")
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_loop_refuses_need_unrecorded(tmp_path) -> None:
+    rt = await open_runtime(tmp_path, "g4-loop-unrec")
+    try:
+        await rt.create_study(profile="t", request="q", catalog_version=3)
+        await rt.accept_plan(
+            [], questions=_Q1, loops=[], hypotheses=NEED_OFF, literature=NEED_OFF
+        )
+        _unrec(rt)
+        assert await materialize_loop_iter(rt, _LOOP, iter_n=1) is None
+        await _assert_one_refuse(rt, "LoopRefused")
     finally:
         await close_runtime(rt)
 
@@ -210,5 +228,15 @@ async def test_accept_plan_omit_refuses(tmp_path) -> None:
         refused = [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
         assert len(refused) == 1
         assert refused[0].payload["detail"] == "plan_need_required:hypotheses"
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_accept_plan_explicit_need_off(tmp_path) -> None:
+    rt = await open_runtime(tmp_path, "g4-need")
+    try:
+        await rt.create_study(profile="t", request="q", catalog_version=3)
+        assert await rt.accept_plan([_EXP], hypotheses=NEED_OFF, literature=NEED_OFF)
     finally:
         await close_runtime(rt)
