@@ -205,7 +205,6 @@ name = "agents layer above tools and llm"
 type = "layers"
 layers = [
   "coscientist.agents",
-  "coscientist.agents.adapter",
   "coscientist.tools | coscientist.llm",
 ]
 
