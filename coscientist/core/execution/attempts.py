@@ -11,6 +11,7 @@ from coscientist.core.claims.reasons import CloseReason, TaskReason, coerce_clos
 from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import attempt_id, task_id
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.schema_versions import (
     ATTEMPT_CLOSED_SCHEMA_VERSION,
     ATTEMPT_STARTED_SCHEMA_VERSION,
@@ -34,7 +35,6 @@ from coscientist.core.execution.inputs import (
 )
 from coscientist.core.execution.quorum import bind_input_groups
 
-from coscientist.core.events.mapping import optional_item
 # Persisted on AttemptClosed.retry_at; fired by StudyRuntime.tick vs injected Clock.
 RETRY_BACKOFF_S = 0.05
 
@@ -379,9 +379,13 @@ class AttemptsMixin:
                             addrs = set(spec.addresses)
                             if addrs & set(need):
                                 cover_keys.add(spec.task_key)
-                cover_tasks = [t for t in self.tasks.values() if t.spec.task_key in cover_keys] or list(  # audit-ok[or_call]: attempts.py L382 or_call structural path not inventing domain value
-                    self.tasks.values()
-                )
+                matched_cover = [
+                    t for t in self.tasks.values() if t.spec.task_key in cover_keys
+                ]
+                if matched_cover:
+                    cover_tasks = matched_cover
+                else:
+                    cover_tasks = list(self.tasks.values())
                 any_exp = any(
                     t.state == TaskState.DONE
                     and t.outcome
@@ -568,7 +572,7 @@ class AttemptsMixin:
 
         lim_payload = []
         for lim in limitations:
-            if hasattr(lim, "model_dump"):  # audit-ok[hasattr]: attempts.py L571 hasattr structural path not inventing domain value
+            if hasattr(lim, "model_dump"):  # audit-ok[hasattr]: attempts.py:571 hasattr
                 lim_payload.append(lim.model_dump(mode="json"))
             elif isinstance(lim, dict):
                 lim_payload.append(dict(lim))

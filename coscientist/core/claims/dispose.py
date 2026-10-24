@@ -27,12 +27,12 @@ from coscientist.core.claims.reasons import Disposition
 from coscientist.core.events.digest import sha256_hex
 from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import UnstampedEvent, make_idem
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.schema_versions import (
     QUESTION_DISPOSE_REJECTED_SCHEMA_VERSION,
     QUESTION_DISPOSED_SCHEMA_VERSION,
 )
 
-from coscientist.core.events.mapping import optional_item
 ExplicitDisposition = Literal["needs_more_data", "infeasible"]
 EXPLICIT_DISPOSITIONS: frozenset[str] = frozenset({"needs_more_data", "infeasible"})
 
@@ -120,7 +120,7 @@ def _refs_ok(refs: list[Any]) -> bool:
         try:
             _coerce_dispose_ref(r)
         except DisposeRejected:
-            return False  # audit-ok[except_silent_return]: dispose.py L123 except_silent_return structural path not inventing domain value
+            return False  # audit-ok[except_silent_return]: dispose.py:123 except_silent_return
     return True
 
 
@@ -373,7 +373,7 @@ async def dispose_question(
                 question_id=qid_hint,
                 disposition=disp_hint,
             )
-            return None  # audit-ok[except_silent_return]: dispose.py L376 except_silent_return structural path not inventing domain value
+            return None  # audit-ok[except_silent_return]: dispose.py:376 except_silent_return
     qid_hint = disposal.question_id
     disp_hint = disposal.disposition
     try:
@@ -403,7 +403,7 @@ async def dispose_question(
             journal_kinds=_dict_or_none(kinds),
             tasks=tasks,
             results=results,
-            covering_task_keys=set(cover.get(disposal.question_id, set())),  # audit-ok[dict_get_default]: dispose.py L406 dict_get_default structural path not inventing domain value
+            covering_task_keys=set(cover.get(disposal.question_id, set())),  # audit-ok[dict_get_default]: d406
         )
     except DisposeRejected as e:
         await _journal_reject(
@@ -414,7 +414,7 @@ async def dispose_question(
             question_id=qid_hint,
             disposition=disp_hint,
         )
-        return None  # audit-ok[except_silent_return]: dispose.py L417 except_silent_return structural path not inventing domain value
+        return None  # audit-ok[except_silent_return]: dispose.py:417 except_silent_return
     try:
         finalized = runtime._finalized
     except AttributeError as e:
@@ -429,13 +429,13 @@ async def dispose_question(
     try:
         append = runtime._append
     except AttributeError:
-        return None  # audit-ok[except_silent_return]: dispose.py L432 except_silent_return structural path not inventing domain value
+        return None  # audit-ok[except_silent_return]: dispose.py:432 except_silent_return
     try:
         await append([ev])
     except LeaseLost:
         raise
     except StudyClosedError:
-        return None  # audit-ok[except_silent_return]: dispose.py L438 except_silent_return structural path not inventing domain value
+        return None  # audit-ok[except_silent_return]: dispose.py:438 except_silent_return
     return disposal.question_id
 
 
@@ -467,13 +467,13 @@ async def _journal_reject(
     try:
         append = runtime._append
     except AttributeError:
-        return  # audit-ok[except_silent_return]: dispose.py L470 except_silent_return structural path not inventing domain value
+        return  # audit-ok[except_silent_return]: dispose.py:470 except_silent_return
     try:
         await append([ev])
     except LeaseLost:
         raise
     except StudyClosedError:
-        return  # audit-ok[except_silent_return]: dispose.py L476 except_silent_return structural path not inventing domain value
+        return  # audit-ok[except_silent_return]: dispose.py:476 except_silent_return
     # Live mirror only after durable append; fold re-applies on replay.
     if "report_line" not in ev.payload:
         raise JournalFormatError("QuestionDisposeRejected missing report_line")

@@ -1,5 +1,58 @@
+"""Executor.record — sole result-write path (DESIGN §4)."""
 
-def _maybe_value(obj, attr="value"):  # audit-ok[param_default]: executor.py L2 param_default structural path not inventing domain value
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import Mapping
+from datetime import timedelta
+from decimal import Decimal
+from typing import Any, cast
+
+from coscientist.checks.evaluate import evaluate_task_checks, role_from_catalog
+from coscientist.core.claims.reasons import CloseReason, TaskReason
+from coscientist.core.events.digest import canonical_json, payload_digest, sha256_hex
+from coscientist.core.events.errors import (
+    AttemptClosedError,
+    CatalogError,
+    CoreBugError,
+    JournalFormatError,
+    SandboxInfraError,
+)
+from coscientist.core.events.events import UnstampedEvent, make_idem
+from coscientist.core.events.ids import criterion_node_id, result_id
+from coscientist.core.events.mapping import optional_item
+from coscientist.core.events.schema_versions import (
+    ATTEMPT_CLOSED_SCHEMA_VERSION,
+    DOWNGRADE_REJECTED_SCHEMA_VERSION,
+    LATE_WRITE_REJECTED_SCHEMA_VERSION,
+    RESULT_PENDING_SCHEMA_VERSION,
+    RESULT_RECORDED_SCHEMA_VERSION,
+    REVIEW_RECORDED_SCHEMA_VERSION,
+    ROUTE_RETURNED_SCHEMA_VERSION,
+    TASK_DONE_SCHEMA_VERSION,
+)
+from coscientist.core.events.upcasters import writer_schema_version
+from coscientist.core.events.writer import StudyWriter
+from coscientist.core.execution.artifacts import LocalArtifactStore
+from coscientist.core.execution.attempts import RETRY_BACKOFF_S
+from coscientist.core.execution.domain import (
+    VALID_PROVENANCE,
+    AgentTaskOutput,
+    Catalog,
+    CriterionStatus,
+    ExperimentMethod,
+    Outcome,
+    Provenance,
+    ReqStatus,
+    Result,
+    TaskOutcome,
+)
+from coscientist.core.execution.inputs import claim_nodes_from_attempt
+from coscientist.core.execution.outcome import compute_outcome
+
+
+def _maybe_value(obj, attr="value"):  # audit-ok[param_default]: executor.py:56 param_default
     if obj is None:
         return None
     return getattr(obj, attr)
@@ -34,60 +87,40 @@ def _join_or(kinds, fallback):
         return ";".join(kinds)
     return fallback
 
-"""Executor.record — sole result-write path (DESIGN §4)."""
 
-from __future__ import annotations
-
-import asyncio
-import logging
-from collections.abc import Mapping
-from datetime import timedelta
-from decimal import Decimal
-from typing import Any, cast
-
-from coscientist.checks.evaluate import evaluate_task_checks, role_from_catalog
-from coscientist.core.claims.reasons import CloseReason, TaskReason
-from coscientist.core.events.digest import canonical_json, payload_digest, sha256_hex
-from coscientist.core.events.errors import (
-    AttemptClosedError,
-    CatalogError,
-    CoreBugError,
-    JournalFormatError,
-    SandboxInfraError,
-)
-from coscientist.core.events.events import UnstampedEvent, make_idem
-from coscientist.core.events.ids import criterion_node_id, result_id
-from coscientist.core.events.schema_versions import (
-    ATTEMPT_CLOSED_SCHEMA_VERSION,
-    DOWNGRADE_REJECTED_SCHEMA_VERSION,
-    LATE_WRITE_REJECTED_SCHEMA_VERSION,
-    RESULT_PENDING_SCHEMA_VERSION,
-    RESULT_RECORDED_SCHEMA_VERSION,
-    REVIEW_RECORDED_SCHEMA_VERSION,
-    ROUTE_RETURNED_SCHEMA_VERSION,
-    TASK_DONE_SCHEMA_VERSION,
-)
-from coscientist.core.events.upcasters import writer_schema_version
-from coscientist.core.events.writer import StudyWriter
-from coscientist.core.execution.artifacts import LocalArtifactStore
-from coscientist.core.execution.attempts import RETRY_BACKOFF_S
-from coscientist.core.execution.domain import (
-    VALID_PROVENANCE,
-    AgentTaskOutput,
-    Catalog,
-    CriterionStatus,
-    ExperimentMethod,
-    Outcome,
-    Provenance,
-    ReqStatus,
-    Result,
-    TaskOutcome,
-)
-from coscientist.core.execution.inputs import claim_nodes_from_attempt
-from coscientist.core.execution.outcome import compute_outcome
+def _spec_criteria(spec: object) -> object:
+    if spec is None:
+        return None
+    return spec.criteria  # type: ignore[attr-defined]
 
 
-from coscientist.core.events.mapping import optional_item
+def _valid_label(validity_ok: bool) -> str:
+    if validity_ok:
+        return "valid"
+    return "invalid"
+
+
+def _role_or_prediction(has_prediction_check: bool, role: object) -> object:
+    if has_prediction_check:
+        return "prediction"
+    return role
+
+
+def _lit_own(lit: object, criteria: object) -> bool:
+    if not lit:
+        return False
+    if not criteria:
+        return False
+    return True
+
+
+def _outcome_from_payload(payload: Mapping[str, Any]) -> Outcome | None:
+    ac = optional_item(payload, "agent_claim")
+    if ac is None:
+        return None
+    return Outcome(ac)
+
+
 def _or_empty_str(value: object) -> str:
     if value is None:
         return ""
@@ -141,7 +174,7 @@ def _attempt_get(attempt: Any, name: str) -> Any:
     try:
         return getattr(attempt, name)
     except AttributeError:
-        return None  # audit-ok[except_silent_return]: executor.py L144 except_silent_return structural path not inventing domain value
+        return None  # audit-ok[except_silent_return]: executor.py:177 except_silent_return
 
 
 def _attempt_req(attempt: Any, name: str) -> Any:
@@ -173,7 +206,7 @@ def _check_field(c: Any, name: str) -> Any:
     try:
         return getattr(c, name)
     except AttributeError:
-        return None  # audit-ok[except_silent_return]: executor.py L176 except_silent_return structural path not inventing domain value
+        return None  # audit-ok[except_silent_return]: executor.py:209 except_silent_return
 
 def _normalize_to_template_id(key: str, checks: list[Any], criteria: list[Any]) -> str:
     """Map check_id (``value_match#0``) → template_id; leave template_id as-is."""
@@ -348,12 +381,12 @@ def _criterion_freeze_attrs(graph: Any, study_id: str, template_id: Any) -> dict
         try:
             out["sesoi"] = attrs["sesoi"]
         except (TypeError, ValueError):
-            pass  # audit-ok[except_pass]: executor.py L351 except_pass structural path not inventing domain value
+            pass  # audit-ok[except_pass]: executor.py:384 except_pass
     if optional_item(attrs, "alpha") is not None:
         try:
             out["alpha"] = attrs["alpha"]
         except (TypeError, ValueError):
-            pass  # audit-ok[except_pass]: executor.py L356 except_pass structural path not inventing domain value
+            pass  # audit-ok[except_pass]: executor.py:389 except_pass
     if "predicts_null" in attrs:
         out["predicts_null"] = optional_item(attrs, "predicts_null") is True
     if "uses_sesoi" in attrs:
@@ -422,7 +455,7 @@ def _effect_from_checks(
             if recomputed is not None:
                 effect = recomputed
         except (TypeError, ValueError, KeyError):
-            continue  # audit-ok[except_silent_continue]: executor.py L425 except_silent_continue structural path not inventing domain value
+            continue  # audit-ok[except_silent_continue]: executor.py:458 except_silent_continue
         used = _check_field(c, "used_sesoi") is True
         return effect, used
     return None, False
@@ -494,7 +527,11 @@ def _derive_claim_core_attrs(
             exclusion_reason = specific
         else:
             exclusion_reason = "unknown_role"
-    elif role == "validity" and status == CriterionStatus.NOT_MET.value and not any(_is_rubric_check(c) for c in (_or_empty_tuple(checks))):
+    elif (
+        role == "validity"
+        and status == CriterionStatus.NOT_MET.value
+        and not any(_is_rubric_check(c) for c in (_or_empty_tuple(checks)))
+    ):
         validity_ok = False
         status = CriterionStatus.UNASSESSED.value
         exclusion_reason = "validity_failed"
@@ -624,8 +661,8 @@ def _derive_claim_core_attrs(
     exp_id = ""
     try:
         exp_id = _or_empty_str(task.task_id)
-    except Exception:  # noqa: BLE001  # audit-ok[broad_except]: executor.py L627 broad_except structural path not inventing domain value
-        exp_id = ""  # audit-ok[except_enum_default]: executor.py L628 except_enum_default structural path not inventing domain value
+    except Exception:  # noqa: BLE001  # audit-ok[broad_except]: executor.py:660 broad_except
+        exp_id = ""  # audit-ok[except_enum_default]: executor.py:661 except_enum_default
     lookup = None
     arts = artifact_store
     if arts is not None:
@@ -700,7 +737,7 @@ def _derive_claim_core_attrs(
         and isinstance(sesoi, float)
         and used_sesoi
         and effect_is_countable(effect)
-        and (effect_has_interval(effect) if predicts_null else True)  # audit-ok[ternary_name]: executor.py L703 ternary_name structural path not inventing domain value
+        and (effect_has_interval(effect) if predicts_null else True)  # audit-ok[ternary_name]: e736
     )
     from coscientist.core.claims.derivation import (
         EVIDENCE_KIND_DERIVATION,
@@ -945,7 +982,7 @@ class Executor:
                     plan_role=task.plan_role,
                     fetched_digests=fetch_idx.digests_for_attempt(attempt_id),
                     proposals=(
-                        (proposals if isinstance(proposals, dict) else _EMPTY)  # audit-ok[ternary_name]: executor.py L948 ternary_name structural path not inventing domain value
+                        (proposals if isinstance(proposals, dict) else {})  # audit-ok[ternary_name]: e981
                     ),
                     attempts=attempts_bag,
                     results_by_id=_as_dict_or_none(results_bag),
@@ -958,7 +995,7 @@ class Executor:
                 detail = e.reason
                 transient = e.transient is True
                 provenance = _provenance(self.get_attempt(attempt_id))
-                return await self._commit_failure(  # audit-ok[except_silent_return]: executor.py L961 except_silent_return structural path not inventing domain value
+                return await self._commit_failure(  # audit-ok[except_silent_return]: e994
                     attempt_id,
                     study_id,
                     task_id,
@@ -975,7 +1012,7 @@ class Executor:
             except CoreBugError as e:
                 # Own result_class (not infra); reported; never counts.
                 provenance = _provenance(self.get_attempt(attempt_id))
-                return await self._commit_failure(  # audit-ok[except_silent_return]: executor.py L978 except_silent_return structural path not inventing domain value
+                return await self._commit_failure(  # audit-ok[except_silent_return]: e1011
                     attempt_id,
                     study_id,
                     task_id,
@@ -1169,7 +1206,7 @@ class Executor:
         try:
             computed, downgrade = compute_outcome(checks, claim, reason, provenance)
         except CatalogError as e:
-            return await self._commit_failure(  # audit-ok[except_silent_return]: executor.py L1172 except_silent_return structural path not inventing domain value
+            return await self._commit_failure(  # audit-ok[except_silent_return]: executor.py:1205 except_silent_return
                 attempt_id,
                 study_id,
                 task_id,
@@ -1344,7 +1381,7 @@ class Executor:
                     qid_hint = _or_empty_str(optional_item(raw, 'question_id')) or None
                     disp_hint = _or_empty_str(optional_item(raw, 'disposition')) or None
                 disposal = (
-                    raw  # audit-ok[ternary_name]: executor.py L1347 ternary_name structural path not inventing domain value
+                    raw  # audit-ok[ternary_name]: executor.py:1380 ternary_name
                     if isinstance(raw, QuestionDisposal)
                     else QuestionDisposal.model_validate(raw)
                 )
@@ -1372,7 +1409,10 @@ class Executor:
                 if g is not None:
                     for n in g.nodes_by_kind("question"):
                         if n.study_id == study_id:
-                            known.add(n.ref_id or n.node_id.split(":")[-1])  # audit-ok[str_split]: executor.py L1375 str_split structural path not inventing domain value  # audit-ok[or_slice]: executor.py L1375 or_slice structural path not inventing domain value
+                            if n.ref_id:
+                                known.add(n.ref_id)
+                            else:
+                                known.add(n.node_id.split(":")[-1])  # audit-ok[str_split]: e1408
                 if not known:
                     known = {_or_empty_str(a) for a in task.spec.addresses if a}
                 kinds_fn = self.get_artifact_kinds
@@ -1406,7 +1446,7 @@ class Executor:
                         disposition=disp_hint,
                     )
                 )
-                continue  # audit-ok[except_silent_continue]: executor.py L1409 except_silent_continue structural path not inventing domain value
+                continue  # audit-ok[except_silent_continue]: executor.py:1442 except_silent_continue
 
         return await self._commit_result(
             attempt_id,
@@ -1459,7 +1499,7 @@ class Executor:
         item = item_id
         if item is None and ":" in check_id and "|" not in check_id:
             # Legacy ``check_id:item_id`` argument form.
-            parent_check, _, item = check_id.partition(":")  # audit-ok[str_partition]: executor.py L1462 str_partition structural path not inventing domain value
+            parent_check, _, item = check_id.partition(":")  # audit-ok[str_partition]: executor.py:1495 str_partition
         item = item
         if item is None:
             item = ''
@@ -1717,7 +1757,7 @@ class Executor:
                 **payload,
                 "inputs": [
                 (
-                    b.model_dump(mode="json")  # audit-ok[ternary_name]: executor.py L1720 ternary_name structural path not inventing domain value
+                    b.model_dump(mode="json")  # audit-ok[ternary_name]: executor.py:1753 ternary_name
                     if not isinstance(b, dict)
                     else dict(b)
                 )

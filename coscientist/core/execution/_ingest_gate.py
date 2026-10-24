@@ -24,12 +24,12 @@ from typing import Any
 
 from coscientist.core.claims.reasons import RefusalKind
 from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.schema_versions import ARTIFACT_REGISTERED_SCHEMA_VERSION
 from coscientist.core.execution._attempt_frame import attempt_active
 from coscientist.core.execution.domain import Artifact
 
 
-from coscientist.core.events.mapping import optional_item
 def _make_issued_registry() -> tuple[
     Any, Any, Any
 ]:

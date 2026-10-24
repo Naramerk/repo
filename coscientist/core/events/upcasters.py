@@ -16,8 +16,8 @@ from collections.abc import Callable
 from typing import Any, get_args
 
 from coscientist.core.events.errors import JournalFormatError
-
 from coscientist.core.events.mapping import optional_item
+
 Upcaster = Callable[[dict[str, Any]], dict[str, Any]]
 DictRowMutator = Callable[[dict[str, Any]], dict[str, Any]]
 

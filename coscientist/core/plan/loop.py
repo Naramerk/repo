@@ -1,10 +1,3 @@
-
-def _coerce_model(cls, value):
-    if isinstance(value, dict):
-        return cls.model_validate(value)
-    return value
-
-
 """LoopSpec materialization (M1 PR11 / S10): PlanExpanded(loop=true) + LoopCapped.
 
 Core-driven (like foreach): no planner, no expansion quota. ``max_iter`` is
@@ -28,6 +21,7 @@ from coscientist.core.events.events import (
     make_idem,
 )
 from coscientist.core.events.ids import task_id
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.schema_versions import (
     EXPANSION_REFUSED_SCHEMA_VERSION,
     LOOP_CAPPED_SCHEMA_VERSION,
@@ -56,7 +50,12 @@ from coscientist.core.plan.loop_predicates import (
 )
 from coscientist.core.plan.shares import critic_plan_shares
 
-from coscientist.core.events.mapping import optional_item
+
+def _coerce_model(cls, value):
+    if isinstance(value, dict):
+        return cls.model_validate(value)
+    return value
+
 log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -271,7 +270,7 @@ def validate_loop_specs(
                 ls = LoopSpec.model_validate(raw)
             except PlanInvalid:
                 raise
-            except Exception as e:  # audit-ok[broad_except]: loop.py L274 broad_except structural path not inventing domain value
+            except Exception as e:  # audit-ok[broad_except]: loop.py:274 broad_except
                 raise PlanInvalid(f"invalid LoopSpec: {e}") from e
         else:
             ls = raw
@@ -543,7 +542,7 @@ async def materialize_loop_iter(
         loops=[
             _coerce_model(LoopSpec, x) for x in prev_loops
         ]
-        or [loop], rollup="all")  # audit-ok[or_dict]: loop.py L546 or_dict structural path not inventing domain value
+        or [loop], rollup="all")  # audit-ok[or_dict]: loop.py:546 or_dict
     ed = study.effective_deadline()
     events: list[UnstampedEvent]
     events = []
@@ -582,7 +581,7 @@ async def materialize_loop_iter(
             kind = task_kind_for_route(frozen_spec.route)
         except ValueError as e:
             await _refuse_loop(runtime, loop, detail=str(e))
-            return None  # audit-ok[except_silent_return]: loop.py L585 except_silent_return structural path not inventing domain value
+            return None  # audit-ok[except_silent_return]: loop.py:585 except_silent_return
         from coscientist.core.execution.domain import PlanRole
 
         task = Task(
@@ -905,7 +904,7 @@ async def finalize_loop_internal_error(
                 await _emit_loop_advance_failed(runtime, detail=detail)
         except LeaseLost:
             raise
-        except Exception as journal_exc:  # noqa: BLE001  # audit-ok[broad_except]: loop.py L908 broad_except structural path not inventing domain value
+        except Exception as journal_exc:  # noqa: BLE001  # audit-ok[broad_except]: loop.py:908 broad_except
             log.warning(
                 "finalize_loop_internal_error journal failed: %s",
                 journal_exc,
@@ -922,7 +921,7 @@ async def finalize_loop_internal_error(
                 await runtime._append(close_events)  # noqa: SLF001
         except LeaseLost:
             raise
-        except Exception as close_exc:  # noqa: BLE001  # audit-ok[broad_except]: loop.py L925 broad_except structural path not inventing domain value
+        except Exception as close_exc:  # noqa: BLE001  # audit-ok[broad_except]: loop.py:925 broad_except
             log.warning(
                 "finalize_loop_internal_error close_open_work failed: %s",
                 close_exc,
@@ -1015,9 +1014,9 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
         loops = _loops_from_plans(runtime)
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: loop.py L1018 broad_except structural path not inventing domain value
+    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: loop.py:1018 broad_except
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
-        return done  # audit-ok[except_silent_return]: loop.py L1020 except_silent_return structural path not inventing domain value
+        return done  # audit-ok[except_silent_return]: loop.py:1020 except_silent_return
     for loop in loops:
         if runtime._finalized:
             break
@@ -1035,14 +1034,14 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
                 )
             except LeaseLost:
                 raise
-            except Exception as refuse_exc:  # noqa: BLE001  # audit-ok[broad_except]: loop.py L1038 broad_except structural path not inventing domain value
+            except Exception as refuse_exc:  # noqa: BLE001  # audit-ok[broad_except]: loop.py:1038 broad_except
                 await finalize_loop_internal_error(
                     runtime, exc=refuse_exc, loop=loop
                 )
                 break
         except LeaseLost:
             raise
-        except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: loop.py L1045 broad_except structural path not inventing domain value
+        except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: loop.py:1045 broad_except
             await finalize_loop_internal_error(runtime, exc=e, loop=loop)
             break
     return done
@@ -1068,9 +1067,9 @@ async def resume_pending_loops(runtime: StudyRuntime) -> int:
         return len(got)
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: loop.py L1071 broad_except structural path not inventing domain value
+    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: loop.py:1071 broad_except
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
-        return 0  # audit-ok[except_silent_return]: loop.py L1073 except_silent_return structural path not inventing domain value
+        return 0  # audit-ok[except_silent_return]: loop.py:1073 except_silent_return
 
 def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
     """Rebuild ``_loop_state`` from a PlanExpanded(loop=true) payload."""

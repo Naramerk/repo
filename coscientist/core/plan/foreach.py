@@ -1,10 +1,3 @@
-
-def _coerce_model(cls, value):
-    if isinstance(value, dict):
-        return cls.model_validate(value)
-    return value
-
-
 """Foreach materialization (M1 PR10): PlanExpanded(foreach=true), no planner/quota."""
 
 from __future__ import annotations
@@ -21,6 +14,7 @@ from coscientist.core.events.events import (
     make_idem,
 )
 from coscientist.core.events.ids import task_id
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.schema_versions import (
     PLAN_EXPANDED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
@@ -44,11 +38,17 @@ from coscientist.core.plan.expand_graph import (
 from coscientist.core.plan.expand_trigger import refuse_expansion
 from coscientist.core.plan.expand_validate import active_plan_blob, assign_core_keys
 
-from coscientist.core.events.mapping import optional_item
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
-_NAT_SPLIT = re.compile(r"(\d+)")  # audit-ok[re_compile]: foreach.py L51 re_compile structural path not inventing domain value
+
+
+def _coerce_model(cls, value):
+    if isinstance(value, dict):
+        return cls.model_validate(value)
+    return value
+
+_NAT_SPLIT = re.compile(r"(\d+)")  # audit-ok[re_compile]: foreach.py:51 re_compile
 
 def _fe_kind(fe):
     if fe:
@@ -61,12 +61,12 @@ def _nat_key(s: str) -> tuple:
     """Numerically aware sort key: H2 < H10."""
     if not isinstance(s, str):
         raise TypeError(f"_nat_key requires str, got {type(s).__name__}")
-    parts = _NAT_SPLIT.split(s)  # audit-ok[str_split]: foreach.py L64 str_split structural path not inventing domain value
+    parts = _NAT_SPLIT.split(s)  # audit-ok[str_split]: foreach.py:64 str_split
     out: list[Any]
     out = []
     for p in parts:
         if p.isdigit():
-            out.append(int(p))  # audit-ok[coerce_int]: foreach.py L69 coerce_int structural path not inventing domain value
+            out.append(int(p))  # audit-ok[coerce_int]: foreach.py:69 coerce_int
         else:
             out.append(p.casefold())
     return tuple(out)
@@ -91,7 +91,7 @@ def _rank_key(logical: str, attrs: dict[str, Any]) -> tuple[tuple, str | None]:
 
     Never raises — non-numeric yields a report note.
     """
-    raw = attrs.get("rank", None)  # audit-ok[dict_get_default]: foreach.py L94 dict_get_default structural path not inventing domain value
+    raw = attrs.get("rank", None)  # audit-ok[dict_get_default]: foreach.py:94 dict_get_default
     if raw is None:
         return (1, 0, _nat_key(logical)), None
     if any((isinstance(raw, bool), not isinstance(raw, int))):

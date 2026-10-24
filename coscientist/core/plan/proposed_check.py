@@ -42,6 +42,7 @@ from coscientist.core.events.errors import (
 )
 from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import hitl_request_id, proposal_id
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.schema_versions import (
     ATTEMPT_CLOSED_SCHEMA_VERSION,
     CHECK_APPROVED_SCHEMA_VERSION,
@@ -63,7 +64,6 @@ from coscientist.core.execution.domain import (
 )
 
 
-from coscientist.core.events.mapping import optional_item
 def _or_empty_str(value: object) -> str:
     if value is None:
         return ""
@@ -1449,7 +1449,7 @@ def assert_proposal_preregistered_for_eval(
             missing = _or_empty_str(e.args[0])
         else:
             missing = _MISSING_BOUND
-        return f"unapproved_check:missing_{missing}"  # audit-ok[except_silent_return]: proposed_check.py L1452 except_silent_return structural path not inventing domain value
+        return f"unapproved_check:missing_{missing}"  # audit-ok[except_silent_return]: p1452
     if not bound_task:
         return "unapproved_check:missing_bound_task"
     if not bound_target.strip():

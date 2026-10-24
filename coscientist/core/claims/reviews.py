@@ -16,10 +16,10 @@ from typing import Any, Literal
 from coscientist.core.events.digest import sha256_hex
 from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import UnstampedEvent, make_idem
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import AgentTaskOutput, ReqStatus
 
-from coscientist.core.events.mapping import optional_item
 JudgeFailureKind = Literal["timeout", "invalid_json", "refusal"]
 # Keep in sync with checks.kinds.rubric.JUDGE_FAILURE_KINDS (no circular import).
 JUDGE_FAILURE_KINDS = frozenset({"timeout", "invalid_json", "refusal"})
@@ -78,7 +78,7 @@ def parse_review_key(key: str) -> dict[str, str] | None:
     try:
         parts = json.loads(key)
     except (TypeError, json.JSONDecodeError):
-        return None  # audit-ok[except_silent_return]: reviews.py L81 except_silent_return structural path not inventing domain value
+        return None  # audit-ok[except_silent_return]: reviews.py:81 except_silent_return
     if any((not isinstance(parts, list), len(parts) != 5)):
         return None
     out = {}

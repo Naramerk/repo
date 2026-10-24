@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Any, Sequence
 
 from coscientist.core.events.errors import JournalFormatError
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import Study, Task, TaskSpec, TaskState
 from coscientist.core.plan.shares import (
@@ -18,7 +19,6 @@ from coscientist.core.plan.shares import (
 )
 
 
-from coscientist.core.events.mapping import optional_item
 def _as_decimal(value: object, *, what: str) -> Decimal:
     if isinstance(value, Decimal):
         return value

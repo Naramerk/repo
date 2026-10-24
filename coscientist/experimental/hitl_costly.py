@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import UnstampedEvent, make_idem
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.schema_versions import TASK_DONE_SCHEMA_VERSION
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import HitlRequest, Task, TaskOutcome, TaskState
@@ -18,7 +19,6 @@ from coscientist.experimental.costly import (
 )
 
 
-from coscientist.core.events.mapping import optional_item
 class _StudyBudgetEmitter(Protocol):
     """Core ``StudyRuntime`` surface used after a costly debit (no MRO stubs)."""
 

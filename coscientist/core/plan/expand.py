@@ -1,10 +1,3 @@
-
-def _coerce_model(cls, value):
-    if isinstance(value, dict):
-        return cls.model_validate(value)
-    return value
-
-
 """PlanExpanded apply path: quotas, replan_reserve, question supersede (M1 PR9).
 
 Trigger lives in ``expand_trigger``; validation in ``expand_validate``;
@@ -25,6 +18,7 @@ from coscientist.core.events.events import (
     make_idem,
 )
 from coscientist.core.events.ids import plan_id, task_id
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.schema_versions import (
     PLAN_EXPANDED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
@@ -63,9 +57,15 @@ from coscientist.core.plan.supersede import (
     tasks_needed_by_active_questions,
 )
 
-from coscientist.core.events.mapping import optional_item
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
+
+
+
+def _coerce_model(cls, value):
+    if isinstance(value, dict):
+        return cls.model_validate(value)
+    return value
 
 Origin = Literal["plan", "emergent"]
 DelegatedBy = Literal["human", "timeout"] | None
@@ -178,7 +178,7 @@ async def expand_plan(
         raise
     except (PlanInvalid, ValidationError, ValueError):
         await refuse_expansion(runtime, after_task, reason="invalid", detail="expand_crash")
-        return None  # audit-ok[except_silent_return]: expand.py L181 except_silent_return structural path not inventing domain value
+        return None  # audit-ok[except_silent_return]: expand.py:181 except_silent_return
 
 async def _expand_plan(
     runtime: StudyRuntime,
@@ -394,7 +394,7 @@ async def _expand_plan(
             reason="expansion_limit",
             detail=str(e)[:DETAIL_MAX_LEN],
         )
-        return None  # audit-ok[except_silent_return]: expand.py L397 except_silent_return structural path not inventing domain value
+        return None  # audit-ok[except_silent_return]: expand.py:397 except_silent_return
     if err is not None:
         if err == "max_tasks":
             reason_code = "expansion_limit"
@@ -462,7 +462,7 @@ async def _expand_plan(
         plan_origin=plan_origin,
     )
     by_new = {q.id: q for q in stamped_new}
-    all_questions = [by_new.get(q.id, q) for q in all_questions]  # audit-ok[dict_get_default]: expand.py L465 dict_get_default structural path not inventing domain value
+    all_questions = [by_new.get(q.id, q) for q in all_questions]  # audit-ok[dict_get_default]: e465
     if prev is None:
         await refuse_expansion(
             runtime, after_task, reason="invalid", detail="missing_plan_rollup"
@@ -701,7 +701,7 @@ async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str |
             detail=str(e)[:DETAIL_MAX_LEN],
             plan_key=plan_key,
         )
-        return None  # audit-ok[except_silent_return]: expand.py L704 except_silent_return structural path not inventing domain value
+        return None  # audit-ok[except_silent_return]: expand.py:704 except_silent_return
     if reject is not None:
         await refuse_expansion(
             runtime,

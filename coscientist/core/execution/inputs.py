@@ -17,6 +17,7 @@ from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import experiment_node_id
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.schema_versions import (
     GRAPH_EDGE_ADDED_SCHEMA_VERSION,
     GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
@@ -33,7 +34,6 @@ from coscientist.core.execution.domain import (
     worst_provenance,
 )
 
-from coscientist.core.events.mapping import optional_item
 # Re-export for callers/tests that imported from inputs.
 __all__ = [
     "InputMode",
@@ -426,9 +426,9 @@ def claim_nodes_from_attempt(
                     core = {}
                 else:
                     core = dict(derived)
-        except Exception:  # audit-ok[broad_except]: inputs.py L429 broad_except structural path not inventing domain value
+        except Exception:  # audit-ok[broad_except]: inputs.py:429 broad_except
             drops.append({"key": agent_key, "reason": "derive_attrs_error"})
-            continue  # audit-ok[except_silent_continue]: inputs.py L431 except_silent_continue structural path not inventing domain value
+            continue  # audit-ok[except_silent_continue]: inputs.py:431 except_silent_continue
         attrs["provenance"] = new_prov
         attrs["attempt_id"] = attempt_id
         attrs["attempt_outcome"] = attempt_outcome
@@ -532,7 +532,7 @@ def claim_nodes_from_attempt(
                 raise JournalFormatError(
                     f"claim experiment_id missing and attempt_id not structured: {attempt_id!r}"
                 )
-            base, sep, n = attempt_id.partition("#")  # audit-ok[str_partition]: inputs.py L535 str_partition structural path not inventing domain value
+            base, sep, n = attempt_id.partition("#")  # audit-ok[str_partition]: inputs.py:535 str_partition
             if any((sep != '#', not base, not n.isdigit())):
                 raise JournalFormatError(
                     f"claim experiment_id empty/invalid from attempt_id: {attempt_id!r}"
@@ -580,7 +580,7 @@ def claim_nodes_from_attempt(
                     "predicts_null": attrs["predicts_null"],
                     "predicted_direction": attrs["predicted_direction"],
                     "effect": (
-                        dict(core["effect"])  # audit-ok[ternary_name]: inputs.py L583 ternary_name structural path not inventing domain value
+                        dict(core["effect"])  # audit-ok[ternary_name]: inputs.py:583 ternary_name
                         if isinstance(optional_item(core, "effect"), dict)
                         else None
                     ),
@@ -835,7 +835,7 @@ def collect_bindable_claims(
     for node in nodes:
         attrs = node.attrs
         aid = optional_item(attrs, "attempt_id")
-        if producer_attempt_failed(str(aid) if aid else None, results=results):  # audit-ok[ternary_name]: inputs.py L838 ternary_name structural path not inventing domain value
+        if producer_attempt_failed(str(aid) if aid else None, results=results):  # audit-ok[ternary_name]: i838
             continue
         known.add(node.node_id)
         p = optional_item(attrs, "provenance")

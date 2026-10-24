@@ -798,7 +798,7 @@ class RequirementTemplate(Frozen):
     applies_to: list[str]  # registered node kinds (strings), not a hard-coded ontology
     check: CodeCheck | ReviewCheck
     role: Literal["prediction", "validity"]
-    kind: TemplateKind = TemplateKind.CATALOG  # audit-ok[named_default]: catalog YAML omits kind; PLAN-n/proposed_check set explicitly
+    kind: TemplateKind = TemplateKind.CATALOG  # audit-ok[named_default]: domain.py:801 named_default
     required: bool
     version: str
     # Severe / TOST threshold — catalog-authored only.

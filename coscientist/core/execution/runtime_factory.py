@@ -76,10 +76,10 @@ async def open_runtime(
     # Fast path: refuse before taking the lease when the journal is already dirty.
     try:
         reject_open_hitl_if_unsupported(cls, await store.read_all())
-    except BaseException:  # audit-ok[broad_except]: runtime_factory.py L79 broad_except structural path not inventing domain value
+    except BaseException:  # audit-ok[broad_except]: runtime_factory.py:79 broad_except
         try:
             await store.close()
-        except BaseException:  # audit-ok[broad_except]: runtime_factory.py L82 broad_except structural path not inventing domain value
+        except BaseException:  # audit-ok[broad_except]: runtime_factory.py:82 broad_except
             log.warning("store.close failed during pre-lease cleanup", exc_info=True)
         raise
 
@@ -97,8 +97,8 @@ async def open_runtime(
                 # Wait for the worker thread; it may have committed before cancel.
                 try:
                     await task
-                except BaseException:  # audit-ok[broad_except]: runtime_factory.py L100 broad_except structural path not inventing domain value
-                    pass  # audit-ok[except_pass]: runtime_factory.py L101 except_pass structural path not inventing domain value
+                except BaseException:  # audit-ok[broad_except]: runtime_factory.py:100 broad_except
+                    pass  # audit-ok[except_pass]: runtime_factory.py:101 except_pass
                 acquired_here = store.owner == owner and store.owner_nonce is not None
                 raise
 
@@ -193,24 +193,24 @@ async def open_runtime(
                 await reconcile_fetch_integrity(writer)
             except LeaseLost:
                 raise
-            except Exception:  # audit-ok[broad_except]: runtime_factory.py L196 broad_except structural path not inventing domain value
+            except Exception:  # audit-ok[broad_except]: runtime_factory.py:196 broad_except
                 log.warning("reconcile_fetch_integrity on open failed", exc_info=True)
         return rt
-    except BaseException:  # audit-ok[broad_except]: runtime_factory.py L199 broad_except structural path not inventing domain value
+    except BaseException:  # audit-ok[broad_except]: runtime_factory.py:199 broad_except
         # Stop the writer first so in-flight appends cannot race release.
         if writer_started and writer is not None:
             try:
                 await writer.stop()
-            except BaseException:  # audit-ok[broad_except]: runtime_factory.py L204 broad_except structural path not inventing domain value
+            except BaseException:  # audit-ok[broad_except]: runtime_factory.py:204 broad_except
                 log.warning("writer.stop failed during open_runtime cleanup", exc_info=True)
         if acquired_here and store.epoch is not None:
             try:
                 await store.release_lease(owner, store.epoch)
-            except BaseException:  # audit-ok[broad_except]: runtime_factory.py L209 broad_except structural path not inventing domain value
+            except BaseException:  # audit-ok[broad_except]: runtime_factory.py:209 broad_except
                 log.warning("release_lease failed during open_runtime cleanup", exc_info=True)
         try:
             await store.close()
-        except BaseException:  # audit-ok[broad_except]: runtime_factory.py L213 broad_except structural path not inventing domain value
+        except BaseException:  # audit-ok[broad_except]: runtime_factory.py:213 broad_except
             log.warning("store.close failed during open_runtime cleanup", exc_info=True)
         raise
 

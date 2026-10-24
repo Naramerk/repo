@@ -9,6 +9,7 @@ from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import question_node_id, task_id
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.schema_versions import (
     ATTEMPT_CLOSED_SCHEMA_VERSION,
     GRAPH_EDGE_ADDED_SCHEMA_VERSION,
@@ -18,7 +19,6 @@ from coscientist.core.events.schema_versions import (
 from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskOutcome, TaskState
 from coscientist.core.plan.supersede import plan_node_id
 
-from coscientist.core.events.mapping import optional_item
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 

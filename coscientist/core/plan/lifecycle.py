@@ -15,6 +15,7 @@ from coscientist.core.events.events import (
     make_idem,
 )
 from coscientist.core.events.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.ports import EventStore
 from coscientist.core.events.schema_versions import (
     GRAPH_EDGE_ADDED_SCHEMA_VERSION,
@@ -48,7 +49,6 @@ from coscientist.core.plan.intake import IntakeAccept, IntakeRefuse, SafetyPort,
 from coscientist.core.plan.question_tasks import questions_from_spec_output
 
 
-from coscientist.core.events.mapping import optional_item
 def _or_empty_str(value: object) -> str:
     if value is None:
         return ""
@@ -256,7 +256,7 @@ class LifecycleMixin:
                     )
             except _INTAKE_RERAISE:
                 raise
-            except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: map unexpected intake failure to IntakeRefuse INPUT_INVALID
+            except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: lifecycle.py:259 broad_except
                 decision = IntakeRefuse(
                     RefusalKind.INPUT_INVALID,
                     f"intake_error:{type(e).__name__}"[:200],
@@ -288,7 +288,7 @@ class LifecycleMixin:
                     _or_empty_str(e.reason)[:200],
                 )
                 user_ids, user_events = [], []
-            except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: map unexpected register_user_input failure to INPUT_INVALID
+            except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: lifecycle.py:291 broad_except
                 decision = IntakeRefuse(
                     RefusalKind.INPUT_INVALID,
                     f"register_error:{type(e).__name__}"[:200],

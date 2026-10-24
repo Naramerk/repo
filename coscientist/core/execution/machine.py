@@ -18,6 +18,7 @@ from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.clock import Clock
 from coscientist.core.events.errors import JournalFormatError, LeaseLost
 from coscientist.core.events.events import UnstampedEvent, make_idem
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.schema_versions import (
     ATTEMPT_CLOSED_SCHEMA_VERSION,
     BUDGET_EXCEEDED_SCHEMA_VERSION,
@@ -40,7 +41,6 @@ from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.cancel import cancel_study as _cancel_study
 from coscientist.core.plan.intake import IntakeRefuse
 
-from coscientist.core.events.mapping import optional_item
 # Charged-attempt cap before FAILED (DESIGN §3.3); not a StudyConfig field.
 MAX_ATTEMPTS = 3
 
@@ -194,7 +194,10 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         else:
             bound_get_attempt = get_attempt
         if get_task is None:
-            bound_get_task = lambda tid: self.tasks[tid]
+            tasks_map = self.tasks
+
+            def bound_get_task(tid: str) -> object:
+                return tasks_map[tid]
         else:
             bound_get_task = get_task
         if on_events is None:

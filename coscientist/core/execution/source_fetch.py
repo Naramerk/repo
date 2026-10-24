@@ -33,6 +33,7 @@ from coscientist.core.events.events import (
     UnstampedEvent,
     make_idem,
 )
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.schema_versions import (
     ATTEMPT_TAINTED_SCHEMA_VERSION,
     FETCH_INTEGRITY_RAISED_SCHEMA_VERSION,
@@ -41,7 +42,6 @@ from coscientist.core.events.schema_versions import (
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.domain import Catalog, CodeCheck, RequirementRef, TaskSpec
 
-from coscientist.core.events.mapping import optional_item
 VerifyFetchCap = Callable[..., "FetchCapability"]
 AssertFetchCap = Callable[..., "FetchCapability"]
 TakeWritePermit = Callable[..., None]
@@ -198,7 +198,7 @@ def _attempt_id_from_call_id(call_id: str) -> str:
     """``call_id`` is ``{attempt_id}:{call_seq}`` — split on the last colon."""
     if ":" not in call_id:
         return call_id
-    return call_id.rsplit(":", 1)[0]  # audit-ok[str_rsplit]: source_fetch.py L201 str_rsplit structural path not inventing domain value
+    return call_id.rsplit(":", 1)[0]  # audit-ok[str_rsplit]: source_fetch.py:201 str_rsplit
 
 
 def source_fetched_payload_ok(payload: dict[str, Any]) -> bool:
@@ -335,7 +335,7 @@ def apply_source_fetch_events(
                 marked = note_fetch_call_from_attempt_tainted(p)
             except FetchToolReclassified as exc:
                 idx.note_reclassified(call_id=exc.call_id, tool=exc.tool)
-                continue  # audit-ok[except_silent_continue]: source_fetch.py L338 except_silent_continue structural path not inventing domain value
+                continue  # audit-ok[except_silent_continue]: source_fetch.py:338 except_silent_continue
             if marked is not None:
                 call_id, tool = marked
                 idx.note_fetch_call(call_id=call_id, tool=tool)
@@ -387,7 +387,7 @@ async def journal_fetch_integrity_raised(
         try:
             stored = await writer.append(ev)
         except Idempotent:
-            continue  # audit-ok[except_silent_continue]: source_fetch.py L390 except_silent_continue structural path not inventing domain value
+            continue  # audit-ok[except_silent_continue]: source_fetch.py:390 except_silent_continue
         out.append(stored)
         seq = _event_seq(stored)
         if seq > _writer_fetch_seq(writer):
@@ -519,7 +519,7 @@ async def append_source_fetched(
     # verify granted a write permit — release it if append fails so it never leaks.
     try:
         stored = await writer.append(ev, _source_fetched_cap_id=capability.id)
-    except BaseException:  # audit-ok[broad_except]: source_fetch.py L522 broad_except structural path not inventing domain value
+    except BaseException:  # audit-ok[broad_except]: source_fetch.py:522 broad_except
         release_source_fetched_write_permit(capability.id)
         raise
     _cache_note_fetch(writer, stored)

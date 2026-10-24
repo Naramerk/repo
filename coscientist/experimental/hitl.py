@@ -10,17 +10,30 @@ from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import Conflict, JournalFormatError
 from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import hitl_request_id, study_id
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.schema_versions import GRAPH_NODE_UPSERTED_SCHEMA_VERSION
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import Clarification, HitlRequest, Task
 from coscientist.experimental.hitl_costly import CostlyHitlMixin
 
-from coscientist.core.events.mapping import optional_item
 
 def _coerce_model(cls, value):
     if isinstance(value, dict):
         return cls.model_validate(value)
     return value
+
+
+def _created_or_now(created_at: object, now: object) -> object:
+    if created_at is None:
+        return now
+    return created_at
+
+
+def _dict_if(dmap: object) -> dict | None:
+    if dmap:
+        return dict(dmap)  # type: ignore[arg-type]
+    return None
+
 _BUDGET_SHARES_REFUSED_SV = writer_schema_version("BudgetSharesRefused")
 _BUDGET_SHARES_ADJUSTED_SV = writer_schema_version("BudgetSharesAdjusted")
 
@@ -451,7 +464,7 @@ class HitlForkMixin(CostlyHitlMixin):
                 )
             except Conflict:
                 # Idem collapse / loser — do not run side effects.
-                return  # audit-ok[except_silent_return]: hitl.py L454 except_silent_return structural path not inventing domain value
+                return  # audit-ok[except_silent_return]: hitl.py:467 except_silent_return
 
             # Journal is authority: only the folded winner may approve/reject/schedule.
             decisions = self._hitl_decisions
@@ -841,7 +854,7 @@ class HitlForkMixin(CostlyHitlMixin):
 
         return any(walk(d) for d in task.spec.depends_on)
 
-    async def recover_after_idle(self, grace_s: float = 60.0) -> None:  # audit-ok[number_outside_domain]: hitl.py L844 number_outside_domain structural path not inventing domain value
+    async def recover_after_idle(self, grace_s: float = 60.0) -> None:  # audit-ok[number_outside_domain]: h857
         """Extend open HITL deadlines within task/study bounds."""
         if self.study is None:
             return

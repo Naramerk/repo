@@ -37,6 +37,7 @@ from coscientist.core.claims.rubric import freeze_rubric, freeze_task_rubrics
 from coscientist.core.claims.rubric_types import VALID_FINAL_TYPES, Rubric
 from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.events.errors import JournalFormatError
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.schema_versions import (
     PLAN_REFUSED_SCHEMA_VERSION,
     TASK_DONE_SCHEMA_VERSION,
@@ -52,7 +53,6 @@ from coscientist.core.plan.decomposes import (
     parent_map_from_questions,
 )
 
-from coscientist.core.events.mapping import optional_item
 __all__ = [
     "PLAN_REFUSED_LINE",
     "apply_plan_refused",
@@ -284,7 +284,7 @@ async def apply_plan_refused(
                 payload={
                     "task_id": t.task_id,
                     "outcome": (
-                        TaskOutcome.FAILED.value  # audit-ok[ternary_name]: plan_validate.py L287 ternary_name structural path not inventing domain value
+                        TaskOutcome.FAILED.value  # audit-ok[ternary_name]: plan_validate.py:287 ternary_name
                         if t.spec.task_key == "PLAN"
                         else TaskOutcome.SKIPPED.value
                     ),
@@ -548,4 +548,4 @@ def validate_plan_final_types_or_err(
         msg = str(e)
         if not msg:
             raise
-        return msg  # audit-ok[except_silent_return]: plan_validate.py L551 except_silent_return structural path not inventing domain value
+        return msg  # audit-ok[except_silent_return]: plan_validate.py:551 except_silent_return

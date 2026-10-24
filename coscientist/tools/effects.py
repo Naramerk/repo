@@ -26,6 +26,7 @@ from coscientist.core.events.events import (
     UnstampedEvent,
     make_idem,
 )
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
@@ -38,11 +39,10 @@ from coscientist.core.execution.tool_registry import resolve_effect, resolve_spe
 from coscientist.tools.contract import CallCtx, Tool, ToolError, ToolOutput
 from coscientist.tools.gate import side_effect_allowed
 
-from coscientist.core.events.mapping import optional_item
 _TEST_STUDY_ID = "st_test"
 _EFFECT_EVENT_SCHEMA_VERSION = 1
 def _event_type(ev):
-    if getattr(ev, "type", None):  # audit-ok[getattr_default]: effects.py L45 getattr_default structural path not inventing domain value
+    if getattr(ev, "type", None):  # audit-ok[getattr_default]: effects.py:45 getattr_default
         return ev.type
     if isinstance(ev, dict):
         return optional_item(ev, "type")
@@ -75,7 +75,7 @@ def _fetch_url(output: object) -> str:
     try:
         data = output.data  # type: ignore[attr-defined]
     except AttributeError:
-        return ""  # audit-ok[except_silent_return]: effects.py L78 except_silent_return structural path not inventing domain value
+        return ""  # audit-ok[except_silent_return]: effects.py:78 except_silent_return
     if not isinstance(data, dict):
         return ""
     url = optional_item(data, "url")
@@ -143,7 +143,7 @@ def _mint_fetch_capability_for_tests(
     if attempt_id is not None:
         aid = attempt_id
     elif ":" in call_id:
-        aid = call_id.rsplit(":", 1)[0]  # audit-ok[str_rsplit]: effects.py L146 str_rsplit structural path not inventing domain value
+        aid = call_id.rsplit(":", 1)[0]  # audit-ok[str_rsplit]: effects.py:146 str_rsplit
     else:
         aid = call_id
     return _mint_fetch_capability(
@@ -884,7 +884,7 @@ async def invoke_tool(
             )
             idx.note_done(key, {"key": key, "status": "failed"})
         raise
-    except Exception as exc:  # audit-ok[broad_except]: effects.py L887 broad_except structural path not inventing domain value
+    except Exception as exc:  # audit-ok[broad_except]: effects.py:887 broad_except
         raise ToolError("opaque", f"tool raised: {type(exc).__name__}: {exc}") from exc
 
     if output.artifacts:

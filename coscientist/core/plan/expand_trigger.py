@@ -14,6 +14,7 @@ from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 from coscientist.core.events.errors import JournalFormatError, LeaseLost
 from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import task_id
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.schema_versions import (
     EXPANSION_REFUSED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
@@ -40,8 +41,6 @@ from coscientist.core.plan.expand_validate import (
     validate_expansion,
 )
 from coscientist.core.plan.loop import DETAIL_MAX_LEN
-
-from coscientist.core.events.mapping import optional_item
 
 
 def _coerce_model(cls, value):
@@ -119,8 +118,8 @@ def parse_plan_n_expansion(
         return None, "malformed_planner_output"
     try:
         req = ExpansionRequest.model_validate(raw)
-    except Exception as e:  # audit-ok[broad_except]: expand_trigger.py L122 broad_except structural path not inventing domain value
-        return None, f"malformed_planner_output:{type(e).__name__}"  # audit-ok[except_silent_return]: expand_trigger.py L123 except_silent_return structural path not inventing domain value
+    except Exception as e:  # audit-ok[broad_except]: expand_trigger.py:121 broad_except
+        return None, f"malformed_planner_output:{type(e).__name__}"  # audit-ok[except_silent_return]: e122
     if not req.tasks:
         return None, "empty_planner_expansion"
     return req, None
@@ -314,14 +313,14 @@ async def maybe_expand_after_task_done(runtime: StudyRuntime, task_id_full: str)
         return await _maybe_expand(runtime, task_id_full)
     except LeaseLost:
         raise
-    except Exception as e:  # audit-ok[broad_except]: expand_trigger.py L317 broad_except structural path not inventing domain value
+    except Exception as e:  # audit-ok[broad_except]: expand_trigger.py:316 broad_except
         await refuse_expansion(
             runtime,
             after,
             reason="invalid",
             detail=f"expand_exception:{type(e).__name__}"[:DETAIL_MAX_LEN],
         )
-        return None  # audit-ok[except_silent_return]: expand_trigger.py L324 except_silent_return structural path not inventing domain value
+        return None  # audit-ok[except_silent_return]: expand_trigger.py:323 except_silent_return
 
 async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
     if any((runtime.study is None, runtime._finalized)):
@@ -394,7 +393,7 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
                 reason="expansion_limit",
                 detail=str(e)[:DETAIL_MAX_LEN],
             )
-            return None  # audit-ok[except_silent_return]: expand_trigger.py L397 except_silent_return structural path not inventing domain value
+            return None  # audit-ok[except_silent_return]: expand_trigger.py:396 except_silent_return
         if err is not None:
             await refuse_expansion(runtime, tkey, reason="invalid", detail=err[:DETAIL_MAX_LEN])
             return None

@@ -17,6 +17,7 @@ from coscientist.core.events.errors import (
     StudyClosedError,
 )
 from coscientist.core.events.events import StoredEvent, UnstampedEvent, make_idem
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.schema_versions import (
     STUDY_FINALIZED_SCHEMA_VERSION,
 )
@@ -27,7 +28,6 @@ from coscientist.core.finalize.minimal_report import build_minimal_report, rende
 from coscientist.core.finalize.study_view import study_view
 
 
-from coscientist.core.events.mapping import optional_item
 def _or_empty_str(value: object) -> str:
     if value is None:
         return ""
@@ -86,7 +86,7 @@ def _escape_report_text(value: object) -> str:
     Keeps alphanumeric reason codes readable (e.g. ``sandbox_unavailable``) while
     neutralizing fence/link/HTML injection and collapsing newlines.
     """
-    text = " ".join(str(value).split())[:2000]  # audit-ok[str_split]: finalize.py L89 str_split structural path not inventing domain value
+    text = " ".join(str(value).split())[:2000]  # audit-ok[str_split]: finalize.py:89 str_split
     return (
         text.replace("\\", "\\\\")
         .replace("`", "'")
@@ -528,7 +528,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
         payload = await _build_rich_payload(runtime, sid=sid, trigger=trigger)
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py L531 broad_except structural path not inventing domain value
+    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py:531 broad_except
         log.warning("finalize rich path failed: %s", e, exc_info=True)
         payload = last_resort_payload(
             study_id=sid,
@@ -542,7 +542,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
         raise
     except (Conflict, StudyClosedError) as err:
         await _sync_finalized_from_store(runtime, sid=sid, err=err)
-    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py L545 broad_except structural path not inventing domain value
+    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py:545 broad_except
         log.warning("finalize append failed: %s; retrying last-resort", e, exc_info=True)
         try:
             await _append_finalized(
@@ -660,7 +660,7 @@ def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
     try:
         lookup = arts.get_meta
     except AttributeError:
-        return None  # audit-ok[except_silent_return]: finalize.py L663 except_silent_return structural path not inventing domain value
+        return None  # audit-ok[except_silent_return]: finalize.py:663 except_silent_return
     if callable(lookup):
         return lookup
     else:
@@ -678,7 +678,7 @@ async def _build_rich_payload(
         await reconcile_fetch_integrity(runtime.writer)
     except LeaseLost:
         raise
-    except Exception:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py L681 broad_except structural path not inventing domain value
+    except Exception:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py:681 broad_except
         log.warning("reconcile_fetch_integrity failed", exc_info=True)
 
     plans = await _load_plans(runtime)
@@ -849,7 +849,7 @@ async def _build_finalized_payload(
         )
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py L852 broad_except structural path not inventing domain value
+    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py:852 broad_except
         fallback = type(e).__name__
         log.warning("finalize primary path failed: %s", e, exc_info=True)
         try:
@@ -871,7 +871,7 @@ async def _build_finalized_payload(
             )
         except LeaseLost:
             raise
-        except Exception as e2:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py L874 broad_except structural path not inventing domain value
+        except Exception as e2:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py:874 broad_except
             raise RuntimeError(f"minimal_report:{type(e2).__name__}") from e2
     custom_checks = _safe_custom_checks(runtime)
     # Findings outside the plan stay unverified observations (DESIGN_M1 §16).
@@ -908,9 +908,9 @@ def _safe_custom_checks(runtime: Any) -> list[dict[str, Any]]:
         return list(custom_checks_report(runtime))
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py L911 broad_except structural path not inventing domain value
+    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py:911 broad_except
         log.warning("custom_checks_report failed: %s", e, exc_info=True)
-        return []  # audit-ok[except_silent_return]: finalize.py L913 except_silent_return structural path not inventing domain value
+        return []  # audit-ok[except_silent_return]: finalize.py:913 except_silent_return
 
 async def _primary_report_path(
     runtime: StudyRuntime,

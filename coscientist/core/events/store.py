@@ -28,14 +28,13 @@ from coscientist.core.events.errors import (
     StudyClosedError,
 )
 from coscientist.core.events.events import StoredEvent, UnstampedEvent, stamp_envelope
+from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.metrics import bump_late_write_rejected
 from coscientist.core.events.upcasters import (
     require_exact_int,
     upcast,
     writer_schema_version,
 )
-
-from coscientist.core.events.mapping import optional_item
 
 _FIRST_LEASE_EPOCH = 1
 _iso = _db.iso
@@ -136,7 +135,7 @@ class SqliteEventStore:
                 if conn is not None:
                     conn.close()
                 raise _map_sqlite_open_error(e) from e
-            except Exception:  # audit-ok[broad_except]: close sqlite conn on unexpected open failure then re-raise
+            except Exception:  # audit-ok[broad_except]: store.py:138 broad_except
                 if conn is not None:
                     conn.close()
                 raise
@@ -275,7 +274,7 @@ class SqliteEventStore:
             self.lease_ttl_s = ttl
             self._finalized_cached = None  # peer may have finalized
             return epoch
-        except Exception:  # audit-ok[broad_except]: rollback lease acquire txn then re-raise caller error
+        except Exception:  # audit-ok[broad_except]: store.py:277 broad_except
             self._conn.rollback()
             raise
 
@@ -479,7 +478,7 @@ class SqliteEventStore:
             stored, idem = self._insert_one(stamped)
             mutated = True
             self._conn.commit()
-        except Exception:  # audit-ok[broad_except]: rollback append txn; drop finalized cache if mutated
+        except Exception:  # audit-ok[broad_except]: store.py:481 broad_except
             self._conn.rollback()
             # Insert may have applied finalized projection in-txn; drop cache.
             if mutated:
@@ -601,7 +600,7 @@ class SqliteEventStore:
                     batch_finalized = True
                 out.append(stored)
             self._conn.commit()
-        except Exception:  # audit-ok[broad_except]: rollback append_many txn; clear stale finalized cache
+        except Exception:  # audit-ok[broad_except]: store.py:603 broad_except
             self._conn.rollback()
             # Rolled-back insert may have applied finalized projection in-txn.
             if mutated:
@@ -774,7 +773,7 @@ class SqliteEventStore:
                 self._fence()
                 self._upsert_projection_write(table, key, data)
                 self._conn.commit()
-            except Exception:  # audit-ok[broad_except]: rollback fenced projection upsert then re-raise
+            except Exception:  # audit-ok[broad_except]: store.py:776 broad_except
                 self._conn.rollback()
                 raise
 
