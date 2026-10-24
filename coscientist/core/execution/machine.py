@@ -335,8 +335,6 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             raise LeaseLost("lease previously lost")
         try:
             if self.store.epoch is None:
-                from coscientist.core.events.errors import LeaseLost
-
                 raise LeaseLost("no lease epoch set")
             await self.store.renew_lease(self.owner, self.store.epoch, ttl_s=ttl_s)
         except LeaseLost:
