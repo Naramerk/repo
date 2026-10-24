@@ -275,20 +275,24 @@ def _coerce_id_set(val: Any) -> frozenset[str] | None | Literal[False]:
 
 
 def _task_key_from_attempt_id(attempt_id: str, *, study_id: str = "") -> str | None:
-    """``{study_id}/{task_key}#{n}`` → ``task_key`` via study prefix, not rsplit."""
+    """``{study_id}/{task_key}#{n}`` → ``task_key`` via study prefix, not last-segment rsplit."""
     if not attempt_id or "#" not in attempt_id:
         return None
-    left = attempt_id.rsplit("#", 1)[0]
+    hash_at = attempt_id.rfind("#")
+    left = attempt_id[:hash_at]
     if study_id:
         prefix = f"{study_id}/"
         if left.startswith(prefix):
             key = left[len(prefix) :]
-            return key or None
+            if key:
+                return key
+            return None
         return None
     if "/" not in left:
         return None
     # Legacy journals without study_id: last segment only (nested keys need study_id).
-    return left.rsplit("/", 1)[-1]
+    slash_at = left.rfind("/")
+    return left[slash_at + 1 :]
 
 
 def _task_key_for_intent(
@@ -302,7 +306,9 @@ def _task_key_for_intent(
         prefix = f"{study_id}/"
         if experiment_id.startswith(prefix):
             key = experiment_id[len(prefix) :]
-            return key or None
+            if key:
+                return key
+            return None
         return experiment_id
     return _task_key_from_attempt_id(attempt_id, study_id=study_id)
 
@@ -672,21 +678,31 @@ def runtime_claim_from_node(
         # Questions: require stamped intent (no tests edge). Never invent confirm.
         stamped_intent = attrs.get("intent")
         if target_kind == "hypothesis":
-            exp_attr = _coerce_str(attrs.get("experiment_id"), allow_empty=True) or None
+            exp_attr = None
+            raw_exp = _coerce_str(attrs.get("experiment_id"), allow_empty=True)
+            if raw_exp:
+                exp_attr = raw_exp
+            attempt_for_intent = ""
+            if aid:
+                attempt_for_intent = aid
+            edge_intent = None
             try:
-                intent = intent_from_producing_experiment(
+                edge_intent = intent_from_producing_experiment(
                     graph,
                     study_id=study_id,
-                    attempt_id=aid or "",
+                    attempt_id=attempt_for_intent,
                     target_logical=target,
                     target_kind=target_kind,
                     experiment_id=exp_attr,
                 )
             except JournalFormatError:
-                if stamped_intent in ("confirm", "refute"):
-                    intent = stamped_intent  # type: ignore[assignment]
-                else:
-                    return None, "missing_intent"
+                edge_intent = None  # audit-ok[except_enum_default]: edge absent → try stamped attrs next
+            if edge_intent in ("confirm", "refute"):
+                intent = edge_intent
+            elif stamped_intent in ("confirm", "refute"):
+                intent = stamped_intent  # type: ignore[assignment]
+            else:
+                return None, "missing_intent"
         elif stamped_intent in ("confirm", "refute"):
             intent = stamped_intent  # type: ignore[assignment]
         else:

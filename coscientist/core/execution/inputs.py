@@ -13,10 +13,10 @@ from coscientist.core.claims.claims import (
     resolve_existing_target,
     whitelist_claim_attrs,
 )
-from coscientist.core.claims.stance import DEFAULT_TESTS_INTENT
-from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.claims.graph import GraphEdge, GraphNode
+from coscientist.core.claims.stance import DEFAULT_TESTS_INTENT
 from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id
 from coscientist.core.execution.domain import (
@@ -388,15 +388,17 @@ def claim_nodes_from_attempt(
         # Hypothesis: tests edge is authority; else derived/task.tests_intent.
         stamped = core.get("intent")
         if target_kind == "question":
-            attrs["intent"] = (
-                stamped if stamped in ("confirm", "refute") else DEFAULT_TESTS_INTENT
-            )
+            if stamped in ("confirm", "refute"):
+                attrs["intent"] = stamped
+            else:
+                attrs["intent"] = DEFAULT_TESTS_INTENT
         else:
-            exp_for_intent = (
-                str(core["experiment_id"]) if core.get("experiment_id") else None
-            )
+            exp_for_intent: str | None = None
+            if core.get("experiment_id"):
+                exp_for_intent = str(core["experiment_id"])
+            edge_intent = None
             try:
-                attrs["intent"] = intent_from_producing_experiment(
+                edge_intent = intent_from_producing_experiment(
                     graph,
                     study_id=study_id,
                     attempt_id=attempt_id,
@@ -405,11 +407,14 @@ def claim_nodes_from_attempt(
                     experiment_id=exp_for_intent,
                 )
             except JournalFormatError:
-                if stamped in ("confirm", "refute"):
-                    attrs["intent"] = stamped
-                else:
-                    drops.append({"key": agent_key, "reason": "missing_intent"})
-                    continue
+                edge_intent = None  # audit-ok[except_enum_default]: edge absent → derived stamp or drop
+            if edge_intent in ("confirm", "refute"):
+                attrs["intent"] = edge_intent
+            elif stamped in ("confirm", "refute"):
+                attrs["intent"] = stamped
+            else:
+                drops.append({"key": agent_key, "reason": "missing_intent"})
+                continue
         excl = core.get("exclusion_reason")
         if excl in (
             "validity_failed",
