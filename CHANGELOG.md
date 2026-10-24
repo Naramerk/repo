@@ -63,7 +63,7 @@
 - **Follow-up:** YAML profile loader (**P3**, owner **G2**):
   `model_validate_json` (no list→tuple shim). Plan:
   [P3 — YAML loader](docs/plan/profiles-medicine-microfluidics.md#p3--yaml-loader-owner-g2)
-  (depends [#62](https://github.com/Naramerk/repo/pull/62), N1 [#70](https://github.com/Naramerk/repo/pull/70)).
+  (depends [#62](https://github.com/Naramerk/repo/pull/62), N1 [#129](https://github.com/Naramerk/repo/issues/129)).
 
 
 ### Docs — capability #21 A2A/MCP handoff
