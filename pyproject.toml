@@ -88,6 +88,7 @@ forbidden_modules = [
   "coscientist.api",
   "coscientist.tools",
   "coscientist.agents",
+  "coscientist.agents.adapter",
   "coscientist.llm",
   "coscientist.mcp",
   "coscientist.profiles",
@@ -113,6 +114,7 @@ forbidden_modules = [
   "coscientist.core",
   "coscientist.tools",
   "coscientist.agents",
+  "coscientist.agents.adapter",
   "coscientist.api",
   "coscientist.checks",
   "coscientist.experimental",
@@ -128,6 +130,7 @@ forbidden_modules = [
   "coscientist.core",
   "coscientist.tools",
   "coscientist.agents",
+  "coscientist.agents.adapter",
   "coscientist.api",
   "coscientist.llm",
   "coscientist.checks",
@@ -139,6 +142,7 @@ name = "agents, api, tools, llm must not import coscientist.mcp"
 type = "forbidden"
 source_modules = [
   "coscientist.agents",
+  "coscientist.agents.adapter",
   "coscientist.api",
   "coscientist.tools",
   "coscientist.llm",
@@ -161,6 +165,7 @@ source_modules = [
   "coscientist.llm",
   "coscientist.tools",
   "coscientist.agents",
+  "coscientist.agents.adapter",
   "coscientist.api",
   "coscientist.schema",
   "coscientist.mcp",
@@ -178,6 +183,7 @@ name = "agents layer above tools and llm"
 type = "layers"
 layers = [
   "coscientist.agents",
+  "coscientist.agents.adapter",
   "coscientist.tools | coscientist.llm",
 ]
 
@@ -241,6 +247,7 @@ type = "forbidden"
 allow_indirect_imports = true
 source_modules = [
   "coscientist.agents",
+  "coscientist.agents.adapter",
   "coscientist.checks",
   "coscientist.experimental",
 ]
@@ -253,12 +260,14 @@ type = "forbidden"
 # Completeness checked by tests/test_ingest_gate_contracts.py against the filesystem.
 source_modules = [
   "coscientist.agents",
+  "coscientist.agents.adapter",
   "coscientist.agents.critic",
   "coscientist.agents.prompts",
   "coscientist.agents.prompts.builtin",
   "coscientist.agents.prompts.registry",
   "coscientist.agents.research_spec",
   "coscientist.agents.reviewer",
+  "coscientist.agents.schemas",
   "coscientist.agents.strict",
   "coscientist.api",
   "coscientist.api.errors",
@@ -426,12 +435,14 @@ type = "forbidden"
 # Completeness of source list: tests/test_ingest_gate_contracts.py.
 source_modules = [
   "coscientist.agents",
+  "coscientist.agents.adapter",
   "coscientist.agents.critic",
   "coscientist.agents.prompts",
   "coscientist.agents.prompts.builtin",
   "coscientist.agents.prompts.registry",
   "coscientist.agents.research_spec",
   "coscientist.agents.reviewer",
+  "coscientist.agents.schemas",
   "coscientist.agents.strict",
   "coscientist.api",
   "coscientist.api.errors",
@@ -591,12 +602,14 @@ name = "_attempt_frame only via executor (+ ingest read)"
 type = "forbidden"
 source_modules = [
   "coscientist.agents",
+  "coscientist.agents.adapter",
   "coscientist.agents.critic",
   "coscientist.agents.prompts",
   "coscientist.agents.prompts.builtin",
   "coscientist.agents.prompts.registry",
   "coscientist.agents.research_spec",
   "coscientist.agents.reviewer",
+  "coscientist.agents.schemas",
   "coscientist.agents.strict",
   "coscientist.api",
   "coscientist.api.errors",
@@ -761,6 +774,7 @@ type = "forbidden"
 source_modules = ["coscientist.profiles"]
 forbidden_modules = [
   "coscientist.agents",
+  "coscientist.agents.adapter",
   "coscientist.llm",
   "coscientist.tools",
   "coscientist.core",
