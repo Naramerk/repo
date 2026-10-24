@@ -77,7 +77,7 @@ def test_refuse(data, match):
     (lambda: validate_attr_value(_pt("str"), None, null_ok=False, ctx="c"), "null not allowed"),
     (lambda: validate_attr_value(_pt("list(str)"), "x", null_ok=False, ctx="c"), "expected list"),
     (lambda: validate_attr_value(_pt("int"), "x", null_ok=False, ctx="c"), "incompatible"),
-])
+], ids=["parse-naive", "parse-type", "parse-cal", "val-null", "val-list", "val-type"])
 def test_parse_validate_raises(call, match):
     with pytest.raises(GraphSchemaError, match=match):
         call()
