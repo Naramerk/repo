@@ -375,7 +375,7 @@ class HitlForkMixin(CostlyHitlMixin):
             return
         # PR20: HITL timeout on proposed_check ≡ reject (StudyFinalized still runs).
         # Must take the same per-proposal lock as answer_hitl — otherwise timeout can
-        # write CheckRejected while a human accept is still inside _append.
+        # write CheckRejected while a human accept is still inside append_events.
         if h.kind == "proposed_check":
             from coscientist.core.plan.proposed_check import reject_check
 

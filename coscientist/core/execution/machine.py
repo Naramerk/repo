@@ -79,7 +79,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self._retry_at: dict[str, datetime] = {}
         self._finalized = False
         # True while finalize_loop_internal_error closes open work —
-        # nested _append(TaskDone) must not re-enter expand/foreach/loop hooks.
+        # nested append_events(TaskDone) must not re-enter expand/foreach/loop hooks.
         self._finalizing = False
         self.question_disposals: dict[str, dict] = {}
         # PR15: ArtifactRegistered(stamped) → artifact_id → kind (journal authority).

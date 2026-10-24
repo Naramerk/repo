@@ -17,7 +17,7 @@ from coscientist.experimental.hitl import HitlForkMixin
 class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
     """API lifecycle + core machine plus HITL gates, DelegatedBudget, fork stub.
 
-    ApiStudyRuntime (machine before LifecycleMixin) keeps ``_append`` real;
+    ApiStudyRuntime (machine before LifecycleMixin) keeps ``append_events`` real;
     HitlForkMixin adds HITL/costly/fork without shadowing core append.
     """
 
