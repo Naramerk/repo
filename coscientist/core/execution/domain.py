@@ -192,14 +192,14 @@ class GateConfig(Frozen):
 
     timeout_s: int = Field(ge=1)
     on_timeout: OnTimeout
-    enabled: bool
+    enabled: bool = True  # audit-ok[field_default]: domain.py GateConfig.enabled wire default
 
 
 class HitlPolicy(Frozen):
     """HITL policy. ``gates`` is required — no ``_default_gates`` inventing timeouts."""
 
     gates: dict[str, GateConfig] = Field(default_factory=dict)
-    mode: Literal["interactive", "auto", "headless"] = "interactive"  # audit-ok[field_default]: domain.py HitlPolicy.mode wire default
+    mode: Literal["interactive", "auto", "headless"]
     # Legacy flat map (optional); gate() uses ``gates`` only.
     timeout_s: dict[str, int] = Field(default_factory=dict)
     # Policy-level fallback unused when every gate sets on_timeout explicitly.
@@ -240,7 +240,7 @@ class OutputSpec(Frozen):
     name: str
     media_type: str
     schema_ref: str | None = None
-    required: bool
+    required: bool = True  # audit-ok[field_default]: domain.py OutputSpec.required wire default
     # Plan-accepted role (core-owned after accept_plan); independence code-vs-data.
     role: ArtifactRole | None = None
     # M1 PR13: qualitative acceptance (literature review, design, …). Frozen at PLAN.
@@ -268,8 +268,8 @@ class InputSpec(Frozen):
     output: str
     schema_ref: str | None = None
     # M1 PR5: default forbid (was use_partial). Old journals restored via upcaster.
-    mode: Literal["use_partial", "simulate", "forbid"]
-    kind: Literal["artifact", "claim", "verdict"]
+    mode: Literal["use_partial", "simulate", "forbid"] = "forbid"  # audit-ok[field_default]: domain.py InputSpec.mode wire default
+    kind: Literal["artifact", "claim", "verdict"] = "artifact"  # audit-ok[field_default]: domain.py InputSpec.kind wire default
     ref: str | None = None
     quorum: int | Literal["all"] | None = None
 
@@ -405,10 +405,10 @@ class LoopSpec(Frozen):
 
 
 class Budget(Frozen):
-    max_llm_calls: int = 100  # audit-ok[field_default]: domain.py Budget.max_llm_calls wire default
-    max_tokens: int = 100000  # audit-ok[number_outside_domain]: domain.py Budget.max_tokens wire default
+    max_llm_calls: int
+    max_tokens: int
     max_cost_rub: Decimal | None = None
-    max_tool_calls: int = 500  # audit-ok[field_default]: domain.py Budget.max_tool_calls wire default
+    max_tool_calls: int
     deadline: datetime | None = None
     # RUB cap for critic decisions on costly_or_nonreal (delegate_capped).
     delegated_costly: Decimal | None = None
@@ -533,7 +533,7 @@ class Task(Frozen):
     inherited_from: str | None = None
     # Sole wire signal for PLAN-n vs bootstrap PLAN (not criteria / key prefix).
     # Required on the wire — no silent NONE default (fail-closed).
-    plan_role: PlanRole = PlanRole.BOOTSTRAP  # audit-ok[named_default]: domain.py Task.plan_role wire default
+    plan_role: PlanRole
 
 
 class InputBinding(Frozen):

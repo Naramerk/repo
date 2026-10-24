@@ -25,7 +25,7 @@ class UnstampedEvent(BaseModel):
     idem_key: str
     payload: dict[str, Any]
     ts: datetime
-    schema_version: StrictInt
+    schema_version: StrictInt = 1  # audit-ok[field_default]: events.py UnstampedEvent.schema_version wire default
 
 
 class StoredEvent(UnstampedEvent):
