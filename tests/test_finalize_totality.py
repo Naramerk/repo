@@ -466,12 +466,13 @@ async def test_tick_ensure_lease_after_finalized(tmp_path, clock):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
     """Old journal PlanAccepted v1 + TaskCreated v2 upcast and finalize."""
     sid = "st_leg"
     root = tmp_path / sid
     root.mkdir()
-    store = SqliteEventStore(sid, root / "events.db", clock=clock)
+    store = SqliteEventStore(sid, root / "events.db", clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("seeder")
     now = clock.now()
     dl = now + timedelta(seconds=120)
@@ -586,7 +587,8 @@ def test_terminal_reason_for(impl):
     t = Task(
         task_id="st/A",
         kind=TaskKind.EXPERIMENT,
-        spec=TaskSpec(task_key="A", title="a", goal="g", route="experiment"),
+        spec=TaskSpec(task_key="A", title="a", goal="g", route="experiment",
+        required=True, tolerate_failed_dep=False),
         state=TaskState.DONE,
         outcome=TaskOutcome.FAILED,
         reason=TaskReason.HUMAN_TIMEOUT,

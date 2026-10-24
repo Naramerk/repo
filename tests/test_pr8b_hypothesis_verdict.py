@@ -252,6 +252,7 @@ def test_refuted_with_confirmations_reports_conflict_note():
     assert note == "refuted; 1 supporting results were stub/partial"
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_studycreated_v5_to_v6_supported_needed():
     v, out = upcast("StudyCreated", 5, {"study_id": "s"})
     assert v == 12
@@ -262,6 +263,7 @@ def test_upcaster_studycreated_v5_to_v6_supported_needed():
     assert out["max_proposals"] == 3
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_studycreated_v4_to_v5_defaults():
     v, out = upcast("StudyCreated", 4, {"study_id": "s", "confirmations_needed": 1})
     assert v == 12
@@ -759,7 +761,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
                 ],
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E0",
                 title="use",
@@ -769,7 +771,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
                 inputs=[InputSpec(from_task="P0", output="dataset")],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -1050,7 +1052,8 @@ def test_minimal_report_hypotheses_truncation_le_10kb():
         "st/T0": Task(
             task_id="st/T0",
             kind=TaskKind.EXPERIMENT,
-            spec=TaskSpec(task_key="T0", title="t", goal="g", route="experiment"),
+            spec=TaskSpec(task_key="T0", title="t", goal="g", route="experiment",
+        required=True, tolerate_failed_dep=False),
             state=TaskState.DONE,
             outcome=TaskOutcome.SUCCESS,
             deadline=__import__("datetime").datetime(2026, 1, 1),
@@ -1335,7 +1338,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
                 # value_match has no uses_sesoi in catalog.
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -1412,7 +1415,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 ],
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="P_MID",
                 title="intermediate",
@@ -1425,7 +1428,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 ],
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E1",
                 title="via mid",
@@ -1439,7 +1442,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 ],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E2",
                 title="direct raw",
@@ -1454,7 +1457,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 ],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E3",
                 title="other data",
@@ -1468,7 +1471,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 ],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
             # No-input: goal/title reword + same templates → 1 source.
             TaskSpec(
                 task_key="N1",
@@ -1479,7 +1482,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 method=ExperimentMethod.COMPUTATIONAL,
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="N2",
                 title="reworded title",
@@ -1489,7 +1492,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 method=ExperimentMethod.COMPUTATIONAL,
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
             # Distinct criterion template → separate structural source.
             TaskSpec(
                 task_key="N3",
@@ -1500,7 +1503,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 method=ExperimentMethod.COMPUTATIONAL,
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -1699,7 +1702,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -1772,7 +1775,7 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -1852,7 +1855,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
                 expected_outputs=[
                     OutputSpec(name="main", media_type="application/json", role="data")
                 ],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="P2",
                 title="raw2",
@@ -1864,7 +1867,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
                 expected_outputs=[
                     OutputSpec(name="main", media_type="application/json", role="data")
                 ],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E1",
                 title="exp1",
@@ -1874,7 +1877,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
                 inputs=[InputSpec(from_task="P1", output="main")],
                 criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E2",
                 title="exp2",
@@ -1884,7 +1887,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
                 inputs=[InputSpec(from_task="P2", output="main")],
                 criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -2028,7 +2031,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 expected_outputs=[
                     OutputSpec(name="main", media_type="application/json", role="data")
                 ],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="P2",
                 title="raw2",
@@ -2040,7 +2043,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 expected_outputs=[
                     OutputSpec(name="main", media_type="application/json", role="data")
                 ],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E1",
                 title="s1",
@@ -2053,7 +2056,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 expected_outputs=[
                     OutputSpec(name="main", media_type="application/json", role="data")
                 ],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E2",
                 title="s2",
@@ -2066,7 +2069,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 expected_outputs=[
                     OutputSpec(name="main", media_type="application/json", role="data")
                 ],
-            ),
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -2252,7 +2255,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E1",
                 title="consumer",
@@ -2262,7 +2265,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
                 inputs=[InputSpec(kind="verdict", ref="Q1")],
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -2351,7 +2354,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -2469,7 +2472,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="tost_equivalence")],
                 addresses=["Q1"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )

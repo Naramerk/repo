@@ -876,7 +876,7 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -887,7 +887,7 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
         if e.type == "AttemptStarted" and e.entity_key == aid
     )
     # #23 writer v8 (inputs_digest); PR20 stacks v9 (attempt_role).
-    assert started.schema_version == 9
+    assert started.schema_version == 1
     assert started.payload.get("inputs_digest")
     assert isinstance(started.payload["inputs_digest"], str)
     assert len(started.payload["inputs_digest"]) == 64
@@ -929,7 +929,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
                 expected_outputs=[
                     OutputSpec(name="main", media_type="application/json")
                 ],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E1",
                 title="e",
@@ -937,7 +937,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["P1"],
                 inputs=[InputSpec(from_task="P1", output="main", mode="forbid")],
-            ),
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[],
     )
@@ -947,7 +947,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
     aid1 = await rt.start_attempt("E1")
     dig1 = rt.attempts[aid1]["inputs_digest"]
     assert dig1
-    await rt.fail_attempt(aid1, retryable=True)
+    await rt.fail_attempt(aid1, retryable=True, close_reason="failed")
     new_art = arts.put_core(
         b'{"count": 999, "drift": true}',
         make_tool_ref(f"{aid_p}:v2", "core", "main"),
@@ -978,6 +978,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cls):
     """Upcasted v7 AttemptStarted (digest=None) → drift unknown, not partial."""
     sid = "st_v7_drift"
@@ -1003,7 +1004,7 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1111,6 +1112,7 @@ async def test_as_of_appears_in_report(tmp_path, clock, runtime_cls):
     await close_runtime(rt)
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_study_created_v9_to_v11():
     """#24 v10 setdefault max_loop_iter; #23 v11 as_of/ids; PR20 v12 max_proposals."""
     v, p = upcast("StudyCreated", 9, {"study_id": "s", "request": "q"})
@@ -1121,6 +1123,7 @@ def test_upcast_study_created_v9_to_v11():
     assert p.get("max_proposals") == 3
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_study_created_v10_to_v11_keeps_max_loop_iter():
     """Custom max_loop_iter (≠ default 8) must survive v10→v11→v12."""
     v, p = upcast(
@@ -1154,7 +1157,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
     assert rt.study is not None
     assert rt.study.max_loop_iter == 2
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 12
+    assert created.schema_version == 1
     assert created.payload.get("max_loop_iter") == 2
     assert created.payload.get("max_proposals") == 3
     await close_runtime(rt)
@@ -1167,6 +1170,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
     await close_runtime(rt2)
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_attempt_started_v7_to_v8():
     """#23 v7→v8 inputs_digest; PR20 continues to v9 attempt_role."""
     v, p = upcast(
@@ -1423,6 +1427,7 @@ async def test_api_corrupt_deflate_study_finalized_not_500(tmp_path, catalog):
     await close_runtime(rt)
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 @pytest.mark.asyncio
 async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls):
     """Persist AttemptStarted schema_version=7, reopen (upcast), next attempt unknown."""
@@ -1452,7 +1457,7 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1522,15 +1527,15 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
 
 
 def test_study_created_writer_is_v11_after_loopspec():
-    """#24 owns max_loop_iter (v10); #23 writer was v11; PR20 stacks v12."""
-    from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION
+    """Schema-v1 baseline: StudyCreated writer is 1 (legacy upcast chains removed)."""
+    from coscientist.core.events.schema_versions import STUDY_CREATED_SCHEMA_VERSION
     from coscientist.core.events.upcasters import writer_schema_version
     from coscientist.core.execution.domain import Study
 
     assert "max_loop_iter" in Study.model_fields
     assert "max_proposals" in Study.model_fields
-    assert STUDY_CREATED_SCHEMA_VERSION == 12
-    assert writer_schema_version("StudyCreated") == 12
+    assert STUDY_CREATED_SCHEMA_VERSION == 1
+    assert writer_schema_version("StudyCreated") == 1
 
 
 def test_tar_many_members_early_exit():
@@ -1638,6 +1643,7 @@ def test_stale_digest_version_garbage_fails_closed():
     )
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 @pytest.mark.asyncio
 async def test_old_study_created_v9_with_digest_drift_unknown(
     tmp_path, clock, runtime_cls
@@ -1687,7 +1693,7 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )

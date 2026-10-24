@@ -17,11 +17,14 @@ def side_effect_decision(policy: HitlPolicy) -> SideEffectDecision:
     anything other than ``allow`` as deny → ToolError(local).
     """
     gate = policy.gate("side_effect")
-    if not gate.enabled:
+    if gate is None or not gate.enabled:
         return "deny"
-    raw = str(policy.defaults.get("side_effect", "deny")).lower()
+    raw = policy.defaults["side_effect"]
+    if not isinstance(raw, str):
+        raise TypeError(f"side_effect default must be str, got {type(raw).__name__}")
+    raw = raw.lower()
     if raw not in ("deny", "allow", "ask"):
-        raw = "deny"
+        raise ValueError(f"side_effect default invalid: {raw!r}")
     decision: SideEffectDecision = raw  # type: ignore[assignment]
     if decision == "ask" and policy.mode in ("headless", "auto"):
         return "deny"

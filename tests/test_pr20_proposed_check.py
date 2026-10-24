@@ -21,12 +21,14 @@ from coscientist.core.claims.verdict import claim_is_severe, exclusion_reason, h
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.errors import AttemptClosedError, Conflict, StudyClosedError
 from coscientist.core.events.events import (
-    STUDY_CREATED_SCHEMA_VERSION,
-    STUDY_FINALIZED_SCHEMA_VERSION,
     EventEnvelope,
     make_idem,
 )
 from coscientist.core.events.ids import hitl_request_id
+from coscientist.core.events.schema_versions import (
+    STUDY_CREATED_SCHEMA_VERSION,
+    STUDY_FINALIZED_SCHEMA_VERSION,
+)
 from coscientist.core.events.upcasters import UPCASTERS, register_upcaster, upcast
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
@@ -123,7 +125,7 @@ def _exp_spec(**kwargs) -> TaskSpec:
             "criteria", [RequirementRef(template_id="artifact_present")]
         ),
         expected_outputs=kwargs.get("expected_outputs", []),
-    )
+        required=True, tolerate_failed_dep=False)
 
 
 async def _create(rt, request: str = "pr20", **kwargs):
@@ -298,7 +300,7 @@ async def test_propose_preregisters_digest_before_result(tmp_path: Path) -> None
         assert proposed[0].schema_version == 1
         created = [e for e in events if e.type == "StudyCreated"][0]
         assert created.schema_version == STUDY_CREATED_SCHEMA_VERSION
-        assert created.schema_version == 12
+        assert created.schema_version == 1
         assert created.payload.get("max_proposals") == 3
         # Evaluating attempt starts only after CheckProposed.
         aid = await rt.start_attempt("EXP")
@@ -1490,6 +1492,7 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
         await close_runtime(rt)
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
     """Main v10 → #23 v11 (as_of/user_input_ids) → PR20 v12 (max_proposals)."""
     v, payload = upcast("StudyCreated", 10, {"study_id": "s", "max_loop_iter": 8})
@@ -1506,6 +1509,7 @@ def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
     assert 10 in UPCASTERS["StudyCreated"] and 11 in UPCASTERS["StudyCreated"]
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_studycreated_v10_preserves_max_loop_iter() -> None:
     """v10→v11 bridge must not pop max_loop_iter (real cap on main / identical to #23)."""
     mid = UPCASTERS["StudyCreated"][10]({"study_id": "s", "max_loop_iter": 2})
@@ -1519,6 +1523,7 @@ def test_upcaster_studycreated_v10_preserves_max_loop_iter() -> None:
     assert payload.get("max_proposals") == 3
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
     """11→12: existing max_proposals=5 stays 5; missing → default 3."""
     v, p = upcast(
@@ -1536,6 +1541,7 @@ def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -> None:
     """Seeded StudyCreated v10 with max_loop_iter=2 reopens as study.max_loop_iter==2."""
     from coscientist.core.events.store import SqliteEventStore
@@ -1543,7 +1549,7 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
     sid = "st_pr20_v10_loop"
     root = tmp_path / sid
     root.mkdir(parents=True)
-    store = SqliteEventStore(sid, root / "events.db")
+    store = SqliteEventStore(sid, root / "events.db", lease_ttl_s=30.0)
     await store.acquire_lease("seeder")
     now = datetime.now(timezone.utc)
     dl = now + timedelta(seconds=120)
@@ -1585,6 +1591,7 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
         await close_runtime(rt)
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_studyfinalized_v3_to_v4_custom_checks() -> None:
     v, payload = upcast("StudyFinalized", 3, {"trigger": "all_done"})
     assert v == STUDY_FINALIZED_SCHEMA_VERSION == 4
@@ -1593,9 +1600,16 @@ def test_upcaster_studyfinalized_v3_to_v4_custom_checks() -> None:
 
 
 def test_register_upcaster_refuses_overwrite() -> None:
-    with pytest.raises(ValueError, match="duplicate upcaster"):
-        register_upcaster("StudyCreated", 9, lambda p: p)
-    assert 9 in UPCASTERS["StudyCreated"]
+    """Duplicate guard on a dummy type (production StudyCreated has no chain)."""
+    name = "_Pr20DupGuard"
+    UPCASTERS.pop(name, None)
+    register_upcaster(name, 1, lambda p: p)
+    try:
+        with pytest.raises(ValueError, match="duplicate upcaster"):
+            register_upcaster(name, 1, lambda p: p)
+        assert 1 in UPCASTERS[name]
+    finally:
+        UPCASTERS.pop(name, None)
 
 
 def test_evaluate_proposed_missing_id_fail_closed(tmp_path: Path) -> None:
@@ -1606,11 +1620,11 @@ def test_evaluate_proposed_missing_id_fail_closed(tmp_path: Path) -> None:
         task_key="EXP",
         title="t",
         goal="g",
-        route="agent",
+        route="experiment",
         criteria=[
             RequirementRef(template_id=PROPOSED_CHECK_TEMPLATE_ID, params={}),
         ],
-    )
+        required=True, tolerate_failed_dep=False)
     results = evaluate_task_checks(catalog, spec, out, arts, proposals={})
     assert results[0].status == ReqStatus.FAILED
     assert "unapproved_check" in (results[0].detail or "")

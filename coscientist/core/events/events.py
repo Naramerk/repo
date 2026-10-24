@@ -10,6 +10,14 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from coscientist.core.events.digest import payload_digest as _payload_digest
 from coscientist.core.events.errors import JournalFormatError
 
+# Writer schema versions after v1 collapse (avoid importing schema_versions here —
+# that module loads upcasters which imports EventType from this file).
+PLAN_EXPANDED_SCHEMA_VERSION = 1
+STUDY_CREATED_SCHEMA_VERSION = 1
+PLAN_ACCEPTED_SCHEMA_VERSION = 1
+TASK_CREATED_SCHEMA_VERSION = 1
+STUDY_FINALIZED_SCHEMA_VERSION = 1
+
 EventType = Literal[
     "StudyCreated",
     "StudyRefused",

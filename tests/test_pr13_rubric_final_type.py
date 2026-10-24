@@ -113,7 +113,7 @@ def _exp(
         addresses=addresses or [],
         expected_outputs=outs,
         criteria=criteria if criteria is not None else ([RequirementRef(template_id="rubric_check")] if rubric else []),
-    )
+        required=True, tolerate_failed_dep=False)
 
 
 async def _boot(tmp_path, clock, sid: str, *, cancel_stages: bool = True):
@@ -188,6 +188,7 @@ async def _record_hitl_expand(rt, **kwargs):
                     "approved_by": "human",
                     "reason": "answered",
                     "spent_rub": 0.0,
+                    "delegated_by": "human",
                 },
                 ts=rt.clock.now(),
             )
@@ -229,7 +230,7 @@ def test_plan_validator_verdict_requires_criterion():
         addresses=["Q1"],
         criteria=[],
         expected_outputs=[],
-    )
+        required=True, tolerate_failed_dep=False)
     with pytest.raises(ValueError, match="criterion"):
         validate_final_types([bad], [q], catalog=None)
     ok = bad.model_copy(update={"criteria": [RequirementRef(template_id="value_match")]})
@@ -431,6 +432,9 @@ async def test_rubric_frozen_digest_runtime(tmp_path, clock):
     tasks, qs = freeze_plan_rubrics(
         [_exp("E0", addresses=["Q1"], rubric=rub.model_copy(update={"digest": ""}))],
         [QuestionSpec(id="Q1", text="q", final_type="artifact")],
+        rollup="all",
+        max_depth=8,
+        max_tasks=64,
     )
     assert tasks[0].expected_outputs[0].rubric is not None
     assert tasks[0].expected_outputs[0].rubric.digest == expected
@@ -780,7 +784,7 @@ async def test_plan_refused_invalid_rubric_still_finalizes(tmp_path, clock):
         addresses=["Q1"],
         criteria=[],
         expected_outputs=[OutputSpec(name="main", media_type="text/markdown", role="report")],
-    )
+        required=True, tolerate_failed_dep=False)
     pid = await rt.accept_plan([bad], questions=[q])
     assert pid == ""
     events = await rt.store.read_all()
@@ -913,6 +917,7 @@ def test_rubric_digest_stable_canonical():
     assert rubric_digest(items, "all_required", 99) == d1
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_taskcreated_v10_and_plan_expanded_v2():
     from coscientist.core.events.upcasters import upcast
 
@@ -1585,6 +1590,7 @@ async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             claims=[
                 {
+                    "id": "c1",
                     "text": "c1",
                     "polarity": "supports",
                     "target": "Q1",

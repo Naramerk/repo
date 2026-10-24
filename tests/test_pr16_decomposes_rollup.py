@@ -13,12 +13,14 @@ from coscientist.core.claims.rubric import freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.events import (
-    PLAN_ACCEPTED_SCHEMA_VERSION,
-    PLAN_EXPANDED_SCHEMA_VERSION,
     EventEnvelope,
     make_idem,
 )
 from coscientist.core.events.ids import hypothesis_node_id, task_id
+from coscientist.core.events.schema_versions import (
+    PLAN_ACCEPTED_SCHEMA_VERSION,
+    PLAN_EXPANDED_SCHEMA_VERSION,
+)
 from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
@@ -92,7 +94,7 @@ def _exp(
         criteria=criteria
         if criteria is not None
         else ([RequirementRef(template_id="rubric_check")] if rubric else []),
-    )
+        required=True, tolerate_failed_dep=False)
 
 
 def _q(qid: str, text: str, *, parent: str | None = None, origin: str | None = None) -> QuestionSpec:
@@ -139,7 +141,7 @@ def _task(
             goal="g",
             route="experiment",
             addresses=addresses or [],
-        ),
+        required=True, tolerate_failed_dep=False),
         state=TaskState.DONE,
         outcome=outcome,
         reason=reason,
@@ -265,7 +267,7 @@ async def test_accept_plan_writes_decomposes_edge(tmp_path, clock):
     assert len(decomp) == 1
     assert decomp[0].payload["attrs"]["origin"] == "explicit"
     accepted = next(e for e in await rt.store.read_all() if e.type == "PlanAccepted")
-    assert accepted.schema_version == PLAN_ACCEPTED_SCHEMA_VERSION == 11
+    assert accepted.schema_version == PLAN_ACCEPTED_SCHEMA_VERSION == 1
     await close_runtime(rt)
 
 
@@ -777,7 +779,7 @@ def test_loop_cap_preserves_iteration_cap_when_children_incomplete_or_rubric():
                 goal="g",
                 route="experiment",
                 addresses=addresses,
-            ),
+        required=True, tolerate_failed_dep=False),
             state=TaskState.PENDING,
             outcome=None,
             reason=None,
@@ -966,7 +968,7 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
                     )
                 ],
                 criteria=[RequirementRef(template_id="rubric_check")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         added_questions=[],
         superseded_tasks=["E1"],
@@ -1208,7 +1210,7 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
         addresses=["Q1"],
         criteria=[RequirementRef(template_id="value_match")],
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
-    )
+        required=True, tolerate_failed_dep=False)
     await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")])
     now = rt.clock.now()
     for i, hid in enumerate(("H0", "H1")):
@@ -1327,7 +1329,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
             depends_on=[],
             addresses=["Q1"],
             criteria=[RequirementRef(template_id="value_match")],
-        )
+        required=True, tolerate_failed_dep=False)
     ]
     await rt.accept_plan(
         [
@@ -1489,6 +1491,7 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
                     "approved_by": "human",
                     "reason": "answered",
                     "spent_rub": 0.0,
+                    "delegated_by": "human",
                 },
                 ts=rt.clock.now(),
             ),
@@ -1532,10 +1535,11 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
     assert "~~`E1`~~" in md
     expanded = [e for e in await rt.store.read_all() if e.type == "PlanExpanded"]
     assert expanded
-    assert expanded[-1].schema_version == PLAN_EXPANDED_SCHEMA_VERSION == 5
+    assert expanded[-1].schema_version == PLAN_EXPANDED_SCHEMA_VERSION == 1
     await close_runtime(rt)
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_planaccepted_v9_to_v10_decomposes():
     v, p = upcast(
         "PlanAccepted",
@@ -1549,6 +1553,7 @@ def test_upcaster_planaccepted_v9_to_v10_decomposes():
     assert p["questions"][0].get("parent_id") is None
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_planexpanded_v3_to_v4_decomposes():
     v, p = upcast(
         "PlanExpanded",
@@ -1569,6 +1574,8 @@ def test_validate_decomposes_pure_cycle():
                 QuestionSpec(id="B", text="b", parent_id="A"),
             ],
             rollup="all",
+            max_depth=8,
+            max_tasks=64,
         )
 
 
@@ -1632,7 +1639,7 @@ def test_expand_graph_rejects_cycle_via_existing_edges():
             now=now,
         )
     # Closing the existing chain (A→C while C→B→A) via full parent map.
-    parent_of = _decomposes_parent_map(rt, sid)  # type: ignore[arg-type]
+    parent_of = _decomposes_parent_map(rt)  # type: ignore[arg-type]
     assert parent_of["B"] == "A"
     assert parent_of["C"] == "B"
     parent_of["A"] = "C"
@@ -1891,7 +1898,7 @@ async def test_foreach_after_task_done_reraise_lease_lost(tmp_path, clock, monke
         addresses=["Q.a"],
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
         criteria=[],
-    )
+        required=True, tolerate_failed_dep=False)
     await rt.accept_plan(
         [e0, fe],
         questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
@@ -1939,7 +1946,7 @@ async def test_materialize_ready_foreach_reraise_lease_lost(tmp_path, clock, mon
         addresses=["Q.a"],
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
         criteria=[],
-    )
+        required=True, tolerate_failed_dep=False)
     await rt.accept_plan(
         [e0, fe],
         questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],

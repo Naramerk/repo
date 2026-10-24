@@ -36,7 +36,7 @@ from coscientist.core.claims.reasons import Disposition
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.verdict import hypothesis_verdict
 from coscientist.core.events.errors import ArtifactRejected
-from coscientist.core.events.events import (
+from coscientist.core.events.schema_versions import (
     PLAN_ACCEPTED_SCHEMA_VERSION,
     PLAN_EXPANDED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
@@ -99,7 +99,7 @@ def _exp_design(key: str, *, addresses: list[str]) -> TaskSpec:
             )
         ],
         criteria=[RequirementRef(template_id="rubric_check")],
-    )
+        required=True, tolerate_failed_dep=False)
 
 
 async def _boot(tmp_path, clock, sid: str):
@@ -295,7 +295,7 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
         expected_outputs=[
             OutputSpec(name="main", media_type="text/plain", role="code", rubric=rub)
         ],
-    )
+        required=True, tolerate_failed_dep=False)
     assert is_derivation_task_spec(spoof) is False
     with pytest.raises(ValidationError):
         OutputSpec(
@@ -319,7 +319,7 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
                 evidence_kind="derivation",
             )
         ],
-    )
+        required=True, tolerate_failed_dep=False)
     with pytest.raises(ValueError, match="derivation"):
         validate_evidence_kinds([bad_role])
     ok = TaskSpec(
@@ -337,7 +337,7 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
                 evidence_kind="derivation",
             )
         ],
-    )
+        required=True, tolerate_failed_dep=False)
     validate_evidence_kinds([ok])
     assert is_derivation_task_spec(ok) is True
 
@@ -849,6 +849,7 @@ def test_executable_check_met_excludes_presence_and_waived():
     assert executable_check_met([real], bound_key="x") is True
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_chains_continuous_and_no_overwrite():
     """Checklist: chains 1..N-1 continuous vs writer versions; no registry mutate."""
     for et in (
