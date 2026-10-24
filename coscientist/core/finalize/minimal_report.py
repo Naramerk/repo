@@ -42,8 +42,12 @@ def _task_provenance(
                 f"task {task.spec.task_key!r}: closed attempt provenance required"
             )
         raw = str(att["provenance"])
-        if raw == "real" or raw == "partial" or raw == "stub":
-            return raw
+        if raw == "real":
+            return "real"
+        if raw == "partial":
+            return "partial"
+        if raw == "stub":
+            return "stub"
         raise MinimalReportRefuse(
             f"task {task.spec.task_key!r}: unknown provenance {raw!r}"
         )
