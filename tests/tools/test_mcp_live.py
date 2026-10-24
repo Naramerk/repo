@@ -16,6 +16,7 @@ from coscientist.tools.mcp_live import (
     PAPER_ANALYSIS_TOOLS,
     PAPERS_SEARCH_TOOLS,
     LiveHttpServer,
+    LiveMcpBundleConfig,
     McpLiveError,
     McpToolRouterBundle,
     bundle_from_live,
@@ -96,16 +97,27 @@ def test_literature_and_bundle_guards() -> None:
         (MCP_SERVER_PAPERS_SEARCH, "http://127.0.0.1:7331/mcp"),
         (MCP_SERVER_PAPER_ANALYSIS, "http://127.0.0.1:7334/mcp"),
     ]
-    bad = dict(ps)
-    del bad["search_entity"]
+    bad_ps = dict(ps)
+    del bad_ps["search_entity"]
     with pytest.raises(McpLiveError, match="papers-search"):
         literature_live_bundle(
             papers_search_url="http://127.0.0.1:7331/mcp",
             paper_analysis_url="http://127.0.0.1:7334/mcp",
             papers_search_api_key_env=None,
             paper_analysis_api_key_env=None,
-            papers_search_tools=bad,
+            papers_search_tools=bad_ps,
             paper_analysis_tools=pa,
+        )
+    bad_pa = dict(pa)
+    del bad_pa["explore_my_papers"]
+    with pytest.raises(McpLiveError, match="paper-analysis"):
+        literature_live_bundle(
+            papers_search_url="http://127.0.0.1:7331/mcp",
+            paper_analysis_url="http://127.0.0.1:7334/mcp",
+            papers_search_api_key_env=None,
+            paper_analysis_api_key_env=None,
+            papers_search_tools=ps,
+            paper_analysis_tools=bad_pa,
         )
     with pytest.raises(ValidationError, match="diverge"):
         McpToolRouterBundle(
@@ -120,6 +132,16 @@ def test_literature_and_bundle_guards() -> None:
         )
     with pytest.raises(ValidationError, match="whitespace"):
         LiveHttpServer(name="x", url="http://x ", api_key_env=None, tools={"t": _p()})
+    with pytest.raises(ValidationError, match="invalid tool name"):
+        LiveHttpServer(name="x", url="http://127.0.0.1:7331/mcp", api_key_env=None, tools={"bad name": _p()})
+    dup = LiveHttpServer(
+        name=MCP_SERVER_PAPERS_SEARCH,
+        url="http://127.0.0.1:7331/mcp",
+        api_key_env=None,
+        tools={"echo": _p()},
+    )
+    with pytest.raises(ValidationError, match="duplicate LiveHttpServer.name"):
+        LiveMcpBundleConfig(servers=(dup, dup))
     base = make_config(
         servers=(
             StdioServerConfig(
