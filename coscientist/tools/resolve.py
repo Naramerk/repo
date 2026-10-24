@@ -57,7 +57,7 @@ async def resolve_against_catalog(
     await store.append(
         UnstampedEvent(
             study_id=need.study_id,
-            type="ToolResolved",
+            type=TOOL_RESOLVED_TYPE,
             entity_key=resolution.task_id,
             idem_key=make_idem(TOOL_RESOLVED_TYPE, resolution.task_id),
             payload=resolution.model_dump(mode="json"),
