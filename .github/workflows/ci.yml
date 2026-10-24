@@ -5,6 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       # bubblewrap required for hard sandbox isolation (PR17); anti-rewrite test must run.
@@ -73,6 +74,8 @@ jobs:
       - run: python scripts/gen_model_tables.py --check
       - run: mypy coscientist
       - run: lint-imports
+      - name: heuristics audit (touched lines vs main)
+        run: python scripts/audit_heuristics.py --vs-main
       # Exclude perf SLO (absolute p99) — that runs in the dedicated job below.
       # Re-enter the job leaf before pytest so _current_cgroup_path is writable.
       - name: pytest
