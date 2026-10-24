@@ -5,23 +5,23 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Protocol
 
-from coscientist.core.events.events import EventEnvelope
+from coscientist.core.events.events import StoredEvent, UnstampedEvent
 from coscientist.core.execution.domain import Artifact, StudyView
 
 
 class EventStore(Protocol):
     study_id: str
     owner: str | None
-    epoch: int
+    epoch: int | None
     owner_nonce: str | None
 
-    async def append(self, event: EventEnvelope) -> EventEnvelope: ...
+    async def append(self, event: UnstampedEvent) -> StoredEvent: ...
 
-    async def append_many(self, events: list[EventEnvelope]) -> list[EventEnvelope]: ...
+    async def append_many(self, events: list[UnstampedEvent]) -> list[StoredEvent]: ...
 
-    async def read_all(self) -> list[EventEnvelope]: ...
+    async def read_all(self) -> list[StoredEvent]: ...
 
-    async def read_after(self, seq: int) -> list[EventEnvelope]: ...
+    async def read_after(self, seq: int) -> list[StoredEvent]: ...
 
     async def get_projection(self, table: str) -> list[dict[str, Any]]: ...
 

@@ -6,7 +6,7 @@ import time
 from threading import Event
 from typing import Any
 
-from coscientist.core.events.events import EventEnvelope
+from coscientist.core.events.events import StoredEvent, UnstampedEvent
 from coscientist.core.events.store import SqliteEventStore
 
 
@@ -24,17 +24,17 @@ class SlowWriteStore(SqliteEventStore):
                 self.write_delay_entered.set()
             time.sleep(self.write_delay_s)
 
-    def _append_locked(self, event: EventEnvelope) -> EventEnvelope:
+    def _append_locked(self, event: UnstampedEvent) -> StoredEvent:
         self._maybe_delay()
         return super()._append_locked(event)
 
     def _append_many_sync(
         self,
-        events: list[EventEnvelope],
+        events: list[UnstampedEvent],
         *,
         require_open_attempt: str | None = None,
         source_fetched_cap_id: str | None = None,
-    ) -> list[EventEnvelope]:
+    ) -> list[StoredEvent]:
         self._maybe_delay()
         return super()._append_many_sync(
             events,

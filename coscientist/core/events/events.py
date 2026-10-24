@@ -5,12 +5,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from coscientist.core.events.digest import payload_digest as _payload_digest
+from coscientist.core.events.errors import JournalFormatError
 
 
-class EventEnvelope(BaseModel):
+class UnstampedEvent(BaseModel):
+    """Writer envelope: no epoch / payload_digest (store stamps both)."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     seq: int | None = None
@@ -21,22 +24,38 @@ class EventEnvelope(BaseModel):
     payload: dict[str, Any]
     ts: datetime
     schema_version: StrictInt
-    # Writers omit these; SqliteEventStore stamps epoch from the lease and
-    # payload_digest from the actual payload before persist. After read/write
-    # both are always set (non-empty digest). Empty digest in an old journal
-    # row is refused — never guessed.
-    epoch: StrictInt | None = None
-    payload_digest: str | None = None
 
 
-def stamp_envelope(event: EventEnvelope, *, epoch: int) -> EventEnvelope:
-    """Stamp lease epoch + digest of ``event.payload`` (single compute site)."""
-    if not isinstance(epoch, int) or isinstance(epoch, bool):
+class StoredEvent(UnstampedEvent):
+    """Persisted envelope after store stamp / on read."""
+
+    epoch: StrictInt
+    payload_digest: str = Field(min_length=1)
+
+
+# Writer alias — construct UnstampedEvent; store returns StoredEvent.
+EventEnvelope = UnstampedEvent
+
+
+def stamp_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
+    """Stamp lease epoch + digest of ``unstamped.payload`` (single compute site)."""
+    if type(epoch) is not int:
         raise TypeError(f"epoch must be exact int, got {epoch!r}")
-    digest = _payload_digest(event.payload)
+    digest = _payload_digest(unstamped.payload)
     if not digest:
-        raise ValueError(f"{event.type}: empty payload_digest")
-    return event.model_copy(update={"epoch": epoch, "payload_digest": digest})
+        raise JournalFormatError(f"{unstamped.type}: empty payload_digest")
+    return StoredEvent(
+        seq=unstamped.seq,
+        study_id=unstamped.study_id,
+        type=unstamped.type,
+        entity_key=unstamped.entity_key,
+        idem_key=unstamped.idem_key,
+        payload=unstamped.payload,
+        ts=unstamped.ts,
+        schema_version=unstamped.schema_version,
+        epoch=epoch,
+        payload_digest=digest,
+    )
 
 
 # Typed payload helpers used by the machine / executor.

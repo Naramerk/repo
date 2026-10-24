@@ -1519,23 +1519,23 @@ def test_task_plan_role_required_no_default():
 
 @pytest.mark.asyncio
 async def test_event_envelope_epoch_digest_stamped_by_store(tmp_path):
-    """Writers omit epoch/digest; store stamps from lease + actual payload.
-
-    Passing both fields in a ValidationError assertion does not prove requiredness.
-    """
+    """UnstampedEvent has no epoch/digest; store returns StoredEvent with both."""
     from datetime import UTC, datetime
+
+    from pydantic import ValidationError
 
     from coscientist.core.events.clock import FakeClock
     from coscientist.core.events.digest import payload_digest as pd
-    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.events import (
+        StoredEvent,
+        UnstampedEvent,
+        stamp_envelope,
+    )
     from coscientist.core.events.store import SqliteEventStore
-    from coscientist.core.events.upcasters import writer_schema_version
 
     clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
-    store = SqliteEventStore("st_stamp", tmp_path / "stamp.db", clock=clock)
-    await store.acquire_lease("o1")
     payload = {"study_id": "st_stamp", "x": 1}
-    ev = EventEnvelope(
+    base = dict(
         study_id="st_stamp",
         type="StudyCreated",
         entity_key="st_stamp",
@@ -1544,9 +1544,30 @@ async def test_event_envelope_epoch_digest_stamped_by_store(tmp_path):
         ts=clock.now(),
         schema_version=writer_schema_version("StudyCreated"),
     )
-    assert ev.epoch is None
-    assert ev.payload_digest is None
+    # Contract: writer type rejects epoch / payload_digest (not optional None).
+    assert "epoch" not in UnstampedEvent.model_fields
+    assert "payload_digest" not in UnstampedEvent.model_fields
+    with pytest.raises(ValidationError):
+        UnstampedEvent(**base, epoch=1)  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        UnstampedEvent(**base, payload_digest="abc")  # type: ignore[call-arg]
+
+    # Contract: StoredEvent requires exact int epoch + non-empty digest.
+    with pytest.raises(ValidationError):
+        StoredEvent(**base)  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        StoredEvent(**base, epoch=1, payload_digest="")  # type: ignore[call-arg]
+
+    ev = UnstampedEvent(**base)
+    stamped = stamp_envelope(ev, epoch=1)
+    assert isinstance(stamped, StoredEvent)
+    assert stamped.epoch == 1
+    assert stamped.payload_digest == pd(payload)
+
+    store = SqliteEventStore("st_stamp", tmp_path / "stamp.db", clock=clock)
+    await store.acquire_lease("o1")
     stored = await store.append(ev)
+    assert isinstance(stored, StoredEvent)
     assert stored.epoch == 1
     assert stored.payload_digest == pd(payload)
     await store.close()

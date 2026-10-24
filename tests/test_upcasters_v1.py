@@ -253,8 +253,6 @@ async def test_write_rejects_schema_version_not_equal_writer(tmp_path: Path):
         with pytest.raises(JournalFormatError, match="!= writer"):
             # Bypass StrictInt by mutating after construct is impossible (frozen);
             # insert via raw SQL path is covered below — here use model_construct.
-            from coscientist.core.events.digest import payload_digest as _pd
-
             payload = {"study_id": "s"}
             ev = EventEnvelope.model_construct(
                 study_id="s",
@@ -264,7 +262,6 @@ async def test_write_rejects_schema_version_not_equal_writer(tmp_path: Path):
                 payload=payload,
                 ts=datetime(2024, 1, 1, tzinfo=UTC),
                 schema_version=2,
-                payload_digest=_pd(payload),
             )
             await store.append(ev)
     finally:

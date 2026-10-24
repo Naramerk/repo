@@ -27,7 +27,7 @@ from coscientist.core.events.errors import (
     LeaseLost,
     StudyClosedError,
 )
-from coscientist.core.events.events import EventEnvelope
+from coscientist.core.events.events import StoredEvent, UnstampedEvent, stamp_envelope
 from coscientist.core.events.metrics import bump_late_write_rejected
 from coscientist.core.events.upcasters import (
     require_exact_int,
@@ -83,7 +83,7 @@ class SqliteEventStore:
         clock: Clock | None = None,
         *,
         owner: str | None = None,
-        epoch: int = 0,
+        epoch: int | None = None,
         owner_nonce: str | None = None,
         lease_ttl_s: float = 30.0,
     ) -> None:
@@ -93,7 +93,8 @@ class SqliteEventStore:
         self.clock = clock or SystemClock()
         self.owner = owner
         self.owner_nonce = owner_nonce
-        self.epoch = epoch
+        # None = no lease held (after release / before acquire). Not a writeable epoch.
+        self.epoch: int | None = epoch
         self.lease_ttl_s = lease_ttl_s
         self._closed = False
         # None=unknown; True only after StudyFinalized commit; clear on acquire.
@@ -295,7 +296,7 @@ class SqliteEventStore:
         if self.owner == owner and self.epoch == epoch:
             self.owner = None
             self.owner_nonce = None
-            self.epoch = 0
+            self.epoch = None
 
     async def current_lease(self) -> tuple[str | None, int, datetime | None]:
         def _read() -> tuple[str | None, int, datetime | None]:
@@ -322,6 +323,8 @@ class SqliteEventStore:
         """
         if self.owner is None or not self.owner_nonce:
             raise LeaseLost("no lease owner set")
+        if self.epoch is None:
+            raise LeaseLost("no lease epoch set")
         ttl = self.lease_ttl_s if ttl_s is None else ttl_s
         now = self.clock.now()
         cur = self._conn.execute(
@@ -340,7 +343,12 @@ class SqliteEventStore:
         if cur.rowcount == 0:
             raise LeaseLost("epoch fencing rejected write")
 
-    async def append(self, event: EventEnvelope) -> EventEnvelope:
+    def _require_write_epoch(self) -> int:
+        if self.epoch is None:
+            raise LeaseLost("no lease epoch set")
+        return self.epoch
+
+    async def append(self, event: UnstampedEvent) -> StoredEvent:
         return await self._to_thread(lambda: self._append_locked(event))
 
     def _study_is_finalized(self) -> bool:
@@ -363,14 +371,22 @@ class SqliteEventStore:
         return False
 
     def _ensure_append_allowed(
-        self, event: EventEnvelope, *, batch_finalized: bool = False
+        self,
+        event: UnstampedEvent,
+        *,
+        digest: str,
+        batch_finalized: bool = False,
     ) -> None:
         """I3: after StudyFinalized, reject writes — except identical idempotent retry.
 
         Idempotency is checked *before* StudyClosedError for every event type so
-        an honest retry of an already-recorded row (same idem_key+payload) returns
+        an honest retry of an already-recorded row (same idem_key+digest) returns
         the original instead of failing closed. A missing key, or same key with a
-        different payload, is rejected (StudyClosedError / Conflict).
+        different digest, is rejected (StudyClosedError / Conflict).
+
+        ``digest`` is the stamped digest (from ``stamp_envelope``), not a
+        separate recompute — stamped digest is the authority for the incoming
+        conflict check.
 
         ``batch_finalized`` covers an earlier StudyFinalized in the same
         ``append_many`` transaction (projections may not be visible via cache yet).
@@ -378,7 +394,6 @@ class SqliteEventStore:
         finalized = batch_finalized or self._study_is_finalized()
         if not finalized:
             return
-        digest = payload_digest(event.payload)
         existing = self._conn.execute(
             "SELECT seq, payload_digest FROM events WHERE idem_key=?",
             (event.idem_key,),
@@ -394,15 +409,16 @@ class SqliteEventStore:
         bump_late_write_rejected(event.type)
         raise StudyClosedError(self.study_id, event.type)
 
-    def _append_locked(self, event: EventEnvelope) -> EventEnvelope:
+    def _append_locked(self, event: UnstampedEvent) -> StoredEvent:
         mutated = False
         try:
             # Defensive: take the write lock before fence/probe. Peer serialization
             # itself is the lease UPDATE inside ``_fence`` (see that docstring).
             self._conn.execute("BEGIN IMMEDIATE")
             self._fence()
-            self._ensure_append_allowed(event)
-            stored, idem = self._insert_one(event)
+            stamped = stamp_envelope(event, epoch=self._require_write_epoch())
+            self._ensure_append_allowed(event, digest=stamped.payload_digest)
+            stored, idem = self._insert_one(stamped)
             mutated = True
             self._conn.commit()
         except Exception:
@@ -420,11 +436,11 @@ class SqliteEventStore:
 
     async def append_many(
         self,
-        events: list[EventEnvelope],
+        events: list[UnstampedEvent],
         *,
         require_open_attempt: str | None = None,
         _source_fetched_cap_id: str | None = None,
-    ) -> list[EventEnvelope]:
+    ) -> list[StoredEvent]:
         return await self._to_thread(
             lambda: self._append_many_sync(
                 events,
@@ -433,7 +449,7 @@ class SqliteEventStore:
             )
         )
 
-    def _fetch_by_idem(self, idem_key: str) -> EventEnvelope:
+    def _fetch_by_idem(self, idem_key: str) -> StoredEvent:
         cur = self._conn.execute(
             "SELECT * FROM events WHERE idem_key=?", (idem_key,)
         )
@@ -444,13 +460,14 @@ class SqliteEventStore:
 
     def _append_many_sync(
         self,
-        events: list[EventEnvelope],
+        events: list[UnstampedEvent],
         *,
         require_open_attempt: str | None = None,
         source_fetched_cap_id: str | None = None,
-    ) -> list[EventEnvelope]:
-        out: list[EventEnvelope] = []
+    ) -> list[StoredEvent]:
+        out: list[StoredEvent] = []
         mutated = False
+        write_epoch = self._require_write_epoch()
         try:
             # Defensive early write lock; ``_fence`` UPDATE is the real serializer.
             self._conn.execute("BEGIN IMMEDIATE")
@@ -464,8 +481,11 @@ class SqliteEventStore:
                 if row is None or row.get("closed"):
                     raise AttemptClosedError(require_open_attempt)
             for ev in events:
+                stamped = stamp_envelope(ev, epoch=write_epoch)
                 # First StudyFinalized is allowed; after that only identical retry.
-                self._ensure_append_allowed(ev, batch_finalized=batch_finalized)
+                self._ensure_append_allowed(
+                    ev, digest=stamped.payload_digest, batch_finalized=batch_finalized
+                )
                 if ev.type == "SourceFetched":
                     # Must present a capability id whose write permit was granted
                     # by effects.verify (consume). Bool bypass flags are gone.
@@ -509,7 +529,7 @@ class SqliteEventStore:
                         call_id=call_id,
                         study_id=ev.study_id,
                     )
-                stored, idem = self._insert_one(ev)
+                stored, idem = self._insert_one(stamped)
                 mutated = True
                 if idem is not None:
                     out.append(self._fetch_by_idem(ev.idem_key))
@@ -532,45 +552,39 @@ class SqliteEventStore:
         return out
 
     def _insert_one(
-        self, event: EventEnvelope
-    ) -> tuple[EventEnvelope | None, Idempotent | None]:
-        from coscientist.core.events.events import stamp_envelope
-
-        # Single compute site: digest from actual payload; epoch from lease.
-        stamped = stamp_envelope(event, epoch=self.epoch)
+        self, stamped: StoredEvent
+    ) -> tuple[StoredEvent | None, Idempotent | None]:
+        """Persist a already-stamped envelope; stamped digest is conflict authority."""
         digest = stamped.payload_digest
-        assert digest is not None
-        if event.payload_digest is not None and event.payload_digest != digest:
+        if not digest:
+            raise JournalFormatError(f"{stamped.type}: empty payload_digest")
+        write_epoch = self._require_write_epoch()
+        if stamped.epoch != write_epoch:
             raise JournalFormatError(
-                f"{event.type}: payload_digest mismatch "
-                f"(got {event.payload_digest}, expected {digest})"
-            )
-        if event.epoch is not None and event.epoch != self.epoch:
-            raise JournalFormatError(
-                f"{event.type}: epoch mismatch "
-                f"(got {event.epoch}, store {self.epoch})"
+                f"{stamped.type}: epoch mismatch "
+                f"(got {stamped.epoch}, store {write_epoch})"
             )
         version = require_exact_int(
-            event.schema_version, what=f"{event.type}.schema_version"
+            stamped.schema_version, what=f"{stamped.type}.schema_version"
         )
-        expected = writer_schema_version(event.type)
+        expected = writer_schema_version(stamped.type)
         if version != expected:
             raise JournalFormatError(
-                f"{event.type}: write schema_version {version} != writer {expected}"
+                f"{stamped.type}: write schema_version {version} != writer {expected}"
             )
         cur = self._conn.execute(
             "SELECT seq, payload_digest FROM events WHERE idem_key=?",
-            (event.idem_key,),
+            (stamped.idem_key,),
         )
         existing = cur.fetchone()
         if existing is not None:
             if existing["payload_digest"] == digest:
                 return None, Idempotent(int(existing["seq"]))
             raise Conflict(
-                f"idem_key={event.idem_key} payload mismatch "
+                f"idem_key={stamped.idem_key} payload mismatch "
                 f"(stored={existing['payload_digest']}, new={digest})"
             )
-        ts = event.ts if event.ts.tzinfo else event.ts.replace(tzinfo=UTC)
+        ts = stamped.ts if stamped.ts.tzinfo else stamped.ts.replace(tzinfo=UTC)
         cur = self._conn.execute(
             "INSERT INTO events(study_id, type, entity_key, idem_key, payload, ts, "
             "schema_version, epoch, payload_digest) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -582,24 +596,22 @@ class SqliteEventStore:
                 json.dumps(stamped.payload, sort_keys=True),
                 _iso(ts),
                 version,
-                self.epoch,
+                write_epoch,
                 digest,
             ),
         )
         if cur.lastrowid is None:
             raise JournalUnavailableError("events insert returned no lastrowid")
         seq = int(cur.lastrowid)
-        stored = stamped.model_copy(
-            update={"seq": seq, "epoch": self.epoch, "payload_digest": digest, "ts": ts}
-        )
+        stored = stamped.model_copy(update={"seq": seq, "ts": ts})
         self._apply_projection(stored)
         return stored, None
 
-    async def read_all(self) -> list[EventEnvelope]:
+    async def read_all(self) -> list[StoredEvent]:
         return await self.read_after(0)
 
-    async def read_after(self, seq: int) -> list[EventEnvelope]:
-        def _read() -> list[EventEnvelope]:
+    async def read_after(self, seq: int) -> list[StoredEvent]:
+        def _read() -> list[StoredEvent]:
             cur = self._read_conn.execute(
                 "SELECT * FROM events WHERE study_id=? AND seq>? ORDER BY seq",
                 (self.study_id, seq),
@@ -608,7 +620,7 @@ class SqliteEventStore:
 
         return await self._read_thread(_read)
 
-    def _row_to_event(self, row: sqlite3.Row) -> EventEnvelope:
+    def _row_to_event(self, row: sqlite3.Row) -> StoredEvent:
         raw_payload = json.loads(row["payload"])
         stored_digest = row["payload_digest"]
         # Old / tampered journals: refuse empty digest or mismatch (never recompute-as-trust).
@@ -625,7 +637,8 @@ class SqliteEventStore:
         raw_sv = row["schema_version"]
         # SQLite INT affinity may still surface non-ints; never coerce via int().
         version, payload = upcast(row["type"], raw_sv, raw_payload)
-        return EventEnvelope(
+        epoch = require_exact_int(row["epoch"], what=f"{row['type']}.epoch")
+        return StoredEvent(
             seq=int(row["seq"]),
             study_id=row["study_id"],
             type=row["type"],
@@ -634,7 +647,7 @@ class SqliteEventStore:
             payload=payload,
             ts=_parse_iso(row["ts"]),
             schema_version=version,
-            epoch=int(row["epoch"]),
+            epoch=epoch,
             payload_digest=stored_digest,
         )
 
@@ -697,7 +710,7 @@ class SqliteEventStore:
 
         await self._to_thread(_write)
 
-    def _apply_projection(self, event: EventEnvelope) -> None:
+    def _apply_projection(self, event: StoredEvent) -> None:
         from coscientist.core.events.projections import apply_event
 
         apply_event(self, event)

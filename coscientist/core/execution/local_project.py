@@ -10,7 +10,7 @@ from typing import Any
 from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore
 from coscientist.core.claims.reasons import RefusalKind, TaskReason
 from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.events import EventEnvelope
+from coscientist.core.events.events import EventEnvelope, StoredEvent
 from coscientist.core.execution.domain import Study, Task, TaskOutcome, TaskState
 from coscientist.core.plan.intake import IntakeRefuse
 
@@ -120,7 +120,7 @@ class LocalProjectMixin:
             for k in drop:
                 reqs.pop(k, None)
 
-    def _project_local(self, ev: EventEnvelope) -> None:
+    def _project_local(self, ev: EventEnvelope | StoredEvent) -> None:
         p = ev.payload
         if ev.type == "StudyCreated":
             self.study = Study.model_validate(p)

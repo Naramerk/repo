@@ -187,7 +187,7 @@ async def open_runtime(
                 await writer.stop()
             except BaseException:
                 log.warning("writer.stop failed during open_runtime cleanup", exc_info=True)
-        if acquired_here:
+        if acquired_here and store.epoch is not None:
             try:
                 await store.release_lease(owner, store.epoch)
             except BaseException:
@@ -205,7 +205,7 @@ async def close_runtime(rt: StudyRuntime) -> None:
         await rt.writer.stop()
     finally:
         try:
-            if rt.store.owner is not None:
+            if rt.store.owner is not None and rt.store.epoch is not None:
                 await rt.store.release_lease(rt.owner, rt.store.epoch)
         except LeaseLost:
             log.warning("release_lease during close_runtime", exc_info=True)

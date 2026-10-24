@@ -24,7 +24,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from coscientist.core.events.errors import ArtifactRejected, FetchToolReclassified
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import (
+    EventEnvelope,
+    StoredEvent,
+    UnstampedEvent,
+    make_idem,
+)
 from coscientist.core.events.schema_versions import (
     ATTEMPT_TAINTED_SCHEMA_VERSION,
     FETCH_INTEGRITY_RAISED_SCHEMA_VERSION,
@@ -290,11 +295,11 @@ async def journal_fetch_integrity_raised(
     *,
     study_id: str,
     on_event: Any | None = None,
-) -> list[EventEnvelope]:
+) -> list[StoredEvent]:
     """Append idempotent ``FetchIntegrityRaised`` for each reclassified call."""
     from coscientist.core.events.errors import Idempotent
 
-    out: list[EventEnvelope] = []
+    out: list[StoredEvent] = []
     for issue in issues:
         tool = str(issue.get("tool") or "")
         call_id = str(issue.get("call_id") or "")
@@ -398,7 +403,7 @@ async def load_source_fetch_index_from_writer(writer: StudyWriter) -> SourceFetc
     # ``reconcile_fetch_integrity`` on open/finalize.
     return idx
 
-def _cache_note_fetch(writer: StudyWriter, ev: EventEnvelope) -> None:
+def _cache_note_fetch(writer: StudyWriter, ev: StoredEvent | UnstampedEvent) -> None:
     idx = writer.source_fetch_idx
     if idx is None:
         return
@@ -417,7 +422,7 @@ async def append_source_fetched(
     url: str,
     capability: FetchCapability,
     on_event: Any | None = None,
-) -> EventEnvelope:
+) -> StoredEvent:
     """Append ``SourceFetched`` v1. Consumes the opaque capability (single-use)."""
     verify_fetch_capability(
         capability,

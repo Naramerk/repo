@@ -599,15 +599,37 @@ async def test_append_stamps_epoch_from_lease_not_writer_literal(
     await store.close()
 
 
+def test_unstamped_event_rejects_epoch_and_digest_fields(clock: FakeClock):
+    """Writers cannot pass epoch/digest — UnstampedEvent forbids those fields."""
+    from pydantic import ValidationError
+
+    from coscientist.core.events.events import UnstampedEvent
+
+    base = dict(
+        study_id="st_em",
+        type="StudyCreated",
+        entity_key="st_em",
+        idem_key="StudyCreated:st_em",
+        payload={"study_id": "st_em"},
+        ts=clock.now(),
+        schema_version=writer_schema_version("StudyCreated"),
+    )
+    with pytest.raises(ValidationError):
+        UnstampedEvent(**base, epoch=0)  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        UnstampedEvent(**base, payload_digest="deadbeef")  # type: ignore[call-arg]
+
+
 @pytest.mark.asyncio
-async def test_append_rejects_writer_epoch_mismatch(
-    tmp_path: Path, clock: FakeClock
-):
-    from coscientist.core.events.errors import JournalFormatError
+async def test_append_refuses_when_epoch_is_none(tmp_path: Path, clock: FakeClock):
+    """Release clears epoch to None; writes refuse (no sentinel 0)."""
+    from coscientist.core.events.errors import LeaseLost
 
     store = SqliteEventStore("st_em", tmp_path / "em.db", clock=clock)
-    await store.acquire_lease("o1")
-    with pytest.raises(JournalFormatError, match="epoch mismatch"):
+    epoch = await store.acquire_lease("o1")
+    await store.release_lease("o1", epoch)
+    assert store.epoch is None
+    with pytest.raises(LeaseLost, match="no lease"):
         await store.append(
             EventEnvelope(
                 study_id="st_em",
@@ -617,7 +639,6 @@ async def test_append_rejects_writer_epoch_mismatch(
                 payload={"study_id": "st_em"},
                 ts=clock.now(),
                 schema_version=writer_schema_version("StudyCreated"),
-                epoch=0,  # intentional wrong writer epoch (store lease epoch is 1)
             )
         )
     await store.close()

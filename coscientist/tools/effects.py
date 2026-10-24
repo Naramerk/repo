@@ -21,7 +21,12 @@ from typing import Any
 
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import ArtifactRejected
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import (
+    EventEnvelope,
+    StoredEvent,
+    UnstampedEvent,
+    make_idem,
+)
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
@@ -279,7 +284,7 @@ class EffectIndex:
         return None
 
 
-def load_effect_index(events: list[EventEnvelope] | list[Any]) -> EffectIndex:
+def load_effect_index(events: list[StoredEvent] | list[Any]) -> EffectIndex:
     idx = EffectIndex()
     for ev in events:
         t = getattr(ev, "type", None) or (ev.get("type") if isinstance(ev, dict) else None)
@@ -341,7 +346,7 @@ async def _load_index_from_writer(writer: StudyWriter) -> EffectIndex:
     return idx
 
 
-def _cache_note(writer: StudyWriter, ev: EventEnvelope) -> None:
+def _cache_note(writer: StudyWriter, ev: StoredEvent) -> None:
     idx: EffectIndex | None = getattr(writer, "_pr18_effect_idx", None)
     if idx is None:
         return
@@ -422,7 +427,7 @@ async def _journal_attempt_tainted(
     call_id: str,
     tool: str,
     on_event: Any | None = None,
-) -> EventEnvelope:
+) -> StoredEvent:
     """Journal sticky attempt taint after a successful source fetch."""
     ev = EventEnvelope(
         study_id=study_id,
@@ -479,9 +484,9 @@ def _restore_output(
 
 async def _append(
     writer: StudyWriter,
-    ev: EventEnvelope,
+    ev: UnstampedEvent,
     on_event: Any | None,
-) -> EventEnvelope:
+) -> StoredEvent:
     stored = await writer.append(ev)
     _cache_note(writer, stored)
     if on_event is not None:
