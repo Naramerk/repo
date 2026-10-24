@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -28,14 +27,14 @@ def seed_legacy_journal(store: Any, events: list[Any]) -> None:
     """Insert old journal rows at event.schema_version; read/reopen upcasts.
 
     Does not call stamp_envelope / store.append — writer schema gate stays on.
+    Naive ``ts`` and non-dict ``payload`` are refused (no UTC guess / no ``{}``).
     """
     conn = store._conn  # noqa: SLF001 — test-only journal seed
     epoch = store.epoch
     for ev in events:
-        ts = ev.ts
-        if getattr(ts, "tzinfo", None) is None:
+        if getattr(ev.ts, "tzinfo", None) is None:
             raise JournalFormatError(
-                f"{ev.type}: naive datetime refused: {ts!r}",
+                f"{ev.type}: naive datetime refused: {ev.ts!r}",
                 expected_store_format=None,
                 found_store_format=None,
             )
@@ -60,7 +59,7 @@ def seed_legacy_journal(store: Any, events: list[Any]) -> None:
                 ev.entity_key,
                 ev.idem_key,
                 json.dumps(payload, sort_keys=True),
-                _iso(ts),
+                _iso(ev.ts),
                 ev.schema_version,
                 epoch,
                 digest,
