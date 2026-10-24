@@ -170,7 +170,9 @@ def _task_created_v6_to_v7_foreach_quorum(payload: dict[str, Any]) -> dict[str, 
 
 def _ensure_share_fields(spec: dict[str, Any]) -> dict[str, Any]:
     """PR12: budget_share / deadline_share default None on old journals."""
-    from coscientist.core.plan.shares import ensure_share_defaults
+    # Import share_alloc directly — shares.__getattr__ re-export is Any to mypy
+    # once the events package gains schema_gate/store stamp imports.
+    from coscientist.core.plan.share_alloc import ensure_share_defaults
 
     return ensure_share_defaults(spec)
 

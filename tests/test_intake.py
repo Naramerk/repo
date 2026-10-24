@@ -194,7 +194,6 @@ async def test_real_replay_study_refused_v1_gets_null_catalog_version(tmp_path, 
     import sqlite3
 
     from coscientist.core.events.digest import canonical_json, sha256_hex
-    from coscientist.core.events.events import EventEnvelope, make_idem
 
     sid = "st_refused_v1"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")

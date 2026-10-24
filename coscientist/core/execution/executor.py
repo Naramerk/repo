@@ -18,7 +18,7 @@ from coscientist.core.events.errors import (
     CoreBugError,
     SandboxInfraError,
 )
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import EventEnvelope, EventType, make_idem
 from coscientist.core.events.ids import criterion_node_id, result_id
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore
@@ -1349,7 +1349,7 @@ class Executor:
         *,
         reason: str,
         detail: str,
-        event_type: str = "CatalogErrorRaised",
+        event_type: EventType = "CatalogErrorRaised",
         result_class: str = "infra",
         charge_attempt: bool = True,
         allow_retry: bool = False,

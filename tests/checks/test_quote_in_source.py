@@ -2163,6 +2163,9 @@ def _install_reclassified_papers_get() -> None:
 
 def _copy_reclass_fixture(tmp_path: Path) -> tuple[str, str, str, Path]:
     import shutil
+    import sqlite3
+
+    from coscientist.core.events.store_db import JOURNAL_STORE_FORMAT
 
     meta = json.loads(
         (_RECLASS_FIXTURE.parent / "reclassified_fetch_old.json").read_text()
@@ -2174,6 +2177,21 @@ def _copy_reclass_fixture(tmp_path: Path) -> tuple[str, str, str, Path]:
     dest.mkdir(parents=True)
     db = dest / "events.db"
     shutil.copy2(_RECLASS_FIXTURE / "events.db", db)
+    # Schema v1: legacy fixture predates journal_meta.store_format; stamp the
+    # current marker on the temp copy so open is allowed (payloads stay old).
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS journal_meta("
+            "key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO journal_meta(key, value) VALUES (?, ?)",
+            ("store_format", str(JOURNAL_STORE_FORMAT)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     _complete_legacy_freeze_fields(db)
     return sid, digest, call_id, db
 
@@ -2203,6 +2221,8 @@ def _complete_legacy_freeze_fields(db_path: Path) -> None:
         }
     }
 
+    from coscientist.core.events.digest import canonical_json, sha256_hex
+
     conn = sqlite3.connect(db_path)
     try:
         for etype, patch in (
@@ -2219,9 +2239,10 @@ def _complete_legacy_freeze_fields(db_path: Path) -> None:
             ).fetchone()
             payload = json.loads(row[1])
             patch(payload)
+            new_raw = canonical_json(payload)
             conn.execute(
-                "UPDATE events SET payload=? WHERE seq=?",
-                (json.dumps(payload), row[0]),
+                "UPDATE events SET payload=?, payload_digest=? WHERE seq=?",
+                (new_raw, sha256_hex(new_raw), row[0]),
             )
         conn.commit()
     finally:

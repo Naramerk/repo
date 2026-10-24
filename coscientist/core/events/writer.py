@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from coscientist.core.events.events import EventEnvelope
+from coscientist.core.events.events import StoredEvent, UnstampedEvent
 from coscientist.core.events.store import SqliteEventStore
 
 WriteFn = Callable[[], Awaitable[Any]]
@@ -91,10 +91,10 @@ class StudyWriter:
 
     async def append(
         self,
-        event: EventEnvelope,
+        event: UnstampedEvent,
         *,
         _source_fetched_cap_id: str | None = None,
-    ) -> EventEnvelope:
+    ) -> StoredEvent:
         out = await self.append_many(
             [event], _source_fetched_cap_id=_source_fetched_cap_id
         )
@@ -105,11 +105,11 @@ class StudyWriter:
 
     async def append_many(
         self,
-        events: list[EventEnvelope],
+        events: list[UnstampedEvent],
         *,
         require_open_attempt: str | None = None,
         _source_fetched_cap_id: str | None = None,
-    ) -> list[EventEnvelope]:
+    ) -> list[StoredEvent]:
         for ev in events:
             if getattr(ev, "type", None) == "SourceFetched":
                 # Capability id required; store takes the effects write permit.
@@ -120,7 +120,7 @@ class StudyWriter:
 
         _cap_id = _source_fetched_cap_id
 
-        async def _do() -> list[EventEnvelope]:
+        async def _do() -> list[StoredEvent]:
             return await self.store.append_many(
                 events,
                 require_open_attempt=require_open_attempt,

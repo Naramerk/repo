@@ -5,6 +5,30 @@ class CoreError(Exception):
     """Base for core errors."""
 
 
+class JournalFormatError(CoreError):
+    """Journal store-format marker missing/incompatible, or typed schema refuse.
+
+    Carries ``expected_store_format`` (what this build requires) and
+    ``found_store_format`` (what the on-disk journal declared, or None if
+    absent). ``store_format`` is an alias of ``expected_store_format``.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        expected_store_format: int | None = None,
+        found_store_format: int | None = None,
+        store_format: int | None = None,
+    ):
+        if expected_store_format is None and store_format is not None:
+            expected_store_format = store_format
+        self.expected_store_format = expected_store_format
+        self.found_store_format = found_store_format
+        self.store_format = expected_store_format
+        super().__init__(message)
+
+
 class CatalogError(CoreError):
     """Invalid or incomplete requirement catalog / empty required set."""
 

@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 
 from coscientist.core.events.clock import FakeClock
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import Conflict, Idempotent, LeaseLost
 from coscientist.core.events.events import EventEnvelope
 from coscientist.core.events.projections import fold_events
@@ -34,7 +33,6 @@ async def test_idempotent_same_payload(tmp_path: Path, clock: FakeClock):
         idem_key="StudyCreated:st1",
         payload=payload,
         ts=clock.now(),
-        payload_digest=payload_digest(payload),
     )
     first = await store.append(ev)
     assert first.seq == 1
@@ -83,7 +81,6 @@ async def test_writer_idempotent_append_returns_existing(
         idem_key="StudyCreated:st1",
         payload=payload,
         ts=clock.now(),
-        payload_digest=payload_digest(payload),
     )
     a = await writer.append(ev)
     b = await writer.append(ev)
@@ -103,12 +100,9 @@ async def test_conflict_different_payload(tmp_path: Path, clock: FakeClock):
         idem_key="StudyCreated:st1",
         payload={"a": 1},
         ts=clock.now(),
-        payload_digest=payload_digest({"a": 1}),
     )
     await store.append(ev1)
-    ev2 = ev1.model_copy(
-        update={"payload": {"a": 2}, "payload_digest": payload_digest({"a": 2})}
-    )
+    ev2 = ev1.model_copy(update={"payload": {"a": 2}})
     with pytest.raises(Conflict):
         await store.append(ev2)
     await store.close()
@@ -421,13 +415,15 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(
 
 @pytest.mark.asyncio
 async def test_append_rejects_datetime_in_payload(tmp_path: Path, clock: FakeClock):
-    """Append with datetime in payload raises at json.dumps (strict; no stringification).
+    """Append with datetime in payload raises at stamp digest (JCS; no coerce)."""
+    from rfc8785._impl import CanonicalizationError
 
-    Pre-sets payload_digest so the failure is the store's JSON encode, not JCS digest.
-    """
     store = SqliteEventStore("st_json2", tmp_path / "json2.db", clock=clock)
     await store.acquire_lease("o1")
-    with pytest.raises(TypeError, match="not JSON serializable|datetime"):
+    with pytest.raises(
+        (TypeError, CanonicalizationError),
+        match="not JSON serializable|datetime|type|unsupported type",
+    ):
         await store.append(
             EventEnvelope(
                 study_id="st_json2",
@@ -436,8 +432,6 @@ async def test_append_rejects_datetime_in_payload(tmp_path: Path, clock: FakeClo
                 idem_key="StudyCreated:st_json2",
                 payload={"study_id": "st_json2", "created_at": clock.now()},
                 ts=clock.now(),
-                # Skip digest so we exercise json.dumps in _insert_one.
-                payload_digest="a" * 64,
             )
         )
     await store.close()

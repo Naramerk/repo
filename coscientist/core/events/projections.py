@@ -7,7 +7,7 @@ from contextvars import ContextVar
 from typing import Any
 
 from coscientist.core.claims.reasons import TaskReason
-from coscientist.core.events.events import EventEnvelope
+from coscientist.core.events.events import EventEnvelope, StoredEvent
 
 log = logging.getLogger(__name__)
 
@@ -319,7 +319,7 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         )
 
 
-def fold_events(events: list[EventEnvelope]) -> ProjectionMap:
+def fold_events(events: list[EventEnvelope] | list[StoredEvent]) -> ProjectionMap:
     proj: ProjectionMap = {}
     for ev in events:
         apply_to_map(proj, ev)
