@@ -113,7 +113,10 @@ async def run_study(
     if type(catalog_version) is not int:
         raise TypeError("catalog_version must be int")
 
-    wall = study_clock if study_clock is not None else SystemClock()
+    if study_clock is not None:
+        wall = study_clock
+    else:
+        wall = SystemClock()
     deadline = wall.now() + timedelta(seconds=float(deadline_s))
     data_root.mkdir(parents=True, exist_ok=True)
     study_id = f"run_{task_path.stem}"
@@ -137,7 +140,7 @@ async def run_study(
             deadline=deadline,
             sid=study_id,
             require_hypotheses=False,
-            finalize_reserve_s=5 if float(deadline_s) > 5 else 1,
+            finalize_reserve_s=_finalize_reserve_s(deadline_s),
         )
         await rt.ensure_lease(ttl_s=max(30.0, float(deadline_s)))
 
@@ -163,10 +166,10 @@ async def run_study(
             raise RuntimeError("accept_plan refused plan (empty plan_id)")
 
         for draft in plan_out.tasks:
-            try:
-                aid = await rt.start_attempt(draft.task_key)
-            except RuntimeError:
+            dispatchable = {t.spec.task_key for t in rt.iter_dispatchable_tasks()}
+            if draft.task_key not in dispatchable:
                 continue
+            aid = await rt.start_attempt(draft.task_key)
             if aid is None:
                 continue
             exec_run = await adapter.run(
@@ -207,6 +210,12 @@ async def run_study(
         return 0 if rt.view().phase == "closed" else 2
     finally:
         await close_runtime(rt)
+
+
+def _finalize_reserve_s(deadline_s: float | int) -> int:
+    if float(deadline_s) > 5:
+        return 5
+    return 1
 
 
 def _usage_row(role: str, run: AgentRun, *, task_key: str | None = None) -> dict[str, Any]:
