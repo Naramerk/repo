@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Annotated, Any
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket
 from pydantic import BaseModel, ConfigDict
 
 from coscientist.api.cancel import require_cancel_by
@@ -41,6 +41,11 @@ def _http_error(exc: ApiRefuse | StudyNotFound) -> HTTPException:
     if isinstance(exc, StudyNotFound):
         return HTTPException(status_code=404, detail=exc.reason)
     return HTTPException(status_code=400, detail=exc.reason)
+
+
+async def _ws_refuse(websocket: WebSocket, reason: str) -> None:
+    """Signal the peer, then caller re-raises — never swallow."""
+    await websocket.close(code=1008, reason=reason[:120])
 
 
 def create_app(deps: AppDeps) -> FastAPI:
@@ -90,15 +95,15 @@ def create_app(deps: AppDeps) -> FastAPI:
             sid = require_study_id(study_id)
             store = deps.event_store_for(sid)
         except ApiRefuse as exc:
-            await websocket.close(code=1008, reason=exc.reason[:120])
-            return  # audit-ok[except_silent_return]: refuse query before WS accept
+            await _ws_refuse(websocket, exc.reason)
+            raise
         except StudyNotFound as exc:
-            await websocket.close(code=1008, reason=exc.reason[:120])
-            return  # audit-ok[except_silent_return]: missing study before WS accept
+            await _ws_refuse(websocket, exc.reason)
+            raise
         except (ValueError, TypeError) as exc:
             detail = f"after_query_invalid:{type(exc).__name__}"
-            await websocket.close(code=1008, reason=detail[:120])
-            return  # audit-ok[except_silent_return]: bad after query before WS accept
+            await _ws_refuse(websocket, detail)
+            raise ApiRefuse(detail) from exc
         try:
             await stream_study_events(
                 websocket,
@@ -107,9 +112,8 @@ def create_app(deps: AppDeps) -> FastAPI:
                 after=after_seq,
                 poll_interval_s=app.state.stream_poll_interval_s,
             )
-        except WebSocketDisconnect:
-            return  # audit-ok[except_silent_return]: client disconnected mid-stream
         except (ApiRefuse, StudyNotFound) as exc:
-            await websocket.close(code=1008, reason=exc.reason[:120])
+            await _ws_refuse(websocket, exc.reason)
+            raise
 
     return app
