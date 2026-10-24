@@ -1070,10 +1070,17 @@ def claim_is_severe(claim: Any) -> bool:
         return False
     if not effect_is_countable(effect):
         return False
+    try:
+        sesoi_f = float(sesoi)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as e:
+        raise JournalFormatError(
+            f"invalid sesoi: {sesoi!r}",
+            field="sesoi",
+        ) from e
     if predicts_null:
-        return tost_holds(sesoi=float(sesoi), effect=effect)
+        return tost_holds(sesoi=sesoi_f, effect=effect)
     return effect_exceeds_sesoi(
-        sesoi=float(sesoi), effect=effect, direction=direction
+        sesoi=sesoi_f, effect=effect, direction=direction
     )
 
 

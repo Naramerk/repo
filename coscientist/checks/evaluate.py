@@ -34,7 +34,6 @@ from coscientist.core.execution.domain import (
     TaskSpec,
 )
 
-
 # Exact PLAN-n critic template ids (DESIGN_M1); membership, not prefix match.
 _PLAN_N_CRITIC_TEMPLATE_IDS: frozenset[str] = frozenset(
     {

@@ -1493,7 +1493,7 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
                     "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
                 },
                 values={"count": 42},
-                claims=[{"target": "q1", "target_kind": "question", "checked_against": "value_match"}],
+                # No claims: EXP criteria stay artifact_present (no _set_proposed_criteria).
             ),
         )
         await _finish_report(rt, tmp_path)
