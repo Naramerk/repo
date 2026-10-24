@@ -15,6 +15,11 @@
   (one discriminator with `CheckResult` / `CheckLike`). Plan:
   [`docs/plan/quality-hitl.md`](docs/plan/quality-hitl.md).
 
+### M2: versioned prompt registry (`coscientist/agents/prompts`)
+- In-memory registry ([DESIGN §7](docs/DESIGN.md#7-агентный-слой),
+  [§11](docs/DESIGN.md#11-структура-пакетов-и-бюджет-размера),
+  [CAP #27](docs/CAPABILITIES.md#cap-27)).
+
 ### Benchmark harness — typed errors (plan item 2)
 - Add `bench/errors.py`: `BenchError` / `BenchConfigError` (typed refuse; no
   silent fallbacks). import-linter root includes `bench`; forbid
