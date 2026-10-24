@@ -6,11 +6,14 @@ this router binds and dispatches to ``McpBoundTool``.
 
 Every server and tool must be listed in ``ToolRouterConfig`` — no discovery, no
 silent defaults.
+
+Capability #8 surface: ``ToolNeed`` / ``Resolution`` / ``ToolRouter.resolve``
+(by_name against bound MCP tools; by_query / alembic / coder → tool_missing until G3/G6).
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -25,8 +28,52 @@ from coscientist.tools.mcp_adapter import (
     McpToolProfile,
     bind_mcp_server_tools,
     mcp_tool_key,
+    mcp_tool_spec_name,
     tools_from_mcp_session,
 )
+
+# Re-export for agent callers (agents must not import tools.contract directly).
+__all__ = [
+    "CallCtx",
+    "McpServerRoute",
+    "Resolution",
+    "ToolNeed",
+    "ToolOutput",
+    "ToolRouter",
+    "ToolRouterCloseError",
+    "ToolRouterConfig",
+    "ToolRouterError",
+]
+
+
+class ToolNeed(BaseModel):
+    """What the agent needs resolved before a tool call (DESIGN §6.3 / CAP #8)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    kind: Literal["by_name", "by_query"]
+    value: str = Field(min_length=1)
+
+
+class Resolution(BaseModel):
+    """Result of ``ToolRouter.resolve`` (capability #8 statuses)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    status: Literal["tool_found", "tool_built", "coder", "tool_missing"]
+    server_name: str | None = None
+    tool_name: str | None = None
+
+    @model_validator(mode="after")
+    def _status_matches_fields(self) -> Self:
+        if self.status == "tool_found":
+            if self.server_name is None or not self.server_name:
+                raise ValueError("tool_found requires non-empty server_name")
+            if self.tool_name is None or not self.tool_name:
+                raise ValueError("tool_found requires non-empty tool_name")
+        elif self.server_name is not None or self.tool_name is not None:
+            raise ValueError(f"{self.status} requires server_name=tool_name=None")
+        return self
 
 
 class ToolRouterError(Exception):
@@ -202,6 +249,53 @@ class ToolRouter:
         except KeyError as exc:
             known = sorted(f"{s}:{t}" for s, t in self._tools)
             raise ToolRouterError(f"unknown tool {server_name}:{tool_name}; bound={known}") from exc
+
+    def resolve(self, need: ToolNeed) -> Resolution:
+        """Map ``ToolNeed`` to a bound MCP tool (CAP #8).
+
+        ``by_name`` accepts ``server:tool`` (``ToolSpec.name``) or a bare tool name
+        when exactly one bound tool has that MCP name. ``by_query`` / alembic / coder
+        are out of scope → ``tool_missing``.
+        """
+        if not self._opened:
+            return Resolution(status="tool_missing")
+        if need.kind != "by_name":
+            return Resolution(status="tool_missing")
+        value = need.value
+        if ":" in value:
+            server_name, sep, tool_name = value.partition(":")
+            if not sep or not server_name or not tool_name or ":" in tool_name:
+                return Resolution(status="tool_missing")
+            key = mcp_tool_key(server_name, tool_name)
+            if key in self._tools:
+                return Resolution(
+                    status="tool_found",
+                    server_name=server_name,
+                    tool_name=tool_name,
+                )
+            return Resolution(status="tool_missing")
+        matches = [key for key in self._tools if key[1] == value]
+        if len(matches) == 1:
+            server_name, tool_name = matches[0]
+            return Resolution(
+                status="tool_found",
+                server_name=server_name,
+                tool_name=tool_name,
+            )
+        # Also accept exact ToolSpec.name collision-safe form without relying on ":".
+        spec_matches = [
+            key
+            for key in self._tools
+            if mcp_tool_spec_name(key[0], key[1]) == value
+        ]
+        if len(spec_matches) == 1:
+            server_name, tool_name = spec_matches[0]
+            return Resolution(
+                status="tool_found",
+                server_name=server_name,
+                tool_name=tool_name,
+            )
+        return Resolution(status="tool_missing")
 
     async def call(
         self,

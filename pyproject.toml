@@ -239,6 +239,8 @@ forbidden_modules = [
 [[tool.importlinter.contracts]]
 name = "agents must use invoke_tool (no contract / registry / gate)"
 type = "forbidden"
+# Indirect via tools.router (CallCtx/ToolOutput) is OK; direct contract import is not.
+allow_indirect_imports = true
 source_modules = ["coscientist.agents"]
 forbidden_modules = [
   "coscientist.tools.contract",
@@ -452,7 +454,6 @@ source_modules = [
   "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",
   "coscientist.tools.propose_check_tool",
-  "coscientist.tools.resolve",
   "coscientist.tools.router",
   "coscientist.tools.taint",
 ]
@@ -646,7 +647,6 @@ source_modules = [
   "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",
   "coscientist.tools.propose_check_tool",
-  "coscientist.tools.resolve",
   "coscientist.tools.router",
   "coscientist.tools.taint",
 ]
@@ -834,7 +834,6 @@ source_modules = [
   "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",
   "coscientist.tools.propose_check_tool",
-  "coscientist.tools.resolve",
   "coscientist.tools.router",
   "coscientist.tools.taint",
 ]

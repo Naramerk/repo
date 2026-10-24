@@ -416,3 +416,58 @@ async def test_router_open_real_stdio() -> None:
         assert out.data["result"]["content"][0]["text"] == "stdio"
     finally:
         await router.aclose()
+
+
+@pytest.mark.asyncio
+async def test_resolve_by_name_tool_found_and_missing() -> None:
+    from coscientist.tools.router import ToolNeed
+
+    cfg = _router_cfg(_route(SERVER_A))
+    router = ToolRouter(cfg)
+    assert router.resolve(ToolNeed(kind="by_name", value="echo")).status == "tool_missing"
+    client = _stdio_client(SERVER_A)
+    async with FakeStdioServer(default_handler) as server:
+        session = await client.connect_memory(SERVER_A, server.client)
+        try:
+            await router.attach_session(session, server_name=SERVER_A)
+            found = router.resolve(ToolNeed(kind="by_name", value="echo"))
+            assert found.status == "tool_found"
+            assert found.server_name == SERVER_A
+            assert found.tool_name == "echo"
+            spec = router.resolve(ToolNeed(kind="by_name", value=f"{SERVER_A}:echo"))
+            assert spec.status == "tool_found"
+            assert spec.server_name == SERVER_A
+            assert spec.tool_name == "echo"
+            missing = router.resolve(ToolNeed(kind="by_name", value="nope"))
+            assert missing.status == "tool_missing"
+            assert missing.server_name is None
+            assert missing.tool_name is None
+            query = router.resolve(ToolNeed(kind="by_query", value="echo"))
+            assert query.status == "tool_missing"
+        finally:
+            await router.aclose()
+
+
+@pytest.mark.asyncio
+async def test_resolve_ambiguous_bare_name_is_missing() -> None:
+    from coscientist.tools.router import ToolNeed
+
+    cfg = _router_cfg(
+        _route(SERVER_A, tools={"echo": _profile()}),
+        _route(SERVER_B, tools={"echo": _profile()}),
+    )
+    router = ToolRouter(cfg)
+    client = _stdio_client(SERVER_A, SERVER_B)
+    async with FakeStdioServer(default_handler) as s1, FakeStdioServer(default_handler) as s2:
+        sess1 = await client.connect_memory(SERVER_A, s1.client)
+        sess2 = await client.connect_memory(SERVER_B, s2.client)
+        try:
+            await router.attach_session(sess1, server_name=SERVER_A)
+            await router.attach_session(sess2, server_name=SERVER_B)
+            amb = router.resolve(ToolNeed(kind="by_name", value="echo"))
+            assert amb.status == "tool_missing"
+            ok = router.resolve(ToolNeed(kind="by_name", value=f"{SERVER_A}:echo"))
+            assert ok.status == "tool_found"
+            assert ok.server_name == SERVER_A
+        finally:
+            await router.aclose()
