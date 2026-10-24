@@ -1872,9 +1872,10 @@ def test_agent_facing_view_never_includes_holdout_or_scorer():
     assert "test_x" not in blob
     assert "assert False" not in blob
     assert view["text_ru"] == tmpl.text_ru
-    assert view["check_kind"] == "metric_on_holdout"
+    assert view["is_code"] is True
+    assert view["check_detail"] == "metric_on_holdout"
     # NodeRequirement path also omits the check body.
-    req = template_to_requirement(tmpl, "n1")
+    req = template_to_requirement(tmpl, "n1", req_id=f"n1:{tmpl.id}")
     req_dump = req.model_dump()
     assert "holdout" not in req_dump
     assert "check" not in req_dump
@@ -3219,7 +3220,8 @@ def test_agent_facing_catalog_view_is_sole_template_export():
     assert BUILTIN_METRIC_SCORER_ARGV[0] not in blob
     assert "assert False" not in blob
     assert tmpl_view["template_id"] == "metric_secret"
-    assert tmpl_view["check_kind"] == "metric_on_holdout"
+    assert tmpl_view["is_code"] is True
+    assert tmpl_view["check_detail"] == "metric_on_holdout"
 
 
 def test_sandbox_timeout_report_line_by_reason_only():

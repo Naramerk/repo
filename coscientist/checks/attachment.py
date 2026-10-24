@@ -1,7 +1,7 @@
 """Capability #7 helpers: CodeCheck + ReviewCheck on a result; UNASSESSED ≠ FAILED.
 
-Pure functions over check-result rows. Executor wiring is a later PR.
-No status coercion, no guessed defaults — missing attachment → CatalogError.
+Pure functions over check-result rows. Executor wiring is Q3.
+``CheckLike`` / agent view use ``is_code`` (same owner as ``CheckResult``).
 """
 
 from __future__ import annotations
@@ -9,12 +9,28 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol
 
-from coscientist.core.events.errors import CatalogError
+from coscientist.core.events.errors import CheckAttachmentError
 from coscientist.core.execution.domain import ReqStatus
+
+UNASSESSED_STATUSES: frozenset[ReqStatus] = frozenset({ReqStatus.UNASSESSED, ReqStatus.PENDING})
+
+# DESIGN §5.4 partners for UNASSESSED (R23: shown separately from FAILED/STALE/
+# MIGRATION_ERROR). PENDING = in_progress; MET|WAIVED|NOT_APPLICABLE = done.
+UNASSESSED_PARTNERS: frozenset[ReqStatus] = frozenset(
+    {
+        ReqStatus.PENDING,
+        ReqStatus.MET,
+        ReqStatus.WAIVED,
+        ReqStatus.NOT_APPLICABLE,
+    }
+)
+_UNASSESSED_TRANSITIONS: frozenset[tuple[ReqStatus, ReqStatus]] = frozenset(
+    {(ReqStatus.UNASSESSED, s) for s in UNASSESSED_PARTNERS} | {(s, ReqStatus.UNASSESSED) for s in UNASSESSED_PARTNERS}
+)
 
 
 class CheckLike(Protocol):
-    """Narrow surface for attachment checks (avoids importing full CheckResult)."""
+    """Narrow surface — mirrors ``CheckResult`` (``is_code`` owner)."""
 
     @property
     def check_id(self) -> str: ...
@@ -30,54 +46,48 @@ class CheckLike(Protocol):
 
 
 def code_checks(checks: Sequence[CheckLike]) -> list[CheckLike]:
-    """Return rows whose catalog check is a CodeCheck (``is_code``)."""
+    """Rows with ``is_code`` (CodeCheck attachment)."""
     return [c for c in checks if c.is_code]
 
 
 def review_checks(checks: Sequence[CheckLike]) -> list[CheckLike]:
-    """Return rows whose catalog check is a ReviewCheck (not ``is_code``)."""
+    """Rows with ReviewCheck attachment (``not is_code`` — same owner as CheckResult)."""
     return [c for c in checks if not c.is_code]
 
 
 def require_code_and_review(checks: Sequence[CheckLike]) -> tuple[list[CheckLike], list[CheckLike]]:
-    """Require ≥1 CodeCheck and ≥1 ReviewCheck on a result record.
-
-    Returns ``(code, review)``. Raises ``CatalogError`` when either side is empty
-    (typed refuse — CAPABILITIES #7: both kinds attached on every result).
-    """
+    """Require ≥1 CodeCheck and ≥1 ReviewCheck; miss → ``CheckAttachmentError``."""
     code = code_checks(checks)
     review = review_checks(checks)
     if not code:
-        raise CatalogError("result missing CodeCheck attachment")
+        raise CheckAttachmentError("result missing CodeCheck attachment")
     if not review:
-        raise CatalogError("result missing ReviewCheck attachment")
+        raise CheckAttachmentError("result missing ReviewCheck attachment")
     return code, review
 
 
 def unassessed_required_review_ids(checks: Sequence[CheckLike]) -> list[str]:
-    """Ids of required ReviewChecks still without a verdict (R23).
+    """Required ReviewCheck ids still without verdict (R23).
 
-    Only ``UNASSESSED`` and ``PENDING`` count. ``FAILED`` is a verdict and must
-    not appear here — UNASSESSED is distinct from FAILED.
+    Only ``UNASSESSED``|``PENDING``. FAILED/STALE/MIGRATION_ERROR excluded
+    (DESIGN §5.4 — UNASSESSED shown separately; those statuses are distinct).
     """
     out: list[str] = []
     for c in review_checks(checks):
         if not c.required:
             continue
-        if c.status in (ReqStatus.UNASSESSED, ReqStatus.PENDING):
+        if c.status in UNASSESSED_STATUSES:
             out.append(c.check_id)
     return out
 
 
-def refuse_unassessed_failed_coercion(from_status: ReqStatus, to_status: ReqStatus) -> None:
-    """Refuse remapping UNASSESSED ↔ FAILED (R23).
-
-    Any other pair is allowed (caller decides). Same-status is a no-op.
-    """
+def refuse_illegal_unassessed_transition(from_status: ReqStatus, to_status: ReqStatus) -> None:
+    """Refuse illegal UNASSESSED transitions (allowlist ``_UNASSESSED_TRANSITIONS``)."""
     if from_status == to_status:
         return
-    pair = {from_status, to_status}
-    if pair == {ReqStatus.UNASSESSED, ReqStatus.FAILED}:
-        raise CatalogError(
-            f"UNASSESSED must stay distinct from FAILED; refused {from_status.value!r}→{to_status.value!r}"
-        )
+    # PENDING→FAILED/STALE etc. never touch UNASSESSED — out of scope here.
+    if from_status is not ReqStatus.UNASSESSED and to_status is not ReqStatus.UNASSESSED:
+        return
+    if (from_status, to_status) in _UNASSESSED_TRANSITIONS:
+        return
+    raise CheckAttachmentError(f"UNASSESSED must stay distinct from {from_status.value!r}→{to_status.value!r}")

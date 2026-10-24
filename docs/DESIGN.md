@@ -442,7 +442,7 @@ class NodeRequirement(BaseModel):
     evidence: list[EvidenceRef] = []
     verdict: ReviewVerdict | None = None
     waived_by: str | None = None    # id HITL-решения
-    check_version: str
+    check_version: int
 
 class ReviewVerdict(BaseModel):
     decision: Literal["pass","fail","unassessed"]; reasons: list[str]
