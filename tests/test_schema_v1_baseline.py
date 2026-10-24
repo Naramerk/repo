@@ -133,6 +133,7 @@ async def test_store_stamps_digest_writers_cannot_supply(
         "catalog_version": 1,
         "max_loop_iter": 8,
         "max_proposals": 3,
+        "require_hypotheses": False,
     }
     ev = _unstamped(
         clock,

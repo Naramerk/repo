@@ -102,7 +102,7 @@ async def _boot(tmp_path, clock, sid: str, **create_kw):
         "sid": sid,
     }
     kw.update(create_kw)
-    await rt.create_study(**kw)
+    await rt.create_study(**kw, require_hypotheses=False)
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
@@ -434,6 +434,7 @@ async def _boot_hitl_budget(tmp_path, clock, sid: str):
         sid=sid,
         replan_reserve=0.0,
         hitl_policy=HitlPolicy(mode="interactive"),
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)

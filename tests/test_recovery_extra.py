@@ -21,6 +21,7 @@ async def test_recovery_stage_task_not_rerun(tmp_path, clock, runtime_cls):
         catalog_version=3,
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_rec",
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")

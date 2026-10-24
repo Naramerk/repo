@@ -13,7 +13,9 @@ from coscientist.core.events.schema_gate import require_writer_schema_version
 
 # Writer schema version constants (kept for call sites; must match upcasters).
 PLAN_EXPANDED_SCHEMA_VERSION = 5
-STUDY_CREATED_SCHEMA_VERSION = 13  # #41: catalog_version StrictInt
+STUDY_CREATED_SCHEMA_VERSION = 14  # G4: require_hypotheses
+# Last StudyCreated schema without require_hypotheses (immutable; not SCHEMA_VERSION - 1).
+STUDY_CREATED_REQUIRE_HYPOTHESES_SINCE = 13
 STUDY_REFUSED_SCHEMA_VERSION = 2  # #41: required nullable catalog_version
 PLAN_ACCEPTED_SCHEMA_VERSION = 12
 # Last PlanAccepted schema without Need fields (immutable; not SCHEMA_VERSION - 1).

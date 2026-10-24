@@ -28,6 +28,7 @@ PlanNeedRefuseReason = Literal[
     "plan_need_unrecorded",
     "invalid",
     "plan_need_required",
+    "profile_requires_hypotheses",
 ]
 
 
@@ -76,14 +77,30 @@ def recorded_plan_needs(prev: Mapping[str, Any] | None) -> tuple[Need, Need]:
     )
 
 
+def assert_profile_hypotheses_satisfied(
+    hypotheses: Need | NeedUnrecorded,
+    *,
+    require_hypotheses: bool,
+) -> None:
+    """Refuse when profile requires hypotheses and plan Need is off / unrecorded."""
+    hyp = require_need(hypotheses)
+    if require_hypotheses and not hyp.needed:
+        raise PlanNeedRefuse(
+            "profile_requires_hypotheses:plan.hypotheses.needed_must_be_true",
+            reason="profile_requires_hypotheses",
+        )
+
+
 def resolve_plan_needs(
     *,
     hypotheses: Need | None,
     literature: Need | None,
+    require_hypotheses: bool,
 ) -> tuple[Need, Need]:
     """Resolve Plan Needs for accept_plan. Omitted → PlanNeedRefuse (planner decides)."""
     if hypotheses is None:
         raise PlanNeedRefuse("plan_need_required:hypotheses", reason="plan_need_required")
     if literature is None:
         raise PlanNeedRefuse("plan_need_required:literature", reason="plan_need_required")
+    assert_profile_hypotheses_satisfied(hypotheses, require_hypotheses=require_hypotheses)
     return hypotheses, literature

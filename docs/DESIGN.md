@@ -66,6 +66,8 @@ class Study(BaseModel):
     max_attempts: int                    # profile.max_attempts → Study (D17 / RC17a)
     max_expansions: int                  # agent expansion quota; RC3t: required (no default)
     # CAPABILITIES #2 / D3: required; upcasters must not invent False / Need.
+    # Legacy StudyCreated (schema ≤13) without require_hypotheses → CatalogError on
+    # v13→v14 upcast (require_hypotheses_required); journal cannot be replayed as-is.
     require_hypotheses: bool
     # статуса нет: study_view() выводится из задач (§3.2)
 

@@ -65,6 +65,7 @@ async def _boot(
         profile="research", request="q", catalog_version=3,
         deadline=clock.now() + timedelta(seconds=seconds), sid=sid,
         finalize_reserve_s=reserve,
+        require_hypotheses=False,
     )
     return rt
 
@@ -584,6 +585,7 @@ async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     await rt.note_budget_exceeded()
     assert rt._budget_exceeded
@@ -622,6 +624,7 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
         sid=sid,
         budget=budget,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     # Public debit without BudgetExceeded (crash before producer tick).
     await rt.record_budget_debit(spent_rub=Decimal("50"), request_id="debit-crash")
@@ -663,6 +666,7 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
                 delegated_costly=Decimal("101"),
             ),
             finalize_reserve_s=5,
+            require_hypotheses=False,
         )
     await close_runtime(rt)
 
@@ -705,6 +709,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
             "delegated_costly": "999",
         },
         "finalize_reserve_s": 5,
+        "require_hypotheses": False,
     }
     # Pin: fold path uses the same Study.model_validate as local_project.
     folded = Study.model_validate(payload)

@@ -287,6 +287,7 @@ async def _run_load(
         catalog_version=3,
         deadline=clock.now() + timedelta(hours=1),
         sid="st_load",
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -699,6 +700,7 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
             catalog_version=3,
             deadline=clock.now() + timedelta(hours=1),
             sid=sid,
+            require_hypotheses=False,
         )
         for i in range(20):
             await rt.writer.append(

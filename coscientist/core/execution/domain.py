@@ -488,6 +488,8 @@ class Study(Frozen):
     user_input_ids: list[str] = Field(default_factory=list)
     # PR20: max agent CheckProposed per study (default 3); excess → proposal_quota.
     max_proposals: int = Field(default=3, ge=0)
+    # G4 / D3: required (no default). Missing on read → require_hypotheses_required.
+    require_hypotheses: bool
 
     def effective_deadline(self) -> datetime:
         """Last instant usable by tasks/attempts/HITL (deadline − finalize reserve)."""

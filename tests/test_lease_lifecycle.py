@@ -287,6 +287,7 @@ async def test_open_runtime_cancelled_error_stops_writer_before_release(
         catalog_version=3,
         deadline=clock.now() + timedelta(minutes=30),
         sid=sid,
+        require_hypotheses=False,
     )
     await close_runtime(seed)
 
@@ -357,6 +358,7 @@ async def test_open_runtime_releases_lease_on_post_acquire_failure(
         catalog_version=3,
         deadline=clock.now() + timedelta(minutes=30),
         sid=sid,
+        require_hypotheses=False,
     )
     await close_runtime(seed)
     assert await _lease_owner(db, sid, clock) is None

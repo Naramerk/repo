@@ -10,6 +10,10 @@
 - `StudyRuntime.append_events`: sole durable append+project path (replaces private `_append`); tests use the same entry as production.
 - `fold_loop_capped`: status is `capped` only for `iteration_cap`; any other `LoopCapped.reason` (including plan-need refuse codes) folds as `refused` (was: only `error`/`refused` → refused, else capped).
 
+### G4 Study.require_hypotheses
+
+- `Study.require_hypotheses` required (no construct default); StudyCreated v13→v14 refuses missing/null/non-bool (`require_hypotheses_required` / `require_hypotheses_must_be_bool`) — **legacy StudyCreated without the field cannot be replayed** (typed `CatalogError`, no invent `False`); `accept_plan` gates via `assert_profile_hypotheses_satisfied`. [CAP #2](docs/CAPABILITIES.md); [DESIGN §2](docs/DESIGN.md#2-доменная-модель).
+
 ### Docs — #16/#17 handoff ([report-s3.md](docs/handoff/report-s3.md))
 - Queue issues [#117](https://github.com/Naramerk/repo/issues/117)–[#128](https://github.com/Naramerk/repo/issues/128); `nir.py` body = core `render_markdown_report`; Depends-only ordering.
 - [CAPABILITIES.md](docs/CAPABILITIES.md) #16/#17; [DESIGN.md](docs/DESIGN.md) §9–§11 / §10; [DESIGN_M1.md](docs/DESIGN_M1.md) I1.
