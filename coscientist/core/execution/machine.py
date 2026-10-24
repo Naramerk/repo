@@ -24,12 +24,12 @@ from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.attempts import AttemptsMixin
 from coscientist.core.execution.domain import (
-    VALID_PROVENANCE,
     Provenance,
     Study,
     Task,
     TaskOutcome,
     TaskState,
+    parse_provenance,
 )
 from coscientist.core.execution.local_project import LocalProjectMixin
 from coscientist.core.finalize.finalize import (
@@ -147,18 +147,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
 
         def _default_attempt(aid: str) -> Any:
             d = self.attempts[aid]
-            if "provenance" not in d or d["provenance"] is None:
-                raise ValueError(f"attempt {aid!r}: provenance required")
-            raw = d["provenance"]
-            if not isinstance(raw, str) or raw not in VALID_PROVENANCE:
-                raise ValueError(f"attempt {aid!r}: unknown provenance {raw!r}")
-            prov: Provenance
-            if raw == "real":
-                prov = "real"
-            elif raw == "partial":
-                prov = "partial"
-            else:
-                prov = "stub"
+            raw = d["provenance"] if "provenance" in d else None
+            prov = parse_provenance(raw, owner=f"attempt {aid!r}")
             return type(
                 "Att",
                 (),

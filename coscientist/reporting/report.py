@@ -15,6 +15,7 @@ from pydantic import (
     field_validator,
 )
 
+from coscientist.core.execution.domain import Task
 from coscientist.core.finalize.minimal_report import render_markdown_report
 from coscientist.core.finalize.minimal_report_models import MinimalReport
 from coscientist.reporting.render_html import wrap_markdown_html
@@ -55,11 +56,15 @@ class ReportFormatConfig(BaseModel):
 
 
 class ReportRenderInput(BaseModel):
-    """Payload-only input: typed report + optional CAS artifact id (no free markdown)."""
+    """Typed report + tasks map + optional CAS artifact id (no free markdown).
+
+    ``tasks`` is required for the subtask tree — never silently empty.
+    """
 
     model_config = _FROZEN
     report: MinimalReport
     report_artifact_id: StrictStr | None
+    tasks: dict[str, Task]
 
     @field_validator("report_artifact_id")
     @classmethod
@@ -115,7 +120,7 @@ def render_report_body(
     config: ReportFormatConfig,
 ) -> str:
     """Render report body only; callers use ``media_type_for(fmt)`` for media."""
-    md_core = render_markdown_report(inp.report)
+    md_core = render_markdown_report(inp.report, tasks=inp.tasks)
     md = f"{md_core}{_artifacts_appendix(inp.report_artifact_id, config)}"
     if fmt == "json":
         return (

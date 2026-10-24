@@ -25,6 +25,7 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
+    parse_provenance,
     worst_provenance,
 )
 
@@ -88,18 +89,10 @@ def input_binding_digest(
     )
 
 
-def _verdict_snap_provenance(snapshot: dict[str, Any], *, ref: str) -> Provenance:
+def _verdict_snap_provenance(snapshot: dict[str, object], *, ref: str) -> Provenance:
     """Require snapshot provenance — never invent ``real`` (DESIGN_M1 §6.7)."""
-    if "provenance" not in snapshot or snapshot["provenance"] is None:
-        raise ValueError(f"verdict {ref!r}: provenance required")
-    raw = snapshot["provenance"]
-    if not isinstance(raw, str) or raw not in VALID_PROVENANCE:
-        raise ValueError(f"verdict {ref!r}: unknown provenance {raw!r}")
-    if raw == "real":
-        return "real"
-    if raw == "partial":
-        return "partial"
-    return "stub"
+    raw = snapshot["provenance"] if "provenance" in snapshot else None
+    return parse_provenance(raw, owner=f"verdict {ref!r}")
 
 
 def verdict_binding_digest(*, ref: str, snapshot: dict[str, Any]) -> str:
@@ -392,9 +385,7 @@ def claim_nodes_from_attempt(
         attrs["accepted"] = bool(core.get("accepted", False))
         attrs["validity_ok"] = bool(core.get("validity_ok", True))
         role = core.get("check_role", "unknown")
-        attrs["check_role"] = (
-            role if role in ("prediction", "validity", "unknown") else "unknown"
-        )
+        attrs["check_role"] = role if role in ("prediction", "validity", "unknown") else "unknown"
         excl = core.get("exclusion_reason")
         if excl in (
             "validity_failed",
@@ -439,9 +430,7 @@ def claim_nodes_from_attempt(
         if isinstance(core.get("data_digests"), list):
             attrs["data_digests"] = [str(x) for x in core["data_digests"]]
         if isinstance(core.get("criterion_template_ids"), list):
-            attrs["criterion_template_ids"] = [
-                str(x) for x in core["criterion_template_ids"] if x
-            ]
+            attrs["criterion_template_ids"] = [str(x) for x in core["criterion_template_ids"] if x]
         if isinstance(core.get("independence_notes"), list) and core["independence_notes"]:
             attrs["independence_notes"] = [str(x) for x in core["independence_notes"]]
         if core.get("study_id"):
@@ -450,17 +439,13 @@ def claim_nodes_from_attempt(
             attrs["experiment_id"] = str(core["experiment_id"])
         else:
             # attempt_id = "{task_id}#{n}" → experiment_id = task_id
-            attrs["experiment_id"] = (
-                attempt_id.rsplit("#", 1)[0] if attempt_id else ""
-            )
+            attrs["experiment_id"] = attempt_id.rsplit("#", 1)[0] if attempt_id else ""
         if core.get("independence_key"):
             attrs["independence_key"] = str(core["independence_key"])
         else:
             from coscientist.core.claims.verdict import independence_key_for
 
-            attrs["independence_key"] = independence_key_for(
-                experiment_id=str(attrs.get("experiment_id") or "")
-            )
+            attrs["independence_key"] = independence_key_for(experiment_id=str(attrs.get("experiment_id") or ""))
         if "refute_capable" in core:
             attrs["refute_capable"] = bool(core.get("refute_capable"))
         if "severe" in core:
@@ -481,14 +466,8 @@ def claim_nodes_from_attempt(
                     "uses_sesoi": attrs.get("uses_sesoi"),
                     "used_sesoi": attrs.get("used_sesoi"),
                     "predicts_null": attrs.get("predicts_null", False),
-                    "predicted_direction": attrs.get(
-                        "predicted_direction", "two_sided"
-                    ),
-                    "effect": (
-                        dict(core["effect"])
-                        if isinstance(core.get("effect"), dict)
-                        else None
-                    ),
+                    "predicted_direction": attrs.get("predicted_direction", "two_sided"),
+                    "effect": (dict(core["effect"]) if isinstance(core.get("effect"), dict) else None),
                     "severe": None,
                     "criterion_frozen_at_seq": None,
                     "first_cited_evidence_seq": None,
@@ -630,22 +609,13 @@ def validate_input_specs(tasks: list[TaskSpec]) -> None:
             kind = inp.kind
             if kind == "verdict":
                 if not inp.ref:
-                    raise ValueError(
-                        f"InputSpec.kind=verdict requires ref "
-                        f"(task {t.task_key!r})"
-                    )
+                    raise ValueError(f"InputSpec.kind=verdict requires ref (task {t.task_key!r})")
             elif kind == "claim":
                 if not inp.ref:
-                    raise ValueError(
-                        f"InputSpec.kind=claim requires ref "
-                        f"(task {t.task_key!r})"
-                    )
+                    raise ValueError(f"InputSpec.kind=claim requires ref (task {t.task_key!r})")
             elif kind == "artifact":
                 if not inp.from_task or not inp.output:
-                    raise ValueError(
-                        f"InputSpec.kind=artifact requires from_task and output "
-                        f"(task {t.task_key!r})"
-                    )
+                    raise ValueError(f"InputSpec.kind=artifact requires from_task and output (task {t.task_key!r})")
             else:
                 raise ValueError(f"unknown InputSpec.kind: {kind!r}")
     validate_quorum_specs(tasks)
@@ -670,10 +640,7 @@ def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
         for ref in spec.criteria or []:
             tid = getattr(ref, "template_id", None)
             if not tid or tid not in by_id:
-                raise ValueError(
-                    f"unknown criterion template {tid!r} "
-                    f"(task {spec.task_key!r})"
-                )
+                raise ValueError(f"unknown criterion template {tid!r} (task {spec.task_key!r})")
             tmpl = by_id[tid]
             params = dict(getattr(ref, "params", None) or {})
             bad = sorted(_FORBIDDEN_THRESHOLD_PARAMS & set(params))
@@ -688,17 +655,11 @@ def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
                 lo = getattr(tmpl, "sesoi_min", None)
                 hi = getattr(tmpl, "sesoi_max", None)
                 if sesoi is None:
-                    raise ValueError(
-                        f"template {tid!r} uses_sesoi but sesoi is unset"
-                    )
+                    raise ValueError(f"template {tid!r} uses_sesoi but sesoi is unset")
                 if lo is not None and float(sesoi) < float(lo):
-                    raise ValueError(
-                        f"template {tid!r} sesoi {sesoi} < sesoi_min {lo}"
-                    )
+                    raise ValueError(f"template {tid!r} sesoi {sesoi} < sesoi_min {lo}")
                 if hi is not None and float(sesoi) > float(hi):
-                    raise ValueError(
-                        f"template {tid!r} sesoi {sesoi} > sesoi_max {hi}"
-                    )
+                    raise ValueError(f"template {tid!r} sesoi {sesoi} > sesoi_max {hi}")
             plan_role = getattr(ref, "role", None)
             if plan_role is None:
                 continue

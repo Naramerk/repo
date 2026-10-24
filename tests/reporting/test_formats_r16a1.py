@@ -54,13 +54,14 @@ def _input(
     study_id: str = "st_16a1",
     formulation: str = "q",
 ) -> ReportRenderInput:
+    tasks = {"st/A": _task("A")}
     report = assemble_minimal_report(
         study_id=study_id,
         terminal_reason="completed",
         trigger="all_done",
         contributing_reasons=[],
         verdict="partial",
-        tasks={"st/A": _task("A")},
+        tasks=tasks,
         attempts={},
         question_dispositions={
             "Q1": {
@@ -70,8 +71,13 @@ def _input(
             }
         },
         fallback_reason=None,
+        refusal=None,
+        hypotheses={},
+        hypotheses_unavailable=None,
+        custom_checks=[],
+        observations=[],
     )
-    return ReportRenderInput(report=report, report_artifact_id=aid)
+    return ReportRenderInput(report=report, report_artifact_id=aid, tasks=tasks)
 
 
 @pytest.mark.parametrize(
@@ -247,9 +253,13 @@ def test_parse_report_format_known(raw: str) -> None:
 
 
 def test_refuse_backtick_artifact_id() -> None:
-    report = _input().report
+    inp = _input()
     with pytest.raises(ValidationError, match="backtick"):
-        ReportRenderInput(report=report, report_artifact_id="art_`x")
+        ReportRenderInput(
+            report=inp.report,
+            report_artifact_id="art_`x",
+            tasks=inp.tasks,
+        )
 
 
 def test_api_view_body_matches_render() -> None:

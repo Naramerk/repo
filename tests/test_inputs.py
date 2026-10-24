@@ -95,7 +95,7 @@ def test_worst_provenance_order():
     ],
     ids=["absent", "null", "unknown"],
 )
-def test_verdict_binding_digest_provenance_fail_closed(snap: dict, match: str) -> None:
+def test_verdict_binding_digest_provenance_fail_closed(snap: dict[str, object], match: str) -> None:
     with pytest.raises(ValueError, match=match):
         verdict_binding_digest(ref="Q1", snapshot=snap)
 
@@ -104,11 +104,12 @@ def test_verdict_binding_digest_provenance_fail_closed(snap: dict, match: str) -
     ("snap", "match"),
     [
         ({"verdict": "supported"}, "provenance required"),
+        ({"verdict": "supported", "provenance": None}, "provenance required"),
         ({"verdict": "supported", "provenance": "bogus"}, "unknown provenance"),
     ],
-    ids=["absent", "unknown"],
+    ids=["absent", "null", "unknown"],
 )
-def test_bind_verdict_provenance_fail_closed(snap: dict, match: str) -> None:
+def test_bind_verdict_provenance_fail_closed(snap: dict[str, object], match: str) -> None:
     child = _task(
         "B",
         None,
@@ -161,7 +162,7 @@ def test_bind_verdict_provenance_fail_closed(snap: dict, match: str) -> None:
 async def test_make_executor_default_attempt_provenance_fail_closed(
     tmp_path: Path,
     clock: FakeClock,
-    payload: dict,
+    payload: dict[str, object],
     match: str,
 ) -> None:
     sid = "st_prov"
