@@ -670,19 +670,27 @@ class LifecycleMixin:
             # Freeze plan criteria at accept (DESIGN_M1 §6 / frozen_at_seq).
             seen_criteria: set[str] = set()
             for spec in tasks:
-                for ref in spec.criteria or []:
-                    key = str(getattr(ref, "template_id", None) or ref)
+                crit_list = spec.criteria
+                if crit_list is None:
+                    crit_list = []
+                for ref in crit_list:
+                    tid = getattr(ref, "template_id", None)
+                    key = str(tid) if tid is not None else str(ref)
                     if not key or key in seen_criteria:
                         continue
                     seen_criteria.add(key)
                     cnid = criterion_node_id(sid, key)
                     if graph is not None and graph.get_node(cnid) is not None:
                         existing = graph.get_node(cnid)
-                        if existing is not None and (
-                            (existing.attrs or {}).get("frozen_at_seq") is not None
-                            or bool((existing.attrs or {}).get("frozen"))
-                        ):
-                            continue
+                        if existing is not None:
+                            raw_attrs = existing.attrs
+                            ea: dict[str, Any] = (
+                                dict(raw_attrs) if isinstance(raw_attrs, dict) else {}
+                            )
+                            if ea.get("frozen_at_seq") is not None or bool(
+                                ea.get("frozen")
+                            ):
+                                continue
                     # SESOI / predicts_null from catalog template only — never params.
                     # metric/op/target/check only from CodeCheck / RequirementRef.params.
                     cattrs: dict[str, Any] = {"frozen": True, "template_id": key}
@@ -810,7 +818,7 @@ class LifecycleMixin:
                 )
             await self.append_events(events)
         except CatalogError as e:
-            return await apply_plan_refused(
+            return await apply_plan_refused(  # audit-ok[except_silent_return]: CatalogError → PlanRefused
                 self, detail=refuse_detail(e), report_line=PLAN_REFUSED_LINE
             )
         # B1: foreach templates whose of_task is already DONE (e.g. HYP-0).
