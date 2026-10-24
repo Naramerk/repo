@@ -11,9 +11,6 @@ from coscientist.core.events.events import EventType
 from coscientist.core.events.payload_schemas import PAYLOAD_MODELS, validate_event_payload
 from coscientist.core.events.schema_gate import _payload_validators, upcast_strict
 
-# Back-compat alias used by stacked G3 tests.
-PAYLOAD_SPECS = PAYLOAD_MODELS
-
 
 def test_payload_validators_cover_every_event_type() -> None:
     reg = _payload_validators()

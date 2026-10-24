@@ -28,7 +28,7 @@ def _known_event_types() -> set[str]:
 def _payload_validators() -> dict[str, PayloadValidator]:
     """One real schema per ``EventType``. Missing registry key → fail-closed."""
     from coscientist.core.events.events import EventType
-    from coscientist.core.events.payload_schemas import PAYLOAD_SPECS, validate_event_payload
+    from coscientist.core.events.payload_schemas import PAYLOAD_MODELS, validate_event_payload
 
     def _bound(et: str) -> PayloadValidator:
         def _fn(raw: dict[str, Any]) -> dict[str, Any]:
@@ -36,7 +36,7 @@ def _payload_validators() -> dict[str, PayloadValidator]:
 
         return _fn
 
-    reg: dict[str, PayloadValidator] = {t: _bound(t) for t in PAYLOAD_SPECS}
+    reg: dict[str, PayloadValidator] = {t: _bound(t) for t in PAYLOAD_MODELS}
     missing = set(get_args(EventType)) - set(reg)
     if missing:
         raise RuntimeError(f"payload schemas missing EventTypes: {sorted(missing)}")
