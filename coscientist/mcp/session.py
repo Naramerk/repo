@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-import time
 from typing import Any
 
 from coscientist.mcp.config import McpClientConfig
@@ -19,6 +16,8 @@ from coscientist.mcp.errors import (
 )
 from coscientist.mcp.files import fetch_files
 from coscientist.mcp.http_transport import StreamableHttpSession
+from coscientist.mcp.jsonutil import dumps_strict, json_rpc_ids_equal, loads_strict
+from coscientist.mcp.runtime import AsyncWaitFor, Clock
 from coscientist.mcp.stdio import StdioTransport
 from coscientist.mcp.transport import FileFetcher, MessageTransport
 from coscientist.mcp.types import CallToolReply, ListToolsReply, McpTool
@@ -37,6 +36,8 @@ class McpSession:
         config: McpClientConfig,
         server_name: str,
         file_fetcher: FileFetcher,
+        clock: Clock,
+        wait_for: AsyncWaitFor,
         stdio: StdioTransport | None = None,
         http: StreamableHttpSession | None = None,
         memory: MessageTransport | None = None,
@@ -47,6 +48,8 @@ class McpSession:
         self._config = config
         self._server_name = server_name
         self._file_fetcher = file_fetcher
+        self._clock = clock
+        self._wait_for = wait_for
         self._stdio = stdio
         self._http = http
         self._memory = memory
@@ -159,7 +162,11 @@ class McpSession:
             uris,
             fetcher=self._file_fetcher,
             max_bytes=self._config.max_file_bytes,
-            timeout_s=self._config.file_fetch_timeout_s,
+            max_files=self._config.max_files_per_call,
+            max_total_bytes=self._config.max_files_total_bytes,
+            timeout_s=self._config.files_fetch_timeout_s,
+            clock=self._clock,
+            wait_for=self._wait_for,
         )
         digest = content_digest(result)
         return CallToolReply(
@@ -201,9 +208,9 @@ class McpSession:
             message["params"] = params
         if self._http is not None:
             try:
-                await asyncio.wait_for(
+                await self._wait_for(
                     self._http.request(message, timeout_s=self._config.notification_timeout_s),
-                    timeout=self._config.notification_timeout_s,
+                    timeout_s=self._config.notification_timeout_s,
                 )
             except TimeoutError as exc:
                 raise McpTimeoutError(
@@ -272,9 +279,9 @@ class McpSession:
     ) -> tuple[dict[str, Any], bytes]:
         assert self._http is not None
         try:
-            message, raw, status = await asyncio.wait_for(
+            message, raw, status = await self._wait_for(
                 self._http.request(request, timeout_s=timeout_s),
-                timeout=timeout_s,
+                timeout_s=timeout_s,
             )
         except TimeoutError as exc:
             await self._cancel_and_close(req_id)
@@ -314,9 +321,9 @@ class McpSession:
         req_id: int,
         timeout_s: float,
     ) -> tuple[dict[str, Any], bytes]:
-        deadline = time.monotonic() + timeout_s
+        deadline = self._clock.monotonic() + timeout_s
         while True:
-            remaining = deadline - time.monotonic()
+            remaining = deadline - self._clock.monotonic()
             if remaining <= 0:
                 raise McpTimeoutError("stdio/memory receive exceeded configured timeout")
             try:
@@ -327,10 +334,10 @@ class McpSession:
                 await self._fail_close()
                 raise
             try:
-                message = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                message = loads_strict(raw)
+            except McpProtocolError:
                 await self._fail_close()
-                raise McpProtocolError("response is not JSON", raw_bytes=raw) from exc
+                raise
             if not isinstance(message, dict):
                 await self._fail_close()
                 raise McpProtocolError("JSON-RPC message must be an object", raw_bytes=raw)
@@ -361,7 +368,7 @@ class McpSession:
                     "JSON-RPC response id must not be null",
                     raw_bytes=raw,
                 )
-            if msg_id != req_id:
+            if not json_rpc_ids_equal(msg_id, req_id):
                 await self._fail_close()
                 raise McpProtocolError(
                     "JSON-RPC response id does not match request",
@@ -374,7 +381,7 @@ class McpSession:
                 raise
 
     async def _write(self, message: dict[str, Any]) -> None:
-        raw = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        raw = dumps_strict(message)
         if b"\n" in raw:
             raise McpProtocolError("JSON-RPC message must not contain embedded newlines")
         if self._stdio is not None:
@@ -398,7 +405,10 @@ class McpSession:
             return await self._stdio.receive(max_bytes=max_bytes, timeout_s=timeout_s)
         if self._memory is not None:
             try:
-                return await self._memory.receive(max_bytes=max_bytes, timeout_s=timeout_s)
+                return await self._wait_for(
+                    self._memory.receive(max_bytes=max_bytes, timeout_s=timeout_s),
+                    timeout_s=timeout_s,
+                )
             except TimeoutError as exc:
                 raise McpTimeoutError("memory transport receive exceeded timeout") from exc
         raise McpTransportError("no message transport", retryable=False)
@@ -407,7 +417,7 @@ class McpSession:
 def _extract_result(message: dict[str, Any], *, req_id: int, raw: bytes) -> dict[str, Any]:
     if message.get("jsonrpc") != "2.0":
         raise McpProtocolError("JSON-RPC version must be 2.0", raw_bytes=raw)
-    if message.get("id") != req_id:
+    if not json_rpc_ids_equal(message.get("id"), req_id):
         raise McpProtocolError("JSON-RPC id mismatch", raw_bytes=raw)
     if "error" in message:
         err = message["error"]

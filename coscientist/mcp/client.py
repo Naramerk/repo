@@ -10,6 +10,7 @@ from coscientist.mcp.config import (
 from coscientist.mcp.errors import McpConfigError
 from coscientist.mcp.files import SafeHttpFileFetcher
 from coscientist.mcp.http_transport import StreamableHttpSession
+from coscientist.mcp.runtime import AsyncSleep, AsyncWaitFor, Clock
 from coscientist.mcp.session import McpSession
 from coscientist.mcp.ssrf import HostnameResolver
 from coscientist.mcp.stdio import StdioTransport
@@ -28,11 +29,17 @@ class McpClient:
         self,
         config: McpClientConfig,
         *,
+        clock: Clock,
+        sleep: AsyncSleep,
+        wait_for: AsyncWaitFor,
         file_fetcher: FileFetcher | None = None,
         http_transport: HttpTransport | None = None,
         resolver: HostnameResolver | None = None,
     ) -> None:
         self._config = config
+        self._clock = clock
+        self._sleep = sleep
+        self._wait_for = wait_for
         self._http_transport = http_transport
         if file_fetcher is not None:
             self._file_fetcher = file_fetcher
@@ -44,6 +51,8 @@ class McpClient:
                 allowed_content_types=frozenset(config.allowed_file_content_types),
                 allowed_content_encodings=frozenset(config.allowed_content_encodings),
                 read_chunk_bytes=config.http_read_chunk_bytes,
+                clock=clock,
+                wait_for=wait_for,
                 resolver=resolver,
             )
         else:
@@ -63,11 +72,16 @@ class McpClient:
                 process_group_poll_interval_s=self._config.process_group_poll_interval_s,
                 read_chunk_bytes=self._config.stdio_read_chunk_bytes,
                 max_stderr_bytes=self._config.max_stderr_bytes,
+                clock=self._clock,
+                sleep=self._sleep,
+                wait_for=self._wait_for,
             )
             session = McpSession(
                 config=self._config,
                 server_name=server.name,
                 file_fetcher=self._file_fetcher,
+                clock=self._clock,
+                wait_for=self._wait_for,
                 stdio=transport,
             )
         else:
@@ -84,16 +98,19 @@ class McpClient:
                 notification_ok_statuses=frozenset(self._config.http_notification_ok_statuses),
                 protocol_version=self._config.protocol_version,
                 close_timeout_s=self._config.notification_timeout_s,
+                clock=self._clock,
             )
             session = McpSession(
                 config=self._config,
                 server_name=server.name,
                 file_fetcher=self._file_fetcher,
+                clock=self._clock,
+                wait_for=self._wait_for,
                 http=http,
             )
         try:
             await session.initialize()
-        except Exception:
+        except BaseException:
             await session.aclose()
             raise
         return session
@@ -109,11 +126,13 @@ class McpClient:
             config=self._config,
             server_name=server_name,
             file_fetcher=self._file_fetcher,
+            clock=self._clock,
+            wait_for=self._wait_for,
             memory=transport,
         )
         try:
             await session.initialize()
-        except Exception:
+        except BaseException:
             await session.aclose()
             raise
         return session

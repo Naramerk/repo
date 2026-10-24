@@ -42,6 +42,11 @@ class AsyncDnsResolver:
             )
         except socket.gaierror as exc:
             raise McpSsrfError(f"DNS resolution failed for host {hostname!r}", uri=hostname) from exc
+        except (UnicodeError, ValueError) as exc:
+            raise McpSsrfError(
+                f"DNS resolution rejected host {hostname!r}: {exc}",
+                uri=hostname,
+            ) from exc
         addrs: list[str] = []
         for info in infos:
             sockaddr = info[4]
@@ -61,8 +66,11 @@ class AsyncDnsResolver:
 
 def assert_fetch_scheme(uri: str, *, allowed_schemes: frozenset[str]) -> None:
     """Hard-deny non-http(s) in code; profile schemes may only narrow further."""
-    parsed = urlparse(uri)
-    scheme = parsed.scheme.lower()
+    try:
+        parsed = urlparse(uri)
+        scheme = parsed.scheme.lower()
+    except (ValueError, UnicodeError) as exc:
+        raise McpSsrfError(f"URI parse failed: {exc}", uri=uri) from exc
     if scheme not in HARD_FETCH_SCHEMES:
         raise McpUnsupportedUriError(
             f"URI scheme {scheme!r} hard-denied (only http/https)",
@@ -76,11 +84,17 @@ def assert_fetch_scheme(uri: str, *, allowed_schemes: frozenset[str]) -> None:
 
 
 def parse_host_port(uri: str) -> tuple[str, int | None, str]:
-    """Return (hostname, port|None, scheme). Raises McpSsrfError on missing host."""
-    parsed = urlparse(uri)
-    if not parsed.hostname:
+    """Return (hostname, port|None, scheme). Raises McpSsrfError on missing/bad host."""
+    try:
+        parsed = urlparse(uri)
+        host = parsed.hostname
+        port = parsed.port
+        scheme = parsed.scheme.lower()
+    except (ValueError, UnicodeError) as exc:
+        raise McpSsrfError(f"URI host/port parse failed: {exc}", uri=uri) from exc
+    if not host:
         raise McpSsrfError("URI has no hostname", uri=uri)
-    return parsed.hostname, parsed.port, parsed.scheme.lower()
+    return host, port, scheme
 
 
 _NAT64_WELL_KNOWN = ipaddress.IPv6Network("64:ff9b::/96")
@@ -246,14 +260,18 @@ def redirect_url(base_uri: str, location: str) -> str:
 
 def rewrite_url_host(uri: str, connect_ip: str) -> str:
     """Replace URL hostname with ``connect_ip`` for the TCP peer (Host/SNI stay separate)."""
-    parsed = urlparse(uri)
+    try:
+        parsed = urlparse(uri)
+        port = parsed.port
+    except (ValueError, UnicodeError) as exc:
+        raise McpSsrfError(f"URI parse failed: {exc}", uri=uri) from exc
     try:
         ip = ipaddress.ip_address(connect_ip)
         host = f"[{connect_ip}]" if isinstance(ip, ipaddress.IPv6Address) else connect_ip
     except ValueError as exc:
         raise McpSsrfError(f"invalid connect IP {connect_ip!r}", uri=uri) from exc
-    if parsed.port is not None:
-        netloc = f"{host}:{parsed.port}"
+    if port is not None:
+        netloc = f"{host}:{port}"
     else:
         netloc = host
     return urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))

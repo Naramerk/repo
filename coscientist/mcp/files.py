@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import time
 import zlib
 from typing import Mapping
 
@@ -15,6 +13,7 @@ from coscientist.mcp.errors import (
     McpTimeoutError,
     McpTransportError,
 )
+from coscientist.mcp.runtime import AsyncWaitFor, Clock
 from coscientist.mcp.ssrf import (
     AddressPolicy,
     AsyncDnsResolver,
@@ -41,6 +40,8 @@ class SafeHttpFileFetcher:
         allowed_content_types: frozenset[str],
         allowed_content_encodings: frozenset[str],
         read_chunk_bytes: int,
+        clock: Clock,
+        wait_for: AsyncWaitFor,
         resolver: HostnameResolver | None = None,
         address_policy: AddressPolicy | None = None,
     ) -> None:
@@ -50,15 +51,17 @@ class SafeHttpFileFetcher:
         self._allowed_content_types = allowed_content_types
         self._allowed_content_encodings = allowed_content_encodings
         self._read_chunk_bytes = read_chunk_bytes
+        self._clock = clock
+        self._wait_for = wait_for
         self._resolver: HostnameResolver = resolver if resolver is not None else AsyncDnsResolver()
         self._address_policy = address_policy
 
     async def fetch(self, url: str, *, max_bytes: int, timeout_s: float) -> bytes:
         """Fetch ``url`` under a single overall deadline (all redirects + body)."""
         try:
-            return await asyncio.wait_for(
+            return await self._wait_for(
                 self._fetch_within_deadline(url, max_bytes=max_bytes, timeout_s=timeout_s),
-                timeout=timeout_s,
+                timeout_s=timeout_s,
             )
         except TimeoutError as exc:
             raise McpTimeoutError("file fetch exceeded file_fetch_timeout_s") from exc
@@ -71,10 +74,10 @@ class SafeHttpFileFetcher:
         timeout_s: float,
     ) -> bytes:
         assert_fetch_scheme(url, allowed_schemes=self._allowed_schemes)
-        deadline = time.monotonic() + timeout_s
+        deadline = self._clock.monotonic() + timeout_s
         current = url
         for hop in range(self._max_redirect_hops + 1):
-            remaining = _remaining(deadline)
+            remaining = _remaining(deadline, self._clock)
             _uri, connect_ip, server_hostname = await resolve_and_pin(
                 current,
                 resolver=self._resolver,
@@ -129,6 +132,7 @@ class SafeHttpFileFetcher:
                     max_bytes=max_bytes,
                     chunk_bytes=self._read_chunk_bytes,
                     deadline=deadline,
+                    clock=self._clock,
                 )
                 if encoding in ("gzip", "x-gzip"):
                     return _gunzip_limited(raw, max_bytes=max_bytes)
@@ -147,11 +151,40 @@ async def fetch_files(
     *,
     fetcher: FileFetcher,
     max_bytes: int,
+    max_files: int,
+    max_total_bytes: int,
     timeout_s: float,
+    clock: Clock,
+    wait_for: AsyncWaitFor | None = None,
 ) -> tuple[FetchedFile, ...]:
+    if len(uris) > max_files:
+        raise McpResponseLimitError(
+            "number of file URIs exceeds max_files_per_call",
+            limit=max_files,
+        )
+    deadline = clock.monotonic() + timeout_s
     files: list[FetchedFile] = []
+    total_bytes = 0
     for uri in uris:
-        raw = await fetcher.fetch(uri, max_bytes=max_bytes, timeout_s=timeout_s)
+        remaining = deadline - clock.monotonic()
+        if remaining <= 0:
+            raise McpTimeoutError("files fetch exceeded files_fetch_timeout_s")
+        try:
+            if wait_for is not None:
+                raw = await wait_for(
+                    fetcher.fetch(uri, max_bytes=max_bytes, timeout_s=remaining),
+                    timeout_s=remaining,
+                )
+            else:
+                raw = await fetcher.fetch(uri, max_bytes=max_bytes, timeout_s=remaining)
+        except TimeoutError as exc:
+            raise McpTimeoutError("files fetch exceeded files_fetch_timeout_s") from exc
+        total_bytes += len(raw)
+        if total_bytes > max_total_bytes:
+            raise McpResponseLimitError(
+                "downloaded files exceed max_files_total_bytes",
+                limit=max_total_bytes,
+            )
         digest = sha256_hex(raw)
         files.append(
             FetchedFile(
@@ -164,8 +197,8 @@ async def fetch_files(
     return tuple(files)
 
 
-def _remaining(deadline: float) -> float:
-    left = deadline - time.monotonic()
+def _remaining(deadline: float, clock: Clock) -> float:
+    left = deadline - clock.monotonic()
     if left <= 0:
         raise McpTimeoutError("file fetch exceeded file_fetch_timeout_s")
     return left
@@ -177,15 +210,16 @@ async def _read_limited(
     max_bytes: int,
     chunk_bytes: int,
     deadline: float,
+    clock: Clock,
 ) -> bytes:
     chunks: list[bytes] = []
     total = 0
     while True:
-        _remaining(deadline)
+        _remaining(deadline, clock)
         piece = await stream.read(min(chunk_bytes, max_bytes - total + 1))
         if not piece:
             break
-        if time.monotonic() >= deadline:
+        if clock.monotonic() >= deadline:
             raise McpTimeoutError("file fetch exceeded file_fetch_timeout_s")
         total += len(piece)
         if total > max_bytes:

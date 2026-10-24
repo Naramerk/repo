@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import codecs
-import json
 import os
-import time
 from typing import Any, Mapping
 
 from coscientist.mcp.errors import (
@@ -15,6 +13,8 @@ from coscientist.mcp.errors import (
     McpTimeoutError,
     McpTransportError,
 )
+from coscientist.mcp.jsonutil import dumps_strict, json_rpc_ids_equal, loads_strict
+from coscientist.mcp.runtime import Clock
 from coscientist.mcp.transport import HttpStream, HttpTransport
 
 _METHOD_NOT_FOUND = -32601
@@ -35,6 +35,7 @@ class StreamableHttpSession:
         notification_ok_statuses: frozenset[int],
         protocol_version: str,
         close_timeout_s: float,
+        clock: Clock,
     ) -> None:
         self._url = url
         self._api_key_env = api_key_env
@@ -45,6 +46,7 @@ class StreamableHttpSession:
         self._notification_ok_statuses = notification_ok_statuses
         self._protocol_version = protocol_version
         self._close_timeout_s = close_timeout_s
+        self._clock = clock
         self._session_id: str | None = None
         self._closed = False
         self._negotiated_version: str | None = None
@@ -72,10 +74,10 @@ class StreamableHttpSession:
         """
         if self._closed:
             raise McpTransportError("streamable HTTP session is closed", retryable=False)
-        deadline = time.monotonic() + timeout_s
+        deadline = self._clock.monotonic() + timeout_s
         is_notification = "id" not in payload
         headers = self._headers(include_session=payload.get("method") != "initialize")
-        body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        body = dumps_strict(payload)
         try:
             stream = await self._http.open(
                 "POST",
@@ -100,6 +102,7 @@ class StreamableHttpSession:
                     max_bytes=self._max_response_bytes,
                     chunk_bytes=self._read_chunk_bytes,
                     deadline=deadline,
+                    clock=self._clock,
                 )
                 if raw:
                     raise McpProtocolError(
@@ -116,6 +119,7 @@ class StreamableHttpSession:
                         max_bytes=self._max_response_bytes,
                         chunk_bytes=self._read_chunk_bytes,
                         deadline=deadline,
+                        clock=self._clock,
                     ),
                     status,
                 )
@@ -134,6 +138,7 @@ class StreamableHttpSession:
                     max_bytes=self._max_response_bytes,
                     chunk_bytes=self._read_chunk_bytes,
                     deadline=deadline,
+                    clock=self._clock,
                 )
                 return _parse_json_rpc(raw), raw, status
             if media == "text/event-stream":
@@ -173,7 +178,8 @@ class StreamableHttpSession:
                 stream,
                 max_bytes=self._max_response_bytes,
                 chunk_bytes=self._read_chunk_bytes,
-                deadline=time.monotonic() + self._close_timeout_s,
+                deadline=self._clock.monotonic() + self._close_timeout_s,
+                clock=self._clock,
             )
         except (McpResponseLimitError, McpTimeoutError, McpTransportError):
             pass
@@ -210,12 +216,12 @@ class StreamableHttpSession:
         matched: dict[str, Any] | None = None
         matched_raw: bytes | None = None
         while True:
-            _remaining(deadline)
+            _remaining(deadline, self._clock)
             piece = await stream.read(self._read_chunk_bytes)
             if not piece:
                 events = parser.finish()
             else:
-                if time.monotonic() >= deadline:
+                if self._clock.monotonic() >= deadline:
                     raise McpTimeoutError("streamable HTTP SSE exceeded configured timeout")
                 total += len(piece)
                 if total > self._max_response_bytes:
@@ -230,7 +236,7 @@ class StreamableHttpSession:
                 if "method" in message and "id" in message:
                     await self._answer_method_not_found(
                         message["id"],
-                        timeout_s=_remaining(deadline),
+                        timeout_s=_remaining(deadline, self._clock),
                     )
                     continue
                 if "id" not in message:
@@ -246,7 +252,7 @@ class StreamableHttpSession:
                         "SSE JSON-RPC response id must not be null",
                         raw_bytes=raw,
                     )
-                if msg_id != req_id:
+                if not json_rpc_ids_equal(msg_id, req_id):
                     raise McpProtocolError(
                         "SSE JSON-RPC response id does not match request",
                         raw_bytes=raw,
@@ -278,7 +284,7 @@ class StreamableHttpSession:
             "error": {"code": _METHOD_NOT_FOUND, "message": "Method not found"},
         }
         headers = self._headers(include_session=True)
-        body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        body = dumps_strict(payload)
         stream = await self._http.open(
             "POST",
             self._url,
@@ -292,14 +298,15 @@ class StreamableHttpSession:
                 stream,
                 max_bytes=self._max_response_bytes,
                 chunk_bytes=self._read_chunk_bytes,
-                deadline=time.monotonic() + timeout_s,
+                deadline=self._clock.monotonic() + timeout_s,
+                clock=self._clock,
             )
         finally:
             await stream.aclose()
 
 
-def _remaining(deadline: float) -> float:
-    left = deadline - time.monotonic()
+def _remaining(deadline: float, clock: Clock) -> float:
+    left = deadline - clock.monotonic()
     if left <= 0:
         raise McpTimeoutError("streamable HTTP request exceeded configured timeout")
     return left
@@ -311,15 +318,16 @@ async def _read_limited(
     max_bytes: int,
     chunk_bytes: int,
     deadline: float,
+    clock: Clock,
 ) -> bytes:
     chunks: list[bytes] = []
     total = 0
     while True:
-        _remaining(deadline)
+        _remaining(deadline, clock)
         piece = await stream.read(min(chunk_bytes, max_bytes - total + 1))
         if not piece:
             break
-        if time.monotonic() >= deadline:
+        if clock.monotonic() >= deadline:
             raise McpTimeoutError("streamable HTTP body read exceeded configured timeout")
         total += len(piece)
         if total > max_bytes:
@@ -347,10 +355,7 @@ def _header(headers: Mapping[str, str], name: str) -> str | None:
 
 
 def _parse_json_rpc(raw: bytes) -> dict[str, Any]:
-    try:
-        data = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise McpProtocolError("response is not JSON", raw_bytes=raw) from exc
+    data = loads_strict(raw)
     if not isinstance(data, dict):
         raise McpProtocolError("JSON-RPC message must be an object", raw_bytes=raw)
     return data

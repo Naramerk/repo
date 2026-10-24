@@ -36,15 +36,11 @@ def uris_from_call_result(
             resource = item.get("resource")
             if not isinstance(resource, dict):
                 raise McpProtocolError(f"content[{index}].resource must be an object")
-            if "text" in resource or "blob" in resource:
-                continue
-            found.append(
-                _require_uri(
-                    resource,
-                    path=f"content[{index}].resource",
-                    allowed_schemes=allowed_schemes,
+            if "text" not in resource and "blob" not in resource:
+                raise McpProtocolError(
+                    f"content[{index}].resource embedded resource requires text or blob"
                 )
-            )
+            continue  # embedded payload — never fetch uri
     return tuple(found)
 
 
