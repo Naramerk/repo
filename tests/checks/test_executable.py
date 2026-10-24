@@ -48,7 +48,7 @@ from tests.checks.sandbox_test_limits import (
     TEST_TIMEOUT_S,
     sandbox_limits,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
+from tests.helpers import attach_executor, close_runtime, open_runtime, record_success, TEST_NEED_KW
 
 
 def _REWARD_JSON(v: float) -> bytes:
@@ -1193,7 +1193,7 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(
                 criteria=[RequirementRef(template_id="exec_ok")],
             )
         ]
-    )
+    , **TEST_NEED_KW)
     aid = await rt.start_attempt("E1")
     result = await ex.record(
         aid,
@@ -1270,7 +1270,7 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
                 criteria=[RequirementRef(template_id="exec_ok")],
             )
         ]
-    )
+    , **TEST_NEED_KW)
     aid = await rt.start_attempt("E1")
     result = await ex.record(aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS))
     assert result.outcome is Outcome.SUCCESS
@@ -2598,7 +2598,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
                 criteria=[RequirementRef(template_id="exec_sleep")],
             )
         ]
-    )
+    , **TEST_NEED_KW)
     from coscientist.core.finalize.finalize import IDLE_TIMEOUT_RU, TIMEOUT_BUDGET_RU
 
     for i in range(2):
@@ -2741,7 +2741,7 @@ async def test_timeout_with_stuck_drain_charges_attempt(
                 criteria=[RequirementRef(template_id="exec_busy_hold")],
             )
         ]
-    )
+    , **TEST_NEED_KW)
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     frozen_check = apply_frozen_limits(
         tmpl.check, task.spec, template_id="exec_busy_hold"
@@ -2937,7 +2937,7 @@ async def test_infra_failure_does_not_charge_attempt(
                 criteria=[RequirementRef(template_id="exec_ok")],
             )
         ]
-    )
+    , **TEST_NEED_KW)
     aid = await rt.start_attempt("E1")
     calls = {"n": 0}
     real_eval = evaluate_task_checks
@@ -3028,7 +3028,7 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
                 criteria=[RequirementRef(template_id="exec_sleep")],
             )
         ]
-    )
+    , **TEST_NEED_KW)
     empty = AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
     aid1 = await rt.start_attempt("E1")
     r1 = await ex.record(aid1, empty)
@@ -3093,7 +3093,7 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
                 sandbox_memory_mb=1,
             )
         ]
-    )
+    , **TEST_NEED_KW)
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     assert task.spec.sandbox_timeout_s is None
     assert task.spec.sandbox_memory_mb is None
@@ -3414,7 +3414,7 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
                 ],
             )
         ]
-    )
+    , **TEST_NEED_KW)
 
     call_n = {"n": 0}
 
@@ -3533,7 +3533,7 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
                 criteria=[RequirementRef(template_id="pred_only")],
             )
         ]
-    )
+    , **TEST_NEED_KW)
 
     def _fake_eval(*_a, **_kw):
         return [

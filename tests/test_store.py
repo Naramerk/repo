@@ -14,7 +14,7 @@ from coscientist.core.events.events import EventEnvelope
 from coscientist.core.events.projections import fold_events
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.upcasters import writer_schema_version
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import close_runtime, open_runtime, TEST_NEED_KW
 
 
 @pytest.fixture
@@ -181,7 +181,7 @@ async def test_replay_equals_projection(
     for key in ("SPEC", "HYP", "LIT"):
         aid = await rt.start_attempt(key)
         await record_success(rt, aid, arts)
-    await rt.accept_plan([exp_spec("EXP-1")])
+    await rt.accept_plan([exp_spec("EXP-1")], **TEST_NEED_KW)
     aid = await rt.start_attempt("EXP-1")
     await record_success(rt, aid, arts)
     await rt.cancel_task("REPORT", reason="budget")

@@ -16,7 +16,7 @@ from coscientist.core.execution.inputs import (
     bind_inputs,
     input_binding_digest,
 )
-from tests.helpers import close_runtime, open_runtime, seed_legacy_journal
+from tests.helpers import close_runtime, open_runtime, seed_legacy_journal, TEST_NEED_KW
 from tests.test_inputs import _task
 
 
@@ -184,7 +184,7 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
             )
         ],
         questions=[],
-    )
+     **TEST_NEED_KW)
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
@@ -220,7 +220,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
             )
         ],
         questions=[],
-    )
+     **TEST_NEED_KW)
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
@@ -309,7 +309,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
             )
         ],
         questions=[],
-    )
+     **TEST_NEED_KW)
     aid = await rt.start_attempt("E1")
     exp_id = experiment_node_id(sid, "E1")
     assert rt.graph.get_node(exp_id) is not None
@@ -387,7 +387,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     **TEST_NEED_KW)
     aid0 = await rt.start_attempt("E0", provenance="stub")
     assert aid0 == aid0_expected
     content = b'{"count": 225}'
@@ -556,7 +556,7 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[],
-    )
+     **TEST_NEED_KW)
     tid = f"{sid}/E1"
     aid = f"{tid}#1"
     await seed_legacy_journal(rt.store, [

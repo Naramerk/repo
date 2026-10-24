@@ -15,7 +15,7 @@ from coscientist.core.claims.r17 import (
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.domain import TaskSpec
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import close_runtime, open_runtime, TEST_NEED_KW
 
 
 def test_refute_intent_met_is_survived(impl):
@@ -383,7 +383,7 @@ async def test_cancel_study_tick_closes_remaining(
             ),
         ],
         questions=[],
-    )
+     **TEST_NEED_KW)
     await rt.start_attempt("P")
     # cancel_study uses finalize_mod.finalize (module attr) — patch that path.
     real_close = cancel_mod._close_open_work

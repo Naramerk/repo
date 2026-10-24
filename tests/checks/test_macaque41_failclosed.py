@@ -51,7 +51,7 @@ from tests.checks.sandbox_test_limits import (
     TEST_UNIT_MEMORY_MB,
     sandbox_limits,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import attach_executor, close_runtime, open_runtime, TEST_NEED_KW
 from tests.test_pr9_plan_expanded import _boot_plan, _task
 from tests.test_pr10_foreach_quorum import (
     _boot_stages,
@@ -747,7 +747,7 @@ async def _boot_foreach(rt, *, criteria_marker: bool):
                 ]
             }
         )
-    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")])
+    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")], **TEST_NEED_KW)
     await _upsert_selected_hypotheses(rt, of_task="E0", n=2)
     from coscientist.core.events.ids import task_id
 
@@ -844,7 +844,7 @@ async def test_accept_plan_real_bad_criteria_is_plan_refused_with_catalog_detail
     await _boot_stages(rt)
     pid = await rt.accept_plan(
         [_marker_task("E0", ["PLAN"])], questions=[QuestionSpec(id="Q1", text="why")]
-    )
+    , **TEST_NEED_KW)
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
@@ -866,7 +866,7 @@ async def test_accept_plan_exempt_template_accepted_and_frozen(
     await _boot_stages(rt)
     pid = await rt.accept_plan(
         [_marker_task("E0", ["PLAN"])], questions=[QuestionSpec(id="Q1", text="why")]
-    )
+    , **TEST_NEED_KW)
     assert pid
     events = await rt.store.read_all()
     limits = _task_created_payload(events, "E0")["spec"]["sandbox_check_limits"]

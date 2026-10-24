@@ -42,6 +42,7 @@ from tests.helpers import (
     open_runtime,
     record_success,
     seed_legacy_journal,
+    TEST_NEED_KW,
 )
 
 _TS = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
@@ -517,7 +518,7 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
-    )
+     **TEST_NEED_KW)
     a = rt.tasks[f"{sid}/A"]
     events: list[EventEnvelope] = []
     for aid in a.attempts:
@@ -758,7 +759,7 @@ async def test_all_done_budget_reasons_finalize_all_done(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_finalize_zero_questions(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_zq")
-    await rt.accept_plan([_spec("E1")], questions=[], revision=1)
+    await rt.accept_plan([_spec("E1")], questions=[], revision=1, **TEST_NEED_KW)
     await _skip_all(rt)
     await rt.tick()
     assert _fin(await rt.store.read_all()).payload["question_dispositions"] == {}
@@ -772,7 +773,7 @@ async def test_report_task_failed_still_report(tmp_path, clock):
     rt.artifacts = arts
     for key in ("SPEC", "HYP", "LIT"):
         await record_success(rt, await rt.start_attempt(key), arts)
-    await rt.accept_plan([])
+    await rt.accept_plan([], **TEST_NEED_KW)
     await rt.fail_attempt(await rt.start_attempt("REPORT"), retryable=False)
     await rt.tick()
     ev = _fin(await rt.store.read_all())
@@ -795,7 +796,7 @@ async def test_conclusion_per_question(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_cq")
     rt.artifacts = LocalArtifactStore(tmp_path / "arts")
     qs = [QuestionSpec(id="Q1", text="one"), QuestionSpec(id="Q2", text="two")]
-    await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs)
+    await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs, **TEST_NEED_KW)
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     ev = _fin(await rt.store.read_all())
@@ -848,7 +849,7 @@ async def test_finalize_total_on_cas_failure(tmp_path, clock):
 async def test_finalized_dispositions_replay(tmp_path, clock):
     sid = "st_rep"
     rt = await _boot(tmp_path, clock, sid)
-    await rt.accept_plan([_spec("E1", ["Q1"])], questions=[QuestionSpec(id="Q1", text="why")])
+    await rt.accept_plan([_spec("E1", ["Q1"])], questions=[QuestionSpec(id="Q1", text="why")], **TEST_NEED_KW)
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     payload = _fin(await rt.store.read_all()).payload["question_dispositions"]
@@ -1416,7 +1417,7 @@ async def test_plan_refused_and_normal_finalize_exactly_one(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_sf_plan")
     await rt.accept_plan(
         [_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")]
-    )
+    , **TEST_NEED_KW)
     events = await rt.store.read_all()
     assert any(e.type == "PlanRefused" for e in events)
     _fin(events)
@@ -1590,7 +1591,7 @@ async def test_p5_after_long_downtime_uses_task_deadline(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_ua")
-    pid = await rt.accept_plan([_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")])
+    pid = await rt.accept_plan([_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")], **TEST_NEED_KW)
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
@@ -1602,8 +1603,8 @@ async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_accept_plan_rejects_question_text_conflict(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_qc")
-    await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="one")], revision=1)
-    pid = await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="other")], revision=2)
+    await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="one")], revision=1, **TEST_NEED_KW)
+    pid = await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="other")], revision=2, **TEST_NEED_KW)
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]

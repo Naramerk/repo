@@ -67,6 +67,7 @@ from tests.helpers import (
     open_runtime,
     open_runtime_experimental,
     seed_legacy_journal,
+    TEST_NEED_KW,
 )
 
 
@@ -143,7 +144,7 @@ async def _boot_plan(rt, tasks, *, questions=None):
     for key in ("HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
-    await rt.accept_plan(tasks, questions=questions or [])
+    await rt.accept_plan(tasks, questions=questions or [], **TEST_NEED_KW)
     return proposer_aid
 
 

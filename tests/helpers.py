@@ -21,6 +21,9 @@ from coscientist.core.execution.runtime_factory import close_runtime as close_ru
 from coscientist.core.execution.runtime_factory import open_runtime as _open_runtime_core
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 
+# G4 prep: **TEST_NEED_KW empty until Need PR.
+TEST_NEED_KW: dict = {}
+
 
 async def seed_legacy_journal(
     store: SqliteEventStore, events: list[UnstampedEvent]

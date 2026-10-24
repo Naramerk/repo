@@ -41,7 +41,7 @@ from coscientist.core.execution.inputs import InputUnavailable
 from coscientist.core.execution.recover import recover
 from coscientist.core.finalize.finalize_nodes import conclusion_id_for_question
 from coscientist.core.plan.question_tasks import known_questions
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import close_runtime, open_runtime, TEST_NEED_KW
 
 _RULE_ERR = (
     KeyError,
@@ -173,7 +173,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                     addresses=addr,
                 )
             )
-        self._call(self.rt.accept_plan(specs, questions=qs, revision=rev))
+        self._call(self.rt.accept_plan(specs, questions=qs, revision=rev, **TEST_NEED_KW))
         return f"EXP-r{rev}-1"
 
     @rule()

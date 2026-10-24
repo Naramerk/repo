@@ -50,7 +50,7 @@ from coscientist.tools.effects import (
     _mint_fetch_capability_for_tests,
     invoke_tool,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
+from tests.helpers import attach_executor, close_runtime, open_runtime, record_success, TEST_NEED_KW
 
 
 def _cap(
@@ -793,7 +793,7 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
             )
         ],
         questions=[],
-    )
+     **TEST_NEED_KW)
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
     body = b"The known result was confirmed under careful review today."
@@ -923,7 +923,7 @@ async def test_store_fetched_source_journals_and_matches(
             )
         ],
         questions=[],
-    )
+     **TEST_NEED_KW)
     # Spoof-path study: digests attempt-scoped; unit spoof uses producer=agent.
     cap = _cap("spoofatt:1", "papers_get", study_id=sid)
     paper = await store_fetched_source(
@@ -1018,7 +1018,7 @@ async def test_source_fetched_survives_crash_reopen(
             )
         ],
         questions=[],
-    )
+     **TEST_NEED_KW)
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
     call_id = f"{aid}:1"
@@ -1112,7 +1112,7 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
             )
         ],
         questions=[],
-    )
+     **TEST_NEED_KW)
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
     call_id = f"{aid}:1"
@@ -1260,7 +1260,7 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
             )
         ],
         questions=[],
-    )
+     **TEST_NEED_KW)
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
     fetch = _FetchTool(arts, b"Four word tokens appear right here now.")
@@ -1402,7 +1402,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
             )
         ],
         questions=[],
-    )
+     **TEST_NEED_KW)
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
     out = await invoke_tool(
@@ -1584,7 +1584,7 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
             )
         ],
         questions=[],
-    )
+     **TEST_NEED_KW)
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
 
@@ -1734,7 +1734,7 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
             )
         ],
         questions=[],
-    )
+     **TEST_NEED_KW)
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
     out = await invoke_tool(
@@ -1827,7 +1827,7 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
             )
         ],
         questions=[],
-    )
+     **TEST_NEED_KW)
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
     out = await invoke_tool(
@@ -1938,7 +1938,7 @@ async def test_append_failure_on_second_digest_clears_permits(
             )
         ],
         questions=[],
-    )
+     **TEST_NEED_KW)
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
 

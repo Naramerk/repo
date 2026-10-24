@@ -40,7 +40,7 @@ from coscientist.core.plan.loop_predicates import (
     scope_fingerprint,
     validate_loop_predicate,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import attach_executor, close_runtime, open_runtime, TEST_NEED_KW
 
 
 def _body(key: str = "BODY", *, depends_on: list[str] | None = None) -> list[TaskSpec]:
@@ -276,7 +276,7 @@ async def test_loop_max_iter_missing_honest_refusal(tmp_path, clock, runtime_cls
                 "scope_questions": ["Q1"],
             }
         ],
-    )
+     **TEST_NEED_KW)
     assert pid == ""
     await _assert_plan_refused(rt, match="max_iter")
     await close_runtime(rt)
@@ -302,7 +302,7 @@ async def test_loop_max_iter_exceeds_profile_rejected(tmp_path, clock, runtime_c
         ],
         questions=[QuestionSpec(id="Q1", text="q")],
         loops=[_loop(max_iter=9)],
-    )
+     **TEST_NEED_KW)
     assert pid == ""
     await _assert_plan_refused(rt, match="max_loop_iter")
     await close_runtime(rt)
@@ -317,7 +317,7 @@ async def test_loop_unknown_predicate_rejected(tmp_path, clock, runtime_cls):
         [],
         questions=[QuestionSpec(id="Q1", text="q")],
         loops=[_loop(until=LoopPredicate(name="not_a_real_pred", params={}))],
-    )
+     **TEST_NEED_KW)
     assert pid == ""
     await _assert_plan_refused(rt, match="unknown loop predicate")
     await close_runtime(rt)
@@ -333,7 +333,7 @@ async def test_loop_unknown_scope_question_refused(tmp_path, clock, runtime_cls)
         [],
         questions=[QuestionSpec(id="Q1", text="q")],
         loops=[_loop(scope_questions=["Q_MISSING"])],
-    )
+     **TEST_NEED_KW)
     assert pid == ""
     await _assert_plan_refused(rt, match="scope_questions")
     await close_runtime(rt)
@@ -692,7 +692,7 @@ async def test_loop_no_change_stops_on_stable_scope(tmp_path, clock, runtime_cls
         [],
         questions=[QuestionSpec(id="Q1", text="q")],
         loops=[loop],
-    )
+     **TEST_NEED_KW)
     assert len(current_loop_iter_tasks(rt, "L1", 1)) == 1
     for t in current_loop_iter_tasks(rt, "L1", 1):
         aid = await rt.start_attempt(t.spec.task_key)
@@ -1682,7 +1682,7 @@ async def test_materialize_loop_iter_writes_plan_expanded(tmp_path, clock, runti
         [],
         questions=[QuestionSpec(id="Q1", text="q")],
         loops=[],
-    )
+     **TEST_NEED_KW)
     # Direct materialize (accept with empty loops leaves no auto-iter).
     loop = _loop(
         max_iter=2,
