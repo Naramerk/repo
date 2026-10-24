@@ -1,47 +1,51 @@
-# TOOL-GAP / Alembic / Coder — small PR plan
+# TOOL-GAP — revised plan (G3 / G6 ownership)
 
-Area: CAPABILITIES #8 (tool retrieval statuses), #9 (Alembic pipeline), #10 (repo search), #11 (Coder sandbox job).
-Base: `main` @ `2ac0d5b`. Parallel agents own LLM client, MCP client, execution graph — this area depends only on narrow Protocols + fakes.
-Hard rules: no hardcodes/heuristics (`scripts/audit_heuristics.py --vs-main`); config or typed refuse; tests for every new function; local pytest + perf (p99 ≤ 50 ms); never merge (owner merges).
-Size: each PR ≈ ≤300 changed lines, one coherent slice.
+**Owner (this agent area):** G3 = MCP tool catalog + `ToolResolved`; G6 = `JobStore` / Job events (DESIGN §6.4).  
+**Not owned:** Profile / `alembic: enabled|disabled` policy (**G2**, `#49` profiles agent). LLM, MCP client, execution graph = other agents.  
+**Base:** `main`. **PR rules:** ≤1 open PR per agent; ≤400 changed lines; stack depth ≤2; no shims; check `main` first; `audit_heuristics.py --vs-main`; local pytest+perf; never merge.
+
+## Open question (needs user answer)
+
+**Exact-name vs semantic catalog search.** DESIGN §6.3 says “по имени и семантическому поиску”. CAPABILITIES #8 only requires catalog membership + successful call.  
+Until answered: **G3 implements exact-name lookup only**; semantic/RAG search is **blocked / not started**.
+
+## Non-goals / do not duplicate
+
+| Temptation | Why not |
+|---|---|
+| Six journal event types (`ToolFound`, …) | DESIGN §6.3: **one** `ToolResolved(task_id, status, tool\|job_id)` |
+| Parallel `GapJournal` | Use existing **`EventStore.append`** / study writer path |
+| New “catalog call guard” | Overlaps `tools/gate.py` + `invoke_tool` / closed `tool_registry` — do not reimplement |
+| Second effect registry | `core.execution.tool_registry` owns **effect class**; G3 catalog is **MCP membership + version** for routing only |
+| Sandbox Protocol + “adapter later” | Shim — Coder jobs call **`checks.sandbox.run_sandbox`** directly |
+| Alembic enable flag in this area | Lives on **Profile (G2 / #49)** |
 
 ## PR list
 
-| # | Title | Scope (1 line) | Depends on |
+| ID | Title | Acceptance (1 line) | Depends |
 |---|---|---|---|
-| 1 | **tool-gap plan doc** (this PR) | Add `docs/plan/tool-gap.md` with the stacked PR list only. | — (base `main`) |
-| 2 | TOOL-GAP journal event types | Add `ToolFound` / `ToolMissing` / `ToolProvisionRequested` / `AlembicStep` / `CoderStep` / `ToolCatalogRegistered` to `EventType` + constructibility tests; no projection logic. | main (independent of #1) |
-| 3 | `tools/gap` types + errors | Frozen `CatalogTool`, `ToolNeed`, `ResolutionStatus`, typed error classes; unit tests only. | #2 optional |
-| 4 | `tools/gap` config models | Required-field `ToolGapConfig` / `ToolSpecValidationConfig` / `AlembicClientConfig` / `CoderAgentConfig` / `CoderSandboxLimits` (no guessed defaults); validation tests. | #3 |
-| 5 | Versioned MCP tool catalog | `VersionedToolCatalog`: exact-name get/contains/register + `catalog_version` bump; refuse duplicates; tests. | #3 |
-| 6 | Gap journal helpers + ports | `GapJournalPort`, `MemoryGapJournal`, event builders for #2 types; clock/catalog/HTTP/sandbox/codegen Protocols; tests. | #2, #3 |
-| 7 | Tool retrieval → found/missing | Exact-name lookup journals `ToolFound` or `ToolMissing`; no semantic/name guessing; tests. | #5, #6 |
-| 8 | Catalog call guard | `call_catalog_tool`: refuse any call absent from catalog (0 outside-catalog calls); tests. | #5 |
-| 9 | Missing-tool policy routing | Explicit plan/config `alembic` \| `coder` only; typed refuse if backend missing; no name-based guessing; tests. | #4 |
-| 10 | ToolSpec validation | Config-driven validate-before-register; typed `ToolSpecValidationError`; tests. | #4, #3 |
-| 11 | Alembic HTTP client skeleton | Injected `HttpTransport`; config endpoint/timeouts; typed transport/HTTP failures; one POST helper + tests with fake transport. | #4, #6 |
-| 12 | Alembic `repo_search` (#10) | Step returns candidate repository list; journal `AlembicStep(repo_search)`; empty/malformed → typed refuse; tests. | #11 |
-| 13 | Alembic `build` step (#9) | Build from candidate list (server chooses; no local name pick); journal `AlembicStep(build)`; tests. | #12 |
-| 14 | Alembic validate + register (#9) | Validate spec (#10) + remote/local register; journal steps; bump catalog version on success; tests. | #10, #13, #5 |
-| 15 | `ToolGapRouter` wire-up | retrieve → missing → policy → provisioner → register; statuses `tool_found` / `tool_built` / `coder` / `tool_missing`; tests. | #7, #8, #9, #14 |
-| 16 | `two_tasks` 2/2 `tool_found` (#8) | Scenario: both tools in catalog, both calls succeed, 2/2 `ToolFound`, 0 outside-catalog calls; e2e with fakes. | #15, #8 |
-| 17 | `alembic_nomcp` scenario (#9) | Empty catalog → repo_search→build→validate→register → tool called in task; fake Alembic + fake MCP; e2e. | #15, #14, #8 |
-| 18 | CoderAgent codegen path | `CoderAgent` + `CodeGenerator` Protocol; journal `CoderStep(code_generated)`; typed codegen failures; tests with fake LLM. | #4, #6 |
-| 19 | Coder job + deadline (#11) | Job envelope with explicit deadline; sandbox run via `SandboxRunner` Protocol (local/HTTP adapter later); tests. | #18 |
-| 20 | Coder artifacts sha256 (#11) | Register code/stdout/stderr (and result files) with sha256 digests on journal/artifact records; tests. | #19 |
-| 21 | Coder deadline → failure(retryable) (#11) | Past deadline → verdict failure with `retryable=True`; journal; tests (fake clock). | #19 |
-| 22 | Coder provision → catalog | Successful coder run yields `CatalogTool(source=coder)` + register via router; status `coder`; tests. | #15, #20, #21 |
-| 23 | CHANGELOG + public exports | Document TOOL-GAP surface in CHANGELOG; `__init__` exports only; no behavior change. | last implementation PR merged or stacked |
+| **G3** | MCP tool catalog + `ToolResolved` | Exact-name catalog lookup journals one `ToolResolved` (`tool_found` \| `tool_missing`) via `EventStore`; versioned register/bump; tests. | `main` |
+| **G6** | `JobStore` Protocol + Job events | `Job` model + `JobStore` Protocol + `JobSubmitted` / `JobStatusChanged` / `JobTimedOut` / `JobCancelled` / `JobCancelFailed` on `EventType`; fake in-memory store; contract tests (§6.4). | `main` (or stack on G3 if shared helpers) |
+| **G3b** | Empty catalog fixture | `EmptyMcpCatalog` for R3 / `alembic_nomcp` (no Alembic yet). | G3 |
+| **A1** | Alembic client skeleton | Config endpoint/timeouts + injected HTTP transport; typed failures; fake transport tests. | G3; Profile/G2 when wiring enable flag |
+| **A2** | Alembic `repo_search` (#10) | Returns candidate repo list; recorded on job/resolution path; empty → typed refuse. | A1, G6 |
+| **A3** | Alembic build → validate → register (#9) | Pipeline steps; register into G3 catalog + version bump; `ToolResolved(status=tool_built)`. | A2, G3 |
+| **A4** | `alembic_nomcp` e2e (#9) | Empty catalog → pipeline → tool in catalog → call via `invoke_tool`; fake Alembic. | A3, G3b |
+| **C1** | Coder job via `JobStore` + `run_sandbox` (#11) | Submit coder job with deadline; run `checks.sandbox.run_sandbox`; artifacts sha256; deadline → `JobTimedOut` + failure(retryable). | G6 |
+| **C2** | Coder → catalog + `ToolResolved(coder)` | Successful coder registers tool; one `ToolResolved(status=coder)`. | C1, G3 |
+| **R1** | ToolRouter resolve (#8) | Catalog hit → `tool_found`; miss → request Alembic/Coder per **Profile** policy (G2); never guess from names. | G3, G6, G2/`#49`, A3/C2 as available |
+| **R2** | `two_tasks` 2/2 `tool_found` (#8) | Both tools in catalog + successful calls; 0 calls outside catalog (`invoke_tool` path). | R1 |
 
-## Stacking notes
+## Stacking
 
-- Prefer base=`main` when the slice only needs Protocols/fakes already on main.
-- Stack on the prior TOOL-GAP PR when the slice imports unfinished modules (say so in the PR body: `stack_on: #N`).
-- Do not duplicate MCP/LLM clients or the execution graph; inject Protocols and test with fakes.
-- GitHub CI may be blocked — run full pytest + perf + `audit_heuristics.py --vs-main` locally before opening each PR.
+- Default base: `main`. Stack only when required; **depth ≤ 2**.
+- G6 may stack on G3 only if it needs shared test helpers; otherwise parallel on `main`.
+- R1 waits on Profile G2 for `alembic: enabled|disabled` — do not invent a local policy enum.
 
-## Out of scope for this area
+## Done / in flight
 
-- Real MCP session wiring / live Alembic HTTP / production sandbox bwrap adapter (follow-up after #17/#22).
-- Agent orchestrator / plan expansion / HITL (other agents).
-- Semantic tool search (RAG); retrieval here is exact-name against the versioned catalog only.
+| ID | Status |
+|---|---|
+| Plan rewrite | this update to `#46` |
+| **G3** | next open PR (then STOP) |
+| G6, A*, C*, R* | **not started** — for follow-up agents / later turns |
