@@ -490,13 +490,16 @@ def _derive_claim_core_attrs(
     for c in checks or ():
         if _check_role(c) == "prediction":
             has_prediction_check = True
-            st = getattr(getattr(c, "status", None), "value", getattr(c, "status", None))
-            if st is None or str(st) == "":
+            st = _check_field(c, "status")
+            if st is None or (isinstance(st, str) and st == ""):
                 raise JournalFormatError(
                     "prediction check missing required status",
                     field="status",
                 )
-            pred_statuses.append(str(st))
+            if isinstance(st, ReqStatus):
+                pred_statuses.append(st.value)
+            else:
+                pred_statuses.append(str(st))
     # Criterion status already folds check results; mirror into classify_outcome
     # when this claim has no prediction-role check rows (validity-only / empty).
     if not pred_statuses and status in ("met", "not_met", "unassessed"):

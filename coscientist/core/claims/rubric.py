@@ -188,22 +188,21 @@ def _result_row(results: Any, aid: str) -> dict[str, Any] | None:
 
 
 def _is_rubric_check(cr: dict[str, Any], digests: set[str]) -> str | None:
-    """Return matching digest via structured identity (never substring match)."""
+    """Return matching digest via structural fields only (never check_id partition).
+
+    Identity is ``effect.rubric_digest`` or ``template_id == rubric:<digest>``.
+    Do not parse ``check_id`` / ``detail`` strings for aggregation.
+    """
     raw_effect = cr.get("effect")
     effect: dict[str, Any] = raw_effect if isinstance(raw_effect, dict) else {}
     dig = str(effect.get("rubric_digest") or "")
     if dig and dig in digests:
         return dig
     tid = str(cr.get("template_id") or "")
-    cid = str(cr.get("check_id") or "")
     for d in digests:
         if not d:
             continue
         if tid == f"rubric:{d}":
-            return d
-        # Structured check_id: ``rubric:<digest>#<suffix>`` (exact head, non-empty tail).
-        head, sep, tail = cid.partition("#")
-        if sep == "#" and head == f"rubric:{d}" and bool(tail):
             return d
     if effect.get("rubric_kind") == "rubric" and dig and dig in digests:
         return dig

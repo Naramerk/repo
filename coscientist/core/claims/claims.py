@@ -496,7 +496,7 @@ def runtime_claim_from_node(
             else None
         )
         # Never trust stored severe/refute_capable — recompute after attrs load.
-        # Absent severe on legacy journals ⇒ treat as False until recomputed (V5).
+        # Explicit False is definitive; absent severe is recomputed (not invented False).
         independence_key = (
             _coerce_str(attrs.get("independence_key"), allow_empty=True) or ""
         )
@@ -646,7 +646,7 @@ def runtime_claim_from_node(
         )
         art = _coerce_str(attrs.get("artifact_id"), allow_empty=True) or node.node_id
         # Never trust stored severe/refute_capable=True (forged journals).
-        # Absent or explicit False ⇒ never-severe (V5); True is ignored and recomputed.
+        # Explicit False is definitive (V5); absent → recompute (never invent False).
         from coscientist.core.claims.verdict import (
             claim_is_severe,
             effect_has_interval,
@@ -654,11 +654,9 @@ def runtime_claim_from_node(
         )
 
         sesoi_f = sesoi if isinstance(sesoi, float) else None
-        stored_severe = attrs.get("severe")
-        # Seed False when absent/explicit False so claim_is_severe short-circuits (V5).
-        # Seed None when stored True so forgery cannot win without check evidence.
+        # Journal mapping: only honor an explicit False stamp; missing/True → recompute.
         probe_severe: bool | None
-        if stored_severe is False or "severe" not in attrs:
+        if "severe" in attrs and attrs.get("severe") is False:
             probe_severe = False
         else:
             probe_severe = None

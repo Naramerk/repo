@@ -986,7 +986,10 @@ def effect_exceeds_sesoi(
 def claim_is_severe(claim: Any) -> bool:
     """Severe from catalog + check results — never trust stored ``severe=True``.
 
-    Explicit ``severe=False`` remains definitive (V5 legacy never supported).
+    Explicit ``severe=False`` remains definitive (V5). Absent ``severe`` is
+    **not** treated as False — recompute from evidence. Journal mappings should
+    only seed False when the field is present and explicitly False.
+
     Requires **countable** core-evaluated evidence (not sandbox ``trusted``).
     ``effect.trusted`` is a separate stronger tag recorded for reporting.
 
@@ -997,8 +1000,11 @@ def claim_is_severe(claim: Any) -> bool:
         return False
     if effective_validity(claim) != "valid":
         return False
-    # Legacy / explicit non-severe stamp is definitive (V5).
-    if getattr(claim, "severe", None) is False:
+    # Explicit False only — missing attribute/key must not short-circuit.
+    if isinstance(claim, Mapping):
+        if "severe" in claim and claim["severe"] is False:
+            return False
+    elif hasattr(claim, "severe") and claim.severe is False:
         return False
     effect = getattr(claim, "effect", None)
     if isinstance(effect, dict):
@@ -1075,12 +1081,16 @@ def refute_intent_counts(claim: Any) -> bool:
     """Refute intent counts toward supported only if the prediction could fail.
 
     Never trusts stored ``refute_capable=True``. Recomputes from catalog + check.
+    Explicit ``refute_capable=False`` is definitive; absent is recomputed.
     Requires countable core-evaluated evidence (same rule as severe).
     """
     if _intent(claim) != "refute":
         return False
-    # Explicit False (core) is definitive; True is ignored (legacy forgery).
-    if getattr(claim, "refute_capable", None) is False:
+    # Explicit False only — no getattr(..., None) absent⇒False invent.
+    if isinstance(claim, Mapping):
+        if "refute_capable" in claim and claim["refute_capable"] is False:
+            return False
+    elif hasattr(claim, "refute_capable") and claim.refute_capable is False:
         return False
     if isinstance(claim, Mapping):
         frozen = require_journal_field(claim, "frozen", ctx="claim")

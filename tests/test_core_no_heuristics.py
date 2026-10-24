@@ -1775,3 +1775,221 @@ def test_artifact_belongs_to_attempt_no_startswith():
         produced_by=SimpleNamespace(call_id=f"{aid}:1", attempt_id="other")
     )
     assert not artifact_belongs_to_attempt(meta_wrong, aid)
+
+
+# --- Monkey-review follow-up: severe / HitlPolicy / status / rubric ---
+
+
+def test_claim_is_severe_absent_severe_does_not_short_circuit():
+    """Absent severe must recompute — only explicit False is definitive."""
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.verdict import claim_is_severe
+
+    base = dict(
+        criterion_status="met",
+        validity_ok=True,
+        validity="valid",
+        claim_outcome="consistent",
+        effect={
+            "est": 2.0,
+            "kind": "point",
+            "producer": "agent",
+            "core_evaluated": True,
+            "countable": True,
+            "trusted": False,
+        },
+        frozen=True,
+        criterion_frozen_at_seq=1,
+        first_cited_evidence_seq=2,
+        sesoi=0.5,
+        uses_sesoi=True,
+        used_sesoi=True,
+        predicts_null=False,
+        predicted_direction="positive",
+    )
+    # No severe attribute → recompute (True from countable evidence).
+    assert claim_is_severe(SimpleNamespace(**base)) is True
+    # Explicit False short-circuits on objects and journal mappings.
+    assert claim_is_severe(SimpleNamespace(**base, severe=False)) is False
+    assert claim_is_severe({**base, "severe": False}) is False
+
+
+def test_runtime_claim_journal_absent_severe_not_seeded_false():
+    """runtime_claim_from_node must not treat missing severe as False stamp."""
+    import inspect
+
+    from coscientist.core.claims import claims as claims_mod
+
+    src = inspect.getsource(claims_mod.runtime_claim_from_node)
+    assert '"severe" not in attrs' not in src
+    assert 'getattr(claim, "severe", None)' not in src
+
+
+def test_refute_intent_no_getattr_absent_false_probe():
+    """refute_intent_counts uses explicit-False only (no getattr None invent)."""
+    import inspect
+    from types import SimpleNamespace
+
+    from coscientist.core.claims import verdict as verdict_mod
+    from coscientist.core.claims.verdict import refute_intent_counts
+
+    src = inspect.getsource(verdict_mod.refute_intent_counts)
+    assert 'getattr(claim, "refute_capable", None)' not in src
+    assert 'getattr(claim, "severe", None)' not in inspect.getsource(
+        verdict_mod.claim_is_severe
+    )
+
+    claim = SimpleNamespace(
+        intent="refute",
+        frozen=True,
+        uses_sesoi=True,
+        predicts_null=False,
+        check_role="prediction",
+        sesoi=0.5,
+        used_sesoi=True,
+        effect={
+            "est": 1.0,
+            "kind": "point",
+            "producer": "agent",
+            "core_evaluated": True,
+            "countable": True,
+        },
+        # refute_capable absent
+    )
+    assert refute_intent_counts(claim) is True
+    claim.refute_capable = False
+    assert refute_intent_counts(claim) is False
+
+
+def test_hitl_policy_gates_only_no_legacy_flat_timeout_s():
+    """HitlPolicy is gates-only; legacy flat timeout_s is stripped, not invented."""
+    from coscientist.core.execution.domain import GATE_TIMEOUTS_S, HitlPolicy
+
+    p = HitlPolicy()
+    assert "timeout_s" not in HitlPolicy.model_fields
+    dump = p.model_dump(mode="json")
+    assert "timeout_s" not in dump
+    assert p.gate("spec_approval").timeout_s == GATE_TIMEOUTS_S["spec_approval"]
+    # Old StudyCreated payload with flat map still validates (stripped).
+    legacy = HitlPolicy.model_validate(
+        {
+            "mode": "headless",
+            "gates": dump["gates"],
+            "timeout_s": {"spec_approval": 120, "plan_approval": 180},
+            "on_timeout": "delegate",
+            "defaults": dump["defaults"],
+        }
+    )
+    assert "timeout_s" not in legacy.model_dump()
+
+
+def test_derive_claim_prediction_status_requires_field_no_dual_getattr():
+    """Prediction status via _check_field — no enum/str dual getattr invent."""
+    import inspect
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.graph import GraphNode, GraphStore, default_execution_registry
+    from coscientist.core.events.ids import criterion_node_id
+    from coscientist.core.execution import executor as ex_mod
+    from coscientist.core.execution.domain import (
+        ExperimentMethod,
+        ReqStatus,
+        TaskOutcome,
+    )
+    from coscientist.core.execution.executor import _derive_claim_core_attrs
+
+    src = inspect.getsource(ex_mod._derive_claim_core_attrs)
+    assert 'getattr(getattr(c, "status", None), "value"' not in src
+    assert '_check_field(c, "status")' in src
+
+    sid = "st"
+    g = GraphStore(default_execution_registry())
+    g.upsert_node(
+        GraphNode(
+            node_id=criterion_node_id(sid, "value_match"),
+            kind="criterion",
+            study_id=sid,
+            ref_id="value_match",
+            attrs={
+                "frozen": True,
+                "uses_sesoi": False,
+                "predicts_null": False,
+                "predicted_direction": "two_sided",
+            },
+        )
+    )
+    task = SimpleNamespace(
+        task_id="st/E1",
+        spec=SimpleNamespace(
+            method=ExperimentMethod.COMPUTATIONAL,
+            criteria=[SimpleNamespace(template_id="value_match")],
+        ),
+    )
+    # Validity row supplies criterion status; prediction row missing status → refuse.
+    checks = [
+        {
+            "role": "validity",
+            "template_id": "value_match",
+            "check_id": "value_match#v",
+            "status": ReqStatus.MET.value,
+            "required": True,
+        },
+        {
+            "role": "prediction",
+            "template_id": "value_match",
+            "check_id": "value_match#0",
+            # status missing
+        },
+    ]
+    with pytest.raises(JournalFormatError, match="status") as ei:
+        _derive_claim_core_attrs(
+            task,
+            TaskOutcome.SUCCESS,
+            raw={
+                "checked_against": "value_match",
+                "target": "Q1",
+                "target_kind": "question",
+            },
+            checks=checks,
+            graph=g,
+            study_id=sid,
+            validated=True,
+            bindings=[],
+            attempt_id="st/E1#1",
+        )
+    assert ei.value.field == "status"
+
+
+def test_rubric_match_uses_structural_fields_not_check_id_partition():
+    """Rubric aggregation identity is rubric_digest / template_id — not check_id parse."""
+    import inspect
+
+    from coscientist.core.claims import rubric as rubric_mod
+    from coscientist.core.claims.rubric import _is_rubric_check
+
+    src = inspect.getsource(rubric_mod._is_rubric_check)
+    assert ".partition(" not in src
+
+    dig = "abc123"
+    digests = {dig}
+    # Structural effect field matches.
+    assert (
+        _is_rubric_check(
+            {"effect": {"rubric_digest": dig, "rubric_kind": "rubric"}},
+            digests,
+        )
+        == dig
+    )
+    # Structural template_id matches.
+    assert (
+        _is_rubric_check({"template_id": f"rubric:{dig}", "effect": {}}, digests) == dig
+    )
+    # check_id-only (legacy partition shape) must not invent a match.
+    assert (
+        _is_rubric_check(
+            {"check_id": f"rubric:{dig}#out", "effect": {}},
+            digests,
+        )
+        is None
+    )

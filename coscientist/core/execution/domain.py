@@ -136,18 +136,14 @@ def _default_gates() -> dict[str, GateConfig]:
 
 
 class HitlPolicy(Frozen):
+    """HITL policy — timeouts live only on ``gates`` (DESIGN §7.3).
+
+    Legacy flat ``timeout_s`` maps in old StudyCreated payloads are stripped on
+    validate (never read, never re-emitted).
+    """
+
     mode: Literal["interactive", "auto", "headless"] = "headless"
     gates: dict[str, GateConfig] = Field(default_factory=_default_gates)
-    # Legacy flat map kept for callers/tests; gate() prefers gates then these.
-    # Explicit factory values (DESIGN §7.3) — not silent invent at read time.
-    timeout_s: dict[str, int] = Field(
-        default_factory=lambda: {
-            "spec_approval": GATE_TIMEOUTS_S["spec_approval"],
-            "plan_approval": GATE_TIMEOUTS_S["plan_approval"],
-            "result_acceptance": GATE_TIMEOUTS_S["result_acceptance"],
-            "skip_task": GATE_TIMEOUTS_S["skip_task"],
-        }
-    )
     # Policy-level default for gates not listed; costly_or_nonreal still defaults to fail.
     on_timeout: OnTimeout = "delegate"
     defaults: dict[str, str] = Field(
@@ -161,6 +157,15 @@ class HitlPolicy(Frozen):
             "proposed_check": "reject",
         }
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_flat_timeout_s(cls, data: Any) -> Any:
+        """Isolate gates-only: ignore legacy flat timeout_s without inventing it."""
+        if isinstance(data, dict) and "timeout_s" in data:
+            data = dict(data)
+            data.pop("timeout_s", None)
+        return data
 
     def gate(self, kind: str) -> GateConfig:
         """Return config for a canonical gate kind; unknown kind raises."""
