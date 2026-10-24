@@ -244,40 +244,61 @@ def parse_aware_datetime(value: Any, *, ctx: str) -> datetime:
         return _AWARE_DT.validate_python(value)
     except ValidationError as e:
         raise GraphSchemaError(f"{ctx}: invalid aware datetime: {value!r}") from e
-def _attr_err(t: AttrType, value: Any, *, null_ok: bool, ctx: str) -> str | None:
+def _attr_check(t: AttrType, value: Any, *, null_ok: bool, ctx: str) -> None:
     if value is None:
-        return None if null_ok else f"{ctx}: null not allowed"
-    if isinstance(t, AttrSimple) and t.tag == "datetime":
-        err = None
-        try:
+        if not null_ok:
+            raise GraphSchemaError(f"{ctx}: null not allowed")
+        return
+    if isinstance(t, AttrSimple):
+        tag = t.tag
+        if tag == "datetime":
             parse_aware_datetime(value, ctx=ctx)
-        except GraphSchemaError as e:
-            err = e.args[0]
-        return err
+            return
+        if tag in ("str", "digest"):
+            if isinstance(value, str):
+                return
+            raise GraphSchemaError(f"{ctx}: incompatible with type")
+        if tag == "int":
+            if type(value) is int:
+                return
+            raise GraphSchemaError(f"{ctx}: incompatible with type")
+        if tag == "bool":
+            if type(value) is bool:
+                return
+            raise GraphSchemaError(f"{ctx}: incompatible with type")
+        if tag == "float":
+            if type(value) is float:
+                return
+            raise GraphSchemaError(f"{ctx}: incompatible with type")
+        raise GraphSchemaError(f"{ctx}: incompatible with type")
+    if isinstance(t, AttrEnum):
+        if isinstance(value, str) and value in t.enum_values:
+            return
+        raise GraphSchemaError(f"{ctx}: incompatible with type")
+    if isinstance(t, AttrRef):
+        if isinstance(value, str) and value != "":
+            return
+        raise GraphSchemaError(f"{ctx}: incompatible with type")
+    if isinstance(t, AttrObj):
+        if type(value) is dict and all(isinstance(k, str) for k in value):
+            return
+        raise GraphSchemaError(f"{ctx}: incompatible with type")
     if isinstance(t, AttrList):
         if not isinstance(value, list):
-            return f"{ctx}: expected list"
+            raise GraphSchemaError(f"{ctx}: expected list")
         for i, el in enumerate(value):
-            err = _attr_err(t.list_elem, el, null_ok=False, ctx=f"{ctx}[{i}]")
-            if err is not None:
-                return err
-        return None
-    ok = (
-        (isinstance(t, AttrSimple) and (
-            (t.tag in ("str", "digest") and isinstance(value, str))
-            or (t.tag == "int" and type(value) is int)
-            or (t.tag == "bool" and type(value) is bool)
-            or (t.tag == "float" and type(value) is float)))
-        or (isinstance(t, AttrEnum) and isinstance(value, str) and value in t.enum_values)
-        or (isinstance(t, AttrRef) and isinstance(value, str) and value != "")
-        or (isinstance(t, AttrObj) and type(value) is dict and all(isinstance(k, str) for k in value)))
-    return None if ok else f"{ctx}: incompatible with type"
-def attr_value_ok(t: AttrType, value: Any, *, null_ok: bool) -> bool:
-    return _attr_err(t, value, null_ok=null_ok, ctx="value") is None
+            _attr_check(t.list_elem, el, null_ok=False, ctx=f"{ctx}[{i}]")
+        return
+    raise GraphSchemaError(f"{ctx}: incompatible with type")
 def validate_attr_value(t: AttrType, value: Any, *, null_ok: bool, ctx: str) -> None:
-    err = _attr_err(t, value, null_ok=null_ok, ctx=ctx)
-    if err is not None:
-        raise GraphSchemaError(err)
+    _attr_check(t, value, null_ok=null_ok, ctx=ctx)
+def attr_value_ok(t: AttrType, value: Any, *, null_ok: bool) -> bool:
+    caught = []
+    try:
+        validate_attr_value(t, value, null_ok=null_ok, ctx="value")
+    except GraphSchemaError as e:
+        caught.append(e)
+    return not caught
 def _attr_fields(raw: Any, *, ctx: str) -> tuple[AttrFieldSpec, ...]:
     if not isinstance(raw, list):
         raise GraphSchemaError(f"{ctx}: fields/attrs must be a list")

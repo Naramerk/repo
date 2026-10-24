@@ -26,8 +26,8 @@ _Q = {"kind": "question", "prefix": "Q", "text_ru": "q", "fields": _QF}
 _ST = {"kind": "study", "prefix": "ST", "text_ru": "s", "fields": _SF}
 _ASKS = {"name": "asks", "pairs": [["study", "question"]], "card": {"out": "1..n", "in": "1..1"}, "attrs": []}
 def _s(**kw):
-    n, e = kw.pop("nodes", [_ST, _Q]), kw.pop("edges", [_ASKS])
-    return {"version": kw.pop("version", GRAPH_SCHEMA_VERSION), "nodes": n, "edges": e, **kw}
+    nodes, edges = kw.pop("nodes", [_ST, _Q]), kw.pop("edges", [_ASKS])
+    return {"version": kw.pop("version", GRAPH_SCHEMA_VERSION), "nodes": nodes, "edges": edges, **kw}
 def _f(**kw): return {"name": "a", "type": "str", "required": True, **kw}
 def _nf(*fields): return _s(nodes=[{**_Q, "fields": list(fields)}, _ST])
 def _pt(s): return parse_attr_type(s, ctx="t")
