@@ -8,7 +8,7 @@ import pytest
 
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import CloseReason, TaskReason
-from coscientist.core.events.events import EventEnvelope, make_idem, STUDY_CREATED_SCHEMA_VERSION
+from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION, EventEnvelope, make_idem
 from coscientist.core.events.ids import hypothesis_node_id, task_id
 from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref

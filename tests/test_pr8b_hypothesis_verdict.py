@@ -2351,7 +2351,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
 ):
     """Legacy/forged severe=True / refute_capable=True must not survive read/replay."""
     from coscientist.core.claims.graph import GraphEdge, GraphNode
-    from coscientist.core.events.events import EventEnvelope, make_idem, STUDY_CREATED_SCHEMA_VERSION
+    from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.events.ids import claim_node_id, question_node_id
 
     sid = "st_forge"
