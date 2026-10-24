@@ -766,12 +766,15 @@ async def test_prevalidate_max_depth_refused_as_expansion_limit(monkeypatch):
     monkeypatch.setattr(et, "_final_result_class", lambda *_a, **_k: "scientific")
     monkeypatch.setattr(et, "expansion_already_handled", lambda *_a, **_k: False)
 
+    from coscientist.core.execution.domain import PlanRole
+
     task = SimpleNamespace(
         outcome=TaskOutcome.SUCCESS,
         spec=SimpleNamespace(task_key="E0"),
         state=TaskState.DONE,
         kind=TaskKind.EXPERIMENT,
         task_id="s/E0",
+        plan_role=PlanRole.NONE,
     )
     rt = _RT()
     rt.study = SimpleNamespace(study_id="s")
@@ -1527,11 +1530,11 @@ def test_local_project_plan_n_requires_alloc_and_pending_dict():
 def test_inputs_rejects_outcome_alias_without_claim_outcome():
     from datetime import UTC, datetime
 
-    from coscientist.core.claims.graph import GraphNode, GraphStore
+    from coscientist.core.claims.graph import GraphNode, GraphStore, default_execution_registry
     from coscientist.core.events.ids import question_node_id
     from coscientist.core.execution.inputs import claim_nodes_from_attempt
 
-    g = GraphStore()
+    g = GraphStore(default_execution_registry())
     qid = "Q1"
     nid = question_node_id("s", qid)
     g.upsert_node(
