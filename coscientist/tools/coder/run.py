@@ -1,22 +1,27 @@
-"""Run a coder job: JobStore lifecycle + ``checks.sandbox.run_sandbox`` + CAS.
+"""Run a coder job: JobStore lifecycle + ``run_sandbox`` + CAS.
 
-No sandbox Protocol shim — calls ``run_sandbox`` directly (tool-gap plan).
-Deadline → ``JobTimedOut`` + ``CoderOutcome(status=timed_out, retryable=True)``.
+Calls ``checks.sandbox.run_sandbox`` in a child process (no sandbox Protocol).
+Deadline → kill guest process group + ``JobTimedOut`` + retryable outcome (R4).
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+import multiprocessing as mp
+import threading
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal
+from multiprocessing.connection import Connection
+from multiprocessing.context import ForkContext, SpawnContext
+from multiprocessing.process import BaseProcess
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from coscientist.checks.sandbox import SandboxLimits, SandboxResult, SandboxStatus, run_sandbox
 from coscientist.core.events.digest import sha256_hex
-from coscientist.core.events.job_events import job_is_terminal
+from coscientist.core.events.job_events import job_is_live, job_is_terminal
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import Artifact, FsIsolation, NetIsolation
 from coscientist.tools.contract import ToolError
@@ -40,7 +45,7 @@ class CoderOutputSpec:
 
 @dataclass(frozen=True)
 class CoderRequest:
-    """All fields required — no invented limits, env, or capture defaults."""
+    """All fields required — no invented limits/env. ``attempt_is_closed`` read at put."""
 
     attempt_id: str
     call_id: str
@@ -50,7 +55,7 @@ class CoderRequest:
     limits: SandboxLimits
     deadline: datetime
     outputs: tuple[CoderOutputSpec, ...]
-    attempt_closed: bool
+    attempt_is_closed: Callable[[], bool]
 
     def __post_init__(self) -> None:
         if not self.attempt_id or self.attempt_id.strip() != self.attempt_id:
@@ -61,8 +66,8 @@ class CoderRequest:
             raise ToolError("local", "argv must be non-empty")
         if self.deadline.tzinfo is None:
             raise ToolError("local", "deadline must be timezone-aware")
-        if not isinstance(self.attempt_closed, bool):
-            raise ToolError("local", "attempt_closed must be bool")
+        if not callable(self.attempt_is_closed):
+            raise ToolError("local", "attempt_is_closed must be callable")
         if not isinstance(self.limits, SandboxLimits):
             raise ToolError("local", "limits must be SandboxLimits")
         if not isinstance(self.inputs, Mapping) or not isinstance(self.env, Mapping):
@@ -90,9 +95,6 @@ class CoderOutcome(BaseModel):
         return self
 
 
-_POLL_S = 0.05
-
-
 def _limits_to_spec(limits: SandboxLimits) -> dict[str, Any]:
     return {
         "timeout_s": limits.timeout_s,
@@ -118,43 +120,36 @@ def _request_spec(request: CoderRequest) -> dict[str, Any]:
     }
 
 
-def _isolation(value: str) -> NetIsolation:
+def _as_net(value: str) -> NetIsolation:
     if value not in ("hard", "soft", "none"):
-        raise ToolError("local", f"unknown isolation {value!r}")
+        raise ToolError("local", f"unknown net isolation {value!r}")
     return value  # type: ignore[return-value]
 
 
-async def _poll_sleep() -> None:
-    sleeper = asyncio.create_task(asyncio.sleep(_POLL_S))
-    await sleeper
+def _as_fs(value: str) -> FsIsolation:
+    if value not in ("hard", "soft", "none"):
+        raise ToolError("local", f"unknown fs isolation {value!r}")
+    return value  # type: ignore[return-value]
 
 
-def _register_outputs(
-    request: CoderRequest,
+def sandbox_status_to_coder(
     result: SandboxResult,
     *,
-    artifacts: LocalArtifactStore,
-) -> list[Artifact]:
-    ref = make_tool_ref(request.call_id, tool="coder")
-    net = _isolation(str(result.net_isolation))
-    fs: FsIsolation = _isolation(str(result.fs_isolation))
-    out: list[Artifact] = []
-    for spec in request.outputs:
-        if spec.source == "stdout":
-            content = result.stdout
-        else:
-            content = result.stderr
-        art = artifacts.put_sandbox(
-            content,
-            ref,
-            name=spec.name,
-            media_type=spec.media_type,
-            attempt_closed=request.attempt_closed,
-            net_isolation=net,
-            fs_isolation=fs,
-        )
-        out.append(art)
-    return out
+    job_id: str,
+    attempt_id: str,
+) -> CoderOutcome:
+    """Map ``SandboxStatus`` → coder failed/retryable (pure; tested)."""
+    if result.status == SandboxStatus.OK:
+        raise ToolError("local", "sandbox_status_to_coder: OK is not a failure mapping")
+    retryable = result.status == SandboxStatus.TIMEOUT
+    return CoderOutcome(
+        job_id=job_id,
+        attempt_id=attempt_id,
+        status="failed",
+        retryable=retryable,
+        artifact_ids=[],
+        detail=f"sandbox:{result.status.value}:{result.reason}",
+    )
 
 
 def _timed_out_outcome(job_id: str, attempt_id: str, detail: str) -> CoderOutcome:
@@ -168,81 +163,213 @@ def _timed_out_outcome(job_id: str, attempt_id: str, detail: str) -> CoderOutcom
     )
 
 
+def _sandbox_worker(
+    conn: Connection,
+    argv: list[str],
+    limits: SandboxLimits,
+    inputs: dict[str, bytes],
+    env: dict[str, str],
+) -> None:
+    try:
+        result = run_sandbox(argv, limits=limits, inputs=inputs, env=env)
+        conn.send(("ok", result))
+    except BaseException as exc:  # audit-ok[broad_except]: pipe must report any worker failure to parent
+        conn.send(("err", exc))
+    finally:
+        conn.close()
+
+
+async def _kill_sandbox_process(
+    proc: BaseProcess,
+    *,
+    reap_timeout_s: float,
+    guest_done: asyncio.Event,
+) -> bool:
+    """Signal guest then await the sole join-watcher; True iff watcher reaped.
+
+    Only the join-watcher thread calls ``Process.join`` / waitpid — callers must
+    not ``poll``/``join`` in parallel (races leave ``is_alive()`` wrong).
+    """
+    if guest_done.is_set():
+        return True
+    proc.terminate()
+    try:
+        await asyncio.wait_for(guest_done.wait(), timeout=reap_timeout_s)
+    except TimeoutError:
+        pass  # audit-ok[except_silent_pass]: term grace elapsed → escalate to kill
+    if guest_done.is_set():
+        return True
+    proc.kill()
+    try:
+        await asyncio.wait_for(guest_done.wait(), timeout=reap_timeout_s)
+    except TimeoutError:
+        pass  # audit-ok[except_silent_pass]: kill grace elapsed → report cancel-failed
+    return guest_done.is_set()
+
+
+def _register_outputs(
+    request: CoderRequest,
+    result: SandboxResult,
+    *,
+    artifacts: LocalArtifactStore,
+) -> list[Artifact]:
+    closed = request.attempt_is_closed()
+    if not isinstance(closed, bool):
+        raise ToolError("local", "attempt_is_closed() must return bool")
+    ref = make_tool_ref(request.call_id, tool="coder")
+    net = _as_net(str(result.net_isolation))
+    fs = _as_fs(str(result.fs_isolation))
+    out: list[Artifact] = []
+    for spec in request.outputs:
+        if spec.source == "stdout":
+            content = result.stdout
+        else:
+            content = result.stderr
+        art = artifacts.put_sandbox(
+            content,
+            ref,
+            name=spec.name,
+            media_type=spec.media_type,
+            attempt_closed=closed,
+            net_isolation=net,
+            fs_isolation=fs,
+        )
+        out.append(art)
+    return out
+
+
+def _ensure_terminal(jobs: InMemoryJobStore, job_id: str, *, detail: str) -> None:
+    job = jobs.get(job_id)
+    if job_is_live(job.status):
+        jobs.complete(job_id, status="failed", artifacts=[])
+        return
+    if not job_is_terminal(job.status):
+        raise ToolError("local", f"job not terminal after ensure: {job.status} ({detail})")
+
+
+def _start_join_watcher(proc: BaseProcess, loop: asyncio.AbstractEventLoop, done: asyncio.Event) -> None:
+    """Single joiner thread — avoids racing ``Process.join`` with kill."""
+
+    def _watch() -> None:
+        proc.join()
+        loop.call_soon_threadsafe(done.set)
+
+    threading.Thread(target=_watch, name="coder-sandbox-join", daemon=True).start()
+
+
 async def run_coder_job(
     request: CoderRequest,
     *,
     jobs: InMemoryJobStore,
     artifacts: LocalArtifactStore,
 ) -> CoderOutcome:
-    """Submit coder job, run ``run_sandbox``, register artifacts or time out (R4)."""
+    """Submit coder job, run ``run_sandbox`` in a child process, register or time out."""
     spec = _request_spec(request)
     jid = jobs.submit("coder", spec, request.attempt_id, request.deadline)
     jobs.mark_running(jid)
 
-    def _invoke() -> SandboxResult:
-        return run_sandbox(
-            list(request.argv),
-            limits=request.limits,
-            inputs=dict(request.inputs),
-            env=dict(request.env),
-        )
-
-    fut = asyncio.get_running_loop().run_in_executor(None, _invoke)
-    while not fut.done():
-        jobs.tick()
-        job = jobs.get(jid)
-        if job.status == "timed_out":
-            return _timed_out_outcome(jid, request.attempt_id, "job_deadline")
-        if job_is_terminal(job.status):
-            raise ToolError("local", f"job closed underfoot: {job.status}")
-        await _poll_sleep()
-
-    jobs.tick()
-    job = jobs.get(jid)
-    if job.status == "timed_out":
-        return _timed_out_outcome(jid, request.attempt_id, "job_deadline")
-
-    result = fut.result()
-    if result.status in (
-        SandboxStatus.TIMEOUT,
-        SandboxStatus.UNAVAILABLE,
-        SandboxStatus.BLOCKED,
-        SandboxStatus.OOM,
-    ):
-        # Guest/host budget before job deadline — still a retryable failure.
-        retryable = result.status == SandboxStatus.TIMEOUT
-        jobs.complete(jid, status="failed", artifacts=[])
-        return CoderOutcome(
-            job_id=jid,
-            attempt_id=request.attempt_id,
-            status="failed",
-            retryable=retryable,
-            artifact_ids=[],
-            detail=f"sandbox:{result.status.value}:{result.reason}",
-        )
-
-    if result.status != SandboxStatus.OK:
-        jobs.complete(jid, status="failed", artifacts=[])
-        return CoderOutcome(
-            job_id=jid,
-            attempt_id=request.attempt_id,
-            status="failed",
-            retryable=False,
-            artifact_ids=[],
-            detail=f"sandbox:{result.status.value}:{result.reason}",
-        )
-
-    registered = _register_outputs(request, result, artifacts=artifacts)
-    ids = [a.artifact_id for a in registered]
-    for art in registered:
-        if not art.sha256 or len(art.sha256) != 64:
-            raise ToolError("local", f"artifact missing sha256: {art.artifact_id}")
-    jobs.complete(jid, status="succeeded", artifacts=ids)
-    return CoderOutcome(
-        job_id=jid,
-        attempt_id=request.attempt_id,
-        status="succeeded",
-        retryable=False,
-        artifact_ids=ids,
-        detail="ok",
+    # fork: inherit test monkeypatches; spawn fallback when fork unavailable.
+    methods = mp.get_all_start_methods()
+    ctx = cast(
+        ForkContext | SpawnContext,
+        mp.get_context("fork" if "fork" in methods else "spawn"),
     )
+    parent_conn, child_conn = ctx.Pipe(duplex=False)
+    proc = ctx.Process(
+        target=_sandbox_worker,
+        args=(
+            child_conn,
+            list(request.argv),
+            request.limits,
+            dict(request.inputs),
+            dict(request.env),
+        ),
+    )
+    proc.start()
+    child_conn.close()
+
+    loop = asyncio.get_running_loop()
+    guest_done = asyncio.Event()
+    _start_join_watcher(proc, loop, guest_done)
+
+    wait_task = asyncio.create_task(jobs.wait(jid, until=request.deadline))
+    join_task = asyncio.create_task(guest_done.wait())
+    outcome: CoderOutcome | None = None  # audit-ok[field_default]: mutable slot until try returns
+    try:
+        finished, pending = await asyncio.wait(
+            {wait_task, join_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        job = jobs.get(jid)
+        if wait_task in finished and not wait_task.cancelled():
+            job = wait_task.result()
+
+        timed_out = job.status == "timed_out" or (
+            wait_task in finished and not wait_task.cancelled() and wait_task.result().status == "timed_out"
+        )
+        if timed_out:
+            killed = await _kill_sandbox_process(
+                proc,
+                reap_timeout_s=request.limits.reap_timeout_s,
+                guest_done=guest_done,
+            )
+            if not killed:
+                jobs.record_cancel_failed(jid, "guest_still_alive")
+            parent_conn.close()
+            outcome = _timed_out_outcome(jid, request.attempt_id, "job_deadline")
+            return outcome
+
+        if proc.is_alive():
+            killed = await _kill_sandbox_process(
+                proc,
+                reap_timeout_s=request.limits.reap_timeout_s,
+                guest_done=guest_done,
+            )
+            if not killed:
+                jobs.record_cancel_failed(jid, "guest_still_alive")
+            raise ToolError("local", "sandbox process still alive after wait")
+
+        if not parent_conn.poll(0):
+            raise ToolError("local", "sandbox process exited without result")
+        tag, payload = parent_conn.recv()
+        parent_conn.close()
+        if tag == "err":
+            raise payload
+        if tag != "ok" or not isinstance(payload, SandboxResult):
+            raise ToolError("local", f"bad sandbox worker payload tag={tag!r}")
+
+        if payload.status != SandboxStatus.OK:
+            mapped = sandbox_status_to_coder(payload, job_id=jid, attempt_id=request.attempt_id)
+            jobs.complete(jid, status="failed", artifacts=[])
+            outcome = mapped
+            return outcome
+
+        registered = _register_outputs(request, payload, artifacts=artifacts)
+        ids = [a.artifact_id for a in registered]
+        for art in registered:
+            if not art.sha256 or len(art.sha256) != 64:
+                raise ToolError("local", f"artifact missing sha256: {art.artifact_id}")
+        jobs.complete(jid, status="succeeded", artifacts=ids)
+        outcome = CoderOutcome(
+            job_id=jid,
+            attempt_id=request.attempt_id,
+            status="succeeded",
+            retryable=False,
+            artifact_ids=ids,
+            detail="ok",
+        )
+        return outcome
+    finally:
+        if proc.is_alive():
+            await _kill_sandbox_process(
+                proc,
+                reap_timeout_s=request.limits.reap_timeout_s,
+                guest_done=guest_done,
+            )
+        if outcome is None:
+            _ensure_terminal(jobs, jid, detail="run_coder_job_exit")

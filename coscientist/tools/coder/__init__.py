@@ -5,6 +5,7 @@ from coscientist.tools.coder.run import (
     CoderOutputSpec,
     CoderRequest,
     run_coder_job,
+    sandbox_status_to_coder,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "CoderOutputSpec",
     "CoderRequest",
     "run_coder_job",
+    "sandbox_status_to_coder",
 ]

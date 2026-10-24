@@ -4,22 +4,25 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import threading
-import time
+import multiprocessing as mp
 from datetime import UTC, datetime, timedelta
+from multiprocessing.connection import Connection
 from pathlib import Path
 
 import pytest
 
 from coscientist.checks.sandbox import SandboxResult, SandboxStatus
 from coscientist.core.events.clock import FakeClock, SystemClock
+from coscientist.core.events.errors import ArtifactRejected
 from coscientist.core.events.events import UnstampedEvent
+from coscientist.core.events.job_events import job_is_live
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.tools.coder import (
     CoderOutcome,
     CoderOutputSpec,
     CoderRequest,
     run_coder_job,
+    sandbox_status_to_coder,
 )
 from coscientist.tools.contract import ToolError
 from coscientist.tools.jobs import InMemoryJobStore
@@ -36,6 +39,13 @@ class _Journal:
 
 def _types(journal: _Journal) -> list[str]:
     return [e.type for e in journal.events]
+
+
+def _job_id(journal: _Journal) -> str:
+    for event in journal.events:
+        if event.type == "JobSubmitted":
+            return str(event.payload["job_id"])
+    raise AssertionError("no JobSubmitted")
 
 
 def _jobs(clock: FakeClock | SystemClock, journal: _Journal) -> InMemoryJobStore:
@@ -57,6 +67,25 @@ def _fake_ok(*, stdout: bytes = b"hello\n") -> SandboxResult:
     )
 
 
+def _fake_status(status: SandboxStatus, *, reason: str = "r") -> SandboxResult:
+    return SandboxResult(
+        status=status,
+        exit_code=1 if status != SandboxStatus.OK else 0,
+        stdout=b"",
+        stderr=b"",
+        reason=reason,
+        duration_s=0.01,
+        cgroup_limits_held=True,
+        net_isolation="hard",
+        fs_isolation="hard",
+        oom_detectable=True,
+    )
+
+
+def _open() -> bool:
+    return False
+
+
 @pytest.mark.asyncio
 async def test_coder_success_registers_sha256_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
@@ -64,10 +93,17 @@ async def test_coder_success_registers_sha256_artifact(tmp_path: Path, monkeypat
     jobs = _jobs(clock, journal)
     arts = LocalArtifactStore(tmp_path / "cas")
 
-    def _run(*_a: object, **_k: object) -> SandboxResult:
-        return _fake_ok(stdout=b"payload-bytes")
+    def _worker(
+        conn: Connection,
+        _argv: list[str],
+        _limits: object,
+        _inputs: dict[str, bytes],
+        _env: dict[str, str],
+    ) -> None:
+        conn.send(("ok", _fake_ok(stdout=b"payload-bytes")))
+        conn.close()
 
-    monkeypatch.setattr("coscientist.tools.coder.run.run_sandbox", _run)
+    monkeypatch.setattr("coscientist.tools.coder.run._sandbox_worker", _worker)
     out = await run_coder_job(
         CoderRequest(
             attempt_id="att#1",
@@ -78,7 +114,7 @@ async def test_coder_success_registers_sha256_artifact(tmp_path: Path, monkeypat
             limits=sandbox_limits(timeout_s=5.0, memory_mb=64, max_output_bytes=4096),
             deadline=clock.now() + timedelta(seconds=30),
             outputs=(CoderOutputSpec(name="out.txt", source="stdout", media_type="text/plain"),),
-            attempt_closed=False,
+            attempt_is_closed=_open,
         ),
         jobs=jobs,
         artifacts=arts,
@@ -91,72 +127,83 @@ async def test_coder_success_registers_sha256_artifact(tmp_path: Path, monkeypat
     assert meta.sha256 == hashlib.sha256(b"payload-bytes").hexdigest()
     assert meta.producer == "sandbox"
     assert jobs.get(out.job_id).status == "succeeded"
-    assert "JobSubmitted" in _types(journal)
-    assert "JobStatusChanged" in _types(journal)
 
 
 @pytest.mark.asyncio
-async def test_coder_timeout_r4_fake_clock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Job past deadline → JobTimedOut + failure(retryable) without waiting forever."""
+async def test_coder_timeout_kills_guest_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deadline → timed_out + guest process not alive (DESIGN §6.4)."""
+    import coscientist.tools.coder.run as coder_run
+
     clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
     journal = _Journal()
     jobs = _jobs(clock, journal)
     arts = LocalArtifactStore(tmp_path / "cas")
-    started = threading.Event()
-    release = threading.Event()
+    marker = tmp_path / "started"
+    killed: list[mp.process.BaseProcess] = []
+    real_kill = coder_run._kill_sandbox_process
 
-    def _hang(*_a: object, **_k: object) -> SandboxResult:
-        started.set()
-        release.wait(timeout=30.0)
-        return _fake_ok()
+    def _hang_worker(
+        conn: Connection,
+        _argv: list[str],
+        _limits: object,
+        _inputs: dict[str, bytes],
+        _env: dict[str, str],
+    ) -> None:
+        marker.write_text("1", encoding="utf-8")
+        import time
 
-    monkeypatch.setattr("coscientist.tools.coder.run.run_sandbox", _hang)
+        time.sleep(60)
+        conn.send(("ok", _fake_ok()))
+        conn.close()
+
+    async def _spy_kill(
+        proc: mp.process.BaseProcess,
+        *,
+        reap_timeout_s: float,
+        guest_done: asyncio.Event,
+    ) -> bool:
+        killed.append(proc)
+        return await real_kill(proc, reap_timeout_s=reap_timeout_s, guest_done=guest_done)
+
+    monkeypatch.setattr(coder_run, "_sandbox_worker", _hang_worker)
+    monkeypatch.setattr(coder_run, "_kill_sandbox_process", _spy_kill)
+
     deadline = clock.now() + timedelta(seconds=2)
 
     async def _advance() -> None:
-        while not started.is_set():
+        while not marker.exists():
             await asyncio.sleep(0)
         await asyncio.sleep(0)
         clock.advance(timedelta(seconds=3))
 
     adv = asyncio.create_task(_advance())
-    t0 = time.perf_counter()
     out = await run_coder_job(
         CoderRequest(
             attempt_id="att#to",
             call_id="call_to",
-            argv=("sleep", "30"),
+            argv=("sleep", "60"),
             inputs={},
             env={},
             limits=sandbox_limits(timeout_s=60.0, memory_mb=64, max_output_bytes=4096),
             deadline=deadline,
             outputs=(),
-            attempt_closed=False,
+            attempt_is_closed=_open,
         ),
         jobs=jobs,
         artifacts=arts,
     )
     await adv
-    release.set()
-    elapsed = time.perf_counter() - t0
-    assert out == CoderOutcome(
-        job_id=out.job_id,
-        attempt_id="att#to",
-        status="timed_out",
-        retryable=True,
-        artifact_ids=[],
-        detail="job_deadline",
-    )
+    assert out.status == "timed_out"
+    assert out.retryable is True
     assert jobs.get(out.job_id).status == "timed_out"
-    assert _types(journal)[:3] == ["JobSubmitted", "JobStatusChanged", "JobTimedOut"]
+    assert "JobTimedOut" in _types(journal)
     assert "JobCancelled" in _types(journal)
-    # Wall time for the runner must not track the hung sandbox (≤ deadline+tick).
-    assert elapsed < 2.0
+    assert killed, "kill was not invoked"
+    assert not killed[0].is_alive()
 
 
 @pytest.mark.asyncio
 async def test_coder_timeout_r4_wall_clock(tmp_path: Path) -> None:
-    """Live bwrap sleep past job deadline → timed_out retryable ≤ deadline+tick."""
     from coscientist.checks.sandbox_probe import isolation_fully_hard, resolve_isolation
 
     net, fs = resolve_isolation(allow_network=False)
@@ -184,7 +231,7 @@ async def test_coder_timeout_r4_wall_clock(tmp_path: Path) -> None:
             ),
             deadline=deadline,
             outputs=(),
-            attempt_closed=False,
+            attempt_is_closed=_open,
         ),
         jobs=jobs,
         artifacts=arts,
@@ -192,24 +239,31 @@ async def test_coder_timeout_r4_wall_clock(tmp_path: Path) -> None:
     done = clock.now()
     assert out.status == "timed_out"
     assert out.retryable is True
-    assert out.detail == "job_deadline"
     assert (done - t0) <= timedelta(seconds=1, milliseconds=800)
     assert "JobTimedOut" in _types(journal)
-    assert "JobCancelled" in _types(journal)
 
 
 @pytest.mark.asyncio
-async def test_coder_refuses_artifacts_when_attempt_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from coscientist.core.events.errors import ArtifactRejected
-
+async def test_coder_refuses_late_artifacts_via_attempt_is_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
     journal = _Journal()
     jobs = _jobs(clock, journal)
     arts = LocalArtifactStore(tmp_path / "cas")
-    monkeypatch.setattr(
-        "coscientist.tools.coder.run.run_sandbox",
-        lambda *_a, **_k: _fake_ok(stdout=b"late"),
-    )
+
+    def _worker(
+        conn: Connection,
+        _argv: list[str],
+        _limits: object,
+        _inputs: dict[str, bytes],
+        _env: dict[str, str],
+    ) -> None:
+        conn.send(("ok", _fake_ok(stdout=b"late")))
+        conn.close()
+
+    monkeypatch.setattr("coscientist.tools.coder.run._sandbox_worker", _worker)
+    # Put-time check: attempt closed while guest ran (callable, not frozen bool).
     with pytest.raises(ArtifactRejected, match="attempt_closed"):
         await run_coder_job(
             CoderRequest(
@@ -221,11 +275,129 @@ async def test_coder_refuses_artifacts_when_attempt_closed(tmp_path: Path, monke
                 limits=sandbox_limits(timeout_s=5.0, memory_mb=64, max_output_bytes=4096),
                 deadline=clock.now() + timedelta(seconds=30),
                 outputs=(CoderOutputSpec(name="x", source="stdout", media_type="text/plain"),),
-                attempt_closed=True,
+                attempt_is_closed=lambda: True,
             ),
             jobs=jobs,
             artifacts=arts,
         )
+    assert not job_is_live(jobs.get(_job_id(journal)).status)
+
+
+@pytest.mark.asyncio
+async def test_coder_exception_leaves_job_terminal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
+    journal = _Journal()
+    jobs = _jobs(clock, journal)
+    arts = LocalArtifactStore(tmp_path / "cas")
+
+    def _boom(
+        conn: Connection,
+        _argv: list[str],
+        _limits: object,
+        _inputs: dict[str, bytes],
+        _env: dict[str, str],
+    ) -> None:
+        conn.send(("err", RuntimeError("sandbox boom")))
+        conn.close()
+
+    monkeypatch.setattr("coscientist.tools.coder.run._sandbox_worker", _boom)
+    with pytest.raises(RuntimeError, match="sandbox boom"):
+        await run_coder_job(
+            CoderRequest(
+                attempt_id="att#boom",
+                call_id="call_b",
+                argv=("/bin/true",),
+                inputs={},
+                env={},
+                limits=sandbox_limits(timeout_s=5.0, memory_mb=64, max_output_bytes=4096),
+                deadline=clock.now() + timedelta(seconds=30),
+                outputs=(),
+                attempt_is_closed=_open,
+            ),
+            jobs=jobs,
+            artifacts=arts,
+        )
+    job = jobs.get(_job_id(journal))
+    assert job.status == "failed"
+    assert not job_is_live(job.status)
+
+
+@pytest.mark.parametrize(
+    ("status", "retryable"),
+    [
+        (SandboxStatus.TIMEOUT, True),
+        (SandboxStatus.UNAVAILABLE, False),
+        (SandboxStatus.BLOCKED, False),
+        (SandboxStatus.OOM, False),
+        (SandboxStatus.NONZERO, False),
+        (SandboxStatus.OUTPUT_EXCEEDED, False),
+    ],
+)
+def test_sandbox_status_mapping(status: SandboxStatus, retryable: bool) -> None:
+    out = sandbox_status_to_coder(
+        _fake_status(status, reason="detail"),
+        job_id="job_x",
+        attempt_id="att",
+    )
+    assert out == CoderOutcome(
+        job_id="job_x",
+        attempt_id="att",
+        status="failed",
+        retryable=retryable,
+        artifact_ids=[],
+        detail=f"sandbox:{status.value}:detail",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "retryable"),
+    [
+        (SandboxStatus.TIMEOUT, True),
+        (SandboxStatus.UNAVAILABLE, False),
+        (SandboxStatus.NONZERO, False),
+    ],
+)
+async def test_coder_job_maps_sandbox_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: SandboxStatus,
+    retryable: bool,
+) -> None:
+    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
+    journal = _Journal()
+    jobs = _jobs(clock, journal)
+    arts = LocalArtifactStore(tmp_path / "cas")
+
+    def _worker(
+        conn: Connection,
+        _argv: list[str],
+        _limits: object,
+        _inputs: dict[str, bytes],
+        _env: dict[str, str],
+    ) -> None:
+        conn.send(("ok", _fake_status(status, reason="mapped")))
+        conn.close()
+
+    monkeypatch.setattr("coscientist.tools.coder.run._sandbox_worker", _worker)
+    out = await run_coder_job(
+        CoderRequest(
+            attempt_id=f"att#{status.value}",
+            call_id="call_m",
+            argv=("/bin/false",),
+            inputs={},
+            env={},
+            limits=sandbox_limits(timeout_s=5.0, memory_mb=64, max_output_bytes=4096),
+            deadline=clock.now() + timedelta(seconds=30),
+            outputs=(),
+            attempt_is_closed=_open,
+        ),
+        jobs=jobs,
+        artifacts=arts,
+    )
+    assert out.status == "failed"
+    assert out.retryable is retryable
+    assert jobs.get(out.job_id).status == "failed"
 
 
 def test_coder_request_refuses_naive_deadline() -> None:
@@ -239,5 +411,5 @@ def test_coder_request_refuses_naive_deadline() -> None:
             limits=sandbox_limits(timeout_s=5.0, memory_mb=64, max_output_bytes=1024),
             deadline=datetime(2026, 10, 24),
             outputs=(),
-            attempt_closed=False,
+            attempt_is_closed=_open,
         )

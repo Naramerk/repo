@@ -296,6 +296,18 @@ class InMemoryJobStore:
         self._jobs[job_id] = job.model_copy(update={"artifacts": list(artifacts)})
         return self._set_status(job_id, status)
 
+    def record_cancel_failed(self, job_id: str, reason: str) -> None:
+        """Journal JobCancelFailed (e.g. guest still alive after kill)."""
+        if not reason or reason.strip() != reason:
+            raise ToolError("local", "cancel-failed reason must be non-empty bare")
+        job = self.get(job_id)
+        self._emit(
+            "JobCancelFailed",
+            job_id,
+            JobCancelFailedPayload(job_id=job_id, attempt_id=job.attempt_id, reason=reason).model_dump(mode="json"),
+            make_idem("JobCancelFailed", job_id, reason),
+        )
+
     def _apply_timeout(self, job_id: str) -> Job:
         job = self.get(job_id)
         if not job_is_live(job.status):
