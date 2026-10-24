@@ -98,7 +98,7 @@ class StoredEvent(UnstampedEvent):
     payload_digest: str = Field(min_length=1)
 
 
-# Compat alias — mandatory next PR H2 deletes this (UnstampedEvent only).
+# Compat alias — H2 (next PR) deletes this.
 EventEnvelope = UnstampedEvent
 
 
@@ -140,6 +140,35 @@ def stamp_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
         payload_digest=digest,
     )
 
+
+def stamp_historical_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
+    """Stamp epoch+digest; schema_version must be in [1, writer)."""
+    if type(epoch) is not int or isinstance(epoch, bool):
+        raise TypeError(f"epoch must be exact int, got {epoch!r}")
+    if unstamped.ts.tzinfo is None:
+        raise JournalFormatError(
+            f"{unstamped.type}: naive datetime refused: {unstamped.ts!r}",
+            expected_store_format=None, found_store_format=None,
+        )
+    digest = _payload_digest(unstamped.payload)
+    if not digest:
+        raise JournalFormatError(
+            f"{unstamped.type}: empty payload_digest",
+            expected_store_format=None, found_store_format=None,
+        )
+    writer_v = require_writer_schema_version(unstamped.type)
+    version = unstamped.schema_version
+    if version < 1 or version >= writer_v:
+        raise JournalFormatError(
+            f"{unstamped.type}: schema_version {version} not behind writer v{writer_v}",
+            expected_store_format=None, found_store_format=None,
+        )
+    return StoredEvent(
+        seq=unstamped.seq, study_id=unstamped.study_id, type=unstamped.type,
+        entity_key=unstamped.entity_key, idem_key=unstamped.idem_key,
+        payload=unstamped.payload, ts=unstamped.ts,
+        schema_version=version, epoch=epoch, payload_digest=digest,
+    )
 
 def make_idem(event_type: str, entity_key: str, *parts: str) -> str:
     rest = ":".join(parts)

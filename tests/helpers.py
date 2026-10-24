@@ -7,9 +7,6 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
-from coscientist.core.events.digest import payload_digest as _payload_digest
-from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.store_db import iso as _iso
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -21,50 +18,6 @@ from coscientist.core.execution.executor import Executor
 from coscientist.core.execution.runtime_factory import close_runtime as close_runtime
 from coscientist.core.execution.runtime_factory import open_runtime as _open_runtime_core
 from tests.checks.minimal_test_catalog import minimal_test_catalog
-
-
-def seed_legacy_journal(store: Any, events: list[Any]) -> None:
-    """Insert old journal rows at event.schema_version; read/reopen upcasts.
-
-    Does not call stamp_envelope / store.append — writer schema gate stays on.
-    Naive ``ts`` and non-dict ``payload`` are refused (no UTC guess / no ``{}``).
-    """
-    conn = store._conn  # noqa: SLF001 — test-only journal seed
-    epoch = store.epoch
-    for ev in events:
-        if getattr(ev.ts, "tzinfo", None) is None:
-            raise JournalFormatError(
-                f"{ev.type}: naive datetime refused: {ev.ts!r}",
-                expected_store_format=None, found_store_format=None,
-            )
-        payload = ev.payload
-        if not isinstance(payload, dict):
-            raise TypeError(
-                f"{ev.type}: payload must be dict, got {type(payload).__name__}"
-            )
-        digest = _payload_digest(payload)
-        if not digest:
-            raise JournalFormatError(
-                f"{ev.type}: empty payload_digest",
-                expected_store_format=None, found_store_format=None,
-            )
-        conn.execute(
-            "INSERT INTO events(study_id, type, entity_key, idem_key, payload, ts, "
-            "schema_version, epoch, payload_digest) VALUES (?,?,?,?,?,?,?,?,?)",
-            (
-                ev.study_id,
-                ev.type,
-                ev.entity_key,
-                ev.idem_key,
-                json.dumps(payload, sort_keys=True),
-                _iso(ev.ts),
-                ev.schema_version,
-                epoch,
-                digest,
-            ),
-        )
-    conn.commit()
-    store._finalized_cached = None  # noqa: SLF001
 
 
 async def open_runtime(
@@ -90,6 +43,7 @@ async def open_runtime(
         **kwargs,
     )
 
+
 async def open_runtime_experimental(
     data_root: Path | str,
     study_id: str,
@@ -109,6 +63,7 @@ async def open_runtime_experimental(
         **kwargs,
     )
 
+
 class RuntimeLike(Protocol):
     """Minimal surface used by attach_executor / record_success."""
 
@@ -119,6 +74,7 @@ class RuntimeLike(Protocol):
     executor: Any
 
     def _project_local(self, ev: Any) -> None: ...
+
 
 def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifactStore]:
     # Prefer Executor already wired by open_runtime.make_executor (live get_graph).
@@ -183,6 +139,7 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
         rt.executor = ex
     return ex, arts
 
+
 async def record_success(
     rt: RuntimeLike, aid: str | None, arts: LocalArtifactStore, *, count: int = 225
 ) -> None:
@@ -210,6 +167,7 @@ async def record_success(
         ),
     )
 
+
 def exp_spec(key: str, deps: list[str] | None = None) -> TaskSpec:
     return TaskSpec(
         task_key=key,
@@ -219,5 +177,3 @@ def exp_spec(key: str, deps: list[str] | None = None) -> TaskSpec:
         depends_on=deps or ["PLAN"],
         criteria=[RequirementRef(template_id="value_match")],
     )
-
-

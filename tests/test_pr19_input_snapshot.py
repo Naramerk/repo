@@ -38,7 +38,7 @@ from coscientist.core.execution.input_limits import (
     merge_input_limits,
     snapshot_bindings_at_p2,
 )
-from tests.helpers import close_runtime, open_runtime, seed_legacy_journal
+from tests.helpers import close_runtime, open_runtime
 
 
 def _with_user_put(fn):
@@ -1498,8 +1498,7 @@ async def test_post_studies_conflict_requires_same_request_study_created(
     key = "conflict-other-req"
     sid = study_id_from_idempotency_key(key)
     rt = await open_runtime(tmp_path, sid, catalog=catalog)
-    seed_legacy_journal(rt.store, [
-            EventEnvelope(
+    await rt.store.append(EventEnvelope(
                 study_id=sid,
                 type="StudyCreated",
                 entity_key=sid,
@@ -1515,10 +1514,8 @@ async def test_post_studies_conflict_requires_same_request_study_created(
                     "created_at": "2026-01-01T00:00:00+00:00",
                 },
                 ts=rt.clock.now(),
-                schema_version=13,
-            )
-        ]
-    )
+                schema_version=writer_schema_version("StudyCreated"),
+            ))
     await close_runtime(rt)
 
     with pytest.raises(Conflict, match="peer payload clock"):
@@ -1722,7 +1719,7 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
     # Write a raw v7 journal row (pre-PR19) then close it.
-    seed_legacy_journal(rt.store, [
+    await rt.store.append_historical([
         EventEnvelope(
             study_id=sid,
             type="AttemptStarted",
@@ -1956,7 +1953,7 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
     old_digest = "a" * 64  # non-empty legacy formula digest, no digest_version
-    seed_legacy_journal(rt.store, [
+    await rt.store.append_historical([
         EventEnvelope(
             study_id=sid,
             type="AttemptStarted",

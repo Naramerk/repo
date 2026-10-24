@@ -16,7 +16,7 @@ from coscientist.core.finalize.finalize_nodes import (
     conclusion_id_for_study,
     conclusion_ids_for,
 )
-from tests.helpers import close_runtime, open_runtime, seed_legacy_journal
+from tests.helpers import close_runtime, open_runtime
 from tests.test_finalize import _boot, _fin, _skip_all, _spec
 
 
@@ -475,7 +475,7 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
     await store.acquire_lease("seeder")
     now = clock.now()
     dl = now + timedelta(seconds=120)
-    seed_legacy_journal(store, 
+    await store.append_historical(
         [
             EventEnvelope(
                 study_id=sid,

@@ -66,7 +66,6 @@ from tests.helpers import (
     close_runtime,
     open_runtime,
     open_runtime_experimental,
-    seed_legacy_journal,
 )
 
 
@@ -1548,7 +1547,7 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
     await store.acquire_lease("seeder")
     now = datetime.now(timezone.utc)
     dl = now + timedelta(seconds=120)
-    seed_legacy_journal(store, [
+    await store.append_historical([
         EventEnvelope(
             study_id=sid,
             type="StudyCreated",

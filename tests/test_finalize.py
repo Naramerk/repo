@@ -41,7 +41,6 @@ from tests.helpers import (
     close_runtime,
     open_runtime,
     record_success,
-    seed_legacy_journal,
 )
 
 _TS = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
@@ -705,7 +704,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
     assert folded.budget.max_cost_rub == Decimal("50")
     # Budget alone also accepts the legacy ratio (no model_validator).
     Budget.model_validate(payload["budget"])
-    seed_legacy_journal(store, [
+    await store.append_historical([
         EventEnvelope(
             study_id=sid,
             type="StudyCreated",

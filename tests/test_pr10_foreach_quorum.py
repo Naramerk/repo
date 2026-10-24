@@ -29,7 +29,6 @@ from tests.helpers import (
     attach_executor,
     close_runtime,
     open_runtime,
-    seed_legacy_journal,
 )
 
 
@@ -501,7 +500,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
     e0_tid = task_id(sid, "E0")
     aid = f"{e0_tid}#1"
     now = rt.clock.now()
-    seed_legacy_journal(rt.store, 
+    await rt.store.append_historical(
         [
             EventEnvelope(
                 study_id=sid,
@@ -525,7 +524,9 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                 },
                 ts=now,
                 schema_version=4,
-            ),
+            )
+        ])
+    await rt.store.append_many([
             EventEnvelope(
                 study_id=sid,
                 type="AttemptClosed",
@@ -538,7 +539,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                     "task_id": e0_tid,
                 },
                 ts=now,
-                schema_version=2,
+                schema_version=writer_schema_version("AttemptClosed"),
             ),
             EventEnvelope(
                 study_id=sid,
@@ -551,10 +552,9 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                     "reason": None,
                 },
                 ts=now,
-                schema_version=2,
+                schema_version=writer_schema_version("TaskDone"),
             ),
-        ]
-    )
+        ])
     await close_runtime(rt)
     rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
     attach_executor(rt2, tmp_path)

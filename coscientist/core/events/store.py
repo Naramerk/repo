@@ -25,7 +25,7 @@ from coscientist.core.events.errors import (
     LeaseLost,
     StudyClosedError,
 )
-from coscientist.core.events.events import StoredEvent, UnstampedEvent, stamp_envelope
+from coscientist.core.events.events import StoredEvent, UnstampedEvent, stamp_envelope, stamp_historical_envelope
 from coscientist.core.events.metrics import bump_late_write_rejected
 from coscientist.core.events.schema_gate import upcast_strict
 
@@ -289,6 +289,26 @@ class SqliteEventStore:
 
     async def append(self, event: UnstampedEvent) -> StoredEvent:
         return await self._to_thread(lambda: self._append_locked(event))
+
+    async def append_historical(self, events: list[UnstampedEvent]) -> list[StoredEvent]:
+        """Fence + stamp_historical_envelope + insert (schema_version behind writer)."""
+        return await self._to_thread(lambda: self._append_historical_sync(events))
+
+    def _append_historical_sync(self, events: list[UnstampedEvent]) -> list[StoredEvent]:
+        out: list[StoredEvent] = []
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._fence()
+            for ev in events:
+                stored, idem = self._insert_one(
+                    stamp_historical_envelope(ev, epoch=self.epoch)
+                )
+                out.append(self._fetch_by_idem(ev.idem_key) if idem else stored)  # type: ignore[arg-type]
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        return out
 
     def _study_is_finalized(self) -> bool:
         """Return whether the study has a StudyFinalized in projections.

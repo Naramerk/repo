@@ -17,6 +17,7 @@ from coscientist.core.events.events import (
     StoredEvent,
     UnstampedEvent,
     stamp_envelope,
+    stamp_historical_envelope,
 )
 from coscientist.core.events.schema_gate import (
     require_writer_schema_version,
@@ -117,18 +118,26 @@ def test_unstamped_event_requires_schema_version(clock: FakeClock) -> None:
 
 
 def test_stamp_envelope_refuses_schema_version_behind_writer(clock: FakeClock) -> None:
-    u = _unstamped(clock, schema_version=0)
-    with pytest.raises(JournalFormatError, match="behind writer") as ei:
+    writer_v = writer_schema_version("StudyCreated")
+    u = _unstamped(clock, schema_version=writer_v - 1)
+    with pytest.raises(JournalFormatError, match="behind writer"):
         stamp_envelope(u, epoch=1)
-    assert "StudyCreated" in str(ei.value)
 
 
 def test_stamp_envelope_refuses_schema_version_ahead_of_writer(clock: FakeClock) -> None:
     writer_v = writer_schema_version("StudyCreated")
     u = _unstamped(clock, schema_version=writer_v + 1)
-    with pytest.raises(JournalFormatError, match="ahead of writer") as ei:
+    with pytest.raises(JournalFormatError, match="ahead of writer"):
         stamp_envelope(u, epoch=1)
-    assert "StudyCreated" in str(ei.value)
+
+
+def test_stamp_historical_refuses_naive_and_not_behind(clock: FakeClock) -> None:
+    w = writer_schema_version("StudyCreated")
+    with pytest.raises(JournalFormatError, match="naive datetime refused"):
+        stamp_historical_envelope(_unstamped(clock, schema_version=w - 1, ts=datetime(2026, 1, 1)), epoch=1)
+    for v in (0, w, w + 1):
+        with pytest.raises(JournalFormatError, match="not behind writer"):
+            stamp_historical_envelope(_unstamped(clock, schema_version=v), epoch=1)
 
 
 def test_stamp_envelope_accepts_exact_writer_schema_version(clock: FakeClock) -> None:
