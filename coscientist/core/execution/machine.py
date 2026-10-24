@@ -16,9 +16,9 @@ from typing import Any
 
 from coscientist.core.claims.graph import GraphStore, KindRegistry, default_execution_registry
 from coscientist.core.claims.reasons import CloseReason, TaskReason
+from coscientist.core.events.attempt_fields import attempt_closed
 from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.errors import LeaseLost
-from coscientist.core.events.attempt_fields import attempt_closed
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.upcasters import writer_schema_version

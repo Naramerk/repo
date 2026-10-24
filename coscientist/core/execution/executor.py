@@ -53,7 +53,7 @@ def _provenance(attempt: Any) -> Provenance:
     except AttemptUnrecordedRefuse:
         raise
     except (KeyError, AttributeError, TypeError) as e:
-        raise ValueError(f"invalid attempt provenance: missing") from e
+        raise ValueError("invalid attempt provenance: missing") from e
     if p not in VALID_PROVENANCE:
         raise ValueError(f"invalid attempt provenance: {p!r}")
     return p  # type: ignore[return-value]

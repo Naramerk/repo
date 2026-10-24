@@ -21,7 +21,6 @@ from coscientist.core.execution.domain import AgentTaskOutput
 from coscientist.tools.effects import EffectIndex
 from tests.helpers import close_runtime, open_runtime
 
-
 _UNREC = {
     "kind": "unrecorded",
     "source_schema_version": ATTEMPT_STARTED_UNRECORDED_SINCE,
