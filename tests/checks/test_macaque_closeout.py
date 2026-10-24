@@ -37,6 +37,7 @@ from coscientist.core.events.events import (
     make_idem,
 )
 from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     Catalog,
     CodeCheck,
@@ -406,7 +407,7 @@ def test_study_created_v12_upcaster_refuses_missing_and_non_int():
     assert _study_created_v12_to_v13_catalog_version({"catalog_version": 3})[
         "catalog_version"
     ] == 3
-    assert STUDY_CREATED_SCHEMA_VERSION == 14
+    assert STUDY_CREATED_SCHEMA_VERSION == writer_schema_version("StudyCreated")
 
 
 def test_create_study_body_requires_strict_int_catalog_version():

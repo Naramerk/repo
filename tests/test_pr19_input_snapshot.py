@@ -13,6 +13,7 @@ import pytest
 
 from coscientist.core.claims.reasons import RefusalKind, TerminalReason
 from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION
 from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution._ingest_gate import (
     mint_user_put_capability,
@@ -1125,7 +1126,7 @@ def test_upcast_study_created_v9_to_v11():
             "require_hypotheses": False,
         },
     )
-    assert v == 14
+    assert v == STUDY_CREATED_SCHEMA_VERSION
     assert p.get("max_loop_iter") == 8
     assert p.get("as_of") is None
     assert p.get("user_input_ids") == []
@@ -1142,7 +1143,7 @@ def test_upcast_study_created_v10_to_v11_keeps_max_loop_iter():
             "require_hypotheses": False,
         },
     )
-    assert v == 14
+    assert v == STUDY_CREATED_SCHEMA_VERSION
     assert p["max_loop_iter"] == 2
     assert p.get("as_of") is None
     assert p.get("user_input_ids") == []
@@ -1169,7 +1170,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
     assert rt.study is not None
     assert rt.study.max_loop_iter == 2
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 14
+    assert created.schema_version == STUDY_CREATED_SCHEMA_VERSION
     assert created.payload.get("max_loop_iter") == 2
     assert created.payload.get("max_proposals") == 3
     await close_runtime(rt)
@@ -1806,8 +1807,7 @@ def test_study_created_writer_is_v11_after_loopspec():
 
     assert "max_loop_iter" in Study.model_fields
     assert "max_proposals" in Study.model_fields
-    assert STUDY_CREATED_SCHEMA_VERSION == 14
-    assert writer_schema_version("StudyCreated") == 14
+    assert STUDY_CREATED_SCHEMA_VERSION == writer_schema_version("StudyCreated")
 
 
 def test_tar_many_members_early_exit():

@@ -16,6 +16,7 @@ from coscientist.core.claims.reasons import (
     TerminalReason,
     intake,
 )
+from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION
 from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.domain import (
     Task,
@@ -344,7 +345,7 @@ def test_upcast_study_created_sets_reserve_zero():
         },
     )
     # v1→…→v10 max_loop_iter (PR11) → v11 as_of (#23) → v12 max_proposals (PR20).
-    assert v == 14
+    assert v == STUDY_CREATED_SCHEMA_VERSION
     assert p["max_foreach_children"] == 32
     assert p["max_loop_iter"] == 8
     assert p.get("as_of") is None
@@ -373,7 +374,7 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
     tmp_path: Path, clock, runtime_cls
 ):
     """StudyCreated v1 without finalize_reserve_s → reserve=0; deadlines unchanged; tick works."""
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import EventEnvelope, make_idem, STUDY_CREATED_SCHEMA_VERSION
     from coscientist.core.events.store import SqliteEventStore
     from coscientist.core.execution.domain import HitlPolicy, TaskKind, TaskSpec, TaskState
 

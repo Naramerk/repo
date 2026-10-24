@@ -28,6 +28,7 @@ from coscientist.core.claims.verdict import (
     root_data_digests_from_bindings,
     tost_holds,
 )
+from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION
 from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -254,7 +255,7 @@ def test_refuted_with_confirmations_reports_conflict_note():
 
 def test_upcaster_studycreated_v5_to_v6_supported_needed():
     v, out = upcast("StudyCreated", 5, {"catalog_version": 3, "study_id": "s", "require_hypotheses": False})
-    assert v == 14
+    assert v == STUDY_CREATED_SCHEMA_VERSION
     assert out["supported_needed"] == 2
     assert out.get("aggregate", "count") == "count"
     assert out.get("user_input_ids") == []
@@ -273,7 +274,7 @@ def test_upcaster_studycreated_v4_to_v5_defaults():
             "require_hypotheses": False,
         },
     )
-    assert v == 14
+    assert v == STUDY_CREATED_SCHEMA_VERSION
     assert out["aggregate"] == "count"
     assert out["supported_needed"] == 2
     assert out.get("as_of") is None
@@ -2350,7 +2351,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
 ):
     """Legacy/forged severe=True / refute_capable=True must not survive read/replay."""
     from coscientist.core.claims.graph import GraphEdge, GraphNode
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import EventEnvelope, make_idem, STUDY_CREATED_SCHEMA_VERSION
     from coscientist.core.events.ids import claim_node_id, question_node_id
 
     sid = "st_forge"

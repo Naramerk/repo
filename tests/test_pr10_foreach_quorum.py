@@ -8,7 +8,7 @@ import pytest
 
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import CloseReason, TaskReason
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import EventEnvelope, make_idem, STUDY_CREATED_SCHEMA_VERSION
 from coscientist.core.events.ids import hypothesis_node_id, task_id
 from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref
@@ -1567,7 +1567,7 @@ def test_upcast_attempt_limitations():
 
 def test_upcast_study_foreach_cap():
     v, p = upcast("StudyCreated", 7, {"catalog_version": 3, "study_id": "s", "require_hypotheses": False})
-    assert v == 14
+    assert v == STUDY_CREATED_SCHEMA_VERSION
     assert p["max_foreach_children"] == 32
     assert p["as_of"] is None
     assert p["user_input_ids"] == []

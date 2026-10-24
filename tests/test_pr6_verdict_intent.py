@@ -13,6 +13,7 @@ from coscientist.core.claims.r17 import (
     r17_threshold_source_not_counted,
 )
 from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION
 from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.domain import TaskSpec
 from tests.helpers import NEED_OFF, close_runtime, open_runtime
@@ -240,7 +241,7 @@ def test_upcast_study_created_k_ref_defaults():
         },
     )
     # v2→…→v10 max_loop_iter (#24) → v11 as_of/ids (#23) → v12 max_proposals (PR20)
-    assert v == 14
+    assert v == STUDY_CREATED_SCHEMA_VERSION
     assert p["refutations_needed"] == 1
     assert p["refutation_priority"] is False
     assert p["confirmations_needed"] == 1
@@ -266,7 +267,7 @@ def test_upcast_study_created_confirmations_needed_v3_to_v4():
             "catalog_version": 3, "require_hypotheses": False
         },
     )
-    assert v == 14
+    assert v == STUDY_CREATED_SCHEMA_VERSION
     assert p["confirmations_needed"] == 1
     assert p["refutations_needed"] == 2
     assert p["refutation_priority"] is True
@@ -297,7 +298,7 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
     assert rt.study.refutations_needed == 3
     assert rt.study.refutation_priority is True
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 14
+    assert created.schema_version == STUDY_CREATED_SCHEMA_VERSION
     assert created.payload["refutations_needed"] == 3
     assert created.payload["confirmations_needed"] == 1
     assert created.payload["aggregate"] == "count"

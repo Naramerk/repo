@@ -9,7 +9,10 @@ import pytest
 
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import Disposition, TaskReason, TerminalReason
-from coscientist.core.events.events import PLAN_ACCEPTED_SCHEMA_VERSION
+from coscientist.core.events.events import (
+    PLAN_ACCEPTED_SCHEMA_VERSION,
+    STUDY_CREATED_SCHEMA_VERSION,
+)
 from coscientist.core.events.ids import hypothesis_node_id
 from coscientist.core.events.upcasters import (
     UPCASTERS,
@@ -1182,7 +1185,7 @@ def test_upcast_study_created_max_loop_iter():
             "created_at": "2026-01-01T00:00:00+00:00", "require_hypotheses": False
         },
     )
-    assert v == 14
+    assert v == STUDY_CREATED_SCHEMA_VERSION
     # #24 v10 setdefault(max_loop_iter, 8); #23 v11 preserves it; PR20 v12 max_proposals.
     assert p["max_loop_iter"] == 8
     assert p["as_of"] is None
