@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel, ConfigDict, Field
 
 from coscientist.tools.contract import ToolProvider
@@ -14,7 +12,7 @@ class McpCatalogTool(BaseModel):
 
     name: str = Field(min_length=1)
     description: str | None
-    input_schema: dict[str, Any]
+    input_schema: dict[str, object]
     provider: ToolProvider
 
 

@@ -29,7 +29,6 @@ from coscientist.core.events.job_events import (
     JobSubmittedPayload,
     JobTimedOutPayload,
 )
-from coscientist.core.events.tool_resolved import ToolResolvedPayload
 from coscientist.core.execution.domain import (
     Budget,
     CheckResult,
@@ -1338,6 +1337,38 @@ class CheckRejectedPayload(WireModel):
     source: str
 
 
+MatchKind = Literal["exact", "none"]
+
+
+class MatchInfo(WireModel):
+    kind: MatchKind
+    ranked: list[str]
+
+
+class ToolResolvedPayload(WireModel):
+    """G3 ToolResolved — same WireModel path as every other PAYLOAD_MODELS entry."""
+
+    task_id: str = Field(min_length=1)
+    status: Literal["tool_found", "tool_missing"]
+    tool: str | None
+    catalog_version: StrictInt = Field(ge=0)
+    match: MatchInfo
+
+    @model_validator(mode="after")
+    def _status_match_tool(self) -> ToolResolvedPayload:
+        found = self.status == "tool_found"
+        if found != (self.tool is not None):
+            raise ValueError(
+                "tool_found requires tool" if found else "tool_missing requires tool=None"
+            )
+        want = "exact" if found else "none"
+        if self.match.kind != want:
+            raise ValueError(f"{self.status} requires match.kind={want}")
+        if found and self.match.ranked != [self.tool]:
+            raise ValueError("tool_found requires ranked=[tool]")
+        return self
+
+
 PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "StudyCreated": StudyCreatedPayload,
     "StudyRefused": StudyRefusedPayload,
@@ -1396,7 +1427,6 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "JobTimedOut": JobTimedOutPayload,
     "JobCancelled": JobCancelledPayload,
     "JobCancelFailed": JobCancelFailedPayload,
-    # G3: model authored in tool_resolved.py (writer + MatchInfo); single registry path.
     "ToolResolved": ToolResolvedPayload,
 }
 

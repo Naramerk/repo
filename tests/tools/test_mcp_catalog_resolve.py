@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, cast, get_args
+from typing import Literal, TypedDict, get_args
 
 import pytest
 from pydantic import ValidationError
@@ -22,8 +23,14 @@ from coscientist.tools.contract import ToolProvider
 from coscientist.tools.mcp_catalog import McpCatalogError, McpCatalogTool, McpToolCatalog
 from coscientist.tools.resolve import ToolNeed, resolve_against_catalog
 
-_X = {"name": "x", "description": None, "input_schema": {}}
-_TE = {"study_id": "s", "task_id": "s/E", "tool_name": "t", "extra": 1}
+_X: dict[str, object] = {"name": "x", "description": None, "input_schema": {}}
+_TE: dict[str, object] = {"study_id": "s", "task_id": "s/E", "tool_name": "t", "extra": 1}
+
+
+class _ResolutionKw(TypedDict):
+    status: Literal["tool_found", "tool_missing"]
+    tool: str | None
+    match: MatchInfo
 
 
 def _tool(name: str, *, provider: ToolProvider) -> McpCatalogTool:
@@ -87,7 +94,7 @@ def test_catalog_refuse_initial_version(initial_version: object, match: str) -> 
     ],
     ids=["tool-extra", "bad-provider", "need-extra", "semantic-kind"],
 )
-def test_strict_extra_refuse(factory: Callable[[], Any], err: str, loc: tuple[str, ...]) -> None:
+def test_strict_extra_refuse(factory: Callable[[], object], err: str, loc: tuple[str, ...]) -> None:
     with pytest.raises(ValidationError, match=err) as ei:
         factory()
     err0 = ei.value.errors()[0]
@@ -98,14 +105,42 @@ def test_strict_extra_refuse(factory: Callable[[], Any], err: str, loc: tuple[st
 @pytest.mark.parametrize(
     ("kw", "msg"),
     [
-        ({"status": "tool_found", "tool": None, "match": MatchInfo(kind="exact", ranked=[])}, "requires tool"),
-        ({"status": "tool_found", "tool": "x", "match": MatchInfo(kind="none", ranked=[])}, r"match\.kind=exact"),
-        ({"status": "tool_found", "tool": "x", "match": MatchInfo(kind="exact", ranked=["y"])}, r"ranked=\[tool\]"),
-        ({"status": "tool_missing", "tool": "x", "match": MatchInfo(kind="none", ranked=[])}, "tool=None"),
+        (
+            {
+                "status": "tool_found",
+                "tool": None,
+                "match": MatchInfo(kind="exact", ranked=[]),
+            },
+            "requires tool",
+        ),
+        (
+            {
+                "status": "tool_found",
+                "tool": "x",
+                "match": MatchInfo(kind="none", ranked=[]),
+            },
+            r"match\.kind=exact",
+        ),
+        (
+            {
+                "status": "tool_found",
+                "tool": "x",
+                "match": MatchInfo(kind="exact", ranked=["y"]),
+            },
+            r"ranked=\[tool\]",
+        ),
+        (
+            {
+                "status": "tool_missing",
+                "tool": "x",
+                "match": MatchInfo(kind="none", ranked=[]),
+            },
+            "tool=None",
+        ),
     ],
     ids=["found-no-tool", "found-kind", "ranked", "miss-tool"],
 )
-def test_resolution_validator(kw: dict[str, Any], msg: str) -> None:
+def test_resolution_validator(kw: _ResolutionKw, msg: str) -> None:
     with pytest.raises(ValidationError, match=msg):
         ToolResolvedPayload(task_id="t", catalog_version=0, **kw)
 
@@ -134,7 +169,7 @@ async def test_expected_catalog_version_not_int(tmp_path: Path, bad: object) -> 
             catalog=McpToolCatalog(initial_version=0, tools=()),
             store=store,
             clock=clock,
-            expected_catalog_version=cast(int, bad),
+            expected_catalog_version=bad,
         )
 
 
@@ -195,7 +230,7 @@ async def _append_tr(
     store: SqliteEventStore,
     clock: FakeClock,
     entity: str,
-    raw: dict[str, Any],
+    raw: dict[str, object],
 ) -> None:
     await store.append(
         UnstampedEvent(
@@ -261,7 +296,7 @@ def test_payload_validators_include_tool_resolved() -> None:
     assert set(reg) == set(get_args(EventType))
     assert "ToolResolved" in PAYLOAD_MODELS
     assert PAYLOAD_MODELS["ToolResolved"] is ToolResolvedPayload
-    raw = {
+    raw: dict[str, object] = {
         "task_id": "st1/E",
         "status": "tool_found",
         "tool": "t",

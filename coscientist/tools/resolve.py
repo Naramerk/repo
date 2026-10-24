@@ -26,7 +26,7 @@ async def resolve_against_catalog(
     catalog: McpToolCatalog,
     store: EventStore,
     clock: Clock,
-    expected_catalog_version: int,
+    expected_catalog_version: object,
 ) -> ToolResolvedPayload:
     if type(expected_catalog_version) is not int or isinstance(expected_catalog_version, bool):
         raise McpCatalogError(
