@@ -13,9 +13,13 @@ from coscientist.core.execution.domain import Catalog, StudyView
 from coscientist.core.execution.runtime_factory import close_runtime, open_runtime
 
 
-def _absent_loop() -> asyncio.AbstractEventLoop | None:
-    """Sentinel for ``except RuntimeError`` (Call assign — not a silent default)."""
-    return None
+def _has_running_loop() -> bool:
+    """True iff ``asyncio.get_running_loop()`` succeeds."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False  # audit-ok[except_silent_return]: documented no-loop signal from get_running_loop
+    return True
 
 
 def study_events_db(data_root: Path, study_id: object) -> tuple[str, Path]:
@@ -43,12 +47,7 @@ class DataRootStudyService:
         self._catalog = catalog
 
     def study_view(self, study_id: str) -> StudyView:
-        # Detect loop first; run work outside except (no __context__ entanglement).
-        try:
-            loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = _absent_loop()
-        if loop is not None:
+        if _has_running_loop():
             raise StudyViewLoopRefuse("study_view_requires_no_running_event_loop")
         return asyncio.run(self._study_view_async(study_id))
 

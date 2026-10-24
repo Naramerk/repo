@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-### M5 API — crocodile closeout
-- `study_view`: detect loop then `asyncio.run` outside except; no unreachable id self-checks.
-- No None→[] inputs coalesce; contract tests split + typed EventStore fake.
+### M5 API — DataRootStudyService loop gate + contract tests
+- `_has_running_loop()` then `asyncio.run` (no work inside except); `study_events_db` → `(sid, path)`.
+- Generators without unreachable self-checks; contract tests one scenario each + typed EventStore fake.
 
 ### M5 API — cayman closeout (StudyNotFound path + loop gate)
 - `StudyNotFound` only from `core.events.errors` (no api/ports re-export); reason required.
