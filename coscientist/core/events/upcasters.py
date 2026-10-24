@@ -890,6 +890,24 @@ def _attempt_started_v8_to_v9_role(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _attempt_started_v9_to_v10_provenance(payload: dict[str, Any]) -> dict[str, Any]:
+    """R16a / DESIGN_M1 §6.7: materialize absent AttemptStarted.provenance.
+
+    Pre-field journals omitted the key; runtime historically treated that as
+    ``real``. Writers already send an explicit value. Present-but-null is
+    corrupt → CatalogError (never invent here either).
+    """
+    from coscientist.core.events.errors import CatalogError
+
+    out = dict(payload)
+    if "provenance" not in out:
+        out["provenance"] = "real"
+        return out
+    if out["provenance"] is None:
+        raise CatalogError("AttemptStarted.v10:provenance_required")
+    return out
+
+
 def _task_created_v13_to_v14_sandbox_freeze(payload: dict[str, Any]) -> dict[str, Any]:
     """#41: v14 TaskCreated must carry a complete typed sandbox freeze map.
 
@@ -1029,6 +1047,7 @@ register_upcaster("AttemptStarted", 5, _attempt_started_v5_to_v6_budget_limit)
 register_upcaster("AttemptStarted", 6, _attempt_started_v6_to_v7_tainted)
 register_upcaster("AttemptStarted", 7, _attempt_started_v7_to_v8_inputs_digest)
 register_upcaster("AttemptStarted", 8, _attempt_started_v8_to_v9_role)
+register_upcaster("AttemptStarted", 9, _attempt_started_v9_to_v10_provenance)
 
 
 def _result_recorded_v2_to_v3_output_kinds(payload: dict[str, Any]) -> dict[str, Any]:

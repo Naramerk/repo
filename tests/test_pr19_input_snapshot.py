@@ -889,12 +889,13 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
         for e in await rt.store.read_all()
         if e.type == "AttemptStarted" and e.entity_key == aid
     )
-    # #23 writer v8 (inputs_digest); PR20 stacks v9 (attempt_role).
-    assert started.schema_version == 9
+    # #23 v8 inputs_digest; PR20 v9 attempt_role; R16a v10 provenance.
+    assert started.schema_version == 10
     assert started.payload.get("inputs_digest")
     assert isinstance(started.payload["inputs_digest"], str)
     assert len(started.payload["inputs_digest"]) == 64
     assert started.payload.get("attempt_role") == "agent"
+    assert started.payload.get("provenance") == "real"
     await close_runtime(rt)
 
 
@@ -1032,10 +1033,11 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
             "inputs_digest": "deadbeef" * 8,
         },
     )
-    # #23 v7→v8 inputs_digest; PR20 v8→v9 attempt_role (continuous chain).
-    assert v == 9
+    # #23 v7→v8 inputs_digest; PR20 v8→v9 role; R16a v9→v10 provenance.
+    assert v == 10
     assert payload["inputs"][0].get("digest") is None
     assert payload.get("attempt_role") == "agent"
+    assert payload.get("provenance") == "real"
     rt.attempts[fake_aid] = payload
     task.attempts.append(fake_aid)
 
@@ -1184,7 +1186,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
 
 
 def test_upcast_attempt_started_v7_to_v8():
-    """#23 v7→v8 inputs_digest; PR20 continues to v9 attempt_role."""
+    """#23 v7→v8 inputs_digest; PR20 v9 role; R16a v10 provenance."""
     v, p = upcast(
         "AttemptStarted",
         7,
@@ -1194,9 +1196,10 @@ def test_upcast_attempt_started_v7_to_v8():
             "tainted_context": False,
         },
     )
-    assert v == 9
+    assert v == 10
     assert "inputs_digest" in p
     assert p.get("attempt_role") == "agent"
+    assert p.get("provenance") == "real"
     assert p["inputs"][0].get("digest") is None
     assert p["inputs"][0].get("digest_version") is None
     assert p["inputs"][0].get("retrieved_at") is None

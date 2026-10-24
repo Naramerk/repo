@@ -663,16 +663,19 @@ def test_assemble_refuses_unknown_disposition_and_provenance():
 
 @pytest.mark.asyncio
 async def test_build_finalized_payload_requires_observations():
+    from types import SimpleNamespace
+    from typing import cast
+
+    from coscientist.core.execution.machine import StudyRuntime
     from coscientist.core.finalize.finalize import _build_finalized_payload
 
-    class _RT:
-        tasks: dict = {}
-        attempts: dict = {}
-        study = None
-
+    rt = cast(
+        StudyRuntime,
+        SimpleNamespace(tasks={}, attempts={}, study=None),
+    )
     with pytest.raises(RuntimeError, match="runtime._observations required"):
         await _build_finalized_payload(
-            _RT(),  # type: ignore[arg-type]
+            rt,
             sid="st",
             trigger="all_done",
             term=TerminalReason.COMPLETED,
@@ -682,6 +685,27 @@ async def test_build_finalized_payload_requires_observations():
             hypothesis_verdicts={},
             hypotheses_unavailable=None,
         )
+
+
+def test_assemble_done_without_closed_attempt_has_null_provenance():
+    """DONE with no closed attempt → row kept, provenance=null (not silent drop)."""
+    report = assemble_minimal_report(
+        study_id="st",
+        terminal_reason="completed",
+        trigger="all_done",
+        contributing_reasons=[],
+        verdict="partial",
+        tasks={"st/A": _task("A")},  # SUCCESS, attempts=[]
+        attempts={},
+        question_dispositions={},
+        fallback_reason=None,
+    )
+    assert len(report.tasks) == 1
+    assert report.tasks[0].provenance is None
+    assert report.tasks[0].outcome is TaskOutcome.SUCCESS
+    # Summary counts that task (согласованный учёт with report.tasks).
+    assert "задач 1" in report.summary
+    assert "SUCCESS 1" in report.summary
 
 
 def test_report_not_required_verdict():

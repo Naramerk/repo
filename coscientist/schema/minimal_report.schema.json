@@ -54,7 +54,10 @@
           "kind": {"type": "string"},
           "outcome": {"enum": ["SUCCESS", "PARTIAL", "FAILED", "SKIPPED"]},
           "reason": {"type": ["string", "null"]},
-          "provenance": {"enum": ["real", "partial", "stub"]}
+          "provenance": {
+            "type": ["string", "null"],
+            "enum": ["real", "partial", "stub", null]
+          }
         }
       }
     },

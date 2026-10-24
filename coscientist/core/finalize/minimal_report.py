@@ -195,11 +195,6 @@ def assemble_minimal_report(
             raise MinimalReportRefuse(
                 f"task {t.spec.task_key!r}: outcome required"
             )
-        if not _has_closed_attempt(t, attempts):
-            # No closed attempt → no provenance to attribute (do not invent
-            # ``real``, which would also land SUCCESS/PARTIAL in section real).
-            # Summary still counts the task; row omitted.
-            continue
         reason_s: str | None
         if isinstance(t.reason, TaskReason):
             reason_s = t.reason.value
@@ -207,13 +202,18 @@ def assemble_minimal_report(
             reason_s = str(t.reason)
         else:
             reason_s = None
+        # No closed attempt → explicit provenance=null (not invent real, not omit).
+        if _has_closed_attempt(t, attempts):
+            prov: Provenance | None = _task_provenance(t, attempts)
+        else:
+            prov = None
         t_rows.append(
             {
                 "task_key": t.spec.task_key,
                 "kind": t.kind.value,
                 "outcome": t.outcome,
                 "reason": reason_s,
-                "provenance": _task_provenance(t, attempts),
+                "provenance": prov,
             }
         )
     q_n = len(q_rows)

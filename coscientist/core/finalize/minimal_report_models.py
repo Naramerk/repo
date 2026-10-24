@@ -22,7 +22,8 @@ class MinimalReportTaskRow(BaseModel):
     kind: StrictStr
     outcome: TaskOutcome
     reason: StrictStr | None
-    provenance: Provenance
+    # None = DONE with no closed attempt (explicit not-started; never invent real).
+    provenance: Provenance | None
 
 
 class MinimalReportQuestionRow(BaseModel):
