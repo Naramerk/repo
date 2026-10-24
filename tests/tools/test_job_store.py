@@ -1,0 +1,505 @@
+"""G6 JobStore contract tests (DESIGN §6.4)."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime, timedelta, timezone
+from typing import Literal, get_args
+
+import pytest
+from pydantic import ValidationError
+
+from coscientist.core.events.clock import FakeClock
+from coscientist.core.events.events import EventType, UnstampedEvent
+from coscientist.core.events.job_events import (
+    JOB_ID_DIGEST_HEX_LEN,
+    JobCancelFailedPayload,
+    JobCancelledPayload,
+    JobEventType,
+    JobStatus,
+    JobStatusChangedPayload,
+    JobSubmittedPayload,
+    JobTimedOutPayload,
+    deadline_to_wire,
+    job_cancel_refused,
+    job_is_live,
+    job_is_terminal,
+    require_nonblank,
+)
+from coscientist.tools.contract import ToolError
+from coscientist.tools.jobs import InMemoryJobStore, Job
+
+_CompleteStatus = Literal["succeeded", "failed"]
+
+
+class _Journal:
+    def __init__(self) -> None:
+        self.events: list[UnstampedEvent] = []
+
+    def record(self, event: UnstampedEvent) -> None:
+        self.events.append(event)
+
+
+def _store() -> tuple[FakeClock, _Journal, InMemoryJobStore]:
+    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
+    journal = _Journal()
+    store = InMemoryJobStore(
+        study_id="st1",
+        clock=clock,
+        journal=journal,
+        on_clock_change=clock.on_change,
+    )
+    return clock, journal, store
+
+
+def _types(journal: _Journal) -> list[str]:
+    return [e.type for e in journal.events]
+
+
+def test_job_event_types_are_event_type_members() -> None:
+    """JobEventType is the sole source; EventType nests it (get_args flattens)."""
+    known = set(get_args(EventType))
+    for name in get_args(JobEventType):
+        assert name in known
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        ("queued", True),
+        ("running", True),
+        ("timed_out", False),
+        ("succeeded", False),
+        ("failed", False),
+        ("cancelled", False),
+    ],
+    ids=[
+        "queued_live",
+        "running_live",
+        "timed_out_not_live",
+        "succeeded_not_live",
+        "failed_not_live",
+        "cancelled_not_live",
+    ],
+)
+def test_job_is_live(status: JobStatus, expected: bool) -> None:
+    assert job_is_live(status) is expected
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        ("timed_out", True),
+        ("succeeded", True),
+        ("failed", True),
+        ("cancelled", True),
+        ("queued", False),
+        ("running", False),
+    ],
+    ids=[
+        "timed_out_terminal",
+        "succeeded_terminal",
+        "failed_terminal",
+        "cancelled_terminal",
+        "queued_not_terminal",
+        "running_not_terminal",
+    ],
+)
+def test_job_is_terminal(status: JobStatus, expected: bool) -> None:
+    assert job_is_terminal(status) is expected
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        ("succeeded", True),
+        ("failed", True),
+        ("cancelled", True),
+        ("timed_out", False),
+        ("running", False),
+        ("queued", False),
+    ],
+    ids=[
+        "succeeded_refused",
+        "failed_refused",
+        "cancelled_refused",
+        "timed_out_allowed",
+        "running_allowed",
+        "queued_allowed",
+    ],
+)
+def test_job_cancel_refused(status: JobStatus, expected: bool) -> None:
+    assert job_cancel_refused(status) is expected
+
+
+def test_job_refuses_naive_deadline() -> None:
+    with pytest.raises(ValidationError, match="timezone-aware"):
+        Job(
+            job_id="job_x",
+            kind="coder",
+            attempt_id="a#1",
+            status="queued",
+            deadline=datetime(2026, 10, 24),
+            artifacts=[],
+        )
+
+
+def test_deadline_to_wire_naive_refused() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        deadline_to_wire(datetime(2026, 10, 24))
+
+
+def test_deadline_to_wire_normalizes_plus3_offset() -> None:
+    plus3 = timezone(timedelta(hours=3))
+    local = datetime(2026, 10, 24, 3, 0, tzinfo=plus3)
+    assert deadline_to_wire(local) == "2026-10-24T00:00:00Z"
+
+
+def test_deadline_to_wire_utc_z_suffix() -> None:
+    assert deadline_to_wire(datetime(2026, 10, 24, tzinfo=UTC)) == "2026-10-24T00:00:00Z"
+
+
+@pytest.mark.parametrize(
+    ("value", "field"),
+    [
+        ("  x", "id"),
+        ("", "id"),
+        ("x ", "id"),
+    ],
+    ids=["leading_space", "empty", "trailing_space"],
+)
+def test_require_nonblank_refuses(value: str, field: str) -> None:
+    with pytest.raises(ValueError, match="non-empty"):
+        require_nonblank(value, field=field)
+
+
+def test_job_submitted_payload_refuses_blank_deadline() -> None:
+    with pytest.raises(ValidationError, match="deadline"):
+        JobSubmittedPayload(
+            job_id="j",
+            attempt_id="a",
+            kind="coder",
+            deadline=" ",
+            spec_digest="d",
+        )
+
+
+def test_job_submitted_payload_refuses_blank_spec_digest() -> None:
+    with pytest.raises(ValidationError, match="spec_digest"):
+        JobSubmittedPayload(
+            job_id="j",
+            attempt_id="a",
+            kind="coder",
+            deadline="2026-10-24T00:00:00Z",
+            spec_digest="",
+        )
+
+
+def test_job_timed_out_payload_refuses_blank_deadline() -> None:
+    with pytest.raises(ValidationError, match="deadline"):
+        JobTimedOutPayload(job_id="j", attempt_id="a", deadline="\t")
+
+
+def test_job_cancel_failed_payload_refuses_blank_reason() -> None:
+    with pytest.raises(ValidationError, match="reason"):
+        JobCancelFailedPayload(job_id="j", attempt_id="a", reason=" ")
+
+
+def test_job_cancelled_payload_refuses_padded_job_id() -> None:
+    with pytest.raises(ValidationError, match="job_id"):
+        JobCancelledPayload(job_id=" j", attempt_id="a")
+
+
+def test_job_status_changed_payload_accepts_running() -> None:
+    payload = JobStatusChangedPayload(job_id="j", attempt_id="a", status="running")
+    assert payload.status == "running"
+
+
+def test_submit_journals_and_idempotent() -> None:
+    _clock, journal, store = _store()
+    deadline = _clock.now() + timedelta(seconds=30)
+    spec = {"code": "print(1)", "lang": "python"}
+    jid = store.submit("coder", spec, "att#1", deadline)
+    assert jid.startswith("job_")
+    assert len(jid) == len("job_") + JOB_ID_DIGEST_HEX_LEN
+    assert store.get(jid).status == "queued"
+    assert _types(journal) == ["JobSubmitted"]
+    payload = JobSubmittedPayload.model_validate(journal.events[0].payload)
+    assert payload.job_id == jid
+    assert payload.kind == "coder"
+    assert payload.attempt_id == "att#1"
+    assert payload.deadline == deadline_to_wire(deadline)
+    assert store.submit("coder", spec, "att#1", deadline) == jid
+    assert _types(journal) == ["JobSubmitted"]
+
+
+def test_second_live_job_same_attempt_refused() -> None:
+    clock, _journal, store = _store()
+    deadline = clock.now() + timedelta(seconds=30)
+    store.submit("coder", {"a": 1}, "att#1", deadline)
+    with pytest.raises(ToolError, match="live job") as ei:
+        store.submit("coder", {"a": 2}, "att#1", deadline)
+    assert ei.value.kind == "local"
+    assert ei.value.retryable is False
+
+
+def test_store_init_refuses_empty_study_id() -> None:
+    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
+    with pytest.raises(ToolError, match="study_id"):
+        InMemoryJobStore(
+            study_id="",
+            clock=clock,
+            journal=_Journal(),
+            on_clock_change=None,
+        )
+
+
+def test_store_init_refuses_padded_study_id() -> None:
+    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
+    with pytest.raises(ToolError, match="study_id"):
+        InMemoryJobStore(
+            study_id=" st",
+            clock=clock,
+            journal=_Journal(),
+            on_clock_change=None,
+        )
+
+
+def test_submit_refuses_naive_deadline() -> None:
+    clock, _journal, store = _store()
+    with pytest.raises(ToolError, match="timezone-aware"):
+        store.submit("coder", {}, "att", datetime(2026, 10, 24))
+    store.close()
+
+
+def test_submit_refuses_empty_attempt_id() -> None:
+    clock, _journal, store = _store()
+    aware = clock.now() + timedelta(seconds=1)
+    with pytest.raises(ToolError, match="attempt_id"):
+        store.submit("coder", {}, "", aware)
+    store.close()
+
+
+def test_submit_refuses_padded_attempt_id() -> None:
+    clock, _journal, store = _store()
+    aware = clock.now() + timedelta(seconds=1)
+    with pytest.raises(ToolError, match="attempt_id"):
+        store.submit("coder", {}, " a", aware)
+    store.close()
+
+
+def test_get_unknown_job_id() -> None:
+    _clock, _journal, store = _store()
+    with pytest.raises(ToolError, match="unknown job_id"):
+        store.get("job_missing")
+
+
+@pytest.mark.asyncio
+async def test_wait_refuses_naive_until() -> None:
+    clock, _journal, store = _store()
+    jid = store.submit("coder", {"x": 1}, "att#u", clock.now() + timedelta(seconds=30))
+    with pytest.raises(ToolError, match="timezone-aware"):
+        await store.wait(jid, until=datetime(2026, 10, 24))
+
+
+def test_complete_refused_after_cancel() -> None:
+    clock, _journal, store = _store()
+    jid = store.submit("coder", {"x": 1}, "att#c", clock.now() + timedelta(seconds=30))
+    store.cancel(jid)
+    with pytest.raises(ToolError, match="complete requires live"):
+        store.complete(jid, status="succeeded", artifacts=[])
+
+
+def test_mark_running_refused_after_cancel() -> None:
+    clock, _journal, store = _store()
+    jid = store.submit("coder", {"x": 1}, "att#mr", clock.now() + timedelta(seconds=30))
+    store.cancel(jid)
+    with pytest.raises(ToolError, match="mark_running requires queued"):
+        store.mark_running(jid)
+
+
+@pytest.mark.parametrize(
+    "terminal",
+    ("succeeded", "failed"),
+    ids=["succeeded", "failed"],
+)
+def test_cancel_refused_on_succeeded_or_failed(terminal: _CompleteStatus) -> None:
+    clock, journal, store = _store()
+    jid = store.submit(
+        "coder",
+        {"t": terminal},
+        "att#" + terminal,
+        clock.now() + timedelta(seconds=30),
+    )
+    store.mark_running(jid)
+    store.complete(jid, status=terminal, artifacts=[])
+    store.cancel(jid)
+    assert _types(journal)[-1] == "JobCancelFailed"
+    failed = JobCancelFailedPayload.model_validate(journal.events[-1].payload)
+    assert failed.reason == f"status={terminal}"
+    assert store.get(jid).status == terminal
+
+
+@pytest.mark.asyncio
+async def test_wait_returns_when_until_passes_via_clock_advance() -> None:
+    """DESIGN §6.4: wait bounded by until; FakeClock.advance must not hang."""
+    clock, _journal, store = _store()
+    deadline = clock.now() + timedelta(seconds=30)
+    jid = store.submit("coder", {"x": 1}, "att#until", deadline)
+    until = clock.now() + timedelta(seconds=5)
+
+    adv = asyncio.create_task(_coro_advance(clock, timedelta(seconds=10)))
+    job = await asyncio.wait_for(store.wait(jid, until=until), timeout=2.0)
+    await adv
+    assert job.status == "queued"
+    assert job.job_id == jid
+    assert clock.now() >= until
+    assert clock.now() < deadline
+
+
+async def _coro_advance(clock: FakeClock, delta: timedelta) -> None:
+    clock.advance(delta)
+
+
+@pytest.mark.asyncio
+async def test_wait_times_out_when_deadline_passes_via_clock_advance() -> None:
+    clock, journal, store = _store()
+    deadline = clock.now() + timedelta(seconds=5)
+    jid = store.submit("coder", {"x": 1}, "att#dl", deadline)
+
+    adv = asyncio.create_task(_coro_advance(clock, timedelta(seconds=6)))
+    job = await asyncio.wait_for(
+        store.wait(jid, until=clock.now() + timedelta(seconds=60)),
+        timeout=2.0,
+    )
+    await adv
+    assert job.status == "timed_out"
+    assert _types(journal) == ["JobSubmitted", "JobTimedOut", "JobCancelled"]
+
+
+@pytest.mark.asyncio
+async def test_wait_returns_when_until_already_elapsed_without_subscribe() -> None:
+    """``on_clock_change=None`` path (SystemClock wiring): until checked via now()."""
+    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
+    journal = _Journal()
+    store = InMemoryJobStore(
+        study_id="st1",
+        clock=clock,
+        journal=journal,
+        on_clock_change=None,
+    )
+    try:
+        deadline = clock.now() + timedelta(seconds=30)
+        jid = store.submit("coder", {"x": 1}, "att#nosub", deadline)
+        until = clock.now() + timedelta(seconds=5)
+        clock.advance(timedelta(seconds=6))
+        job = await asyncio.wait_for(store.wait(jid, until=until), timeout=2.0)
+        assert job.status == "queued"
+        assert job.job_id == jid
+        assert clock.now() >= until
+        assert clock.now() < deadline
+    finally:
+        store.close()
+
+
+def test_close_unsubscribes_clock() -> None:
+    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
+    journal = _Journal()
+    store = InMemoryJobStore(
+        study_id="st1",
+        clock=clock,
+        journal=journal,
+        on_clock_change=clock.on_change,
+    )
+    jid = store.submit("coder", {"x": 1}, "att#close", clock.now() + timedelta(seconds=2))
+    store.close()
+    clock.advance(timedelta(seconds=3))
+    # Without subscription, advance must not tick the store.
+    assert store.get(jid).status == "queued"
+    store.tick()
+    assert store.get(jid).status == "timed_out"
+
+
+@pytest.mark.asyncio
+async def test_deadline_timed_out_then_cancelled() -> None:
+    clock, journal, store = _store()
+    deadline = clock.now() + timedelta(seconds=5)
+    jid = store.submit("alembic", {"step": "build"}, "att#2", deadline)
+    clock.advance(timedelta(seconds=6))
+    job = await store.wait(jid, until=clock.now() + timedelta(seconds=60))
+    assert job.status == "timed_out"
+    assert _types(journal) == ["JobSubmitted", "JobTimedOut", "JobCancelled"]
+    timed = JobTimedOutPayload.model_validate(journal.events[1].payload)
+    assert timed.job_id == jid
+    assert timed.deadline == deadline_to_wire(deadline)
+
+
+@pytest.mark.asyncio
+async def test_wait_never_revives_timed_out() -> None:
+    clock, _journal, store = _store()
+    deadline = clock.now() + timedelta(seconds=1)
+    jid = store.submit("coder", {"x": 1}, "att#3", deadline)
+    clock.advance(timedelta(seconds=2))
+    first = await store.wait(jid, until=clock.now())
+    assert first.status == "timed_out"
+    second = await store.wait(jid, until=clock.now() + timedelta(hours=1))
+    assert second.status == "timed_out"
+
+
+def test_mark_running_refused_on_timed_out() -> None:
+    clock, _journal, store = _store()
+    deadline = clock.now() + timedelta(seconds=1)
+    jid = store.submit("coder", {"x": 1}, "att#3b", deadline)
+    clock.advance(timedelta(seconds=2))
+    store.tick()
+    with pytest.raises(ToolError, match="mark_running requires queued"):
+        store.mark_running(jid)
+
+
+@pytest.mark.asyncio
+async def test_complete_success_wakes_wait() -> None:
+    clock, journal, store = _store()
+    deadline = clock.now() + timedelta(seconds=60)
+    jid = store.submit("coder", {"x": 1}, "att#4", deadline)
+    store.mark_running(jid)
+
+    async def _finish() -> None:
+        store.complete(jid, status="succeeded", artifacts=["art_a"])
+
+    fin = asyncio.create_task(_finish())
+    job = await store.wait(jid, until=deadline)
+    await fin
+    assert job.status == "succeeded"
+    assert job.artifacts == ["art_a"]
+    assert _types(journal) == [
+        "JobSubmitted",
+        "JobStatusChanged",
+        "JobStatusChanged",
+    ]
+
+
+def test_cancel_live_journals_cancelled() -> None:
+    clock, journal, store = _store()
+    jid = store.submit("coder", {"x": 1}, "att#5", clock.now() + timedelta(seconds=30))
+    store.cancel(jid)
+    assert store.get(jid).status == "cancelled"
+    assert _types(journal) == ["JobSubmitted", "JobCancelled"]
+
+
+def test_second_cancel_journals_cancel_failed() -> None:
+    clock, journal, store = _store()
+    jid = store.submit("coder", {"x": 1}, "att#5b", clock.now() + timedelta(seconds=30))
+    store.cancel(jid)
+    store.cancel(jid)
+    assert _types(journal)[-1] == "JobCancelFailed"
+    failed = JobCancelFailedPayload.model_validate(journal.events[-1].payload)
+    assert failed.reason == "cancel_already_recorded"
+
+
+def test_tick_closes_overdue() -> None:
+    clock, journal, store = _store()
+    jid = store.submit("coder", {"x": 1}, "att#6", clock.now() + timedelta(seconds=2))
+    clock.advance(timedelta(seconds=3))
+    store.tick()
+    assert store.get(jid).status == "timed_out"
+    assert _types(journal) == ["JobSubmitted", "JobTimedOut", "JobCancelled"]

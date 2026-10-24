@@ -206,6 +206,7 @@ forbidden_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
+  "coscientist.tools.jobs",
   "coscientist.tools.taint",
 ]
 
@@ -216,6 +217,7 @@ source_modules = ["coscientist.agents"]
 forbidden_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.gate",
+  "coscientist.tools.jobs",
   "coscientist.tools.taint",
   "coscientist.core.execution.tool_registry",
 ]
@@ -300,6 +302,7 @@ source_modules = [
   "coscientist.core.events.errors",
   "coscientist.core.events.events",
   "coscientist.core.events.ids",
+  "coscientist.core.events.job_events",
   "coscientist.core.events.metrics",
   "coscientist.core.events.ports",
   "coscientist.core.events.projections",
@@ -396,6 +399,7 @@ source_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
+  "coscientist.tools.jobs",
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.router",
@@ -469,6 +473,7 @@ source_modules = [
   "coscientist.core.events.errors",
   "coscientist.core.events.events",
   "coscientist.core.events.ids",
+  "coscientist.core.events.job_events",
   "coscientist.core.events.metrics",
   "coscientist.core.events.ports",
   "coscientist.core.events.projections",
@@ -566,6 +571,7 @@ source_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
+  "coscientist.tools.jobs",
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.router",
@@ -633,6 +639,7 @@ source_modules = [
   "coscientist.core.events.errors",
   "coscientist.core.events.events",
   "coscientist.core.events.ids",
+  "coscientist.core.events.job_events",
   "coscientist.core.events.metrics",
   "coscientist.core.events.ports",
   "coscientist.core.events.projections",
@@ -730,6 +737,7 @@ source_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
+  "coscientist.tools.jobs",
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.router",
