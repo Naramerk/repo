@@ -88,7 +88,6 @@ forbidden_modules = [
   "coscientist.api",
   "coscientist.tools",
   "coscientist.agents",
-  "coscientist.agents.adapter",
   "coscientist.llm",
   "coscientist.mcp",
   "coscientist.profiles",
@@ -114,7 +113,6 @@ forbidden_modules = [
   "coscientist.core",
   "coscientist.tools",
   "coscientist.agents",
-  "coscientist.agents.adapter",
   "coscientist.api",
   "coscientist.checks",
   "coscientist.experimental",
@@ -130,7 +128,6 @@ forbidden_modules = [
   "coscientist.core",
   "coscientist.tools",
   "coscientist.agents",
-  "coscientist.agents.adapter",
   "coscientist.api",
   "coscientist.llm",
   "coscientist.checks",
@@ -142,7 +139,6 @@ name = "agents, api, tools, llm must not import coscientist.mcp"
 type = "forbidden"
 source_modules = [
   "coscientist.agents",
-  "coscientist.agents.adapter",
   "coscientist.api",
   "coscientist.tools",
   "coscientist.llm",
@@ -165,7 +161,6 @@ source_modules = [
   "coscientist.llm",
   "coscientist.tools",
   "coscientist.agents",
-  "coscientist.agents.adapter",
   "coscientist.api",
   "coscientist.schema",
   "coscientist.mcp",
@@ -246,7 +241,6 @@ type = "forbidden"
 allow_indirect_imports = true
 source_modules = [
   "coscientist.agents",
-  "coscientist.agents.adapter",
   "coscientist.checks",
   "coscientist.experimental",
 ]
@@ -779,7 +773,6 @@ type = "forbidden"
 source_modules = ["coscientist.profiles"]
 forbidden_modules = [
   "coscientist.agents",
-  "coscientist.agents.adapter",
   "coscientist.llm",
   "coscientist.tools",
   "coscientist.core",
