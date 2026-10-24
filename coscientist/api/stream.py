@@ -16,11 +16,7 @@ class _WebSocketLike(Protocol):
 
 
 def require_poll_interval_s(value: float) -> float:
-    """Positive finite ``float`` poll interval (``type is float``; bool/int refused)."""
-    if type(value) is not float:
-        kind = type(value).__name__
-        msg = f"poll_interval_s_must_be_float_got_{kind}:{value!r}"
-        raise StreamConfigRefuse(msg)
+    """Positive finite ``float`` poll interval (``AppDeps.stream_poll_interval_s``)."""
     if not math.isfinite(value) or value <= 0.0:
         msg = f"poll_interval_s_must_be_positive_finite_got_{value!r}"
         raise StreamConfigRefuse(msg)

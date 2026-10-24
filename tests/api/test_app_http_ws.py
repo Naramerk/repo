@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import math
+import threading
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -14,9 +16,15 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from coscientist.api.app import AppDeps, create_app
+from coscientist.api.app import (
+    WS_CLOSE_REASON_MAX_BYTES,
+    AppDeps,
+    _await_cancelled,
+    create_app,
+    encode_ws_close_reason,
+)
 from coscientist.api.cancel import bind_cancel_study
-from coscientist.api.errors import AfterSeqRefuse, StreamConfigRefuse
+from coscientist.api.errors import AfterSeqRefuse, StreamConfigRefuse, WsCloseReasonRefuse
 from coscientist.api.stream import require_poll_interval_s, stream_study_events
 from coscientist.api.views import parse_after_query
 from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
@@ -121,6 +129,24 @@ class _PollSleep:
         await asyncio.sleep(0)
 
 
+class _GateSleep:
+    """Block after the first poll so the test can close the socket exactly once."""
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.entered = threading.Event()
+        self._gate = threading.Event()
+
+    async def __call__(self, _interval: float) -> None:
+        self.count += 1
+        self.entered.set()
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._gate.wait)
+
+    def release(self) -> None:
+        self._gate.set()
+
+
 def _ev(seq: int) -> StoredEvent:
     return StoredEvent(
         seq=seq,
@@ -140,10 +166,10 @@ def _make_app(
     events: list[StoredEvent],
     calls: list[tuple[str, str]],
     *,
-    sleep: _PollSleep | None = None,
+    sleep: Callable[[float], Awaitable[None]] | None = None,
 ) -> TestClient:
     store: EventStore = _Store(events)
-    clock = sleep if sleep is not None else _PollSleep()
+    clock: Callable[[float], Awaitable[None]] = sleep if sleep is not None else _PollSleep()
 
     async def _cancel(sid: str, by: str) -> dict[str, str]:
         if sid != _SID:
@@ -241,9 +267,18 @@ def test_parse_after_query_whitespace() -> None:
         parse_after_query(" 1")
 
 
-def test_parse_after_query_invalid() -> None:
-    with pytest.raises(AfterSeqRefuse, match="after_query_invalid:ValueError"):
-        parse_after_query("nope")
+@pytest.mark.parametrize(
+    ("raw", "match"),
+    [
+        ("nope", r"after_query_non_digits:'nope'"),
+        ("+1", r"after_query_non_digits:'\+1'"),
+        ("1_000", r"after_query_non_digits:'1_000'"),
+    ],
+    ids=["alpha", "plus_sign", "underscore"],
+)
+def test_parse_after_query_non_digits(raw: str, match: str) -> None:
+    with pytest.raises(AfterSeqRefuse, match=match):
+        parse_after_query(raw)
 
 
 def test_cancel_ok() -> None:
@@ -258,43 +293,30 @@ def test_cancel_missing_study_via_stub() -> None:
     assert client.post(f"/studies/{_SID_MISSING}/cancel", json={"by": "ops"}).status_code == 404
 
 
-def test_cancel_bind_missing_study(tmp_path: Path) -> None:
-    catalog = minimal_test_catalog()
-
+def _make_bind_cancel_app(tmp_path: Path) -> TestClient:
     def _store_missing(sid: str) -> EventStore:
         raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
 
-    client = TestClient(
+    return TestClient(
         create_app(
             AppDeps(
                 studies=_Studies(),
                 event_store_for=_store_missing,
-                cancel_study=bind_cancel_study(tmp_path, catalog=catalog),
+                cancel_study=bind_cancel_study(tmp_path, catalog=minimal_test_catalog()),
                 stream_poll_interval_s=0.01,
                 stream_sleep=_PollSleep(),
             )
         )
     )
+
+
+def test_cancel_bind_missing_study(tmp_path: Path) -> None:
+    client = _make_bind_cancel_app(tmp_path)
     assert client.post(f"/studies/{_SID_MISSING}/cancel", json={"by": "ops"}).status_code == 404
 
 
 def test_cancel_bind_bad_by(tmp_path: Path) -> None:
-    catalog = minimal_test_catalog()
-
-    def _store_missing(sid: str) -> EventStore:
-        raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
-
-    client = TestClient(
-        create_app(
-            AppDeps(
-                studies=_Studies(),
-                event_store_for=_store_missing,
-                cancel_study=bind_cancel_study(tmp_path, catalog=catalog),
-                stream_poll_interval_s=0.01,
-                stream_sleep=_PollSleep(),
-            )
-        )
-    )
+    client = _make_bind_cancel_app(tmp_path)
     assert client.post(f"/studies/{_SID}/cancel", json={"by": " "}).status_code == 400
 
 
@@ -310,10 +332,10 @@ def test_ws_happy_path() -> None:
     [
         (f"/studies/{_SID}/stream", "after_query_required"),
         (f"/studies/{_SID}/stream?after=%201", "after_query_whitespace"),
-        (f"/studies/{_SID}/stream?after=nope", "after_query_invalid:ValueError"),
+        (f"/studies/{_SID}/stream?after=nope", "after_query_non_digits:'nope'"),
         (f"/studies/{_SID_FOREIGN}/stream?after=0", STUDY_NOT_FOUND_REASON),
     ],
-    ids=["no_after", "whitespace", "non_int", "foreign"],
+    ids=["no_after", "whitespace", "non_digits", "foreign"],
 )
 def test_ws_refuse_closes_1008(path: str, reason: str) -> None:
     client = _make_app([_ev(1)], [])
@@ -324,12 +346,26 @@ def test_ws_refuse_closes_1008(path: str, reason: str) -> None:
     assert ei.value.reason == reason
 
 
+def test_encode_ws_close_reason_ok() -> None:
+    assert encode_ws_close_reason("short") == "short"
+
+
+def test_encode_ws_close_reason_exceeds_limit() -> None:
+    oversized = "x" * (WS_CLOSE_REASON_MAX_BYTES + 1)
+    size = len(oversized.encode("utf-8"))
+    match = rf"ws_close_reason_exceeds_{WS_CLOSE_REASON_MAX_BYTES}_bytes_got_{size}"
+    with pytest.raises(WsCloseReasonRefuse, match=match):
+        encode_ws_close_reason(oversized)
+
+
 def test_ws_stops_on_client_disconnect() -> None:
-    clock = _PollSleep()
+    clock = _GateSleep()
     client = _make_app([], [], sleep=clock)
-    with client.websocket_connect(f"/studies/{_SID}/stream?after=0"):
-        pass
-    assert clock.count >= 1
+    with client.websocket_connect(f"/studies/{_SID}/stream?after=0") as ws:
+        assert clock.entered.wait(timeout=5.0)
+        ws.close()
+        clock.release()
+    assert clock.count == 1
 
 
 @pytest.mark.asyncio
@@ -359,3 +395,14 @@ async def test_stream_helper_stops_when_disconnected() -> None:
     )
     assert state.polls == 2
     assert ws.sent == []
+
+
+@pytest.mark.asyncio
+async def test_await_cancelled_reraise() -> None:
+    async def boom() -> None:
+        raise RuntimeError("watcher_boom")
+
+    task = asyncio.create_task(boom())
+    await asyncio.wait({task})
+    with pytest.raises(RuntimeError, match="watcher_boom"):
+        await _await_cancelled(task)
