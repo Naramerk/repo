@@ -370,7 +370,7 @@ async def materialize_loop_iter(
             runtime,
             loop,
             detail=f"loop_assign_keys:{keyed}",
-            reason=LOOP_REASON_REFUSED,
+            reason="refused",
             expansion_reason="invalid",
         )
         return None
@@ -391,7 +391,7 @@ async def materialize_loop_iter(
             runtime,
             loop,
             detail=f"loop_max_tasks:{existing_n + len(added)}>{max_tasks}",
-            reason=LOOP_REASON_REFUSED,
+            reason="refused",
             expansion_reason="invalid",
         )
         return None
@@ -416,7 +416,7 @@ async def materialize_loop_iter(
             runtime,
             loop,
             detail=f"loop_shares:{share_err}",
-            reason=LOOP_REASON_REFUSED,
+            reason="refused",
             expansion_reason="invalid",
         )
         return None
@@ -803,7 +803,7 @@ async def finalize_loop_internal_error(
                     loop,
                     iter_n=current_iter(runtime, loop.loop_id) or 0,
                     detail=detail,
-                    reason=LOOP_REASON_ERROR,
+                    reason="error",
                     expansion_reason="invalid",
                 )
             else:
@@ -936,7 +936,7 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
                     runtime,
                     loop,
                     detail=f"loop_predicate:{type(e).__name__}:{e}"[:200],
-                    reason=LOOP_REASON_ERROR,
+                    reason="error",
                     expansion_reason="invalid",
                 )
             except LeaseLost:
