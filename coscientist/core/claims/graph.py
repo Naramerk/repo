@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 from functools import lru_cache
 from importlib import resources
-from typing import Annotated, Any, Literal, TypeGuard, Union, get_args
+from typing import Annotated, Any, Literal, TypeGuard, Union, assert_never, get_args
 
 import yaml
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -25,36 +25,54 @@ _CARD_KEYS = frozenset({"out", "in", "out_by_src"})
 SimpleTag = Literal["str", "int", "bool", "float", "datetime", "digest"]
 _SIMPLE_TAGS = frozenset(get_args(SimpleTag))
 
+
 class Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
+
 
 class AttrSimple(Frozen):
     text: str
     tag: SimpleTag
+
+
 class AttrEnum(Frozen):
     text: str
     tag: Literal["enum"]
     enum_values: tuple[str, ...]
+
+
 class AttrRef(Frozen):
     text: str
     tag: Literal["ref"]
     ref_kinds: tuple[str, ...]
+
+
 class AttrObj(Frozen):
     text: str
     tag: Literal["obj"]
     obj_names: tuple[str, ...]
+
+
 class AttrList(Frozen):
     text: str
     tag: Literal["list"]
     list_elem: AttrType
+
+
 AttrType = Annotated[Union[AttrSimple, AttrEnum, AttrRef, AttrObj, AttrList], Field(discriminator="tag")]
+
+
 class AttrDefault(Frozen):
     value: Any
+
+
 class AttrFieldSpec(Frozen):
     name: str
     type: AttrType
     required: bool
     default: AttrDefault | None
+
+
 class KindSpec(Frozen):
     kind: str
     layer: str = "research"
@@ -66,6 +84,8 @@ class KindSpec(Frozen):
 
 class GraphSchemaError(CoreError):
     pass
+
+
 class KindRegistry:
     def __init__(self) -> None:
         self._nodes: dict[str, KindSpec] = {}
@@ -160,9 +180,7 @@ class GraphStore:
         src = self._nodes[edge.src_id]
         dst = self._nodes[edge.dst_id]
         if not self.registry.edge_allowed(edge.kind, src.kind, dst.kind):
-            raise ValueError(
-                f"edge {edge.kind}: {src.kind} -> {dst.kind} not allowed"
-            )
+            raise ValueError(f"edge {edge.kind}: {src.kind} -> {dst.kind} not allowed")
         self._edges[edge.edge_id] = edge
         return edge
 
@@ -182,33 +200,50 @@ class GraphStore:
     def all_edges(self) -> list[GraphEdge]:
         return list(self._edges.values())
 
+
 def schema_mapping_from_text(raw: str) -> dict[str, Any]:
     data = yaml.safe_load(raw)
     if not isinstance(data, dict):
         raise GraphSchemaError("graph_schema.yaml root must be a mapping")
     return data
+
+
 def load_schema() -> dict[str, Any]:
     text = resources.files("coscientist.schema").joinpath("graph_schema.yaml").read_text(encoding="utf-8")
     return schema_mapping_from_text(text)
+
+
 def _req(obj: dict[str, Any], key: str, *, ctx: str) -> Any:
     if key not in obj:
         raise GraphSchemaError(f"{ctx} missing required key {key!r}")
     return obj[key]
+
+
 def _ns(v: Any, *, ctx: str) -> str:
     if not isinstance(v, str) or not v:
         raise GraphSchemaError(f"{ctx} must be a non-empty str")
     return v
+
+
 def _forbid_extra(obj: dict[str, Any], allowed: frozenset[str], *, ctx: str) -> None:
     if set(obj) - allowed:
         raise GraphSchemaError(f"{ctx} unknown keys: {sorted(set(obj) - allowed)}")
+
+
 _PIPE_BODY = re.compile(r"[^|]+(?:\|[^|]+)*")
 _LIST_PREFIX = "list("
+
+
 def _split_pipe(body: str, *, ctx: str, label: str) -> tuple[str, ...]:
     if not _PIPE_BODY.fullmatch(body):
         raise GraphSchemaError(f"{ctx}.type {label} must be non-empty")
     return tuple(re.findall(r"[^|]+", body))
+
+
 def _is_simple_tag(raw: str) -> TypeGuard[SimpleTag]:
     return raw in _SIMPLE_TAGS
+
+
 def parse_attr_type(raw: str, *, ctx: str) -> AttrType:
     if _is_simple_tag(raw):
         return AttrSimple(text=raw, tag=raw)
@@ -218,13 +253,15 @@ def parse_attr_type(raw: str, *, ctx: str) -> AttrType:
         ("obj(", "obj names", lambda p: AttrObj(text=raw, tag="obj", obj_names=p)),
     ):
         if raw.startswith(prefix) and raw.endswith(")"):
-            return make(_split_pipe(raw[len(prefix):-1], ctx=ctx, label=label))
+            return make(_split_pipe(raw[len(prefix) : -1], ctx=ctx, label=label))
     if raw.startswith(_LIST_PREFIX) and raw.endswith(")"):
-        body = raw[len(_LIST_PREFIX):-1]
+        body = raw[len(_LIST_PREFIX) : -1]
         if not body:
             raise GraphSchemaError(f"{ctx}.type list() empty")
         return AttrList(text=raw, tag="list", list_elem=parse_attr_type(body, ctx=ctx))
     raise GraphSchemaError(f"{ctx}.type unsupported: {raw!r}")
+
+
 def check_ref_kinds(t: AttrType, known: frozenset[str], *, ctx: str) -> None:
     if isinstance(t, AttrRef):
         missing = sorted(k for k in t.ref_kinds if k not in known)
@@ -232,7 +269,11 @@ def check_ref_kinds(t: AttrType, known: frozenset[str], *, ctx: str) -> None:
             raise GraphSchemaError(f"{ctx}: unknown ref kind(s) {missing}")
     elif isinstance(t, AttrList):
         check_ref_kinds(t.list_elem, known, ctx=ctx)
+
+
 _AWARE_DT = TypeAdapter(AwareDatetime)
+
+
 def parse_aware_datetime(value: Any, *, ctx: str) -> datetime:
     if isinstance(value, datetime):
         if value.tzinfo is None:
@@ -244,6 +285,8 @@ def parse_aware_datetime(value: Any, *, ctx: str) -> datetime:
         return _AWARE_DT.validate_python(value)
     except ValidationError as e:
         raise GraphSchemaError(f"{ctx}: invalid aware datetime: {value!r}") from e
+
+
 def _attr_check(t: AttrType, value: Any, *, null_ok: bool, ctx: str) -> None:
     if value is None:
         if not null_ok:
@@ -270,7 +313,7 @@ def _attr_check(t: AttrType, value: Any, *, null_ok: bool, ctx: str) -> None:
             if type(value) is float:
                 return
             raise GraphSchemaError(f"{ctx}: incompatible with type")
-        raise GraphSchemaError(f"{ctx}: incompatible with type")
+        assert_never(tag)
     if isinstance(t, AttrEnum):
         if isinstance(value, str) and value in t.enum_values:
             return
@@ -289,9 +332,13 @@ def _attr_check(t: AttrType, value: Any, *, null_ok: bool, ctx: str) -> None:
         for i, el in enumerate(value):
             _attr_check(t.list_elem, el, null_ok=False, ctx=f"{ctx}[{i}]")
         return
-    raise GraphSchemaError(f"{ctx}: incompatible with type")
+    assert_never(t)
+
+
 def validate_attr_value(t: AttrType, value: Any, *, null_ok: bool, ctx: str) -> None:
     _attr_check(t, value, null_ok=null_ok, ctx=ctx)
+
+
 def _attr_fields(raw: Any, *, ctx: str) -> tuple[AttrFieldSpec, ...]:
     if not isinstance(raw, list):
         raise GraphSchemaError(f"{ctx}: fields/attrs must be a list")
@@ -320,12 +367,16 @@ def _attr_fields(raw: Any, *, ctx: str) -> tuple[AttrFieldSpec, ...]:
             default = AttrDefault(value=f["default"])
         out.append(AttrFieldSpec(name=name, type=at, required=required_raw, default=default))
     return tuple(out)
+
+
 def _card_desc(card: Any, *, ctx: str) -> str:
     if not isinstance(card, dict):
         raise GraphSchemaError(f"{ctx}.card must be a mapping")
     _forbid_extra(card, _CARD_KEYS, ctx=f"{ctx}.card")
     o = _ns(_req(card, "out", ctx=f"{ctx}.card"), ctx=f"{ctx}.card.out")
     return f"{o}/{_ns(_req(card, 'in', ctx=f'{ctx}.card'), ctx=f'{ctx}.card.in')}"
+
+
 def _edge_pairs(e: dict[str, Any], *, ctx: str) -> frozenset[tuple[str, str]]:
     pairs_raw = _req(e, "pairs", ctx=ctx)
     if not isinstance(pairs_raw, list) or not pairs_raw:
@@ -339,6 +390,8 @@ def _edge_pairs(e: dict[str, Any], *, ctx: str) -> frozenset[tuple[str, str]]:
             raise GraphSchemaError(f"{ctx}.pairs[{i}] entries must be non-empty str")
         pairs.add((a, b))
     return frozenset(pairs)
+
+
 def registry_from_mapping(data: dict[str, Any]) -> KindRegistry:
     _forbid_extra(data, _ROOT_KEYS, ctx="graph_schema")
     ver = _req(data, "version", ctx="graph_schema")
@@ -355,10 +408,16 @@ def registry_from_mapping(data: dict[str, Any]) -> KindRegistry:
         _forbid_extra(n, _NODE_KEYS, ctx=ctx)
         kind = _ns(_req(n, "kind", ctx=ctx), ctx=f"{ctx}.kind")
         fields = _attr_fields(_req(n, "fields", ctx=ctx), ctx=f"{ctx}.fields")
-        reg.register_node(KindSpec(
-            kind=kind, layer="research", schema_ref=None, prefix=_ns(_req(n, "prefix", ctx=ctx), ctx=f"{ctx}.prefix"),
-            description=_ns(_req(n, "text_ru", ctx=ctx), ctx=f"{ctx}.text_ru"), fields=fields,
-        ))
+        reg.register_node(
+            KindSpec(
+                kind=kind,
+                layer="research",
+                schema_ref=None,
+                prefix=_ns(_req(n, "prefix", ctx=ctx), ctx=f"{ctx}.prefix"),
+                description=_ns(_req(n, "text_ru", ctx=ctx), ctx=f"{ctx}.text_ru"),
+                fields=fields,
+            )
+        )
     known = reg.node_kinds()
     for kind in known:
         for f in reg.require_node_kind(kind).fields:
@@ -378,15 +437,25 @@ def registry_from_mapping(data: dict[str, Any]) -> KindRegistry:
             check_ref_kinds(f.type, known, ctx=f"edge {name!r} attr {f.name!r}")
         reg.register_edge(
             KindSpec(
-                kind=name, layer="research", schema_ref=None, prefix=None, fields=edge_fields,
+                kind=name,
+                layer="research",
+                schema_ref=None,
+                prefix=None,
+                fields=edge_fields,
                 description=_card_desc(_req(e, "card", ctx=ctx), ctx=ctx),
             ),
             pairs=pairs,
         )
     return reg
+
+
 @lru_cache(maxsize=1)
 def registry_from_schema() -> KindRegistry:
     return registry_from_mapping(load_schema())
+
+
 def default_execution_registry() -> KindRegistry:
     return registry_from_schema().copy()
+
+
 AttrList.model_rebuild()
