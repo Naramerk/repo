@@ -1,4 +1,9 @@
-"""Frozen profile models (DESIGN §8). Budget=core; P3 depends on N1 (docs/plan/profiles-medicine-microfluidics.md#n1-budget-strict-owner-ruslan-and); do not wrap."""
+"""Frozen profile models (DESIGN §8).
+
+Budget=core; P3 depends on N1
+(docs/plan/profiles-medicine-microfluidics.md#n1-budget-strict-owner-ruslan-and).
+Do not wrap.
+"""
 
 from __future__ import annotations
 
