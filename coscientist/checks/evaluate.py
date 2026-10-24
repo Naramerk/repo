@@ -37,6 +37,25 @@ from coscientist.core.execution.domain import (
 )
 
 
+
+def _as_float(value: object, *, what: str) -> float:
+    if type(value) is bool or not isinstance(value, (int, float)):
+        raise JournalFormatError(f"{what} must be numeric, got {type(value).__name__}")
+    return float(value)  # audit-ok: coerce after int|float type gate (bool rejected)
+
+
+def _as_bool(value: object, *, what: str) -> bool:
+    if type(value) is not bool:
+        raise JournalFormatError(f"{what} must be bool, got {type(value).__name__}")
+    return value
+
+
+def _as_str(value: object, *, what: str) -> str:
+    if not isinstance(value, str):
+        raise JournalFormatError(f"{what} must be str, got {type(value).__name__}")
+    return value
+
+
 def role_from_template(tmpl: RequirementTemplate | None) -> CheckRole:
     """Authoritative role from the catalog template only (no plan override)."""
     if tmpl is None:
@@ -59,17 +78,19 @@ def role_from_catalog(template_id: str, catalog: Catalog | None) -> CheckRole:
 def _pointer_get(doc: Any, pointer: str | None) -> Any:
     if not pointer:
         return doc
-    if not pointer.startswith("/"):
+    if not pointer.startswith("/"):  # audit-ok: RFC6901 pointer must be absolute
         raise ValueError(f"invalid json pointer: {pointer}")
     cur = doc
     if pointer == "/":
         return cur
-    for part in pointer[1:].split("/"):
+    for part in pointer[1:].split("/"):  # audit-ok: RFC6901 path segment walk
         part = part.replace("~1", "/").replace("~0", "~")
         if isinstance(cur, dict):
             cur = cur[part]
         elif isinstance(cur, list):
-            cur = cur[int(part)]
+            if not part.isdigit():
+                raise KeyError(pointer)
+            cur = cur[int(part)]  # audit-ok: coerce after digit allowlist
         else:
             raise KeyError(pointer)
     return cur
@@ -80,7 +101,7 @@ def _cmp(op: str, left: Any, right: Any, tolerance: float | None) -> bool:
         return left in right
     if tolerance is not None and isinstance(left, (int, float)) and isinstance(right, (int, float)):
         if op in ("==",):
-            return abs(float(left) - float(right)) <= tolerance
+            return abs(_as_float(left, what="cmp.left") - _as_float(right, what="cmp.right")) <= tolerance
     ops = {
         "<": lambda a, b: a < b,
         "<=": lambda a, b: a <= b,
@@ -105,10 +126,14 @@ def artifact_belongs_to_attempt(meta: Any | None, attempt_id: str | None) -> boo
         raw_call = produced.call_id
     except AttributeError as e:
         raise JournalFormatError("artifact produced_by missing call_id") from e
-    call_id = str(raw_call) if raw_call is not None else ""
+    if raw_call is None:
+        return False
+    call_id = _as_str(raw_call, what="produced_by.call_id")
     if not call_id:
         return False
-    return call_id == attempt_id or call_id.startswith(f"{attempt_id}:")
+    return call_id == attempt_id or call_id.startswith(  # audit-ok: attempt_id call_id prefix bind
+        f"{attempt_id}:"
+    )
 
 
 # Stable reasons for checks with no numeric effect (indeterminate — never refute).
@@ -159,8 +184,8 @@ def _effect_provenance_fields(
     """
     meta = artifacts.get_meta(artifact_id) if artifact_id else None
     if meta is None:
-        producer: str = "agent"
-        call_id = ""
+        producer = "agent"  # audit-ok: absent meta ⇒ untrusted agent (fail-closed vs core)
+        call_id = ""  # audit-ok: structural empty = no produced_by.call_id
     else:
         try:
             producer = meta.producer
@@ -168,19 +193,18 @@ def _effect_provenance_fields(
             raise JournalFormatError("artifact meta missing producer") from e
         if producer is None:
             raise JournalFormatError("artifact meta.producer must not be null")
-        producer = str(producer)
+        producer = _as_str(producer, what="artifact.producer")
         # Fail-closed: unknown / future producers collapse to agent (untrusted).
-        # ``user`` is explicit — never trusted, never countable via this helper alone.
         if producer == "user":
             pass
         elif producer not in ("agent", "core", "sandbox", "tool"):
-            producer = "agent"
+            producer = "agent"  # audit-ok: unknown producer collapses to untrusted agent
         try:
             produced = meta.produced_by
         except AttributeError as e:
             raise JournalFormatError("artifact meta missing produced_by") from e
         if produced is None:
-            call_id = ""
+            call_id = ""  # audit-ok: structural empty = no produced_by.call_id
         else:
             try:
                 raw_call = produced.call_id
@@ -188,16 +212,22 @@ def _effect_provenance_fields(
                 raise JournalFormatError(
                     "artifact produced_by missing call_id"
                 ) from e
-            call_id = str(raw_call) if raw_call is not None else ""
+            if raw_call is None:
+                call_id = ""  # audit-ok: structural empty = null call_id
+            else:
+                call_id = _as_str(raw_call, what="produced_by.call_id")
     belongs = artifact_belongs_to_attempt(meta, attempt_id)
+    if artifact_id is None:
+        art_id_s = ""  # audit-ok: structural empty = no artifact_id
+    else:
+        art_id_s = _as_str(artifact_id, what="artifact_id")
     out: dict[str, Any] = {
         "producer": producer,
         "trusted": artifact_producer_trusted(meta),
         "core_evaluated": True,
         "produced_by_call_id": call_id,
-        "artifact_id": str(artifact_id or ""),
-        # Countable only when the artifact was produced for this attempt.
-        "countable": bool(belongs),
+        "artifact_id": art_id_s,
+        "countable": belongs,
     }
     if meta is not None and producer == "sandbox":
         try:
@@ -222,7 +252,7 @@ def _extract_ci(doc: Any, left: Any) -> dict[str, float] | None:
     or when ``left`` itself is that mapping. Point estimates (missing CI or
     ``ci_low >= ci_high``) return None — never invent CI from a point.
     """
-    candidates: list[Any] = []
+    candidates = []
     if isinstance(left, dict):
         candidates.append(left)
     if isinstance(doc, dict):
@@ -235,11 +265,14 @@ def _extract_ci(doc: Any, left: Any) -> dict[str, float] | None:
         if "ci_low" not in raw or "ci_high" not in raw:
             continue
         try:
-            lo = float(raw["ci_low"])
-            hi = float(raw["ci_high"])
-            est = float(raw["est"]) if raw.get("est") is not None else (lo + hi) / 2.0
-        except (TypeError, ValueError):
-            continue
+            lo = _as_float(raw["ci_low"], what="ci_low")
+            hi = _as_float(raw["ci_high"], what="ci_high")
+            if raw.get("est") is not None:
+                est = _as_float(raw["est"], what="est")
+            else:
+                est = (lo + hi) / 2.0
+        except (TypeError, ValueError, JournalFormatError):
+            continue  # audit-ok: skip malformed CI candidate (never invent interval)
         if lo < hi:
             return {"est": est, "ci_low": lo, "ci_high": hi}
     return None
@@ -254,16 +287,19 @@ def evaluate_code_check(
     artifacts: LocalArtifactStore,
     values: dict[str, Any],
     role: CheckRole,
-    uses_sesoi: bool = False,
+    uses_sesoi: bool,
     sesoi: float | None = None,
-    predicts_null: bool = False,
-    predicted_direction: str = "two_sided",
+    predicts_null: bool,
+    predicted_direction: str,
     attempt_id: str | None = None,
     fetched_digests: frozenset[str] | Collection[str] | None = None,
 ) -> CheckResult:
     try:
         if check.kind == "artifact_exists":
-            handle = out.outputs.get(check.output or "")
+            out_name = check.output
+            if not out_name:
+                raise JournalFormatError("artifact_exists requires non-empty output")
+            handle = out.outputs.get(out_name)
             if handle is None:
                 return _no_effect_result(
                     check_id=check_id,
@@ -279,7 +315,8 @@ def evaluate_code_check(
                     reason="artifact_missing",
                 )
             art = artifacts.get_meta(handle.artifact_id)
-            assert art is not None
+            if art is None:
+                raise JournalFormatError("artifact_exists meta vanished after probe")
             if attempt_id and not artifact_belongs_to_attempt(art, attempt_id):
                 return _no_effect_result(
                     check_id=check_id,
@@ -355,7 +392,7 @@ def evaluate_code_check(
                     left = _pointer_get(doc, pointer)
                     evid_digest = sha256_hex(canonical_json(left))
             except (KeyError, IndexError, TypeError, ValueError):
-                return _no_effect_result(
+                return _no_effect_result(  # audit-ok: pointer miss ⇒ indeterminate (no invent)
                     check_id=check_id,
                     template_id=template_id,
                     role=role,
@@ -379,7 +416,7 @@ def evaluate_code_check(
                 # Exact equality is a point check — never TOST, never used_sesoi.
                 ok = left == check.target
                 if isinstance(left, (int, float)):
-                    est = float(left)
+                    est = _as_float(left, what="value_matches.left")
                     effect = {"est": est, "kind": "point", **prov}
             else:
                 # metric_threshold — point-estimate exceedance or TOST with real CI.
@@ -398,7 +435,7 @@ def evaluate_code_check(
                             **prov,
                         }
                         used_sesoi = True
-                        ok = (-float(sesoi)) < ci["ci_low"] and ci["ci_high"] < float(sesoi)
+                        s = _as_float(sesoi, what="sesoi"); ok = (-s) < ci["ci_low"] and ci["ci_high"] < s
                     else:
                         # No CI → not a TOST result; equivalence not assessable.
                         used_sesoi = False
@@ -407,18 +444,23 @@ def evaluate_code_check(
                 elif uses_sesoi and sesoi is not None and isinstance(left, (int, float)):
                     # Honest point-estimate check (not TOST).
                     used_sesoi = True
-                    est = float(left)
+                    est = _as_float(left, what="metric.left")
                     effect = {"est": est, "kind": "point", **prov}
+                    s = _as_float(sesoi, what="sesoi")
                     if predicted_direction == "positive":
-                        ok = est > float(sesoi)
+                        ok = est > s
                     elif predicted_direction == "negative":
-                        ok = est < -float(sesoi)
+                        ok = est < -s
                     else:
-                        ok = abs(est) > float(sesoi)
+                        ok = abs(est) > s
                 else:
                     ok = _cmp(op, left, check.target, check.tolerance)
                     if isinstance(left, (int, float)):
-                        effect = {"est": float(left), "kind": "point", **prov}
+                        effect = {
+                            "est": _as_float(left, what="metric.left"),
+                            "kind": "point",
+                            **prov,
+                        }
 
             return CheckResult(
                 check_id=check_id,
@@ -574,7 +616,7 @@ def evaluate_code_check(
             role=role,
             detail=str(e),
         )
-    except Exception as e:
+    except Exception as e:  # audit-ok: unexpected → CoreBugError (never FAILED invent)
         # Unexpected core bugs: neither infra nor scientific (B3).
         # Never convert unexpected exceptions into FAILED CheckResult.
         raise CoreBugError(f"core_bug:{e.__class__.__name__}:{e}") from e
@@ -623,8 +665,8 @@ def agent_facing_catalog_view(catalog: Catalog) -> dict[str, Any]:
         "catalog_version": catalog.catalog_version,
         "edition": catalog.edition,
         "templates": [agent_facing_template_view(t) for t in catalog.templates],
-        "defaults": {k: list(v) for k, v in (catalog.defaults or {}).items()},
-        "code_output_names": list(catalog.code_output_names or []),
+        "defaults": {k: list(v) for k, v in catalog.defaults.items()},
+        "code_output_names": list(catalog.code_output_names),
     }
 
 
@@ -637,15 +679,18 @@ def template_to_requirement(
 ) -> NodeRequirement:
     """Build a NodeRequirement from the agent-facing template view (no check body)."""
     view = agent_facing_template_view(tmpl)
+    text_ru = view["text_ru"]
+    if text_ru is None:
+        text_ru = ""  # audit-ok: structural empty text_ru allowed on NodeRequirement
     return NodeRequirement(
         id=req_id or f"{node_id}:{view['template_id']}",
-        template_id=str(view["template_id"]),
+        template_id=_as_str(view["template_id"], what="template_id"),
         node_id=node_id,
-        text_ru=str(view["text_ru"] or ""),
-        required=bool(view["required"]),
+        text_ru=_as_str(text_ru, what="text_ru"),
+        required=_as_bool(view["required"], what="required"),
         status=status,
-        check_version=str(view["version"]),
-        is_code=bool(view["is_code"]),
+        check_version=_as_str(view["version"], what="version"),
+        is_code=_as_bool(view["is_code"], what="is_code"),
     )
 
 
@@ -678,8 +723,14 @@ def _evaluate_proposed_check(
         rubric_from_proposal,
     )
 
-    params = ref.params if isinstance(ref.params, dict) else {}
-    pid = str(params.get("proposal_id") or "")
+    if not isinstance(ref.params, dict):
+        raise JournalFormatError("proposed_check RequirementRef.params must be dict")
+    params = ref.params
+    pid_raw = params.get("proposal_id")
+    if pid_raw is None:
+        pid = ""  # audit-ok: structural empty = missing proposal_id (failed below)
+    else:
+        pid = _as_str(pid_raw, what="proposal_id")
     base_effect: dict[str, Any] = {
         "proposed_check": True,
         "proposal_id": pid,
@@ -718,7 +769,10 @@ def _evaluate_proposed_check(
         raise CatalogError(f"proposed_check row bad role: {role_raw!r}")
     role: CheckRole = role_raw  # type: ignore[assignment]
     base_effect["proposal_digest"] = row.get("proposal_digest")
-    base_effect["delegated"] = bool(row.get("delegated"))
+    if "delegated" in row:
+        base_effect["delegated"] = _as_bool(row["delegated"], what="delegated")
+    else:
+        base_effect["delegated"] = False  # audit-ok: structural absent delegated = False
     base_effect["bound_task_id"] = row["bound_task_id"]
     base_effect["bound_target"] = row["bound_target"]
     # Target must be on the RequirementRef (params); no fallback to bound_target.
@@ -743,16 +797,21 @@ def _evaluate_proposed_check(
             effect={**base_effect, "exclusion_reason": "unapproved_check"},
         )
     # Cheap bind: when the attempt recorded claims, params.target must name one.
-    claims = list(getattr(out, "claims", None) or [])
+    claims = list(out.claims)
     if claims and eval_target is not None and str(eval_target).strip():
         import unicodedata
 
-        want = unicodedata.normalize("NFKC", str(eval_target)).strip()
-        claim_targets = {
-            unicodedata.normalize("NFKC", str(c.get("target") or "")).strip()
-            for c in claims
-            if isinstance(c, dict)
-        }
+        want = unicodedata.normalize("NFKC", _as_str(eval_target, what="eval_target")).strip()
+        claim_targets = set()
+        for c in claims:
+            if not isinstance(c, dict):
+                continue
+            t = c.get("target")
+            if t is None:
+                continue
+            claim_targets.add(
+                unicodedata.normalize("NFKC", _as_str(t, what="claim.target")).strip()
+            )
         claim_targets.discard("")
         if claim_targets and want not in claim_targets:
             return CheckResult(
@@ -769,6 +828,10 @@ def _evaluate_proposed_check(
                 effect={**base_effect, "exclusion_reason": "unapproved_check"},
             )
     if status == "rejected":
+        if "reject_reason" in row and row["reject_reason"] is not None:
+            reject_detail = _as_str(row["reject_reason"], what="reject_reason")
+        else:
+            reject_detail = "rejected"  # audit-ok: structural absent reject_reason
         return CheckResult(
             check_id=check_id,
             template_id=PROPOSED_CHECK_TEMPLATE_ID,
@@ -776,7 +839,7 @@ def _evaluate_proposed_check(
             is_code=row.get("check") is not None,
             required=ref.required,
             role=role,
-            detail=f"unapproved_check:rejected:{row.get('reject_reason') or 'rejected'}",
+            detail=f"unapproved_check:rejected:{reject_detail}",
             effect={**base_effect, "exclusion_reason": "unapproved_check"},
         )
     if status != "approved":
@@ -794,8 +857,8 @@ def _evaluate_proposed_check(
 
     # Approved: evaluate using the preregistered body (never mutate after propose).
     # Bound approval: one task_id + target only (no multi-claim k_sup reuse).
-    bound_task = str(row["bound_task_id"])
-    if task_id and bound_task and str(task_id) != bound_task:
+    bound_task = _as_str(row["bound_task_id"], what="bound_task_id")
+    if task_id and bound_task and _as_str(task_id, what="task_id") != bound_task:
         return CheckResult(
             check_id=check_id,
             template_id=PROPOSED_CHECK_TEMPLATE_ID,
@@ -806,7 +869,10 @@ def _evaluate_proposed_check(
             detail=f"unapproved_check:task_mismatch:{bound_task}!={task_id}",
             effect={**base_effect, "exclusion_reason": "unapproved_check"},
         )
-    delegated = bool(row.get("delegated"))
+    if "delegated" in row:
+        delegated = _as_bool(row["delegated"], what="delegated")
+    else:
+        delegated = False  # audit-ok: structural absent delegated = False
     if row.get("rubric") is not None:
         from coscientist.checks.kinds.rubric import evaluate_rubric
         from coscientist.core.execution.domain import CodeCheck as CC
@@ -830,7 +896,10 @@ def _evaluate_proposed_check(
             output_digest=output_digest,
             evaluate_code_check=evaluate_code_check,
         )
-        effect = dict(cr.effect or {})
+        if cr.effect is None:
+            effect = {}
+        else:
+            effect = dict(cr.effect)
         effect.update(
             {
                 "proposed_check": True,
@@ -875,6 +944,18 @@ def _evaluate_proposed_check(
         raise JournalFormatError(
             "proposed_check missing required predicted_direction"
         )
+    if "uses_sesoi" in row:
+        uses_sesoi_v = _as_bool(row["uses_sesoi"], what="uses_sesoi")
+    else:
+        uses_sesoi_v = False  # audit-ok: structural absent uses_sesoi = False
+    if "predicts_null" in row:
+        predicts_null_v = _as_bool(row["predicts_null"], what="predicts_null")
+    else:
+        predicts_null_v = False  # audit-ok: structural absent predicts_null = False
+    if row.get("sesoi") is not None:
+        sesoi_v = row.get("sesoi")
+    else:
+        sesoi_v = row.get("threshold")
     cr = evaluate_code_check(
         check,
         template_id=PROPOSED_CHECK_TEMPLATE_ID,
@@ -883,14 +964,17 @@ def _evaluate_proposed_check(
         artifacts=artifacts,
         values=out.values,
         role=role,
-        uses_sesoi=bool(row.get("uses_sesoi")),
-        sesoi=row.get("sesoi") if row.get("sesoi") is not None else row.get("threshold"),
-        predicts_null=bool(row.get("predicts_null")),
-        predicted_direction=str(row["predicted_direction"]),
+        uses_sesoi=uses_sesoi_v,
+        sesoi=sesoi_v,
+        predicts_null=predicts_null_v,
+        predicted_direction=_as_str(row["predicted_direction"], what="predicted_direction"),
         attempt_id=attempt_id,
         fetched_digests=fetched_digests,
     )
-    effect = dict(cr.effect or {})
+    if cr.effect is None:
+        effect = {}
+    else:
+        effect = dict(cr.effect)
     effect.update(
         {
             "proposed_check": True,
@@ -959,7 +1043,7 @@ def evaluate_task_checks(
     judge_retry = _optional_dict(judge_retry, name="judge_retry")
     failure_kinds = _optional_dict(failure_kinds, name="failure_kinds")
     proposals = _optional_dict(proposals, name="proposals")
-    results: list[CheckResult] = []
+    results = []
     refs = list(spec.criteria)
     if not refs:
         # apply defaults for experiment kind (schema NodeKind)
@@ -1007,7 +1091,7 @@ def evaluate_task_checks(
             continue
         role = role_from_template(tmpl)
         is_proposed_kind = tmpl.kind == TemplateKind.PROPOSED
-        is_proposed_id = str(ref.template_id) == PROPOSED_CHECK_TEMPLATE_ID
+        is_proposed_id = ref.template_id == PROPOSED_CHECK_TEMPLATE_ID
         if is_proposed_kind != is_proposed_id:
             raise JournalFormatError(
                 "proposed_check kind/template_id mismatch: "
@@ -1081,7 +1165,10 @@ def evaluate_task_checks(
                     item_id="",
                     output_digest=output_digest,
                 )
-                st = review_statuses.get(rkey, ReqStatus.UNASSESSED)
+                if rkey in review_statuses:
+                    st = review_statuses[rkey]
+                else:
+                    st = ReqStatus.UNASSESSED  # audit-ok: absent review ⇒ UNASSESSED (not invented pass)
             results.append(
                 CheckResult(
                     check_id=cid,
@@ -1101,7 +1188,7 @@ def evaluate_task_checks(
             if not check.output:
                 raise JournalFormatError("rubric requires non-empty output")
             out_rubric = None
-            for o in spec.expected_outputs or []:
+            for o in spec.expected_outputs:
                 if o.name == check.output and o.rubric is not None:
                     out_rubric = freeze_rubric(o.rubric)
                     break
@@ -1144,10 +1231,10 @@ def evaluate_task_checks(
                 artifacts=artifacts,
                 values=out.values,
                 role=role,
-                uses_sesoi=bool(tmpl.uses_sesoi),
+                uses_sesoi=tmpl.uses_sesoi,
                 sesoi=tmpl.sesoi,
-                predicts_null=bool(tmpl.predicts_null),
-                predicted_direction=str(tmpl.predicted_direction),
+                predicts_null=tmpl.predicts_null,
+                predicted_direction=tmpl.predicted_direction,
                 attempt_id=attempt_id,
                 fetched_digests=fetched_digests,
             )
@@ -1173,7 +1260,10 @@ def evaluate_task_checks(
 
     already: set[str] = {r.template_id for r in results}
     for r in results:
-        effect = r.effect if isinstance(r.effect, dict) else {}
+        if isinstance(r.effect, dict):
+            effect = r.effect
+        else:
+            effect = {}
         dig = effect.get("rubric_digest")
         if dig:
             already.add(f"rubric:{dig}")
