@@ -8,15 +8,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from coscientist.mcp.client import McpClient
 from coscientist.mcp.config import (
     Identifier,
     McpClientConfig,
-    McpServers,
     StreamableHttpServerConfig,
-    unique_mcp_server_names,
 )
 from coscientist.mcp.errors import McpConfigError
 from coscientist.mcp.runtime import AsyncSleep, AsyncWaitFor, Clock
@@ -49,25 +47,6 @@ class McpLiveError(Exception):
     """Fail-closed live-bundle / literature-endpoint error."""
 
 
-class LiveMcpBundleConfig(BaseModel):
-    """Paired ``StreamableHttpServerConfig`` + ``McpServerRoute`` (same names, same order)."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-
-    http_servers: tuple[StreamableHttpServerConfig, ...] = Field(min_length=1)
-    routes: tuple[McpServerRoute, ...] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def _align(self) -> LiveMcpBundleConfig:
-        unique_mcp_server_names(self.http_servers)
-        ToolRouterConfig(servers=self.routes)  # unique server_name + tool ids
-        http_names = [s.name for s in self.http_servers]
-        route_names = [r.server_name for r in self.routes]
-        if http_names != route_names:
-            raise ValueError(f"http_servers/routes names diverge: http={http_names} routes={route_names}")
-        return self
-
-
 class McpToolRouterBundle(BaseModel):
     """Client server names must equal router server names."""
 
@@ -87,14 +66,6 @@ class McpToolRouterBundle(BaseModel):
         return self
 
 
-def streamable_servers(bundle: LiveMcpBundleConfig) -> McpServers:
-    return bundle.http_servers
-
-
-def router_config(bundle: LiveMcpBundleConfig) -> ToolRouterConfig:
-    return ToolRouterConfig(servers=bundle.routes)
-
-
 def _require_exact_tools(
     label: str,
     tools: Mapping[str, McpToolProfile],
@@ -107,6 +78,7 @@ def _require_exact_tools(
 
 
 def literature_live_bundle(
+    base_client: McpClientConfig,
     *,
     papers_search_url: str,
     paper_analysis_url: str,
@@ -114,37 +86,32 @@ def literature_live_bundle(
     paper_analysis_api_key_env: Identifier | None,
     papers_search_tools: Mapping[str, McpToolProfile],
     paper_analysis_tools: Mapping[str, McpToolProfile],
-) -> LiveMcpBundleConfig:
-    """``papers-search`` + ``paper-analysis`` with exact legacy tool sets."""
+) -> McpToolRouterBundle:
+    """``papers-search`` + ``paper-analysis``; timeouts from ``base_client`` (servers replaced)."""
     ps = _require_exact_tools("papers-search", papers_search_tools, PAPERS_SEARCH_TOOLS)
     pa = _require_exact_tools("paper-analysis", paper_analysis_tools, PAPER_ANALYSIS_TOOLS)
-    return LiveMcpBundleConfig(
-        http_servers=(
-            StreamableHttpServerConfig(
-                transport="streamable_http",
-                name=MCP_SERVER_PAPERS_SEARCH,
-                url=papers_search_url,
-                api_key_env=papers_search_api_key_env,
-            ),
-            StreamableHttpServerConfig(
-                transport="streamable_http",
-                name=MCP_SERVER_PAPER_ANALYSIS,
-                url=paper_analysis_url,
-                api_key_env=paper_analysis_api_key_env,
-            ),
+    servers = (
+        StreamableHttpServerConfig(
+            transport="streamable_http",
+            name=MCP_SERVER_PAPERS_SEARCH,
+            url=papers_search_url,
+            api_key_env=papers_search_api_key_env,
         ),
-        routes=(
-            McpServerRoute(server_name=MCP_SERVER_PAPERS_SEARCH, tools=ps),
-            McpServerRoute(server_name=MCP_SERVER_PAPER_ANALYSIS, tools=pa),
+        StreamableHttpServerConfig(
+            transport="streamable_http",
+            name=MCP_SERVER_PAPER_ANALYSIS,
+            url=paper_analysis_url,
+            api_key_env=paper_analysis_api_key_env,
         ),
     )
-
-
-def bundle_from_live(base_client: McpClientConfig, live: LiveMcpBundleConfig) -> McpToolRouterBundle:
-    """Compose client+router; ``base_client`` supplies timeouts (servers replaced)."""
     return McpToolRouterBundle(
-        client=base_client.model_copy(update={"servers": streamable_servers(live)}),
-        router=router_config(live),
+        client=base_client.model_copy(update={"servers": servers}),
+        router=ToolRouterConfig(
+            servers=(
+                McpServerRoute(server_name=MCP_SERVER_PAPERS_SEARCH, tools=ps),
+                McpServerRoute(server_name=MCP_SERVER_PAPER_ANALYSIS, tools=pa),
+            )
+        ),
     )
 
 
@@ -173,9 +140,11 @@ async def open_tool_router(
     except McpConfigError as exc:
         raise ToolRouterError(f"failed to build McpClient: {exc}") from exc
     router = ToolRouter(bundle.router)
+    opened = False
     try:
         await router.open(client)
-    except (ToolRouterError, OSError, TimeoutError):
-        await router.aclose()
-        raise
-    return client, router
+        opened = True
+        return client, router
+    finally:
+        if not opened:
+            await router.aclose()

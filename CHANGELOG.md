@@ -11,7 +11,7 @@
 - Parity: [DESIGN §6.4](docs/DESIGN.md#64-coder-и-alembic-как-асинхронные-задачи-r4), [CAP #11](docs/CAPABILITIES.md), issue [#130](https://github.com/Naramerk/repo/issues/130).
 
 ### MCP live servers (literature) [M1]
-- `mcp_live`: `LiveMcpBundleConfig` pairs `StreamableHttpServerConfig` + `McpServerRoute`; `literature_live_bundle` / `open_tool_router` (explicit `file_fetcher`/`http_transport`); `mcp-servers/docker-compose.yml` (`COSCIENTIST_DEV_ROOT`, legacy container port 7331). [DESIGN §13](docs/DESIGN.md#13-вехи), [§12.2](docs/DESIGN.md#122-сценарии-и-пороги), [CAP #3/#8](docs/CAPABILITIES.md).
+- `mcp_live`: `literature_live_bundle` → `McpToolRouterBundle` (`StreamableHttpServerConfig` + `McpServerRoute`); `open_tool_router` (explicit `file_fetcher`/`http_transport`, aclose on any open failure); `mcp-servers/docker-compose.yml` (`COSCIENTIST_DEV_ROOT`, legacy container port 7331). [DESIGN §13](docs/DESIGN.md#13-вехи), [§12.2](docs/DESIGN.md#122-сценарии-и-пороги), [CAP #3/#8](docs/CAPABILITIES.md).
 
 ### ToolRouter(MCP) [M1]
 - `coscientist.tools.router.ToolRouter`: explicit `ToolRouterConfig` / `McpServerRoute` (no discovery); routes `(server, tool)` calls through `mcp_adapter` → `McpClient`; fail-closed on unknown server/tool; `ToolRouterCloseError` with required `causes`. [DESIGN §6.3](docs/DESIGN.md#63-маршрутизация-и-alembic-fallback), [CAP #8](docs/CAPABILITIES.md?plain=1#L17).

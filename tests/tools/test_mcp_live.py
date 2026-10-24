@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pydantic import ValidationError
 
 from coscientist.core.execution.domain import HitlPolicy
-from coscientist.mcp.config import StdioServerConfig, StreamableHttpServerConfig
+from coscientist.mcp.config import McpClientConfig, StdioServerConfig, StreamableHttpServerConfig
 from coscientist.tools.contract import CallCtx
 from coscientist.tools.mcp_adapter import McpToolProfile
 from coscientist.tools.mcp_live import (
@@ -18,10 +18,8 @@ from coscientist.tools.mcp_live import (
     MCP_SERVER_PAPERS_SEARCH,
     PAPER_ANALYSIS_TOOLS,
     PAPERS_SEARCH_TOOLS,
-    LiveMcpBundleConfig,
     McpLiveError,
     McpToolRouterBundle,
-    bundle_from_live,
     literature_live_bundle,
     open_tool_router,
 )
@@ -38,7 +36,7 @@ ECHO_STDIO = Path(__file__).resolve().parents[1] / "mcp" / "echo_stdio_server.py
 
 
 class _NoFetch:
-    async def fetch(self, *a: Any, **k: Any) -> Any:
+    async def fetch(self, url: str, *, max_bytes: int, timeout_s: float) -> bytes:
         raise AssertionError("no fetch")
 
 
@@ -52,6 +50,20 @@ def _p() -> McpToolProfile:
 
 def _lit_tools() -> tuple[dict[str, McpToolProfile], dict[str, McpToolProfile]]:
     return {n: _p() for n in PAPERS_SEARCH_TOOLS}, {n: _p() for n in PAPER_ANALYSIS_TOOLS}
+
+
+def _base() -> McpClientConfig:
+    return make_config(
+        servers=(
+            StdioServerConfig(
+                transport="stdio",
+                name="ph",
+                command=sys.executable,
+                args=("-c", "pass"),
+                env_keys=(),
+            ),
+        )
+    )
 
 
 def _bundle(cmd: tuple[str, ...] = ("-c", "pass")) -> McpToolRouterBundle:
@@ -82,7 +94,8 @@ def _http(name: str, url: str) -> StreamableHttpServerConfig:
 
 def test_literature_live_bundle_urls() -> None:
     ps, pa = _lit_tools()
-    live = literature_live_bundle(
+    bundle = literature_live_bundle(
+        _base(),
         papers_search_url="http://127.0.0.1:7331/mcp",
         paper_analysis_url="http://127.0.0.1:7334/mcp",
         papers_search_api_key_env=None,
@@ -90,9 +103,15 @@ def test_literature_live_bundle_urls() -> None:
         papers_search_tools=ps,
         paper_analysis_tools=pa,
     )
-    assert [(s.name, s.url, s.api_key_env) for s in live.http_servers] == [
+    servers = bundle.client.servers
+    assert all(isinstance(s, StreamableHttpServerConfig) for s in servers)
+    assert [(s.name, s.url, s.api_key_env) for s in servers] == [
         (MCP_SERVER_PAPERS_SEARCH, "http://127.0.0.1:7331/mcp", None),
         (MCP_SERVER_PAPER_ANALYSIS, "http://127.0.0.1:7334/mcp", "PA_KEY"),
+    ]
+    assert [r.server_name for r in bundle.router.servers] == [
+        MCP_SERVER_PAPERS_SEARCH,
+        MCP_SERVER_PAPER_ANALYSIS,
     ]
 
 
@@ -102,6 +121,7 @@ def test_literature_refuses_wrong_papers_search_tools() -> None:
     del bad["search_entity"]
     with pytest.raises(McpLiveError, match="papers-search"):
         literature_live_bundle(
+            _base(),
             papers_search_url="http://127.0.0.1:7331/mcp",
             paper_analysis_url="http://127.0.0.1:7334/mcp",
             papers_search_api_key_env=None,
@@ -117,6 +137,7 @@ def test_literature_refuses_wrong_paper_analysis_tools() -> None:
     del bad["explore_my_papers"]
     with pytest.raises(McpLiveError, match="paper-analysis"):
         literature_live_bundle(
+            _base(),
             papers_search_url="http://127.0.0.1:7331/mcp",
             paper_analysis_url="http://127.0.0.1:7334/mcp",
             papers_search_api_key_env=None,
@@ -154,47 +175,10 @@ def test_route_invalid_tool_name_refused() -> None:
         McpServerRoute(server_name="x", tools={"bad name": _p()})
 
 
-def test_live_bundle_duplicate_http_name_refused() -> None:
+def test_client_duplicate_http_name_refused() -> None:
     srv = _http(MCP_SERVER_PAPERS_SEARCH, "http://127.0.0.1:7331/mcp")
-    route = McpServerRoute(server_name=MCP_SERVER_PAPERS_SEARCH, tools={"echo": _p()})
     with pytest.raises(ValidationError, match="unique"):
-        LiveMcpBundleConfig(http_servers=(srv, srv), routes=(route, route))
-
-
-def test_live_bundle_http_routes_name_mismatch_refused() -> None:
-    with pytest.raises(ValidationError, match="diverge"):
-        LiveMcpBundleConfig(
-            http_servers=(_http(MCP_SERVER_PAPERS_SEARCH, "http://127.0.0.1:7331/mcp"),),
-            routes=(McpServerRoute(server_name=MCP_SERVER_PAPER_ANALYSIS, tools={"echo": _p()}),),
-        )
-
-
-def test_bundle_from_live_replaces_servers() -> None:
-    ps, pa = _lit_tools()
-    live = literature_live_bundle(
-        papers_search_url="http://127.0.0.1:7331/mcp",
-        paper_analysis_url="http://127.0.0.1:7334/mcp",
-        papers_search_api_key_env=None,
-        paper_analysis_api_key_env=None,
-        papers_search_tools=ps,
-        paper_analysis_tools=pa,
-    )
-    base = make_config(
-        servers=(
-            StdioServerConfig(
-                transport="stdio",
-                name="ph",
-                command=sys.executable,
-                args=("-c", "pass"),
-                env_keys=(),
-            ),
-        )
-    )
-    b = bundle_from_live(base, live)
-    assert [s.name for s in b.client.servers] == [
-        MCP_SERVER_PAPERS_SEARCH,
-        MCP_SERVER_PAPER_ANALYSIS,
-    ]
+        make_config(servers=(srv, srv))
 
 
 @pytest.mark.asyncio
@@ -239,3 +223,22 @@ async def test_open_tool_router_requires_fetcher_or_http() -> None:
             file_fetcher=None,
             http_transport=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_open_tool_router_aclose_on_any_open_failure() -> None:
+    closed = AsyncMock()
+    with (
+        patch.object(ToolRouter, "open", side_effect=RuntimeError("open-boom")),
+        patch.object(ToolRouter, "aclose", closed),
+    ):
+        with pytest.raises(RuntimeError, match="open-boom"):
+            await open_tool_router(
+                _bundle(("-u", str(ECHO_STDIO))),
+                clock=SystemClock(),
+                sleep=system_sleep(),
+                wait_for=system_wait_for(),
+                file_fetcher=_NoFetch(),
+                http_transport=None,
+            )
+    closed.assert_awaited_once()
