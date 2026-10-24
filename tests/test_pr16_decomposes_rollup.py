@@ -1,7 +1,6 @@
 """M1 PR16: decomposes (acyclic) + rollup + subtask tree in report (DESIGN_M1 §10)."""
 
 from __future__ import annotations
-from coscientist.core.events.upcasters import writer_schema_version
 
 from datetime import datetime, timedelta, timezone
 
@@ -19,6 +18,7 @@ from coscientist.core.events.schema_versions import (
     PLAN_ACCEPTED_SCHEMA_VERSION,
     PLAN_EXPANDED_SCHEMA_VERSION,
 )
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,

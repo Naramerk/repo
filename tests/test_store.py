@@ -1,7 +1,6 @@
 """EventStore: idempotency, lease fencing, replay == projection."""
 
 from __future__ import annotations
-from coscientist.core.events.upcasters import writer_schema_version
 
 import asyncio
 from datetime import UTC, datetime, timedelta
@@ -15,6 +14,7 @@ from coscientist.core.events.errors import Conflict, Idempotent, LeaseLost
 from coscientist.core.events.events import EventEnvelope
 from coscientist.core.events.projections import fold_events
 from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.events.upcasters import writer_schema_version
 from tests.helpers import close_runtime, open_runtime
 
 

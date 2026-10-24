@@ -1,7 +1,6 @@
 """M1 PR8: verdict() runtime wiring, kind=verdict, claim carry-overs + review fixes."""
 
 from __future__ import annotations
-from coscientist.core.events.upcasters import writer_schema_version
 
 from datetime import UTC, datetime, timedelta
 
@@ -18,6 +17,7 @@ from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore, defa
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import claim_node_id, question_node_id
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     HitlPolicy,
     InputSpec,
@@ -789,7 +789,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"effect": 2.0},
-            claims=[{"id": "ans", "target": "Q1"}],
+            claims=[{"id": "ans", "target": "Q1", "checked_against": "value_match_sesoi"}],
         ),
     )
     d = dispositions(

@@ -1,7 +1,6 @@
 """M1 PR12: budget_share / deadline_share (DESIGN_M1 §5 / S4)."""
 
 from __future__ import annotations
-from coscientist.core.events.upcasters import writer_schema_version
 
 from datetime import timedelta
 from decimal import Decimal
@@ -13,6 +12,7 @@ from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.errors import CoreBugError, SandboxInfraError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hypothesis_node_id, task_id
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,

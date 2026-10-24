@@ -1,13 +1,13 @@
 """M1 PR5: simulate=forbid default, H-c tolerate_failed_dep, method=simulation."""
 
 from __future__ import annotations
-from coscientist.core.events.upcasters import writer_schema_version
 
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     ExperimentMethod,
     InputSpec,

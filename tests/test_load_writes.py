@@ -1,7 +1,6 @@
 """Load: 20 parallel attempts in one study, fsync on (DESIGN §3.5a)."""
 
 from __future__ import annotations
-from coscientist.core.events.upcasters import writer_schema_version
 
 import asyncio
 import json
@@ -20,6 +19,7 @@ import pytest
 from coscientist.core.events.clock import SystemClock
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.projections import _row_key, fold_events
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.source_fetch import verify_fetch_capability
 from coscientist.tools.effects import _mint_fetch_capability_for_tests
 from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success

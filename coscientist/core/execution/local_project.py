@@ -459,14 +459,14 @@ class LocalProjectMixin:
             aid = p.get("attempt_id")
             if not isinstance(aid, str) or not aid:
                 raise JournalFormatError("ResultRecorded: missing attempt_id")
-            att = self.attempts.get(aid)
-            tid = None
-            if isinstance(att, dict) and "task_id" in att:
-                tid = att["task_id"]
+            att_row = self.attempts.get(aid)
+            result_tid: str | None = None
+            if isinstance(att_row, dict) and "task_id" in att_row:
+                result_tid = str(att_row["task_id"])
             elif "task_id" in p:
-                tid = p["task_id"]
-            if isinstance(dep_outputs, dict) and tid and tid in self.tasks:
-                tkey = self.tasks[tid].spec.task_key
+                result_tid = str(p["task_id"])
+            if isinstance(dep_outputs, dict) and result_tid and result_tid in self.tasks:
+                tkey = self.tasks[result_tid].spec.task_key
                 omap = p.get("output_map")
                 if isinstance(omap, dict) and omap:
                     dep_outputs[tkey] = {str(k): str(v) for k, v in omap.items() if v}

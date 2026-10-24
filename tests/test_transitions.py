@@ -1,7 +1,6 @@
 """State transitions §3.3 / crash recovery §3.7."""
 
 from __future__ import annotations
-from coscientist.core.events.upcasters import writer_schema_version
 
 import asyncio
 from datetime import timedelta
@@ -12,6 +11,7 @@ import pytest
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.errors import AttemptClosedError
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,

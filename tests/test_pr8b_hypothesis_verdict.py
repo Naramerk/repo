@@ -1,7 +1,6 @@
 """M1 PR8b: hypothesis verdict model (DESIGN_HYP_DELTA) — review fixes."""
 
 from __future__ import annotations
-from coscientist.core.events.upcasters import writer_schema_version
 
 from datetime import timedelta
 
@@ -29,6 +28,7 @@ from coscientist.core.claims.verdict import (
     root_data_digests_from_bindings,
     tost_holds,
 )
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,

@@ -21,8 +21,8 @@ from typing import Any
 
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import ArtifactRejected
-from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.source_fetch import (

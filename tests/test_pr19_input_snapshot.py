@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from coscientist.core.events.upcasters import writer_schema_version
-
 import gzip
 import io
 import json
@@ -15,6 +13,7 @@ import pytest
 
 from coscientist.core.claims.reasons import RefusalKind, TerminalReason
 from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution._ingest_gate import (
     mint_user_put_capability,
     put_user,

@@ -1,7 +1,6 @@
 """M1 PR13: rubric + final_type + PlanValidator (DESIGN_M1 §6)."""
 
 from __future__ import annotations
-from coscientist.core.events.upcasters import writer_schema_version
 
 from datetime import timedelta
 
@@ -15,6 +14,7 @@ from coscientist.core.claims.rubric import freeze_rubric, rubric_digest
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.stance import claim_stance
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,

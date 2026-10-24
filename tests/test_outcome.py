@@ -1,7 +1,6 @@
 """compute_outcome + B1/B2 / article_small tests (DESIGN §4.2)."""
 
 from __future__ import annotations
-from coscientist.core.events.upcasters import writer_schema_version
 
 import json
 from datetime import UTC, datetime, timedelta
@@ -12,6 +11,7 @@ from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.errors import AttemptClosedError, CatalogError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (

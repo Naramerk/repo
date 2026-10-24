@@ -1,7 +1,6 @@
 """Core must refuse journals that still have open HITL gates."""
 
 from __future__ import annotations
-from coscientist.core.events.upcasters import writer_schema_version
 
 from datetime import timedelta
 from pathlib import Path
@@ -10,6 +9,7 @@ import pytest
 
 from coscientist.core.events.errors import HitlUnsupported
 from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import GateConfig, HitlPolicy
 from coscientist.core.execution.machine import StudyRuntime as CoreStudyRuntime
 from coscientist.core.execution.recover import recover

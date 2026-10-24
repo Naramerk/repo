@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from coscientist.core.events.upcasters import writer_schema_version
-
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -18,7 +16,7 @@ from coscientist.core.events.errors import (
     JournalLockedError,
     JournalUnavailableError,
 )
-from coscientist.core.events.upcasters import require_exact_int
+from coscientist.core.events.upcasters import require_exact_int, writer_schema_version
 from coscientist.core.execution.domain import TaskKind, TaskOutcome, TaskState
 from coscientist.core.plan.loop import (
     LOOP_REASON_ERROR,

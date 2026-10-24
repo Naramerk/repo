@@ -1,7 +1,6 @@
 """M1 PR7: InputSpec.kind + uses_claim edge; AttemptStarted bindings."""
 
 from __future__ import annotations
-from coscientist.core.events.upcasters import writer_schema_version
 
 from datetime import timedelta
 
@@ -10,6 +9,7 @@ import pytest
 from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import InputSpec, TaskSpec
 from coscientist.core.execution.inputs import (
     InputUnavailable,

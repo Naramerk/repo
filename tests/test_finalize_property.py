@@ -1,7 +1,6 @@
 """PR 3: Hypothesis stateful finalize property + future xfail stubs."""
 
 from __future__ import annotations
-from coscientist.core.events.upcasters import writer_schema_version
 
 import asyncio
 import shutil
@@ -31,6 +30,7 @@ from coscientist.core.events.errors import (
 )
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.projections import fold_events
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     QuestionSpec,
     QuestionSupersede,

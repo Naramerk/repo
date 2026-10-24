@@ -1,7 +1,6 @@
 """PR 2: study finalizer, dispositions, minimal_report."""
 
 from __future__ import annotations
-from coscientist.core.events.upcasters import writer_schema_version
 
 import json
 from datetime import datetime, timedelta
@@ -17,6 +16,7 @@ from coscientist.core.events.errors import Conflict, Idempotent, StudyClosedErro
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.metrics import late_write_rejected_total
 from coscientist.core.events.projections import fold_events
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.domain import (
     QuestionSpec,

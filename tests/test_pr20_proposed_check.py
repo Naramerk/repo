@@ -1,7 +1,6 @@
 """M1 PR20: proposed_check catalog meta-template (DESIGN_M1 §16)."""
 
 from __future__ import annotations
-from coscientist.core.events.upcasters import writer_schema_version
 
 import asyncio
 import json
@@ -27,6 +26,7 @@ from coscientist.core.events.schema_versions import (
     STUDY_CREATED_SCHEMA_VERSION,
     STUDY_FINALIZED_SCHEMA_VERSION,
 )
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     PROPOSED_CHECK_TEMPLATE_ID,
