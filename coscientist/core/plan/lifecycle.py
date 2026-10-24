@@ -15,6 +15,7 @@ from coscientist.core.events.errors import (
     JournalFormatError,
     LeaseLost,
     SandboxInfraError,
+    require_journal_field,
 )
 from coscientist.core.events.events import (
     PLAN_ACCEPTED_SCHEMA_VERSION,
@@ -23,6 +24,12 @@ from coscientist.core.events.events import (
     EventEnvelope,
     make_idem,
 )
+
+# Writer schema pins for lifecycle journals (not schema_versions.py / #38).
+STUDY_REFUSED_SCHEMA_VERSION = 1
+GRAPH_NODE_UPSERTED_SCHEMA_VERSION = 1
+GRAPH_EDGE_ADDED_SCHEMA_VERSION = 1
+TASK_DONE_SCHEMA_VERSION = 2
 from coscientist.core.events.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
 from coscientist.core.events.ports import EventStore
 from coscientist.core.execution.domain import (
@@ -220,12 +227,7 @@ class LifecycleMixin:
                     )
             except _INTAKE_RERAISE:
                 raise
-            except Exception as e:  # noqa: BLE001 — fail-closed to StudyFinalized
-                decision = IntakeRefuse(
-                    RefusalKind.INPUT_INVALID,
-                    f"intake_error:{type(e).__name__}"[:200],
-                )
-                limits = profile_limits
+            # Unknown exceptions re-raise (fail-closed); do not invent IntakeRefuse.
         user_ids: list[str] = []
         user_events: list[EventEnvelope] = []
         if not isinstance(decision, IntakeRefuse) and inputs:
@@ -248,12 +250,7 @@ class LifecycleMixin:
                     str(e.reason)[:200],
                 )
                 user_ids, user_events = [], []
-            except Exception as e:  # noqa: BLE001 — registration bugs → refuse
-                decision = IntakeRefuse(
-                    RefusalKind.INPUT_INVALID,
-                    f"register_error:{type(e).__name__}"[:200],
-                )
-                user_ids, user_events = [], []
+            # Unknown exceptions re-raise; do not invent IntakeRefuse.
         study = Study(
             study_id=sid,
             profile=profile,
@@ -326,7 +323,7 @@ class LifecycleMixin:
                         "classifier_error": decision.classifier_error,
                     },
                     ts=now,
-                    schema_version=1,
+                    schema_version=STUDY_REFUSED_SCHEMA_VERSION,
                 )
             )
             await self._append(events)
@@ -446,7 +443,6 @@ class LifecycleMixin:
                 q for q in questions if getattr(q, "parent_id", None)
             ] or named_subs
             expand_after = list(expand_after or [])
-            self._validate_dag(tasks)
             known_texts = await self._known_question_texts()
             self._validate_questions(questions, known_texts)
             known_texts = {**known_texts, **{q.id: q.text for q in questions}}
@@ -460,9 +456,13 @@ class LifecycleMixin:
             known_hyps: set[str] = set()
             if graph is not None:
                 for node in graph.nodes_by_kind("hypothesis"):
-                    hid = str(getattr(node, "ref_id", None) or "")
-                    if hid:
-                        known_hyps.add(hid)
+                    hid = node.ref_id
+                    if hid is None or str(hid) == "":
+                        raise JournalFormatError(
+                            f"hypothesis node {node.node_id!r} missing ref_id",
+                            field="ref_id",
+                        )
+                    known_hyps.add(str(hid))
             loop_specs = validate_loop_specs(
                 raw_loops,
                 known_keys=known_keys,
@@ -493,6 +493,8 @@ class LifecycleMixin:
             )
             assert_decomposes_acyclic(parent_map_from_questions(questions))
             loop_ids = {ls.loop_id for ls in loop_specs}
+            from coscientist.core.plan.loop import LOOP_DEP_PREFIX
+
             # NFKC-normalize loop:<id> barriers and store normalized deps on tasks.
             rewritten: list[TaskSpec] = []
             for t in tasks:
@@ -503,14 +505,14 @@ class LifecycleMixin:
                         new_deps.append(d)
                         continue
                     try:
-                        lid = normalize_loop_id(d[len("loop:") :])
+                        lid = normalize_loop_id(d[len(LOOP_DEP_PREFIX) :])
                     except PlanInvalid as e:
                         raise PlanInvalid(
                             f"depends_on invalid loop barrier {d!r}: {e}"
                         ) from e
                     if lid not in loop_ids:
                         raise PlanInvalid(f"depends_on unknown loop barrier {d!r}")
-                    nd = f"loop:{lid}"
+                    nd = f"{LOOP_DEP_PREFIX}{lid}"
                     if nd != d:
                         changed = True
                     new_deps.append(nd)
@@ -518,6 +520,7 @@ class LifecycleMixin:
                     t.model_copy(update={"depends_on": new_deps}) if changed else t
                 )
             tasks = rewritten
+            self._validate_dag(tasks, known_loop_ids=loop_ids)
         except PlanInvalid as e:
             return await apply_plan_refused(
                 self,
@@ -591,7 +594,7 @@ class LifecycleMixin:
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
+                    schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                 )
             )
         # PR16: decomposes edges on accept (child → parent); acyclicity already checked.
@@ -622,7 +625,7 @@ class LifecycleMixin:
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
+                    schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
                 )
             )
         # Freeze rubric digests onto criterion-like nodes (frozen_at_seq via projection).
@@ -632,8 +635,14 @@ class LifecycleMixin:
                 rub = getattr(o, "rubric", None)
                 if rub is None:
                     continue
-                dig = str(getattr(rub, "digest", "") or "")
-                if not dig or dig in seen_rubrics:
+                dig_raw = rub.digest
+                if dig_raw is None or str(dig_raw) == "":
+                    raise JournalFormatError(
+                        f"output {o.name!r} rubric missing digest",
+                        field="digest",
+                    )
+                dig = str(dig_raw)
+                if dig in seen_rubrics:
                     continue
                 seen_rubrics.add(dig)
                 rnid = criterion_node_id(sid, f"rubric:{dig}")
@@ -661,15 +670,21 @@ class LifecycleMixin:
                             created_at=now,
                         ).model_dump(mode="json"),
                         ts=now,
-                        schema_version=1,
+                        schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                     )
                 )
         # Freeze plan criteria at accept (DESIGN_M1 §6 / frozen_at_seq).
         seen_criteria: set[str] = set()
         for spec in tasks:
             for ref in spec.criteria or []:
-                key = str(getattr(ref, "template_id", None) or ref)
-                if not key or key in seen_criteria:
+                tid = ref.template_id
+                if tid is None or str(tid) == "":
+                    raise JournalFormatError(
+                        "criterion RequirementRef missing template_id",
+                        field="template_id",
+                    )
+                key = str(tid)
+                if key in seen_criteria:
                     continue
                 seen_criteria.add(key)
                 cnid = criterion_node_id(sid, key)
@@ -729,7 +744,7 @@ class LifecycleMixin:
                             created_at=now,
                         ).model_dump(mode="json"),
                         ts=now,
-                        schema_version=1,
+                        schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                     )
                 )
         plan_tid = task_id(sid, "PLAN")
@@ -746,7 +761,7 @@ class LifecycleMixin:
                         "reason": None,
                     },
                     ts=now,
-                    schema_version=2,
+                    schema_version=TASK_DONE_SCHEMA_VERSION,
                 )
             )
         effective = self.study.effective_deadline()
@@ -791,13 +806,22 @@ class LifecycleMixin:
             if store is not None:
                 plans = await store.get_projection("plans")
         for plan in plans:
-            for q in plan.get("questions") or []:
+            raw_qs = plan.get("questions")
+            if raw_qs is None:
+                continue
+            if not isinstance(raw_qs, list):
+                raise JournalFormatError(
+                    "plan.questions must be a list",
+                    field="questions",
+                )
+            for q in raw_qs:
                 if not isinstance(q, dict):
-                    continue
-                qid = str(q.get("id", ""))
-                text = str(q.get("text", ""))
-                if not qid:
-                    continue
+                    raise JournalFormatError(
+                        "plan.questions entry must be a mapping",
+                        field="questions",
+                    )
+                qid = str(require_journal_field(q, "id", ctx="plan.questions"))
+                text = str(require_journal_field(q, "text", ctx="plan.questions"))
                 if qid in texts and texts[qid] != text:
                     raise ValueError(f"question id {qid!r} text conflict")
                 texts[qid] = text
@@ -821,7 +845,11 @@ class LifecycleMixin:
                     raise ValueError(f"unknown question id in addresses: {qid!r}")
 
     @staticmethod
-    def _validate_dag(tasks: list[TaskSpec]) -> None:
+    def _validate_dag(
+        tasks: list[TaskSpec], *, known_loop_ids: set[str] | None = None
+    ) -> None:
+        from coscientist.core.plan.loop import is_loop_dep, parse_loop_dep
+
         keys = {t.task_key for t in tasks}
         stage = {"SPEC", "HYP", "LIT", "PLAN"}
         for t in tasks:
@@ -829,8 +857,15 @@ class LifecycleMixin:
                 # Allow stage keys, peers in this revision, and PLAN-n containers.
                 # Expand revisions may depend on keys that only exist as runtime
                 # tasks (already DONE) — callers pass those via merged still_kept.
-                # PR11: loop:<id> barriers resolved by core after LoopCapped/until.
-                if d in keys or d in stage or d.startswith("loop:"):
+                # PR11: exact loop:<id> barriers (LOOP_DEP_PREFIX) vs known LoopSpecs.
+                if d in keys or d in stage:
+                    continue
+                if is_loop_dep(d):
+                    lid = parse_loop_dep(d)
+                    if lid is None:
+                        raise ValueError(f"invalid loop dependency {d!r}")
+                    if known_loop_ids is not None and lid not in known_loop_ids:
+                        raise ValueError(f"unknown loop dependency {d!r}")
                     continue
                 raise ValueError(f"unknown dependency {d}")
         by = {t.task_key: t.depends_on for t in tasks}
@@ -843,7 +878,7 @@ class LifecycleMixin:
                 return
             stack.add(k)
             for d in by[k]:
-                if str(d).startswith("loop:"):
+                if is_loop_dep(str(d)):
                     continue
                 visit(d, stack)
             stack.remove(k)

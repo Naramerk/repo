@@ -652,6 +652,7 @@ def test_foreach_select_requires_graph():
 
 
 def test_foreach_node_missing_ref_id_raises():
+    """ref_id required — attrs['id'] must not alias."""
     from types import SimpleNamespace
 
     from coscientist.core.execution.domain import ForEachSpec
@@ -660,13 +661,143 @@ def test_foreach_node_missing_ref_id_raises():
     node = SimpleNamespace(
         node_id="st:hypothesis:H1",
         ref_id=None,
-        attrs={"source_task": "FE"},
+        attrs={"source_task": "FE", "id": "H1"},
     )
     graph = SimpleNamespace(nodes_by_kind=lambda _k: [node])
     fe = ForEachSpec(kind="hypothesis", of_task="FE", selector="all")
     with pytest.raises(JournalFormatError, match="ref_id") as ei:
         select_foreach_items(SimpleNamespace(graph=graph), fe)
     assert ei.value.field == "ref_id"
+
+
+def _fold_host(**extra):
+    """Minimal LocalProjectMixin fold target (no store/writer)."""
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.graph import GraphStore, default_execution_registry
+
+    base = dict(
+        study=None,
+        tasks={},
+        attempts={},
+        results={},
+        plans={},
+        graph=GraphStore(default_execution_registry()),
+        _finalized=False,
+        _study_cancelled=False,
+        _budget_exceeded=False,
+        _intake_refusal=None,
+        verdict_snapshots={},
+        hypothesis_verdicts={},
+        _expand_requests={},
+        _expand_pending=set(),
+        _hitl_requests={},
+        _hitl_decisions={},
+        _foreach_children={},
+        artifacts=None,
+        artifact_kinds={},
+        question_disposals={},
+    )
+    base.update(extra)
+    return SimpleNamespace(**base)
+
+
+def test_hitl_opened_missing_request_id_raises():
+    """HitlOpened must carry request_id — no entity_key alias."""
+    from datetime import datetime, timezone
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.execution.local_project import LocalProjectMixin
+
+    host = _fold_host()
+    ev = EventEnvelope(
+        study_id="st",
+        type="HitlOpened",
+        entity_key="ek-should-not-alias",
+        idem_key="idem-hitl",
+        payload={"kind": "plan_approval", "open": True},
+        ts=datetime.now(timezone.utc),
+    )
+    with pytest.raises(JournalFormatError, match="request_id") as ei:
+        LocalProjectMixin._project_local(host, ev)
+    assert ei.value.field == "request_id"
+
+
+def test_artifact_registered_missing_artifact_id_raises():
+    """ArtifactRegistered must carry artifact_id — no entity_key alias."""
+    from datetime import datetime, timezone
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.execution.local_project import LocalProjectMixin
+
+    host = _fold_host()
+    ev = EventEnvelope(
+        study_id="st",
+        type="ArtifactRegistered",
+        entity_key="ek-should-not-alias",
+        idem_key="idem-art",
+        payload={"kind": "experiment_design", "stamped": True},
+        ts=datetime.now(timezone.utc),
+    )
+    with pytest.raises(JournalFormatError, match="artifact_id") as ei:
+        LocalProjectMixin._project_local(host, ev)
+    assert ei.value.field == "artifact_id"
+
+
+def test_attempt_started_missing_attempt_role_raises_on_fold():
+    """AttemptStarted fold refuses missing attempt_role (no setdefault invent)."""
+    from datetime import datetime, timedelta, timezone
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.execution.domain import Task, TaskKind, TaskSpec, TaskState
+    from coscientist.core.execution.local_project import LocalProjectMixin
+
+    host = _fold_host()
+    host.tasks["st/E1"] = Task(
+        task_id="st/E1",
+        kind=TaskKind.EXPERIMENT,
+        spec=TaskSpec(task_key="E1", title="t", goal="g", route="experiment"),
+        state=TaskState.PENDING,
+        deadline=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    ev = EventEnvelope(
+        study_id="st",
+        type="AttemptStarted",
+        entity_key="st/E1#1",
+        idem_key="idem-att",
+        payload={
+            "attempt_id": "st/E1#1",
+            "task_id": "st/E1",
+            "closed": False,
+            "charged": False,
+            "provenance": "real",
+            # attempt_role omitted
+        },
+        ts=datetime.now(timezone.utc),
+    )
+    with pytest.raises(JournalFormatError, match="attempt_role") as ei:
+        LocalProjectMixin._project_local(host, ev)
+    assert ei.value.field == "attempt_role"
+
+
+def test_verdict_snapshots_recorded_missing_snapshots_raises():
+    from datetime import datetime, timezone
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.execution.local_project import LocalProjectMixin
+
+    host = _fold_host()
+    ev = EventEnvelope(
+        study_id="st",
+        type="VerdictSnapshotsRecorded",
+        entity_key="st",
+        idem_key="idem-vs",
+        payload={},
+        ts=datetime.now(timezone.utc),
+    )
+    with pytest.raises(JournalFormatError, match="snapshots") as ei:
+        LocalProjectMixin._project_local(host, ev)
+    assert ei.value.field == "snapshots"
 
 
 def test_expand_input_groups_requires_foreach_children():

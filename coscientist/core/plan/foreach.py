@@ -113,10 +113,8 @@ def select_foreach_items(
             continue
         logical = node.ref_id
         if logical is None or str(logical) == "":
-            logical = attrs.get("id")
-        if logical is None or str(logical) == "":
             raise JournalFormatError(
-                f"foreach node {node.node_id!r} missing ref_id/id",
+                f"foreach node {node.node_id!r} missing ref_id",
                 field="ref_id",
             )
         logical = str(logical)
@@ -501,12 +499,12 @@ async def maybe_foreach_after_task_done(
                 done.append(pid)
         except LeaseLost:
             raise
-        except Exception as e:  # noqa: BLE001 — never raise; refuse + skip
+        except JournalFormatError as e:
             await _refuse_and_skip_foreach(
                 runtime,
                 tmpl,
                 after=after,
-                detail=f"foreach_exception:{type(e).__name__}",
+                detail=f"foreach_journal:{e.field or type(e).__name__}",
             )
     return done
 
@@ -527,12 +525,12 @@ async def materialize_ready_foreach(runtime: StudyRuntime) -> list[str]:
                 done.append(pid)
         except LeaseLost:
             raise
-        except Exception as e:  # noqa: BLE001
+        except JournalFormatError as e:
             await _refuse_and_skip_foreach(
                 runtime,
                 tmpl,
                 after=after,
-                detail=f"foreach_exception:{type(e).__name__}",
+                detail=f"foreach_journal:{e.field or type(e).__name__}",
             )
     return done
 

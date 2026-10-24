@@ -113,8 +113,10 @@ class LocalProjectMixin:
         if plan_key and plan_key in reqs:
             reqs.pop(plan_key, None)
         if after_task:
-            for k in [k for k, m in reqs.items() if str(m.get("after_task") or "") == after_task]:
-                reqs.pop(k, None)
+            for k, m in list(reqs.items()):
+                raw_after = require_journal_field(m, "after_task", ctx="expand_request")
+                if str(raw_after) == after_task:
+                    reqs.pop(k, None)
 
     def _project_local(self, ev: EventEnvelope) -> None:
         p = ev.payload
@@ -261,12 +263,10 @@ class LocalProjectMixin:
 
                 fold_loop_expansion_refused(self, p)
         elif ev.type == "HitlOpened":
-            rid_raw = p.get("request_id")
-            if rid_raw is None or str(rid_raw) == "":
-                rid_raw = ev.entity_key
+            rid_raw = require_journal_field(p, "request_id", ctx="HitlOpened")
             if rid_raw is None or str(rid_raw) == "":
                 raise JournalFormatError(
-                    "HitlOpened missing request_id/entity_key",
+                    "HitlOpened missing request_id",
                     field="request_id",
                 )
             rid = str(rid_raw)
@@ -302,12 +302,10 @@ class LocalProjectMixin:
         elif ev.type == "ArtifactRegistered":
             # PR15: core-stamped Artifact.kind (experiment_design / contradiction_map).
             # Journal is authority; meta mutation only here (after successful append).
-            art_raw = p.get("artifact_id")
-            if art_raw is None or str(art_raw) == "":
-                art_raw = ev.entity_key
+            art_raw = require_journal_field(p, "artifact_id", ctx="ArtifactRegistered")
             if art_raw is None or str(art_raw) == "":
                 raise JournalFormatError(
-                    "ArtifactRegistered missing artifact_id/entity_key",
+                    "ArtifactRegistered missing artifact_id",
                     field="artifact_id",
                 )
             art_id = str(art_raw)
@@ -411,7 +409,7 @@ class LocalProjectMixin:
             # Writer stamps closed/charged/provenance/attempt_role. Schema v10
             # refusal of legacy journals is deferred until after #38 rebase.
             row = dict(p)
-            row.setdefault("attempt_role", "agent")
+            require_journal_field(row, "attempt_role", ctx="AttemptStarted")
             if getattr(ev, "seq", None) is not None:
                 row["_seq"] = ev.seq
             self.attempts[p["attempt_id"]] = row
@@ -576,9 +574,19 @@ class LocalProjectMixin:
                     logical = str(dst.ref_id)
                 self._invalidate_verdict_snapshots_for_target(logical)
         elif ev.type == "VerdictSnapshotsRecorded":
-            snaps = p.get("snapshots") or {}
-            if isinstance(snaps, dict):
-                self.verdict_snapshots.update({str(k): dict(v) for k, v in snaps.items() if isinstance(v, dict)})
+            snaps = require_journal_field(p, "snapshots", ctx="VerdictSnapshotsRecorded")
+            if not isinstance(snaps, dict):
+                raise JournalFormatError(
+                    "VerdictSnapshotsRecorded snapshots must be a mapping",
+                    field="snapshots",
+                )
+            self.verdict_snapshots.update(
+                {
+                    str(k): dict(v)
+                    for k, v in snaps.items()
+                    if isinstance(v, dict)
+                }
+            )
 
     def _invalidate_verdict_snapshots_for_target(self, target: Any) -> None:
         """Drop journaled snapshots for one target ref (DESIGN_M1 PR8)."""
