@@ -219,6 +219,10 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         ex._append = _append_with_expand  # type: ignore[method-assign]
         return ex
 
+    async def append_events(self, events: list[EventEnvelope]) -> None:
+        """Public durable append + project (prod writers and test seams)."""
+        await self._append(events)
+
     async def _append(self, events: list[EventEnvelope]) -> None:
         if self._lease_lost:
             raise LeaseLost("writer stopped after lease loss")

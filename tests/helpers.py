@@ -60,10 +60,9 @@ async def append_plan_accepted(
     *,
     schema_version: int,
 ) -> None:
-    """Test seam: journal PlanAccepted then project via runtime ``_project_local``.
+    """Test seam: PlanAccepted via public ``StudyRuntime.append_events``.
 
-    Same durable-append + fold order as ``StudyRuntime._append`` (no hand-written
-    ``runtime.plans`` mutation). ``schema_version`` is required (no default).
+    ``schema_version`` is required (no default). ``plan_id`` must be ``str``.
     """
     if runtime.study is None:
         raise RuntimeError("append_plan_accepted requires an open study")
@@ -80,9 +79,7 @@ async def append_plan_accepted(
         ts=runtime.clock.now(),
         schema_version=schema_version,
     )
-    stored = await runtime.writer.append_many([ev])
-    for sev in stored:
-        runtime._project_local(sev)
+    await runtime.append_events([ev])
 
 
 async def open_runtime(
