@@ -653,6 +653,26 @@ async def test_budget_max_llm_calls_zero_raises_before_complete(
 
 
 @pytest.mark.asyncio
+async def test_budget_max_llm_calls_counts_across_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _adapter(
+        _client(
+            [
+                _ok_body(content=_plan_out_json()),
+                _ok_body(content=_plan_out_json()),
+            ],
+            monkeypatch=monkeypatch,
+        )
+    )
+    ctx = StudyContext(study_id="s", request="r", profile="p")
+    first = await adapter.run("planner", ctx, [], _budget(max_llm_calls=1))
+    assert first.error is None
+    with pytest.raises(AgentError, match="max_llm_calls exceeded"):
+        await adapter.run("planner", ctx, [], _budget(max_llm_calls=1))
+
+
+@pytest.mark.asyncio
 async def test_budget_naive_deadline_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _adapter(_client([], monkeypatch=monkeypatch))
     with pytest.raises(AgentError, match="timezone-aware"):

@@ -214,8 +214,6 @@ forbidden_modules = [
 [[tool.importlinter.contracts]]
 name = "agents must use invoke_tool (no contract / registry / gate)"
 type = "forbidden"
-# Indirect via tools.router (CallCtx/ToolOutput) is OK; direct contract import is not.
-allow_indirect_imports = true
 source_modules = ["coscientist.agents"]
 forbidden_modules = [
   "coscientist.tools.contract",
@@ -224,6 +222,12 @@ forbidden_modules = [
   "coscientist.tools.taint",
   "coscientist.core.execution.tool_registry",
 ]
+# CallCtx/ToolOutput via ToolRouter.call only — not allow_indirect (opens gate/taint/registry).
+ignore_imports = [
+  "coscientist.tools.router -> coscientist.tools.contract",
+  "coscientist.tools.mcp_adapter -> coscientist.tools.contract",
+]
+unmatched_ignore_imports_alerting = "error"
 
 [[tool.importlinter.contracts]]
 name = "agents must not import dispose or artifact_stamp"

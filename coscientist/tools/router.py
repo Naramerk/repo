@@ -28,7 +28,6 @@ from coscientist.tools.mcp_adapter import (
     McpToolProfile,
     bind_mcp_server_tools,
     mcp_tool_key,
-    mcp_tool_spec_name,
     tools_from_mcp_session,
 )
 
@@ -280,19 +279,6 @@ class ToolRouter:
         matches = [key for key in self._tools if key[1] == value]
         if len(matches) == 1:
             server_name, tool_name = matches[0]
-            return Resolution(
-                status="tool_found",
-                server_name=server_name,
-                tool_name=tool_name,
-            )
-        # Also accept exact ToolSpec.name collision-safe form without relying on ":".
-        spec_matches = [
-            key
-            for key in self._tools
-            if mcp_tool_spec_name(key[0], key[1]) == value
-        ]
-        if len(spec_matches) == 1:
-            server_name, tool_name = spec_matches[0]
             return Resolution(
                 status="tool_found",
                 server_name=server_name,
