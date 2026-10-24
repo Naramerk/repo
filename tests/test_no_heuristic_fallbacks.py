@@ -6,6 +6,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+
 from coscientist.core.claims.contradicts import _accepted, _stance_of
 from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.claims.stance import claim_stance

@@ -847,9 +847,8 @@ async def bind_proposed_check_reviewer(
         "status": "pending",
         "deadline": rev.get("deadline"),
         "hitl_request_id": rev.get("hitl_request_id"),
-        "task_id": rev.get("task_id") or row.get("task_id"),
-        "proposer_attempt_id": rev.get("proposer_attempt_id")
-        or row["proposer_attempt_id"],
+        "task_id": rev["task_id"],
+        "proposer_attempt_id": row["proposer_attempt_id"],
     }
     await _append_events(
         runtime,
