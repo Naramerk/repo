@@ -56,13 +56,16 @@ T = TypeVar("T")
 
 
 def _map_sqlite_open_error(exc: sqlite3.Error) -> Exception:
-    """Map sqlite open failures by ``sqlite_errorcode`` (never by message text).
+    """Map sqlite open failures by ``exc.sqlite_errorcode`` (never by message text).
 
     - ``SQLITE_BUSY`` / ``SQLITE_LOCKED`` → ``JournalLockedError``
     - ``SQLITE_CORRUPT`` / ``SQLITE_NOTADB`` → ``JournalFormatError`` (truncated/corrupt)
-    - any other / missing code → ``JournalUnavailableError`` (never "truncated")
+    - any other / missing attribute → ``JournalUnavailableError`` (never "truncated")
     """
-    code = getattr(exc, "sqlite_errorcode", None)
+    try:
+        code = exc.sqlite_errorcode
+    except AttributeError:
+        return JournalUnavailableError(f"journal unavailable: {exc}")
     if code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
         return JournalLockedError(f"journal locked: {exc}")
     if code in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
@@ -196,7 +199,10 @@ class SqliteEventStore:
                 )
             else:
                 exp = _parse_iso(row["expires_at"])
-                held_nonce = str(row["owner_nonce"] or "")
+                raw_nonce = row["owner_nonce"]
+                if raw_nonce is None:
+                    raise JournalFormatError("lease.owner_nonce is NULL")
+                held_nonce = str(raw_nonce)
                 if exp > now and row["owner"] != owner:
                     raise LeaseLost(
                         f"lease held by {row['owner']} until {row['expires_at']}"
@@ -469,12 +475,38 @@ class SqliteEventStore:
 
                     if not source_fetched_cap_id:
                         raise ArtifactRejected("fetch_capability_required")
-                    p = ev.payload if isinstance(ev.payload, dict) else {}
+                    if not isinstance(ev.payload, dict):
+                        raise JournalFormatError(
+                            f"SourceFetched: payload must be dict, "
+                            f"got {type(ev.payload).__name__}"
+                        )
+                    p = ev.payload
+                    try:
+                        tool = p["tool"]
+                        call_id = p["call_id"]
+                    except KeyError as e:
+                        raise JournalFormatError(
+                            f"SourceFetched: missing {e.args[0]!r}"
+                        ) from e
+                    if not isinstance(tool, str) or not tool:
+                        raise JournalFormatError(
+                            f"SourceFetched: tool must be non-empty str, got {tool!r}"
+                        )
+                    if not isinstance(call_id, str) or not call_id:
+                        raise JournalFormatError(
+                            f"SourceFetched: call_id must be non-empty str, "
+                            f"got {call_id!r}"
+                        )
+                    if not isinstance(ev.study_id, str) or not ev.study_id:
+                        raise JournalFormatError(
+                            f"SourceFetched: study_id must be non-empty str, "
+                            f"got {ev.study_id!r}"
+                        )
                     take_source_fetched_write_permit(
                         source_fetched_cap_id,
-                        tool=str(p.get("tool") or ""),
-                        call_id=str(p.get("call_id") or ""),
-                        study_id=str(ev.study_id or ""),
+                        tool=tool,
+                        call_id=call_id,
+                        study_id=ev.study_id,
                     )
                 stored, idem = self._insert_one(ev)
                 mutated = True
@@ -538,7 +570,9 @@ class SqliteEventStore:
                 digest,
             ),
         )
-        seq = int(cur.lastrowid or 0)
+        if cur.lastrowid is None:
+            raise JournalUnavailableError("events insert returned no lastrowid")
+        seq = int(cur.lastrowid)
         stored = event.model_copy(
             update={"seq": seq, "epoch": self.epoch, "payload_digest": digest, "ts": ts}
         )

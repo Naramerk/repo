@@ -10,8 +10,13 @@ from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import Conflict
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hitl_request_id, study_id
+from coscientist.core.events.schema_versions import GRAPH_NODE_UPSERTED_SCHEMA_VERSION
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import Clarification, HitlRequest, Task
 from coscientist.experimental.hitl_costly import CostlyHitlMixin
+
+_BUDGET_SHARES_REFUSED_SV = writer_schema_version("BudgetSharesRefused")
+_BUDGET_SHARES_ADJUSTED_SV = writer_schema_version("BudgetSharesAdjusted")
 
 
 class HitlForkMixin(CostlyHitlMixin):
@@ -529,7 +534,7 @@ class HitlForkMixin(CostlyHitlMixin):
                     idem_key=make_idem("GraphNodeUpserted", pnid, "hitl_delegate", delegated_by),
                     payload=node.model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
+                    schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                 )
             ]
         )
@@ -558,7 +563,9 @@ class HitlForkMixin(CostlyHitlMixin):
             idem_key=make_idem(
                 "GraphNodeUpserted", nid, "hitl_decision", approved_by, delegated_by or "-"
             ),
-            payload=node.model_dump(mode="json"), ts=now, schema_version=1,
+            payload=node.model_dump(mode="json"),
+            ts=now,
+            schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
         )])
 
     async def _apply_budget_hitl(
@@ -595,11 +602,11 @@ class HitlForkMixin(CostlyHitlMixin):
                         payload={
                             "request_id": request_id,
                             "reason": "critic_rejected",
-                            "detail": str(err or "invalid"),
+                            "detail": str(err) if err is not None else "invalid",
                             "approved_by": approved_by,
                         },
                         ts=self.clock.now(),
-                        schema_version=1,
+                        schema_version=_BUDGET_SHARES_REFUSED_SV,
                     )
                 ]
             )
@@ -608,7 +615,9 @@ class HitlForkMixin(CostlyHitlMixin):
         await self._append([EventEnvelope(
             study_id=h.study_id, type="BudgetSharesAdjusted", entity_key=request_id,
             idem_key=make_idem("BudgetSharesAdjusted", request_id),
-            payload=payload, ts=self.clock.now(), schema_version=1,
+            payload=payload,
+            ts=self.clock.now(),
+            schema_version=_BUDGET_SHARES_ADJUSTED_SV,
         )])
 
     def _depends_transitively(self, task: Task, key: str) -> bool:

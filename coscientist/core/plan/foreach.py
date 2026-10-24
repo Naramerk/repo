@@ -22,7 +22,6 @@ from coscientist.core.execution.domain import (
     Plan,
     QuestionSpec,
     Task,
-    TaskKind,
     TaskOutcome,
     TaskSpec,
     TaskState,
@@ -333,24 +332,16 @@ async def materialize_foreach(
         )
     )
     from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
+    from coscientist.core.plan.expand_validate import task_kind_for_route
 
-    catalog = getattr(runtime, "catalog", None)
+    catalog = runtime.catalog
     existing_keys = {t.spec.task_key for t in runtime.tasks.values()}
     for spec in added:
         if spec.task_key in existing_keys and spec.task_key not in superseded:
             continue
         frozen_spec = freeze_task_sandbox_limits(spec, catalog)
         tid = task_id(sid, frozen_spec.task_key)
-        route = (frozen_spec.route or "").lower()
-        kind = {
-            "literature": TaskKind.LITERATURE,
-            "lit": TaskKind.LITERATURE,
-            "hypotheses": TaskKind.HYPOTHESES,
-            "hypothesis": TaskKind.HYPOTHESES,
-            "hyp": TaskKind.HYPOTHESES,
-            "planner": TaskKind.PLAN,
-            "plan": TaskKind.PLAN,
-        }.get(route, TaskKind.EXPERIMENT)
+        kind = task_kind_for_route(frozen_spec.route)
         task = Task(
             task_id=tid,
             kind=kind,

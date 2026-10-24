@@ -114,10 +114,27 @@ def review_scheduled_events(
     events: list[EventEnvelope] = []
     seen: set[str] = set()
     for c in checks:
-        effect = getattr(c, "effect", None) or {}
-        item_statuses = effect.get("item_statuses") if isinstance(effect, dict) else None
+        effect = c.effect
+        if effect is None:
+            item_statuses = None
+            pending: set[Any] = set()
+        elif not isinstance(effect, dict):
+            raise JournalFormatError(
+                f"ReviewCheck.effect must be dict|None, got {type(effect).__name__}"
+            )
+        else:
+            item_statuses = effect.get("item_statuses")
+            if "pending_items" not in effect:
+                pending = set()
+            else:
+                raw_pending = effect["pending_items"]
+                if not isinstance(raw_pending, list):
+                    raise JournalFormatError(
+                        f"ReviewCheck.effect.pending_items must be list, "
+                        f"got {type(raw_pending).__name__}"
+                    )
+                pending = set(raw_pending)
         if isinstance(item_statuses, dict):
-            pending = set(effect.get("pending_items") or [])
             for item_id, st in item_statuses.items():
                 if (
                     st
@@ -154,13 +171,17 @@ def review_scheduled_events(
                             "task_id": task_id,
                             "output_digest": output_digest,
                             "kind": "rubric_judge",
-                            "rubric_digest": effect.get("rubric_digest"),
+                            "rubric_digest": (
+                                effect["rubric_digest"]
+                                if isinstance(effect, dict) and "rubric_digest" in effect
+                                else None
+                            ),
                         },
                         ts=now,
                     )
                 )
             continue
-        if not c.is_code and getattr(c, "status", None) in (
+        if not c.is_code and c.status in (
             ReqStatus.UNASSESSED,
             ReqStatus.PENDING,
         ):

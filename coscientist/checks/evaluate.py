@@ -901,10 +901,13 @@ def evaluate_task_checks(
         for tid in catalog.defaults.get("experiment", []):
             refs.append(RequirementRef(template_id=tid))
 
-    # plan_expansion_* markers are valid ONLY on core-created PLAN-n containers.
-    key = task_key if task_key is not None else spec.task_key
-    kind = str(task_kind or "")
-    is_core_plan_n = kind == "plan" and str(key).startswith("PLAN-")
+    # PLAN-n critic template ids are valid ONLY on core-created PLAN-n containers.
+    from coscientist.core.plan.expand_critic import PLAN_N_TEMPLATE_IDS
+
+    kind = str(task_kind) if task_kind is not None else ""
+    crit_ids = {str(r.template_id) for r in refs}
+    # Core PLAN-n always carries the full typed critic id set (not a key prefix).
+    is_core_plan_n = kind == "plan" and PLAN_N_TEMPLATE_IDS.issubset(crit_ids)
 
     for i, ref in enumerate(refs):
         tmpl = by_id.get(ref.template_id)
@@ -931,7 +934,7 @@ def evaluate_task_checks(
                 )
             )
             continue
-        if str(ref.template_id or "").startswith("plan_expansion_"):
+        if str(ref.template_id) in PLAN_N_TEMPLATE_IDS:
             if is_core_plan_n:
                 results.append(
                     CheckResult(

@@ -26,7 +26,10 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.plan.expand_critic import PLAN_N_CRITIC_CRITERIA
+from coscientist.core.plan.expand_critic import (
+    PLAN_N_CRITIC_CRITERIA,
+    task_has_plan_n_critic,
+)
 from coscientist.core.plan.expand_validate import (
     MaxDepthExceeded,
     active_plan_blob,
@@ -200,9 +203,7 @@ async def ensure_plan_n_task(
         return None
     sid = runtime.study.study_id
     existing_plan_n = sum(
-        1
-        for t in runtime.tasks.values()
-        if t.kind == TaskKind.PLAN and str(t.spec.task_key).startswith("PLAN-")
+        1 for t in runtime.tasks.values() if task_has_plan_n_critic(t)
     )
     n = int(runtime._agent_expansions) + existing_plan_n + 1
     key = f"PLAN-{n}"
@@ -286,7 +287,7 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
     if task is None or task.state != TaskState.DONE:
         return None
     # PLAN-n completion → M1 deterministic critic, then apply (or refuse).
-    if task.kind == TaskKind.PLAN and task.spec.task_key.startswith("PLAN-"):
+    if task_has_plan_n_critic(task):
         plan_key = task.spec.task_key
         if plan_n_already_closed(runtime, plan_key):
             return None
@@ -296,7 +297,26 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
             return await apply_pending_expansion(runtime, plan_key)
         # MJ-c: non-SUCCESS PLAN-n must not vanish.
         meta = runtime._expand_requests.get(plan_key)
-        after = str(meta["after_task"]) if isinstance(meta, dict) and "after_task" in meta else plan_key
+        if not isinstance(meta, dict) or "after_task" not in meta:
+            await refuse_expansion(
+                runtime,
+                plan_key,
+                reason="invalid",
+                detail="missing_expand_after_task",
+                plan_key=plan_key,
+            )
+            return None
+        raw_after = meta["after_task"]
+        if not isinstance(raw_after, str) or not raw_after:
+            await refuse_expansion(
+                runtime,
+                plan_key,
+                reason="invalid",
+                detail="invalid_expand_after_task",
+                plan_key=plan_key,
+            )
+            return None
+        after = raw_after
         oc = _outcome_token(task.outcome)
         await refuse_expansion(
             runtime,
@@ -403,14 +423,17 @@ async def resume_pending_expansions(runtime: StudyRuntime) -> int:
         if task.state != TaskState.DONE:
             continue
         # PLAN-n: resume critic/apply or refuse non-SUCCESS.
-        if task.kind == TaskKind.PLAN and task.spec.task_key.startswith("PLAN-"):
+        if task_has_plan_n_critic(task):
             plan_key = task.spec.task_key
             if plan_n_already_closed(runtime, plan_key):
                 continue
             meta = runtime._expand_requests.get(plan_key)
-            if not isinstance(meta, dict):
+            if not isinstance(meta, dict) or "after_task" not in meta:
                 continue
-            after = str(meta["after_task"]) if "after_task" in meta else plan_key
+            raw_after = meta["after_task"]
+            if not isinstance(raw_after, str) or not raw_after:
+                continue
+            after = raw_after
             if task.outcome == TaskOutcome.SUCCESS:
                 from coscientist.core.plan.expand import apply_pending_expansion
 

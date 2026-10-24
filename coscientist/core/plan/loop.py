@@ -34,7 +34,6 @@ from coscientist.core.execution.domain import (
     Plan,
     QuestionSpec,
     Task,
-    TaskKind,
     TaskSpec,
     TaskState,
 )
@@ -349,7 +348,7 @@ async def materialize_loop_iter(
     iter_n: int,
 ) -> str | None:
     """Write PlanExpanded(loop=true) for one iteration. Returns plan_id or None."""
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime._finalized:
         return None
     study = runtime.study
     sid = study.study_id
@@ -384,7 +383,7 @@ async def materialize_loop_iter(
     )
 
     # max_tasks guard
-    max_tasks = int(getattr(study, "max_tasks", 64) or 64)
+    max_tasks = int(study.max_tasks)
     existing_n = len(runtime.tasks)
     if existing_n + len(added) > max_tasks:
         await _refuse_loop(
@@ -394,19 +393,27 @@ async def materialize_loop_iter(
         )
         return None
 
-    prev = active_plan_blob(runtime) or {}
-    prev_rev = int(prev.get("revision") or 0)
-    prev_pid = str(prev.get("plan_id") or "")
+    from coscientist.core.events.upcasters import require_exact_int
+    from coscientist.core.plan.expand_validate import task_kind_for_route
+
+    prev = active_plan_blob(runtime)
+    if prev is None:
+        await _refuse_loop(runtime, loop, detail="missing_plan_rollup")
+        return None
+    prev_rev = require_exact_int(prev["revision"], what="plan.revision")
+    prev_pid = prev["plan_id"]
+    if not isinstance(prev_pid, str) or not prev_pid:
+        await _refuse_loop(runtime, loop, detail="missing_plan_id")
+        return None
     new_rev = prev_rev + 1
     prev_tasks = [
-        TaskSpec.model_validate(t) if isinstance(t, dict) else t
-        for t in (prev.get("tasks") or [])
+        TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in prev["tasks"]
     ]
     prev_questions = [
         QuestionSpec.model_validate(q) if isinstance(q, dict) else q
-        for q in (prev.get("questions") or [])
+        for q in prev["questions"]
     ]
-    prev_loops = list(prev.get("loops") or [])
+    prev_loops = list(prev["loops"]) if "loops" in prev else []
     merged = list(prev_tasks) + added
     share_err = critic_plan_shares(merged, study=study)
     if share_err is not None:
@@ -414,6 +421,7 @@ async def materialize_loop_iter(
         return None
 
     pid = loop_plan_id(sid, loop.loop_id, iter_n, new_rev)
+    expand_after = list(prev["expand_after"]) if "expand_after" in prev else []
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -421,7 +429,7 @@ async def materialize_loop_iter(
         hypothesis_id=None,
         tasks=merged,
         questions=list(prev_questions),
-        expand_after=list(prev.get("expand_after") or []),
+        expand_after=expand_after,
         loops=[
             LoopSpec.model_validate(x) if isinstance(x, dict) else x for x in prev_loops
         ]
@@ -453,23 +461,18 @@ async def materialize_loop_iter(
             now=now,
         )
     )
-    catalog = getattr(runtime, "catalog", None)
+    catalog = runtime.catalog
     existing_keys = {t.spec.task_key for t in runtime.tasks.values()}
     for spec in added:
         if spec.task_key in existing_keys:
             continue
         frozen_spec = freeze_task_sandbox_limits(spec, catalog)
         tid = task_id(sid, frozen_spec.task_key)
-        route = (frozen_spec.route or "").lower()
-        kind = {
-            "literature": TaskKind.LITERATURE,
-            "lit": TaskKind.LITERATURE,
-            "hypotheses": TaskKind.HYPOTHESES,
-            "hypothesis": TaskKind.HYPOTHESES,
-            "hyp": TaskKind.HYPOTHESES,
-            "planner": TaskKind.PLAN,
-            "plan": TaskKind.PLAN,
-        }.get(route, TaskKind.EXPERIMENT)
+        try:
+            kind = task_kind_for_route(frozen_spec.route)
+        except ValueError as e:
+            await _refuse_loop(runtime, loop, detail=str(e))
+            return None
         task = Task(
             task_id=tid,
             kind=kind,
@@ -536,10 +539,10 @@ async def _emit_loop_capped(
     survivors: int | None = None,
 ) -> None:
     """Journal LoopCapped. Never recomputes survivors on error/refuse paths."""
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime._finalized:
         return
     sid = runtime.study.study_id
-    capped = getattr(runtime, "_loop_capped", None) or {}
+    capped = runtime._loop_capped if runtime._loop_capped is not None else {}
     if isinstance(capped, dict) and loop.loop_id in capped:
         return
     status = loop_status(runtime, loop.loop_id)
@@ -587,11 +590,11 @@ async def _emit_loop_refused(
     Single batch avoids mid-emit ``status=refused`` early-outs that would skip
     LoopCapped (live ≡ replay needs ``_loop_capped`` populated).
     """
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime._finalized:
         return
     if loop_is_complete(runtime, loop.loop_id):
         return
-    capped = getattr(runtime, "_loop_capped", None) or {}
+    capped = runtime._loop_capped if runtime._loop_capped is not None else {}
     if isinstance(capped, dict) and loop.loop_id in capped:
         return
     sid = runtime.study.study_id
@@ -666,7 +669,7 @@ async def _emit_loop_completed(
     runtime: StudyRuntime, loop: LoopSpec, *, iter_n: int
 ) -> None:
     """Journal until-met completion so reopen restores status without re-eval."""
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime._finalized:
         return
     done_map = getattr(runtime, "_loop_done", None) or set()
     if isinstance(done_map, set) and loop.loop_id in done_map:
@@ -714,7 +717,7 @@ async def _emit_loop_advance_failed(
     runtime: StudyRuntime, *, detail: str
 ) -> None:
     """Journal ExpansionRefused when no LoopSpec context is available."""
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime._finalized:
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
@@ -753,7 +756,7 @@ async def finalize_loop_internal_error(
     same as #21). Expected predicate failures use ``_refuse_loop`` instead.
     Closes any RUNNING tasks/attempts before finalize so the journal is honest.
     """
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime._finalized:
         return
     detail = f"loop_advance:{type(exc).__name__}:{exc}"[:200]
     # Suppress expand/foreach/loop hooks on nested _append(TaskDone) while closing.
@@ -806,7 +809,7 @@ async def refuse_orphaned_loop_barriers(runtime: StudyRuntime) -> int:
 
     A dropped / never-accepted LoopSpec must not leave dependents PENDING forever.
     """
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime._finalized:
         return 0
     n = 0
     for task in list(runtime.tasks.values()):
@@ -872,7 +875,7 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
     disguise as iteration_cap). Does not re-raise after finalize.
     """
     done: list[str] = []
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime._finalized:
         return done
     try:
         await refuse_orphaned_loop_barriers(runtime)
@@ -883,7 +886,7 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
         return done
     for loop in loops:
-        if getattr(runtime, "_finalized", False):
+        if runtime._finalized:
             break
         try:
             pid = await _advance_one(runtime, loop)
@@ -915,7 +918,7 @@ async def maybe_loop_after_task_done(
     runtime: StudyRuntime, task_id_full: str
 ) -> list[str]:
     """After any TaskDone, try to advance loops (deps ready or iter complete)."""
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime._finalized:
         return []
     return await maybe_advance_loops(runtime)
 
@@ -925,7 +928,7 @@ async def resume_pending_loops(runtime: StudyRuntime) -> int:
     Unexpected errors are journaled + finalized inside ``maybe_advance_loops``;
     this wrapper also catch-finalizes so recover never aborts before ``tick()``.
     """
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime._finalized:
         return 0
     try:
         got = await maybe_advance_loops(runtime)
@@ -1070,7 +1073,7 @@ def capped_scope_questions(runtime: Any) -> dict[str, dict[str, Any]]:
     disposition reason=iteration_cap. Post-#21 rebase: also respect public
     ``TerminalReason.INTERNAL_ERROR`` (never map error-path loops to cap).
     """
-    capped = getattr(runtime, "_loop_capped", None) or {}
+    capped = runtime._loop_capped if runtime._loop_capped is not None else {}
     out: dict[str, dict[str, Any]] = {}
     if not isinstance(capped, dict):
         return out

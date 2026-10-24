@@ -763,20 +763,17 @@ class LifecycleMixin:
 
     @staticmethod
     def _validate_dag(tasks: list[TaskSpec]) -> None:
+        from coscientist.core.plan.loop import is_loop_dep
+
         keys = {t.task_key for t in tasks}
-        stage = {"SPEC", "HYP", "LIT", "PLAN"}
+        stage = frozenset({"SPEC", "HYP", "LIT", "PLAN"})
         for t in tasks:
             for d in t.depends_on:
-                # Allow stage keys, peers in this revision, and PLAN-n containers.
+                # Allow stage keys, peers in this revision, and loop:<id> barriers.
                 # Expand revisions may depend on keys that only exist as runtime
-                # tasks (already DONE) — callers pass those via merged still_kept.
-                # PR11: loop:<id> barriers resolved by core after LoopCapped/until.
-                if (
-                    d in keys
-                    or d in stage
-                    or d.startswith("PLAN-")
-                    or d.startswith("loop:")
-                ):
+                # tasks (already DONE) — callers pass those via merged still_kept
+                # (including PLAN-n task_keys). No string-prefix classification.
+                if d in keys or d in stage or is_loop_dep(d):
                     continue
                 raise ValueError(f"unknown dependency {d}")
         by = {t.task_key: t.depends_on for t in tasks}
@@ -789,7 +786,7 @@ class LifecycleMixin:
                 return
             stack.add(k)
             for d in by[k]:
-                if str(d).startswith("loop:"):
+                if is_loop_dep(d):
                     continue
                 visit(d, stack)
             stack.remove(k)

@@ -11,7 +11,12 @@ from typing import TYPE_CHECKING, Any
 from coscientist.core.claims.rubric_types import VALID_FINAL_TYPES, FinalType
 from coscientist.core.events.ids import task_id
 from coscientist.core.events.upcasters import require_exact_int
-from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskSpec
+from coscientist.core.execution.domain import (
+    QuestionSpec,
+    QuestionSupersede,
+    TaskKind,
+    TaskSpec,
+)
 from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
 from coscientist.core.plan.decomposes import VALID_ROLLUP_RULES, RollupRule
 
@@ -56,19 +61,38 @@ def _rollup_from_plans(plan_rows: list[Any]) -> tuple[RollupRule | None, str | N
         return None, str(e)
 
 
+# Canonical route → kind prefix / TaskKind (exact match; no .lower() / aliases).
+_ROUTE_PREFIX: dict[str, str] = {
+    "literature": "LIT",
+    "hypotheses": "HYP",
+    "planner": "PLAN",
+    "experiment": "EXP",
+}
+_ROUTE_KIND: dict[str, TaskKind] = {
+    "literature": TaskKind.LITERATURE,
+    "hypotheses": TaskKind.HYPOTHESES,
+    "planner": TaskKind.PLAN,
+    "experiment": TaskKind.EXPERIMENT,
+}
+
+
 def _prefix_for_route(route: str) -> str:
     if not isinstance(route, str) or not route:
         raise ValueError(f"invalid_route:{route!r}")
-    r = route.lower()
-    if r in ("literature", "lit"):
-        return "LIT"
-    if r in ("hypotheses", "hypothesis", "hyp"):
-        return "HYP"
-    if r in ("planner", "plan"):
-        return "PLAN"
-    if r in ("experiment", "exp"):
-        return "EXP"
-    raise ValueError(f"unknown_route:{route!r}")
+    try:
+        return _ROUTE_PREFIX[route]
+    except KeyError as e:
+        raise ValueError(f"unknown_route:{route!r}") from e
+
+
+def task_kind_for_route(route: str) -> TaskKind:
+    """Map canonical ``TaskSpec.route`` to ``TaskKind`` (exact; no aliases)."""
+    if not isinstance(route, str) or not route:
+        raise ValueError(f"invalid_route:{route!r}")
+    try:
+        return _ROUTE_KIND[route]
+    except KeyError as e:
+        raise ValueError(f"unknown_route:{route!r}") from e
 
 
 def next_kind_index(runtime: StudyRuntime, prefix: str, tasks: list[TaskSpec]) -> int:
@@ -182,11 +206,14 @@ def _validate(
         return "max_tasks"
     # Allow deps on existing runtime DONE/PENDING keys (not only merged revision).
     runtime_keys = {t.spec.task_key for t in runtime.tasks.values()}
+    plan_keys = {
+        t.spec.task_key for t in runtime.tasks.values() if t.kind == TaskKind.PLAN
+    }
     keys = {t.task_key for t in merged} | runtime_keys
-    stage = {"SPEC", "HYP", "LIT", "PLAN"}
+    stage = frozenset({"SPEC", "HYP", "LIT", "PLAN"})
     for t in merged:
         for d in t.depends_on:
-            if d in keys or d in stage or d.startswith("PLAN-"):
+            if d in keys or d in stage or d in plan_keys:
                 continue
             return f"unknown dependency {d}"
     by = {t.task_key: list(t.depends_on) for t in merged}
@@ -216,7 +243,8 @@ def _validate(
     try:
         validate_foreach_specs(merged, known_keys=keys)
     except ValueError as e:
-        return str(e) or "invalid_foreach"
+        msg = str(e)
+        return msg if msg else "invalid_foreach"
     share_err = critic_plan_shares(merged, study=study)
     if share_err is not None:
         return share_err
@@ -402,8 +430,13 @@ def task_produced_countable_claims(runtime: StudyRuntime, tkey: str) -> bool:
     by = filtered_claims_by_target(runtime.graph, study_id=sid, results=runtime.results)
     for claims in by.values():
         for c in claims:
-            aid = c.attempt_id if isinstance(getattr(c, "attempt_id", None), str) else ""
-            if aid.startswith(tid) and c.counts():
+            if not hasattr(c, "attempt_id"):
+                continue
+            aid = c.attempt_id
+            if not isinstance(aid, str) or not aid:
+                continue
+            # Structured attempt ids are ``{task_id}#{n}`` — not free substring match.
+            if aid.startswith(f"{tid}#") and c.counts():
                 return True
     return False
 

@@ -6,9 +6,15 @@ before ``PlanExpanded``. Reject → ``ExpansionRefused(critic_rejected, …)``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from coscientist.core.execution.domain import ExpansionRequest, RequirementRef, TaskSpec, TaskState
+from coscientist.core.execution.domain import (
+    ExpansionRequest,
+    RequirementRef,
+    TaskKind,
+    TaskSpec,
+    TaskState,
+)
 from coscientist.core.plan.expand_validate import (
     active_plan_blob,
     assign_core_keys,
@@ -30,6 +36,17 @@ PLAN_N_CRITIC_CRITERIA: list[RequirementRef] = [
     RequirementRef(template_id="plan_expansion_acceptance_criteria", required=True),
     RequirementRef(template_id="plan_expansion_no_duplicates", required=True),
 ]
+# Typed marker set — classify PLAN-n critic templates by id membership, not prefix.
+PLAN_N_TEMPLATE_IDS: frozenset[str] = frozenset(
+    r.template_id for r in PLAN_N_CRITIC_CRITERIA
+)
+
+
+def task_has_plan_n_critic(task: Any) -> bool:
+    """True when task carries PLAN-n critic criteria (typed ids, not key prefix)."""
+    if task.kind != TaskKind.PLAN:
+        return False
+    return any(r.template_id in PLAN_N_TEMPLATE_IDS for r in task.spec.criteria)
 
 
 def critic_gate(
@@ -62,7 +79,7 @@ def critic_gate(
             tmpl_id = ref.template_id
             if not isinstance(tmpl_id, str) or not tmpl_id:
                 return f"missing_template_id:{spec.task_key}"
-            if tmpl_id.startswith("plan_expansion_"):
+            if tmpl_id in PLAN_N_TEMPLATE_IDS:
                 return f"forbidden_plan_expansion_marker:{spec.task_key}"
         if not any(r.template_id in by_id for r in crits):
             return f"missing_catalog_criteria:{spec.task_key}"

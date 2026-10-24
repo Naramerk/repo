@@ -29,7 +29,6 @@ from coscientist.core.execution.domain import (
     QuestionSpec,
     QuestionSupersede,
     Task,
-    TaskKind,
     TaskSpec,
     TaskState,
 )
@@ -45,6 +44,7 @@ from coscientist.core.plan.expand_validate import (
     MaxDepthExceeded,
     active_plan_blob,
     assign_core_keys,
+    task_kind_for_route,
     task_produced_countable_claims,
     validate_expansion,
 )
@@ -397,23 +397,25 @@ async def _expand_plan(
     by_new = {q.id: q for q in stamped_new}
     all_questions = [by_new.get(q.id, q) for q in all_questions]
     if prev is None:
-        rollup = "all"
-    else:
-        if "rollup" not in prev:
-            await refuse_expansion(
-                runtime, after_task, reason="invalid", detail="missing_plan_rollup"
-            )
-            return None
-        prev_rollup = prev["rollup"]
-        if prev_rollup not in VALID_ROLLUP_RULES:
-            await refuse_expansion(
-                runtime,
-                after_task,
-                reason="invalid",
-                detail=f"invalid_rollup:{prev_rollup!r}"[:DETAIL_MAX_LEN],
-            )
-            return None
-        rollup = prev_rollup
+        await refuse_expansion(
+            runtime, after_task, reason="invalid", detail="missing_plan_rollup"
+        )
+        return None
+    if "rollup" not in prev:
+        await refuse_expansion(
+            runtime, after_task, reason="invalid", detail="missing_plan_rollup"
+        )
+        return None
+    prev_rollup = prev["rollup"]
+    if prev_rollup not in VALID_ROLLUP_RULES:
+        await refuse_expansion(
+            runtime,
+            after_task,
+            reason="invalid",
+            detail=f"invalid_rollup:{prev_rollup!r}"[:DETAIL_MAX_LEN],
+        )
+        return None
+    rollup = prev_rollup
     named_subs = [q for q in all_questions if q.parent_id is not None]
 
     pid = plan_id()
@@ -474,14 +476,7 @@ async def _expand_plan(
             continue
         frozen_spec = freeze_task_sandbox_limits(spec, catalog)
         tid = task_id(sid, frozen_spec.task_key)
-        kind = TaskKind.EXPERIMENT
-        route = frozen_spec.route.lower()
-        if route in ("literature", "lit"):
-            kind = TaskKind.LITERATURE
-        elif route in ("hypotheses", "hypothesis", "hyp"):
-            kind = TaskKind.HYPOTHESES
-        elif route in ("planner", "plan"):
-            kind = TaskKind.PLAN
+        kind = task_kind_for_route(frozen_spec.route)
         task = Task(
             task_id=tid,
             kind=kind,
@@ -563,7 +558,9 @@ def _resolve_plan_n_request(
         return None, "missing_planner_output"
     req, err = parse_plan_n_expansion(runtime, plan_tid)
     if req is None:
-        return None, err or "malformed_planner_output"
+        if err is None:
+            return None, "missing_planner_output"
+        return None, err
     return req, None
 
 async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str | None:
@@ -575,14 +572,35 @@ async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str |
     meta = reqs.get(plan_key) if isinstance(reqs, dict) else None
     if not isinstance(meta, dict):
         return None
-    after = str(meta.get("after_task") or plan_key)
+    if "after_task" not in meta:
+        await refuse_expansion(
+            runtime,
+            plan_key,
+            reason="invalid",
+            detail="missing_expand_after_task",
+            plan_key=plan_key,
+        )
+        return None
+    raw_after = meta["after_task"]
+    if not isinstance(raw_after, str) or not raw_after:
+        await refuse_expansion(
+            runtime,
+            plan_key,
+            reason="invalid",
+            detail="invalid_expand_after_task",
+            plan_key=plan_key,
+        )
+        return None
+    after = raw_after
     req, err = _resolve_plan_n_request(runtime, plan_key, meta)
     if req is None:
         await refuse_expansion(
             runtime,
             after,
             reason="invalid",
-            detail=str(err or "missing_planner_output")[:DETAIL_MAX_LEN],
+            detail=str(err if err is not None else "missing_planner_output")[
+                :DETAIL_MAX_LEN
+            ],
             plan_key=plan_key,
         )
         return None
@@ -635,7 +653,7 @@ async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str |
         superseded_tasks=list(prepared.superseded_tasks),
         superseded_questions=list(prepared.superseded_questions),
         origin="emergent",
-        reason=prepared.reason or "expansion_request",
+        reason=prepared.reason,
         assign_keys=False,  # already assigned in prepare_request_for_apply
         replan_allocated_s=0.0 if already > 0 else None,
         plan_key=plan_key,

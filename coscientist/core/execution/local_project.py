@@ -157,16 +157,16 @@ class LocalProjectMixin:
                     self._human_expansions = int(getattr(self, "_human_expansions", 0)) + 1
                 else:
                     self._agent_expansions = int(getattr(self, "_agent_expansions", 0)) + 1
-            alloc = float(p.get("replan_allocated_s") or 0.0)
-            if alloc:
-                self._replan_used_s = float(getattr(self, "_replan_used_s", 0.0)) + alloc
+            if "replan_allocated_s" in p:
+                self._replan_used_s = float(self._replan_used_s) + float(
+                    p["replan_allocated_s"]
+                )
             after = p.get("after_task")
-            pending = getattr(self, "_expand_pending", None)
-            if after and isinstance(pending, set):
-                pending.discard(str(after))
+            if after is not None and isinstance(self._expand_pending, set):
+                self._expand_pending.discard(str(after))
             # Clear PLAN-n pending rebuilt from TaskCreated (MAJOR replay leak).
             self._clear_expand_request(
-                after_task=str(after) if after else None,
+                after_task=str(after) if after is not None else None,
                 plan_key=p.get("plan_key"),
             )
             rid = p.get("hitl_request_id")
@@ -320,27 +320,40 @@ class LocalProjectMixin:
             clean = {k: v for k, v in p.items() if k not in drop}
             self.tasks[p["task_id"]] = Task.model_validate(clean)
             # Fold PLAN-n replan_allocated_s (reserve spent creating the container).
-            alloc = float(p.get("replan_allocated_s") or 0.0)
-            if alloc:
-                self._replan_used_s = float(getattr(self, "_replan_used_s", 0.0)) + alloc
+            if "replan_allocated_s" in p:
+                alloc = float(p["replan_allocated_s"])
+                self._replan_used_s = float(self._replan_used_s) + alloc
+            else:
+                alloc = 0.0
             pending_exp = p.get("pending_expansion")
             after = p.get("expand_after_task")
-            tkey = str((clean.get("spec") or {}).get("task_key") or "")
-            if after and tkey.startswith("PLAN-"):
-                reqs = getattr(self, "_expand_requests", None)
+            # Typed PLAN-n signal: expand_after_task written by ensure_plan_n_task.
+            if after is not None:
+                if not isinstance(after, str) or not after:
+                    raise JournalFormatError(
+                        f"TaskCreated: expand_after_task must be non-empty str, "
+                        f"got {after!r}"
+                    )
+                spec = clean.get("spec")
+                if not isinstance(spec, dict) or "task_key" not in spec:
+                    raise JournalFormatError("TaskCreated: missing spec.task_key")
+                tkey = spec["task_key"]
+                if not isinstance(tkey, str) or not tkey:
+                    raise JournalFormatError(
+                        f"TaskCreated: task_key must be non-empty str, got {tkey!r}"
+                    )
+                reqs = self._expand_requests
                 if not isinstance(reqs, dict):
                     self._expand_requests = {}
                     reqs = self._expand_requests
                 reqs[tkey] = {
-                    "after_task": str(after),
+                    "after_task": after,
                     "pending": pending_exp if isinstance(pending_exp, dict) else None,
                     "replan_allocated_s": alloc,
                 }
-                pend = getattr(self, "_expand_pending", None)
-                if isinstance(pend, set):
-                    pend.add(str(after))
-                else:
-                    self._expand_pending = {str(after)}
+                if not isinstance(self._expand_pending, set):
+                    self._expand_pending = set()
+                self._expand_pending.add(after)
         elif ev.type == "AttemptStarted":
             row = dict(p)
             # Schema v1: required on the wire (no upcaster/default fill).
