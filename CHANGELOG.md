@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Events: required schema_version; stamp refuse behind/ahead (#53)
+- `UnstampedEvent.schema_version` required (`StrictInt`); no wire default.
+- `stamp_envelope` refuses schema_version behind or ahead of writer (docs/DESIGN.md:290 §3.5a; CAPABILITIES #14 journal projections).
+- Legacy test fixtures seed raw journal rows (`seed_legacy_journal`); writer gate stays on.
+- **Next (mandatory H2):** drop `EventEnvelope = UnstampedEvent` alias.
+
 ### Docs — capability #21 A2A/MCP handoff
 - `docs/handoff/a2a.md`: small-PR plan for external MAS (A2A facade, remote Tool, MCP module server; DESIGN §6.5 / CAPABILITIES #21). Reuses `StudyService` / `post_studies` / `EventStore.read_after`; `provider=http` depends on tool-gap catalog; MCP modules via `AgentPort` typed outs; real HTTP in `mcp/httpx_transport`; CI green in DoD. Notes **#63** / **#54** merged on `main` (`1a1ea7d`).
 

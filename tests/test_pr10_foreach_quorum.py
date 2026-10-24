@@ -29,7 +29,7 @@ from tests.helpers import (
     attach_executor,
     close_runtime,
     open_runtime,
-    writer_append_many_legacy,
+    seed_legacy_journal,
 )
 
 
@@ -501,7 +501,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
     e0_tid = task_id(sid, "E0")
     aid = f"{e0_tid}#1"
     now = rt.clock.now()
-    await writer_append_many_legacy(rt.writer, 
+    seed_legacy_journal(rt.store, 
         [
             EventEnvelope(
                 study_id=sid,

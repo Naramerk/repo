@@ -37,11 +37,11 @@ from coscientist.core.finalize.minimal_report import MAX_BYTES, build_minimal_re
 from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.question_tasks import question_tasks, questions_from_spec_output
 from tests.helpers import (
-    append_legacy,
     attach_executor,
     close_runtime,
     open_runtime,
     record_success,
+    seed_legacy_journal,
 )
 
 _TS = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
@@ -705,7 +705,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
     assert folded.budget.max_cost_rub == Decimal("50")
     # Budget alone also accepts the legacy ratio (no model_validator).
     Budget.model_validate(payload["budget"])
-    await append_legacy(store, 
+    seed_legacy_journal(store, [
         EventEnvelope(
             study_id=sid,
             type="StudyCreated",
@@ -715,7 +715,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
             ts=now,
             schema_version=2,
         )
-    )
+    ])
     await store.release_lease("seed", store.epoch)
     await store.close()
 
@@ -1678,7 +1678,7 @@ async def test_finalized_rollback_allows_retry_then_closes(tmp_path, clock, monk
         await store.append(fin_ev)
     _fin(await store.read_all())
     with pytest.raises(StudyClosedError):
-        await append_legacy(store, 
+        await store.append(
             EventEnvelope(
                 study_id=sid,
                 type="TaskDone",
@@ -1686,7 +1686,7 @@ async def test_finalized_rollback_allows_retry_then_closes(tmp_path, clock, monk
                 idem_key=make_idem("TaskDone", "x", "late"),
                 payload={"task_id": "x", "outcome": "FAILED", "reason": "failed"},
                 ts=clock.now(),
-                schema_version=2,
+                schema_version=writer_schema_version("TaskDone"),
             )
         )
     await close_runtime(rt)

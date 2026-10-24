@@ -1,29 +1,17 @@
 # Core no-hardcodes cleanup — handoff
 
-After #44 (`2ac0d5b`). ≤400-line PR; ≤1 open; pytest+perf(p99≤50)+`audit --vs-main`; never merge.
+After #44. ≤400-line PR; ≤1 open; pytest+perf+`audit --vs-main`; never merge.
 
-## Область
-Deferred #44/#41 hardcodes: upcasters, Study/GateConfig defaults, or/_DEFAULT_*, silent except,
-id prefixes, PLAN-n, EventEnvelope alias, NodeRequirement.is_code=True, audit UnicodeDecodeError,
-REVIEW_CHECKLIST.md.
+## Сделано (#53)
+Required `schema_version`; `stamp_envelope` refuses behind/ahead; omit-sites use
+`writer_schema_version(type)`. Legacy fixtures: `seed_legacy_journal` (raw SQL rows;
+gate stays on). No `make_unstamped_event`.
 
-## Состояние / Сделано
-Schema v1 on main. **#53**: required schema_version; stamp refuses behind/ahead; omit-sites use
-writer_schema_version(type); no make_unstamped_event (review). Legacy seeds: append_legacy /
-permit_legacy_schema_versions / writer_append_*_legacy.
+## Обязательный следующий PR
+**H2 Drop `EventEnvelope` alias** — `UnstampedEvent` only; ≤400; suite+audit green.
 
-## Следующий PR
-**H2 Drop EventEnvelope alias** — UnstampedEvent only; ≤400 lines; suite+audit green.
-
-## Контракты / Проверки / Риски
-Config/plan or typed refuse; no invents/clamps/literal writer versions/id startswith; re-raise
-LeaseLost; test per fix. Checks: ruff; audit --vs-main; pytest -m 'not perf'; perf gate on.
-Risks: upcaster wipe; writer literal mismatch; executor/lifecycle/expand/evaluate/hitl conflicts.
-
-## Вопросы
-Empty upcasters vs structural chains? Study defaults profile vs explicit? PLAN-n plan_role vs allocator?
-
-## Remaining PRs (≤400)
-1 H2 alias · 2 H3 empty upcasters · 3 H4 constants→v1 · 4 H5–H10 writer literals by module ·
-5 H11 is_code=True · 6 H12–H17 studies/lifecycle/GateConfig · 7 H18–H21 PLAN-n/rsplit ·
-8 H22–H28 invents/except/noqa · 9 H29 audit UnicodeDecodeError · 10 H30 REVIEW_CHECKLIST.md
+## Remaining (≤400)
+H3 empty upcasters · H4 constants→v1 · **H5–H10 writer literals by module** (~70 prod
+`schema_version=N`, hitl/executor/…) · H11 `is_code=True` · H12–H17 Study/GateConfig ·
+H18–H21 PLAN-n · H22–H28 invents/except · H29 audit UnicodeDecodeError · H30 REVIEW_CHECKLIST ·
+derive `PLAN_EXPANDED`/`STUDY_CREATED` consts from upcasters · ~67 test literals.

@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import json
-from contextlib import contextmanager
+from datetime import UTC
 from pathlib import Path
-from typing import Any, Iterator, Protocol
-from unittest.mock import patch
+from typing import Any, Protocol
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
 from coscientist.core.events.digest import payload_digest as _payload_digest
 from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.events import StoredEvent, UnstampedEvent
+from coscientist.core.events.store_db import iso as _iso
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -25,38 +24,43 @@ from coscientist.core.execution.runtime_factory import open_runtime as _open_run
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 
 
-@contextmanager
-def permit_legacy_schema_versions() -> Iterator[None]:
-    """Test-only: allow append of non-writer schema_version for legacy-upcast seeds."""
+def seed_legacy_journal(store: Any, events: list[Any]) -> None:
+    """Insert old journal rows at event.schema_version; read/reopen upcasts.
 
-    def _stamp(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
-        if type(epoch) is not int or isinstance(epoch, bool):
-            raise TypeError(f"epoch must be exact int, got {epoch!r}")
-        digest = _payload_digest(unstamped.payload)
+    Does not call stamp_envelope / store.append — writer schema gate stays on.
+    """
+    conn = store._conn  # noqa: SLF001 — test-only journal seed
+    epoch = int(store.epoch)
+    for ev in events:
+        ts = ev.ts
+        if getattr(ts, "tzinfo", None) is None:
+            ts = ts.replace(tzinfo=UTC)
+        payload = ev.payload if isinstance(ev.payload, dict) else {}
+        digest = _payload_digest(payload)
         if not digest:
             raise JournalFormatError(
-                f"{unstamped.type}: empty payload_digest",
+                f"{ev.type}: empty payload_digest",
                 expected_store_format=None,
                 found_store_format=None,
             )
-        return StoredEvent(
-            seq=unstamped.seq,
-            study_id=unstamped.study_id,
-            type=unstamped.type,
-            entity_key=unstamped.entity_key,
-            idem_key=unstamped.idem_key,
-            payload=unstamped.payload,
-            ts=unstamped.ts,
-            schema_version=int(unstamped.schema_version),
-            epoch=epoch,
-            payload_digest=digest,
+        conn.execute(
+            "INSERT INTO events(study_id, type, entity_key, idem_key, payload, ts, "
+            "schema_version, epoch, payload_digest) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                ev.study_id,
+                ev.type,
+                ev.entity_key,
+                ev.idem_key,
+                json.dumps(payload, sort_keys=True),
+                _iso(ts),
+                ev.schema_version,
+                epoch,
+                digest,
+            ),
         )
+    conn.commit()
+    store._finalized_cached = None  # noqa: SLF001
 
-    with (
-        patch("coscientist.core.events.events.stamp_envelope", _stamp),
-        patch("coscientist.core.events.store.stamp_envelope", _stamp),
-    ):
-        yield
 
 async def open_runtime(
     data_root: Path | str,
@@ -211,18 +215,4 @@ def exp_spec(key: str, deps: list[str] | None = None) -> TaskSpec:
         criteria=[RequirementRef(template_id="value_match")],
     )
 
-async def append_legacy(store: Any, event: Any) -> Any:
-    """``store.append`` keeping event.schema_version (legacy upcast seeds)."""
-    with permit_legacy_schema_versions():
-        return await store.append(event)
-
-async def append_many_legacy(store: Any, events: list[Any], **kwargs: Any) -> Any:
-    """``store.append_many`` keeping schema_versions (legacy upcast seeds)."""
-    with permit_legacy_schema_versions():
-        return await store.append_many(events, **kwargs)
-
-
-async def writer_append_many_legacy(writer: Any, events: list[Any], **kwargs: Any) -> Any:
-    with permit_legacy_schema_versions():
-        return await writer.append_many(events, **kwargs)
 

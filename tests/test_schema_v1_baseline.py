@@ -105,7 +105,7 @@ def test_stamp_envelope_sets_epoch_and_digest(clock: FakeClock) -> None:
 
 
 def test_unstamped_event_requires_schema_version(clock: FakeClock) -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="schema_version"):
         UnstampedEvent(  # type: ignore[call-arg]
             study_id="st1",
             type="StudyCreated",
@@ -117,10 +117,16 @@ def test_unstamped_event_requires_schema_version(clock: FakeClock) -> None:
 
 
 def test_stamp_envelope_refuses_schema_version_behind_writer(clock: FakeClock) -> None:
-    writer_v = writer_schema_version("StudyCreated")
-    assert writer_v > 1
-    u = _unstamped(clock, schema_version=1)
+    u = _unstamped(clock, schema_version=0)
     with pytest.raises(JournalFormatError, match="behind writer") as ei:
+        stamp_envelope(u, epoch=1)
+    assert "StudyCreated" in str(ei.value)
+
+
+def test_stamp_envelope_refuses_schema_version_ahead_of_writer(clock: FakeClock) -> None:
+    writer_v = writer_schema_version("StudyCreated")
+    u = _unstamped(clock, schema_version=writer_v + 1)
+    with pytest.raises(JournalFormatError, match="ahead of writer") as ei:
         stamp_envelope(u, epoch=1)
     assert "StudyCreated" in str(ei.value)
 

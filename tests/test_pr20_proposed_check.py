@@ -62,11 +62,11 @@ from coscientist.tools.contract import CallCtx
 from coscientist.tools.propose_check_tool import ProposeCheckTool
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 from tests.helpers import (
-    append_legacy,
     attach_executor,
     close_runtime,
     open_runtime,
     open_runtime_experimental,
+    seed_legacy_journal,
 )
 
 
@@ -1548,7 +1548,7 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
     await store.acquire_lease("seeder")
     now = datetime.now(timezone.utc)
     dl = now + timedelta(seconds=120)
-    await append_legacy(store, 
+    seed_legacy_journal(store, [
         EventEnvelope(
             study_id=sid,
             type="StudyCreated",
@@ -1567,7 +1567,7 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
             ts=now,
             schema_version=10,
         )
-    )
+    ])
     await store.release_lease("seeder", store.epoch)
     await store.close()
 

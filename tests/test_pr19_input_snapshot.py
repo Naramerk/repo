@@ -38,7 +38,7 @@ from coscientist.core.execution.input_limits import (
     merge_input_limits,
     snapshot_bindings_at_p2,
 )
-from tests.helpers import append_legacy, close_runtime, open_runtime, permit_legacy_schema_versions
+from tests.helpers import close_runtime, open_runtime, seed_legacy_journal
 
 
 def _with_user_put(fn):
@@ -1498,9 +1498,7 @@ async def test_post_studies_conflict_requires_same_request_study_created(
     key = "conflict-other-req"
     sid = study_id_from_idempotency_key(key)
     rt = await open_runtime(tmp_path, sid, catalog=catalog)
-    with permit_legacy_schema_versions():
-        await rt._append(
-        [
+    seed_legacy_journal(rt.store, [
             EventEnvelope(
                 study_id=sid,
                 type="StudyCreated",
@@ -1724,7 +1722,7 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
     # Write a raw v7 journal row (pre-PR19) then close it.
-    await append_legacy(rt.store, 
+    seed_legacy_journal(rt.store, [
         EventEnvelope(
             study_id=sid,
             type="AttemptStarted",
@@ -1746,7 +1744,7 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
             ts=clock.now(),
             schema_version=7,
         )
-    )
+    ])
     await rt.store.append(
         EventEnvelope(
             study_id=sid,
@@ -1958,7 +1956,7 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
     old_digest = "a" * 64  # non-empty legacy formula digest, no digest_version
-    await append_legacy(rt.store, 
+    seed_legacy_journal(rt.store, [
         EventEnvelope(
             study_id=sid,
             type="AttemptStarted",
@@ -1985,7 +1983,7 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
             ts=clock.now(),
             schema_version=7,
         )
-    )
+    ])
     await rt.store.append(
         EventEnvelope(
             study_id=sid,

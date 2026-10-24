@@ -98,7 +98,7 @@ class StoredEvent(UnstampedEvent):
     payload_digest: str = Field(min_length=1)
 
 
-# Compat alias: writers still construct ``EventEnvelope(...)`` without stamp fields.
+# Compat alias — mandatory next PR H2 deletes this (UnstampedEvent only).
 EventEnvelope = UnstampedEvent
 
 
@@ -114,7 +114,7 @@ def stamp_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
             found_store_format=None,
         )
     writer_v = require_writer_schema_version(unstamped.type)
-    version = int(unstamped.schema_version)
+    version = unstamped.schema_version
     if version > writer_v:
         raise JournalFormatError(
             f"{unstamped.type}: schema_version {version} ahead of writer v{writer_v}",

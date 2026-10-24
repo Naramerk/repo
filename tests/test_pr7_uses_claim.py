@@ -16,7 +16,7 @@ from coscientist.core.execution.inputs import (
     bind_inputs,
     input_binding_digest,
 )
-from tests.helpers import close_runtime, open_runtime, permit_legacy_schema_versions
+from tests.helpers import close_runtime, open_runtime, seed_legacy_journal
 from tests.test_inputs import _task
 
 
@@ -504,9 +504,7 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
             "allow_cgroup_degraded": False,
         }
     }
-    with permit_legacy_schema_versions():
-        await rt._append(
-        [
+    seed_legacy_journal(rt.store, [
             EventEnvelope(
                 study_id=sid,
                 type="TaskCreated",
@@ -562,9 +560,7 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
     )
     tid = f"{sid}/E1"
     aid = f"{tid}#1"
-    with permit_legacy_schema_versions():
-        await rt._append(
-        [
+    seed_legacy_journal(rt.store, [
             EventEnvelope(
                 study_id=sid,
                 type="AttemptStarted",
