@@ -61,8 +61,8 @@ class Resolution(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     status: Literal["tool_found", "tool_built", "coder", "tool_missing"]
-    server_name: str | None = None
-    tool_name: str | None = None
+    server_name: str | None
+    tool_name: str | None
 
     @model_validator(mode="after")
     def _status_matches_fields(self) -> Self:
@@ -257,15 +257,18 @@ class ToolRouter:
         when exactly one bound tool has that MCP name. ``by_query`` / alembic / coder
         are out of scope → ``tool_missing``.
         """
+        missing = Resolution(status="tool_missing", server_name=None, tool_name=None)
         if not self._opened:
-            return Resolution(status="tool_missing")
+            return missing
         if need.kind != "by_name":
-            return Resolution(status="tool_missing")
+            return missing
         value = need.value
-        if ":" in value:
-            server_name, sep, tool_name = value.partition(":")
-            if not sep or not server_name or not tool_name or ":" in tool_name:
-                return Resolution(status="tool_missing")
+        colon = value.find(":")
+        if colon > 0 and value.find(":", colon + 1) < 0:
+            server_name = value[:colon]
+            tool_name = value[colon + 1 :]
+            if not tool_name:
+                return missing
             key = mcp_tool_key(server_name, tool_name)
             if key in self._tools:
                 return Resolution(
@@ -273,7 +276,7 @@ class ToolRouter:
                     server_name=server_name,
                     tool_name=tool_name,
                 )
-            return Resolution(status="tool_missing")
+            return missing
         matches = [key for key in self._tools if key[1] == value]
         if len(matches) == 1:
             server_name, tool_name = matches[0]
@@ -295,7 +298,7 @@ class ToolRouter:
                 server_name=server_name,
                 tool_name=tool_name,
             )
-        return Resolution(status="tool_missing")
+        return missing
 
     async def call(
         self,
