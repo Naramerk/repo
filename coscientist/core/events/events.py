@@ -80,7 +80,7 @@ class UnstampedEvent(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    seq: int | None = None
+    seq: int | None = None  # audit-ok[field_default]: UnstampedEvent.seq is None until store assigns lastrowid
     study_id: str
     type: EventType
     entity_key: str
@@ -89,7 +89,7 @@ class UnstampedEvent(BaseModel):
     ts: datetime
     # Default 1 for legacy writers that omit the kwarg; store re-stamps via
     # writer_schema_version(type) so this literal never becomes the persisted version.
-    schema_version: StrictInt = 1  # audit-ok[field_default]: UnstampedEvent.schema_version default 1; store always re-stamps from writer_schema_version(type)
+    schema_version: StrictInt = 1  # audit-ok[field_default]: UnstampedEvent.schema_version default 1; store re-stamps from writer_schema_version(type) audit-ok[number_outside_domain]: schema_version default 1 overwritten by stamp_envelope
 
 
 class StoredEvent(UnstampedEvent):

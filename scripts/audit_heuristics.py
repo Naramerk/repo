@@ -69,7 +69,10 @@ META_RULES: dict[str, str] = {
     "bad_marker_form": "audit-ok present but not audit-ok[rule]: reason",
 }
 
-_MARKER_RE = re.compile(r"audit-ok\[([a-z0-9_]+)\]:\s*(\S.*)$")
+# Non-greedy reason so multiple audit-ok[rule]: … markers may share one line.
+_MARKER_RE = re.compile(
+    r"audit-ok\[([a-z0-9_]+)\]:\s*(.+?)(?=\s+audit-ok\[|$)"
+)
 _MARKER_ANY_RE = re.compile(r"audit-ok\[")
 _MAX_REASON_REPEAT = 3
 

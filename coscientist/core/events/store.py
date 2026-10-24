@@ -483,7 +483,10 @@ class SqliteEventStore:
                 f"idem_key={stamped.idem_key} payload mismatch "
                 f"(stored={existing['payload_digest']}, new={digest})"
             )
-        ts = stamped.ts if stamped.ts.tzinfo else stamped.ts.replace(tzinfo=UTC)
+        if stamped.ts.tzinfo is None:
+            ts = stamped.ts.replace(tzinfo=UTC)
+        else:
+            ts = stamped.ts
         cur = self._conn.execute(
             "INSERT INTO events(study_id, type, entity_key, idem_key, payload, ts, "
             "schema_version, epoch, payload_digest) VALUES (?,?,?,?,?,?,?,?,?)",
