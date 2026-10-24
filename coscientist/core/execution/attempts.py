@@ -255,7 +255,9 @@ class AttemptsMixin:
         # Sequence ``n`` is always len+1 so uncharged retries keep unique attempt ids.
         charged = 0
         for aid in task.attempts:
-            att = self.attempts.get(aid) or {}
+            att = self.attempts[aid]
+            if not att["closed"]:
+                raise RuntimeError(f"open attempt in budget count: {aid!r}")
             if att["charged"]:
                 charged += 1
         if charged + 1 > self.max_attempts:
@@ -435,6 +437,8 @@ class AttemptsMixin:
             "dispatch_id": f"dispatch:{aid}",
             "route_returned": False,
             "closed": False,
+            # Open attempts are not charged; close/result overwrites with True/False.
+            "charged": False,
             "close_reason": None,
             "provenance": prov,
             "agent_output_digest": None,

@@ -2318,7 +2318,7 @@ def test_no_derived_call_id_fallback():
         attempt_id=f"{sid}/E1#1",
         attempt_outcome="SUCCESS",
         provenance="real",
-        claims=[{"id": "C1", "target": "Q1"}],
+        claims=[{"id": "C1", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived={

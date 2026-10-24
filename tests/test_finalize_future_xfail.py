@@ -68,7 +68,7 @@ def test_question_disposition_computed_from_verdict():
         study_id=sid,
         attempt_id=aid,
         provenance="real",
-        claims=[{"id": "C1", "target": "Q1"}],
+        claims=[{"id": "C1", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived={

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Breaking: no domain heuristics in core (outside upcasters)
+- **Required fields** (missing ⇒ error, never a guessed default): `provenance` on attempts/results/bindings/snapshots; `charged` on every attempt row (`AttemptStarted` stamps `False`, close/result overwrites); `producer` on artifacts/effects; `OutputSpec.role`; `QuestionSpec.final_type`; claim `target_kind` + `checked_against`.
+- **No string classification**: artifact role is never inferred from `media_type`; foreach/loop route → `TaskKind(route)` or raise (no `lit`/`hyp` aliases, no default `EXPERIMENT`); plan tasks detected by `task.kind == PLAN` (not `PLAN-` prefix); HITL `gate(kind)` has no plan↔plan_approval alias; `SandboxInfraError.transient` is typed (not parsed from reason).
+- **No silent enum fallbacks**: unknown/missing `criterion_status`, `check_role`, `final_type`, CloseReason, disposition maps, effect producer → raise (or claim drop with explicit reason). Study caps (`max_depth` / `max_tasks` / `max_foreach_children` / `replan_reserve` / `max_loop_iter`) are read directly (no `getattr(..., N) or N`).
+- **No clamps** on `refutations_needed` / `supported_needed` / `InputSpec.quorum` at use sites — validated at Study/InputSpec construction (`quorum >= 1`, `supported_needed >= 2`, …).
+- **Documented constants**: `DEFAULT_GATE_TIMEOUT_S=1800` (DESIGN.md §7.3); `RETRY_BACKOFF_S=0.05` (DESIGN P3 retry delay). Security limits (`archive_limits`, `input_limits`, `*_MAX`) unchanged.
+- **Out of scope here**: upcasters and `schema_version=` literals (parallel schema-v1 baseline PR). Heuristics in `loop.py`, `proposed_check.py`, `plan_validate.py`, `contradicts.py`, `hitl_costly.py`, `share_alloc.py`, `reviews.py`, `expand.py`, `expand_graph.py`, and `projections.py` are owned by PR #38.
+
 ### Core layout
 - Move flat `coscientist/core/*.py` into subpackages `events/`, `plan/`, `claims/`, `execution/`, `finalize/` (`git mv`); update imports, import-linter contracts, and tests. No logic changes.
 

@@ -173,7 +173,7 @@ def validate_final_types(
         q = q_by_id.get(qid)
         if q is None:
             continue
-        ft = q.final_type
+        ft = getattr(q, "final_type", None) or "verdict"
         if ft not in VALID_FINAL_TYPES:
             raise ValueError(f"question {qid!r}: unknown final_type {ft!r} (expected verdict|artifact|both)")
         covering = cover.get(qid) or []

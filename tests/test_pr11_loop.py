@@ -1094,7 +1094,10 @@ def test_dispositions_preserve_infeasible_and_outside_answers_under_cap():
 
     plans = {
         "p1": {
-            "questions": [{"id": "Q1", "text": "q1"}, {"id": "Q2", "text": "q2"}],
+            "questions": [
+                {"id": "Q1", "text": "q1", "final_type": "verdict"},
+                {"id": "Q2", "text": "q2", "final_type": "verdict"},
+            ],
             "tasks": [],
         }
     }

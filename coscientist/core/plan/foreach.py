@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING, Any
 
 from coscientist.core.claims.reasons import TaskReason
@@ -36,17 +35,20 @@ from coscientist.core.plan.expand_validate import active_plan_blob, assign_core_
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
-_NAT_SPLIT = re.compile(r"(\d+)")
-
 def _nat_key(s: str) -> tuple:
-    """Numerically aware sort key: H2 < H10."""
-    parts = _NAT_SPLIT.split(str(s))
+    """Numerically aware sort key: H2 < H10 (digit runs without regex)."""
     out: list[Any] = []
-    for p in parts:
-        if p.isdigit():
-            out.append(int(p))
-        else:
-            out.append(p.casefold())
+    buf = ""
+    digit = False
+    for ch in str(s):
+        is_d = ch.isdigit()
+        if buf and is_d != digit:
+            out.append(int(buf) if digit else buf.casefold())
+            buf = ""
+        digit = is_d
+        buf += ch
+    if buf:
+        out.append(int(buf) if digit else buf.casefold())
     return tuple(out)
 
 def foreach_plan_id(study_id: str, template_key: str, rev: int) -> str:

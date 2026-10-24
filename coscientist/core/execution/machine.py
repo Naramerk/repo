@@ -138,19 +138,19 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
 
         def _default_attempt(aid: str) -> Any:
             d = self.attempts[aid]
+            # AttemptStarted stamps closed/charged/provenance; missing ⇒ corrupt journal.
             return type(
                 "Att",
                 (),
                 {
                     "attempt_id": d["attempt_id"],
-                    "closed": d.get("closed", False),
+                    "closed": d["closed"],
+                    "charged": d["charged"],
                     "provenance": d["provenance"],
                     "task_id": d["task_id"],
                     "study_id": d["study_id"],
                     "inputs": list(d.get("inputs") or []),
                     "agent_output_digest": d.get("agent_output_digest"),
-                    # charged may be absent on open attempts; only stamp when present.
-                    **({"charged": d["charged"]} if "charged" in d else {}),
                     "n": d.get("n"),
                     "allocated_budget_rub": d.get("allocated_budget_rub"),
                     "budget_limit_rub": d.get("budget_limit_rub"),
@@ -558,9 +558,14 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             if open_atts:
                 self._retry_at.pop(tid, None)
                 continue
-            prov = self._provenance_for_retry(tid)
+            # Inherit provenance only from a prior closed attempt; first start
+            # (or synthetic retry_at with no attempts) derives at bind.
+            closed_with_prov = any(
+                self.attempts.get(a, {}).get("closed") for a in task.attempts
+            )
+            prov = self._provenance_for_retry(tid) if closed_with_prov else None
             self._retry_at.pop(tid, None)
-            # None = honest refuse (zero share / empty pool); task already SKIPPED.
+            # None return = honest refuse (zero share / empty pool); task already SKIPPED.
             await self.start_attempt(tid, provenance=prov)
 
 

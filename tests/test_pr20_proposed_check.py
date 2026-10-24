@@ -355,7 +355,7 @@ async def test_unapproved_check_excluded_from_verdict(tmp_path: Path) -> None:
                     "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
                 },
                 values={"count": 42},
-                claims=[{"target": "q1", "target_kind": "question"}],
+                claims=[{"target": "q1", "target_kind": "question", "checked_against": "value_match"}],
             ),
         )
         proposed = [
@@ -420,7 +420,7 @@ async def test_approved_executable_counts_like_catalog(tmp_path: Path) -> None:
                     "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
                 },
                 values={"count": 42},
-                claims=[{"target": "q1", "target_kind": "question"}],
+                claims=[{"target": "q1", "target_kind": "question", "checked_against": "value_match"}],
             ),
         )
         events = await rt.store.read_all()
@@ -1256,7 +1256,7 @@ async def test_prereg_after_attempt_fails_eval(tmp_path: Path) -> None:
                     "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
                 },
                 values={"count": 42},
-                claims=[{"target": "q1", "target_kind": "question"}],
+                claims=[{"target": "q1", "target_kind": "question", "checked_against": "value_match"}],
             ),
         )
         events = await rt.store.read_all()
@@ -1320,7 +1320,7 @@ async def test_approval_cannot_bind_another_task_id(tmp_path: Path) -> None:
                     "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
                 },
                 values={"count": 42},
-                claims=[{"target": "q1", "target_kind": "question"}],
+                claims=[{"target": "q1", "target_kind": "question", "checked_against": "value_match"}],
             ),
         )
         events = await rt.store.read_all()
@@ -1484,7 +1484,7 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
                     "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
                 },
                 values={"count": 42},
-                claims=[{"target": "q1", "target_kind": "question"}],
+                claims=[{"target": "q1", "target_kind": "question", "checked_against": "value_match"}],
             ),
         )
         await _finish_report(rt, tmp_path)
@@ -1646,7 +1646,7 @@ def test_proposal_requires_rejected_templates() -> None:
         validate_proposal_content(
             CheckProposal(
                 proposal_id="p",
-                target="q",
+                target="q", target_kind="question",
                 role="prediction",
                 measures="m",
                 check=_value_check(target=1),
@@ -1665,7 +1665,7 @@ def test_proposal_rubric_xor_check() -> None:
         validate_proposal_content(
             CheckProposal(
                 proposal_id="p",
-                target="q",
+                target="q", target_kind="question",
                 role="validity",
                 measures="m",
                 check=_value_check(target=1),
@@ -1686,6 +1686,7 @@ def test_nfkc_digest_composed_decomposed_same() -> None:
     base = dict(
         proposal_id="p",
         target="q",
+        target_kind="question",
         role="prediction",
         check=_value_check(target=1),
         justification="j",
@@ -1748,7 +1749,7 @@ def test_nan_inf_threshold_rejected_at_validate() -> None:
         validate_proposal_content(
             CheckProposal(
                 proposal_id="p",
-                target="q",
+                target="q", target_kind="question",
                 role="prediction",
                 measures="m",
                 check=_value_check(target=1),
@@ -1761,7 +1762,7 @@ def test_nan_inf_threshold_rejected_at_validate() -> None:
         validate_proposal_content(
             CheckProposal(
                 proposal_id="p",
-                target="q",
+                target="q", target_kind="question",
                 role="prediction",
                 measures="m",
                 check=_value_check(target=1),
@@ -2197,8 +2198,8 @@ async def test_approval_cannot_satisfy_other_target_same_task(tmp_path: Path) ->
                 },
                 values={"count": 42},
                 claims=[
-                    {"target": "q1", "target_kind": "question"},
-                    {"target": "q2", "target_kind": "question"},
+                    {"target": "q1", "target_kind": "question", "checked_against": "value_match"},
+                    {"target": "q2", "target_kind": "question", "checked_against": "value_match"},
                 ],
             ),
         )

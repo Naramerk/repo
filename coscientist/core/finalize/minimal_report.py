@@ -20,9 +20,9 @@ def _task_provenance(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> s
         # Closed attempts must stamp provenance (never defaulted).
         return str(att["provenance"])
     if not task.attempts:
-        # Never started (e.g. cancelled before first attempt): schema still
-        # requires an enum; there is no attempt row to read.
-        return "real"
+        # Defined meaning for zero-attempt tasks (cancelled/skipped before start):
+        # no attempt evidence exists — report stub. Not a missing-field default.
+        return "stub"
     raise ValueError(f"no closed attempt provenance for task {task.spec.task_key!r}")
 
 

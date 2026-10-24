@@ -364,7 +364,7 @@ async def materialize_loop_iter(
     )
 
     # max_tasks guard
-    max_tasks = int(study.max_tasks)
+    max_tasks = int(getattr(study, "max_tasks", 64) or 64)
     existing_n = len(runtime.tasks)
     if existing_n + len(added) > max_tasks:
         await _refuse_loop(
@@ -440,7 +440,16 @@ async def materialize_loop_iter(
             continue
         frozen_spec = freeze_task_sandbox_limits(spec, catalog)
         tid = task_id(sid, frozen_spec.task_key)
-        kind = TaskKind(frozen_spec.route)
+        route = (frozen_spec.route or "").lower()
+        kind = {
+            "literature": TaskKind.LITERATURE,
+            "lit": TaskKind.LITERATURE,
+            "hypotheses": TaskKind.HYPOTHESES,
+            "hypothesis": TaskKind.HYPOTHESES,
+            "hyp": TaskKind.HYPOTHESES,
+            "planner": TaskKind.PLAN,
+            "plan": TaskKind.PLAN,
+        }.get(route, TaskKind.EXPERIMENT)
         task = Task(
             task_id=tid,
             kind=kind,

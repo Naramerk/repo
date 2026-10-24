@@ -1868,7 +1868,7 @@ async def test_superseded_question_claims_not_counted(tmp_path, clock, runtime_c
             summary="x",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 999},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         ),
     )
     await _human_expand(

@@ -45,6 +45,7 @@ _DERIVED_OK = {
     "frozen": True,
     "lit_own_criterion": False,
     "accepted": True,
+    "validity_ok": True,
     "artifact_id": "A1",
     # Catalog-style SESOI threshold + core effect (exceeds sesoi).
     "sesoi": 0.5,
@@ -113,7 +114,7 @@ def test_reupsert_keeps_worst_provenance():
         study_id=sid,
         attempt_id=aid,
         provenance="stub",
-        claims=[{"id": "C1", "target": "Q1"}],
+        claims=[{"id": "C1", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived=_derived_for(aid),
@@ -126,7 +127,7 @@ def test_reupsert_keeps_worst_provenance():
         study_id=sid,
         attempt_id=aid,
         provenance="real",
-        claims=[{"id": "C1", "target": "Q1", "secret": "x", "criterion_status": "met"}],
+        claims=[{"id": "C1", "target": "Q1", "target_kind": "question", "secret": "x", "criterion_status": "met", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived=_derived_for(aid, accepted=True),
@@ -152,7 +153,7 @@ def test_claim_attrs_whitelisted_no_counting_controls():
         claims=[
             {
                 "id": "C1",
-                "target": "Q1",
+                "target": "Q1", "target_kind": "question",
                 "criterion_status": "met",
                 "frozen": True,
                 "intent": "refute",
@@ -160,6 +161,7 @@ def test_claim_attrs_whitelisted_no_counting_controls():
                 "stance": "supports",
                 "evil": 1,
                 "reason": "ok",
+                "checked_against": "value_match",
             }
         ],
         now=now,
@@ -188,7 +190,7 @@ def test_about_edge_emitted_unknown_target_dropped():
         study_id=sid,
         attempt_id=aid,
         provenance="real",
-        claims=[{"id": "C1", "target": "Q1"}],
+        claims=[{"id": "C1", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived=_derived_for(aid),
@@ -200,7 +202,7 @@ def test_about_edge_emitted_unknown_target_dropped():
         study_id=sid,
         attempt_id=aid,
         provenance="real",
-        claims=[{"id": "C1", "target": "Q1"}],
+        claims=[{"id": "C1", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived=_derived_for(aid),
@@ -233,6 +235,8 @@ def test_garbage_attrs_dropped_not_raised():
                 "target": "Q1",
                 "criterion_status": "met",
                 "accepted": True,
+                "validity_ok": True,
+                "check_role": "prediction",
                 "frozen": True,
                 "evidence_kind": "computational",
                 "confirming_evidence_ids": 5,  # garbage
@@ -302,7 +306,7 @@ def test_foreign_claim_id_rejected():
         study_id=sid,
         attempt_id=aid,
         provenance="real",
-        claims=[{"id": foreign, "target": "Q1"}],
+        claims=[{"id": foreign, "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived=_derived_for(aid),
@@ -321,7 +325,7 @@ def test_no_h_star_heuristic_auto_create():
         study_id=sid,
         attempt_id=aid,
         provenance="real",
-        claims=[{"id": "C1", "target": "H1"}],
+        claims=[{"id": "C1", "target": "H1", "target_kind": "hypothesis", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived=_derived_for(aid),
@@ -390,7 +394,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
                     "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
                 },
                 values={"count": 225},
-                claims=[{"id": claim_id, "target": "Q1"}],
+                claims=[{"id": claim_id, "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
             ),
         )
     assert result.outcome.value == "FAILED"
@@ -440,7 +444,7 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
             summary="fail",
             outputs={},
             values={},
-            claims=[{"id": "sci", "target": "Q1", "checked_against": "artifact_present"}],
+            claims=[{"id": "sci", "target": "Q1", "target_kind": "question", "checked_against": "artifact_present"}],
         ),
     )
     assert result.outcome.value in ("FAILED", "PARTIAL")
@@ -490,11 +494,12 @@ async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime
                         "provenance": "real",
                         "attempt_id": aid_fake,
                         "attempt_outcome": "FAILED",
-                        "target": "Q1",
+                        "target": "Q1", "target_kind": "question",
                         "accepted": True,
                         "criterion_status": "met",
                         "frozen": True,
                         "evidence_kind": "computational",
+                        "checked_against": "artifact_present",
                     },
                 ).model_dump(mode="json"),
                 ts=clock.now(),
@@ -659,7 +664,7 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         ),
     )
     claims = list(rt.graph.nodes_by_kind("claim"))
@@ -689,7 +694,7 @@ def test_dispositions_from_verdict_counting_claims():
         study_id=sid,
         attempt_id=aid,
         provenance="real",
-        claims=[{"id": "C1", "target": "Q1"}],
+        claims=[{"id": "C1", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived=_derived_for(aid),
@@ -724,7 +729,7 @@ def test_dispositions_from_verdict_counting_claims():
     )
     plan = {
         "plan_id": "pl",
-        "questions": [{"id": "Q1", "text": "why"}],
+        "questions": [{"id": "Q1", "text": "why", "final_type": "verdict"}],
         "tasks": [{"task_key": "E1", "addresses": ["Q1"]}],
     }
     d = dispositions(
@@ -789,7 +794,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"effect": 2.0},
-            claims=[{"id": "ans", "target": "Q1"}],
+            claims=[{"id": "ans", "target": "Q1", "target_kind": "question", "checked_against": "value_match_sesoi"}],
         ),
     )
     d = dispositions(
@@ -840,7 +845,7 @@ def test_qh_logical_id_collision_does_not_merge():
         study_id=sid,
         attempt_id=aid_q,
         provenance="real",
-        claims=[{"id": "cq", "target": "X1"}],
+        claims=[{"id": "cq", "target": "X1", "target_kind": "question", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived=_derived_for(aid_q),
@@ -851,7 +856,7 @@ def test_qh_logical_id_collision_does_not_merge():
         study_id=sid,
         attempt_id=aid_h,
         provenance="real",
-        claims=[{"id": "ch", "target": hid}],
+        claims=[{"id": "ch", "target": hid, "target_kind": "hypothesis", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived=_derived_for(aid_h, criterion_status="not_met"),
@@ -919,7 +924,7 @@ def test_criterion_status_not_met_from_failed_check():
     attrs = _derive_claim_core_attrs(
         task,
         TaskOutcome.SUCCESS,
-        raw={"checked_against": "value_match", "target": "Q1"},
+        raw={"checked_against": "value_match", "target": "Q1", "target_kind": "question"},
         checks=checks,
         graph=None,
         study_id="st",
@@ -978,7 +983,7 @@ def test_frozen_normalizes_check_id_to_template_id():
     attrs = _derive_claim_core_attrs(
         task,
         TaskOutcome.SUCCESS,
-        raw={"checked_against": "value_match#0", "target": "Q1"},
+        raw={"checked_against": "value_match#0", "target": "Q1", "target_kind": "question"},
         checks=checks,
         graph=g,
         study_id=sid,
@@ -989,7 +994,7 @@ def test_frozen_normalizes_check_id_to_template_id():
 
 
 def test_criterion_match_is_exact_not_endswith():
-    """C11 must not match template_id ``1`` via endswith."""
+    """C11 must not match template_id ``1`` via endswith — missing match raises."""
     from coscientist.core.execution.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
     from coscientist.core.execution.executor import _derive_claim_core_attrs
 
@@ -1014,16 +1019,16 @@ def test_criterion_match_is_exact_not_endswith():
             role="unknown",
         )
     ]
-    attrs = _derive_claim_core_attrs(
-        task,
-        TaskOutcome.SUCCESS,
-        raw={"checked_against": "C11", "target": "Q1"},
-        checks=checks,
-        graph=None,
-        study_id="st",
-        validated=True,
-    )
-    assert attrs["criterion_status"] == "unassessed"
+    with pytest.raises(ValueError, match="no check status for criterion key"):
+        _derive_claim_core_attrs(
+            task,
+            TaskOutcome.SUCCESS,
+            raw={"checked_against": "C11", "target": "Q1", "target_kind": "question"},
+            checks=checks,
+            graph=None,
+            study_id="st",
+            validated=True,
+        )
 
 
 @pytest.mark.asyncio
@@ -1089,7 +1094,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
             claims=[
                 {
                     "id": "ref",
-                    "target": "Q1",
+                    "target": "Q1", "target_kind": "question",
                     "checked_against": "value_match",
                 }
             ],
@@ -1167,7 +1172,7 @@ async def test_validity_failed_claim_invalid_inconclusive(
             claims=[
                 {
                     "id": "c",
-                    "target": "Q1",
+                    "target": "Q1", "target_kind": "question",
                     "checked_against": "artifact_present",
                 }
             ],
@@ -1345,7 +1350,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 999},
             claims=[
-                {"id": "ref", "target": "Q1", "checked_against": "value_match"},
+                {"id": "ref", "target": "Q1", "target_kind": "question", "checked_against": "value_match"},
             ],
         ),
     )
@@ -1448,7 +1453,7 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
             study_id=sid,
             attempt_id=aid,
             provenance="real",
-            claims=[{"id": f"c{i}", "target": "Q1"}],
+            claims=[{"id": f"c{i}", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
             now=now,
             graph=g,
             derived=_derived_for(
@@ -1466,7 +1471,7 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
         study_id=sid,
         attempt_id=aid_b,
         provenance="real",
-        claims=[{"id": "bad", "target": "Q1"}],
+        claims=[{"id": "bad", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived=_derived_for(
@@ -1539,7 +1544,7 @@ def test_unknown_role_exclusion_never_forces_verdict():
         study_id=sid,
         attempt_id=aid,
         provenance="real",
-        claims=[{"id": "u", "target": "Q1"}],
+        claims=[{"id": "u", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived=_derived_for(
@@ -1590,7 +1595,7 @@ def test_validity_only_evidence_inconclusive():
         study_id=sid,
         attempt_id=aid,
         provenance="real",
-        claims=[{"id": "bad", "target": "Q1"}],
+        claims=[{"id": "bad", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived=_derived_for(
@@ -1697,7 +1702,7 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
                     "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
                 },
                 values={"count": 225},
-                claims=[{"id": "c1", "target": "Q1"}],
+                claims=[{"id": "c1", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
             ),
         )
         claims = list(rt.graph.nodes_by_kind("claim"))
@@ -1731,7 +1736,7 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         study_id=sid,
         attempt_id=aid_sup,
         provenance="stub",
-        claims=[{"id": "sup", "target": "H1"}],
+        claims=[{"id": "sup", "target": "H1", "target_kind": "hypothesis", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived=_derived_for(aid_sup, criterion_status="met"),
@@ -1742,7 +1747,7 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         study_id=sid,
         attempt_id=aid_ref,
         provenance="real",
-        claims=[{"id": "ref", "target": "H1"}],
+        claims=[{"id": "ref", "target": "H1", "target_kind": "hypothesis", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived=_derived_for(aid_ref, criterion_status="not_met"),
@@ -1861,7 +1866,7 @@ def test_intent_from_producing_experiment_two_opposite():
             study_id=sid,
             attempt_id=aid,
             provenance="real",
-            claims=[{"id": "c", "target": "H1"}],
+            claims=[{"id": "c", "target": "H1", "target_kind": "hypothesis", "checked_against": "value_match"}],
             now=now,
             graph=g,
             derived=_derived_for(aid),
@@ -1933,7 +1938,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         ),
     )
     await rt.start_attempt("E1")
@@ -2037,7 +2042,7 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
+            claims=[{"id": "c1", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         ),
     )
     claim = next(iter(rt.graph.nodes_by_kind("claim")))

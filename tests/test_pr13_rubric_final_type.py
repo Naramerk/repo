@@ -1598,7 +1598,9 @@ async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
                     "text": "c1",
                     "polarity": "supports",
                     "target": "Q1",
+                    "target_kind": "question",
                     "about": "Q1",
+                    "checked_against": "artifact_present",
                 }
             ],
         ),

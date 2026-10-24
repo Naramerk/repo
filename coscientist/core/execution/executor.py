@@ -1390,7 +1390,7 @@ class Executor:
             if aid == attempt_id:
                 continue
             row = results.get(aid) if isinstance(results, dict) else None
-            if isinstance(row, dict) and "charged" in row:
+            if isinstance(row, dict):
                 if row["charged"]:
                     n += 1
                 continue
@@ -1400,7 +1400,7 @@ class Executor:
                 if att["charged"]:
                     n += 1
             else:
-                if getattr(att, "charged"):
+                if att.charged:  # type: ignore[union-attr]
                     n += 1
         return n
 

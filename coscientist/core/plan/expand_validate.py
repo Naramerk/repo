@@ -5,47 +5,52 @@ Returns error detail strings; never raises to the tick/record path.
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING, Any
 
 from coscientist.core.events.ids import task_id
-from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskSpec
+from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskKind, TaskSpec
 from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
-_KIND_KEY = re.compile(r"^(EXP|LIT|HYP|PLAN)-(\d+)$")
-
 _PREFIX_FOR_KIND = {
-    "literature": "LIT",
-    "hypotheses": "HYP",
-    "plan": "PLAN",
-    "experiment": "EXP",
-    "spec": "EXP",
-    "report": "EXP",
+    TaskKind.LITERATURE.value: "LIT",
+    TaskKind.HYPOTHESES.value: "HYP",
+    TaskKind.PLAN.value: "PLAN",
+    TaskKind.EXPERIMENT.value: "EXP",
+    TaskKind.SPEC.value: "EXP",
+    TaskKind.REPORT.value: "EXP",
 }
 
 
 def _prefix_for_route(route: str) -> str:
-    from coscientist.core.execution.domain import TaskKind
-
     kind = TaskKind(route)
     return _PREFIX_FOR_KIND[kind.value]
+
+
+def _index_after_prefix(task_key: str, prefix: str) -> int | None:
+    """Parse ``{prefix}-<n>`` index without regex; None if not that shape."""
+    head = f"{prefix}-"
+    if not task_key.startswith(head):
+        return None
+    rest = task_key[len(head) :]
+    if not rest.isdigit():
+        return None
+    return int(rest)
 
 
 def next_kind_index(runtime: StudyRuntime, prefix: str, tasks: list[TaskSpec]) -> int:
     """Next ``{prefix}-<n>`` index from runtime tasks + candidates."""
     n = 0
-    pat = re.compile(rf"^{re.escape(prefix)}-(\d+)$")
     for rt_task in runtime.tasks.values():
-        m = pat.match(rt_task.spec.task_key)
-        if m:
-            n = max(n, int(m.group(1)) + 1)
+        idx = _index_after_prefix(rt_task.spec.task_key, prefix)
+        if idx is not None:
+            n = max(n, idx + 1)
     for spec in tasks:
-        m = pat.match(spec.task_key)
-        if m:
-            n = max(n, int(m.group(1)) + 1)
+        idx = _index_after_prefix(spec.task_key, prefix)
+        if idx is not None:
+            n = max(n, idx + 1)
     return n
 
 

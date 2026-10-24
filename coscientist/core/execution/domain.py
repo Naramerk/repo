@@ -794,7 +794,8 @@ class CheckProposal(Frozen):
 
     proposal_id: str
     target: str
-    target_kind: Literal["question", "hypothesis"] = "question"
+    # Required — never inferred from target id prefixes.
+    target_kind: Literal["question", "hypothesis"]
     role: Literal["prediction", "validity"]
     measures: str
     check: CodeCheck | None = None

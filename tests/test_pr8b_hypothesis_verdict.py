@@ -782,7 +782,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
         media_type="text/x-python",
         role="code",
     )
-    assert raw.role == "code"  # media_type heuristic at put
+    assert raw.role == "code"  # explicit role (no media_type heuristic)
     await rt.executor.record(
         aid_p,
         AgentTaskOutput(
@@ -809,7 +809,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1356,7 +1356,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1514,7 +1514,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
         make_tool_ref(f"{aid_p}:da"),
         name="dataset",
         media_type="application/json",
-        role="code",  # agent code|data role ignored at put
+        role="data",  # role required (no media_type heuristic)
     )
     db = arts.put(
         b'{"count": 2}',
@@ -1530,7 +1530,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
         media_type="text/x-python",
         role="code",
     )
-    assert da.role == "data"  # agent role ignored; catalog owns kind
+    assert da.role == "data"
     await rt.executor.record(
         aid_p,
         AgentTaskOutput(
@@ -1576,13 +1576,14 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
             media_type="application/json",
             role="data",
         )
+        against = "artifact_present" if tk == "N3" else "value_match"
         await rt.executor.record(
             aid,
             AgentTaskOutput(
                 summary="ok",
                 outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"count": 225},
-                claims=[{"id": f"c_{tk}", "target": "Q1"}],
+                claims=[{"id": f"c_{tk}", "target": "Q1", "target_kind": "question", "checked_against": against}],
             ),
         )
         by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1658,7 +1659,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
             summary="falsified",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 999},
-            claims=[{"id": "ref", "target": "Q1", "checked_against": "value_match"}],
+            claims=[{"id": "ref", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1724,7 +1725,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
                 "main": ArtifactHandle(artifact_id=foreign.artifact_id, name="main")
             },
             values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1789,7 +1790,7 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
             summary="no artifact",
             outputs={},
             values={},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1964,7 +1965,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
                 summary="ok",
                 outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"effect": est},
-                claims=[{"id": f"c_{tk}", "target": "H1"}],
+                claims=[{"id": f"c_{tk}", "target": "H1", "target_kind": "hypothesis", "checked_against": "value_match_sesoi"}]
             ),
         )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -2145,7 +2146,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 summary="ok",
                 outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"effect": est},
-                claims=[{"id": f"c_{tk}", "target": "H1"}],
+                claims=[{"id": f"c_{tk}", "target": "H1", "target_kind": "hypothesis", "checked_against": "value_match_sesoi"}]
             ),
         )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -2206,7 +2207,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
             summary="falsified",
             outputs={"main": ArtifactHandle(artifact_id=art_f.artifact_id, name="main")},
             values={"count": 999},
-            claims=[{"id": "ref", "target": "Q1", "checked_against": "value_match"}],
+            claims=[{"id": "ref", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         ),
     )
     by2 = filtered_claims_by_target(rt2.graph, study_id=sid2, results=rt2.results)
@@ -2287,7 +2288,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"effect": 2.0},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "target_kind": "question", "checked_against": "value_match_sesoi"}],
         ),
     )
     # Bind E1 → records VerdictSnapshotsRecorded for Q1.
@@ -2495,7 +2496,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "target_kind": "question", "checked_against": "tost_equivalence"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)

@@ -74,22 +74,21 @@ def test_claim_provenance_from_producing_attempt():
 
 
 def test_claim_unknown_provenance_defaults_to_stub():
-    """Missing claim provenance attrs must not look real."""
+    """Missing claim provenance is required (never coerced to stub/real)."""
     child = _task(
         "B",
         None,
         inputs=[InputSpec(kind="claim", ref="cl_unk")],
     )
-    bindings, prov = bind_inputs(
-        child,
-        dep_tasks={},
-        dep_outputs={},
-        dep_provenance={},
-        known_claim_ids={"cl_unk"},
-        claim_provenance={},
-    )
-    assert bindings[0].source == "stub"
-    assert prov == "stub"
+    with pytest.raises(KeyError):
+        bind_inputs(
+            child,
+            dep_tasks={},
+            dep_outputs={},
+            dep_provenance={},
+            known_claim_ids={"cl_unk"},
+            claim_provenance={},
+        )
 
 
 def test_upcast_task_created_input_kind_defaults():
@@ -388,7 +387,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": "from_E0", "target": "Q1"}],
+            claims=[{"id": "from_E0", "target": "Q1", "target_kind": "question", "checked_against": "value_match"}],
         ),
     )
     node = rt.graph.get_node(claim_id)
@@ -550,6 +549,7 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
                     "closed": False,
                     "close_reason": None,
                     "provenance": "real",
+                    "attempt_role": "agent",
                     "agent_output_digest": None,
                     "deadline": (clock.now() + timedelta(seconds=30)).isoformat(),
                     "task_id": tid,

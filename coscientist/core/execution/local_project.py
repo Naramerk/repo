@@ -343,7 +343,10 @@ class LocalProjectMixin:
                     self._expand_pending = {str(after)}
         elif ev.type == "AttemptStarted":
             row = dict(p)
-            row.setdefault("attempt_role", "agent")
+            if "attempt_role" not in row:
+                raise ValueError("AttemptStarted missing required attempt_role")
+            if "provenance" not in row:
+                raise ValueError("AttemptStarted missing required provenance")
             if getattr(ev, "seq", None) is not None:
                 row["_seq"] = ev.seq
             self.attempts[p["attempt_id"]] = row

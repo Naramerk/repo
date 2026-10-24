@@ -680,6 +680,8 @@ async def test_contradicts_edge(tmp_path, clock):
                     "frozen": True,
                     "criterion_status": status,
                     "target": "Q1",
+                    "target_kind": "question",
+                    "checked_against": "value_match",
                 },
             )
         )
