@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
 
-from coscientist.tools.router import Resolution, ToolNeed
+from coscientist.tools.resolve import Resolution, ToolNeed
 
 
 class StaticToolRouter:
@@ -15,8 +14,8 @@ class StaticToolRouter:
     (no silent ``del args``).
     """
 
-    def __init__(self, *, tools: Mapping[str, Mapping[str, Any]]) -> None:
-        self._tools = dict(tools)
+    def __init__(self, *, tools: Mapping[str, Mapping[str, object]]) -> None:
+        self._tools = {k: dict(v) for k, v in tools.items()}
 
     @property
     def tool_names(self) -> frozenset[str]:
@@ -32,12 +31,12 @@ class StaticToolRouter:
     async def call(
         self,
         tool_name: str,
-        args: Mapping[str, Any],
+        args: Mapping[str, object],
         *,
         study_id: str,
         task_key: str,
         attempt_id: str,
-    ) -> Mapping[str, Any]:
+    ) -> Mapping[str, object]:
         if args:
             raise ValueError(
                 f"StaticToolRouter refuses non-empty args for {tool_name!r} "

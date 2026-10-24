@@ -37,7 +37,7 @@ from coscientist.core.events.clock import FakeClock
 from coscientist.core.execution.domain import Need
 from coscientist.llm.client import LlmClient
 from coscientist.llm.errors import LlmTransportError
-from coscientist.tools.router import ToolNeed
+from coscientist.tools.resolve import ToolNeed
 from tests.agents.test_adapter_roles import (
     CassetteTransport,
     FakeToolRouter,
