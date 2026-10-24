@@ -31,17 +31,24 @@ def _tmpl(
     )
 
 
-def _reg(tmpl: PromptTemplate | None = None) -> PromptRegistry:
-    item = tmpl if tmpl is not None else _tmpl()
+def _reg() -> PromptRegistry:
+    item = _tmpl()
     return PromptRegistry({(item.prompt_id, item.version): item})
 
 
-def test_happy_get_render_refs() -> None:
+def test_happy_get() -> None:
     greeter = PromptRef(prompt_id="demo.greet", version="1")
-    reg = _reg()
-    assert reg.get(greeter).body == "Hello {{goal}}.\n"
-    assert reg.render(greeter, {"goal": "X"}) == "Hello X.\n"
-    assert reg.refs() == frozenset({greeter})
+    assert _reg().get(greeter).body == "Hello {{goal}}.\n"
+
+
+def test_happy_render() -> None:
+    greeter = PromptRef(prompt_id="demo.greet", version="1")
+    assert _reg().render(greeter, {"goal": "X"}) == "Hello X.\n"
+
+
+def test_happy_refs() -> None:
+    greeter = PromptRef(prompt_id="demo.greet", version="1")
+    assert _reg().refs() == frozenset({greeter})
 
 
 def test_get_unknown_version() -> None:
