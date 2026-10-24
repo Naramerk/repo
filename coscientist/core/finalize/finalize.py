@@ -15,7 +15,7 @@ from coscientist.core.events.errors import (
     LeaseLost,
     StudyClosedError,
 )
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import EventEnvelope, StoredEvent, make_idem
 from coscientist.core.execution.domain import Task, TaskOutcome, TaskState
 from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
 from coscientist.core.finalize.minimal_report import build_minimal_report, render_markdown_report
@@ -161,7 +161,9 @@ def sandbox_timeout_report_line(reason: str | None, detail: str | None = None) -
     return None
 
 
-def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
+def contributing_reasons_ordered(
+    events: list[EventEnvelope] | list[StoredEvent],
+) -> list[str]:
     """TaskReason + ExpansionRefused / foreach / quorum / timeout lines (by seq)."""
     seen: list[str] = []
     for ev in sorted(events, key=lambda e: e.seq or 0):

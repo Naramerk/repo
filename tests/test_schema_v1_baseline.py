@@ -18,6 +18,10 @@ from coscientist.core.events.events import (
     UnstampedEvent,
     stamp_envelope,
 )
+from coscientist.core.events.schema_gate import (
+    require_writer_schema_version,
+    upcast_strict,
+)
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.store_db import (
     JOURNAL_STORE_FORMAT,
@@ -25,10 +29,6 @@ from coscientist.core.events.store_db import (
     init_schema,
     open_conn,
     parse_store_format_marker,
-)
-from coscientist.core.events.schema_gate import (
-    require_writer_schema_version,
-    upcast_strict,
 )
 from coscientist.core.events.upcasters import writer_schema_version
 

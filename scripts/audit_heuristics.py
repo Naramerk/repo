@@ -52,15 +52,15 @@ RULES: dict[str, str] = {
 }
 
 META_RULES: dict[str, str] = {
-    "duplicate_audit_ok": "duplicate audit-ok[rule] on same line",
-    "marker_in_literal": "audit-ok marker inside string/bytes literal",
-    "orphan_marker": "audit-ok with no matching hit on that line",
-    "repeated_reason": "same audit-ok reason text used more than 3 times",
-    "unknown_rule": "audit-ok rule id not in registry",
-    "bad_marker_form": "audit-ok present but not audit-ok[rule]: reason",
+    "duplicate_audit_ok": "duplicate hand-marker rule on same line",
+    "marker_in_literal": "hand-marker text inside string/bytes literal",
+    "orphan_marker": "hand-marker with no matching hit on that line",
+    "repeated_reason": "same hand-marker reason text used more than 3 times",
+    "unknown_rule": "hand-marker rule id not in registry",
+    "bad_marker_form": "hand-marker present but not rule-id + colon + reason",
 }
 
-# Non-greedy reason so multiple audit-ok[rule]: … markers may share one line.
+# Non-greedy reason so multiple hand markers may share one line.
 _MARKER_RE = re.compile(
     r"audit-ok\[([a-z0-9_]+)\]:\s*(.+?)(?=\s+audit-ok\[|$)"
 )

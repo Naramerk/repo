@@ -10,6 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from coscientist.core.events.digest import payload_digest as _payload_digest
 from coscientist.core.events.errors import JournalFormatError
 
+# Wire default when writers omit schema_version; stamp_envelope overwrites it.
+SCHEMA_VERSION_WIRE_DEFAULT = 1
+
 # Writer schema version constants (kept for call sites; must match upcasters).
 PLAN_EXPANDED_SCHEMA_VERSION = 5
 STUDY_CREATED_SCHEMA_VERSION = 13  # #41: catalog_version StrictInt
@@ -87,9 +90,11 @@ class UnstampedEvent(BaseModel):
     idem_key: str
     payload: dict[str, Any]
     ts: datetime
-    # Default 1 for legacy writers that omit the kwarg; store re-stamps via
-    # writer_schema_version(type) so this literal never becomes the persisted version.
-    schema_version: StrictInt = 1  # audit-ok[field_default]: UnstampedEvent.schema_version default 1; store re-stamps from writer_schema_version(type) audit-ok[number_outside_domain]: schema_version default 1 overwritten by stamp_envelope
+    # Default for legacy writers that omit the kwarg; store re-stamps via
+    # writer_schema_version(type) so this never becomes the persisted version.
+    schema_version: StrictInt = (  # audit-ok[named_default]: wire default; stamp_envelope overwrites from registry
+        SCHEMA_VERSION_WIRE_DEFAULT
+    )
 
 
 class StoredEvent(UnstampedEvent):

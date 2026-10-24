@@ -3,6 +3,8 @@
 Keeps ``upcasters.py`` free of drive-by edits so the heuristics audit on
 touched files does not inherit every historical ``setdefault`` in upcast
 chains. Call sites that stamp or read go through these helpers.
+
+Imports from ``upcasters`` are lazy to avoid import cycles with shares/events.
 """
 
 from __future__ import annotations
@@ -10,7 +12,6 @@ from __future__ import annotations
 from typing import Any, get_args
 
 from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
 
 
 def _known_event_types() -> set[str]:
@@ -21,6 +22,8 @@ def _known_event_types() -> set[str]:
 
 def require_writer_schema_version(event_type: str) -> int:
     """``writer_schema_version`` plus refuse for unknown production types."""
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
+
     if event_type not in UPCASTERS and event_type not in _known_event_types():
         raise JournalFormatError(
             f"unknown event type for writer: {event_type!r}",
@@ -34,6 +37,8 @@ def upcast_strict(
     event_type: str, schema_version: int, payload: dict[str, Any]
 ) -> tuple[int, dict[str, Any]]:
     """Upcast with typed refuse for unknown types and versions ahead of writer."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast
+
     if (
         type(schema_version) is not int
         or isinstance(schema_version, bool)
