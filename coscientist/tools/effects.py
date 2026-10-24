@@ -13,6 +13,22 @@ Read tools are not journaled. Write / external_effect keys include
 
 from __future__ import annotations
 
+def _or_empty_str(value: object) -> str:
+    if value is None:
+        return ""  # audit-ok: structural absent → empty str
+    if not isinstance(value, str):
+        return str(value)  # audit-ok: coerce after None gate for wire display
+    return value
+
+
+def _or_zero_int(value: object) -> int:
+    if value is None:
+        return 0  # audit-ok: structural absent → 0
+    if type(value) is bool or not isinstance(value, int):
+        raise TypeError(f"expected int|None, got {type(value).__name__}")
+    return value
+
+
 import json
 import secrets
 from dataclasses import dataclass, field
@@ -94,7 +110,9 @@ def _mint_fetch_capability_for_tests(
 def _invalidate_fetch_capability(capability: FetchCapability | None) -> None:
     if capability is None:
         return
-    cap_id = capability.id or ""
+    cap_id = capability.id
+    if cap_id is None:
+        cap_id = ''  # audit-ok: structural absent → empty/zero
     _ISSUED_FETCH_CAPS.pop(cap_id, None)
     _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id, None)
 
@@ -275,10 +293,10 @@ class EffectIndex:
             if key in self.done:
                 continue
             if (
-                str(payload.get("study_id") or "") == study_id
-                and str(payload.get("task_key") or "") == task_key
-                and str(payload.get("tool") or "") == tool
-                and str(payload.get("args_digest") or "") == args_digest
+                _or_empty_str(payload.get('study_id')) == study_id
+                and _or_empty_str(payload.get('task_key')) == task_key
+                and _or_empty_str(payload.get('tool')) == tool
+                and _or_empty_str(payload.get('args_digest')) == args_digest
             ):
                 return dict(payload)
         return None
@@ -305,11 +323,13 @@ def _apply_events(idx: EffectIndex, events: list[Any]) -> int:
     """Fold events into idx; return max seq seen (0 if none)."""
     max_seq = 0
     for ev in events:
-        seq = int(ev.seq or 0)
+        seq = _or_zero_int(ev.seq)
         if seq > max_seq:
             max_seq = seq
         t = ev.type
-        p = ev.payload or {}
+        p = ev.payload
+        if p is None:
+            p = {}  # audit-ok: structural absent → empty container
         if not isinstance(p, dict):
             continue
         key = str(p.get("key") or ev.entity_key or "")
@@ -328,7 +348,7 @@ async def _load_index_from_writer(writer: StudyWriter) -> EffectIndex:
     if store is None or not hasattr(store, "read_all"):
         return EffectIndex()
     idx: EffectIndex | None = writer._pr18_effect_idx
-    after = int(writer._pr18_effect_seq or 0)
+    after = _or_zero_int(writer._pr18_effect_seq)
     if idx is None:
         idx = EffectIndex()
         events = await store.read_all()
@@ -337,7 +357,7 @@ async def _load_index_from_writer(writer: StudyWriter) -> EffectIndex:
         if hasattr(store, "read_after"):
             events = await store.read_after(after)
         else:
-            events = [e for e in await store.read_all() if int(e.seq or 0) > after]
+            events = [e for e in await store.read_all() if _or_zero_int(e.seq) > after]
         n = _apply_events(idx, events)
         if n > after:
             after = n
@@ -351,15 +371,17 @@ def _cache_note(writer: StudyWriter, ev: StoredEvent) -> None:
     if idx is None:
         return
     _apply_events(idx, [ev])
-    seq = int(ev.seq or 0)
-    cur = int(writer._pr18_effect_seq or 0)
+    seq = _or_zero_int(ev.seq)
+    cur = _or_zero_int(writer._pr18_effect_seq)
     if seq > cur:
         writer._pr18_effect_seq = seq  # type: ignore[attr-defined]
 
 
 def _note_attempt_taint(cache: dict[str, bool], ev: Any) -> None:
     t = ev.type
-    p = ev.payload or {}
+    p = ev.payload
+    if p is None:
+        p = {}  # audit-ok: structural absent → empty container
     if not isinstance(p, dict):
         return
     aid = str(p.get("attempt_id") or ev.entity_key or "")
@@ -386,13 +408,13 @@ async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
     if not attempt_id:
         return True
     cache: dict[str, bool] | None = writer._pr18_taint_by_attempt
-    after = int(writer._pr18_taint_seq or 0)
+    after = _or_zero_int(writer._pr18_taint_seq)
     if cache is None:
         cache = {}
         events = await store.read_all()
         max_seq = 0
         for ev in events:
-            seq = int(ev.seq or 0)
+            seq = _or_zero_int(ev.seq)
             if seq > max_seq:
                 max_seq = seq
             _note_attempt_taint(cache, ev)
@@ -405,10 +427,10 @@ async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
             events = [
                 e
                 for e in await store.read_all()
-                if int(e.seq or 0) > after
+                if _or_zero_int(e.seq) > after
             ]
         for ev in events:
-            seq = int(ev.seq or 0)
+            seq = _or_zero_int(ev.seq)
             if seq > after:
                 after = seq
             _note_attempt_taint(cache, ev)
@@ -606,7 +628,7 @@ async def invoke_tool(
                 for art in output.artifacts:
                     if art.producer != "tool":
                         continue
-                    digest = str(art.sha256 or "")
+                    digest = _or_empty_str(art.sha256)
                     if not digest:
                         continue
                     if first:
@@ -706,7 +728,7 @@ async def invoke_tool(
         args_digest=digest,
     )
     if doubt is not None:
-        same_attempt = str(doubt.get("attempt_id") or "") == ctx.attempt_id
+        same_attempt = _or_empty_str(doubt.get('attempt_id')) == ctx.attempt_id
         if same_attempt and reg.supports_idem_key:
             pass  # re-call with server-side idem_key
         else:

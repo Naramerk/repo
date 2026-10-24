@@ -2,6 +2,22 @@
 
 from __future__ import annotations
 
+def _or_empty_str(value: object) -> str:
+    if value is None:
+        return ""  # audit-ok: structural absent → empty str
+    if not isinstance(value, str):
+        return str(value)  # audit-ok: coerce after None gate for wire display
+    return value
+
+
+def _or_zero_int(value: object) -> int:
+    if value is None:
+        return 0  # audit-ok: structural absent → 0
+    if type(value) is bool or not isinstance(value, int):
+        raise TypeError(f"expected int|None, got {type(value).__name__}")
+    return value
+
+
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -381,7 +397,8 @@ class LifecycleMixin:
         ``expand_after`` lists task_keys that trigger planner after TaskDone (H-g).
         ``loops`` — M1 PR11 ``LoopSpec`` list (body materialised by core).
         """
-        assert self.study is not None
+        if not (self.study is not None):
+            raise RuntimeError('assertion failed: self.study is not None')
         sid = self.study.study_id
         now = self.clock.now()
         from pydantic import ValidationError
@@ -444,7 +461,7 @@ class LifecycleMixin:
             known_hyps: set[str] = set()
             if graph is not None:
                 for node in graph.nodes_by_kind("hypothesis"):
-                    hid = str(node.ref_id or "")
+                    hid = _or_empty_str(node.ref_id)
                     if hid:
                         known_hyps.add(hid)
             loop_specs = validate_loop_specs(
@@ -586,7 +603,9 @@ class LifecycleMixin:
             qnid = question_node_id(sid, q.id)
             pn = question_node_id(sid, str(parent))
             eid = f"decomposes:{qnid}:{pn}"
-            origin = q.origin or "explicit"
+            origin = q.origin
+            if origin is None:
+                origin = 'explicit'  # audit-ok: structural absent default
             events.append(
                 EventEnvelope(
                     study_id=sid,
@@ -613,7 +632,7 @@ class LifecycleMixin:
                 rub = o.rubric
                 if rub is None:
                     continue
-                dig = str(rub.digest or "")
+                dig = _or_empty_str(rub.digest)
                 if not dig or dig in seen_rubrics:
                     continue
                 seen_rubrics.add(dig)

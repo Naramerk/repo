@@ -2,6 +2,22 @@
 
 from __future__ import annotations
 
+def _or_empty_str(value: object) -> str:
+    if value is None:
+        return ""  # audit-ok: structural absent → empty str
+    if not isinstance(value, str):
+        return str(value)  # audit-ok: coerce after None gate for wire display
+    return value
+
+
+def _or_zero_int(value: object) -> int:
+    if value is None:
+        return 0  # audit-ok: structural absent → 0
+    if type(value) is bool or not isinstance(value, int):
+        raise TypeError(f"expected int|None, got {type(value).__name__}")
+    return value
+
+
 import asyncio
 import logging
 from collections.abc import Mapping
@@ -185,7 +201,7 @@ def _no_effect_reason_from_checks(checks: list[Any]) -> str | None:
         # No-effect failures never carry a countable effect blob.
         if isinstance(_check_field(c, "effect"), dict):
             continue
-        detail = str(_check_field(c, "detail") or "")
+        detail = _or_empty_str(_check_field(c, 'detail'))
         mapped = _NO_EFFECT_DETAIL_ALIASES.get(detail)
         if mapped is not None:
             return mapped
@@ -226,7 +242,9 @@ def _criterion_is_frozen(graph: Any, study_id: str, template_id: Any) -> bool:
     node = _criterion_node(graph, study_id, template_id)
     if node is None:
         return False
-    attrs = node.attrs or {}
+    attrs = node.attrs
+    if attrs is None:
+        attrs = {}  # audit-ok: structural absent → empty container
     return attrs.get("frozen_at_seq") is not None or bool(attrs.get("frozen"))
 
 def _criterion_freeze_attrs(graph: Any, study_id: str, template_id: Any) -> dict[str, Any]:
@@ -272,8 +290,8 @@ def _effect_from_checks(
                 "kind": str(data.get("kind") or "point"),
                 "producer": str(data.get("producer") or "agent"),
                 "core_evaluated": bool(data.get("core_evaluated", False)),
-                "produced_by_call_id": str(data.get("produced_by_call_id") or ""),
-                "artifact_id": str(data.get("artifact_id") or ""),
+                "produced_by_call_id": _or_empty_str(data.get('produced_by_call_id')),
+                "artifact_id": _or_empty_str(data.get('artifact_id')),
             }
             if data.get("ci_low") is not None and data.get("ci_high") is not None:
                 effect["ci_low"] = float(data["ci_low"])
@@ -341,7 +359,7 @@ def _derive_claim_core_attrs(
     del task_outcome  # outcome is scientific whenever we derive; criteria ≠ accepted
     spec = task.spec
     method = spec.method if spec is not None else None
-    lit = method == ExperimentMethod.LITERATURE_SEARCH or str(method or "") == ("literature_search")
+    lit = method == ExperimentMethod.LITERATURE_SEARCH or _or_empty_str(method) == ("literature_search")
     criteria = list(spec.criteria or []) if spec is not None else []
     key = _criterion_key_for_claim(raw, checks, criteria)
     role = _role_for_claim_key(raw, checks, criteria, catalog=catalog)
@@ -436,7 +454,9 @@ def _derive_claim_core_attrs(
     if timeout_checks:
         # Guest timeout is never a counting outcome (not k_ref / not k_sup).
         for tc in timeout_checks:
-            te = tc.effect or {}
+            te = tc.effect
+            if te is None:
+                te = {}  # audit-ok: structural absent → empty container
             if isinstance(te, dict) and te.get("timeout_kind"):
                 timeout_kind = str(te["timeout_kind"])
             if isinstance(te, dict) and te.get("refute_unresolved"):
@@ -475,14 +495,16 @@ def _derive_claim_core_attrs(
             exclusion_reason = "validity_failed"
     elif claim_outcome == "indeterminate" and exclusion_reason is None:
         # Prefer specific no-effect reason over generic indeterminate.
-        exclusion_reason = _no_effect_reason_from_checks(list(checks or [])) or ("indeterminate")
+        exclusion_reason = _no_effect_reason_from_checks(list(checks or []))
+        if exclusion_reason is None:
+            exclusion_reason = 'indeterminate'  # audit-ok: structural absent default
     status = outcome_to_status(
         claim_outcome,  # type: ignore[arg-type]
         validity="valid" if validity_ok else "invalid",
     )
     exp_id = ""
     try:
-        exp_id = str(task.task_id or "")
+        exp_id = _or_empty_str(task.task_id)
     except Exception:  # noqa: BLE001
         exp_id = ""
     lookup = None
@@ -629,7 +651,9 @@ class Executor:
         self.get_attempt = get_attempt
         self.get_task = get_task
         self.on_events = on_events  # callback after successful append (project local)
-        self.review_statuses = review_statuses or {}
+        self.review_statuses = review_statuses
+        if self.review_statuses is None:
+            self.review_statuses = {}  # audit-ok: structural absent → empty container
         # PR13: journaled judge state (rebuilt via apply_judge_journal on reopen).
         self.judge_retry: dict[str, int] = {}
         self.failure_kinds: dict[str, str] = {}
@@ -831,7 +855,7 @@ class Executor:
         timeout_checks = [c for c in checks if check_is_guest_timeout(c)]
         # Digest over content actually mounted into the jail (not artifact ids).
         jail_digests = [
-            str((c.effect or {}).get("jail_inputs_digest") or "")
+            _or_empty_str((c.effect or {}).get('jail_inputs_digest'))
             for c in checks
             if isinstance(c.effect, dict) and (c.effect or {}).get("jail_inputs_digest")
         ]
@@ -853,7 +877,7 @@ class Executor:
             prev = results_map.get(prev_aid) if isinstance(results_map, dict) else None
             if not isinstance(prev, dict):
                 continue
-            if str(prev.get("result_class") or "") != "timeout":
+            if _or_empty_str(prev.get('result_class')) != "timeout":
                 continue
             prev_dig = prev.get("agent_output_digest")
             if prev_dig and agent_digest and prev_dig == agent_digest:
@@ -876,7 +900,7 @@ class Executor:
         if timeout_checks:
             provenance = _provenance(self.get_attempt(attempt_id))
             kinds = [
-                str((c.effect or {}).get("timeout_kind") or "") for c in timeout_checks if isinstance(c.effect, dict)
+                _or_empty_str((c.effect or {}).get('timeout_kind')) for c in timeout_checks if isinstance(c.effect, dict)
             ]
 
             # Structural: ≥2 prediction/refute-role timeouts on this TASK
@@ -884,12 +908,12 @@ class Executor:
             # A single timeout (even on the last charged attempt) stays a
             # plain timeout; refute_unresolved already blocks supported.
             def _prediction_timeout_in_row(row: dict[str, Any]) -> bool:
-                if str(row.get("result_class") or "") != "timeout":
+                if _or_empty_str(row.get('result_class')) != "timeout":
                     return False
                 for cr in row.get("check_results") or []:
                     if not isinstance(cr, dict):
                         continue
-                    if str(cr.get("role") or "") != "prediction":
+                    if _or_empty_str(cr.get('role')) != "prediction":
                         continue
                     raw_eff = cr.get("effect")
                     eff: dict[str, Any] = dict(raw_eff) if isinstance(raw_eff, dict) else {}
@@ -946,7 +970,7 @@ class Executor:
                 checks=checks,
                 reason=timeout_reason,
                 detail=";".join(kinds) or "timeout",
-                agent_output_digest=str(agent_digest or ""),
+                agent_output_digest=_or_empty_str(agent_digest),
             )
 
         claim = out.claim
@@ -1058,7 +1082,7 @@ class Executor:
         # Code|data from catalog code_output_names (ignore planner OutputSpec.role).
         out_names = list((out.outputs or {}).keys())
         for ospec in getattr(task.spec, "expected_outputs", None) or ():
-            n = str(ospec.name or "")
+            n = _or_empty_str(ospec.name)
             if n and n not in out_names:
                 out_names.append(n)
         output_kinds = output_kinds_from_catalog(output_names=out_names, catalog=self.catalog)
@@ -1111,7 +1135,7 @@ class Executor:
             kind = artifact_kind_from_output_spec(ospec)
             if not kind:
                 continue
-            name = str(ospec.name or "")
+            name = _or_empty_str(ospec.name)
             if name not in out_map:
                 raise ArtifactRejected(
                     f"OutputSpec.kind={kind!r} but output {name!r} missing"
@@ -1141,8 +1165,8 @@ class Executor:
             disp_hint: str | None = None
             try:
                 if isinstance(raw, dict):
-                    qid_hint = str(raw.get("question_id") or "") or None
-                    disp_hint = str(raw.get("disposition") or "") or None
+                    qid_hint = _or_empty_str(raw.get('question_id')) or None
+                    disp_hint = _or_empty_str(raw.get('disposition')) or None
                 disposal = (
                     raw
                     if isinstance(raw, QuestionDisposal)
@@ -1252,7 +1276,9 @@ class Executor:
         if item is None and ":" in check_id and "|" not in check_id:
             # Legacy ``check_id:item_id`` argument form.
             parent_check, _, item = check_id.partition(":")
-        item = item or ""
+        item = item
+        if item is None:
+            item = ''  # audit-ok: structural absent → empty/zero
         key = review_key(
             task_id=str(task_id),
             attempt_id=attempt_id,

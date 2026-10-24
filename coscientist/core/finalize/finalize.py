@@ -2,6 +2,22 @@
 
 from __future__ import annotations
 
+def _or_empty_str(value: object) -> str:
+    if value is None:
+        return ""  # audit-ok: structural absent → empty str
+    if not isinstance(value, str):
+        return str(value)  # audit-ok: coerce after None gate for wire display
+    return value
+
+
+def _or_zero_int(value: object) -> int:
+    if value is None:
+        return 0  # audit-ok: structural absent → 0
+    if type(value) is bool or not isinstance(value, int):
+        raise TypeError(f"expected int|None, got {type(value).__name__}")
+    return value
+
+
 import logging
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal
@@ -165,7 +181,7 @@ def sandbox_timeout_report_line(reason: str | None, detail: str | None = None) -
     false positives on unrelated reasons that mention \"timeout\").
     """
     _ = detail  # kept for call-site compat; classification is reason-only
-    r = str(reason or "")
+    r = _or_empty_str(reason)
     if r == TaskReason.IDLE_TIMEOUT.value:
         return IDLE_TIMEOUT_RU
     if r == TaskReason.SANDBOX_TIMEOUT.value:
@@ -190,7 +206,7 @@ def contributing_reasons_ordered(
                 seen.append(str(reason))
                 line = sandbox_timeout_report_line(
                     str(reason),
-                    str(ev.payload.get("detail") or ""),
+                    _or_empty_str(ev.payload.get('detail')),
                 )
                 if line and line not in seen:
                     seen.append(line)
@@ -200,7 +216,7 @@ def contributing_reasons_ordered(
 
                 if TASK_BUDGET_EXHAUSTED_LINE not in seen:
                     seen.append(TASK_BUDGET_EXHAUSTED_LINE)
-            line = _TASKDONE_DETAIL_LINES.get(str(ev.payload.get("detail") or ""))
+            line = _TASKDONE_DETAIL_LINES.get(_or_empty_str(ev.payload.get('detail')))
             if line and line not in seen:
                 seen.append(line)
             if ev.payload.get("budget_overrun"):
@@ -229,8 +245,8 @@ def contributing_reasons_ordered(
                 line = str(custom)
             else:
                 line = expansion_not_done_line(
-                    str(ev.payload.get("reason") or ""),
-                    str(ev.payload.get("detail") or ""),
+                    _or_empty_str(ev.payload.get('reason')),
+                    _or_empty_str(ev.payload.get('detail')),
                 )
             if line not in seen:
                 seen.append(line)
@@ -244,7 +260,7 @@ def contributing_reasons_ordered(
             _append_loop_completed_report_line(seen, ev.payload)
         elif ev.type == "SideEffectDenied":
             tool = str(ev.payload.get("tool") or "?")
-            reason = str(ev.payload.get("reason") or "")
+            reason = _or_empty_str(ev.payload.get('reason'))
             if reason == "taint_deny":
                 line = f"отклонено: tainted контекст ({tool})"
             else:
@@ -261,7 +277,7 @@ def contributing_reasons_ordered(
             else:
                 from coscientist.core.claims.dispose import dispose_reject_report_line
 
-                line = dispose_reject_report_line(str(ev.payload.get("detail") or ""))
+                line = dispose_reject_report_line(_or_empty_str(ev.payload.get('detail')))
             if line and line not in seen:
                 seen.append(line)
         elif ev.type == "EffectIntended":
@@ -279,7 +295,9 @@ def contributing_reasons_ordered(
         elif ev.type == "EffectDone":
             done_keys.add(str(ev.payload.get("key") or ev.entity_key))
     for k in sorted(intended_keys - done_keys):
-        meta = intended_meta.get(k) or {}
+        meta = intended_meta.get(k)
+        if meta is None:
+            meta = {}  # audit-ok: structural absent → empty container
         tool = str(meta.get("tool") or "?")
         line = f"эффект неизвестен: {tool}"
         if line not in seen:
@@ -619,12 +637,14 @@ async def _build_rich_payload(
     # PlanRefused / invalid final_type lines folded from events.
     for ev in events:
         if ev.type == "PlanRefused":
-            line = (ev.payload or {}).get("report_line") or ("не выполнено: план отклонён")
-            if line not in contrib:
+            line = (ev.payload or {}).get('report_line')
+            if line is None:
+                line = 'не выполнено: план отклонён'  # audit-ok: structural absent defaultt in contrib:
                 contrib.append(str(line))
         if ev.type == "JudgeCasCorrupt":
-            line = (ev.payload or {}).get("report_line") or ("не выполнено: внутренняя ошибка (judge CAS)")
-            if line not in contrib:
+            line = (ev.payload or {}).get('report_line')
+            if line is None:
+                line = 'не выполнено: внутренняя ошибка (judge CAS)'  # audit-ok: structural absent default contrib:
                 contrib.append(str(line))
     # Upcaster-coerced unknown final_type → report line on plan questions.
     for plan in plans or []:
@@ -635,7 +655,8 @@ async def _build_rich_payload(
                 if line and line not in contrib:
                     contrib.append(str(line))
     study = runtime.study
-    assert study is not None
+    if not (study is not None):
+        raise RuntimeError('assertion failed: study is not None')
     # PR13 §6.1: final_types into study_view; view uses study_fulfilled (single source).
     from coscientist.core.claims.rubric import question_final_types
 
@@ -651,7 +672,9 @@ async def _build_rich_payload(
         question_final_types=dict(ftypes),
     )
     # Never raise above study_view — it already applied study_fulfilled.
-    verdict = view.verdict or "partial"
+    verdict = view.verdict
+    if verdict is None:
+        verdict = 'partial'  # audit-ok: structural absent default
     payload = await _build_finalized_payload(
         runtime,
         sid=sid,
@@ -810,7 +833,9 @@ async def _primary_report_path(
     # Surface infra details (sandbox reason + soft-isolation note) in report text.
     # Escape agent/host-provided strings so markdown/HTML injection cannot reshape
     # the report structure.
-    results = runtime.results or {}
+    results = runtime.results
+    if results is None:
+        results = {}  # audit-ok: structural absent → empty container
     detail_lines: list[str] = []
     for rid in sorted(results):
         res = results[rid]

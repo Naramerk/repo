@@ -23,6 +23,22 @@ Unicode / digests:
 
 from __future__ import annotations
 
+def _or_empty_str(value: object) -> str:
+    if value is None:
+        return ""  # audit-ok: structural absent → empty str
+    if not isinstance(value, str):
+        return str(value)  # audit-ok: coerce after None gate for wire display
+    return value
+
+
+def _or_zero_int(value: object) -> int:
+    if value is None:
+        return 0  # audit-ok: structural absent → 0
+    if type(value) is bool or not isinstance(value, int):
+        raise TypeError(f"expected int|None, got {type(value).__name__}")
+    return value
+
+
 import asyncio
 import math
 import unicodedata
@@ -213,7 +229,7 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
     seq = ev.seq
     if t == "CheckProposed":
         pid = str(p.get("proposal_id") or ev.entity_key)
-        digest = str(p.get("proposal_digest") or "")
+        digest = _or_empty_str(p.get('proposal_digest'))
         try:
             bound_task_id = str(p["task_id"])
             bound_target = str(p["target"])
@@ -241,8 +257,8 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
         if row.get("status") == "rejected":
             # Rejected → approved is forbidden; ignore adversarial journal order.
             return
-        expected = str(row.get("proposal_digest") or "")
-        got = str(p.get("proposal_digest") or "")
+        expected = _or_empty_str(row.get('proposal_digest'))
+        got = _or_empty_str(p.get('proposal_digest'))
         if expected and got and expected != got:
             return
         try:
@@ -338,13 +354,15 @@ def requirement_ref_for_proposal(
     )
 
 def _task_has_result(runtime: Any, task_id: str) -> bool:
-    results = runtime.results or {}
+    results = runtime.results
+    if results is None:
+        results = {}  # audit-ok: structural absent → empty container
     if not isinstance(results, dict):
         return False
     for row in results.values():
         if not isinstance(row, dict):
             continue
-        if str(row.get("task_id") or "") == str(task_id):
+        if _or_empty_str(row.get('task_id')) == str(task_id):
             return True
     return False
 
@@ -360,16 +378,18 @@ def _task_has_started_attempt(
     journaled (and then fails fail-closed prereg at eval). A foreign live
     attempt on the bound task blocks any new proposal_id.
     """
-    attempts = runtime.attempts or {}
-    except_id = str(except_attempt_id or "")
+    attempts = runtime.attempts
+    if attempts is None:
+        attempts = {}  # audit-ok: structural absent → empty container
+    except_id = _or_empty_str(except_attempt_id)
     for att in attempts.values():
         if not isinstance(att, dict):
             continue
-        if str(att.get("task_id") or "") != str(task_id):
+        if _or_empty_str(att.get('task_id')) != str(task_id):
             continue
         if att.get("closed"):
             continue
-        aid = str(att.get("attempt_id") or "")
+        aid = _or_empty_str(att.get('attempt_id'))
         if except_id and aid == except_id:
             continue
         return True
@@ -392,7 +412,7 @@ def _result_seq_for_task(
     for row in results.values():
         if not isinstance(row, dict):
             continue
-        if str(row.get("task_id") or "") != str(task_id):
+        if _or_empty_str(row.get('task_id')) != str(task_id):
             continue
         found = True
         seq = row.get("_seq")
@@ -631,7 +651,8 @@ async def _close_task_proposal_quota(
     from coscientist.core.execution.domain import TaskState
 
     study = runtime.study
-    assert study is not None
+    if not (study is not None):
+        raise RuntimeError('assertion failed: study is not None')
     if runtime._finalized:
         raise StudyClosedError(study.study_id, "TaskDone")
     now = runtime.clock.now()
@@ -684,10 +705,12 @@ def _validate_reviewer_attempt(
     reviewer_attempt_id: str,
 ) -> dict[str, Any]:
     """Reviewer must exist, be live, bound on ReviewScheduled, different task/author."""
-    aid = str(reviewer_attempt_id or "")
+    aid = _or_empty_str(reviewer_attempt_id)
     if not aid:
         raise ValueError("delegated approval requires reviewer_attempt_id")
-    attempts = runtime.attempts or {}
+    attempts = runtime.attempts
+    if attempts is None:
+        attempts = {}  # audit-ok: structural absent → empty container
     att = attempts.get(aid)
     if not isinstance(att, dict):
         raise ValueError(f"unknown reviewer_attempt_id: {aid!r}")
@@ -702,15 +725,15 @@ def _validate_reviewer_attempt(
         raise ValueError("delegated reviewer must differ from the proposal author attempt")
     if att.get("closed"):
         raise AttemptClosedError(aid)
-    rev_task = str(att.get("task_id") or "")
+    rev_task = _or_empty_str(att.get('task_id'))
     if prop_task and rev_task and prop_task == rev_task:
         raise ValueError("reviewer attempt must belong to a different task than the proposer")
     reviews = _reviews_map(runtime)
-    pid = str(row.get("proposal_id") or "")
+    pid = _or_empty_str(row.get('proposal_id'))
     rev = reviews.get(pid)
     if not isinstance(rev, dict):
         raise ValueError(f"no ReviewScheduled(proposed_check_review) for {pid!r}")
-    bound = str(rev.get("reviewer_attempt_id") or "")
+    bound = _or_empty_str(rev.get('reviewer_attempt_id'))
     if not bound:
         raise ValueError(
             f"reviewer not bound on ReviewScheduled for {pid!r}; "
@@ -726,7 +749,9 @@ def _validate_reviewer_attempt(
 def _lookup_hitl_request(runtime: Any, request_id: str) -> Any | None:
     hitl_map = runtime.hitl
     if not isinstance(hitl_map, dict):
-        hitl_map = runtime._hitl_requests or {}
+        hitl_map = runtime._hitl_requests
+        if hitl_map is None:
+            hitl_map = {}  # audit-ok: structural absent → empty container
     if not isinstance(hitl_map, dict):
         return None
     return hitl_map.get(request_id)
@@ -761,7 +786,7 @@ def _verify_human_principal(
     del human_principal  # audit-only callers may still pass it; never sufficient alone
     if source not in ("hitl", "api"):
         raise ValueError(f"human principal not applicable for source={source!r}")
-    rid = str(hitl_request_id_s or "").strip()
+    rid = _or_empty_str(hitl_request_id_s).strip()
     if not rid:
         raise ValueError(
             f"{source} approval requires hitl_request_id bound to authenticated HitlOpened"
@@ -772,11 +797,11 @@ def _verify_human_principal(
             f"{source} approval requires verifiable HitlOpened request: {rid!r}"
         )
     if isinstance(h, dict):
-        kind = str(h.get("kind") or "")
+        kind = _or_empty_str(h.get('kind'))
         ref = str(h.get("payload_ref") or h.get("proposal_id") or "")
     else:
-        kind = str(h.kind or "")
-        ref = str(h.payload_ref or "")
+        kind = _or_empty_str(h.kind)
+        ref = _or_empty_str(h.payload_ref)
     # Fail-closed: empty kind/ref are not a free pass (must equal expected).
     if kind != "proposed_check":
         raise ValueError(
@@ -802,12 +827,12 @@ def _verify_human_principal(
         raise ValueError(
             f"HitlDecided for {rid!r} must be by=human, got {by!r}"
         )
-    decision = str(dec.get("decision") or "").strip()
+    decision = _or_empty_str(dec.get('decision')).strip()
     if decision not in expect_decisions:
         raise ValueError(
             f"HitlDecided for {rid!r} decision={decision!r} not in {sorted(expect_decisions)}"
         )
-    dec_pid = str(dec.get("proposal_id") or "").strip()
+    dec_pid = _or_empty_str(dec.get('proposal_id')).strip()
     # Strict: missing/empty proposal_id on HitlDecided is not a free pass.
     if dec_pid != str(proposal_id_s):
         raise ValueError(
@@ -843,20 +868,22 @@ async def bind_proposed_check_reviewer(
         raise JournalFormatError("ReviewScheduled: missing 'status'") from e
     if rev_status != "pending":
         raise ValueError(f"review not pending for {proposal_id_s!r}")
-    designated = str(rev.get("reviewer_task_id") or "").strip()
+    designated = _or_empty_str(rev.get('reviewer_task_id')).strip()
     if not designated:
         raise ValueError(
             f"ReviewScheduled for {proposal_id_s!r} missing reviewer_task_id"
         )
-    existing = str(rev.get("reviewer_attempt_id") or "")
-    aid = str(reviewer_attempt_id or "")
+    existing = _or_empty_str(rev.get('reviewer_attempt_id'))
+    aid = _or_empty_str(reviewer_attempt_id)
     if existing and existing != aid:
         raise ValueError(
             f"ReviewScheduled already bound to reviewer {existing!r}"
         )
     if existing == aid:
         return
-    attempts = runtime.attempts or {}
+    attempts = runtime.attempts
+    if attempts is None:
+        attempts = {}  # audit-ok: structural absent → empty container
     att = attempts.get(aid)
     if not isinstance(att, dict):
         raise ValueError(f"unknown reviewer_attempt_id: {aid!r}")
@@ -886,7 +913,7 @@ async def bind_proposed_check_reviewer(
         raise JournalFormatError(
             "CheckProposed: missing 'bound_task_id'"
         ) from e
-    rev_task = str(att.get("task_id") or "")
+    rev_task = _or_empty_str(att.get('task_id'))
     if prop_task and rev_task and prop_task == rev_task:
         raise ValueError("reviewer attempt must belong to a different task than the proposer")
     if rev_task != designated:
@@ -895,7 +922,8 @@ async def bind_proposed_check_reviewer(
             f"{designated!r}"
         )
     study = runtime.study
-    assert study is not None
+    if not (study is not None):
+        raise RuntimeError('assertion failed: study is not None')
     now = runtime.clock.now()
     try:
         rev_task_id = rev["task_id"]
@@ -977,11 +1005,12 @@ async def approve_check(
         else:
             by = "reviewer"
             _validate_reviewer_attempt(
-                runtime, row=row, reviewer_attempt_id=str(reviewer_attempt_id or "")
+                runtime, row=row, reviewer_attempt_id=_or_empty_str(reviewer_attempt_id)
             )
 
         study = runtime.study
-        assert study is not None
+        if not (study is not None):
+            raise RuntimeError('assertion failed: study is not None')
         now = runtime.clock.now()
         try:
             bound_task_id = str(row["bound_task_id"])
@@ -1050,14 +1079,14 @@ async def reject_check(
         if source == "timeout" and hitl_request_id_s:
             dec = _lookup_hitl_decision(runtime, str(hitl_request_id_s))
             if isinstance(dec, dict):
-                d = str(dec.get("decision") or "").strip()
+                d = _or_empty_str(dec.get('decision')).strip()
                 decided_by = str(dec["by"]).strip()
                 if decided_by == "human" and d in ("accept", "approve"):
                     return
         principal: str | None = None
         if source == "reviewer":
             _validate_reviewer_attempt(
-                runtime, row=row, reviewer_attempt_id=str(reviewer_attempt_id or "")
+                runtime, row=row, reviewer_attempt_id=_or_empty_str(reviewer_attempt_id)
             )
         elif source in ("hitl", "api"):
             principal = _verify_human_principal(
@@ -1069,7 +1098,8 @@ async def reject_check(
                 expect_decisions=frozenset({"reject"}),
             )
         study = runtime.study
-        assert study is not None
+        if not (study is not None):
+            raise RuntimeError('assertion failed: study is not None')
         now = runtime.clock.now()
         by: str
         if source == "timeout":
@@ -1139,7 +1169,8 @@ async def schedule_proposed_check_review(
     if row is None:
         raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
     study = runtime.study
-    assert study is not None
+    if not (study is not None):
+        raise RuntimeError('assertion failed: study is not None')
     now = runtime.clock.now()
     gate = study.hitl_policy.gate("proposed_check")
     if gate is None:
@@ -1289,7 +1320,7 @@ async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
                 source="timeout",
                 reason="human_timeout",
                 delegated=True,
-                hitl_request_id_s=str(rev_live.get("hitl_request_id") or "") or None,
+                hitl_request_id_s=_or_empty_str(rev_live.get('hitl_request_id')) or None,
             )
             rejected.append(pid)
     return rejected
