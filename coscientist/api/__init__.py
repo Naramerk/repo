@@ -7,6 +7,7 @@ from coscientist.api.errors import (
     StudyIdRefuse,
     StudyNotFound,
     StudyStoreMismatch,
+    StudyViewLoopRefuse,
 )
 from coscientist.api.studies import CreateStudyBody, post_studies
 from coscientist.api.study_service import DataRootStudyService
@@ -29,6 +30,7 @@ __all__ = [
     "StudyIdRefuse",
     "StudyNotFound",
     "StudyStoreMismatch",
+    "StudyViewLoopRefuse",
     "event_to_wire",
     "get_study",
     "list_study_events",

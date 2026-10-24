@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### M5 API — study_view under running loop → StudyViewLoopRefuse
+- Drop loop probe/`audit-ok`; `asyncio.run` maps to typed refuse; test under loop.
+
 ### M5 API — study_id format owned by core/events/ids
 - `STUDY_ID_RE` / `is_study_id` / `study_id_from_idempotency_key` next to `study_id()`.
 - `require_study_id` uses core predicate; path resolve kept in `study_events_db`.

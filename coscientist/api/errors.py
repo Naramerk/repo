@@ -27,3 +27,7 @@ class AfterSeqRefuse(ApiRefuse):
 
 class EventWireRefuse(ApiRefuse):
     """Stored event cannot be projected to the public wire DTO."""
+
+
+class StudyViewLoopRefuse(ApiRefuse):
+    """``DataRootStudyService.study_view`` called under a running event loop."""

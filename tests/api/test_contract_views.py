@@ -15,6 +15,7 @@ from coscientist.api.errors import (
     EventWireRefuse,
     StudyIdRefuse,
     StudyStoreMismatch,
+    StudyViewLoopRefuse,
 )
 from coscientist.api.studies import CreateStudyBody, post_studies
 from coscientist.api.study_service import DataRootStudyService
@@ -207,6 +208,18 @@ def test_data_root_study_service_path_traversal_and_no_mkdir(tmp_path: Path) -> 
     after = set(tmp_path.rglob("*"))
     assert before == after
     assert not (tmp_path / _SID_MISSING).exists()
+
+
+def test_data_root_study_service_refuses_under_running_loop(tmp_path: Path) -> None:
+    catalog = minimal_test_catalog()
+    svc = DataRootStudyService(tmp_path, catalog=catalog)
+
+    async def _under_loop() -> None:
+        with pytest.raises(StudyViewLoopRefuse) as ei:
+            svc.study_view(_SID_MISSING)
+        assert ei.value.reason == "study_view_requires_no_running_event_loop"
+
+    asyncio.run(_under_loop())
 
 
 @pytest.mark.asyncio

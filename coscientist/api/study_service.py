@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from coscientist.api.errors import StudyIdRefuse
+from coscientist.api.errors import StudyIdRefuse, StudyViewLoopRefuse
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
 from coscientist.api.views import require_study_id
 from coscientist.core.events.errors import StudyNotFound
 from coscientist.core.execution.domain import Catalog, StudyView
 from coscientist.core.execution.runtime_factory import close_runtime, open_runtime
+
+_ASYNCIO_RUN_UNDER_LOOP = "asyncio.run() cannot be called from a running event loop"
 
 
 def study_events_db(data_root: Path, study_id: object) -> Path:
@@ -38,17 +40,16 @@ class DataRootStudyService:
         self._catalog = catalog
 
     def study_view(self, study_id: str) -> StudyView:
+        coro = self._study_view_async(study_id)
         try:
-            asyncio.get_running_loop()
+            return asyncio.run(coro)
         except RuntimeError as exc:
-            # Expected probe signal only; anything else → re-raise (no swallow).
-            if str(exc) != "no running event loop":
+            coro.close()
+            if str(exc) != _ASYNCIO_RUN_UNDER_LOOP:
                 raise
-        else:
-            raise RuntimeError(
-                "DataRootStudyService.study_view requires no running event loop"
-            )
-        return asyncio.run(self._study_view_async(study_id))
+            raise StudyViewLoopRefuse(
+                "study_view_requires_no_running_event_loop"
+            ) from exc
 
     async def _study_view_async(self, study_id: str) -> StudyView:
         sid = require_study_id(study_id)
