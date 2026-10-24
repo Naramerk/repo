@@ -515,7 +515,8 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
                             "depends_on": ["PLAN"],
                         }
                     ],
-                    "hypotheses": {"needed": False, "reason": "test"}, "literature": {"needed": False, "reason": "test"},
+                    "hypotheses": {"needed": False, "reason": "test"},
+                    "literature": {"needed": False, "reason": "test"},
                     # no questions / addresses → upcast v1→v2
                 },
                 ts=now,
