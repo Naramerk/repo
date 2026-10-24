@@ -86,30 +86,34 @@ def test_worst_provenance_order():
     assert worst_provenance("partial", "stub") == "stub"
 
 
+_VERDICT_PROVENANCE_CASES: list[tuple[dict[str, object], str]] = [
+    ({"verdict": "supported"}, "provenance required"),
+    ({"verdict": "supported", "provenance": None}, "provenance required"),
+    ({"verdict": "supported", "provenance": "bogus"}, "unknown provenance"),
+]
+_VERDICT_PROVENANCE_IDS = ["absent", "null", "unknown"]
+
+
 @pytest.mark.parametrize(
     ("snap", "match"),
-    [
-        ({"verdict": "supported"}, "provenance required"),
-        ({"verdict": "supported", "provenance": None}, "provenance required"),
-        ({"verdict": "supported", "provenance": "bogus"}, "unknown provenance"),
-    ],
-    ids=["absent", "null", "unknown"],
+    _VERDICT_PROVENANCE_CASES,
+    ids=_VERDICT_PROVENANCE_IDS,
 )
-def test_verdict_binding_digest_provenance_fail_closed(snap: dict[str, object], match: str) -> None:
+def test_verdict_binding_digest_provenance_fail_closed(
+    snap: dict[str, object], match: str
+) -> None:
     with pytest.raises(ValueError, match=match):
         verdict_binding_digest(ref="Q1", snapshot=snap)
 
 
 @pytest.mark.parametrize(
     ("snap", "match"),
-    [
-        ({"verdict": "supported"}, "provenance required"),
-        ({"verdict": "supported", "provenance": None}, "provenance required"),
-        ({"verdict": "supported", "provenance": "bogus"}, "unknown provenance"),
-    ],
-    ids=["absent", "null", "unknown"],
+    _VERDICT_PROVENANCE_CASES,
+    ids=_VERDICT_PROVENANCE_IDS,
 )
-def test_bind_verdict_provenance_fail_closed(snap: dict[str, object], match: str) -> None:
+def test_bind_verdict_provenance_fail_closed(
+    snap: dict[str, object], match: str
+) -> None:
     child = _task(
         "B",
         None,
