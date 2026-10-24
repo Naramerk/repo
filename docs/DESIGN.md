@@ -541,6 +541,8 @@ class McpReply(BaseModel):
 - File URLs: SSRF policy + streaming limit; secrets only from env; never logged.
 
 ### 6.1 Контракт
+<!-- heading anchor: #sec-6-1-contract -->
+<a id="sec-6-1-contract"></a>
 
 ```python
 class ToolSpec(BaseModel):
@@ -694,7 +696,7 @@ class Transport(Protocol):  # тесты — fake; сеть не в unit-тес�
 - Типизированные ошибки: `LlmConfigError`, `LlmClockError`, `LlmTimeoutError`, `LlmTransportError`, `LlmProviderError`, `LlmResponseError`, `LlmFinishReasonError`, `LlmRetryAfterError`. Нет угадывания retryable по тексту/форме ответа — только флаги и `retryable_status_codes` из config. `finish_reason` ∉ `accepted_finish_reasons` → ошибка (не silent success для `length`/`content_filter`).
 - Секреты только из env; тела запросов/ответов и ключи не логируются и не печатаются.
 - import-linter: `llm` ↛ `core`/`tools`/`agents`/`api`/`checks`/`experimental`/`google`/`httpx`.
-- Порт агента (поверх клиента; wiring в M2). **Owner: agent-layer agent** (`docs/plan/agents.md`; G1 in `coscientist.agents.contract`). Scheduler owns `Usage`/`Budget` recording (`UsageRecorded`); agents return `llm.types.Usage` and accept `Budget`. `role: RoleName` from `coscientist.profiles` (G1 after [#62](https://github.com/Naramerk/repo/pull/62) merged; `RoleName = Identifier`). `tools: list[Tool]` with `Tool` from `coscientist.tools.contract`. **import-linter (G1 lands):** agents↔`invoke_tool` is [§6.1](#L543) above; coordinated with tools [#65](https://github.com/Naramerk/repo/pull/65) for `tools.effects` ignores only (#65 does not edit DESIGN). Do **not** use `allow_indirect_imports = true`. Use **targeted** `ignore_imports` only: `coscientist.agents.contract -> coscientist.tools.contract` (typing), plus `coscientist.tools.effects -> {tools.contract, tools.gate, core.execution.tool_registry}` so agents may import `invoke_tool` without opening direct gate/taint/registry. Runtime **`invoke_tool` only**. Full list: `docs/plan/agents.md`.
+- Порт агента (поверх клиента; wiring в M2). **Owner: agent-layer agent** (`docs/plan/agents.md`; G1 in `coscientist.agents.contract`). Scheduler owns `Usage`/`Budget` recording (`UsageRecorded`); agents return `llm.types.Usage` and accept `Budget`. `role: RoleName` from `coscientist.profiles` (G1 after [#62](https://github.com/Naramerk/repo/pull/62) merged; `RoleName = Identifier`). `tools: list[Tool]` with `Tool` from `coscientist.tools.contract`. **import-linter (G1 lands):** agents↔`invoke_tool` is [§6.1](#sec-6-1-contract) above; coordinated with tools [#65](https://github.com/Naramerk/repo/pull/65) for `tools.effects` ignores only (#65 does not edit DESIGN). Do **not** use `allow_indirect_imports = true`. Use **targeted** `ignore_imports` only: `coscientist.agents.contract -> coscientist.tools.contract` (typing), plus `coscientist.tools.effects -> {tools.contract, tools.gate, core.execution.tool_registry}` so agents may import `invoke_tool` without opening direct gate/taint/registry. Runtime **`invoke_tool` only**. Full list: `docs/plan/agents.md`.
 
 ```python
 class AgentPort(Protocol):

@@ -2,7 +2,7 @@
 
 Links: [DESIGN §7.2](../DESIGN.md) (`AgentPort` — **owner: this agent**), [DESIGN §6.0](../DESIGN.md) (MCP), [CAPABILITIES #5/#6/#18/#23/#24](../CAPABILITIES.md).  
 Depends on: thin LLM (`coscientist/llm`), tools `invoke_tool` (gate, registry), [#54](https://github.com/Naramerk/repo/pull/54) MCP adapter (**merged**), [#62](https://github.com/Naramerk/repo/pull/62) (`RoleName = Identifier` in `coscientist.profiles`; `from coscientist.profiles import RoleName`), [#50](https://github.com/Naramerk/repo/pull/50) PromptRegistry, [#70](https://github.com/Naramerk/repo/pull/70) scheduler plan (S1/S2).  
-Does **not** own: `Usage`, `Budget`, `UsageRecorded` (**scheduler** S1/S2 per [#70](https://github.com/Naramerk/repo/pull/70)); PromptRegistry (**#50**); MCP req/resp journal (**owner: #21 A2A/MCP**, plan [#60](https://github.com/Naramerk/repo/pull/60) → [`docs/handoff/a2a.md`](../handoff/a2a.md)).
+Does **not** own: `Usage`, `Budget`, `UsageRecorded` (**scheduler** S1/S2 per [#70](https://github.com/Naramerk/repo/pull/70)); PromptRegistry (**#50**); MCP req/resp journal (**owner: A2A/MCP**, [`docs/handoff/a2a.md`](../handoff/a2a.md) **PR8** — `McpRequestRecorded` / `McpResponseRecorded`).
 
 ## Область
 
@@ -12,7 +12,7 @@ Does **not** own: `Usage`, `Budget`, `UsageRecorded` (**scheduler** S1/S2 per [#
 | `Orchestrator` (order by `RouteConfig`) | **this agent** | G1b; types from #62 |
 | `PromptRegistry`, `PromptRef` | **#50** | Reference only — **no new PR here** |
 | `Usage`, `Budget`, `UsageRecorded` | **scheduler** ([#70](https://github.com/Naramerk/repo/pull/70) S1/S2) | Agents return `llm.types.Usage` on `AgentRun`; accept `Budget` (DESIGN §7.2); scheduler records |
-| MCP `McpRequestRecorded`, `McpResponseRecorded` | **#21 A2A/MCP** ([#60](https://github.com/Naramerk/repo/pull/60)) | Hand off — not this track |
+| MCP `McpRequestRecorded`, `McpResponseRecorded` | **A2A/MCP** ([`a2a.md`](../handoff/a2a.md) **PR8**) | Hand off — not this track |
 | Research cycle, spec/lit, profiles, HITL, bench | **consumers** | |
 
 ## Состояние
@@ -36,7 +36,7 @@ G1  AgentPort contract (coscientist.agents.contract) ──► G1-impl
 #54 MCP adapter (merged)                ──► G1-impl (MCP tools via invoke_tool)
 #50 PromptRegistry                      ──► G1-impl (PromptRef; no duplicate PR)
 G1, G1-impl (AgentRun.usage)            ──► #70 scheduler S1/S2 (Usage → UsageRecorded)
-MCP journal Mcp*                        ──► #21 A2A/MCP (#60)
+MCP journal Mcp*                        ──► A2A/MCP a2a.md PR8
 ```
 
 Edge direction: **agents produce `Usage` on `AgentRun`; [#70](https://github.com/Naramerk/repo/pull/70) S1/S2 depend on that and own `UsageRecorded`.** G1-impl does **not** depend on S1/S2.
@@ -48,7 +48,7 @@ Edge direction: **agents produce `Usage` on `AgentRun`; [#70](https://github.com
 **Where:** module **`coscientist.agents.contract`** (Protocol + `AgentRun`, `AgentError` + fakes). Delete `Any` stub in `core/events/ports.py` in this same PR.  
 **Role:** `role: RoleName` via `from coscientist.profiles import RoleName`.  
 **Tools:** `tools: list[Tool]` with `Tool` from `coscientist.tools.contract`.  
-**import-linter (G1 lands pyproject; this docs PR does not prove lint-imports):** see decision below + DESIGN §7.2. Agents↔`invoke_tool` rule is [DESIGN §6.1](../DESIGN.md#L543) on main. Coordinated with tools track [#65](https://github.com/Naramerk/repo/pull/65) for `tools.effects` →\* `ignore_imports` only (#65 does not edit DESIGN).  
+**import-linter (G1 lands pyproject; this docs PR does not prove lint-imports):** see decision below + DESIGN §7.2. Agents↔`invoke_tool` rule is [DESIGN §6.1](../DESIGN.md#sec-6-1-contract) on main. Coordinated with tools track [#65](https://github.com/Naramerk/repo/pull/65) for `tools.effects` →\* `ignore_imports` only (#65 does not edit DESIGN).  
 **Usage/Budget:** return `llm.types.Usage`; accept domain `Budget`.  
 **Acceptance:** mypy-clean; fake port tests; no orchestrator/journal/MCP; audit `--vs-main`; **`lint-imports` green with the pyproject change G1 lands**; **AST boundary test mandatory in G1** (no `Tool.call`, no `register_tool`, no direct gate/taint/registry misuse — мартышка + крокодил); CHANGELOG.  
 **DoD:** below + **CI green on push and on merge-ref vs current main** + lint-imports + AST test.
@@ -61,7 +61,7 @@ Edge direction: **agents produce `Usage` on `AgentRun`; [#70](https://github.com
 ### G1-impl — Journaled `AgentPort` (≤400 LOC)
 **Depends:** G1, #54 (merged), #50. **Does not depend on #70 S1/S2.**  
 **Acceptance:** fake LLM + **`invoke_tool` only** (no `Tool.call`); live≡replay; **AST test mandatory**.  
-**DoD:** same. MCP Mcp\* journal out of scope (**#21 A2A/MCP**, [#60](https://github.com/Naramerk/repo/pull/60)).
+**DoD:** same. MCP Mcp\* journal out of scope (**A2A/MCP**, [`a2a.md`](../handoff/a2a.md) **PR8**).
 
 ## Контракты (locked for G1)
 
@@ -109,11 +109,11 @@ ignore_imports = [
 
 Direct `agents → tools.gate`, `tools.taint`, and `tool_registry` stay forbidden. Runtime: **`invoke_tool` only**. **G1 must ship an AST boundary test** (мартышка + крокодил) — lint-imports alone is not enough.
 
-Agents↔`invoke_tool`: [DESIGN §6.1](../DESIGN.md#L543). Tools-side `effects` ignores: [#65](https://github.com/Naramerk/repo/pull/65). G1 DoD: `lint-imports` + AST test after pyproject edit.
+Agents↔`invoke_tool`: [DESIGN §6.1](../DESIGN.md#sec-6-1-contract). Tools-side `effects` ignores: [#65](https://github.com/Naramerk/repo/pull/65). G1 DoD: `lint-imports` + AST test after pyproject edit.
 
 ## Вопросы
 
-_(none open — scheduler S1/S2 = [#70](https://github.com/Naramerk/repo/pull/70); MCP journal = [#60](https://github.com/Naramerk/repo/pull/60).)_
+_(none open — scheduler S1/S2 = [#70](https://github.com/Naramerk/repo/pull/70); MCP journal = [`a2a.md`](../handoff/a2a.md) **PR8**.)_
 
 ## Проверки (DoD — every PR)
 
@@ -134,4 +134,4 @@ _(none open — scheduler S1/S2 = [#70](https://github.com/Naramerk/repo/pull/70
 - Starting G1 before #62 merges `RoleName` to main.  
 - Broad `allow_indirect_imports` — rejected; keep targeted ignores only (matched to #65 `effects` imports).  
 - Direct `tools.contract` abuse via ignore — scoped to `coscientist.agents.contract` + **mandatory AST test in G1**.  
-- Taking MCP journal into this track (owned by **#21 A2A/MCP**, [#60](https://github.com/Naramerk/repo/pull/60)).
+- Taking MCP journal into this track (owned by **A2A/MCP**, [`a2a.md`](../handoff/a2a.md) **PR8**).
