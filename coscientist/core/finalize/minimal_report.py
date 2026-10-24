@@ -12,13 +12,7 @@ from pydantic import ValidationError
 
 from coscientist.core.claims.reasons import Disposition, TaskReason
 from coscientist.core.events.digest import canonical_json
-from coscientist.core.execution.domain import (
-    VALID_PROVENANCE,
-    Provenance,
-    Task,
-    TaskOutcome,
-    TaskState,
-)
+from coscientist.core.execution.domain import Provenance, Task, TaskOutcome, TaskState
 from coscientist.core.finalize.minimal_report_models import (
     MinimalReport,
     MinimalReportRefuse,
@@ -47,12 +41,12 @@ def _task_provenance(
             raise MinimalReportRefuse(
                 f"task {task.spec.task_key!r}: closed attempt provenance required"
             )
-        prov = str(att["provenance"])
-        if prov not in VALID_PROVENANCE:
-            raise MinimalReportRefuse(
-                f"task {task.spec.task_key!r}: unknown provenance {prov!r}"
-            )
-        return prov  # type: ignore[return-value]
+        raw = str(att["provenance"])
+        if raw == "real" or raw == "partial" or raw == "stub":
+            return raw
+        raise MinimalReportRefuse(
+            f"task {task.spec.task_key!r}: unknown provenance {raw!r}"
+        )
     raise MinimalReportRefuse(
         f"task {task.spec.task_key!r}: closed attempt provenance required"
     )
