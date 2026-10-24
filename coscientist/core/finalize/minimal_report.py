@@ -106,8 +106,10 @@ def assemble_minimal_report(
             h_rows.append(dict(v))
             if "hypothesis_id" not in h_rows[-1]:
                 h_rows[-1]["hypothesis_id"] = str(hid)
+    elif hypotheses is None:
+        h_rows = []
     else:
-        h_rows = [dict(h) for h in (hypotheses if hypotheses is not None else [])]
+        h_rows = [dict(h) for h in hypotheses]
     t_rows = [
         {
             "task_key": t.spec.task_key,
@@ -125,13 +127,17 @@ def assemble_minimal_report(
     ]
     q_n = len(q_rows)
     na_n = sum(1 for q in q_rows if q.get("disposition") == "not_attempted")
-    checks = [dict(c) for c in (custom_checks if custom_checks is not None else [])]
+    if custom_checks is None:
+        checks: list[dict[str, Any]] = []
+    else:
+        checks = [dict(c) for c in custom_checks]
     obs_list: list[Any] = []
-    for obs in observations if observations is not None else []:
-        if isinstance(obs, Mapping):
-            obs_list.append(dict(obs))
-        else:
-            obs_list.append(obs)
+    if observations is not None:
+        for obs in observations:
+            if isinstance(obs, Mapping):
+                obs_list.append(dict(obs))
+            else:
+                obs_list.append(obs)
     raw: dict[str, Any] = {
         "study_id": study_id,
         "terminal_reason": terminal_reason,
@@ -254,7 +260,10 @@ def render_markdown_report(
     }
     custom_checks = list(report.custom_checks)
     observations: list[Any] = list(report.observations)
-    task_map: Mapping[str, Task] = {} if tasks is None else tasks
+    if tasks is None:
+        task_map: Mapping[str, Task] = {}
+    else:
+        task_map = tasks
     lines = [
         f"# Study report `{study_id}`",
         "",
@@ -279,8 +288,7 @@ def render_markdown_report(
         lines.append("_No questions._")
     for qid, d in sorted(question_dispositions.items()):
         lines.append(
-            f"- `{qid}`: {d.get('disposition')} ({d.get('reason')}) — "
-            f"{d.get('formulation', '')}"
+            f"- `{qid}`: {d['disposition']} ({d['reason']}) — {d['formulation']}"
         )
     lines.extend(["", "## Tasks"])
     if tasks is not None:

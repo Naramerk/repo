@@ -723,13 +723,18 @@ async def _build_finalized_payload(
     fallback: str | None = None
     report_artifact_id: str | None = None
     conclusion_ids = conclusion_ids_for(sid, qdisp)
-    minimal: MinimalReport | None = None
+    minimal: MinimalReport | None
+    minimal = None
     refusal = _refusal_payload(runtime, trigger)
-    hyp_map: Mapping[str, Mapping[str, Any]] = (
-        {} if hypothesis_verdicts is None else hypothesis_verdicts
-    )
+    if hypothesis_verdicts is None:
+        hyp_map: Mapping[str, Mapping[str, Any]] = {}
+    else:
+        hyp_map = hypothesis_verdicts
     obs_attr = getattr(runtime, "_observations", None)
-    observations: list[Any] = list(obs_attr) if obs_attr is not None else []
+    if obs_attr is None:
+        observations: list[Any] = []
+    else:
+        observations = list(obs_attr)
     custom_checks = _safe_custom_checks(runtime)
     try:
         report_artifact_id = await _primary_report_path(
@@ -826,9 +831,18 @@ async def _primary_report_path(
     if as_of_raw is not None:
         as_of_s = as_of_raw.isoformat() if hasattr(as_of_raw, "isoformat") else str(as_of_raw)
     plans_local = getattr(runtime, "plans", None)
-    hyp: Mapping[str, Mapping[str, Any]] = {} if hypotheses is None else hypotheses
-    checks: list[dict[str, Any]] = [] if custom_checks is None else custom_checks
-    obs: list[Any] = [] if observations is None else observations
+    if hypotheses is None:
+        hyp: Mapping[str, Mapping[str, Any]] = {}
+    else:
+        hyp = hypotheses
+    if custom_checks is None:
+        checks: list[dict[str, Any]] = []
+    else:
+        checks = custom_checks
+    if observations is None:
+        obs: list[Any] = []
+    else:
+        obs = observations
     assembled = assemble_minimal_report(
         study_id=sid,
         terminal_reason=term.value,
