@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.errors import Idempotent, JournalPayloadError
-from coscientist.core.events.events import TOOL_RESOLVED_TYPE, EventType, UnstampedEvent
+from coscientist.core.events.events import EventType, UnstampedEvent
 from coscientist.core.events.payload_schemas import PAYLOAD_MODELS
 from coscientist.core.events.schema_gate import _payload_validators
 from coscientist.core.events.schema_versions import TOOL_RESOLVED_SCHEMA_VERSION
@@ -204,9 +204,9 @@ async def _append_tr(
     await store.append(
         UnstampedEvent(
             study_id="st1",
-            type=TOOL_RESOLVED_TYPE,
+            type="ToolResolved",
             entity_key=entity,
-            idem_key=f"{TOOL_RESOLVED_TYPE}:{entity}",
+            idem_key=f"ToolResolved:{entity}",
             payload=raw,
             ts=clock.now(),
             schema_version=TOOL_RESOLVED_SCHEMA_VERSION,
@@ -262,6 +262,6 @@ async def test_broken_json_payload_refused(tmp_path: Path) -> None:
 def test_payload_validators_include_tool_resolved() -> None:
     reg = _payload_validators()
     assert set(reg) == set(get_args(EventType))
-    assert reg[TOOL_RESOLVED_TYPE] is validate_tool_resolved_payload
-    assert TOOL_RESOLVED_TYPE not in PAYLOAD_MODELS
-    assert set(PAYLOAD_MODELS) == set(get_args(EventType)) - {TOOL_RESOLVED_TYPE}
+    assert reg["ToolResolved"] is validate_tool_resolved_payload
+    assert "ToolResolved" not in PAYLOAD_MODELS
+    assert set(PAYLOAD_MODELS) == set(get_args(EventType)) - {"ToolResolved"}

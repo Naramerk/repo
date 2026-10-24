@@ -7,7 +7,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, model_validator
 
 from coscientist.core.events.errors import JournalPayloadError
-from coscientist.core.events.events import TOOL_RESOLVED_TYPE
 
 MatchKind = Literal["exact", "none"]
 
@@ -49,7 +48,7 @@ def validate_tool_resolved_payload(raw: dict[str, Any]) -> dict[str, Any]:
     except ValidationError as e:
         first = e.errors()[0]
         raise JournalPayloadError(
-            f"{TOOL_RESOLVED_TYPE}: payload schema refuse ({first['type']})",
+            f"ToolResolved: payload schema refuse ({first['type']})",
             expected_store_format=None,
             found_store_format=None,
             loc=tuple(first["loc"]),
