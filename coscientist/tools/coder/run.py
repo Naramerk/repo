@@ -7,11 +7,9 @@ Deadline → ``killpg`` guest process group + ``JobTimedOut`` + retryable outcom
 from __future__ import annotations
 
 import asyncio
-import ctypes
-import errno
 import multiprocessing as mp
+import os
 import signal
-import sys
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -187,36 +185,18 @@ def _require_positive_seconds(name: str, value: float) -> float:
     return value
 
 
-_LIBC = ctypes.CDLL(None, use_errno=True)
-_LIBC.killpg.argtypes = (ctypes.c_int, ctypes.c_int)
-_LIBC.killpg.restype = ctypes.c_int
-
-
-def _killpg_errno(pgid: int, sig: int) -> int:
-    """``killpg(2)`` returning 0 or errno — no exception control-flow."""
-    ctypes.set_errno(0)
-    if _LIBC.killpg(int(pgid), int(sig)) == 0:
-        return 0
-    err = ctypes.get_errno()
-    if err == 0:
+def _pg_state(pgid: int) -> Literal["alive", "gone"]:
+    """Probe process group; ProcessLookupError → gone; other OSError → ToolError."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return "gone"  # audit-ok[except_silent_return]: ESRCH — group already reaped (probe)
+    except OSError as e:
         raise ToolError(
             "local",
-            f"killpg returned failure with errno unset: pgid={pgid} sig={sig}",
-        )
-    return int(err)
-
-
-def _pg_state(pgid: int) -> Literal["alive", "gone"]:
-    """Probe process group via killpg signal 0; ESRCH → gone, other errno → ToolError."""
-    err = _killpg_errno(pgid, 0)
-    if err == 0:
-        return "alive"
-    if err == errno.ESRCH:
-        return "gone"
-    raise ToolError(
-        "local",
-        f"guest process group probe failed: pgid={pgid}: errno={err}",
-    )
+            f"guest process group probe failed: pgid={pgid}: {e}",
+        ) from e
+    return "alive"
 
 
 def _pg_alive(pgid: int) -> bool:
@@ -224,16 +204,14 @@ def _pg_alive(pgid: int) -> bool:
 
 
 def _killpg(pgid: int, sig: signal.Signals) -> Literal["signaled", "gone"]:
-    """Signal process group; ESRCH → gone. Other errno → ToolError."""
-    err = _killpg_errno(pgid, int(sig))
-    if err == 0:
-        return "signaled"
-    if err == errno.ESRCH:
-        return "gone"
-    raise ToolError(
-        "local",
-        f"killpg({sig.name}) failed: errno={err}",
-    )
+    """Signal process group; ProcessLookupError → gone; other OSError → ToolError."""
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:
+        return "gone"  # audit-ok[except_silent_return]: ESRCH — group already reaped (killpg)
+    except OSError as e:
+        raise ToolError("local", f"killpg({sig.name}) failed: {e}") from e
+    return "signaled"
 
 
 def _set_guest_pgid(slot: Any, pgid: object) -> None:
@@ -399,8 +377,6 @@ async def _stop_guest_or_record(
     unpublished_reason: str,
 ) -> None:
     """Resolve pgid (fail-closed), kill guest, record cancel-failed when needed."""
-    pgid = 0
-    await_error = None
     try:
         pgid = await _await_guest_pgid(
             guest_pgid_slot,
@@ -408,7 +384,15 @@ async def _stop_guest_or_record(
             poll_interval_s=limits.watch_poll_interval_s,
         )
     except ToolError:
-        await_error = sys.exception()
+        await _kill_sandbox_guest(
+            proc,
+            guest_pgid=0,
+            term_grace_s=limits.term_grace_s,
+            reap_timeout_s=limits.reap_timeout_s,
+            guest_done=guest_done,
+        )
+        jobs.record_cancel_failed(jid, unpublished_reason)
+        return  # audit-ok[except_silent_return]: JobCancelFailed journaled (unpublished pgid)
     killed = await _kill_sandbox_guest(
         proc,
         guest_pgid=pgid,
@@ -416,9 +400,6 @@ async def _stop_guest_or_record(
         reap_timeout_s=limits.reap_timeout_s,
         guest_done=guest_done,
     )
-    if isinstance(await_error, ToolError):
-        jobs.record_cancel_failed(jid, unpublished_reason)
-        return
     if not killed:
         jobs.record_cancel_failed(jid, "guest_still_alive")
 
@@ -500,7 +481,10 @@ async def run_coder_job(
 
         if not parent_conn.poll(0):
             raise ToolError("local", "sandbox process exited without result")
-        tag, payload = parent_conn.recv()
+        try:
+            tag, payload = parent_conn.recv()
+        except EOFError as e:
+            raise ToolError("local", "sandbox process exited without result") from e
         parent_conn.close()
         if tag != "ok" or not isinstance(payload, SandboxResult):
             raise ToolError("local", f"bad sandbox worker payload tag={tag!r}")
@@ -528,17 +512,21 @@ async def run_coder_job(
         finished_outcomes.append(outcome)
         return outcome
     finally:
-        pgid = int(guest_pgid.value)
-        still_running = proc.is_alive()
-        if not still_running and pgid > 0:
-            still_running = _pg_alive(pgid)
-        if still_running:
-            await _kill_sandbox_guest(
-                proc,
-                guest_pgid=pgid,
-                term_grace_s=request.limits.term_grace_s,
-                reap_timeout_s=request.limits.reap_timeout_s,
-                guest_done=guest_done,
-            )
+        # Cleanup must not mask the try outcome or skip terminalization.
+        try:
+            pgid = int(guest_pgid.value)
+            still_running = proc.is_alive()
+            if not still_running and pgid > 0:
+                still_running = _pg_alive(pgid)
+            if still_running:
+                await _kill_sandbox_guest(
+                    proc,
+                    guest_pgid=pgid,
+                    term_grace_s=request.limits.term_grace_s,
+                    reap_timeout_s=request.limits.reap_timeout_s,
+                    guest_done=guest_done,
+                )
+        except ToolError:
+            jobs.record_cancel_failed(jid, "guest_cleanup_failed")
         if not finished_outcomes:
             _ensure_terminal(jobs, jid, detail="run_coder_job_exit")
