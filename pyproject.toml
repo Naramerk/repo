@@ -710,13 +710,24 @@ ignore_imports = [
 unmatched_ignore_imports_alerting = "error"
 
 [[tool.importlinter.contracts]]
-name = "profiles must not import api, web, experimental"
+name = "profiles allow only mcp.config (+ core.domain Budget)"
 type = "forbidden"
 source_modules = ["coscientist.profiles"]
 forbidden_modules = [
+  "coscientist.agents",
+  "coscientist.llm",
+  "coscientist.tools",
+  "coscientist.core",
+  "coscientist.checks",
   "coscientist.api",
   "coscientist.experimental",
+  "coscientist.mcp",
   "web",
   "fastapi",
   "google",
 ]
+ignore_imports = [
+  "coscientist.profiles.models -> coscientist.mcp.config",
+  "coscientist.profiles.models -> coscientist.core.execution.domain",
+]
+unmatched_ignore_imports_alerting = "error"

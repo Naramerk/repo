@@ -778,15 +778,25 @@ class Budget(BaseModel):
 ## 8. Профили (R1)
 
 ```python
+class RoleConfig(BaseModel):  # frozen; strict; no guessed defaults
+    model: Identifier
+    tools: tuple[Identifier, ...]           # unique; MCP catalog names
+    # prompt: PromptRef(prompt_id, version)  # waits on agent-layer prompt registry (#50)
+
+class RouteConfig(BaseModel):
+    role: Identifier
+    budget: Budget                          # core Budget (§7.4) — no parallel RouteBudget
+
 class Profile(BaseModel):
-    name: str
-    roles: dict[str, RoleConfig]            # модель, промпт, инструменты
-    mcp_servers: list[McpServerConfig]
-    routes: dict[str, RouteConfig]          # route -> роль + бюджет
-    catalog_extensions: list[str]           # доп. шаблоны требований
-    alembic: Literal["enabled","disabled"] = "enabled"
-    integrations: list[str] = []            # опциональные внешние сервисы (§6.5)
-    plugins: list[str] = []                 # entry points "coscientist.profiles"
+    name: Identifier
+    profile_version: StrictInt              # ≥ 1
+    roles: dict[Identifier, RoleConfig]
+    mcp_servers: tuple[McpServerConfig, ...]  # strict models in mcp/config.py; unique names
+    routes: dict[Identifier, RouteConfig]   # route -> role + Budget
+    catalog_extensions: tuple[Identifier, ...]
+    alembic: Literal["enabled", "disabled"]
+    integrations: tuple[Identifier, ...]
+    plugins: tuple[Identifier, ...]         # entry points "coscientist.profiles"
 
 class ProfilePlugin(Protocol):
     def register(self, reg: Registry) -> None   # только: tools, check kinds, templates, routes
@@ -794,6 +804,7 @@ class ProfilePlugin(Protocol):
 - Профили: `research` (гипотезы + литература), `medicine` (маршрут medical + med_tools), `microfluidics`.
 - Плагин не меняет машину состояний и не вешает callbacks. Новый CodeCheck kind регистрируется с функцией и схемой параметров; неизвестный kind в каталоге — ошибка старта.
 - Study создаётся одной функцией для всех профилей: корень (REQUEST/STUDY) создаётся ядром до запуска любых агентов. Тест: `test_r1_every_profile_starts_and_has_root`.
+- `coscientist.profiles` import-linter: ↛ agents/llm/tools/checks/api; only `mcp.config` + `core.execution.domain` (Budget).
 
 ## 9. API для веба
 
