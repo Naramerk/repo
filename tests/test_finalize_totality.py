@@ -471,7 +471,7 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
     sid = "st_leg"
     root = tmp_path / sid
     root.mkdir()
-    store = SqliteEventStore(sid, root / "events.db", clock=clock)
+    store = SqliteEventStore(sid, root / "events.db", clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("seeder")
     now = clock.now()
     dl = now + timedelta(seconds=120)

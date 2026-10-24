@@ -222,6 +222,23 @@ async def create_study(rt: Any, **kwargs: Any) -> str:
 
 
 
+
+def _wrap_expand_plan(rt: Any) -> Any:
+    """Inject explicit reason/assign_keys when tests omit them."""
+    orig = getattr(rt, "expand_plan", None)
+    if not callable(orig):
+        return rt
+
+    async def _bound(*args: Any, **kwargs: Any):
+        if "reason" not in kwargs:
+            kwargs["reason"] = "test_expand"
+        if "assign_keys" not in kwargs:
+            kwargs["assign_keys"] = True
+        return await orig(*args, **kwargs)
+
+    rt.expand_plan = _bound  # type: ignore[method-assign]
+    return rt
+
 def _wrap_accept_plan(rt: Any) -> Any:
     """Inject explicit rollup/revision when tests omit them."""
     orig = getattr(rt, "accept_plan", None)
@@ -299,7 +316,7 @@ async def open_runtime(
         catalog=catalog if catalog is not None else minimal_test_catalog(),
         **kwargs,
     )
-    return _wrap_accept_plan(_wrap_create_study(rt))
+    return _wrap_expand_plan(_wrap_accept_plan(_wrap_create_study(rt)))
 
 
 async def open_runtime_experimental(
@@ -336,7 +353,7 @@ async def open_runtime_experimental(
         catalog=catalog if catalog is not None else minimal_test_catalog(),
         **kwargs,
     )
-    return _wrap_accept_plan(_wrap_create_study(rt))
+    return _wrap_expand_plan(_wrap_accept_plan(_wrap_create_study(rt)))
 
 
 class RuntimeLike(Protocol):

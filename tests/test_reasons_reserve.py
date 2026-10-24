@@ -371,7 +371,7 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
     sid = "st_legacy"
     root = tmp_path / sid
     root.mkdir(parents=True)
-    store = SqliteEventStore(sid, root / "events.db", clock=clock)
+    store = SqliteEventStore(sid, root / "events.db", clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("seeder")
     now = clock.now()
     # Keep under default lease TTL (30s) so clock.advance for tick does not expire the lease.

@@ -629,7 +629,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
     sid = "st_bg_old_ratio"
     root = tmp_path / sid
     root.mkdir()
-    store = SqliteEventStore(sid, root / "events.db", clock=clock, owner="seed")
+    store = SqliteEventStore(sid, root / "events.db", clock=clock, owner="seed", lease_ttl_s=30.0)
     await store.acquire_lease("seed")
     now = clock.now()
     # Raw journal row (pre-create_study check): looser delegated_costly than max_cost_rub.
@@ -1166,7 +1166,7 @@ async def test_legacy_two_study_finalized_fold_first_wins(tmp_path, clock):
     db = rt.store.db_path
     await close_runtime(rt)
 
-    store = SqliteEventStore(sid, db, clock=clock)
+    store = SqliteEventStore(sid, db, clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("fold")
     events = await store.read_all()
     fins = [e for e in events if e.type == "StudyFinalized"]
@@ -1275,7 +1275,7 @@ async def test_legacy_duplicate_study_finalized_taints_and_report(tmp_path, cloc
     db = rt.store.db_path
     await close_runtime(rt)
 
-    store = SqliteEventStore(sid, db, clock=clock)
+    store = SqliteEventStore(sid, db, clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("taint")
     events = await store.read_all()
     fins = [e for e in events if e.type == "StudyFinalized"]

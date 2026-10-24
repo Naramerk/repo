@@ -1545,7 +1545,7 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
     sid = "st_pr20_v10_loop"
     root = tmp_path / sid
     root.mkdir(parents=True)
-    store = SqliteEventStore(sid, root / "events.db")
+    store = SqliteEventStore(sid, root / "events.db", lease_ttl_s=30.0)
     await store.acquire_lease("seeder")
     now = datetime.now(timezone.utc)
     dl = now + timedelta(seconds=120)

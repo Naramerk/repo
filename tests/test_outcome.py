@@ -128,7 +128,7 @@ def test_b1_closed_only_when_all_tasks_done():
 
 
 async def _writer(tmp_path, clock, sid="st_b2"):
-    store = SqliteEventStore(sid, tmp_path / "e.db", clock=clock)
+    store = SqliteEventStore(sid, tmp_path / "e.db", clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease(new_owner())
     writer = StudyWriter(store)
     writer.start()
