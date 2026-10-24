@@ -20,8 +20,10 @@ if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
 
-async def cancel_study(runtime: StudyRuntime, by: str) -> None:
+async def cancel_study(runtime: StudyRuntime, by: str | None = None) -> None:
     """Emit StudyCancelled, close open work as cancelled, then finalize(trigger=cancel)."""
+    if by is None:
+        by = "user"
     if any((not isinstance(by, str), not by)):
         raise ValueError("cancel_study requires non-empty by=")
     if any((runtime.study is None, finalize_mod.is_finalized(runtime))):

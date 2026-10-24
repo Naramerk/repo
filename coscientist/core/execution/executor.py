@@ -82,6 +82,18 @@ def _as_dict_or_none(v):
     return None
 
 
+def _proposals_dict(v):
+    if isinstance(v, dict):
+        return v
+    return dict()
+
+
+def _binding_as_json(b):
+    if isinstance(b, dict):
+        return dict(b)
+    return b.model_dump(mode="json")
+
+
 def _join_or(kinds, fallback):
     if kinds:
         return ";".join(kinds)
@@ -730,6 +742,10 @@ def _derive_claim_core_attrs(
     severe = claim_is_severe(probe)
     # Capable refute: recompute — never trust a stored True later on replay.
     # Countable core-evaluated evidence required (trusted is a separate tag).
+    if predicts_null:
+        interval_ok = effect_has_interval(effect)
+    else:
+        interval_ok = True
     refute_capable = (
         frozen
         and has_prediction_check
@@ -737,7 +753,7 @@ def _derive_claim_core_attrs(
         and isinstance(sesoi, float)
         and used_sesoi
         and effect_is_countable(effect)
-        and (effect_has_interval(effect) if predicts_null else True)  # audit-ok[ternary_name]: e736
+        and interval_ok
     )
     from coscientist.core.claims.derivation import (
         EVIDENCE_KIND_DERIVATION,
@@ -814,7 +830,7 @@ class Executor:
         get_results: Any | None = None,
         get_artifact_kinds: Any | None = None,
         get_proposals: Any | None = None,
-        max_attempts: int,
+        max_attempts: int | None = None,
         on_budget_debit: Any | None = None,
     ) -> None:
         self.writer = writer
@@ -828,6 +844,10 @@ class Executor:
             review_statuses = {}
         self.review_statuses: dict[str, ReqStatus]
         self.review_statuses = review_statuses
+        if max_attempts is None:
+            from coscientist.core.execution.machine import MAX_ATTEMPTS
+
+            max_attempts = MAX_ATTEMPTS
         # PR13: journaled judge state (rebuilt via apply_judge_journal on reopen).
         self.judge_retry: dict[str, int]
         self.judge_retry = {}
@@ -982,9 +1002,7 @@ class Executor:
                     task_kind=task.kind,
                     task_key=task.spec.task_key,
                     fetched_digests=fetch_idx.digests_for_attempt(attempt_id),
-                    proposals=(
-                        (proposals if isinstance(proposals, dict) else {})  # audit-ok[ternary_name]: e981
-                    ),
+                    proposals=_proposals_dict(proposals),
                     attempts=attempts_bag,
                     results_by_id=_as_dict_or_none(results_bag),
                 )
@@ -1381,11 +1399,10 @@ class Executor:
                 if isinstance(raw, dict):
                     qid_hint = _or_empty_str(optional_item(raw, 'question_id')) or None
                     disp_hint = _or_empty_str(optional_item(raw, 'disposition')) or None
-                disposal = (
-                    raw  # audit-ok[ternary_name]: executor.py:1380 ternary_name
-                    if isinstance(raw, QuestionDisposal)
-                    else QuestionDisposal.model_validate(raw)
-                )
+                if isinstance(raw, QuestionDisposal):
+                    disposal = raw
+                else:
+                    disposal = QuestionDisposal.model_validate(raw)
                 qid_hint = disposal.question_id
                 disp_hint = disposal.disposition
                 if (
@@ -1756,14 +1773,7 @@ class Executor:
         if bindings and not optional_item(payload, "inputs"):
             payload = {
                 **payload,
-                "inputs": [
-                (
-                    b.model_dump(mode="json")  # audit-ok[ternary_name]: executor.py:1753 ternary_name
-                    if not isinstance(b, dict)
-                    else dict(b)
-                )
-                for b in bindings
-            ],
+                "inputs": [_binding_as_json(b) for b in bindings],
             }
             payload["result_content_digest"] = payload_digest(payload)
         payload = {**payload, "charged": charge_attempt is True}

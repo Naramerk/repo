@@ -201,12 +201,14 @@ def validate_final_types(
 
 PLAN_REFUSED_LINE = "не выполнено: план отклонён (рубрика/final_type)"
 
-def refuse_detail(err: BaseException | str, *, truncate: bool) -> str:
+def refuse_detail(err: BaseException | str, *, truncate: bool | None = None) -> str:
     """Full detail string for PlanRefused idem hashing.
 
     ``truncate=True`` only for human-facing report snippets — never before
     ``plan_refused_idem`` (idem must hash the full detail).
     """
+    if truncate is None:
+        truncate = False
     if not isinstance(err, BaseException):
         msg = str(err)
     else:

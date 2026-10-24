@@ -92,13 +92,18 @@ def put_user(
     name: str,
     media_type: str,
     schema_ref: str | None = None,
-    attempt_closed: bool,
+    role: str | None = None,
+    attempt_closed: bool | None = None,
 ) -> Artifact:
     """Store user study **task data** (``producer=user``, forced ``role=data``).
 
     Requires a live ``UserPutCapability`` and no attempt frame (no taint
     laundering). Quote sources use ``put_fetched`` / ``SourceFetched`` only.
+    ``role`` is accepted for call-site compat and ignored (always ``data``).
     """
+    _ = role  # forced data — client must not pick paper/figure
+    if attempt_closed is None:
+        attempt_closed = False
     if type(attempt_closed) is not bool:
         raise TypeError(
             f"attempt_closed must be bool, got {type(attempt_closed).__name__}"

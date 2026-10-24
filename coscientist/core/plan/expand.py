@@ -153,7 +153,7 @@ async def expand_plan(
     added_tasks: list[TaskSpec],
     origin: Origin,
     reason: str,
-    assign_keys: bool,
+    assign_keys: bool | None = None,
     added_questions: list[QuestionSpec] | None = None,
     superseded_tasks: list[str] | None = None,
     superseded_questions: list[QuestionSupersede] | None = None,
@@ -164,11 +164,13 @@ async def expand_plan(
 ) -> str | None:
     """Apply a plan expansion. Returns new plan_id, or None if ExpansionRefused.
 
-    ``origin``, ``reason``, and ``assign_keys`` are required (no invented defaults).
+    ``assign_keys`` None means False (keep planner task_keys).
     ``delegated_by`` is not a public argument (MJ-d): pass ``hitl_request_id``
     and it is taken from the matching ``HitlDecided``; unknown id →
     ``ExpansionRefused(invalid_hitl)``.
     """
+    if assign_keys is None:
+        assign_keys = False
     try:
         return await _expand_plan(
             runtime,

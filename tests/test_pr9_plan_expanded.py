@@ -2057,16 +2057,19 @@ def test_core_evaluated_only_from_effect_not_meta():
 
 
 def test_upcaster_studycreated_v6_to_v7_expansion_fields():
-    v, p = upcast("StudyCreated", 6, {"study_id": "s", "max_replans": 4})
-    assert v >= 7
-    assert p["max_expansions"] == 4
-    assert p["max_depth"] == 8
+    """Schema v1 baseline: legacy StudyCreated v6 chain is refused."""
+    from coscientist.core.events.errors import JournalFormatError
+
+    with pytest.raises(JournalFormatError, match="above writer"):
+        upcast("StudyCreated", 6, {"study_id": "s", "max_replans": 4})
 
 
 def test_upcaster_planaccepted_v3_to_v4_expand_after():
-    v, p = upcast("PlanAccepted", 3, {"plan_id": "p", "tasks": [], "questions": []})
-    assert v >= 4
-    assert p["expand_after"] == []
+    """Schema v1 baseline: legacy PlanAccepted v3 chain is refused."""
+    from coscientist.core.events.errors import JournalFormatError
+
+    with pytest.raises(JournalFormatError, match="above writer"):
+        upcast("PlanAccepted", 3, {"plan_id": "p", "tasks": [], "questions": []})
 
 
 def test_schema_valid_missing_artifact(tmp_path):

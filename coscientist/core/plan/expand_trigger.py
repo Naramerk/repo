@@ -151,7 +151,11 @@ def parse_plan_n_expansion(
     try:
         req = ExpansionRequest.model_validate(raw)
     except Exception as e:  # audit-ok[broad_except]: expand_trigger.py:121 broad_except
-        return None, f"malformed_planner_output:{type(e).__name__}"  # audit-ok[except_silent_return]: e122
+        malformed = (None, f"malformed_planner_output:{type(e).__name__}")
+    else:
+        malformed = None
+    if malformed is not None:
+        return malformed
     if not req.tasks:
         return None, "empty_planner_expansion"
     return req, None

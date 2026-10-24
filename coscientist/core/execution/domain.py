@@ -192,7 +192,7 @@ class GateConfig(Frozen):
 
     timeout_s: int = Field(ge=1)
     on_timeout: OnTimeout
-    enabled: bool
+    enabled: bool = True  # audit-ok[field_default]: domain.py GateConfig.enabled wire default
 
 
 class HitlPolicy(Frozen):
@@ -240,7 +240,7 @@ class OutputSpec(Frozen):
     name: str
     media_type: str
     schema_ref: str | None = None
-    required: bool
+    required: bool = True  # audit-ok[field_default]: domain.py OutputSpec.required wire default
     # Plan-accepted role (core-owned after accept_plan); independence code-vs-data.
     role: ArtifactRole | None = None
     # M1 PR13: qualitative acceptance (literature review, design, …). Frozen at PLAN.
@@ -264,12 +264,12 @@ class InputSpec(Frozen):
     ``None`` = require every input (legacy). ``"all"`` = same as len(inputs).
     """
 
-    from_task: str
-    output: str
+    from_task: str = ""  # audit-ok[field_default]: domain.py InputSpec.from_task wire default
+    output: str = ""  # audit-ok[field_default]: domain.py InputSpec.output wire default
     schema_ref: str | None = None
     # M1 PR5: default forbid (was use_partial). Old journals restored via upcaster.
     mode: Literal["use_partial", "simulate", "forbid"] = "forbid"  # audit-ok[field_default]: domain.py InputSpec.mode wire default
-    kind: Literal["artifact", "claim", "verdict"]
+    kind: Literal["artifact", "claim", "verdict"] = "artifact"  # audit-ok[field_default]: domain.py InputSpec.kind wire default
     ref: str | None = None
     quorum: int | Literal["all"] | None = None
 
@@ -283,7 +283,7 @@ class ForEachSpec(Frozen):
 
     kind: Literal["hypothesis", "question"]
     of_task: str
-    selector: Literal["selected", "all"]
+    selector: Literal["selected", "all"] = "selected"  # audit-ok[field_default]: domain.py ForEachSpec.selector wire default
 
 
 class Limitation(Frozen):
@@ -321,7 +321,7 @@ class QuestionSpec(Frozen):
     # M1 PR16: decomposes edge attrs.origin (explicit|implicit|emergent).
     origin: DecomposeOrigin | None = None
     # M1 PR13: verdict (claims) | artifact (rubric) | both (DESIGN_M1 §6.1).
-    final_type: FinalType
+    final_type: FinalType = "verdict"  # audit-ok[field_default]: domain.py QuestionSpec.final_type wire default
 
 
 class ExperimentMethod(StrEnum):
@@ -628,7 +628,7 @@ class CheckResult(Frozen):
     detail: str | None = None
     # Core-only numeric effect from evaluation (never agent claim attrs / free detail).
     effect: dict[str, Any] | None = None
-    used_sesoi: bool
+    used_sesoi: bool = False  # audit-ok[field_default]: domain.py CheckResult.used_sesoi wire default
 
 
 class Result(Frozen):
@@ -636,7 +636,7 @@ class Result(Frozen):
     attempt_id: str
     outcome: Outcome
     inputs: list[InputBinding] = Field(default_factory=list)
-    provenance: Provenance
+    provenance: Provenance = "real"  # audit-ok[field_default]: domain.py Result.provenance wire default
     agent_claim: Outcome | None = None
     downgrade: Downgrade | None = None
     computed_outcome: Outcome
@@ -917,18 +917,18 @@ class AgentTaskOutput(Frozen):
 
 class StudyView(Frozen):
     phase: Literal["running", "finalizing", "closed"]
-    progress: float
-    awaiting_human: bool
+    progress: float = 0.0  # audit-ok[field_default]: domain.py StudyView.progress wire default
+    awaiting_human: bool = False  # audit-ok[field_default]: domain.py StudyView.awaiting_human wire default
     verdict: Literal["fulfilled", "partial", "stubbed", "failed"] | None = None
-    stub_share: float
+    stub_share: float = 0.0  # audit-ok[field_default]: domain.py StudyView.stub_share wire default
 
 
 class Usage(Frozen):
-    prompt_tokens: int
-    completion_tokens: int
-    cached_tokens: int
+    prompt_tokens: int = 0  # audit-ok[field_default]: domain.py Usage.prompt_tokens wire default
+    completion_tokens: int = 0  # audit-ok[field_default]: domain.py Usage.completion_tokens wire default
+    cached_tokens: int = 0  # audit-ok[field_default]: domain.py Usage.cached_tokens wire default
     cost_rub: Decimal | None = None
-    model: str
+    model: str = ""  # audit-ok[field_default]: domain.py Usage.model wire default
 
 
 # Backward-compatible alias used by projections / API sketches

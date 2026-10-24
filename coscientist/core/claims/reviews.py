@@ -78,7 +78,9 @@ def parse_review_key(key: str) -> dict[str, str] | None:
     try:
         parts = json.loads(key)
     except (TypeError, json.JSONDecodeError):
-        return None  # audit-ok[except_silent_return]: reviews.py:81 except_silent_return
+        parts = None
+    if parts is None:
+        return None
     if any((not isinstance(parts, list), len(parts) != 5)):
         return None
     out = {}

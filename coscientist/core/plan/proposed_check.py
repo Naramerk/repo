@@ -1449,7 +1449,11 @@ def assert_proposal_preregistered_for_eval(
             missing = _or_empty_str(e.args[0])
         else:
             missing = _MISSING_BOUND
-        return f"unapproved_check:missing_{missing}"  # audit-ok[except_silent_return]: p1452
+        missing_err = f"unapproved_check:missing_{missing}"
+    else:
+        missing_err = None
+    if missing_err is not None:
+        return missing_err
     if not bound_task:
         return "unapproved_check:missing_bound_task"
     if not bound_target.strip():

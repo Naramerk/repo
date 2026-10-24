@@ -132,7 +132,10 @@ class SandboxInfraError(CoreError):
     never inferred from ``reason`` substrings).
     """
 
-    def __init__(self, reason: str, *, transient: bool):
+    def __init__(self, reason: str, *, transient: bool | None = None):
+        # None → False for callers that predate the typed flag (evaluate/kinds).
+        if transient is None:
+            transient = False
         if not isinstance(transient, bool):
             raise TypeError(
                 f"SandboxInfraError.transient must be bool, got {type(transient).__name__}"

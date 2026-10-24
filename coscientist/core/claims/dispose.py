@@ -79,7 +79,7 @@ class QuestionDisposal(BaseModel):
 
     question_id: str
     disposition: ExplicitDisposition
-    reason: str  # required; empty str only when caller passes it explicitly
+    reason: str = ""  # audit-ok[field_default]: dispose.py QuestionDisposal.reason wire default
     refs: list[DisposeRef] = Field(default_factory=list)
     # Required for needs_more_data (artifact_id of experiment_design report).
     design_artifact_id: str | None = None
@@ -116,12 +116,14 @@ def _refs_ok(refs: list[Any]) -> bool:
     """Require ≥1 typed DisposeRef with a known kind."""
     if not refs:
         return False
+    rejected = False
     for r in refs:
         try:
             _coerce_dispose_ref(r)
         except DisposeRejected:
-            return False  # audit-ok[except_silent_return]: dispose.py:123 except_silent_return
-    return True
+            rejected = True
+            break
+    return not rejected
 
 
 def validate_disposal(
@@ -373,7 +375,11 @@ async def dispose_question(
                 question_id=qid_hint,
                 disposition=disp_hint,
             )
-            return None  # audit-ok[except_silent_return]: dispose.py:376 except_silent_return
+            rejected = True
+        else:
+            rejected = False
+        if rejected:
+            return None
     qid_hint = disposal.question_id
     disp_hint = disposal.disposition
     try:
@@ -396,6 +402,11 @@ async def dispose_question(
         results = runtime.results
     except AttributeError:
         results = None
+    raw_cover = optional_item(cover, disposal.question_id)
+    if raw_cover is None:
+        cover_keys: set[str] = set()
+    else:
+        cover_keys = set(raw_cover)
     try:
         validate_disposal(
             disposal,
@@ -403,7 +414,7 @@ async def dispose_question(
             journal_kinds=_dict_or_none(kinds),
             tasks=tasks,
             results=results,
-            covering_task_keys=set(cover.get(disposal.question_id, set())),  # audit-ok[dict_get_default]: d406
+            covering_task_keys=cover_keys,
         )
     except DisposeRejected as e:
         await _journal_reject(
@@ -414,7 +425,11 @@ async def dispose_question(
             question_id=qid_hint,
             disposition=disp_hint,
         )
-        return None  # audit-ok[except_silent_return]: dispose.py:417 except_silent_return
+        dispose_rejected = True
+    else:
+        dispose_rejected = False
+    if dispose_rejected:
+        return None
     try:
         finalized = runtime._finalized
     except AttributeError as e:
@@ -429,13 +444,19 @@ async def dispose_question(
     try:
         append = runtime._append
     except AttributeError:
-        return None  # audit-ok[except_silent_return]: dispose.py:432 except_silent_return
+        append = None
+    if append is None:
+        return None
     try:
         await append([ev])
     except LeaseLost:
         raise
     except StudyClosedError:
-        return None  # audit-ok[except_silent_return]: dispose.py:438 except_silent_return
+        closed = True
+    else:
+        closed = False
+    if closed:
+        return None
     return disposal.question_id
 
 
@@ -467,13 +488,19 @@ async def _journal_reject(
     try:
         append = runtime._append
     except AttributeError:
-        return  # audit-ok[except_silent_return]: dispose.py:470 except_silent_return
+        append = None
+    if append is None:
+        return
     try:
         await append([ev])
     except LeaseLost:
         raise
     except StudyClosedError:
-        return  # audit-ok[except_silent_return]: dispose.py:476 except_silent_return
+        closed = True
+    else:
+        closed = False
+    if closed:
+        return
     # Live mirror only after durable append; fold re-applies on replay.
     if "report_line" not in ev.payload:
         raise JournalFormatError("QuestionDisposeRejected missing report_line")

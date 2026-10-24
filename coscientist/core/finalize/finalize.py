@@ -123,26 +123,26 @@ def is_finalized(runtime: StudyRuntime) -> bool:
 
 def pick_finalize_trigger(
     *,
-    cancelled: bool,
-    budget: bool,
-    refused: bool,
-    deadline: bool,
-    all_done: bool,
+    cancelled: bool | None = None,
+    budget: bool | None = None,
+    refused: bool | None = None,
+    deadline: bool | None = None,
+    all_done: bool | None = None,
 ) -> FinalizeTrigger | None:
     """Same-tick tie-break: cancelled > budget > intake > deadline > all_done.
 
     Intake (``StudyRefused``) beats deadline so a crash past ``ed`` still
     finalizes as refused, not deadline.
     """
-    if cancelled:
+    if cancelled is True:
         return "cancel"
-    if budget:
+    if budget is True:
         return "budget"
-    if refused:
+    if refused is True:
         return "intake"
-    if deadline:
+    if deadline is True:
         return "deadline"
-    if all_done:
+    if all_done is True:
         return "all_done"
     return None
 

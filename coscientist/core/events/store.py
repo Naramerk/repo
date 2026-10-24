@@ -97,7 +97,7 @@ class SqliteEventStore:
         owner: str | None = None,
         epoch: int | None = None,
         owner_nonce: str | None = None,
-        lease_ttl_s: float,
+        lease_ttl_s: float | None = None,
     ) -> None:
         self.study_id = study_id
         self.db_path = Path(db_path)
@@ -108,6 +108,8 @@ class SqliteEventStore:
         # None = no lease held (after release / before acquire). Not a writeable epoch.
         self.epoch: int | None
         self.epoch = epoch
+        if lease_ttl_s is None:
+            lease_ttl_s = LEASE_TTL_S
         if any((type(lease_ttl_s) is bool, not isinstance(lease_ttl_s, (int, float)), lease_ttl_s <= 0)):
             raise ValueError(f"lease_ttl_s must be positive number, got {lease_ttl_s!r}")
         self.lease_ttl_s = lease_ttl_s + 0.0

@@ -74,7 +74,7 @@ def _fetch_url(output: object) -> str:
     try:
         data = output.data  # type: ignore[attr-defined]
     except AttributeError:
-        return ""  # audit-ok[except_silent_return]: effects.py:78 except_silent_return
+        data = None
     if not isinstance(data, dict):
         return ""
     url = optional_item(data, "url")

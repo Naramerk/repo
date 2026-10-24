@@ -38,9 +38,11 @@ def make_tool_ref(
     """Test helper: ToolCallRef with required attempt_id (infers from call_id)."""
     if attempt_id is None:
         sep = call_id.find(":")
-        if sep <= 0:
-            raise TypeError(f"make_tool_ref call_id must be attempt_id:n, got {call_id!r}")
-        attempt_id = call_id[:sep]
+        if sep > 0:
+            attempt_id = call_id[:sep]
+        else:
+            # Short synthetic ids in unit tests (e.g. "u" / "u1").
+            attempt_id = call_id
     return ToolCallRef(
         call_id=call_id,
         tool=tool,
@@ -233,7 +235,8 @@ def _wrap_expand_plan(rt: Any) -> Any:
         if "reason" not in kwargs:
             kwargs["reason"] = "test_expand"
         if "assign_keys" not in kwargs:
-            kwargs["assign_keys"] = True
+            # Match former expand_plan default (False): keep planner task_keys.
+            kwargs["assign_keys"] = False
         return await orig(*args, **kwargs)
 
     rt.expand_plan = _bound  # type: ignore[method-assign]

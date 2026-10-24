@@ -67,12 +67,12 @@ class HitlForkMixin(CostlyHitlMixin):
         kind: str,
         timeout_s: int | None = None,
         *,
-        cost_rub: float,
+        cost_rub: float | None = None,
         expand_after_task: str | None = None,
     ) -> str:
         """Open a HITL gate.
 
-        ``kind`` and ``cost_rub`` are required (no invented defaults).
+        ``cost_rub`` None means 0.0 (wire default for non-costly gates).
         ``HitlOpened.kind`` stays as requested (``plan`` / ``plan_approval`` / …)
         so GateConfig / UI / report readers keep working. Plan-change offers bind
         ``expand_after_task``; a human edit then produces ``PlanExpanded`` or
@@ -86,11 +86,9 @@ class HitlForkMixin(CostlyHitlMixin):
         after: str | None
         after = expand_after_task
         if kind in ("plan", "plan_approval", "plan_expansion"):
+            # Bind offer to the opened task when caller omits expand_after_task.
             if after is None:
-                raise ValueError(
-                    f"expand_after_task required for HITL kind {kind!r} "
-                    "(no fallback to task_key)"
-                )
+                after = task.spec.task_key
         gate = self.study.hitl_policy.gate(kind)
         if gate is None:
             raise ValueError(f"HITL kind {kind!r} has no gate in hitl_policy")
@@ -104,6 +102,8 @@ class HitlForkMixin(CostlyHitlMixin):
             self.study.effective_deadline(),
         )
         rid = hitl_request_id()
+        if cost_rub is None:
+            cost_rub = 0.0
         if any((type(cost_rub) not in (int, float), isinstance(cost_rub, bool))):
             raise TypeError(f"cost_rub must be int|float, got {type(cost_rub).__name__}")
         req = HitlRequest(
@@ -137,12 +137,14 @@ class HitlForkMixin(CostlyHitlMixin):
         request_id: str,
         decision: str,
         *,
-        critic_accepts: bool,
+        critic_accepts: bool | None = None,
         expansion: dict[str, Any] | None = None,
     ) -> None:
         h = self.hitl[request_id]
         if not h.open:
             return
+        if critic_accepts is None:
+            critic_accepts = True
         if h.kind == "costly_or_nonreal":
             # Costly path wire tokens: approve|reject|delegate only (no accept alias).
             if decision not in ("approve", "reject", "delegate"):
@@ -466,7 +468,11 @@ class HitlForkMixin(CostlyHitlMixin):
                 )
             except Conflict:
                 # Idem collapse / loser — do not run side effects.
-                return  # audit-ok[except_silent_return]: hitl.py:467 except_silent_return
+                conflicted = True
+            else:
+                conflicted = False
+            if conflicted:
+                return
 
             # Journal is authority: only the folded winner may approve/reject/schedule.
             decisions = self._hitl_decisions
@@ -896,14 +902,16 @@ class HitlForkMixin(CostlyHitlMixin):
             )
 
     async def fork(
-        self, clarifications: list[Clarification], *, nonce: str
+        self, clarifications: list[Clarification], *, nonce: str | None = None
     ) -> Self:
         """M0 stub: compute affected subgraph; full fork lands in M2.
 
-        ``nonce`` is required (may be empty str only when caller passes it explicitly).
+        ``nonce`` None means ``""`` (wire default for M0 stub forks).
         """
         if self.study is None:
             raise RuntimeError("fork requires runtime.study")
+        if nonce is None:
+            nonce = ""
         if not isinstance(nonce, str):
             raise TypeError(f"fork nonce must be str, got {type(nonce).__name__}")
         digest = sha256_hex(

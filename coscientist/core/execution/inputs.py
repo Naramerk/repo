@@ -318,10 +318,10 @@ def claim_nodes_from_attempt(
     claims: list[dict[str, Any]],
     now: datetime,
     graph: Any | None = None,
-    attempt_outcome: str,
+    attempt_outcome: str | None = None,
     derived: dict[str, Any] | None = None,
     derive_attrs: Any | None = None,
-    infra_failure: bool,
+    infra_failure: bool | None = None,
 ) -> tuple[list[UnstampedEvent], list[dict[str, str]]]:
     """Emit ``GraphNodeUpserted`` (+ ``about`` edges) for agent claims.
 
@@ -335,6 +335,10 @@ def claim_nodes_from_attempt(
     """
     drops: list[dict[str, str]]
     drops = []
+    if attempt_outcome is None:
+        attempt_outcome = "SUCCESS"
+    if infra_failure is None:
+        infra_failure = False
     if infra_failure:
         return [], drops
     if provenance not in VALID_PROVENANCE:

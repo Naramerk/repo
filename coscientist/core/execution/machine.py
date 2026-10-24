@@ -13,9 +13,9 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from coscientist.core.claims.graph import GraphStore, KindRegistry
+from coscientist.core.claims.graph import GraphStore, KindRegistry, default_execution_registry
 from coscientist.core.claims.reasons import CloseReason, TaskReason
-from coscientist.core.events.clock import Clock
+from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.errors import JournalFormatError, LeaseLost
 from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.mapping import optional_item
@@ -68,13 +68,19 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         store: SqliteEventStore,
         writer: StudyWriter,
         *,
-        clock: Clock,
-        registry: KindRegistry,
-        max_attempts: int,
+        clock: Clock | None = None,
+        registry: KindRegistry | None = None,
+        max_attempts: int | None = None,
         owner: str,
     ) -> None:
         if not owner:
             raise ValueError("lease owner is required")
+        if clock is None:
+            clock = SystemClock()
+        if registry is None:
+            registry = default_execution_registry()
+        if max_attempts is None:
+            max_attempts = MAX_ATTEMPTS
         if any((type(max_attempts) is not int, max_attempts < 1)):
             raise ValueError(f"max_attempts must be int >= 1, got {max_attempts!r}")
         self.store = store
@@ -388,7 +394,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             self._lease_lost = True
             raise
 
-    async def cancel_study(self, by: str) -> None:
+    async def cancel_study(self, by: str | None = None) -> None:
         await _cancel_study(self, by=by)
 
     async def note_budget_exceeded(self) -> None:

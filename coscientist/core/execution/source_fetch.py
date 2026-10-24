@@ -538,9 +538,9 @@ async def store_fetched_source(
     tool: str,
     url: str,
     capability: FetchCapability,
-    name: str,
-    media_type: str,
-    role: str,
+    name: str | None = None,
+    media_type: str | None = None,
+    role: str | None = None,
     on_event: Any | None = None,
 ) -> Any:
     """``put_fetched`` + ``SourceFetched`` — executor-path only (capability required).
@@ -550,6 +550,12 @@ async def store_fetched_source(
     """
     from coscientist.core.execution.artifacts import make_tool_ref
 
+    if name is None:
+        name = "source.txt"
+    if media_type is None:
+        media_type = "text/plain"
+    if role is None:
+        role = "paper"
     attempt_id = _attempt_id_from_call_id(call_id)
     # Fetch-call marker for projection / index pairing (idempotent per call_id).
     tainted = UnstampedEvent(

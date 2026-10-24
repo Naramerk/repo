@@ -51,6 +51,8 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
             fields = getattr(HitlRequest, "model_fields", None) or {}
             clean = {k: v for k, v in p.items() if k in fields} if fields else dict(p)
             self.hitl[p["request_id"]] = HitlRequest.model_validate(clean)
+            # Also fold into core `_hitl_requests` (expand_plan / proposed_check).
+            super()._project_local(ev)
             return
         if ev.type in ("HitlDecided", "HitlTimedOut"):
             if p.get("keep_open") or p.get("effect") == "WAIT":
@@ -62,13 +64,8 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
             spent = Decimal(str(p.get("spent_rub") or 0))
             if spent > 0:
                 self._delegated_costly_spent += spent
-            if ev.type == "HitlDecided":
-                rid = str(p.get("request_id") or ev.entity_key)
-                decisions = getattr(self, "_hitl_decisions", None)
-                if not isinstance(decisions, dict):
-                    self._hitl_decisions = {}
-                    decisions = self._hitl_decisions
-                decisions[rid] = dict(p)
+            # Core fold owns `_hitl_decisions` / `_hitl_requests.open`.
+            super()._project_local(ev)
             return
         if ev.type == "HitlDeadlineExtended":
             h = self.hitl.get(p["request_id"])
