@@ -105,7 +105,7 @@ async def _boot(tmp_path, clock, sid: str, **create_kw):
 async def _ok(rt, arts, aid: str) -> None:
     content = b'{"count": 1}'
     art = arts.put(
-        content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid}:out", attempt_id=aid), name="main", media_type="application/json"
     )
     await rt.executor.record(
         aid,
@@ -715,7 +715,7 @@ async def test_executor_debits_cost_rub(tmp_path, clock):
     tid = task_id(rt.study.study_id, "E0")
     content = b'{"count": 1}'
     art = arts.put(
-        content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid}:out", attempt_id=aid), name="main", media_type="application/json"
     )
     await rt.executor.record(
         aid,
@@ -862,7 +862,7 @@ async def test_debit_cost_rub_on_every_result_path(tmp_path, clock, monkeypatch,
     if path == "scientific":
         content = b'{"count": 1}'
         art = arts.put(
-            content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
+            content, make_tool_ref(f"{aid}:out", attempt_id=aid), name="main", media_type="application/json"
         )
         out = AgentTaskOutput(
             summary="ok",
@@ -1032,7 +1032,7 @@ async def test_budget_debit_atomic_crash_between_recover(tmp_path, clock):
     tid3 = task_id(rt3.study.study_id, "E0")
     content = b'{"count": 1}'
     art = arts.put(
-        content, make_tool_ref(f"{aid3}:out"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid3}:out", attempt_id=aid3), name="main", media_type="application/json"
     )
     await ex.record(
         aid3,
@@ -1074,7 +1074,7 @@ async def test_single_attempt_budget_overrun(tmp_path, clock):
     assert Decimal(str(rt.attempts[aid]["allocated_budget_rub"])) == limit
     content = b'{"count": 1}'
     art = arts.put(
-        content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid}:out", attempt_id=aid), name="main", media_type="application/json"
     )
     await ex.record(
         aid,

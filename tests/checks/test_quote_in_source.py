@@ -751,7 +751,7 @@ class _ReadNonFetchTool:
         with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
             self.arts.put_fetched(
                 self.body,
-                make_tool_ref(call_id, tool=self.spec.name),
+                make_tool_ref(call_id, tool=self.spec.name, attempt_id=ctx.attempt_id),
                 name="x.txt",
                 media_type="text/plain",
                 role="paper",
@@ -1785,7 +1785,7 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
                 arts_out.append(
                     self.arts.put_fetched(
                         body,
-                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name),
+                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name, attempt_id=call_id),
                         name=f"p{i}.txt",
                         media_type="text/plain",
                         role="paper",
@@ -1960,7 +1960,7 @@ async def test_append_failure_on_second_digest_clears_permits(
                 arts_out.append(
                     self.arts.put_fetched(
                         body,
-                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name),
+                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name, attempt_id=call_id),
                         name=f"p{i}.txt",
                         media_type="text/plain",
                         role="paper",

@@ -423,7 +423,7 @@ def test_tainted_context_no_write_tools():
         sha256="0" * 64,
         size=0,
         uri="cas://x",
-        produced_by=make_tool_ref("a:1", tool="web"),
+        produced_by=make_tool_ref("a:1", tool="web", attempt_id="a"),
         tainted=True,
     )
     assert context_is_tainted([art]) is True

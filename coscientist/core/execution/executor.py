@@ -287,6 +287,10 @@ def _effect_from_checks(
                 "produced_by_call_id": str(data.get("produced_by_call_id") or ""),
                 "artifact_id": str(data.get("artifact_id") or ""),
             }
+            # Never invent from the executor attempt_id — only copy a stamped field.
+            stamped_aid = data.get("attempt_id")
+            if stamped_aid:
+                effect["attempt_id"] = str(stamped_aid)
             if data.get("ci_low") is not None and data.get("ci_high") is not None:
                 effect["ci_low"] = float(data["ci_low"])
                 effect["ci_high"] = float(data["ci_high"])
@@ -571,6 +575,10 @@ def _derive_claim_core_attrs(
         "study_id": study_id,
         "derivation_executable": der_exec,
     }
+    # Plan-side tests.intent (TaskSpec) — never invent confirm here.
+    ti = getattr(spec, "tests_intent", None) if spec is not None else None
+    if ti in ("confirm", "refute"):
+        out["intent"] = ti
     if indep_notes:
         out["independence_notes"] = list(indep_notes)
     if isinstance(sesoi, float):

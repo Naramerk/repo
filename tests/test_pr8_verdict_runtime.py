@@ -46,6 +46,8 @@ _DERIVED_OK = {
     "lit_own_criterion": False,
     "accepted": True,
     "artifact_id": "A1",
+    # Core-stamped intent (never agent whitelist / never invent on read).
+    "intent": "confirm",
     # Catalog-style SESOI threshold + core effect (exceeds sesoi).
     "sesoi": 0.5,
     "uses_sesoi": True,
@@ -69,13 +71,14 @@ _DERIVED_OK = {
 
 
 def _derived_for(attempt_id: str, **extra: object) -> dict:
-    """``_DERIVED_OK`` with ``produced_by_call_id`` bound to ``attempt_id``."""
+    """``_DERIVED_OK`` with structural ``attempt_id`` + call_id on effect."""
     base: dict = {**_DERIVED_OK, **extra}
     eff = dict(base.get("effect") or {})
     extra_eff = extra.get("effect")
     if isinstance(extra_eff, dict):
         eff = {**eff, **extra_eff}
     eff["produced_by_call_id"] = f"{attempt_id}:1"
+    eff["attempt_id"] = attempt_id
     base["effect"] = eff
     return base
 
@@ -170,7 +173,8 @@ def test_claim_attrs_whitelisted_no_counting_controls():
     attrs = next(e for e in evs if e.type == "GraphNodeUpserted").payload["attrs"]
     assert "evil" not in attrs
     assert "stance" not in attrs
-    assert "intent" not in attrs or attrs.get("intent") is None
+    # Agent intent=refute must not stick — core stamps confirm for questions.
+    assert attrs.get("intent") == "confirm"
     # Agent criterion_status must not stick from whitelist — core derived overwrites.
     assert attrs["reason"] == "ok"
     assert attrs["target"] == "Q1"
@@ -374,7 +378,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
     aid0 = await rt.start_attempt("E0")
     content = b'{"count": 225}'
     art = arts.put(
-        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid0}:1", attempt_id=aid0), name="main", media_type="application/json"
     )
 
     def boom(*_a, **_k):
@@ -649,7 +653,7 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
     aid0 = await rt.start_attempt("E0", provenance="real")
     content = b'{"count": 225}'
     art = arts.put(
-        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid0}:1", attempt_id=aid0), name="main", media_type="application/json"
     )
     await rt.executor.record(
         aid0,
@@ -778,7 +782,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
     aid0 = await rt.start_attempt("E0")
     content = b'{"effect": 2.0}'
     art = arts.put(
-        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid0}:1", attempt_id=aid0), name="main", media_type="application/json"
     )
     await rt.executor.record(
         aid0,
@@ -1072,7 +1076,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
     # Production path: agent put + core catalog evaluation → countable refute.
     art = arts.put(
         b'{"count": 999}',
-        make_tool_ref(f"{aid0}:1"),
+        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
         name="main",
         media_type="application/json",
     )
@@ -1329,7 +1333,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
     await rt.record_budget_debit(spent_rub=Decimal("1.00"), request_id="debit-1")
     art = arts.put(
         b'{"count": 999}',
-        make_tool_ref(f"{aid}:1"),
+        make_tool_ref(f"{aid}:1", attempt_id=aid),
         name="main",
         media_type="application/json",
     )
@@ -1679,7 +1683,7 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
         aid0 = await rt.start_attempt("E0")
         art = rt.artifacts.put(
             b'{"count": 225}',
-            make_tool_ref(f"{aid0}:1"),
+            make_tool_ref(f"{aid0}:1", attempt_id=aid0),
             name="main",
             media_type="application/json",
         )
@@ -1916,7 +1920,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
     aid0 = await rt.start_attempt("E0", provenance="real")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid0}:1"),
+        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
         name="main",
         media_type="application/json",
     )
@@ -2019,7 +2023,7 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid0}:1"),
+        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
         name="main",
         media_type="application/json",
     )

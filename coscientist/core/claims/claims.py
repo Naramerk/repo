@@ -10,6 +10,7 @@ from typing import Any, Literal
 from coscientist.core.claims.graph import GraphStore
 from coscientist.core.claims.rules import priority_refuted_support_note
 from coscientist.core.claims.stance import DEFAULT_TESTS_INTENT, TestsIntent, claim_stance
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.ids import (
     claim_node_id,
     experiment_node_id,
@@ -273,14 +274,37 @@ def _coerce_id_set(val: Any) -> frozenset[str] | None | Literal[False]:
         return False
 
 
-def _task_key_from_attempt_id(attempt_id: str) -> str | None:
-    """``{study}/{task_key}#{n}`` → ``task_key``."""
+def _task_key_from_attempt_id(attempt_id: str, *, study_id: str = "") -> str | None:
+    """``{study_id}/{task_key}#{n}`` → ``task_key`` via study prefix, not rsplit."""
     if not attempt_id or "#" not in attempt_id:
         return None
     left = attempt_id.rsplit("#", 1)[0]
+    if study_id:
+        prefix = f"{study_id}/"
+        if left.startswith(prefix):
+            key = left[len(prefix) :]
+            return key or None
+        return None
     if "/" not in left:
         return None
+    # Legacy journals without study_id: last segment only (nested keys need study_id).
     return left.rsplit("/", 1)[-1]
+
+
+def _task_key_for_intent(
+    *,
+    study_id: str,
+    experiment_id: str | None,
+    attempt_id: str,
+) -> str | None:
+    """Prefer structural ``experiment_id``; else parse attempt_id with study prefix."""
+    if experiment_id:
+        prefix = f"{study_id}/"
+        if experiment_id.startswith(prefix):
+            key = experiment_id[len(prefix) :]
+            return key or None
+        return experiment_id
+    return _task_key_from_attempt_id(attempt_id, study_id=study_id)
 
 
 def intent_from_producing_experiment(
@@ -290,24 +314,29 @@ def intent_from_producing_experiment(
     attempt_id: str,
     target_logical: str,
     target_kind: str,
+    experiment_id: str | None = None,
 ) -> TestsIntent:
     """Read ``tests.intent`` from the producing experiment's tests edge.
 
-    Path: attempt_id → task_key → experiment node → that experiment's
-    ``tests`` edge to the hypothesis (DESIGN_M1 §3).
+    Path: structural ``experiment_id`` (or attempt_id + study prefix) → experiment
+    node → that experiment's ``tests`` edge to the hypothesis (DESIGN_M1 §3).
 
-    Questions have no tests edge — callers get the explicit module constant
-    (not an ``or DEFAULT`` invent on a missing edge attr). Hypothesis edges
-    must stamp intent or this refuses.
+    Hypothesis edges must stamp intent or this refuses. Never invents
+    ``DEFAULT_TESTS_INTENT`` on a missing edge.
     """
-    from coscientist.core.events.errors import JournalFormatError
-
     if graph is None or target_kind != "hypothesis" or not target_logical:
-        return DEFAULT_TESTS_INTENT
-    task_key = _task_key_from_attempt_id(attempt_id)
+        raise JournalFormatError(
+            "tests.intent requires hypothesis target and graph",
+            field="intent",
+        )
+    task_key = _task_key_for_intent(
+        study_id=study_id,
+        experiment_id=experiment_id,
+        attempt_id=attempt_id,
+    )
     if not task_key:
         raise JournalFormatError(
-            "tests.intent requires parseable attempt_id for hypothesis",
+            "tests.intent requires experiment_id or parseable attempt_id",
             field="intent",
         )
     exp_id = experiment_node_id(study_id, task_key)
@@ -344,20 +373,23 @@ def intent_from_tests_edge(
     target_logical: str,
     target_kind: str,
     attempt_id: str = "",
+    experiment_id: str | None = None,
 ) -> TestsIntent:
     """Prefer producing-experiment intent; hypothesis path refuses invent."""
-    from coscientist.core.events.errors import JournalFormatError
-
-    if attempt_id:
+    if attempt_id or experiment_id:
         return intent_from_producing_experiment(
             graph,
             study_id=study_id,
             attempt_id=attempt_id,
             target_logical=target_logical,
             target_kind=target_kind,
+            experiment_id=experiment_id,
         )
     if graph is None or target_kind != "hypothesis" or not target_logical:
-        return DEFAULT_TESTS_INTENT
+        raise JournalFormatError(
+            "tests.intent requires hypothesis target and graph",
+            field="intent",
+        )
     if target_logical.startswith(f"{study_id}:hypothesis:"):
         hid = target_logical
     else:
@@ -636,13 +668,29 @@ def runtime_claim_from_node(
                 if checked and criterion_is_superseded(graph, study_id, checked):
                     exclusion_reason = "superseded"
 
-        intent = intent_from_producing_experiment(
-            graph,
-            study_id=study_id,
-            attempt_id=aid or "",
-            target_logical=target,
-            target_kind=target_kind,
-        )
+        # Hypothesis: tests-edge is authority when present; else stamped attrs.
+        # Questions: require stamped intent (no tests edge). Never invent confirm.
+        stamped_intent = attrs.get("intent")
+        if target_kind == "hypothesis":
+            exp_attr = _coerce_str(attrs.get("experiment_id"), allow_empty=True) or None
+            try:
+                intent = intent_from_producing_experiment(
+                    graph,
+                    study_id=study_id,
+                    attempt_id=aid or "",
+                    target_logical=target,
+                    target_kind=target_kind,
+                    experiment_id=exp_attr,
+                )
+            except JournalFormatError:
+                if stamped_intent in ("confirm", "refute"):
+                    intent = stamped_intent  # type: ignore[assignment]
+                else:
+                    return None, "missing_intent"
+        elif stamped_intent in ("confirm", "refute"):
+            intent = stamped_intent  # type: ignore[assignment]
+        else:
+            return None, "missing_intent"
         art = _coerce_str(attrs.get("artifact_id"), allow_empty=True) or node.node_id
         # Never trust stored severe/refute_capable=True (forged journals).
         # Absent or explicit False ⇒ never-severe (V5); True is ignored and recomputed.

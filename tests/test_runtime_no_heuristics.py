@@ -90,6 +90,44 @@ def test_intent_rejects_invalid_and_missing():
     assert _intent(SimpleNamespace(intent="refute")) == "refute"
 
 
+def test_hypothesis_intent_refuses_missing_edge_no_default_invent():
+    """Hypothesis without tests.intent refuses — never invents confirm."""
+    from coscientist.core.claims.claims import intent_from_producing_experiment
+    from coscientist.core.claims.graph import GraphNode, GraphStore, default_execution_registry
+    from coscientist.core.events.ids import hypothesis_node_id
+
+    g = GraphStore(default_execution_registry())
+    sid = "st_no_intent"
+    hid = hypothesis_node_id(sid, "H1")
+    g.upsert_node(
+        GraphNode(node_id=hid, kind="hypothesis", study_id=sid, ref_id="H1", attrs={})
+    )
+    with pytest.raises(JournalFormatError, match="tests.intent") as ei:
+        intent_from_producing_experiment(
+            g,
+            study_id=sid,
+            attempt_id=f"{sid}/E1#1",
+            target_logical="H1",
+            target_kind="hypothesis",
+        )
+    assert ei.value.field == "intent"
+
+
+def test_task_key_for_intent_uses_study_prefix_not_rsplit():
+    """Nested loop keys keep full task_key via study_id prefix (not rsplit)."""
+    from coscientist.core.claims.claims import _task_key_for_intent, _task_key_from_attempt_id
+
+    sid = "st"
+    aid = f"{sid}/L1/1/BODY#1"
+    assert _task_key_from_attempt_id(aid, study_id=sid) == "L1/1/BODY"
+    assert _task_key_for_intent(study_id=sid, experiment_id="L1/1/BODY", attempt_id="") == (
+        "L1/1/BODY"
+    )
+    assert _task_key_for_intent(
+        study_id=sid, experiment_id=f"{sid}/L1/1/BODY", attempt_id=""
+    ) == "L1/1/BODY"
+
+
 def test_evaluate_plan_expansion_uses_frozenset_not_prefix():
     """plan_expansion markers matched by frozenset membership, not startswith."""
     src = inspect.getsource(ev_mod.evaluate_task_checks)

@@ -877,7 +877,7 @@ def test_catalog_scorer_guest_argv_comes_from_catalog_tokens(monkeypatch, tmp_pa
     arts = LocalArtifactStore(tmp_path)
     meta = arts.put(
         b"def f():\n    return 1\n",
-        make_tool_ref("st/E1#1:code"),
+        make_tool_ref("st/E1#1:code", attempt_id="st/E1#1"),
         name="solution.py",
         media_type="text/x-python",
     )

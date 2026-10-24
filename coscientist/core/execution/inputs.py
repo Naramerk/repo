@@ -7,11 +7,14 @@ from enum import StrEnum
 from typing import Any
 
 from coscientist.core.claims.claims import (
+    intent_from_producing_experiment,
     namespaced_claim_id,
     producer_attempt_failed,
     resolve_existing_target,
     whitelist_claim_attrs,
 )
+from coscientist.core.claims.stance import DEFAULT_TESTS_INTENT
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.events import EventEnvelope, make_idem
@@ -310,7 +313,7 @@ def claim_nodes_from_attempt(
         if resolved is None:
             drops.append({"key": agent_key, "reason": "target_unknown"})
             continue
-        target_id, _target_kind = resolved
+        target_id, target_kind = resolved
 
         id_collides = False
         target_changed = False
@@ -380,6 +383,33 @@ def claim_nodes_from_attempt(
         attrs["check_role"] = (
             role if role in ("prediction", "validity", "unknown") else "unknown"
         )
+        # Core-owned intent stamp (agent whitelist never carries intent).
+        # Questions: explicit construction uses DEFAULT_TESTS_INTENT.
+        # Hypothesis: tests edge is authority; else derived/task.tests_intent.
+        stamped = core.get("intent")
+        if target_kind == "question":
+            attrs["intent"] = (
+                stamped if stamped in ("confirm", "refute") else DEFAULT_TESTS_INTENT
+            )
+        else:
+            exp_for_intent = (
+                str(core["experiment_id"]) if core.get("experiment_id") else None
+            )
+            try:
+                attrs["intent"] = intent_from_producing_experiment(
+                    graph,
+                    study_id=study_id,
+                    attempt_id=attempt_id,
+                    target_logical=str(target),
+                    target_kind=target_kind,
+                    experiment_id=exp_for_intent,
+                )
+            except JournalFormatError:
+                if stamped in ("confirm", "refute"):
+                    attrs["intent"] = stamped
+                else:
+                    drops.append({"key": agent_key, "reason": "missing_intent"})
+                    continue
         excl = core.get("exclusion_reason")
         if excl in (
             "validity_failed",

@@ -90,7 +90,7 @@ async def _ok(rt, arts, aid: str, *, count: int = 1) -> None:
     """Record experiment output. ``count=225`` matches catalog ``value_match`` target."""
     content = f'{{"count": {int(count)}}}'.encode()
     art = arts.put(
-        content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid}:out", attempt_id=aid), name="main", media_type="application/json"
     )
     await rt.executor.record(
         aid,
@@ -863,9 +863,14 @@ def _seed_refute_claim_on_graph(rt, *, hid: str, exp_key: str, claim_suffix: str
                 attrs={"task_key": exp_key},
             )
         )
+    # Always ensure tests edge for this hyp (idempotent edge_id).
+    tests_eid = f"tests:{eid}:{hid_n}"
+    if not any(
+        e.kind == "tests" and e.dst_id == hid_n for e in rt.graph.edges_from(eid)
+    ):
         rt.graph.add_edge(
             GraphEdge(
-                edge_id=f"tests:{eid}:{hid_n}",
+                edge_id=tests_eid,
                 kind="tests",
                 study_id=sid,
                 src_id=eid,
@@ -888,6 +893,7 @@ def _seed_refute_claim_on_graph(rt, *, hid: str, exp_key: str, claim_suffix: str
                 "attempt_outcome": "SUCCESS",
                 "experiment_id": exp_key,
                 "target": hid,
+                "intent": "refute",
                 "criterion_status": "not_met",
                 "claim_outcome": "inconsistent",
                 "accepted": True,
@@ -907,6 +913,7 @@ def _seed_refute_claim_on_graph(rt, *, hid: str, exp_key: str, claim_suffix: str
                     "core_evaluated": True,
                     "countable": True,
                     "produced_by_call_id": f"{aid}:1",
+                    "attempt_id": aid,
                 },
             },
         )

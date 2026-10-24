@@ -50,7 +50,7 @@ async def _complete_report_and_finalize(rt, tmp_path) -> None:
     ex, arts = attach_executor(rt, tmp_path)
     art = arts.put(
         b"# report\n",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
     )
@@ -401,7 +401,7 @@ async def test_final_type_artifact_fulfilled_by_rubric(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"# Literature review\n...",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
     )
@@ -574,7 +574,7 @@ async def test_judge_rubric_e2e_met_failed_retry(tmp_path, clock):
     task_id = rt.attempts[aid]["task_id"]
     art = arts.put(
         b"# review\n",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
     )
@@ -677,7 +677,7 @@ async def test_judge_restart_after_review_scheduled(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"# review\n",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
     )
@@ -740,7 +740,7 @@ async def test_judge_restart_after_judge_failure(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"# review\n",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
     )
@@ -1356,7 +1356,7 @@ async def test_e2e_fulfilled_view_matches_payload(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"# Literature review\n...",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
     )
@@ -1395,7 +1395,7 @@ async def test_e2e_downgrade_unaddressed_question_view_matches(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"{}",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="application/json",
     )
@@ -1465,7 +1465,7 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"# review\n",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
     )
@@ -1546,7 +1546,7 @@ async def test_corrupt_judge_cas_finalizes_internal_error(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"# review\n",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
     )
@@ -1598,7 +1598,7 @@ async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"body",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
     )

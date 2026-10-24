@@ -950,7 +950,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
     await rt.fail_attempt(aid1, retryable=True)
     new_art = arts.put_core(
         b'{"count": 999, "drift": true}',
-        make_tool_ref(f"{aid_p}:v2", "core", "main"),
+        make_tool_ref(f"{aid_p}:v2", "core", "main", attempt_id=aid_p),
         name="main",
         media_type="application/json",
         role="data",
