@@ -38,12 +38,11 @@ class FakeClock:
         return self._now
 
     def on_change(self, callback: Callable[[], None]) -> Callable[[], None]:
-        cb = require_change_callback(callback)
-        self._on_change.append(cb)
+        self._on_change.append(callback)
 
         def _unsubscribe() -> None:
-            if cb in self._on_change:
-                self._on_change.remove(cb)
+            if callback in self._on_change:
+                self._on_change.remove(callback)
 
         return _unsubscribe
 

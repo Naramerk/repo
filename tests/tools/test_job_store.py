@@ -227,8 +227,6 @@ def test_complete_and_terminal_transition_refused() -> None:
         store.complete(jid, status="succeeded", artifacts=[])
     with pytest.raises(ToolError, match="queued"):
         store.mark_running(jid)
-    with pytest.raises(ToolError, match="refuse status"):
-        store._set_status(jid, "running")
 
 
 @pytest.mark.parametrize(

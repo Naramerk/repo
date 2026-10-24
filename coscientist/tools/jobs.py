@@ -270,7 +270,11 @@ class InMemoryJobStore:
 
     def _apply_due_timeouts(self) -> None:
         now = self._clock.now()
-        overdue = [jid for jid, job in list(self._jobs.items()) if job_is_live(job.status) and now >= job.deadline]
+        overdue = [
+            jid
+            for jid, job in list(self._jobs.items())
+            if job_is_live(job.status) and now >= job.deadline
+        ]
         for jid in overdue:
             self._apply_timeout(jid)
 
@@ -296,21 +300,11 @@ class InMemoryJobStore:
         job = self.get(job_id)
         if not job_is_live(job.status):
             raise ToolError("local", f"complete requires live job, got {job.status}")
-        updated = job.model_copy(update={"status": status, "artifacts": list(artifacts)})
-        self._jobs[job_id] = updated
-        self._emit(
-            "JobStatusChanged",
-            job_id,
-            JobStatusChangedPayload(job_id=job_id, attempt_id=job.attempt_id, status=status).model_dump(mode="json"),
-            make_idem("JobStatusChanged", job_id, status),
-        )
-        self._wake(job_id)
-        return updated
+        self._jobs[job_id] = job.model_copy(update={"artifacts": list(artifacts)})
+        return self._set_status(job_id, status)
 
     def _apply_timeout(self, job_id: str) -> Job:
         job = self.get(job_id)
-        if job.status == "timed_out":
-            return job
         if not job_is_live(job.status):
             return job
         self._set_status(job_id, "timed_out")
@@ -328,23 +322,20 @@ class InMemoryJobStore:
         return self.get(job_id)
 
     def _set_status(self, job_id: str, status: JobStatus) -> Job:
+        """Caller must ensure live → different status (public API guards)."""
         job = self.get(job_id)
-        if job.status == status:
-            return job
-        if job_is_terminal(job.status):
-            raise ToolError(
-                "local",
-                f"refuse status {job.status!r} → {status!r}",
-            )
         updated = job.model_copy(update={"status": status})
         self._jobs[job_id] = updated
         if job_emits_status_changed(status):
+            payload = JobStatusChangedPayload(
+                job_id=job_id,
+                attempt_id=job.attempt_id,
+                status=status,
+            ).model_dump(mode="json")
             self._emit(
                 "JobStatusChanged",
                 job_id,
-                JobStatusChangedPayload(job_id=job_id, attempt_id=job.attempt_id, status=status).model_dump(
-                    mode="json"
-                ),
+                payload,
                 make_idem("JobStatusChanged", job_id, status),
             )
         self._wake(job_id)
