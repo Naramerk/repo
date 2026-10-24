@@ -105,7 +105,9 @@ def loop_dep_key(loop_id: str) -> str:
     return f"{LOOP_DEP_PREFIX}{loop_id}"
 
 def is_loop_dep(key: str) -> bool:
-    return str(key).startswith(LOOP_DEP_PREFIX)
+    if not isinstance(key, str):
+        raise TypeError(f"depends_on key must be str, got {type(key).__name__}")
+    return key[: len(LOOP_DEP_PREFIX)] == LOOP_DEP_PREFIX
 
 def parse_loop_dep(key: str) -> str | None:
     """Return NFKC-normalized loop_id from ``loop:<id>``, or None if not a barrier.
@@ -125,7 +127,7 @@ def _loops_from_plans(runtime: StudyRuntime) -> list[LoopSpec]:
 
     Invalid journal rows raise (fail-closed) — never silently drop a loop.
     """
-    seen: dict[str, LoopSpec] = {}
+    seen: dict[str, LoopSpec] = {}  # audit-ok: structural empty = collecting LoopSpecs
     # Prefer highest revision that defines loops.
     plans = list(runtime.plans.values())
     plans.sort(key=lambda p: require_exact_int(p["revision"], what="plan.revision"))
@@ -235,7 +237,7 @@ def validate_loop_specs(
     qids = known_questions  # None = skip; set (even empty) = enforce
     hyps = known_hypotheses
     seen_ids: set[str] = set()
-    out: list[LoopSpec] = []
+    out: list[LoopSpec] = []  # audit-ok: structural empty = collecting validated loops
     from coscientist.core.execution.domain import STAGE_DEP_KEYS as stage
     for raw in loops:
         if isinstance(raw, dict):
@@ -248,7 +250,7 @@ def validate_loop_specs(
                 ls = LoopSpec.model_validate(raw)
             except PlanInvalid:
                 raise
-            except Exception as e:
+            except Exception as e:  # audit-ok: pydantic validate → typed refuse detail (never invent LoopSpec)
                 raise PlanInvalid(f"invalid LoopSpec: {e}") from e
         else:
             ls = raw
@@ -258,9 +260,11 @@ def validate_loop_specs(
         if lid in seen_ids:
             raise PlanInvalid(f"duplicate loop_id: {lid!r}")
         seen_ids.add(lid)
-        if int(ls.max_iter) < 1:
+        max_iter_n = require_exact_int(ls.max_iter, what=f"LoopSpec.max_iter[{lid}]")
+        max_loop_cap = require_exact_int(max_loop_iter, what="study.max_loop_iter")
+        if max_iter_n < 1:
             raise PlanInvalid(f"LoopSpec.max_iter must be >= 1 (loop {lid!r})")
-        if int(ls.max_iter) > int(max_loop_iter):
+        if max_iter_n > max_loop_cap:
             # Do not interpolate max_iter values — huge ints blow f-strings.
             raise PlanInvalid(
                 f"LoopSpec.max_iter > study.max_loop_iter (loop {lid!r})"
@@ -282,7 +286,7 @@ def validate_loop_specs(
                     f"loop body template {t.task_key!r} must not set loop_id/loop_iter"
                 )
             for d in t.depends_on:
-                if d.startswith(LOOP_DEP_PREFIX):
+                if is_loop_dep(d):
                     continue
                 if d not in body_keys and d not in known_keys and d not in stage:
                     raise PlanInvalid(
@@ -301,7 +305,7 @@ def validate_loop_specs(
                         f"LoopSpec.scope_questions unknown question {qid!r} "
                         f"(loop {lid!r})"
                     )
-        norm_hyps: list[str] = []
+        norm_hyps: list[str] = []  # audit-ok: structural empty = collecting scope hypotheses
         for hid in ls.scope_hypotheses:
             if hid is None:
                 raise PlanInvalid(
@@ -363,10 +367,10 @@ def _concrete_body(
     key_map: dict[str, str],
     prev_keys: list[str],
 ) -> list[TaskSpec]:
-    out: list[TaskSpec] = []
+    out: list[TaskSpec] = []  # audit-ok: structural empty = building concrete body
     for tmpl in body:
         new_key = key_map[tmpl.task_key]
-        deps: list[str] = []
+        deps: list[str] = []  # audit-ok: structural empty = building depends_on
         for d in tmpl.depends_on:
             if d in key_map:
                 deps.append(key_map[d])
@@ -409,7 +413,7 @@ async def materialize_loop_iter(
     st = _loop_state(runtime)
     raw_row = st.get(loop.loop_id)
     if raw_row is None:
-        row: dict[str, Any] = {}
+        row: dict[str, Any] = {}  # audit-ok: structural empty = first loop state fold
     elif not isinstance(raw_row, dict):
         raise JournalFormatError(
             f"loop state for {loop.loop_id!r} must be dict, got {type(raw_row).__name__}"
@@ -432,7 +436,10 @@ async def materialize_loop_iter(
         return None
 
     now = runtime.clock.now()
-    prev_keys = iter_keys(runtime, loop.loop_id, iter_n - 1) if iter_n > 1 else []
+    if iter_n > 1:
+        prev_keys = iter_keys(runtime, loop.loop_id, iter_n - 1)
+    else:
+        prev_keys = []  # audit-ok: structural empty = first iter has no prev keys
     prototypes = [
         t.model_copy(update={"task_key": f"TMP-LOOP-{i}"})
         for i, t in enumerate(loop.body)
@@ -453,7 +460,7 @@ async def materialize_loop_iter(
     )
 
     # max_tasks guard
-    max_tasks = int(study.max_tasks)
+    max_tasks = require_exact_int(study.max_tasks, what="study.max_tasks")
     existing_n = len(runtime.tasks)
     if existing_n + len(added) > max_tasks:
         await _refuse_loop(
@@ -483,7 +490,10 @@ async def materialize_loop_iter(
         QuestionSpec.model_validate(q) if isinstance(q, dict) else q
         for q in prev["questions"]
     ]
-    prev_loops = list(prev["loops"]) if "loops" in prev else []
+    if "loops" in prev:
+        prev_loops = list(prev["loops"])
+    else:
+        prev_loops = []  # audit-ok: structural empty = no prior loops
     merged = list(prev_tasks) + added
     share_err = critic_plan_shares(merged, study=study)
     if share_err is not None:
@@ -491,7 +501,10 @@ async def materialize_loop_iter(
         return None
 
     pid = loop_plan_id(sid, loop.loop_id, iter_n, new_rev)
-    expand_after = list(prev["expand_after"]) if "expand_after" in prev else []
+    if "expand_after" in prev:
+        expand_after = list(prev["expand_after"])
+    else:
+        expand_after = []  # audit-ok: structural empty = no expand_after
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -506,7 +519,7 @@ async def materialize_loop_iter(
         or [loop],
     )
     ed = study.effective_deadline()
-    events: list[EventEnvelope] = []
+    events: list[EventEnvelope] = []  # audit-ok: structural empty = building event batch
     events.extend(
         plan_graph_events(
             runtime,
@@ -542,7 +555,7 @@ async def materialize_loop_iter(
             kind = task_kind_for_route(frozen_spec.route)
         except ValueError as e:
             await _refuse_loop(runtime, loop, detail=str(e))
-            return None
+            return None  # audit-ok: typed refuse path (never invent kind); MJ-c total
         from coscientist.core.execution.domain import PlanRole
 
         task = Task(
@@ -584,7 +597,7 @@ async def materialize_loop_iter(
         "loop": True,
         "loop_id": loop.loop_id,
         "loop_iter": iter_n,
-        "loop_max_iter": int(loop.max_iter),
+        "loop_max_iter": require_exact_int(loop.max_iter, what="loop.max_iter"),
         "loop_until": loop.until.model_dump(mode="json"),
         "loop_template_keys": list(tmpl_keys),
     }
@@ -632,7 +645,7 @@ async def _emit_loop_capped(
     payload: dict[str, Any] = {
         "loop_id": loop.loop_id,
         "iter": iter_n,
-        "max_iter": int(loop.max_iter),
+        "max_iter": require_exact_int(loop.max_iter, what="loop.max_iter"),
         "survivors": survivors,
         "scope_hypotheses": list(loop.scope_hypotheses),
         "scope_questions": list(loop.scope_questions),
@@ -681,7 +694,7 @@ async def _emit_loop_refused(
     until = loop.until.model_dump(mode="json")
     scope_h = list(loop.scope_hypotheses)
     scope_q = list(loop.scope_questions)
-    max_i = int(loop.max_iter)
+    max_i = require_exact_int(loop.max_iter, what="loop.max_iter")
     events = [
         EventEnvelope(
             study_id=sid,
@@ -767,7 +780,7 @@ async def _emit_loop_completed(
     payload = {
         "loop_id": loop.loop_id,
         "iter": iter_n,
-        "max_iter": int(loop.max_iter),
+        "max_iter": require_exact_int(loop.max_iter, what="loop.max_iter"),
         "survivors": survivors,
         "scope_hypotheses": list(loop.scope_hypotheses),
         "scope_questions": list(loop.scope_questions),
@@ -862,7 +875,7 @@ async def finalize_loop_internal_error(
                 await _emit_loop_advance_failed(runtime, detail=detail)
         except LeaseLost:
             raise
-        except Exception as journal_exc:  # noqa: BLE001 — still must finalize
+        except Exception as journal_exc:  # noqa: BLE001  # audit-ok: MJ-c finalize must stay total; log then continue
             log.warning(
                 "finalize_loop_internal_error journal failed: %s",
                 journal_exc,
@@ -879,7 +892,7 @@ async def finalize_loop_internal_error(
                 await runtime._append(close_events)  # noqa: SLF001
         except LeaseLost:
             raise
-        except Exception as close_exc:  # noqa: BLE001 — still must finalize
+        except Exception as close_exc:  # noqa: BLE001  # audit-ok: MJ-c finalize must stay total; log then continue
             log.warning(
                 "finalize_loop_internal_error close_open_work failed: %s",
                 close_exc,
@@ -947,7 +960,7 @@ async def _advance_one(runtime: StudyRuntime, loop: LoopSpec) -> str | None:
         await _emit_loop_completed(runtime, loop, iter_n=cur)
         return None
 
-    if cur >= int(loop.max_iter):
+    if cur >= require_exact_int(loop.max_iter, what="loop.max_iter"):
         await _emit_loop_capped(runtime, loop, iter_n=cur)
         return None
 
@@ -961,7 +974,7 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
     ``internal_error`` (never leave TaskDone without StudyFinalized; never
     disguise as iteration_cap). Does not re-raise after finalize.
     """
-    done: list[str] = []
+    done: list[str] = []  # audit-ok: structural empty = collecting advanced plan ids
     if runtime.study is None or runtime._finalized:
         return done
     try:
@@ -969,9 +982,9 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
         loops = _loops_from_plans(runtime)
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001 — journal + finalize, never hang
+    except Exception as e:  # noqa: BLE001  # audit-ok: MJ-c advance must not hang; finalize then return
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
-        return done
+        return done  # audit-ok: paired with finalize_loop_internal_error above (MJ-c total)
     for loop in loops:
         if runtime._finalized:
             break
@@ -989,14 +1002,14 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
                 )
             except LeaseLost:
                 raise
-            except Exception as refuse_exc:  # noqa: BLE001 — refuse path must not hang
+            except Exception as refuse_exc:  # noqa: BLE001  # audit-ok: MJ-c refuse path must not hang; finalize
                 await finalize_loop_internal_error(
                     runtime, exc=refuse_exc, loop=loop
                 )
                 break
         except LeaseLost:
             raise
-        except Exception as e:  # noqa: BLE001 — unexpected: finalize study
+        except Exception as e:  # noqa: BLE001  # audit-ok: MJ-c unexpected → finalize study (total)
             await finalize_loop_internal_error(runtime, exc=e, loop=loop)
             break
     return done
@@ -1022,9 +1035,9 @@ async def resume_pending_loops(runtime: StudyRuntime) -> int:
         return len(got)
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001 — belt-and-suspenders for recover
+    except Exception as e:  # noqa: BLE001  # audit-ok: MJ-c recover must not abort before tick; finalize
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
-        return 0
+        return 0  # audit-ok: paired with finalize_loop_internal_error above (MJ-c total)
 
 def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
     """Rebuild ``_loop_state`` from a PlanExpanded(loop=true) payload."""
@@ -1042,19 +1055,21 @@ def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
     raw_added = payload["added_tasks"]
     if not isinstance(raw_added, list):
         raise JournalFormatError("PlanExpanded(loop): added_tasks must be list")
-    keys: list[str] = []
+    keys: list[str] = []  # audit-ok: structural empty = collecting added task keys
     for t in raw_added:
         if isinstance(t, dict):
             if "task_key" not in t or not isinstance(t["task_key"], str) or not t["task_key"]:
                 raise JournalFormatError("PlanExpanded(loop): added_tasks entry missing task_key")
             keys.append(t["task_key"])
-        else:
-            if not hasattr(t, "task_key"):
-                raise JournalFormatError("PlanExpanded(loop): added_tasks entry missing task_key")
+        elif isinstance(t, TaskSpec):
             tk = t.task_key
             if not isinstance(tk, str) or not tk:
                 raise JournalFormatError("PlanExpanded(loop): added_tasks entry missing task_key")
             keys.append(tk)
+        else:
+            raise JournalFormatError(
+                f"PlanExpanded(loop): added_tasks entry must be dict|TaskSpec, got {type(t).__name__}"
+            )
     st = _loop_state(runtime)
     if lid in st:
         prev = st[lid]
@@ -1103,13 +1118,21 @@ def fold_loop_capped(runtime: Any, payload: dict[str, Any]) -> None:
         row = dict(prev)
     else:
         row = {}
-    row["status"] = "refused" if reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED) else "capped"
+    if reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED):
+        row["status"] = "refused"
+    else:
+        row["status"] = "capped"
     row["iter"] = iter_n
     if "survivors" in payload:
         row["survivors"] = payload["survivors"]
     row["reason"] = reason
     if "detail" in payload and payload["detail"] is not None:
-        row["detail"] = str(payload["detail"])[:DETAIL_MAX_LEN]
+        detail_v = payload["detail"]
+        if not isinstance(detail_v, str):
+            raise JournalFormatError(
+                f"LoopCapped.detail must be str, got {type(detail_v).__name__}"
+            )
+        row["detail"] = detail_v[:DETAIL_MAX_LEN]
     st[lid] = row
     capped = _require_loop_capped(runtime)
     capped[lid] = dict(payload)
@@ -1139,7 +1162,12 @@ def fold_loop_refused(runtime: Any, payload: dict[str, Any]) -> None:
     row["reason"] = reason
     row["iter"] = iter_n
     if "detail" in payload and payload["detail"] is not None:
-        row["detail"] = str(payload["detail"])[:DETAIL_MAX_LEN]
+        detail_v = payload["detail"]
+        if not isinstance(detail_v, str):
+            raise JournalFormatError(
+                f"LoopRefused.detail must be str, got {type(detail_v).__name__}"
+            )
+        row["detail"] = detail_v[:DETAIL_MAX_LEN]
     st[lid] = row
 
 def fold_loop_completed(runtime: Any, payload: dict[str, Any]) -> None:
@@ -1204,14 +1232,18 @@ def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
         allowed=LOOP_CAPPED_REASONS,
         what="ExpansionRefused(loop)",
     )
-    row["status"] = (
-        "refused"
-        if loop_reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED)
-        else "capped"
-    )
+    if loop_reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED):
+        row["status"] = "refused"
+    else:
+        row["status"] = "capped"
     row["reason"] = loop_reason
     if "detail" in payload and payload["detail"] is not None:
-        row["detail"] = str(payload["detail"])[:DETAIL_MAX_LEN]
+        detail_v = payload["detail"]
+        if not isinstance(detail_v, str):
+            raise JournalFormatError(
+                f"ExpansionRefused.detail must be str, got {type(detail_v).__name__}"
+            )
+        row["detail"] = detail_v[:DETAIL_MAX_LEN]
     st[lid] = row
 
 def capped_scope_questions(runtime: Any) -> dict[str, dict[str, Any]]:
@@ -1222,7 +1254,7 @@ def capped_scope_questions(runtime: Any) -> dict[str, dict[str, Any]]:
     ``TerminalReason.INTERNAL_ERROR`` (never map error-path loops to cap).
     """
     capped = _require_loop_capped(runtime)
-    out: dict[str, dict[str, Any]] = {}
+    out: dict[str, dict[str, Any]] = {}  # audit-ok: structural empty = collecting qid→cap
     for _lid, p in capped.items():
         if not isinstance(p, dict):
             raise JournalFormatError(
