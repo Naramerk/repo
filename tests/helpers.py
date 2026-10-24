@@ -35,8 +35,7 @@ def seed_legacy_journal(store: Any, events: list[Any]) -> None:
         if getattr(ev.ts, "tzinfo", None) is None:
             raise JournalFormatError(
                 f"{ev.type}: naive datetime refused: {ev.ts!r}",
-                expected_store_format=None,
-                found_store_format=None,
+                expected_store_format=None, found_store_format=None,
             )
         payload = ev.payload
         if not isinstance(payload, dict):
@@ -47,8 +46,7 @@ def seed_legacy_journal(store: Any, events: list[Any]) -> None:
         if not digest:
             raise JournalFormatError(
                 f"{ev.type}: empty payload_digest",
-                expected_store_format=None,
-                found_store_format=None,
+                expected_store_format=None, found_store_format=None,
             )
         conn.execute(
             "INSERT INTO events(study_id, type, entity_key, idem_key, payload, ts, "
