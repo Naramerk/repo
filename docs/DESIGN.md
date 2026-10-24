@@ -789,7 +789,7 @@ class Profile(BaseModel):
     name: Identifier
     profile_version: StrictInt  # ≥ 1
     roles: dict[RoleName, RoleConfig]
-    mcp_servers: tuple[McpServerConfig, ...]  # unique; server strict → MCP follow-up
+    mcp_servers: tuple[McpServerConfig, ...]  # name uniqueness: McpClientConfig
     routes: dict[Identifier, RouteConfig]
     catalog_extensions: tuple[Identifier, ...]
     alembic: Literal["enabled", "disabled"]
@@ -801,7 +801,7 @@ class ProfilePlugin(Protocol):
 - Профили: `research`, `medicine` (medical + med_tools), `microfluidics`.
 - Плагин не меняет машину состояний и не вешает callbacks. Новый CodeCheck kind — с функцией и схемой; неизвестный kind — ошибка старта.
 - Study: один create для всех профилей; корень до агентов. Тест: `test_r1_every_profile_starts_and_has_root`.
-- import-linter profiles ↛ agents/llm/tools/checks/api/schema; only `mcp.config` + `core.execution.domain` (Budget); `allow_indirect_imports`.
+- import-linter profiles ↛ agents/llm/tools/checks/api/schema; only `mcp.config` + `core.execution.domain` (Budget); targeted ignores only (no `allow_indirect_imports`).
 - P3 YAML: after N1 (#70); JSON mode or refuse lists — no list→tuple shim.
 
 ## 9. API для веба

@@ -59,7 +59,4 @@ class Profile(BaseModel):
         )
         if missing:
             raise ValueError(f"routes reference unknown roles: {missing}")
-        names = [s.name for s in self.mcp_servers]
-        if len(names) != len(set(names)):
-            raise ValueError("mcp_servers names must be unique")
         return self
