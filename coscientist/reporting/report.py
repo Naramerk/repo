@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Self
 from urllib.parse import quote
 
 from pydantic import (
@@ -13,6 +12,7 @@ from pydantic import (
     Field,
     StrictStr,
     field_validator,
+    model_validator,
 )
 
 from coscientist.core.finalize.minimal_report import render_markdown_report
@@ -70,29 +70,54 @@ class ReportRenderInput(BaseModel):
         return v
 
 
-@dataclass(frozen=True, slots=True)
-class ReportView:
-    study_id: str
+class ReportView(BaseModel):
+    """Rendered report DTO — same strict/frozen contract as render inputs."""
+
+    model_config = _FROZEN
+    study_id: StrictStr
     format: ReportFormat
-    body: str
-    media_type: str
+    body: StrictStr
+    media_type: StrictStr
+
+    @model_validator(mode="after")
+    def _media_matches_format(self) -> Self:
+        expected = _MEDIA[self.format]
+        if self.media_type != expected:
+            raise ValueError(
+                f"media_type {self.media_type!r} does not match format {self.format!r}"
+            )
+        return self
+
+
+def parse_report_format(raw: str) -> ReportFormat:
+    """Transport str → ReportFormat; unknown → ReportFormatRefuse."""
+    if raw == "json":
+        return "json"
+    if raw == "md":
+        return "md"
+    if raw == "html":
+        return "html"
+    raise ReportFormatRefuse(
+        f"unsupported report format: {raw!r}", format=raw
+    )
+
+
+def artifact_href(aid: str, config: ReportFormatConfig) -> str:
+    """Shared MD/HTML artifact URL: prefix + percent-encoded id."""
+    return f"{config.artifact_link_prefix}{quote(aid, safe='')}"
 
 
 def _artifacts_appendix(aid: str | None, config: ReportFormatConfig) -> str:
     if aid is None:
         return "## Artifacts\n_None._\n"
-    href = f"{config.artifact_link_prefix}{quote(aid, safe='')}"
-    # Code-span label: aid as-is (no backslash escapes). R16a.1a locks the edge case.
+    href = artifact_href(aid, config)
+    # Code-span label: aid as-is (no backslash escapes). Edge case → #119.
     return f"## Artifacts\n- [`{aid}`]({href})\n"
 
 
 def render_report(
     inp: ReportRenderInput, fmt: ReportFormat, config: ReportFormatConfig
 ) -> tuple[str, str]:
-    if fmt not in _MEDIA:
-        raise ReportFormatRefuse(
-            f"unsupported report format: {fmt!r}", format=str(fmt)
-        )
     md_core = render_markdown_report(inp.report)
     md = f"{md_core}{_artifacts_appendix(inp.report_artifact_id, config)}"
     if fmt == "json":
@@ -113,10 +138,16 @@ def render_report(
     elif fmt == "md":
         body = md
     else:
+        href = (
+            None
+            if inp.report_artifact_id is None
+            else artifact_href(inp.report_artifact_id, config)
+        )
         body = wrap_markdown_html(
             study_id=inp.report.study_id,
             markdown=md,
             report_artifact_id=inp.report_artifact_id,
+            artifact_href=href,
         )
     return body, _MEDIA[fmt]
 

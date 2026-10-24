@@ -8,7 +8,9 @@ from coscientist.reporting.report import (
     ReportingError,
     ReportRenderInput,
     ReportView,
+    artifact_href,
     get_study_report,
+    parse_report_format,
     render_report,
 )
 
@@ -19,7 +21,9 @@ __all__ = [
     "ReportRenderInput",
     "ReportView",
     "ReportingError",
+    "artifact_href",
     "get_study_report",
+    "parse_report_format",
     "render_report",
     "wrap_markdown_html",
 ]
