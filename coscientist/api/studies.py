@@ -526,7 +526,12 @@ async def post_studies(
                     release_user_put_capability,
                 )
 
-                use_inputs = [] if force_refuse is not None else list(body.inputs or [])
+                if force_refuse is not None:
+                    use_inputs: list[Any] = []
+                    client_input_limits = None
+                else:
+                    use_inputs = list(body.inputs or [])
+                    client_input_limits = body.input_limits
                 user_cap = mint_user_put_capability() if use_inputs else None
                 try:
                     created_id = await rt.create_study(
@@ -542,7 +547,7 @@ async def post_studies(
                         inputs=use_inputs,
                         as_of=body.as_of,
                         input_limits=profile_limits,
-                        client_input_limits=(None if force_refuse is not None else body.input_limits),
+                        client_input_limits=client_input_limits,
                         intake_refuse=force_refuse,
                         user_put_capability=user_cap,
                         **create_kwargs,

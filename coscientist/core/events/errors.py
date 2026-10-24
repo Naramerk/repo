@@ -63,7 +63,11 @@ class StudyClosedError(CoreError):
     def __init__(self, study_id: str, event_type: str = ""):
         self.study_id = study_id
         self.event_type = event_type
-        super().__init__(f"study {study_id} is finalized; rejecting {event_type or 'write'}")
+        if event_type:
+            rejected = event_type
+        else:
+            rejected = "write"
+        super().__init__(f"study {study_id} is finalized; rejecting {rejected}")
 
 
 STUDY_NOT_FOUND_REASON = "study_not_found"
