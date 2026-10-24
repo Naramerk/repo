@@ -385,7 +385,9 @@ def claim_nodes_from_attempt(
         attrs["accepted"] = bool(core.get("accepted", False))
         attrs["validity_ok"] = bool(core.get("validity_ok", True))
         role = core.get("check_role", "unknown")
-        attrs["check_role"] = role if role in ("prediction", "validity", "unknown") else "unknown"
+        attrs["check_role"] = (
+            role if role in ("prediction", "validity", "unknown") else "unknown"
+        )
         excl = core.get("exclusion_reason")
         if excl in (
             "validity_failed",
@@ -430,7 +432,9 @@ def claim_nodes_from_attempt(
         if isinstance(core.get("data_digests"), list):
             attrs["data_digests"] = [str(x) for x in core["data_digests"]]
         if isinstance(core.get("criterion_template_ids"), list):
-            attrs["criterion_template_ids"] = [str(x) for x in core["criterion_template_ids"] if x]
+            attrs["criterion_template_ids"] = [
+                str(x) for x in core["criterion_template_ids"] if x
+            ]
         if isinstance(core.get("independence_notes"), list) and core["independence_notes"]:
             attrs["independence_notes"] = [str(x) for x in core["independence_notes"]]
         if core.get("study_id"):
@@ -439,13 +443,17 @@ def claim_nodes_from_attempt(
             attrs["experiment_id"] = str(core["experiment_id"])
         else:
             # attempt_id = "{task_id}#{n}" → experiment_id = task_id
-            attrs["experiment_id"] = attempt_id.rsplit("#", 1)[0] if attempt_id else ""
+            attrs["experiment_id"] = (
+                attempt_id.rsplit("#", 1)[0] if attempt_id else ""
+            )
         if core.get("independence_key"):
             attrs["independence_key"] = str(core["independence_key"])
         else:
             from coscientist.core.claims.verdict import independence_key_for
 
-            attrs["independence_key"] = independence_key_for(experiment_id=str(attrs.get("experiment_id") or ""))
+            attrs["independence_key"] = independence_key_for(
+                experiment_id=str(attrs.get("experiment_id") or "")
+            )
         if "refute_capable" in core:
             attrs["refute_capable"] = bool(core.get("refute_capable"))
         if "severe" in core:
@@ -466,8 +474,14 @@ def claim_nodes_from_attempt(
                     "uses_sesoi": attrs.get("uses_sesoi"),
                     "used_sesoi": attrs.get("used_sesoi"),
                     "predicts_null": attrs.get("predicts_null", False),
-                    "predicted_direction": attrs.get("predicted_direction", "two_sided"),
-                    "effect": (dict(core["effect"]) if isinstance(core.get("effect"), dict) else None),
+                    "predicted_direction": attrs.get(
+                        "predicted_direction", "two_sided"
+                    ),
+                    "effect": (
+                        dict(core["effect"])
+                        if isinstance(core.get("effect"), dict)
+                        else None
+                    ),
                     "severe": None,
                     "criterion_frozen_at_seq": None,
                     "first_cited_evidence_seq": None,
