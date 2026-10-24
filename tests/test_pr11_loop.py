@@ -1192,14 +1192,11 @@ def test_upcast_study_created_max_loop_iter():
 
 def test_upcast_plan_accepted_loops_default():
     v, p = upcast(
-        "PlanAccepted",
-        1,
+        "PlanAccepted", 1,
         {
-            "plan_id": "pl1",
-            "study_id": "st",
-            "revision": 1,
-            "hypothesis_id": None,
-            "tasks": [],
+            "plan_id": "pl1", "study_id": "st", "revision": 1,
+            "hypothesis_id": None, "tasks": [],
+            "hypotheses": {"needed": False, "reason": "test"}, "literature": {"needed": False, "reason": "test"},
         },
     )
     assert v == 12  # G4 Need after PR15 kind v11
@@ -1773,8 +1770,8 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
                                 "max_iter": 2,
                             }
                         ],
-                        "hypotheses": {"needed": False, "reason": "legacy_absent"},
-                        "literature": {"needed": False, "reason": "legacy_absent"},
+                        "hypotheses": {"needed": False, "reason": "test"},
+                        "literature": {"needed": False, "reason": "test"},
                     },
                     ts=rt2.clock.now(),
                     schema_version=PLAN_ACCEPTED_SCHEMA_VERSION,

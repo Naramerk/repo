@@ -944,17 +944,13 @@ register_upcaster("TaskCreated", 11, _task_created_v11_to_v12_output_kind)
 register_upcaster("TaskCreated", 12, _task_created_v12_to_v13_evidence_kind)
 register_upcaster("TaskCreated", 13, _task_created_v13_to_v14_sandbox_freeze)
 def _plan_accepted_v11_to_v12_need(payload: dict[str, Any]) -> dict[str, Any]:
-    """G4: Plan.hypotheses / Plan.literature Need; missing key → legacy_absent.
+    """G4: hypotheses/literature required; missing/null → CatalogError (no invent)."""
+    from coscientist.core.events.errors import CatalogError
 
-    Events must not import ``core.plan.need``. Explicit ``None`` is left alone
-    (fail-closed at Plan validate); only a missing key is filled.
-    """
     out = dict(payload)
-    absent = {"needed": False, "reason": "legacy_absent"}
-    if "hypotheses" not in out:
-        out["hypotheses"] = dict(absent)
-    if "literature" not in out:
-        out["literature"] = dict(absent)
+    for field in ("hypotheses", "literature"):
+        if field not in out or out[field] is None:
+            raise CatalogError(f"PlanAccepted.v12:{field}_required")
     return out
 
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)

@@ -21,6 +21,10 @@ def test_need_reason_required() -> None:
     with pytest.raises(ValidationError, match="Need.reason must be non-empty"):
         Need(needed=True, reason="  ")
     assert Need(needed=False, reason="no").needed is False
+    with pytest.raises(ValidationError, match="valid boolean"):
+        Need.model_validate({"needed": "yes", "reason": "x"})
+    with pytest.raises(ValidationError, match="valid boolean"):
+        Need.model_validate({"needed": 1, "reason": "x"})
 
 
 def test_need_from_plan_blob_corrupt() -> None:
@@ -49,11 +53,21 @@ def test_resolve_omit_refuses() -> None:
         )
 
 
-def test_plan_accepted_upcaster_legacy_absent() -> None:
-    v, out = upcast("PlanAccepted", 11, {"plan_id": "p", "tasks": []})
-    assert v == 12
-    assert out["hypotheses"] == {"needed": False, "reason": "legacy_absent"}
-    assert out["literature"] == {"needed": False, "reason": "legacy_absent"}
+def test_plan_accepted_upcaster_need_required() -> None:
+    """Missing / null Need → typed refuse (no invent)."""
+    from coscientist.core.events.errors import CatalogError
+
+    base = {"plan_id": "p", "tasks": []}
+    hyp = {"needed": False, "reason": "x"}
+    lit = {"needed": True, "reason": "y"}
+    with pytest.raises(CatalogError, match="hypotheses_required"):
+        upcast("PlanAccepted", 11, dict(base))
+    with pytest.raises(CatalogError, match="literature_required"):
+        upcast("PlanAccepted", 11, {**base, "hypotheses": hyp})
+    with pytest.raises(CatalogError, match="hypotheses_required"):
+        upcast("PlanAccepted", 11, {**base, "hypotheses": None, "literature": lit})
+    v, out = upcast("PlanAccepted", 11, {**base, "hypotheses": hyp, "literature": lit})
+    assert v == 12 and out["hypotheses"] == hyp and out["literature"] == lit
 
 
 @pytest.mark.asyncio

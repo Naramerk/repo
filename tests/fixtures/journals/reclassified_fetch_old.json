@@ -69,7 +69,8 @@
             "route": "experiment",
             "depends_on": ["PLAN"]
           }
-        ]
+        ],
+        "hypotheses": {"needed": false, "reason": "test"}, "literature": {"needed": false, "reason": "test"}
       }
     },
     {

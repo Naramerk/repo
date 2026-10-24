@@ -276,7 +276,13 @@ def test_upcast_taskcreated_input_mode_old_default():
 
 
 def test_upcast_planaccepted_questions_default():
-    v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
+    v, p = upcast(
+        "PlanAccepted", 1,
+        {
+            "plan_id": "p", "tasks": [{"task_key": "E1"}],
+            "hypotheses": {"needed": False, "reason": "test"}, "literature": {"needed": False, "reason": "test"},
+        },
+    )
     assert v == 12 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
     assert p.get("rollup") == "all" and p.get("subquestions") == []
 
@@ -293,6 +299,7 @@ def test_upcast_planaccepted_questions_default():
                     "expected_outputs": [{"name": "main", "media_type": "text/plain"}],
                 }
             ],
+            "hypotheses": {"needed": False, "reason": "test"}, "literature": {"needed": False, "reason": "test"},
         },
     )
     assert v2 == 12

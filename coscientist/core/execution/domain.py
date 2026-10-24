@@ -500,11 +500,9 @@ class Study(Frozen):
 
 
 class Need(Frozen):
-    """Planner decision: whether hypotheses/literature are needed (DESIGN §2).
+    """Planner Need (DESIGN §2): reason required; strict bool/str (no coerce)."""
 
-    ``reason`` is always required (non-empty after strip), including when
-    ``needed=False`` — CAPABILITIES #2 / planner decision with reason.
-    """
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     needed: bool
     reason: str = Field(min_length=1)

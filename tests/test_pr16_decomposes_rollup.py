@@ -1540,9 +1540,12 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
 
 def test_upcaster_planaccepted_v9_to_v10_decomposes():
     v, p = upcast(
-        "PlanAccepted",
-        9,
-        {"plan_id": "p", "tasks": [], "questions": [{"id": "Q", "text": "t"}], "loops": []},
+        "PlanAccepted", 9,
+        {
+            "plan_id": "p", "tasks": [], "loops": [],
+            "questions": [{"id": "Q", "text": "t"}],
+            "hypotheses": {"needed": False, "reason": "test"}, "literature": {"needed": False, "reason": "test"},
+        },
     )
     assert v == 12
     assert p["rollup"] == "all"

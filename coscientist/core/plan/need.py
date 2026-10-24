@@ -17,15 +17,12 @@ class PlanNeedRefuse(ValueError):
 def validate_need(need: Need | dict[str, Any]) -> Need:
     """Parse/validate a Need; raise on empty reason or bad shape."""
     if isinstance(need, Need):
-        return Need.model_validate(need.model_dump())
+        return need
     return Need.model_validate(need)
 
 
 def need_from_plan_blob(prev: Mapping[str, Any] | None, field: NeedKind) -> Need:
-    """Carry Need from active plan blob. Missing after upcast = corruption → refuse.
-
-    ``legacy_absent`` is upcaster-only (events layer); never synthesized here.
-    """
+    """Carry Need from active plan blob. Missing after upcast = corruption → refuse."""
     if prev is None or field not in prev or prev[field] is None:
         raise PlanNeedRefuse(f"plan_need_corrupt:missing_{field}")
     return validate_need(prev[field])

@@ -820,6 +820,7 @@ def test_upcast_plan_accepted_shares():
             ],
             "questions": [],
             "expand_after": [],
+            "hypotheses": {"needed": False, "reason": "test"}, "literature": {"needed": False, "reason": "test"},
         },
     )
     assert v >= 7

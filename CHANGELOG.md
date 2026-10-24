@@ -7,8 +7,7 @@
 =======
 ### G4 Need
 
-- `Need` + `Plan.hypotheses`/`literature`; PlanAccepted v12 upcaster (`legacy_absent` for old journals only); `accept_plan` omit → `PlanNeedRefuse` (no silent default). No `Study.require_hypotheses` in this slice. [CAP #2](docs/CAPABILITIES.md); [DESIGN §2](docs/DESIGN.md#2-доменные-типы).
-
+- `Need` (strict) + Plan Needs; PlanAccepted v12 refuses missing/null (no invent); omit → `PlanNeedRefuse`. No `Study.require_hypotheses` here. [CAP #2](docs/CAPABILITIES.md); [DESIGN §2](docs/DESIGN.md#2-доменная-модель).
 
 >>>>>>> 1c0a4e2 (fix(G4): Need + omit→PlanNeedRefuse + NEED_OFF call sites)
 ### Docs — #16/#17 handoff ([report-s3.md](docs/handoff/report-s3.md))
