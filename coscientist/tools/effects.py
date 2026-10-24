@@ -43,11 +43,9 @@ from coscientist.tools.gate import side_effect_allowed
 _TEST_STUDY_ID = "st_test"
 _EFFECT_EVENT_SCHEMA_VERSION = 1
 def _event_type(ev):
-    if getattr(ev, "type", None):  # audit-ok[getattr_default]: effects.py:45 getattr_default
-        return ev.type
     if isinstance(ev, dict):
         return optional_item(ev, "type")
-    return None
+    return ev.type
 
 
 def _output_or_payload(payload):

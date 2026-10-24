@@ -539,10 +539,13 @@ async def materialize_loop_iter(
         tasks=merged,
         questions=list(prev_questions),
         expand_after=expand_after,
-        loops=[
+        loops=(
+            [
             _coerce_model(LoopSpec, x) for x in prev_loops
         ]
-        or [loop], rollup="all")  # audit-ok[or_dict]: loop.py:546 or_dict
+            if prev_loops
+            else [loop]
+        ), rollup="all")
     ed = study.effective_deadline()
     events: list[UnstampedEvent]
     events = []

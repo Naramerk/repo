@@ -572,12 +572,15 @@ class AttemptsMixin:
 
         lim_payload = []
         for lim in limitations:
-            if hasattr(lim, "model_dump"):  # audit-ok[hasattr]: attempts.py:571 hasattr
-                lim_payload.append(lim.model_dump(mode="json"))
-            elif isinstance(lim, dict):
+            if isinstance(lim, dict):
                 lim_payload.append(dict(lim))
             else:
-                raise TypeError(f"limitation must be Limitation|dict, got {type(lim).__name__}")
+                try:
+                    lim_payload.append(lim.model_dump(mode="json"))
+                except AttributeError as e:
+                    raise TypeError(
+                        f"limitation must be Limitation|dict, got {type(lim).__name__}"
+                    ) from e
         share_fields = await attempt_share_fields_or_refuse(self, task)
         if share_fields is None:
             # Zero share / empty pool: task already SKIPPED(budget); no AttemptStarted.

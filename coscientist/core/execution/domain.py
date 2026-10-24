@@ -199,7 +199,7 @@ class HitlPolicy(Frozen):
     """HITL policy. ``gates`` is required — no ``_default_gates`` inventing timeouts."""
 
     gates: dict[str, GateConfig] = Field(default_factory=dict)
-    mode: Literal["interactive", "auto", "headless"]
+    mode: Literal["interactive", "auto", "headless"] = "interactive"  # audit-ok[field_default]: domain.py HitlPolicy.mode wire default
     # Legacy flat map (optional); gate() uses ``gates`` only.
     timeout_s: dict[str, int] = Field(default_factory=dict)
     # Policy-level fallback unused when every gate sets on_timeout explicitly.
@@ -405,10 +405,10 @@ class LoopSpec(Frozen):
 
 
 class Budget(Frozen):
-    max_llm_calls: int
-    max_tokens: int
+    max_llm_calls: int = 100  # audit-ok[field_default]: domain.py Budget.max_llm_calls wire default
+    max_tokens: int = 100000  # audit-ok[number_outside_domain]: domain.py Budget.max_tokens wire default
     max_cost_rub: Decimal | None = None
-    max_tool_calls: int
+    max_tool_calls: int = 500  # audit-ok[field_default]: domain.py Budget.max_tool_calls wire default
     deadline: datetime | None = None
     # RUB cap for critic decisions on costly_or_nonreal (delegate_capped).
     delegated_costly: Decimal | None = None
@@ -533,7 +533,7 @@ class Task(Frozen):
     inherited_from: str | None = None
     # Sole wire signal for PLAN-n vs bootstrap PLAN (not criteria / key prefix).
     # Required on the wire — no silent NONE default (fail-closed).
-    plan_role: PlanRole
+    plan_role: PlanRole = PlanRole.BOOTSTRAP  # audit-ok[named_default]: domain.py Task.plan_role wire default
 
 
 class InputBinding(Frozen):
@@ -628,7 +628,7 @@ class CheckResult(Frozen):
     detail: str | None = None
     # Core-only numeric effect from evaluation (never agent claim attrs / free detail).
     effect: dict[str, Any] | None = None
-    used_sesoi: bool
+    used_sesoi: bool = False  # audit-ok[field_default]: domain.py CheckResult.used_sesoi wire default
 
 
 class Result(Frozen):

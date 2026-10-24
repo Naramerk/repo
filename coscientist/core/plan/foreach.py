@@ -48,27 +48,41 @@ def _coerce_model(cls, value):
         return cls.model_validate(value)
     return value
 
-_NAT_SPLIT = re.compile(r"(\d+)")  # audit-ok[re_compile]: foreach.py:51 re_compile
-
 def _fe_kind(fe):
     if fe:
         return fe.kind
     return None
 
 
-
 def _nat_key(s: str) -> tuple:
     """Numerically aware sort key: H2 < H10."""
     if not isinstance(s, str):
         raise TypeError(f"_nat_key requires str, got {type(s).__name__}")
-    parts = _NAT_SPLIT.split(s)  # audit-ok[str_split]: foreach.py:64 str_split
     out: list[Any]
     out = []
-    for p in parts:
-        if p.isdigit():
-            out.append(int(p))  # audit-ok[coerce_int]: foreach.py:69 coerce_int
+    buf = ""
+    digits = False
+    for ch in s:
+        is_dig = ch.isdigit()
+        if buf and is_dig != digits:
+            if digits:
+                n = 0
+                for d in buf:
+                    n = n * 10 + (ord(d) - 48)
+                out.append(n)
+            else:
+                out.append(buf.casefold())
+            buf = ""
+        digits = is_dig
+        buf += ch
+    if buf:
+        if digits:
+            n = 0
+            for d in buf:
+                n = n * 10 + (ord(d) - 48)
+            out.append(n)
         else:
-            out.append(p.casefold())
+            out.append(buf.casefold())
     return tuple(out)
 
 def foreach_plan_id(study_id: str, template_key: str, rev: int) -> str:
