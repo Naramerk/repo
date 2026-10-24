@@ -343,7 +343,9 @@ async def test_content_type_must_be_allowed() -> None:
         await fetcher.fetch("https://cdn.example/x.js", max_bytes=100, timeout_s=1.0)
 
 
-def _start_http_server(handler_cls: type[http.server.BaseHTTPRequestHandler]) -> tuple[http.server.HTTPServer, int, threading.Thread]:
+def _start_http_server(
+    handler_cls: type[http.server.BaseHTTPRequestHandler],
+) -> tuple[http.server.HTTPServer, int, threading.Thread]:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("127.0.0.1", 0))
