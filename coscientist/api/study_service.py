@@ -17,9 +17,9 @@ def _has_running_loop() -> bool:
     """True iff ``asyncio.get_running_loop()`` succeeds."""
     try:
         asyncio.get_running_loop()
+        return True
     except RuntimeError:
         return False  # audit-ok[except_silent_return]: documented no-loop signal from get_running_loop
-    return True
 
 
 def study_events_db(data_root: Path, study_id: object) -> tuple[str, Path]:
