@@ -19,7 +19,9 @@ def register_upcaster(event_type: str, from_version: int, fn: Upcaster) -> None:
     """Register ``from_version → from_version+1``. Duplicate (type, from_version) raises."""
     bucket = UPCASTERS.setdefault(event_type, {})
     if from_version in bucket:
-        raise ValueError(f"duplicate upcaster for {event_type!r} from_version={from_version}")
+        raise ValueError(
+            f"duplicate upcaster for {event_type!r} from_version={from_version}"
+        )
     bucket[from_version] = fn
 
 
