@@ -19,17 +19,61 @@
         "hitl_policy": {
           "mode": "headless",
           "gates": {
-            "spec_approval": {"enabled": true, "timeout_s": 120, "on_timeout": "delegate"},
-            "plan": {"enabled": true, "timeout_s": 180, "on_timeout": "delegate"},
-            "plan_approval": {"enabled": true, "timeout_s": 180, "on_timeout": "delegate"},
-            "plan_expansion": {"enabled": true, "timeout_s": 180, "on_timeout": "delegate"},
-            "hypotheses": {"enabled": true, "timeout_s": 1800, "on_timeout": "delegate"},
-            "costly_or_nonreal": {"enabled": true, "timeout_s": 1800, "on_timeout": "fail"},
-            "report": {"enabled": true, "timeout_s": 1800, "on_timeout": "delegate"},
-            "result_acceptance": {"enabled": true, "timeout_s": 1800, "on_timeout": "delegate"},
-            "skip_task": {"enabled": true, "timeout_s": 1800, "on_timeout": "delegate"},
-            "budget": {"enabled": true, "timeout_s": 1800, "on_timeout": "delegate"},
-            "side_effect": {"enabled": true, "timeout_s": 1800, "on_timeout": "fail"}
+            "spec_approval": {
+              "enabled": true,
+              "timeout_s": 120,
+              "on_timeout": "delegate"
+            },
+            "plan": {
+              "enabled": true,
+              "timeout_s": 180,
+              "on_timeout": "delegate"
+            },
+            "plan_approval": {
+              "enabled": true,
+              "timeout_s": 180,
+              "on_timeout": "delegate"
+            },
+            "plan_expansion": {
+              "enabled": true,
+              "timeout_s": 180,
+              "on_timeout": "delegate"
+            },
+            "hypotheses": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "delegate"
+            },
+            "costly_or_nonreal": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "fail"
+            },
+            "report": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "delegate"
+            },
+            "result_acceptance": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "delegate"
+            },
+            "skip_task": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "delegate"
+            },
+            "budget": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "delegate"
+            },
+            "side_effect": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "fail"
+            }
           },
           "timeout_s": {
             "spec_approval": 120,
@@ -67,7 +111,9 @@
             "title": "e1",
             "goal": "g",
             "route": "experiment",
-            "depends_on": ["PLAN"]
+            "depends_on": [
+              "PLAN"
+            ]
           }
         ]
       }
@@ -86,7 +132,9 @@
           "title": "e1",
           "goal": "g",
           "route": "experiment",
-          "depends_on": ["PLAN"]
+          "depends_on": [
+            "PLAN"
+          ]
         },
         "state": "PENDING",
         "outcome": null,
@@ -104,8 +152,13 @@
       "ts": "2024-01-01T00:00:03+00:00",
       "payload": {
         "attempt_id": "att_lit",
+        "n": 1,
+        "dispatch_id": "dispatch:att_lit",
+        "route_returned": false,
+        "closed": false,
+        "provenance": "real",
         "task_id": "st_reclass_old/E1",
-        "task_key": "E1",
+        "study_id": "st_reclass_old",
         "inputs": [],
         "tainted_context": false
       }
