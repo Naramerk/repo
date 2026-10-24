@@ -50,9 +50,7 @@ class _StubSession:
 
 
 def _ctx() -> CallCtx:
-    return CallCtx(
-        study_id="st", task_key="T0", attempt_id="att#1", hitl_policy=HitlPolicy()
-    )
+    return CallCtx(study_id="st", task_key="T0", attempt_id="att#1", hitl_policy=HitlPolicy())
 
 
 def _profile(**extra: Any) -> McpToolProfile:
@@ -90,25 +88,19 @@ def test_mcp_tool_profile_rejects_negative_max_retries() -> None:
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError, match="max_retries"):
-        McpToolProfile(
-            effect="read", is_fetch=False, idempotent=True, max_retries=-1
-        )
+        McpToolProfile(effect="read", is_fetch=False, idempotent=True, max_retries=-1)
 
 
 @pytest.mark.asyncio
 async def test_mcp_bound_tool_init_uses_session_call_tool_timeout_s() -> None:
     async with FakeStdioServer(default_handler) as server:
-        client = make_client(
-            make_config(call_tool_timeout_s=3.5), file_fetcher=_NoFetch()
-        )
+        client = make_client(make_config(call_tool_timeout_s=3.5), file_fetcher=_NoFetch())
         session = await client.connect_memory("fake", server.client)
         try:
             tool = McpBoundTool(
                 session=session,
                 server_name="fake",
-                mcp_tool=McpTool(
-                    name="echo", description="e", input_schema={"type": "object"}
-                ),
+                mcp_tool=McpTool(name="echo", description="e", input_schema={"type": "object"}),
                 profile=_profile(
                     effect="external_effect",
                     is_fetch=True,
@@ -131,16 +123,12 @@ async def test_mcp_bound_tool_init_uses_session_call_tool_timeout_s() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_bound_tool_call_returns_content_digest() -> None:
-    expected = content_digest(
-        {"content": [{"type": "text", "text": "ping"}], "isError": False}
-    )
+    expected = content_digest({"content": [{"type": "text", "text": "ping"}], "isError": False})
     async with FakeStdioServer(default_handler) as server:
         client = make_client(make_config(), file_fetcher=_NoFetch())
         session = await client.connect_memory("fake", server.client)
         try:
-            tools = await tools_from_mcp_session(
-                session, server_name="fake", bindings=_echo_bindings()
-            )
+            tools = await tools_from_mcp_session(session, server_name="fake", bindings=_echo_bindings())
             out = await tools[("fake", "echo")].call({"text": "ping"}, _ctx())
             assert out.data["result"]["content"][0]["text"] == "ping"
             assert out.data["content_digest"] == expected
@@ -162,9 +150,7 @@ async def test_mcp_bound_tool_call_is_error_includes_result_and_digest() -> None
         client = make_client(make_config(), file_fetcher=_NoFetch())
         session = await client.connect_memory("fake", server.client)
         try:
-            tools = await tools_from_mcp_session(
-                session, server_name="fake", bindings=_echo_bindings()
-            )
+            tools = await tools_from_mcp_session(session, server_name="fake", bindings=_echo_bindings())
             with pytest.raises(ToolError, match="isError") as ei:
                 await tools[("fake", "echo")].call({"text": "x"}, _ctx())
             assert ei.value.kind == "opaque"
@@ -214,9 +200,7 @@ async def test_tools_from_mcp_session_returns_keyed_tools() -> None:
         client = make_client(make_config(), file_fetcher=_NoFetch())
         session = await client.connect_memory("fake", server.client)
         try:
-            tools = await tools_from_mcp_session(
-                session, server_name="fake", bindings=_echo_bindings()
-            )
+            tools = await tools_from_mcp_session(session, server_name="fake", bindings=_echo_bindings())
             assert list(tools) == [("fake", "echo")]
             assert tools[("fake", "echo")].spec.name == "fake:echo"
         finally:
@@ -230,9 +214,7 @@ async def test_tools_from_mcp_session_rejects_server_name_mismatch() -> None:
         session = await client.connect_memory("fake", server.client)
         try:
             with pytest.raises(McpAdapterError, match="server_name"):
-                await tools_from_mcp_session(
-                    session, server_name="other", bindings=_echo_bindings()
-                )
+                await tools_from_mcp_session(session, server_name="other", bindings=_echo_bindings())
         finally:
             await session.aclose()
 
@@ -267,9 +249,7 @@ async def test_tools_from_mcp_session_rejects_extra_binding() -> None:
 
 @pytest.mark.asyncio
 async def test_tools_from_mcp_session_name_collision_across_servers() -> None:
-    async with FakeStdioServer(default_handler) as s1, FakeStdioServer(
-        default_handler
-    ) as s2:
+    async with FakeStdioServer(default_handler) as s1, FakeStdioServer(default_handler) as s2:
         c1 = make_client(
             make_config(
                 servers=(
@@ -301,12 +281,8 @@ async def test_tools_from_mcp_session_name_collision_across_servers() -> None:
         sess1 = await c1.connect_memory("alpha", s1.client)
         sess2 = await c2.connect_memory("beta", s2.client)
         try:
-            t1 = await tools_from_mcp_session(
-                sess1, server_name="alpha", bindings=_echo_bindings()
-            )
-            t2 = await tools_from_mcp_session(
-                sess2, server_name="beta", bindings=_echo_bindings()
-            )
+            t1 = await tools_from_mcp_session(sess1, server_name="alpha", bindings=_echo_bindings())
+            t2 = await tools_from_mcp_session(sess2, server_name="beta", bindings=_echo_bindings())
             merged = {**t1, **t2}
             assert set(merged) == {("alpha", "echo"), ("beta", "echo")}
             assert merged[("alpha", "echo")].spec.name == "alpha:echo"
@@ -348,9 +324,7 @@ async def test_tools_from_mcp_session_per_tool_profiles() -> None:
         client = make_client(make_config(), file_fetcher=_NoFetch())
         session = await client.connect_memory("fake", server.client)
         try:
-            tools = await tools_from_mcp_session(
-                session, server_name="fake", bindings=bindings
-            )
+            tools = await tools_from_mcp_session(session, server_name="fake", bindings=bindings)
             assert tools[("fake", "read_t")].spec.effect == "read"
             assert tools[("fake", "read_t")].spec.max_retries == 0
             assert tools[("fake", "write_t")].spec.effect == "write"
@@ -410,9 +384,7 @@ async def test_bind_mcp_server_tools_connects_via_client() -> None:
         )
     )
     client = make_client(cfg, file_fetcher=_NoFetch())
-    session, tools = await bind_mcp_server_tools(
-        client, "echo", bindings=_echo_bindings()
-    )
+    session, tools = await bind_mcp_server_tools(client, "echo", bindings=_echo_bindings())
     try:
         assert list(tools) == [("echo", "echo")]
         out = await tools[("echo", "echo")].call({"text": "bound"}, _ctx())
@@ -422,7 +394,7 @@ async def test_bind_mcp_server_tools_connects_via_client() -> None:
         await session.aclose()
 
 
-def test_import_contract_allows_only_mcp_adapter() -> None:
+def test_import_contract_allows_mcp_adapter_and_router() -> None:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text())
     contract = next(
         c
@@ -431,7 +403,8 @@ def test_import_contract_allows_only_mcp_adapter() -> None:
     )
     assert "coscientist.tools" in contract["source_modules"]
     assert contract["forbidden_modules"] == ["coscientist.mcp"]
-    assert contract["ignore_imports"] == [
-        "coscientist.tools.mcp_adapter -> coscientist.mcp.*"
-    ]
+    assert set(contract["ignore_imports"]) == {
+        "coscientist.tools.mcp_adapter -> coscientist.mcp.*",
+        "coscientist.tools.router -> coscientist.mcp.*",
+    }
     assert contract["unmatched_ignore_imports_alerting"] == "error"

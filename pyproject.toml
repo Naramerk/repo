@@ -146,6 +146,7 @@ source_modules = [
 forbidden_modules = ["coscientist.mcp"]
 ignore_imports = [
   "coscientist.tools.mcp_adapter -> coscientist.mcp.*",
+  "coscientist.tools.router -> coscientist.mcp.*",
 ]
 unmatched_ignore_imports_alerting = "error"
 
