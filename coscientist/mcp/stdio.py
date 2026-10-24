@@ -13,6 +13,7 @@ from coscientist.mcp.errors import (
     McpTimeoutError,
     McpTransportError,
 )
+from coscientist.mcp.runtime import AsyncSleep, AsyncWaitFor, Clock
 
 
 class StdioTransport:
@@ -28,6 +29,9 @@ class StdioTransport:
         read_chunk_bytes: int,
         max_stderr_bytes: int,
         pgid: int,
+        clock: Clock,
+        sleep: AsyncSleep,
+        wait_for: AsyncWaitFor,
     ) -> None:
         self._proc = proc
         self._terminate_grace_s = terminate_grace_s
@@ -36,6 +40,9 @@ class StdioTransport:
         self._read_chunk_bytes = read_chunk_bytes
         self._max_stderr_bytes = max_stderr_bytes
         self._pgid = pgid
+        self._clock = clock
+        self._sleep = sleep
+        self._wait_for = wait_for
         self._closed = False
         self._buf = bytearray()
         self._stderr_task: asyncio.Task[None] | None = None
@@ -55,6 +62,9 @@ class StdioTransport:
         process_group_poll_interval_s: float,
         read_chunk_bytes: int,
         max_stderr_bytes: int,
+        clock: Clock,
+        sleep: AsyncSleep,
+        wait_for: AsyncWaitFor,
     ) -> StdioTransport:
         env = _child_env(env_keys)
         try:
@@ -88,6 +98,9 @@ class StdioTransport:
             read_chunk_bytes=read_chunk_bytes,
             max_stderr_bytes=max_stderr_bytes,
             pgid=pgid,
+            clock=clock,
+            sleep=sleep,
+            wait_for=wait_for,
         )
 
     async def send(self, message: bytes) -> None:
@@ -118,9 +131,9 @@ class StdioTransport:
                 limit=self._max_stderr_bytes,
             )
         try:
-            return await asyncio.wait_for(
+            return await self._wait_for(
                 self._read_line(max_bytes=max_bytes),
-                timeout=timeout_s,
+                timeout_s=timeout_s,
             )
         except TimeoutError as exc:
             raise McpTimeoutError("stdio receive exceeded configured timeout") from exc
@@ -139,20 +152,28 @@ class StdioTransport:
     async def aclose(self) -> None:
         if self._closed:
             return
+        # _closed only after a full successful cleanup so cancel/error can retry.
+        try:
+            await _reap_process_group(
+                self._proc,
+                pgid=self._pgid,
+                terminate_grace_s=self._terminate_grace_s,
+                kill_grace_s=self._kill_grace_s,
+                process_group_poll_interval_s=self._process_group_poll_interval_s,
+                clock=self._clock,
+                sleep=self._sleep,
+                wait_for=self._wait_for,
+            )
+        finally:
+            if self._stderr_task is not None:
+                task = self._stderr_task
+                self._stderr_task = None
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
         self._closed = True
-        await _reap_process_group(
-            self._proc,
-            pgid=self._pgid,
-            terminate_grace_s=self._terminate_grace_s,
-            kill_grace_s=self._kill_grace_s,
-            process_group_poll_interval_s=self._process_group_poll_interval_s,
-        )
-        if self._stderr_task is not None:
-            self._stderr_task.cancel()
-            try:
-                await self._stderr_task
-            except asyncio.CancelledError:
-                pass
 
     async def _drain_stderr(self) -> None:
         """Keep reading stderr forever; past max_stderr_bytes, discard and flag overflow."""
@@ -223,6 +244,9 @@ async def _reap_process_group(
     terminate_grace_s: float,
     kill_grace_s: float,
     process_group_poll_interval_s: float,
+    clock: Clock,
+    sleep: AsyncSleep,
+    wait_for: AsyncWaitFor,
 ) -> None:
     """Always signal the process group (even if the leader already exited)."""
     await _close_subprocess_pipes(proc)
@@ -230,20 +254,19 @@ async def _reap_process_group(
     _killpg(pgid, signal.SIGTERM)
     if proc.returncode is None:
         try:
-            await asyncio.wait_for(proc.wait(), timeout=terminate_grace_s)
+            await wait_for(proc.wait(), timeout_s=terminate_grace_s)
         except TimeoutError:
             pass
     else:
         # Leader already gone — one poll interval for grandchildren, not full grace.
-        await asyncio.sleep(process_group_poll_interval_s)
+        await sleep(process_group_poll_interval_s)
 
     _killpg(pgid, signal.SIGKILL)
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + kill_grace_s
+    deadline = clock.monotonic() + kill_grace_s
     while True:
         if proc.returncode is None:
             try:
-                await asyncio.wait_for(proc.wait(), timeout=process_group_poll_interval_s)
+                await wait_for(proc.wait(), timeout_s=process_group_poll_interval_s)
             except TimeoutError:
                 pass
         try:
@@ -256,10 +279,10 @@ async def _reap_process_group(
                 f"process group probe failed after SIGKILL: {exc}",
                 retryable=False,
             ) from exc
-        if loop.time() >= deadline:
+        if clock.monotonic() >= deadline:
             await _close_subprocess_pipes(proc)
             raise McpTimeoutError("stdio process group still alive after SIGKILL within kill_grace_s")
-        await asyncio.sleep(process_group_poll_interval_s)
+        await sleep(process_group_poll_interval_s)
 
 
 async def _close_subprocess_pipes(proc: asyncio.subprocess.Process) -> None:

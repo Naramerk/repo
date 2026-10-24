@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from coscientist.mcp.errors import McpTimeoutError, McpTransportError
+from coscientist.mcp.errors import McpSsrfError, McpTimeoutError, McpTransportError
 from coscientist.mcp.ssrf import format_host_header, rewrite_url_host
 
 
@@ -81,8 +81,13 @@ class HttpxTransport:
         connect_ip: str | None,
         server_hostname: str | None = None,
     ) -> HttpxStream:
-        parsed = urlparse(url)
-        original_host = parsed.hostname
+        try:
+            parsed = urlparse(url)
+            original_host = parsed.hostname
+            parsed_port = parsed.port
+            parsed_scheme = parsed.scheme.lower()
+        except (ValueError, UnicodeError) as exc:
+            raise McpSsrfError(f"URL parse failed: {exc}", uri=url) from exc
         if original_host is None:
             raise McpTransportError("URL has no hostname", retryable=False)
 
@@ -92,7 +97,7 @@ class HttpxTransport:
             sni = server_hostname if server_hostname is not None else original_host
             hdrs.setdefault(
                 "Host",
-                format_host_header(sni, parsed.port, scheme=parsed.scheme.lower()),
+                format_host_header(sni, parsed_port, scheme=parsed_scheme),
             )
             extensions: dict[str, object] = {"sni_hostname": sni}
         else:

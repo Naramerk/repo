@@ -113,13 +113,32 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "mcp must not import coscientist.core"
+name = "mcp must not import coscientist.core, tools, agents, api, llm, checks, experimental"
 type = "forbidden"
 source_modules = ["coscientist.mcp"]
-forbidden_modules = ["coscientist.core"]
+forbidden_modules = [
+  "coscientist.core",
+  "coscientist.tools",
+  "coscientist.agents",
+  "coscientist.api",
+  "coscientist.llm",
+  "coscientist.checks",
+  "coscientist.experimental",
+]
 
 [[tool.importlinter.contracts]]
-name = "httpx is only allowed in coscientist.mcp"
+name = "agents, api, tools, llm must not import coscientist.mcp"
+type = "forbidden"
+source_modules = [
+  "coscientist.agents",
+  "coscientist.api",
+  "coscientist.tools",
+  "coscientist.llm",
+]
+forbidden_modules = ["coscientist.mcp"]
+
+[[tool.importlinter.contracts]]
+name = "httpx is only allowed in coscientist.mcp.httpx_transport"
 type = "forbidden"
 source_modules = [
   "coscientist.core",
@@ -130,9 +149,14 @@ source_modules = [
   "coscientist.agents",
   "coscientist.api",
   "coscientist.schema",
+  "coscientist.mcp",
   "web",
 ]
 forbidden_modules = ["httpx"]
+ignore_imports = [
+  "coscientist.mcp.httpx_transport -> httpx",
+]
+unmatched_ignore_imports_alerting = "error"
 
 [[tool.importlinter.contracts]]
 name = "agents layer above tools and llm"

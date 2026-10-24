@@ -186,7 +186,7 @@ async def test_list_tools_max_pages_without_repeat() -> None:
             file_fetcher=RecordingFetcher({}),
         )
         session = await client.connect_memory("fake", server.client)
-        with pytest.raises(McpProtocolError) as ei:
+        with pytest.raises(McpProtocolError, match="max_list_tools_pages") as ei:
             await session.list_tools()
         assert "max_list_tools_pages" in ei.value.detail
 
@@ -251,7 +251,7 @@ async def test_jsonrpc_error_keeps_message_and_data() -> None:
     async with FakeStdioServer(handler) as server:
         client = make_client(make_config(), file_fetcher=RecordingFetcher({}))
         session = await client.connect_memory("fake", server.client)
-        with pytest.raises(McpProtocolError) as ei:
+        with pytest.raises(McpProtocolError, match="tool blew up") as ei:
             await session.call_tool("echo", {})
         assert ei.value.rpc_code == -32000
         assert ei.value.rpc_message == "tool blew up"
@@ -1248,6 +1248,6 @@ async def test_stdio_missing_env_key_names_only(monkeypatch: pytest.MonkeyPatch)
         )
     )
     client = make_client(cfg, file_fetcher=RecordingFetcher({}))
-    with pytest.raises(McpConfigError) as ei:
+    with pytest.raises(McpConfigError, match="COSCI_MCP_MISSING_SECRET") as ei:
         await client.connect("needs-secret")
     assert "COSCI_MCP_MISSING_SECRET" in str(ei.value)

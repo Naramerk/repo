@@ -97,6 +97,9 @@ class McpClientConfig(BaseModel):
     max_response_bytes: int = Field(ge=1)
     max_file_bytes: int = Field(ge=1)
     file_fetch_timeout_s: float
+    max_files_per_call: int = Field(ge=1)
+    max_files_total_bytes: int = Field(ge=1)
+    files_fetch_timeout_s: float
     fetch_uri_schemes: tuple[str, ...]
     max_redirect_hops: int = Field(ge=0)
     max_list_tools_pages: int = Field(ge=1)
@@ -117,6 +120,7 @@ class McpClientConfig(BaseModel):
         "kill_grace_s",
         "process_group_poll_interval_s",
         "file_fetch_timeout_s",
+        "files_fetch_timeout_s",
     )
     @classmethod
     def _positive_finite(cls, v: float) -> float:

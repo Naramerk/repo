@@ -7,6 +7,8 @@ from typing import Any
 
 import rfc8785
 
+from coscientist.mcp.errors import McpError
+
 
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -14,4 +16,8 @@ def sha256_hex(data: bytes) -> str:
 
 def content_digest(result: dict[str, Any]) -> str:
     """JCS-canonical digest of an MCP result object (DESIGN §9 / input snapshot)."""
-    return sha256_hex(rfc8785.dumps(result))
+    try:
+        canonical = rfc8785.dumps(result)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise McpError("JCS canonicalization failed for MCP result") from exc
+    return sha256_hex(canonical)
