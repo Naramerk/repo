@@ -114,7 +114,7 @@ class LocalProjectMixin:
             drop: list[str] = []
             for k, m in reqs.items():
                 if not isinstance(m, dict) or "after_task" not in m:
-                    continue
+                    raise JournalFormatError(f"_expand_requests[{k!r}] corrupt")
                 if m["after_task"] == after_task:
                     drop.append(k)
             for k in drop:
@@ -127,20 +127,22 @@ class LocalProjectMixin:
         elif ev.type == "StudyRefused":
             if "reason" not in p:
                 raise JournalFormatError("StudyRefused: missing reason")
+            if "classifier_error" not in p:
+                raise JournalFormatError("StudyRefused: missing classifier_error")
             self._intake_refusal = IntakeRefuse(
                 kind=RefusalKind(p["kind"]),
                 reason=str(p["reason"]),
-                classifier_error=bool(p["classifier_error"])
-                if "classifier_error" in p
-                else False,
+                classifier_error=bool(p["classifier_error"]),
             )
         elif ev.type == "BudgetDebited":
             if "spent_rub" not in p:
                 raise JournalFormatError("BudgetDebited: missing spent_rub")
             spent = Decimal(str(p["spent_rub"]))
             self._study_spent_rub += spent
-            tid = p.get("task_id")
-            if tid:
+            if "task_id" in p:
+                tid = p["task_id"]
+                if not isinstance(tid, str) or not tid:
+                    raise JournalFormatError("BudgetDebited: empty task_id")
                 raw_spent = getattr(self, "_task_spent_rub", None)
                 if raw_spent is None:
                     raw_spent = {}
@@ -149,8 +151,11 @@ class LocalProjectMixin:
                     raise JournalFormatError(
                         f"_task_spent_rub must be dict, got {type(raw_spent).__name__}"
                     )
-                prev = raw_spent[str(tid)] if str(tid) in raw_spent else Decimal("0")
-                raw_spent[str(tid)] = Decimal(str(prev)) + spent
+                key = str(tid)
+                if key in raw_spent:
+                    raw_spent[key] = Decimal(str(raw_spent[key])) + spent
+                else:
+                    raw_spent[key] = spent
         elif ev.type == "BudgetSharesAdjusted":
             from coscientist.core.plan.share_alloc import fold_budget_shares_adjusted
 
@@ -235,10 +240,15 @@ class LocalProjectMixin:
                 refusals.append(dict(p))
             else:
                 self._expansion_refusals = [dict(p)]
-            after_raw = p["after_task"] if "after_task" in p else None
-            after_clear = str(after_raw) if isinstance(after_raw, str) and after_raw else None
+            if "after_task" not in p:
+                raise JournalFormatError("ExpansionRefused: missing after_task")
+            after_raw = p["after_task"]
+            if not isinstance(after_raw, str) or not after_raw:
+                raise JournalFormatError(
+                    "ExpansionRefused: after_task required non-empty"
+                )
             self._clear_expand_request(
-                after_task=after_clear,
+                after_task=after_raw,
                 plan_key=p.get("plan_key"),
             )
             # PR11: loop refuse must restore status on replay.
@@ -303,7 +313,7 @@ class LocalProjectMixin:
             elif ev.entity_key:
                 art_id = str(ev.entity_key)
             else:
-                art_id = ""
+                raise JournalFormatError("ArtifactRegistered: missing artifact_id")
             kind = p.get("kind")
             if art_id and kind and bool(p.get("stamped")):
                 arts = getattr(self, "artifacts", None)
@@ -405,8 +415,9 @@ class LocalProjectMixin:
                 self._expand_pending.add(after)
             else:
                 if "replan_allocated_s" in p:
-                    alloc = float(p["replan_allocated_s"])
-                    self._replan_used_s = float(self._replan_used_s) + alloc
+                    raise JournalFormatError(
+                        "TaskCreated: replan_allocated_s only valid when plan_role=plan_n"
+                    )
                 if after is not None:
                     raise JournalFormatError(
                         "TaskCreated: expand_after_task only valid when plan_role=plan_n"

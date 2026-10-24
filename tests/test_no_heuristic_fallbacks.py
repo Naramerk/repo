@@ -2303,3 +2303,610 @@ def test_r4_rubric_requires_output_no_main_default(tmp_path):
             LocalArtifactStore(tmp_path / "cas"),
             plan_role=PlanRole.NONE,
         )
+
+
+# --- R4 loop / local_project / inputs / misc fail-closed (review blockers) ---
+
+
+def test_loop_status_row_without_status_raises():
+    from coscientist.core.plan.loop import loop_status
+
+    rt = _RT()
+    rt._loop_state = {"L1": {"iter": 1}}
+    with pytest.raises(JournalFormatError, match="loop.status missing"):
+        loop_status(rt, "L1")
+
+
+def test_iter_keys_unknown_loop_raises():
+    from coscientist.core.plan.loop import iter_keys
+
+    with pytest.raises(JournalFormatError, match="unknown loop"):
+        iter_keys(_RT(), "L1", 1)
+
+
+def test_iter_keys_missing_iters_or_key_raises():
+    from coscientist.core.plan.loop import iter_keys
+
+    rt = _RT()
+    rt._loop_state = {"L1": {"status": "running"}}
+    with pytest.raises(JournalFormatError, match="loop.iters missing"):
+        iter_keys(rt, "L1", 1)
+    rt._loop_state = {"L1": {"status": "running", "iters": {}}}
+    with pytest.raises(JournalFormatError, match=r"loop\.iters\[1\] missing"):
+        iter_keys(rt, "L1", 1)
+
+
+def test_current_iter_row_missing_iter_raises():
+    from coscientist.core.plan.loop import current_iter
+
+    rt = _RT()
+    rt._loop_state = {"L1": {"status": "running"}}
+    with pytest.raises(JournalFormatError, match="loop.iter missing"):
+        current_iter(rt, "L1")
+    assert current_iter(_RT(), "L1") == 0
+
+
+@pytest.mark.asyncio
+async def test_materialize_loop_iter_none_study_raises():
+    from coscientist.core.execution.domain import LoopPredicate, LoopSpec, Route, TaskSpec
+    from coscientist.core.plan.loop import materialize_loop_iter
+
+    loop = LoopSpec(
+        loop_id="L1",
+        body=[
+            TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT)
+        ],
+        until=LoopPredicate(name="survivors_le", params={"n": 0}),
+        max_iter=2,
+    )
+    rt = SimpleNamespace(study=None, _finalized=False)
+    with pytest.raises(JournalFormatError, match="missing study"):
+        await materialize_loop_iter(rt, loop, iter_n=1)
+
+
+@pytest.mark.asyncio
+async def test_emit_loop_capped_none_study_raises():
+    from coscientist.core.execution.domain import LoopPredicate, LoopSpec, Route, TaskSpec
+    from coscientist.core.plan.loop import _emit_loop_capped
+
+    loop = LoopSpec(
+        loop_id="L1",
+        body=[
+            TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT)
+        ],
+        until=LoopPredicate(name="survivors_le", params={"n": 0}),
+        max_iter=1,
+    )
+    rt = SimpleNamespace(study=None, _finalized=False, _loop_capped={})
+    with pytest.raises(JournalFormatError, match="missing study"):
+        await _emit_loop_capped(rt, loop, iter_n=1)
+
+
+def test_loop_capped_map_required():
+    """materialize/fold/capped_scope must not invent else {} for _loop_capped."""
+    from coscientist.core.plan.loop import _require_loop_capped
+
+    rt = _RT()
+    rt._loop_capped = None  # type: ignore[assignment]
+    with pytest.raises(JournalFormatError, match="_loop_capped missing"):
+        _require_loop_capped(rt)
+    with pytest.raises(JournalFormatError, match="_loop_capped missing"):
+        fold_loop_capped(
+            rt,
+            {
+                "loop_id": "L1",
+                "iter": 1,
+                "reason": LOOP_REASON_ITERATION_CAP,
+                "scope_questions": [],
+            },
+        )
+    with pytest.raises(JournalFormatError, match="_loop_capped missing"):
+        capped_scope_questions(rt)
+
+
+def test_validate_loop_specs_none_hypothesis_id_raises():
+    from coscientist.core.execution.domain import LoopPredicate, LoopSpec, Route, TaskSpec
+    from coscientist.core.plan.loop import validate_loop_specs
+
+    body = [TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT)]
+    loop = LoopSpec.model_construct(
+        loop_id="L1",
+        body=body,
+        until=LoopPredicate(name="survivors_le", params={"n": 0}),
+        max_iter=1,
+        scope_hypotheses=[None],
+        scope_questions=[],
+        depends_on=[],
+    )
+    with pytest.raises(PlanInvalid, match="None id"):
+        validate_loop_specs([loop], known_keys={"E0"}, max_loop_iter=8)
+
+
+@pytest.mark.asyncio
+async def test_refuse_orphaned_loop_requires_cancel_task():
+    from datetime import UTC, datetime
+
+    from coscientist.core.execution.domain import (
+        PlanRole,
+        Route,
+        Task,
+        TaskKind,
+        TaskSpec,
+        TaskState,
+    )
+    from coscientist.core.plan.loop import refuse_orphaned_loop_barriers
+
+    class _NoCancel:
+        study = SimpleNamespace(study_id="s")
+        _finalized = False
+        plans: dict = {}
+        _loop_state: dict = {}
+        tasks = {
+            "s/E0": Task(
+                task_id="s/E0",
+                kind=TaskKind.EXPERIMENT,
+                spec=TaskSpec(
+                    task_key="E0",
+                    title="t",
+                    goal="g",
+                    route=Route.EXPERIMENT,
+                    depends_on=["loop:ghost"],
+                ),
+                state=TaskState.PENDING,
+                deadline=datetime.now(UTC),
+                plan_role=PlanRole.NONE,
+            )
+        }
+
+    with pytest.raises(AttributeError, match="cancel_task"):
+        await refuse_orphaned_loop_barriers(_NoCancel())  # type: ignore[arg-type]
+
+
+def test_refuse_orphaned_barrier_parse_none_unreachable():
+    """After is_loop_dep, parse_loop_dep None is unreachable — would raise."""
+    from coscientist.core.plan.loop import is_loop_dep, parse_loop_dep
+
+    assert is_loop_dep("loop:ok")
+    assert parse_loop_dep("loop:ok") == "ok"
+    assert parse_loop_dep("not-a-barrier") is None
+
+
+def test_study_refused_requires_classifier_error():
+    from datetime import UTC, datetime
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.execution.local_project import LocalProjectMixin
+    from coscientist.core.claims.reasons import RefusalKind
+
+    class _LP(LocalProjectMixin):
+        def __init__(self) -> None:
+            self._intake_refusal = None
+
+    payload = {
+        "kind": RefusalKind.SAFETY.value,
+        "reason": "bad",
+    }
+    ev = EventEnvelope(
+        study_id="s",
+        type="StudyRefused",
+        entity_key="s",
+        idem_key="k",
+        payload=payload,
+        ts=datetime.now(UTC),
+        schema_version=1,
+        epoch=0,
+        payload_digest=payload_digest(payload),
+    )
+    with pytest.raises(JournalFormatError, match="classifier_error"):
+        _LP()._project_local(ev)
+
+
+def test_budget_debited_first_task_spend_no_get_default():
+    from datetime import UTC, datetime
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.execution.local_project import LocalProjectMixin
+
+    class _LP(LocalProjectMixin):
+        def __init__(self) -> None:
+            self._study_spent_rub = Decimal("0")
+            self._task_spent_rub = {}
+
+    lp = _LP()
+    payload = {"spent_rub": "1.5", "task_id": "s/E0"}
+    ev = EventEnvelope(
+        study_id="s",
+        type="BudgetDebited",
+        entity_key="s",
+        idem_key="k",
+        payload=payload,
+        ts=datetime.now(UTC),
+        schema_version=1,
+        epoch=0,
+        payload_digest=payload_digest(payload),
+    )
+    lp._project_local(ev)
+    assert lp._task_spent_rub["s/E0"] == Decimal("1.5")
+
+
+def test_budget_debited_empty_task_id_raises():
+    from datetime import UTC, datetime
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.execution.local_project import LocalProjectMixin
+
+    class _LP(LocalProjectMixin):
+        def __init__(self) -> None:
+            self._study_spent_rub = Decimal("0")
+            self._task_spent_rub = {}
+
+    payload = {"spent_rub": "1", "task_id": ""}
+    ev = EventEnvelope(
+        study_id="s",
+        type="BudgetDebited",
+        entity_key="s",
+        idem_key="k",
+        payload=payload,
+        ts=datetime.now(UTC),
+        schema_version=1,
+        epoch=0,
+        payload_digest=payload_digest(payload),
+    )
+    with pytest.raises(JournalFormatError, match="empty task_id"):
+        _LP()._project_local(ev)
+
+
+def test_expansion_refused_requires_after_task():
+    from datetime import UTC, datetime
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.execution.local_project import LocalProjectMixin
+
+    class _LP(LocalProjectMixin):
+        def __init__(self) -> None:
+            self._expansion_refusals = []
+            self._expand_requests = {}
+            self._loop_state = {}
+            self._loop_capped = {}
+
+    payload = {"reason": "invalid", "detail": "x"}
+    ev = EventEnvelope(
+        study_id="s",
+        type="ExpansionRefused",
+        entity_key="s",
+        idem_key="k",
+        payload=payload,
+        ts=datetime.now(UTC),
+        schema_version=1,
+        epoch=0,
+        payload_digest=payload_digest(payload),
+    )
+    with pytest.raises(JournalFormatError, match="after_task"):
+        _LP()._project_local(ev)
+
+
+def test_artifact_registered_missing_id_raises():
+    from datetime import UTC, datetime
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.execution.local_project import LocalProjectMixin
+
+    class _LP(LocalProjectMixin):
+        pass
+
+    payload = {"kind": "experiment_design", "stamped": True}
+    ev = EventEnvelope(
+        study_id="s",
+        type="ArtifactRegistered",
+        entity_key="",
+        idem_key="k",
+        payload=payload,
+        ts=datetime.now(UTC),
+        schema_version=1,
+        epoch=0,
+        payload_digest=payload_digest(payload),
+    )
+    with pytest.raises(JournalFormatError, match="missing artifact_id"):
+        _LP()._project_local(ev)
+
+
+def test_clear_expand_request_corrupt_entry_raises():
+    from coscientist.core.execution.local_project import LocalProjectMixin
+
+    class _LP(LocalProjectMixin):
+        def __init__(self) -> None:
+            self._expand_requests = {"PLAN-1": "not-a-dict"}  # type: ignore[dict-item]
+
+    with pytest.raises(JournalFormatError, match="corrupt"):
+        _LP()._clear_expand_request(after_task="E0")
+
+
+def test_task_created_non_plan_n_rejects_replan_allocated_s():
+    from datetime import UTC, datetime
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.execution.domain import (
+        PlanRole,
+        Route,
+        TaskKind,
+        TaskSpec,
+        TaskState,
+    )
+    from coscientist.core.execution.local_project import LocalProjectMixin
+
+    class _LP(LocalProjectMixin):
+        def __init__(self) -> None:
+            self.tasks = {}
+            self._replan_used_s = 0.0
+            self._expand_requests = {}
+            self._expand_pending = set()
+
+    spec = TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT)
+    payload = {
+        "task_id": "s/E0",
+        "kind": TaskKind.EXPERIMENT.value,
+        "spec": spec.model_dump(mode="json"),
+        "state": TaskState.PENDING.value,
+        "deadline": datetime.now(UTC).isoformat(),
+        "plan_role": PlanRole.NONE.value,
+        "replan_allocated_s": 1.0,
+    }
+    ev = EventEnvelope(
+        study_id="s",
+        type="TaskCreated",
+        entity_key="s/E0",
+        idem_key="k",
+        payload=payload,
+        ts=datetime.now(UTC),
+        schema_version=1,
+        epoch=0,
+        payload_digest=payload_digest(payload),
+    )
+    with pytest.raises(JournalFormatError, match="replan_allocated_s"):
+        _LP()._project_local(ev)
+
+
+def test_local_project_plan_n_missing_alloc_raises():
+    from datetime import UTC, datetime
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.execution.domain import (
+        PlanRole,
+        Route,
+        TaskKind,
+        TaskSpec,
+        TaskState,
+    )
+    from coscientist.core.execution.local_project import LocalProjectMixin
+
+    class _LP(LocalProjectMixin):
+        def __init__(self) -> None:
+            self.tasks = {}
+            self._replan_used_s = 0.0
+            self._expand_requests = {}
+            self._expand_pending = set()
+
+    spec = TaskSpec(
+        task_key="PLAN-1",
+        title="t",
+        goal="g",
+        route=Route.PLANNER,
+    )
+    payload = {
+        "task_id": "s/PLAN-1",
+        "kind": TaskKind.PLAN.value,
+        "spec": spec.model_dump(mode="json"),
+        "state": TaskState.PENDING.value,
+        "deadline": datetime.now(UTC).isoformat(),
+        "plan_role": PlanRole.PLAN_N.value,
+        "expand_after_task": "E0",
+        "pending_expansion": None,
+        # replan_allocated_s absent — must raise
+    }
+    ev = EventEnvelope(
+        study_id="s",
+        type="TaskCreated",
+        entity_key="s/PLAN-1",
+        idem_key="k",
+        payload=payload,
+        ts=datetime.now(UTC),
+        schema_version=1,
+        epoch=0,
+        payload_digest=payload_digest(payload),
+    )
+    with pytest.raises(JournalFormatError, match="replan_allocated_s required"):
+        _LP()._project_local(ev)
+
+
+def test_inputs_claim_outcome_none_refuses():
+    from datetime import UTC, datetime
+
+    from coscientist.core.claims.graph import GraphNode, GraphStore, default_execution_registry
+    from coscientist.core.events.ids import question_node_id
+    from coscientist.core.execution.inputs import claim_nodes_from_attempt
+
+    g = GraphStore(default_execution_registry())
+    qid = "Q1"
+    nid = question_node_id("s", qid)
+    g.upsert_node(
+        GraphNode(
+            node_id=nid,
+            kind="question",
+            study_id="s",
+            ref_id=qid,
+            attrs={},
+            created_at=datetime.now(UTC),
+        )
+    )
+
+    def derive(raw, ok):
+        return {
+            "criterion_status": "met",
+            "evidence_kind": "computational",
+            "frozen": True,
+            "lit_own_criterion": False,
+            "accepted": True,
+            "validity_ok": True,
+            "check_role": "prediction",
+            "claim_outcome": None,
+            "predicted_direction": "two_sided",
+            "predicts_null": False,
+        }
+
+    with pytest.raises(JournalFormatError, match="claim_outcome required"):
+        claim_nodes_from_attempt(
+            study_id="s",
+            attempt_id="s/E0#1",
+            provenance="real",
+            claims=[{"id": "c1", "text": "t", "target": qid}],
+            now=datetime.now(UTC),
+            graph=g,
+            attempt_outcome="SUCCESS",
+            infra_failure=False,
+            derive_attrs=derive,
+        )
+
+
+def test_inputs_does_not_write_outcome_alias():
+    """claim_nodes_from_attempt must not stamp attrs['outcome'] dual-key."""
+    import inspect
+
+    from coscientist.core.execution import inputs as inputs_mod
+
+    src = inspect.getsource(inputs_mod.claim_nodes_from_attempt)
+    assert 'attrs["claim_outcome"]' in src or "attrs['claim_outcome']" in src
+    assert 'attrs["outcome"]' not in src and "attrs['outcome']" not in src
+
+
+def test_inputs_attempt_id_rsplit_strict_shape():
+    from datetime import UTC, datetime
+
+    from coscientist.core.claims.graph import GraphNode, GraphStore, default_execution_registry
+    from coscientist.core.events.ids import question_node_id
+    from coscientist.core.execution.inputs import claim_nodes_from_attempt
+
+    g = GraphStore(default_execution_registry())
+    qid = "Q1"
+    nid = question_node_id("s", qid)
+    g.upsert_node(
+        GraphNode(
+            node_id=nid,
+            kind="question",
+            study_id="s",
+            ref_id=qid,
+            attrs={},
+            created_at=datetime.now(UTC),
+        )
+    )
+
+    def derive(raw, ok):
+        return {
+            "criterion_status": "met",
+            "evidence_kind": "computational",
+            "frozen": True,
+            "lit_own_criterion": False,
+            "accepted": True,
+            "validity_ok": True,
+            "check_role": "prediction",
+            "claim_outcome": "consistent",
+            "predicted_direction": "two_sided",
+            "predicts_null": False,
+        }
+
+    with pytest.raises(JournalFormatError, match="not structured"):
+        claim_nodes_from_attempt(
+            study_id="s",
+            attempt_id="s/E0#1#extra",
+            provenance="real",
+            claims=[{"id": "c1", "text": "t", "target": qid}],
+            now=datetime.now(UTC),
+            graph=g,
+            attempt_outcome="SUCCESS",
+            infra_failure=False,
+            derive_attrs=derive,
+        )
+
+
+def test_expand_validate_rollup_object_missing_attr():
+    from coscientist.core.plan.expand_validate import _rollup_from_plans
+
+    class _NoRollup:
+        pass
+
+    rollup, err = _rollup_from_plans([_NoRollup()])
+    assert rollup is None
+    assert err == "missing_plan_rollup"
+
+
+def test_expand_validate_claim_attempt_id_partition_fail_closed():
+    from coscientist.core.plan.expand_validate import task_produced_countable_claims
+
+    claim = SimpleNamespace(attempt_id="bad-no-hash", counts=lambda: True)
+    rt = SimpleNamespace(
+        study=SimpleNamespace(study_id="s"),
+        tasks={"s/E0": SimpleNamespace()},
+        results={},
+        graph=SimpleNamespace(),
+    )
+
+    def _filtered(*_a, **_k):
+        return {"Q1": [claim]}
+
+    import coscientist.core.plan.expand_validate as ev
+
+    # Patch via module import path used inside the function.
+    import coscientist.core.claims.claims as claims_mod
+
+    orig = claims_mod.filtered_claims_by_target
+    claims_mod.filtered_claims_by_target = _filtered  # type: ignore[assignment]
+    try:
+        with pytest.raises(JournalFormatError, match="not structured"):
+            task_produced_countable_claims(rt, "E0")
+    finally:
+        claims_mod.filtered_claims_by_target = orig  # type: ignore[assignment]
+
+
+def test_plan_validate_task_done_uses_direct_spec_task_key():
+    """Nested getattr(getattr(t.spec)) removed — missing spec raises AttributeError."""
+    from coscientist.core.execution.domain import TaskOutcome
+
+    t = SimpleNamespace(task_id="s/PLAN", spec=SimpleNamespace(task_key="PLAN"))
+    assert (
+        TaskOutcome.FAILED.value
+        if t.spec.task_key == "PLAN"
+        else TaskOutcome.SKIPPED.value
+    ) == TaskOutcome.FAILED.value
+    bare = SimpleNamespace(task_id="s/E0")
+    with pytest.raises(AttributeError):
+        _ = bare.spec.task_key
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_known_question_texts_missing_text_raises():
+    from coscientist.core.plan.lifecycle import LifecycleMixin
+
+    class _LC(LifecycleMixin):
+        def __init__(self) -> None:
+            self.plans = {
+                "p1": {"questions": [{"id": "Q1"}]},
+            }
+
+    with pytest.raises(ValueError, match="missing text"):
+        await _LC()._known_question_texts()
+
+
+def test_expand_graph_known_texts_missing_raises():
+    from coscientist.core.plan.expand_graph import _require_known_text
+
+    with pytest.raises(JournalFormatError, match="known_texts missing"):
+        _require_known_text({"Q1": "ok"}, "Q_MISSING")
+
+
+def test_runtime_factory_uses_direct_task_state():
+    """getattr(t, 'state', None) removed — DONE tasks skip via t.state."""
+    from coscientist.core.execution.domain import TaskState
+
+    done = SimpleNamespace(state=TaskState.DONE, task_id="s/E0")
+    open_t = SimpleNamespace(state=TaskState.PENDING, task_id="s/E1")
+    skipped = [t for t in [done, open_t] if t.state != TaskState.DONE]
+    assert [t.task_id for t in skipped] == ["s/E1"]

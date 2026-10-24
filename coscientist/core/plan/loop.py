@@ -161,13 +161,15 @@ def _loop_state(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
     return st
 
 def loop_status(runtime: StudyRuntime, loop_id: str) -> str | None:
-    """None | running | done | capped."""
+    """None when loop row absent; otherwise require a non-empty status string."""
     row = _loop_state(runtime).get(loop_id)
-    if not row:
+    if row is None:
         return None
-    st = row.get("status")
-    if st is None:
-        return None
+    if not isinstance(row, dict):
+        raise JournalFormatError(f"loop state must be dict, got {type(row).__name__}")
+    if "status" not in row:
+        raise JournalFormatError(f"loop.status missing for {loop_id!r}")
+    st = row["status"]
     if not isinstance(st, str) or not st:
         raise JournalFormatError(f"loop.status invalid: {st!r}")
     return st
@@ -178,15 +180,17 @@ def loop_is_complete(runtime: StudyRuntime, loop_id: str) -> bool:
 def iter_keys(runtime: StudyRuntime, loop_id: str, iter_n: int) -> list[str]:
     row = _loop_state(runtime).get(loop_id)
     if row is None:
-        return []
-    by_iter = row.get("iters")
-    if by_iter is None:
-        return []
+        raise JournalFormatError(f"loop.iters: unknown loop {loop_id!r}")
+    if not isinstance(row, dict):
+        raise JournalFormatError(f"loop state must be dict, got {type(row).__name__}")
+    if "iters" not in row:
+        raise JournalFormatError(f"loop.iters missing for {loop_id!r}")
+    by_iter = row["iters"]
     if not isinstance(by_iter, dict):
         raise JournalFormatError(f"loop.iters must be dict, got {type(by_iter).__name__}")
     key = str(iter_n)
     if key not in by_iter:
-        return []
+        raise JournalFormatError(f"loop.iters[{key}] missing for {loop_id!r}")
     keys = by_iter[key]
     if not isinstance(keys, list):
         raise JournalFormatError(f"loop.iters[{key}] must be list")
@@ -199,8 +203,18 @@ def current_iter(runtime: StudyRuntime, loop_id: str) -> int:
     if not isinstance(row, dict):
         raise JournalFormatError(f"loop state must be dict, got {type(row).__name__}")
     if "iter" not in row:
-        return 0
+        raise JournalFormatError(f"loop.iter missing for {loop_id!r}")
     return require_exact_int(row["iter"], what="loop.iter")
+
+def _require_loop_capped(runtime: StudyRuntime) -> dict[str, Any]:
+    capped = runtime._loop_capped
+    if capped is None:
+        raise JournalFormatError("_loop_capped missing")
+    if not isinstance(capped, dict):
+        raise JournalFormatError(
+            f"_loop_capped must be dict, got {type(capped).__name__}"
+        )
+    return capped
 
 def validate_loop_specs(
     loops: list[LoopSpec] | list[dict[str, Any]] | None,
@@ -289,7 +303,11 @@ def validate_loop_specs(
                     )
         norm_hyps: list[str] = []
         for hid in ls.scope_hypotheses:
-            hid_n = unicodedata.normalize("NFKC", str(hid or "")).strip()
+            if hid is None:
+                raise PlanInvalid(
+                    f"LoopSpec.scope_hypotheses None id (loop {lid!r})"
+                )
+            hid_n = unicodedata.normalize("NFKC", str(hid)).strip()
             if not hid_n:
                 raise PlanInvalid(
                     f"LoopSpec.scope_hypotheses empty id (loop {lid!r})"
@@ -382,7 +400,9 @@ async def materialize_loop_iter(
     iter_n: int,
 ) -> str | None:
     """Write PlanExpanded(loop=true) for one iteration. Returns plan_id or None."""
-    if runtime.study is None or runtime._finalized:
+    if runtime.study is None:
+        raise JournalFormatError("materialize_loop_iter: missing study")
+    if runtime._finalized:
         return None
     study = runtime.study
     sid = study.study_id
@@ -592,11 +612,13 @@ async def _emit_loop_capped(
     survivors: int | None = None,
 ) -> None:
     """Journal LoopCapped. Never recomputes survivors on error/refuse paths."""
-    if runtime.study is None or runtime._finalized:
+    if runtime.study is None:
+        raise JournalFormatError("_emit_loop_capped: missing study")
+    if runtime._finalized:
         return
     sid = runtime.study.study_id
-    capped = runtime._loop_capped if runtime._loop_capped is not None else {}
-    if isinstance(capped, dict) and loop.loop_id in capped:
+    capped = _require_loop_capped(runtime)
+    if loop.loop_id in capped:
         return
     status = loop_status(runtime, loop.loop_id)
     # LoopRefused folds status=refused *before* LoopCapped on the fail-closed
@@ -643,12 +665,14 @@ async def _emit_loop_refused(
     Single batch avoids mid-emit ``status=refused`` early-outs that would skip
     LoopCapped (live ≡ replay needs ``_loop_capped`` populated).
     """
-    if runtime.study is None or runtime._finalized:
+    if runtime.study is None:
+        raise JournalFormatError("_emit_loop_refused: missing study")
+    if runtime._finalized:
         return
     if loop_is_complete(runtime, loop.loop_id):
         return
-    capped = runtime._loop_capped if runtime._loop_capped is not None else {}
-    if isinstance(capped, dict) and loop.loop_id in capped:
+    capped = _require_loop_capped(runtime)
+    if loop.loop_id in capped:
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
@@ -722,10 +746,18 @@ async def _emit_loop_completed(
     runtime: StudyRuntime, loop: LoopSpec, *, iter_n: int
 ) -> None:
     """Journal until-met completion so reopen restores status without re-eval."""
-    if runtime.study is None or runtime._finalized:
+    if runtime.study is None:
+        raise JournalFormatError("_emit_loop_completed: missing study")
+    if runtime._finalized:
         return
-    done_map = runtime._loop_done if runtime._loop_done is not None else set()
-    if isinstance(done_map, set) and loop.loop_id in done_map:
+    done_map = runtime._loop_done
+    if done_map is None:
+        raise JournalFormatError("_loop_done missing")
+    if not isinstance(done_map, set):
+        raise JournalFormatError(
+            f"_loop_done must be set, got {type(done_map).__name__}"
+        )
+    if loop.loop_id in done_map:
         return
     if loop_status(runtime, loop.loop_id) == "done":
         return
@@ -770,7 +802,9 @@ async def _emit_loop_advance_failed(
     runtime: StudyRuntime, *, detail: str
 ) -> None:
     """Journal ExpansionRefused when no LoopSpec context is available."""
-    if runtime.study is None or runtime._finalized:
+    if runtime.study is None:
+        raise JournalFormatError("_emit_loop_advance_failed: missing study")
+    if runtime._finalized:
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
@@ -783,7 +817,7 @@ async def _emit_loop_advance_failed(
                 entity_key=f"{sid}:loop_advance:error",
                 idem_key=make_idem("ExpansionRefused", sid, "loop_advance", detail_s),
                 payload={
-                    "after_task": None,
+                    "after_task": "loop_advance",
                     "reason": "invalid",
                     "detail": detail_s,
                     "plan_key": None,
@@ -873,20 +907,20 @@ async def refuse_orphaned_loop_barriers(runtime: StudyRuntime) -> int:
                 continue
             lid = parse_loop_dep(d)
             if lid is None:
-                continue
+                raise JournalFormatError(
+                    f"parse_loop_dep returned None after is_loop_dep for {d!r}"
+                )
             if loop_is_complete(runtime, lid):
                 continue
             if loop_known(runtime, lid):
                 continue
             # Unknown loop id — refuse the waiter (honest, not a hang).
-            cancel = getattr(runtime, "cancel_task", None)
-            if callable(cancel):
-                await cancel(
-                    task.task_id,
-                    reason=TaskReason.SCHEMA_INVALID,
-                    detail=f"unknown loop barrier {d}",
-                )
-                n += 1
+            await runtime.cancel_task(
+                task.task_id,
+                reason=TaskReason.SCHEMA_INVALID,
+                detail=f"unknown loop barrier {d}",
+            )
+            n += 1
             break
     return n
 
@@ -1077,14 +1111,7 @@ def fold_loop_capped(runtime: Any, payload: dict[str, Any]) -> None:
     if "detail" in payload and payload["detail"] is not None:
         row["detail"] = str(payload["detail"])[:DETAIL_MAX_LEN]
     st[lid] = row
-    capped = runtime._loop_capped
-    if capped is None:
-        runtime._loop_capped = {}
-        capped = runtime._loop_capped
-    elif not isinstance(capped, dict):
-        raise JournalFormatError(
-            f"_loop_capped must be dict, got {type(capped).__name__}"
-        )
+    capped = _require_loop_capped(runtime)
     capped[lid] = dict(payload)
 
 def fold_loop_refused(runtime: Any, payload: dict[str, Any]) -> None:
@@ -1142,9 +1169,8 @@ def fold_loop_completed(runtime: Any, payload: dict[str, Any]) -> None:
     st[lid] = row
     done = runtime._loop_done
     if done is None:
-        runtime._loop_done = set()
-        done = runtime._loop_done
-    elif not isinstance(done, set):
+        raise JournalFormatError("_loop_done missing")
+    if not isinstance(done, set):
         raise JournalFormatError(
             f"_loop_done must be set, got {type(done).__name__}"
         )
@@ -1195,13 +1221,13 @@ def capped_scope_questions(runtime: Any) -> dict[str, dict[str, Any]]:
     disposition reason=iteration_cap. Post-#21 rebase: also respect public
     ``TerminalReason.INTERNAL_ERROR`` (never map error-path loops to cap).
     """
-    capped = runtime._loop_capped if runtime._loop_capped is not None else {}
+    capped = _require_loop_capped(runtime)
     out: dict[str, dict[str, Any]] = {}
-    if not isinstance(capped, dict):
-        return out
     for _lid, p in capped.items():
         if not isinstance(p, dict):
-            continue
+            raise JournalFormatError(
+                f"LoopCapped payload must be dict, got {type(p).__name__}"
+            )
         reason = _require_loop_reason(
             p, key="reason", allowed=LOOP_CAPPED_REASONS, what="LoopCapped"
         )
@@ -1210,6 +1236,11 @@ def capped_scope_questions(runtime: Any) -> dict[str, dict[str, Any]]:
         iter_n = _require_loop_iter(p, what="LoopCapped")
         if iter_n < 1:
             continue
-        for qid in p.get("scope_questions") or []:
+        if "scope_questions" not in p:
+            raise JournalFormatError("LoopCapped: missing scope_questions")
+        scope_q = p["scope_questions"]
+        if not isinstance(scope_q, list):
+            raise JournalFormatError("LoopCapped: scope_questions must be list")
+        for qid in scope_q:
             out[str(qid)] = p
     return out

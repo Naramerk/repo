@@ -61,10 +61,12 @@ def _rollup_from_plans(plan_rows: list[Any]) -> tuple[RollupRule | None, str | N
             return _require_rollup(last["rollup"]), None
         except ValueError as e:
             return None, str(e)
-    if not hasattr(last, "rollup"):
+    try:
+        rollup = last.rollup
+    except AttributeError:
         return None, "missing_plan_rollup"
     try:
-        return _require_rollup(last.rollup), None
+        return _require_rollup(rollup), None
     except ValueError as e:
         return None, str(e)
 
@@ -406,7 +408,9 @@ def _question_ref_from_edge(runtime: StudyRuntime, sid: str, dst_id: str) -> str
         return dst.ref_id
     # Structural: dst must equal question_node_id(sid, qid); recover qid via strip.
     prefix = f"{sid}:question:"
-    if not isinstance(dst_id, str) or not dst_id.startswith(prefix):
+    if not isinstance(dst_id, str):
+        raise JournalFormatError(f"decomposes dst id layout invalid: {dst_id!r}")
+    if not dst_id.startswith(prefix):
         raise JournalFormatError(f"decomposes dst id layout invalid: {dst_id!r}")
     qid = dst_id[len(prefix) :]
     if not qid:
@@ -426,9 +430,11 @@ def _parent_from_graph(runtime: StudyRuntime, sid: str, qid: str) -> str | None:
     for e in graph.edges_from(nid):
         if e.kind == "decomposes":
             return _question_ref_from_edge(runtime, sid, e.dst_id)
-    if not hasattr(graph, "all_edges"):
-        raise JournalFormatError("graph missing all_edges")
-    for e in graph.all_edges():
+    try:
+        all_edges = graph.all_edges
+    except AttributeError as e:
+        raise JournalFormatError("graph missing all_edges") from e
+    for e in all_edges():
         if e.kind != "decomposes":
             continue
         if e.src_id == nid:
@@ -450,17 +456,24 @@ def task_produced_countable_claims(runtime: StudyRuntime, tkey: str) -> bool:
     by = filtered_claims_by_target(runtime.graph, study_id=sid, results=runtime.results)
     for claims in by.values():
         for c in claims:
-            if not hasattr(c, "attempt_id"):
-                raise JournalFormatError("claim missing attempt_id")
-            aid = c.attempt_id
-            # Empty/missing attempt_id → not countable for this task (skip, no invent).
+            try:
+                aid = c.attempt_id
+            except AttributeError as e:
+                raise JournalFormatError("claim missing attempt_id") from e
+            # Empty attempt_id → not countable for this task (skip, no invent).
             if not isinstance(aid, str) or not aid:
                 continue
-            # Structured attempt ids are ``{task_id}#{n}`` — exact prefix + numeric suffix.
-            if "#" not in aid:
-                continue
+            # Structured attempt ids are ``{task_id}#{n}`` — exact one # + digits.
+            if aid.count("#") != 1:
+                raise JournalFormatError(
+                    f"claim attempt_id not structured: {aid!r}"
+                )
             base, _, n = aid.partition("#")
-            if base != tid or not n.isdigit():
+            if not base or not n.isdigit():
+                raise JournalFormatError(
+                    f"claim attempt_id not structured: {aid!r}"
+                )
+            if base != tid:
                 continue
             if c.counts():
                 return True

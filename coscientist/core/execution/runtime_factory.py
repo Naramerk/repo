@@ -144,7 +144,7 @@ async def open_runtime(
                 )
             ]
             for t in list(rt.tasks.values()):
-                if getattr(t, "state", None) == TaskState.DONE:
+                if t.state == TaskState.DONE:
                     continue
                 close_events.append(
                     EventEnvelope(

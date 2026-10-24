@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.claims.reasons import CloseReason, TaskReason
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import question_node_id, task_id
 from coscientist.core.events.schema_versions import (
@@ -21,6 +22,16 @@ if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
 DelegatedBy = Literal["human", "timeout"] | None
+
+def _require_known_text(known_texts: dict[str, str], qid: str) -> str:
+    if qid not in known_texts:
+        raise JournalFormatError(f"known_texts missing formulation for {qid!r}")
+    text = known_texts[qid]
+    if not isinstance(text, str):
+        raise JournalFormatError(
+            f"known_texts[{qid!r}] must be str, got {type(text).__name__}"
+        )
+    return text
 
 def plan_graph_events(
     runtime: StudyRuntime,
@@ -212,7 +223,7 @@ def question_graph_events(
                         kind="question",
                         study_id=sid,
                         ref_id=s.old_id,
-                        attrs={"formulation": known_texts.get(s.old_id, "")},
+                        attrs={"formulation": _require_known_text(known_texts, s.old_id)},
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
@@ -231,7 +242,7 @@ def question_graph_events(
                         kind="question",
                         study_id=sid,
                         ref_id=s.new_id,
-                        attrs={"formulation": known_texts.get(s.new_id, "")},
+                        attrs={"formulation": _require_known_text(known_texts, s.new_id)},
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,

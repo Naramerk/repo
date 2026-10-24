@@ -411,14 +411,17 @@ def claim_nodes_from_attempt(
         # Sole outcome key is claim_outcome (no outcome alias dual-lookup).
         if "claim_outcome" in core:
             oc = core["claim_outcome"]
+            if oc is None or oc not in ("consistent", "inconsistent", "indeterminate"):
+                raise JournalFormatError(
+                    "claim claim_outcome required "
+                    f"(consistent|inconsistent|indeterminate), got {oc!r}"
+                )
         elif "outcome" in core:
             raise JournalFormatError(
                 "claim core uses deprecated 'outcome'; require 'claim_outcome'"
             )
         else:
-            oc = None
-        if oc not in ("consistent", "inconsistent", "indeterminate"):
-            # Derive from required criterion_status (already validated above).
+            # Derive from required criterion_status when claim_outcome absent.
             status = str(attrs["criterion_status"])
             oc = {
                 "met": "consistent",
@@ -430,7 +433,6 @@ def claim_nodes_from_attempt(
                     f"claim criterion_status cannot derive outcome: {status!r}"
                 )
         attrs["claim_outcome"] = oc
-        attrs["outcome"] = oc
         # sesoi only from core (catalog-frozen criterion) — never stamp 0.0 freely.
         for num_key in ("p_value", "power", "sesoi", "alpha"):
             if core.get(num_key) is not None:
@@ -458,16 +460,17 @@ def claim_nodes_from_attempt(
         if core.get("experiment_id"):
             attrs["experiment_id"] = str(core["experiment_id"])
         else:
-            # Structured attempt ids are ``{task_id}#{n}`` — require that shape.
-            if not isinstance(attempt_id, str) or "#" not in attempt_id:
+            # Structured attempt ids are ``{task_id}#{n}`` — exactly one # + digits.
+            if not isinstance(attempt_id, str) or attempt_id.count("#") != 1:
                 raise JournalFormatError(
                     f"claim experiment_id missing and attempt_id not structured: {attempt_id!r}"
                 )
-            attrs["experiment_id"] = attempt_id.rsplit("#", 1)[0]
-            if not attrs["experiment_id"]:
+            base, _, n = attempt_id.partition("#")
+            if not base or not n.isdigit():
                 raise JournalFormatError(
-                    f"claim experiment_id empty from attempt_id: {attempt_id!r}"
+                    f"claim experiment_id empty/invalid from attempt_id: {attempt_id!r}"
                 )
+            attrs["experiment_id"] = base
         if core.get("independence_key"):
             attrs["independence_key"] = str(core["independence_key"])
         else:

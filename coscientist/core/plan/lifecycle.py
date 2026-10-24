@@ -747,7 +747,9 @@ class LifecycleMixin:
                 qid = str(q["id"])
                 if not qid:
                     continue
-                text = str(q["text"]) if "text" in q else ""
+                if "text" not in q:
+                    raise ValueError(f"plan question {qid!r} missing text")
+                text = str(q["text"])
                 if qid in texts and texts[qid] != text:
                     raise ValueError(f"question id {qid!r} text conflict")
                 texts[qid] = text

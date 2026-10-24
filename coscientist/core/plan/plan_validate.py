@@ -256,7 +256,7 @@ async def apply_plan_refused(
                     "task_id": t.task_id,
                     "outcome": (
                         TaskOutcome.FAILED.value
-                        if getattr(getattr(t, "spec", None), "task_key", None) == "PLAN"
+                        if t.spec.task_key == "PLAN"
                         else TaskOutcome.SKIPPED.value
                     ),
                     "reason": TaskReason.SCHEMA_INVALID.value,
