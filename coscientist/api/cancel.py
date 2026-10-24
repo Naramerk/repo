@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from coscientist.api.errors import CancelByRefuse, StudyNotFound
+from coscientist.api.study_service import study_events_db
 from coscientist.api.views import require_study_id
 
 
@@ -31,7 +32,7 @@ async def post_study_cancel(
     sid = require_study_id(study_id)
     by_s = require_cancel_by(by)
     root = Path(data_root)
-    if not (root / sid / "events.db").is_file():
+    if not study_events_db(root, sid).is_file():
         raise StudyNotFound(sid)
 
     from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
