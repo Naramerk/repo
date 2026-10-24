@@ -79,11 +79,6 @@ def test_write_usage_jsonl_refuses_parent_that_is_not_directory(tmp_path: Path) 
         write_usage_jsonl(path, _records())
 
 
-def test_timed_run_to_result_obj_assert_never_on_unknown_type() -> None:
-    with pytest.raises(AssertionError):
-        timed_run_to_result_obj(object())  # type: ignore[arg-type]
-
-
 def test_write_result_json_ok_her_shape(tmp_path: Path) -> None:
     run = TimedRunOk(
         kind="ok",

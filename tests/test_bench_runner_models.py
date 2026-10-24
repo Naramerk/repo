@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from pydantic import ValidationError
 
 from bench.models import (
-    EvidenceOutcomeCount,
     QualityObservation,
     RunnerRefuse,
     RunnerSuccess,
@@ -17,30 +18,43 @@ from bench.models import (
     llm_call_count,
     token_total,
 )
-from coscientist.llm.types import Usage
 
 
-def _usage(*, prompt: int = 10, completion: int = 5) -> Usage:
-    return Usage(prompt_tokens=prompt, completion_tokens=completion, latency_ms=1.5)
+def _usage_payload(*, prompt: int = 10, completion: int = 5) -> dict[str, Any]:
+    return {"prompt_tokens": prompt, "completion_tokens": completion, "latency_ms": 1.5}
+
+
+def _record_payload(**overrides: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "study_id": "study-1",
+        "task_id": "task-1",
+        "attempt_id": None,
+        "role": "planner",
+        "usage": _usage_payload(),
+    }
+    payload.update(overrides)
+    return payload
 
 
 def _record(*, role: str = "planner", prompt: int = 10, completion: int = 5) -> UsageRecorded:
-    return UsageRecorded(
-        study_id="study-1",
-        task_id="task-1",
-        attempt_id=None,
-        role=role,
-        usage=_usage(prompt=prompt, completion=completion),
+    return UsageRecorded.model_validate(
+        _record_payload(role=role, usage=_usage_payload(prompt=prompt, completion=completion))
     )
+
+
+def _quality_payload(**overrides: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "status": "fulfilled",
+        "exp_tasks": 2,
+        "evidence": ({"outcome": "success", "count": 2},),
+        "record_result": 2,
+    }
+    payload.update(overrides)
+    return payload
 
 
 def _quality() -> QualityObservation:
-    return QualityObservation(
-        status="fulfilled",
-        exp_tasks=2,
-        evidence=(EvidenceOutcomeCount(outcome="success", count=2),),
-        record_result=2,
-    )
+    return QualityObservation.model_validate(_quality_payload())
 
 
 def test_usage_recorded_requires_provider_usage() -> None:
@@ -50,27 +64,17 @@ def test_usage_recorded_requires_provider_usage() -> None:
     assert record.attempt_id is None
 
 
-def test_usage_recorded_rejects_empty_role() -> None:
-    with pytest.raises(ValidationError):
-        UsageRecorded(
-            study_id="study-1",
-            task_id=None,
-            attempt_id=None,
-            role="",
-            usage=_usage(),
-        )
-
-
-def test_usage_recorded_rejects_extra_field() -> None:
-    with pytest.raises(ValidationError):
-        UsageRecorded(
-            study_id="study-1",
-            task_id=None,
-            attempt_id=None,
-            role="planner",
-            usage=_usage(),
-            estimated_tokens=99,  # type: ignore[call-arg]
-        )
+@pytest.mark.parametrize(
+    ("payload", "match"),
+    [
+        (_record_payload(role=""), "at least 1 character"),
+        (_record_payload(estimated_tokens=99), "Extra inputs are not permitted"),
+    ],
+    ids=["empty_role", "extra_field"],
+)
+def test_usage_recorded_rejects(payload: dict[str, Any], match: str) -> None:
+    with pytest.raises(ValidationError, match=match):
+        UsageRecorded.model_validate(payload)
 
 
 def test_llm_call_count_is_len_of_usage_recorded() -> None:
@@ -102,11 +106,24 @@ def test_runner_success_carries_usage_recorded_not_call_counts() -> None:
     assert not hasattr(ok, "calls")
 
 
-def test_runner_refuse_requires_reason() -> None:
-    refused = RunnerRefuse(kind="refused", reason_code="no_orchestrator", detail="missing")
+@pytest.mark.parametrize(
+    ("payload", "match"),
+    [
+        (
+            {"kind": "refused", "reason_code": "", "detail": "x"},
+            "at least 1 character",
+        ),
+    ],
+    ids=["empty_reason_code"],
+)
+def test_runner_refuse_rejects(payload: dict[str, Any], match: str) -> None:
+    with pytest.raises(ValidationError, match=match):
+        RunnerRefuse.model_validate(payload)
+
+
+def test_runner_refuse_accepts_reason() -> None:
+    refused = RunnerRefuse.model_validate({"kind": "refused", "reason_code": "no_orchestrator", "detail": "missing"})
     assert refused.reason_code == "no_orchestrator"
-    with pytest.raises(ValidationError):
-        RunnerRefuse(kind="refused", reason_code="", detail="x")
 
 
 def test_timed_run_ok_her_fields() -> None:
@@ -124,39 +141,54 @@ def test_timed_run_ok_her_fields() -> None:
 
 
 def test_timed_run_refused_frozen() -> None:
-    run = TimedRunRefused(
-        kind="refused",
-        system_id="old",
-        task_id="web",
-        dur_s=0.5,
-        reason_code="branch_mismatch",
-        detail="expected dev_1",
+    run = TimedRunRefused.model_validate(
+        {
+            "kind": "refused",
+            "system_id": "old",
+            "task_id": "web",
+            "dur_s": 0.5,
+            "reason_code": "branch_mismatch",
+            "detail": "expected dev_1",
+        }
     )
-    with pytest.raises(ValidationError):
-        run.detail = "other"  # type: ignore[misc]
+    field_name = "detail"
+    with pytest.raises(ValidationError, match="frozen"):
+        setattr(run, field_name, "other")
 
 
-def test_quality_observation_rejects_duplicate_evidence() -> None:
-    with pytest.raises(ValidationError, match="unique"):
-        QualityObservation(
-            status="partial",
-            exp_tasks=1,
-            evidence=(
-                EvidenceOutcomeCount(outcome="success", count=1),
-                EvidenceOutcomeCount(outcome="success", count=1),
+@pytest.mark.parametrize(
+    ("payload", "match"),
+    [
+        (
+            _quality_payload(
+                status="partial",
+                exp_tasks=1,
+                evidence=(
+                    {"outcome": "success", "count": 1},
+                    {"outcome": "success", "count": 1},
+                ),
+                record_result=0,
             ),
-            record_result=0,
-        )
+            "unique",
+        ),
+    ],
+    ids=["duplicate_evidence"],
+)
+def test_quality_observation_rejects(payload: dict[str, Any], match: str) -> None:
+    with pytest.raises(ValidationError, match=match):
+        QualityObservation.model_validate(payload)
 
 
 def test_task_comparison_requires_matching_task_ids() -> None:
-    old = TimedRunRefused(
-        kind="refused",
-        system_id="old",
-        task_id="two_tasks",
-        dur_s=1.0,
-        reason_code="r",
-        detail="d",
+    old = TimedRunRefused.model_validate(
+        {
+            "kind": "refused",
+            "system_id": "old",
+            "task_id": "two_tasks",
+            "dur_s": 1.0,
+            "reason_code": "r",
+            "detail": "d",
+        }
     )
     new = TimedRunOk(
         kind="ok",
@@ -170,40 +202,29 @@ def test_task_comparison_requires_matching_task_ids() -> None:
     assert cmp_.task_id == "two_tasks"
 
 
-def test_task_comparison_rejects_mismatched_old_task_id() -> None:
-    old = TimedRunRefused(
-        kind="refused",
-        system_id="old",
-        task_id="other",
-        dur_s=1.0,
-        reason_code="r",
-        detail="d",
+@pytest.mark.parametrize(
+    ("old_task_id", "new_task_id"),
+    [
+        ("other", "two_tasks"),
+        ("two_tasks", "other"),
+    ],
+    ids=["mismatched_old", "mismatched_new"],
+)
+def test_task_comparison_rejects_mismatched_task_ids(old_task_id: str, new_task_id: str) -> None:
+    old = TimedRunRefused.model_validate(
+        {
+            "kind": "refused",
+            "system_id": "old",
+            "task_id": old_task_id,
+            "dur_s": 1.0,
+            "reason_code": "r",
+            "detail": "d",
+        }
     )
     new = TimedRunOk(
         kind="ok",
         system_id="new",
-        task_id="two_tasks",
-        dur_s=2.0,
-        usage_recorded=(),
-        quality=_quality(),
-    )
-    with pytest.raises(ValidationError, match="task_id"):
-        TaskComparison(task_id="two_tasks", old=old, new=new)
-
-
-def test_task_comparison_rejects_mismatched_new_task_id() -> None:
-    old = TimedRunRefused(
-        kind="refused",
-        system_id="old",
-        task_id="two_tasks",
-        dur_s=1.0,
-        reason_code="r",
-        detail="d",
-    )
-    new = TimedRunOk(
-        kind="ok",
-        system_id="new",
-        task_id="other",
+        task_id=new_task_id,
         dur_s=2.0,
         usage_recorded=(),
         quality=_quality(),

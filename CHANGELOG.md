@@ -28,7 +28,11 @@
   [plan item 4](docs/plan/benchmark-harness.md); [DESIGN §10](docs/DESIGN.md#10-наблюдаемость)
   / [§12](docs/DESIGN.md#12-паритет-с-эталоном).
 - Review fix: `TaskComparison` requires matching task ids; writers cover
-  parent-not-dir + `assert_never` unknown run; `ruff format` clean.
+  parent-not-dir; `assert_never` on unknown run (no unreachable-branch test);
+  `ruff format` clean.
+- Alligator fix: `QualityObservation(QualityExpectation)` + `record_result`;
+  drop unused `RunnerRawResult`; tests via `model_validate`/`setattr` (no
+  `# type: ignore`); reject cases parametrized with `ids` + `match=`.
 
 ### Benchmark harness — task + quality models (plan item 3) [M1]
 - Add `bench/models.py`: `EvidenceOutcomeCount`, `QualityExpectation` (status,

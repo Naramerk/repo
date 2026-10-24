@@ -41,6 +41,12 @@ class QualityExpectation(BaseModel):
         return self
 
 
+class QualityObservation(QualityExpectation):
+    """Runner-reported quality: expectation fields plus ``record_result`` count."""
+
+    record_result: StrictInt = Field(ge=0)
+
+
 class BenchTask(BaseModel):
     """One research scenario loaded from a versioned YAML task file."""
 
@@ -99,24 +105,6 @@ class UsageRecorded(BaseModel):
     usage: Usage
 
 
-class QualityObservation(BaseModel):
-    """Quality signals reported by a runner (exact-compare fields + record_result)."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-
-    status: str = Field(min_length=1)
-    exp_tasks: StrictInt = Field(ge=0)
-    evidence: tuple[EvidenceOutcomeCount, ...]
-    record_result: StrictInt = Field(ge=0)
-
-    @model_validator(mode="after")
-    def _unique_evidence_outcomes(self) -> QualityObservation:
-        outcomes = [row.outcome for row in self.evidence]
-        if len(outcomes) != len(set(outcomes)):
-            raise ValueError("QualityObservation.evidence outcomes must be unique")
-        return self
-
-
 class RunnerSuccess(BaseModel):
     """Successful runner payload before harness wall-time attachment."""
 
@@ -135,9 +123,6 @@ class RunnerRefuse(BaseModel):
     kind: Literal["refused"]
     reason_code: str = Field(min_length=1)
     detail: str = Field(min_length=1)
-
-
-RunnerRawResult = RunnerSuccess | RunnerRefuse
 
 
 class TimedRunOk(BaseModel):
