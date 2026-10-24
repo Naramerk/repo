@@ -13,3 +13,6 @@ ARTIFACT_REGISTERED_SCHEMA_VERSION = 1
 
 # InputBinding digest formula version (PR19 JCS rows). Absent/old → drift unknown.
 INPUTS_DIGEST_VERSION = 1
+
+# Job* events (DESIGN §6.4) — shared writer version until an upcast lands.
+JOB_EVENTS_SCHEMA_VERSION = 1

@@ -77,6 +77,12 @@ EventType = Literal[
     "CheckProposed",
     "CheckApproved",
     "CheckRejected",
+    # M3 G6: coder/alembic jobs (DESIGN §6.4).
+    "JobSubmitted",
+    "JobStatusChanged",
+    "JobTimedOut",
+    "JobCancelled",
+    "JobCancelFailed",
 ]
 
 

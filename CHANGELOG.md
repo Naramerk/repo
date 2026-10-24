@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### G6 JobStore + Job* events [M3]
+- `coscientist.tools.jobs`: `Job` / `JobStore` Protocol + journaled `InMemoryJobStore` (DESIGN §6.4).
+- FakeClock `on_change` + unsubscribe; JobStore takes explicit `on_clock_change` (core `Clock` stays `now()`-only); `close()` unsubscribes.
+- Job payloads / `JobEventType` (nested into `EventType`) / `require_aware_datetime` / `require_nonblank` in `core.events.job_events`.
+- Contract: idempotent submit by `(attempt_id, spec_digest)`; one live job per attempt → `ToolError(local)`; deadline → `JobTimedOut` + `cancel` → `JobCancelled` (or `JobCancelFailed`); `wait` does not revive `timed_out`.
+- No `core/ports.py` change; coder/alembic backends and jobs projection fold = follow-ups (C1 / G19).
+- Parity: [DESIGN §6.4](docs/DESIGN.md#64-coder-и-alembic-как-асинхронные-задачи-r4), [CAP #11](docs/CAPABILITIES.md), issue [#130](https://github.com/Naramerk/repo/issues/130).
+
 ### ToolRouter(MCP) [M1]
 - `coscientist.tools.router.ToolRouter`: explicit `ToolRouterConfig` / `McpServerRoute` (no discovery); routes `(server, tool)` calls through `mcp_adapter` → `McpClient`; fail-closed on unknown server/tool; `ToolRouterCloseError` with required `causes`. [DESIGN §6.3](docs/DESIGN.md#63-маршрутизация-и-alembic-fallback), [CAP #8](docs/CAPABILITIES.md?plain=1#L17).
 
