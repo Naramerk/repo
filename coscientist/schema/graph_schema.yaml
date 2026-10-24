@@ -52,16 +52,16 @@ nodes:
     from_output: ResearchSpecOut.success_metrics[], TaskSpec.criteria
     text_ru: Измеримая планка; статус = NodeRequirement (met/not_met/unassessed)
     fields:
-      - {name: metric, type: str, required: true}
-      - {name: op, type: "enum(<|<=|==|>=|>|in)", required: true}
-      - {name: target, type: str, required: true}
+      - {name: metric, type: str, required: true, note: "required for check=code|review; waived when check=rubric + rubric_digest (PR13 qualitative — DESIGN_M1 §6.2, never stance)"}
+      - {name: op, type: "enum(<|<=|==|>=|>|in)", required: true, note: "required for check=code|review; waived when check=rubric + rubric_digest"}
+      - {name: target, type: str, required: true, note: "required for check=code|review; waived when check=rubric + rubric_digest"}
       - {name: tolerance, type: float, required: false}
       - {name: check, type: enum(code|review|rubric), required: true, note: "rubric = qualitative OutputSpec.rubric (PR13); never feeds claim stance"}
       - {name: frozen_at_seq, type: int, required: false}
       - {name: frozen, type: bool, required: false, note: "accept-time freeze marker before frozen_at_seq projection"}
       - {name: template_id, type: str, required: false, note: "catalog template id at freeze"}
       - {name: affects_stance, type: bool, required: false, note: "false for qualitative rubric criteria"}
-      - {name: rubric_digest, type: digest, required: false, note: "M1 PR13 sha256(JCS(items+aggregate))"}
+      - {name: rubric_digest, type: digest, required: false, note: "M1 PR13 sha256(JCS(items+aggregate)); with check=rubric is the criterion identity (no metric/op/target)"}
       - {name: sesoi, type: float, required: false, note: "PR8b smallest effect size of interest"}
       - {name: min_power, type: float, required: false, note: "PR8b e.g. 0.8; frozen with criterion"}
       - {name: alpha, type: float, required: false, default: 0.05, note: "PR8b"}

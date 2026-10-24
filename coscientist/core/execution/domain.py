@@ -882,14 +882,31 @@ class CodeCheck(Frozen):
         return self
 
 
-class ReviewCheck(Frozen):
+class ReviewCheckPlain(Frozen):
+    """Review without KindSpec metric — cannot alone freeze a criterion node."""
+
+    measured: Literal[False]
     reviewer_role: Literal["reviewer", "critic", "human"]
     question: str
-    max_calls: int = 1
-    # KindSpec criterion freeze — catalog must pass explicitly (None → freeze refuse).
-    metric: str | None
-    op: Literal["<", "<=", "==", ">=", ">", "in"] | None
-    target: Any
+    max_calls: int
+
+
+class ReviewCheckMeasured(Frozen):
+    """Review that authors KindSpec metric/op/target for criterion freeze."""
+
+    measured: Literal[True]
+    reviewer_role: Literal["reviewer", "critic", "human"]
+    question: str
+    max_calls: int
+    metric: str
+    op: Literal["<", "<=", "==", ">=", ">", "in"]
+    target: str
+
+
+ReviewCheck = Annotated[
+    ReviewCheckPlain | ReviewCheckMeasured,
+    Field(discriminator="measured"),
+]
 
 
 PredictedDirection = Literal["positive", "negative", "two_sided"]
@@ -911,7 +928,7 @@ class RequirementTemplate(Frozen):
     method_sources: list[str] = Field(default_factory=list)
     rule_ids: list[str] = Field(default_factory=list)
     applies_to: list[str]  # registered node kinds (strings), not a hard-coded ontology
-    check: CodeCheck | ReviewCheck
+    check: CodeCheck | ReviewCheckPlain | ReviewCheckMeasured
     role: Literal["prediction", "validity"]
     required: bool = True
     version: StrictInt

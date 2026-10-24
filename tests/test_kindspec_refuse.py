@@ -42,6 +42,26 @@ def test_criterion_missing_metric_op_target_refused() -> None:
         )
 
 
+def test_criterion_rubric_digest_waives_metric_op_target() -> None:
+    """PR13: check=rubric + rubric_digest — no metric/op/target invent (DESIGN_M1 §6.2)."""
+    GraphNodeUpsertedPayload.model_validate(
+        {
+            "node_id": "n1",
+            "kind": "criterion",
+            "study_id": "s",
+            "attrs": {
+                "check": "rubric",
+                "rubric_digest": "a" * 64,
+                "frozen": True,
+                "affects_stance": False,
+            },
+            "ref_id": None,
+            "parent_id": None,
+            "created_at": None,
+        }
+    )
+
+
 def test_experiment_missing_attempts_refused() -> None:
     with pytest.raises(
         ValidationError,
@@ -271,3 +291,23 @@ async def test_accept_plan_refuses_criterion_freeze_incomplete(tmp_path) -> None
         assert refused[0].payload.get("report_line") == PLAN_REFUSED_LINE
     finally:
         await close_runtime(rt)
+
+
+def test_rubric_freeze_aggregate_required_raises() -> None:
+    """Rubric-like object with digest but no aggregate → CatalogError (typed)."""
+    from coscientist.core.events.errors import CatalogError
+    from coscientist.core.plan.lifecycle import _plan_accept_freeze_rows
+
+    dig = "b" * 64
+    rub = SimpleNamespace(digest=dig, aggregate=None)
+    spec = SimpleNamespace(
+        expected_outputs=[SimpleNamespace(rubric=rub)],
+        criteria=None,
+    )
+    with pytest.raises(CatalogError, match=r"rubric_freeze_aggregate_required:" + dig):
+        _plan_accept_freeze_rows(
+            sid="s",
+            tasks=[spec],  # type: ignore[list-item]
+            catalog=None,
+            graph=None,
+        )

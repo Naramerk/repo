@@ -65,7 +65,11 @@ def _plan_accept_freeze_rows(
     be taken from Rubric / catalog CodeCheck|ReviewCheck / RequirementRef.params
     (no invent, no schema weaken).
     """
-    from coscientist.core.execution.domain import CodeCheck, ReviewCheck
+    from coscientist.core.execution.domain import (
+        CodeCheck,
+        ReviewCheckMeasured,
+        ReviewCheckPlain,
+    )
 
     rubric_rows: list[tuple[str, str, dict[str, Any]]] = []
     seen_rubrics: set[str] = set()
@@ -87,8 +91,8 @@ def _plan_accept_freeze_rows(
             rnid = criterion_node_id(sid, f"rubric:{dig}")
             if graph is not None and graph.get_node(rnid) is not None:
                 continue
-            # PR13 qualitative: check/affects_stance structural; target from Rubric;
-            # metric = frozen digest identity (real Rubric field, not invented).
+            # PR13 qualitative (DESIGN_M1 §6.2): identity is rubric_digest; KindSpec
+            # waives metric/op/target when check=rubric + rubric_digest (no invent).
             rubric_rows.append(
                 (
                     rnid,
@@ -99,9 +103,6 @@ def _plan_accept_freeze_rows(
                         "rubric_digest": dig,
                         "check": "rubric",
                         "affects_stance": False,
-                        "metric": dig,
-                        "op": "==",
-                        "target": aggregate,
                     },
                 )
             )
@@ -146,16 +147,20 @@ def _plan_accept_freeze_rows(
             tmpl = by_id.get(key)
             if tmpl is not None:
                 raw_check = getattr(tmpl, "check", None)
-                if isinstance(raw_check, ReviewCheck):
+                if isinstance(raw_check, (ReviewCheckPlain, ReviewCheckMeasured)):
                     cattrs["check"] = "review"
+                    if isinstance(raw_check, ReviewCheckMeasured):
+                        if "metric" not in cattrs:
+                            cattrs["metric"] = raw_check.metric
+                        if "op" not in cattrs:
+                            cattrs["op"] = raw_check.op
+                        if "target" not in cattrs:
+                            cattrs["target"] = raw_check.target
                 elif isinstance(raw_check, CodeCheck):
                     if raw_check.kind == "rubric":
                         cattrs["check"] = "rubric"
                     else:
                         cattrs["check"] = "code"
-                elif raw_check is not None:
-                    raise CatalogError(f"criterion_freeze_unknown_check_type:{key}")
-                if raw_check is not None:
                     for pk in ("metric", "op", "target"):
                         if pk in cattrs:
                             continue
@@ -166,6 +171,8 @@ def _plan_accept_freeze_rows(
                             cattrs[pk] = cv
                         else:
                             cattrs[pk] = str(cv)
+                elif raw_check is not None:
+                    raise CatalogError(f"criterion_freeze_unknown_check_type:{key}")
                 if getattr(tmpl, "uses_sesoi", False) and tmpl.sesoi is not None:
                     cattrs["uses_sesoi"] = True
                     cattrs["sesoi"] = float(tmpl.sesoi)

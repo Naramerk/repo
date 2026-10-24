@@ -17,6 +17,7 @@ from coscientist.core.claims.graph import (
     GraphSchemaError,
     KindSpec,
     registry_from_schema,
+    required_attr_names,
     validate_attr_value,
 )
 from coscientist.core.events.errors import JournalPayloadError
@@ -75,7 +76,7 @@ def _validate_registry_attrs(
     else:
         assert_never(layer)
     known = {f.name: f for f in spec.fields}
-    required = {f.name for f in spec.fields if f.required}
+    required = required_attr_names(kind, typed, spec)
     missing = sorted(required - set(typed))
     if missing:
         raise ValueError(f"{kind} missing required attrs: {missing}")

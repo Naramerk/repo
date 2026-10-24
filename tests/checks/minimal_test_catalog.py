@@ -237,6 +237,8 @@ def minimal_test_catalog() -> Catalog:
                     title="Human/LLM review",
                     text_ru="Ревьюер оценивает качество результата.",
                     check={
+                        "measured": True,
+                        "max_calls": 1,
                         "reviewer_role": "reviewer",
                         "question": "Is the result adequate?",
                         "metric": "human_review",
@@ -308,7 +310,9 @@ def minimal_test_catalog() -> Catalog:
                         text_ru=f"M1 PLAN-n critic marker {tid}.",
                         method_sources=["DESIGN_M1 §4"],
                         check={
-                            "reviewer_role": "critic",
+                            "measured": True,
+                        "max_calls": 1,
+                        "reviewer_role": "critic",
                             "question": f"marker:{tid}",
                             # KindSpec criterion freeze — catalog-authored, not invent at emit.
                             "metric": tid,

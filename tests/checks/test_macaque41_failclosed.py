@@ -36,7 +36,7 @@ from coscientist.core.execution.domain import (
     QuestionSpec,
     RequirementRef,
     RequirementTemplate,
-    ReviewCheck,
+    ReviewCheckMeasured,
     TaskOutcome,
     TaskState,
 )
@@ -596,9 +596,11 @@ def _catalog_with_marker(*, exempt: bool) -> Catalog:
         method_sources=["test"],
         rule_ids=["R23"],
         applies_to=["experiment"],
-        check=ReviewCheck(
+        check=ReviewCheckMeasured(
+            measured=True,
             reviewer_role="critic",
             question="q",
+            max_calls=1,
             metric="exempt_marker",
             op="==",
             target="pass",

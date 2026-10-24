@@ -45,7 +45,7 @@ from coscientist.core.execution.domain import (
     HitlPolicy,
     RequirementRef,
     RequirementTemplate,
-    ReviewCheck,
+    ReviewCheckPlain,
     Study,
     TaskSpec,
 )
@@ -127,7 +127,7 @@ def test_required_domain_fields_have_no_defaults():
             method_sources=["m"],
             rule_ids=["R"],
             applies_to=["experiment"],
-            check=ReviewCheck(reviewer_role="critic", question="q", metric=None, op=None, target=None),
+            check=ReviewCheckPlain(measured=False, reviewer_role="critic", question="q", max_calls=1),
             role="validity",
             version=1,
         )  # type: ignore[call-arg]

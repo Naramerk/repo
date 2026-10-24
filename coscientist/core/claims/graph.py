@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 from functools import lru_cache
 from importlib import resources
-from typing import Annotated, Any, Literal, TypeGuard, Union, assert_never, get_args
+from typing import Annotated, Any, Literal, Mapping, TypeGuard, Union, assert_never, get_args
 
 import yaml
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -80,6 +80,24 @@ class KindSpec(Frozen):
     description: str = ""
     prefix: str | None = None
     fields: tuple[AttrFieldSpec, ...]
+
+
+# Stance fields on criterion: required for check=code|review; not for PR13
+# qualitative check=rubric with rubric_digest (DESIGN_M1 §6.2 — never feeds stance).
+_CRITERION_STANCE_FIELDS: frozenset[str] = frozenset({"metric", "op", "target"})
+
+
+def required_attr_names(
+    kind: str, attrs: Mapping[str, object], spec: KindSpec
+) -> set[str]:
+    """KindSpec required fields, with PR13 rubric-digest exception for criterion."""
+    required = {f.name for f in spec.fields if f.required}
+    if kind == "criterion":
+        check = attrs.get("check")
+        digest = attrs.get("rubric_digest")
+        if check == "rubric" and isinstance(digest, str) and digest:
+            required -= _CRITERION_STANCE_FIELDS
+    return required
 
 
 class GraphSchemaError(CoreError):

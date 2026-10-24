@@ -7,7 +7,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final, Mapping
 
-from pydantic import StrictInt, ValidationError
+from pydantic import StrictInt, TypeAdapter, ValidationError
 
 from coscientist.core.claims.graph import KindRegistry
 from coscientist.core.events.errors import CatalogError
@@ -16,7 +16,13 @@ from coscientist.core.execution.domain import (
     CodeCheck,
     RequirementTemplate,
     ReviewCheck,
+    ReviewCheckMeasured,
+    ReviewCheckPlain,
     RuleRef,
+)
+
+_REVIEW_CHECK_ADAPTER: TypeAdapter[ReviewCheckPlain | ReviewCheckMeasured] = TypeAdapter(
+    ReviewCheck
 )
 
 # Re-export for callers/tests that type catalog generations.
@@ -146,7 +152,7 @@ def _migrate_code_check(raw: dict[str, Any]) -> dict[str, Any]:
     return dict(raw)
 
 
-def _parse_check(raw: dict[str, Any]) -> CodeCheck | ReviewCheck:
+def _parse_check(raw: dict[str, Any]) -> CodeCheck | ReviewCheckPlain | ReviewCheckMeasured:
     if "kind" in raw:
         kind = raw["kind"]
         if kind not in KNOWN_CODE_KINDS:
@@ -190,7 +196,7 @@ def _parse_check(raw: dict[str, Any]) -> CodeCheck | ReviewCheck:
         if role not in KNOWN_REVIEW_ROLES:
             raise CatalogError(f"catalog_reviewcheck_v1:unknown_role:{role}")
         try:
-            return ReviewCheck.model_validate(raw)
+            return _REVIEW_CHECK_ADAPTER.validate_python(raw)
         except ValidationError as e:
             raise CatalogError(f"catalog_reviewcheck_v1:{role}:{e}") from e
     raise CatalogError("catalog_check_v1:must_be_codecheck_or_reviewcheck")
