@@ -124,9 +124,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
             if t and t.state == TaskState.PENDING:
                 self._call(self.rt.start_attempt(key))
                 self._call(self.rt.cancel_task(key, reason="cancelled"))
-        if not any(
-            k.startswith("EXP-") for k in (t.spec.task_key for t in self.rt.tasks.values())
-        ):
+        if not any(k.startswith("EXP-") for k in (t.spec.task_key for t in self.rt.tasks.values())):
             specs = [
                 TaskSpec(
                     task_key="EXP-1",
@@ -176,9 +174,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
     @precondition(lambda self: self._hitl_ok())
     @rule(key=task_keys, target=hitl_ids)
     def open_hitl(self, key):
-        return self._call(
-            self.rt.open_hitl(key, kind="plan_approval", timeout_s=15), default="none"
-        ) or "none"
+        return self._call(self.rt.open_hitl(key, kind="plan_approval", timeout_s=15), default="none") or "none"
 
     @precondition(lambda self: self._hitl_ok())
     @rule(hid=hitl_ids)
@@ -207,9 +203,26 @@ class StudyClosesMachine(RuleBasedStateMachine):
             return
         self._call(self.rt.cancel_task(key))
 
+    def _has_task_key(self, key: str) -> bool:
+        if self.rt is None:
+            return False
+        return any(t.spec.task_key == key for t in self.rt.tasks.values())
+
+    @precondition(lambda self: self._hitl_ok() and self._has_task_key("EXP-1"))
+    @rule()
+    def fork_session_targeted(self):
+        """Targeted fork on EXP-1 (has descendant EXP-2) once the plan exists."""
+        try:
+            self._run(self.rt.fork([Clarification(target="EXP-1", text="retry")]))
+            self.fork_count += 1
+        except LeaseLost:
+            self.lost_lease = True
+        except _RULE_ERR:
+            pass
+
     @precondition(lambda self: self._hitl_ok())
     @rule()
-    def fork_session(self):
+    def fork_session_untargeted(self):
         try:
             self._run(self.rt.fork([Clarification(target=None, text="retry")]))
             self.fork_count += 1
@@ -340,8 +353,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
         self._run(self.rt.tick())
         self._run(self.rt.tick())
         assert all(t.state == TaskState.DONE for t in self.rt.tasks.values()), {
-            t.spec.task_key: (t.state, t.outcome, t.reason)
-            for t in self.rt.tasks.values()
+            t.spec.task_key: (t.state, t.outcome, t.reason) for t in self.rt.tasks.values()
         }
 
 

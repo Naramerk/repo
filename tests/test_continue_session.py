@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.ids import is_study_id, study_id_from_idempotency_key
 from coscientist.core.execution.domain import Clarification, TaskSpec
 from coscientist.core.plan.continue_session import (
@@ -19,6 +20,8 @@ from coscientist.core.plan.continue_session import (
     same_spec_for_inherit,
     task_spec_digest,
 )
+from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
+from tests.helpers import close_runtime, open_runtime
 
 
 def _spec(key: str, *deps: str, goal: str = "g") -> TaskSpec:
@@ -35,7 +38,7 @@ def _dag() -> dict[str, TaskSpec]:
     }
 
 
-def test_partition_affected_inherited_and_untargeted_stale() -> None:
+def test_partition_targeted_affected_and_inherited() -> None:
     tasks = _dag()
     p = partition_fork(
         parent_id="st_p",
@@ -47,12 +50,21 @@ def test_partition_affected_inherited_and_untargeted_stale() -> None:
     for k in p.inherited:
         assert same_spec_for_inherit(tasks[k], tasks[k])
         assert p.digests[k] == task_spec_digest(tasks[k])
+
+
+def test_partition_untargeted_all_affected() -> None:
+    tasks = _dag()
     u = partition_fork(
         parent_id="st_p",
         tasks=tasks,
         clarifications=[Clarification(target=None, text="all")],
     )
-    assert u.affected == frozenset(tasks) and not u.inherited
+    assert u.affected == frozenset(tasks)
+    assert not u.inherited
+
+
+def test_partition_stale_required_keys_expand_affected() -> None:
+    tasks = _dag()
     s = partition_fork(
         parent_id="st_p",
         tasks=tasks,
@@ -63,39 +75,89 @@ def test_partition_affected_inherited_and_untargeted_stale() -> None:
     assert s.inherited == frozenset({"SPEC", "PLAN"})
 
 
-def test_fork_idem_key_and_child_id_stable() -> None:
+def test_fork_idem_key_stable_empty_nonce() -> None:
+    c = [Clarification(target="EXP-1", text="once")]
+    assert fork_idem_key("st_p", c, nonce="") == fork_idem_key("st_p", c, nonce="")
+
+
+def test_fork_idem_key_differs_with_nonce() -> None:
+    c = [Clarification(target="EXP-1", text="once")]
+    assert fork_idem_key("st_p", c, nonce="") != fork_idem_key("st_p", c, nonce="n2")
+
+
+def test_fork_child_id_stable() -> None:
+    key = fork_idem_key("st_p", [Clarification(target="EXP-1", text="once")], nonce="")
+    assert fork_child_id(key) == fork_child_id(key)
+
+
+def test_fork_child_id_matches_ids_generator() -> None:
+    key = fork_idem_key("st_p", [Clarification(target="EXP-1", text="once")], nonce="")
+    assert fork_child_id(key) == study_id_from_idempotency_key(key)
+
+
+def test_fork_child_id_is_study_id_idem_prefix() -> None:
+    key = fork_idem_key("st_p", [Clarification(target="EXP-1", text="once")], nonce="")
+    child = fork_child_id(key)
+    assert is_study_id(child)
+    assert child.startswith("st_idem_")
+
+
+def test_fork_child_id_differs_with_nonce() -> None:
     c = [Clarification(target="EXP-1", text="once")]
     a = fork_idem_key("st_p", c, nonce="")
-    assert a == fork_idem_key("st_p", c, nonce="") != fork_idem_key("st_p", c, nonce="n2")
-    child = fork_child_id(a)
-    assert child == fork_child_id(a) == study_id_from_idempotency_key(a)
-    assert is_study_id(child) and child.startswith("st_idem_")
-    assert child != fork_child_id(fork_idem_key("st_p", c, nonce="n2"))
+    b = fork_idem_key("st_p", c, nonce="n2")
+    assert fork_child_id(a) != fork_child_id(b)
+
+
+def test_partition_fork_idem_key_matches_helper() -> None:
+    c = [Clarification(target="EXP-1", text="once")]
+    a = fork_idem_key("st_p", c, nonce="")
     assert partition_fork(parent_id="st_p", tasks=_dag(), clarifications=c).idem_key == a
 
 
-def test_continue_session_refuse_init_value_error() -> None:
+@pytest.mark.parametrize(
+    ("code", "detail"),
+    [
+        pytest.param("", "detail", id="blank_code"),
+        pytest.param("code", "   ", id="blank_detail"),
+    ],
+)
+def test_continue_session_refuse_init_value_error(code: str, detail: str) -> None:
     with pytest.raises(ValueError, match="non-blank code and detail"):
-        ContinueSessionRefuse("", "detail")
-    with pytest.raises(ValueError, match="non-blank code and detail"):
-        ContinueSessionRefuse("code", "   ")
+        ContinueSessionRefuse(code, detail)
 
 
-def test_fork_partition_disjoint_cover_value_error() -> None:
-    with pytest.raises(ValueError, match="affected∪inherited"):
+@pytest.mark.parametrize(
+    ("affected", "inherited", "digests", "match"),
+    [
+        pytest.param(
+            frozenset({"A"}),
+            frozenset(),
+            {"A": "d", "B": "d"},
+            "affected∪inherited",
+            id="cover",
+        ),
+        pytest.param(
+            frozenset({"A"}),
+            frozenset({"A"}),
+            {"A": "d"},
+            "must be disjoint",
+            id="disjoint",
+        ),
+    ],
+)
+def test_fork_partition_disjoint_cover_value_error(
+    affected: frozenset[str],
+    inherited: frozenset[str],
+    digests: dict[str, str],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
         ForkPartition(
             parent_id="st_p",
-            affected=frozenset({"A"}),
-            inherited=frozenset(),
-            digests={"A": "d", "B": "d"},
-            idem_key="fork:x",
-        )
-    with pytest.raises(ValueError, match="must be disjoint"):
-        ForkPartition(
-            parent_id="st_p",
-            affected=frozenset({"A"}),
-            inherited=frozenset({"A"}),
-            digests={"A": "d"},
+            affected=affected,
+            inherited=inherited,
+            digests=digests,
             idem_key="fork:x",
         )
 
@@ -146,22 +208,22 @@ _BAD_CLARS: list[object] = ["not-clarification"]
         ),
         pytest.param(
             {"tasks": _BAD_SEQ, "clarifications": [_C0]},
-            "task_type",
+            r"task_type:expected TaskSpec",
             id="task_type_seq",
         ),
         pytest.param(
             {"tasks": _BAD_MAP, "clarifications": [_C0]},
-            "task_type",
+            r"task_type:expected TaskSpec",
             id="task_type_map",
         ),
         pytest.param(
             {"tasks": "nope", "clarifications": [_C0]},
-            "task_type",
+            r"task_type:expected Mapping/Sequence",
             id="task_type_str",
         ),
         pytest.param(
             {"tasks": 1, "clarifications": [_C0]},
-            "task_type",
+            r"task_type:expected Mapping/Sequence",
             id="task_type_int",
         ),
         pytest.param(
@@ -207,26 +269,33 @@ def test_fork_refuses(kwargs: dict[str, object], match: str) -> None:
         )
 
 
-def test_fork_helpers_refuse() -> None:
-    c = [_C0]
+def test_fork_idem_key_parent_id_required() -> None:
     with pytest.raises(ContinueSessionRefuse, match="parent_id_required"):
-        fork_idem_key("  ", c)
+        fork_idem_key("  ", [_C0])
+
+
+def test_fork_idem_key_nonce_must_be_str() -> None:
     bad_nonce: object = 1
     with pytest.raises(ContinueSessionRefuse, match="nonce_must_be_str"):
-        fork_idem_key("st_p", c, nonce=bad_nonce)
+        fork_idem_key("st_p", [_C0], nonce=bad_nonce)
+
+
+def test_fork_child_id_idem_key_required() -> None:
     with pytest.raises(ContinueSessionRefuse, match="idem_key_required"):
         fork_child_id("x")
-    part = partition_fork(parent_id="st_p", tasks=_dag(), clarifications=c)
+
+
+def test_fork_session_record_child_id_required() -> None:
+    part = partition_fork(parent_id="st_p", tasks=_dag(), clarifications=[_C0])
     with pytest.raises(ContinueSessionRefuse, match="child_id_required"):
         ForkSessionRecord.from_partition(part, child_id="  ")
+
+
+def test_same_spec_for_inherit_false_when_goal_differs() -> None:
     assert not same_spec_for_inherit(_spec("EXP-0", goal="a"), _spec("EXP-0", goal="b"))
 
 
-@pytest.mark.asyncio
-async def test_experimental_fork_idempotent_across_reopen(tmp_path, clock) -> None:
-    from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
-    from tests.helpers import close_runtime, open_runtime
-
+async def _boot_fork_runtime(tmp_path: Path, clock: FakeClock) -> ExpStudyRuntime:
     root = Path(tmp_path)
     rt = await open_runtime(root, "st_fork", clock=clock, runtime_cls=ExpStudyRuntime)
     await rt.create_study(
@@ -238,18 +307,48 @@ async def test_experimental_fork_idempotent_across_reopen(tmp_path, clock) -> No
         finalize_reserve_s=5,
         require_hypotheses=False,
     )
+    return rt
+
+
+@pytest.mark.asyncio
+async def test_experimental_fork_replay_same_child_id(tmp_path: Path, clock: FakeClock) -> None:
+    rt = await _boot_fork_runtime(tmp_path, clock)
     c = [Clarification(target="PLAN", text="edit")]
     await rt.fork(c)
     first = rt.last_fork
     assert first is not None
     await rt.fork(c)
-    assert rt.last_fork is not None and rt.last_fork.child_id == first.child_id
+    assert rt.last_fork is not None
+    assert rt.last_fork.child_id == first.child_id
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_experimental_fork_new_nonce_different_child_id(tmp_path: Path, clock: FakeClock) -> None:
+    rt = await _boot_fork_runtime(tmp_path, clock)
+    c = [Clarification(target="PLAN", text="edit")]
+    await rt.fork(c)
+    first = rt.last_fork
+    assert first is not None
     await rt.fork(c, nonce="n2")
-    assert rt.last_fork is not None and rt.last_fork.child_id != first.child_id
+    assert rt.last_fork is not None
+    assert rt.last_fork.child_id != first.child_id
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_experimental_fork_idempotent_across_reopen(tmp_path: Path, clock: FakeClock) -> None:
+    rt = await _boot_fork_runtime(tmp_path, clock)
+    c = [Clarification(target="PLAN", text="edit")]
+    await rt.fork(c)
+    first = rt.last_fork
+    assert first is not None
     owner = rt.owner
+    root = Path(tmp_path)
     await close_runtime(rt)
     clock.advance(timedelta(seconds=60))
     rt2 = await open_runtime(root, "st_fork", clock=clock, runtime_cls=ExpStudyRuntime, owner=owner)
     await rt2.fork(c)
-    assert rt2.last_fork is not None and rt2.last_fork.child_id == first.child_id
+    assert rt2.last_fork is not None
+    assert rt2.last_fork.child_id == first.child_id
     await close_runtime(rt2)
