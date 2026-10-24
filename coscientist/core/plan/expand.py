@@ -187,8 +187,10 @@ async def _expand_plan(
         derived = _delegated_by_from_hitl(
             runtime, hitl_request_id, after_task=after_task, plan_key=plan_key
         )
-        if derived == "human" or derived == "timeout":
-            delegated_by = derived
+        if derived == "human":
+            delegated_by = "human"
+        elif derived == "timeout":
+            delegated_by = "timeout"
         else:
             await refuse_expansion(
                 runtime,
