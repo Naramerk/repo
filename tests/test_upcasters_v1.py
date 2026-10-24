@@ -284,7 +284,8 @@ async def test_read_rejects_string_schema_version_in_db(tmp_path: Path):
             "StudyCreated:s",
             "{}",
             "2024-01-01T00:00:00+00:00",
-            "1",  # text, not exact int
+            # Non-numeric text survives INT affinity; "1" would coerce to integer.
+            "not-an-int",
             0,
             "d",
         ),
@@ -388,4 +389,4 @@ async def test_attempt_started_missing_attempt_role_raises(tmp_path: Path):
         schema_version=1,
     )
     with pytest.raises(KeyError, match="attempt_role"):
-        rt._apply_local(ev)  # noqa: SLF001
+        rt._project_local(ev)  # noqa: SLF001
