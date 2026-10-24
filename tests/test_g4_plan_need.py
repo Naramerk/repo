@@ -24,20 +24,24 @@ from tests.helpers import close_runtime, open_runtime
 def test_need_validate_resolve_refuse_blob() -> None:
     n = validate_need({"needed": True, "reason": "test H0"})
     assert n.needed is True and validate_need(n).needed is True
-    with pytest.raises((ValidationError, ValueError)):
+    with pytest.raises(ValidationError, match="reason"):
         validate_need({"needed": False, "reason": ""})
-    with pytest.raises((ValidationError, ValueError)):
+    with pytest.raises(ValidationError, match="Need.reason must be non-empty"):
         validate_need({"needed": True, "reason": "   "})
     forced = Need(needed=True, reason="must")
     opt = Need(needed=False, reason="skip")
     assert_profile_hypotheses_satisfied(forced, require_hypotheses=True)
-    with pytest.raises(PlanNeedRefuse):
+    with pytest.raises(
+        PlanNeedRefuse, match="profile_requires_hypotheses:plan.hypotheses.needed_must_be_true"
+    ):
         assert_profile_hypotheses_satisfied(opt, require_hypotheses=True)
     with pytest.raises(PlanNeedRefuse, match="plan_need_required:hypotheses"):
         resolve_plan_needs(hypotheses=None, literature=None, require_hypotheses=False)
     with pytest.raises(PlanNeedRefuse, match="plan_need_required:literature"):
         resolve_plan_needs(hypotheses=forced, literature=None, require_hypotheses=False)
-    with pytest.raises(PlanNeedRefuse):
+    with pytest.raises(
+        PlanNeedRefuse, match="profile_requires_hypotheses:plan.hypotheses.needed_must_be_true"
+    ):
         resolve_plan_needs(
             hypotheses=opt,
             literature=Need(needed=False, reason="no lit"),
@@ -92,7 +96,7 @@ def test_upcasters_need_and_require_hypotheses() -> None:
 
 
 def test_plan_model_requires_need() -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="hypotheses"):
         Plan(plan_id="pl", study_id="st", revision=1, hypothesis_id=None, tasks=[])
 
 

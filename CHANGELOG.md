@@ -11,6 +11,15 @@
   (one discriminator with `CheckResult` / `CheckLike`). Plan:
   [`docs/plan/quality-hitl.md`](docs/plan/quality-hitl.md).
 
+### G4 — Need + Plan.hypotheses/literature + Study.require_hypotheses
+- Domain `Need` (strict `needed`/`reason`); `Plan.hypotheses` / `Plan.literature` required;
+  `Study.require_hypotheses` from profile. Omit Need → `PlanNeedRefuse`.
+- **DESIGN confirm:** [DESIGN §2](docs/DESIGN.md) / research-cycle D3 target:
+  `require_hypotheses: bool` is **required (no default)**. Code still has
+  `domain.Study.require_hypotheses: bool = False` and `lifecycle.create_study(..., False)` —
+  follow-up to drop (align with D3/RC3t; do not invent in upcasters).
+- Parity: [CAPABILITIES #2](docs/CAPABILITIES.md), [DESIGN §2](docs/DESIGN.md).
+
 ### Benchmark harness — typed errors (plan item 2)
 - Add `bench/errors.py`: `BenchError` / `BenchConfigError` (typed refuse; no
   silent fallbacks). import-linter root includes `bench`; forbid
