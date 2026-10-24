@@ -52,7 +52,7 @@ class UntilSpec(BaseModel):
 class LimitationRow(BaseModel):
     model_config = _WIRE
     text: str
-    ref: str | None = None  # audit-ok[field_default]: LimitationRow.ref optional on wire
+    ref: str | None = None  # audit-ok[field_default]: LimitationRow.ref opt
 
 
 class SupersededQuestion(BaseModel):
@@ -65,8 +65,8 @@ class QuestionDisposition(BaseModel):
     """Loose wire row under StudyFinalized.question_dispositions values."""
 
     model_config = ConfigDict(frozen=True, extra="allow", strict=True)
-    disposition: str | None = None  # audit-ok[field_default]: QuestionDisposition.disposition optional on wire
-    reason: str | None = None  # audit-ok[field_default]: QuestionDisposition.reason optional on wire
+    disposition: str | None = None  # audit-ok[field_default]: QuestionDisposition.disposition opt
+    reason: str | None = None  # audit-ok[field_default]: QuestionDisposition.reason opt
 
 
 # --- per-event wire models --------------------------------------------------------
@@ -77,32 +77,32 @@ class StudyCreatedPayload(BaseModel):
     model_config = _WIRE
     study_id: str
     catalog_version: StrictInt
-    profile: str | None = None  # audit-ok[field_default]: StudyCreatedPayload.profile optional on wire
-    request: str | None = None  # audit-ok[field_default]: StudyCreatedPayload.request optional on wire
-    hitl_policy: HitlPolicy | None = None  # audit-ok[field_default]: StudyCreatedPayload.hitl_policy optional on wire
-    deadline: str | None = None  # audit-ok[field_default]: StudyCreatedPayload.deadline optional on wire
-    created_at: str | None = None  # audit-ok[field_default]: StudyCreatedPayload.created_at optional on wire
-    parent_study_id: str | None = None  # audit-ok[field_default]: StudyCreatedPayload.parent_study_id optional on wire
-    budget: Budget | None = None  # audit-ok[field_default]: StudyCreatedPayload.budget optional on wire
-    finalize_reserve_s: StrictInt | None = None  # audit-ok[field_default]: StudyCreatedPayload.finalize_reserve_s optional on wire
-    confirmations_needed: StrictInt | None = None  # audit-ok[field_default]: StudyCreatedPayload.confirmations_needed optional on wire
-    refutations_needed: StrictInt | None = None  # audit-ok[field_default]: StudyCreatedPayload.refutations_needed optional on wire
-    refutation_priority: bool | None = None  # audit-ok[field_default]: StudyCreatedPayload.refutation_priority optional on wire
-    supported_needed: StrictInt | None = None  # audit-ok[field_default]: StudyCreatedPayload.supported_needed optional on wire
-    aggregate: Literal["count"] | None = None  # audit-ok[field_default]: StudyCreatedPayload.aggregate optional on wire
-    evalue_alpha: float | None = None  # audit-ok[field_default]: StudyCreatedPayload.evalue_alpha optional on wire
-    max_expansions: StrictInt | None = None  # audit-ok[field_default]: StudyCreatedPayload.max_expansions optional on wire
-    max_human_expansions: StrictInt | None = None  # audit-ok[field_default]: StudyCreatedPayload.max_human_expansions optional on wire
-    replan_reserve: float | None = None  # audit-ok[field_default]: StudyCreatedPayload.replan_reserve optional on wire
-    max_tasks: StrictInt | None = None  # audit-ok[field_default]: StudyCreatedPayload.max_tasks optional on wire
-    max_depth: StrictInt | None = None  # audit-ok[field_default]: StudyCreatedPayload.max_depth optional on wire
-    plan_timeout_s: StrictInt | None = None  # audit-ok[field_default]: StudyCreatedPayload.plan_timeout_s optional on wire
-    max_foreach_children: StrictInt | None = None  # audit-ok[field_default]: StudyCreatedPayload.max_foreach_children optional on wire
-    max_loop_iter: StrictInt | None = None  # audit-ok[field_default]: StudyCreatedPayload.max_loop_iter optional on wire
-    max_task_budget_share: float | None = None  # audit-ok[field_default]: StudyCreatedPayload.max_task_budget_share optional on wire
-    as_of: str | None = None  # audit-ok[field_default]: StudyCreatedPayload.as_of optional on wire
-    user_input_ids: list[str] | None = None  # audit-ok[field_default]: StudyCreatedPayload.user_input_ids optional on wire
-    max_proposals: StrictInt | None = None  # audit-ok[field_default]: StudyCreatedPayload.max_proposals optional on wire
+    profile: str | None = None  # audit-ok[field_default]: StudyCreated.profile opt
+    request: str | None = None  # audit-ok[field_default]: StudyCreated.request opt
+    hitl_policy: HitlPolicy | None = None  # audit-ok[field_default]: StudyCreated.hitl_policy opt
+    deadline: str | None = None  # audit-ok[field_default]: StudyCreated.deadline opt
+    created_at: str | None = None  # audit-ok[field_default]: StudyCreated.created_at opt
+    parent_study_id: str | None = None  # audit-ok[field_default]: StudyCreated.parent_study_id opt
+    budget: Budget | None = None  # audit-ok[field_default]: StudyCreated.budget opt
+    finalize_reserve_s: StrictInt | None = None  # audit-ok[field_default]: StudyCreated.finalize_reserve_s opt
+    confirmations_needed: StrictInt | None = None  # audit-ok[field_default]: StudyCreated.confirmations_needed opt
+    refutations_needed: StrictInt | None = None  # audit-ok[field_default]: StudyCreated.refutations_needed opt
+    refutation_priority: bool | None = None  # audit-ok[field_default]: StudyCreated.refutation_priority opt
+    supported_needed: StrictInt | None = None  # audit-ok[field_default]: StudyCreated.supported_needed opt
+    aggregate: Literal["count"] | None = None  # audit-ok[field_default]: StudyCreated.aggregate opt
+    evalue_alpha: float | None = None  # audit-ok[field_default]: StudyCreated.evalue_alpha opt
+    max_expansions: StrictInt | None = None  # audit-ok[field_default]: StudyCreated.max_expansions opt
+    max_human_expansions: StrictInt | None = None  # audit-ok[field_default]: StudyCreated.max_human_expansions opt
+    replan_reserve: float | None = None  # audit-ok[field_default]: StudyCreated.replan_reserve opt
+    max_tasks: StrictInt | None = None  # audit-ok[field_default]: StudyCreated.max_tasks opt
+    max_depth: StrictInt | None = None  # audit-ok[field_default]: StudyCreated.max_depth opt
+    plan_timeout_s: StrictInt | None = None  # audit-ok[field_default]: StudyCreated.plan_timeout_s opt
+    max_foreach_children: StrictInt | None = None  # audit-ok[field_default]: StudyCreated.max_foreach_children opt
+    max_loop_iter: StrictInt | None = None  # audit-ok[field_default]: StudyCreated.max_loop_iter opt
+    max_task_budget_share: float | None = None  # audit-ok[field_default]: StudyCreated.max_task_budget_share opt
+    as_of: str | None = None  # audit-ok[field_default]: StudyCreated.as_of opt
+    user_input_ids: list[str] | None = None  # audit-ok[field_default]: StudyCreated.user_input_ids opt
+    max_proposals: StrictInt | None = None  # audit-ok[field_default]: StudyCreated.max_proposals opt
 
 
 class StudyRefusedPayload(BaseModel):
@@ -110,14 +110,14 @@ class StudyRefusedPayload(BaseModel):
     kind: str
     reason: str
     classifier_error: bool
-    catalog_version: StrictInt | None = None  # audit-ok[field_default]: StudyRefusedPayload.catalog_version optional on wire
+    catalog_version: StrictInt | None = None  # audit-ok[field_default]: StudyRefused.catalog_version opt
 
 
 class StudyCancelledPayload(BaseModel):
     model_config = _WIRE
     study_id: str
     by: str
-    at: str | None = None  # audit-ok[field_default]: StudyCancelledPayload.at optional on wire
+    at: str | None = None  # audit-ok[field_default]: StudyCancelled.at opt
 
 
 class StudyFinalizedPayload(BaseModel):
@@ -131,12 +131,12 @@ class StudyFinalizedPayload(BaseModel):
     conclusion_ids: list[str]
     minimal_report: dict[str, JsonValue] | None
     fallback_reason: str | None
-    refusal: str | None = None  # audit-ok[field_default]: StudyFinalizedPayload.refusal optional on wire
-    hypothesis_verdicts: dict[str, JsonValue] | None = None  # audit-ok[field_default]: StudyFinalizedPayload.hypothesis_verdicts optional on wire
-    hypotheses_unavailable: str | None = None  # audit-ok[field_default]: StudyFinalizedPayload.hypotheses_unavailable optional on wire
-    hypothesis_report: list[JsonValue] | None = None  # audit-ok[field_default]: StudyFinalizedPayload.hypothesis_report optional on wire
-    custom_checks: list[JsonValue] | None = None  # audit-ok[field_default]: StudyFinalizedPayload.custom_checks optional on wire
-    observations: list[JsonValue] | None = None  # audit-ok[field_default]: StudyFinalizedPayload.observations optional on wire
+    refusal: str | None = None  # audit-ok[field_default]: StudyFinalized.refusal opt
+    hypothesis_verdicts: dict[str, JsonValue] | None = None  # audit-ok[field_default]: StudyFinalized.hv opt
+    hypotheses_unavailable: str | None = None  # audit-ok[field_default]: StudyFinalized.hypotheses_unavailable opt
+    hypothesis_report: list[JsonValue] | None = None  # audit-ok[field_default]: StudyFinalized.hypothesis_report opt
+    custom_checks: list[JsonValue] | None = None  # audit-ok[field_default]: StudyFinalized.custom_checks opt
+    observations: list[JsonValue] | None = None  # audit-ok[field_default]: StudyFinalized.observations opt
 
 
 class TaskCreatedPayload(BaseModel):
@@ -147,14 +147,14 @@ class TaskCreatedPayload(BaseModel):
     kind: str
     spec: TaskSpec
     state: str
-    outcome: str | None = None  # audit-ok[field_default]: TaskCreatedPayload.outcome optional on wire
-    reason: str | None = None  # audit-ok[field_default]: TaskCreatedPayload.reason optional on wire
+    outcome: str | None = None  # audit-ok[field_default]: TaskCreated.outcome opt
+    reason: str | None = None  # audit-ok[field_default]: TaskCreated.reason opt
     deadline: str
     attempts: list[str]
-    inherited_from: str | None = None  # audit-ok[field_default]: TaskCreatedPayload.inherited_from optional on wire
-    expand_after_task: str | None = None  # audit-ok[field_default]: TaskCreatedPayload.expand_after_task optional on wire
-    pending_expansion: dict[str, JsonValue] | None = None  # audit-ok[field_default]: TaskCreatedPayload.pending_expansion optional on wire
-    replan_allocated_s: float | None = None  # audit-ok[field_default]: TaskCreatedPayload.replan_allocated_s optional on wire
+    inherited_from: str | None = None  # audit-ok[field_default]: TaskCreated.inherited_from opt
+    expand_after_task: str | None = None  # audit-ok[field_default]: TaskCreated.expand_after_task opt
+    pending_expansion: dict[str, JsonValue] | None = None  # audit-ok[field_default]: TaskCreated.pending_expansion opt
+    replan_allocated_s: float | None = None  # audit-ok[field_default]: TaskCreated.replan_allocated_s opt
 
 
 class TaskInheritedPayload(TaskCreatedPayload):
@@ -168,38 +168,38 @@ class AttemptStartedPayload(BaseModel):
     provenance: str
     study_id: str
     task_id: str
-    dispatch_id: str | None = None  # audit-ok[field_default]: AttemptStartedPayload.dispatch_id optional on wire
-    route_returned: bool | None = None  # audit-ok[field_default]: AttemptStartedPayload.route_returned optional on wire
-    closed: bool | None = None  # audit-ok[field_default]: AttemptStartedPayload.closed optional on wire
-    close_reason: str | None = None  # audit-ok[field_default]: AttemptStartedPayload.close_reason optional on wire
-    agent_output_digest: str | None = None  # audit-ok[field_default]: AttemptStartedPayload.agent_output_digest optional on wire
-    deadline: str | None = None  # audit-ok[field_default]: AttemptStartedPayload.deadline optional on wire
-    inputs: list[InputBinding] | None = None  # audit-ok[field_default]: AttemptStartedPayload.inputs optional on wire
-    inputs_digest: str | None = None  # audit-ok[field_default]: AttemptStartedPayload.inputs_digest optional on wire
-    tainted_context: bool | None = None  # audit-ok[field_default]: AttemptStartedPayload.tainted_context optional on wire
-    limitations: list[LimitationRow] | None = None  # audit-ok[field_default]: AttemptStartedPayload.limitations optional on wire
-    attempt_role: str | None = None  # audit-ok[field_default]: AttemptStartedPayload.attempt_role optional on wire
-    allocated_budget_rub: str | None = None  # audit-ok[field_default]: AttemptStartedPayload.allocated_budget_rub optional on wire
-    budget_limit_rub: str | None = None  # audit-ok[field_default]: AttemptStartedPayload.budget_limit_rub optional on wire
-    share_renorm: bool | None = None  # audit-ok[field_default]: AttemptStartedPayload.share_renorm optional on wire
+    dispatch_id: str | None = None  # audit-ok[field_default]: AttemptStarted.dispatch_id opt
+    route_returned: bool | None = None  # audit-ok[field_default]: AttemptStarted.route_returned opt
+    closed: bool | None = None  # audit-ok[field_default]: AttemptStarted.closed opt
+    close_reason: str | None = None  # audit-ok[field_default]: AttemptStarted.close_reason opt
+    agent_output_digest: str | None = None  # audit-ok[field_default]: AttemptStarted.agent_output_digest opt
+    deadline: str | None = None  # audit-ok[field_default]: AttemptStarted.deadline opt
+    inputs: list[InputBinding] | None = None  # audit-ok[field_default]: AttemptStarted.inputs opt
+    inputs_digest: str | None = None  # audit-ok[field_default]: AttemptStarted.inputs_digest opt
+    tainted_context: bool | None = None  # audit-ok[field_default]: AttemptStarted.tainted_context opt
+    limitations: list[LimitationRow] | None = None  # audit-ok[field_default]: AttemptStarted.limitations opt
+    attempt_role: str | None = None  # audit-ok[field_default]: AttemptStarted.attempt_role opt
+    allocated_budget_rub: str | None = None  # audit-ok[field_default]: AttemptStarted.allocated_budget_rub opt
+    budget_limit_rub: str | None = None  # audit-ok[field_default]: AttemptStarted.budget_limit_rub opt
+    share_renorm: bool | None = None  # audit-ok[field_default]: AttemptStarted.share_renorm opt
 
 
 class AttemptClosedPayload(BaseModel):
     model_config = _WIRE
     attempt_id: str
     close_reason: str
-    closed: bool | None = None  # audit-ok[field_default]: AttemptClosedPayload.closed optional on wire
-    task_id: str | None = None  # audit-ok[field_default]: AttemptClosedPayload.task_id optional on wire
-    retryable: bool | None = None  # audit-ok[field_default]: AttemptClosedPayload.retryable optional on wire
-    retry_at: str | None = None  # audit-ok[field_default]: AttemptClosedPayload.retry_at optional on wire
-    charged: bool | None = None  # audit-ok[field_default]: AttemptClosedPayload.charged optional on wire
+    closed: bool | None = None  # audit-ok[field_default]: AttemptClosed.closed opt
+    task_id: str | None = None  # audit-ok[field_default]: AttemptClosed.task_id opt
+    retryable: bool | None = None  # audit-ok[field_default]: AttemptClosed.retryable opt
+    retry_at: str | None = None  # audit-ok[field_default]: AttemptClosed.retry_at opt
+    charged: bool | None = None  # audit-ok[field_default]: AttemptClosed.charged opt
 
 
 class RouteReturnedPayload(BaseModel):
     model_config = _WIRE
     attempt_id: str
     agent_output_digest: str
-    route: str | None = None  # audit-ok[field_default]: RouteReturnedPayload.route optional on wire
+    route: str | None = None  # audit-ok[field_default]: RouteReturned.route opt
 
 
 class ResultRecordedPayload(BaseModel):
@@ -219,15 +219,15 @@ class ResultRecordedPayload(BaseModel):
     payload_digest: str
     charged: bool
     result_class: str
-    output_kinds: dict[str, str] | None = None  # audit-ok[field_default]: ResultRecordedPayload.output_kinds optional on wire
-    output_map: dict[str, str] | None = None  # audit-ok[field_default]: ResultRecordedPayload.output_map optional on wire
-    downgrade: dict[str, JsonValue] | None = None  # audit-ok[field_default]: ResultRecordedPayload.downgrade optional on wire
-    expansion_request: dict[str, JsonValue] | None = None  # audit-ok[field_default]: ResultRecordedPayload.expansion_request optional on wire
-    detail: str | None = None  # audit-ok[field_default]: ResultRecordedPayload.detail optional on wire
-    claims_dropped: list[JsonValue] | dict[str, JsonValue] | None = None  # audit-ok[field_default]: ResultRecordedPayload.claims_dropped optional on wire
-    budget_overrun: bool | None = None  # audit-ok[field_default]: ResultRecordedPayload.budget_overrun optional on wire
-    budget_limit_rub: str | None = None  # audit-ok[field_default]: ResultRecordedPayload.budget_limit_rub optional on wire
-    agent_output_digest: str | None = None  # audit-ok[field_default]: ResultRecordedPayload.agent_output_digest optional on wire
+    output_kinds: dict[str, str] | None = None  # audit-ok[field_default]: ResultRecorded.output_kinds opt
+    output_map: dict[str, str] | None = None  # audit-ok[field_default]: ResultRecorded.output_map opt
+    downgrade: dict[str, JsonValue] | None = None  # audit-ok[field_default]: ResultRecorded.downgrade opt
+    expansion_request: dict[str, JsonValue] | None = None  # audit-ok[field_default]: ResultRecorded.er opt
+    detail: str | None = None  # audit-ok[field_default]: ResultRecorded.detail opt
+    claims_dropped: list[JsonValue] | dict[str, JsonValue] | None = None  # audit-ok[field_default]: ResultRecorded.cd opt
+    budget_overrun: bool | None = None  # audit-ok[field_default]: ResultRecorded.budget_overrun opt
+    budget_limit_rub: str | None = None  # audit-ok[field_default]: ResultRecorded.budget_limit_rub opt
+    agent_output_digest: str | None = None  # audit-ok[field_default]: ResultRecorded.agent_output_digest opt
 
 
 class TaskDonePayload(BaseModel):
@@ -235,8 +235,8 @@ class TaskDonePayload(BaseModel):
     task_id: str
     outcome: str
     reason: str | None
-    detail: str | None = None  # audit-ok[field_default]: TaskDonePayload.detail optional on wire
-    budget_overrun: bool | None = None  # audit-ok[field_default]: TaskDonePayload.budget_overrun optional on wire
+    detail: str | None = None  # audit-ok[field_default]: TaskDone.detail opt
+    budget_overrun: bool | None = None  # audit-ok[field_default]: TaskDone.budget_overrun opt
 
 
 class LoopWire(BaseModel):
@@ -247,9 +247,9 @@ class LoopWire(BaseModel):
     body: list[TaskSpec] | str
     until: UntilSpec | dict[str, JsonValue]
     max_iter: StrictInt
-    scope_hypotheses: list[str] | None = None  # audit-ok[field_default]: LoopWire.scope_hypotheses optional on wire
-    scope_questions: list[str] | None = None  # audit-ok[field_default]: LoopWire.scope_questions optional on wire
-    depends_on: list[str] | None = None  # audit-ok[field_default]: LoopWire.depends_on optional on wire
+    scope_hypotheses: list[str] | None = None  # audit-ok[field_default]: LoopWire.scope_hypotheses opt
+    scope_questions: list[str] | None = None  # audit-ok[field_default]: LoopWire.scope_questions opt
+    depends_on: list[str] | None = None  # audit-ok[field_default]: LoopWire.depends_on opt
 
 
 class PlanAcceptedPayload(BaseModel):
@@ -262,8 +262,8 @@ class PlanAcceptedPayload(BaseModel):
     questions: list[QuestionSpec]
     expand_after: list[str]
     loops: list[LoopWire | LoopSpec]
-    subquestions: list[QuestionSpec] | None = None  # audit-ok[field_default]: PlanAcceptedPayload.subquestions optional on wire
-    rollup: str | None = None  # audit-ok[field_default]: PlanAcceptedPayload.rollup optional on wire
+    subquestions: list[QuestionSpec] | None = None  # audit-ok[field_default]: PlanAccepted.subquestions opt
+    rollup: str | None = None  # audit-ok[field_default]: PlanAccepted.rollup opt
 
 
 class PlanExpandedPayload(BaseModel):
@@ -291,22 +291,22 @@ class PlanExpandedPayload(BaseModel):
     prev_plan_id: str | None
     hitl_request_id: str | None
     plan_key: str | None
-    foreach: bool | None = None  # audit-ok[field_default]: PlanExpandedPayload.foreach optional on wire
-    foreach_template: str | None = None  # audit-ok[field_default]: PlanExpandedPayload.foreach_template optional on wire
-    foreach_items: list[JsonValue] | None = None  # audit-ok[field_default]: PlanExpandedPayload.foreach_items optional on wire
-    foreach_kind: str | None = None  # audit-ok[field_default]: PlanExpandedPayload.foreach_kind optional on wire
-    foreach_capped: bool | None = None  # audit-ok[field_default]: PlanExpandedPayload.foreach_capped optional on wire
-    foreach_cap: StrictInt | None = None  # audit-ok[field_default]: PlanExpandedPayload.foreach_cap optional on wire
-    foreach_total: StrictInt | None = None  # audit-ok[field_default]: PlanExpandedPayload.foreach_total optional on wire
-    foreach_dropped: list[JsonValue] | None = None  # audit-ok[field_default]: PlanExpandedPayload.foreach_dropped optional on wire
-    foreach_rank_notes: list[JsonValue] | None = None  # audit-ok[field_default]: PlanExpandedPayload.foreach_rank_notes optional on wire
-    foreach_refute: bool | None = None  # audit-ok[field_default]: PlanExpandedPayload.foreach_refute optional on wire
-    loop: bool | None = None  # audit-ok[field_default]: PlanExpandedPayload.loop optional on wire
-    loop_id: str | None = None  # audit-ok[field_default]: PlanExpandedPayload.loop_id optional on wire
-    loop_iter: StrictInt | None = None  # audit-ok[field_default]: PlanExpandedPayload.loop_iter optional on wire
-    loop_max_iter: StrictInt | None = None  # audit-ok[field_default]: PlanExpandedPayload.loop_max_iter optional on wire
-    loop_template_keys: list[str] | None = None  # audit-ok[field_default]: PlanExpandedPayload.loop_template_keys optional on wire
-    loop_until: UntilSpec | dict[str, JsonValue] | None = None  # audit-ok[field_default]: PlanExpandedPayload.loop_until optional on wire
+    foreach: bool | None = None  # audit-ok[field_default]: PlanExpanded.foreach opt
+    foreach_template: str | None = None  # audit-ok[field_default]: PlanExpanded.foreach_template opt
+    foreach_items: list[JsonValue] | None = None  # audit-ok[field_default]: PlanExpanded.foreach_items opt
+    foreach_kind: str | None = None  # audit-ok[field_default]: PlanExpanded.foreach_kind opt
+    foreach_capped: bool | None = None  # audit-ok[field_default]: PlanExpanded.foreach_capped opt
+    foreach_cap: StrictInt | None = None  # audit-ok[field_default]: PlanExpanded.foreach_cap opt
+    foreach_total: StrictInt | None = None  # audit-ok[field_default]: PlanExpanded.foreach_total opt
+    foreach_dropped: list[JsonValue] | None = None  # audit-ok[field_default]: PlanExpanded.foreach_dropped opt
+    foreach_rank_notes: list[JsonValue] | None = None  # audit-ok[field_default]: PlanExpanded.foreach_rank_notes opt
+    foreach_refute: bool | None = None  # audit-ok[field_default]: PlanExpanded.foreach_refute opt
+    loop: bool | None = None  # audit-ok[field_default]: PlanExpanded.loop opt
+    loop_id: str | None = None  # audit-ok[field_default]: PlanExpanded.loop_id opt
+    loop_iter: StrictInt | None = None  # audit-ok[field_default]: PlanExpanded.loop_iter opt
+    loop_max_iter: StrictInt | None = None  # audit-ok[field_default]: PlanExpanded.loop_max_iter opt
+    loop_template_keys: list[str] | None = None  # audit-ok[field_default]: PlanExpanded.loop_template_keys opt
+    loop_until: UntilSpec | dict[str, JsonValue] | None = None  # audit-ok[field_default]: PlanExpanded.loop_until opt
 
 
 class ExpansionRefusedPayload(BaseModel):
@@ -315,10 +315,10 @@ class ExpansionRefusedPayload(BaseModel):
     reason: str
     detail: str
     plan_key: str | None
-    loop: bool | None = None  # audit-ok[field_default]: ExpansionRefusedPayload.loop optional on wire
-    loop_id: str | None = None  # audit-ok[field_default]: ExpansionRefusedPayload.loop_id optional on wire
-    loop_reason: str | None = None  # audit-ok[field_default]: ExpansionRefusedPayload.loop_reason optional on wire
-    report_line: str | None = None  # audit-ok[field_default]: ExpansionRefusedPayload.report_line optional on wire
+    loop: bool | None = None  # audit-ok[field_default]: ExpansionRefused.loop opt
+    loop_id: str | None = None  # audit-ok[field_default]: ExpansionRefused.loop_id opt
+    loop_reason: str | None = None  # audit-ok[field_default]: ExpansionRefused.loop_reason opt
+    report_line: str | None = None  # audit-ok[field_default]: ExpansionRefused.report_line opt
 
 
 class PlanRefusedPayload(BaseModel):
@@ -338,8 +338,8 @@ class LoopCappedPayload(BaseModel):
     scope_questions: list[str]
     until: UntilSpec | dict[str, JsonValue]
     reason: str
-    detail: str | None = None  # audit-ok[field_default]: LoopCappedPayload.detail optional on wire
-    refuse_detail: str | None = None  # audit-ok[field_default]: LoopCappedPayload.refuse_detail optional on wire
+    detail: str | None = None  # audit-ok[field_default]: LoopCapped.detail opt
+    refuse_detail: str | None = None  # audit-ok[field_default]: LoopCapped.refuse_detail opt
 
 
 class LoopCompletedPayload(BaseModel):
@@ -373,10 +373,10 @@ class HitlOpenedPayload(BaseModel):
     open: bool
     task_id: str
     cost_rub: float
-    payload_ref: str | None = None  # audit-ok[field_default]: HitlOpenedPayload.payload_ref optional on wire
-    deadline: str | None = None  # audit-ok[field_default]: HitlOpenedPayload.deadline optional on wire
-    study_id: str | None = None  # audit-ok[field_default]: HitlOpenedPayload.study_id optional on wire
-    expand_after_task: str | None = None  # audit-ok[field_default]: HitlOpenedPayload.expand_after_task optional on wire
+    payload_ref: str | None = None  # audit-ok[field_default]: HitlOpened.payload_ref opt
+    deadline: str | None = None  # audit-ok[field_default]: HitlOpened.deadline opt
+    study_id: str | None = None  # audit-ok[field_default]: HitlOpened.study_id opt
+    expand_after_task: str | None = None  # audit-ok[field_default]: HitlOpened.expand_after_task opt
 
 
 class HitlDecidedPayload(BaseModel):
@@ -386,15 +386,15 @@ class HitlDecidedPayload(BaseModel):
     by: str
     reason: str
     spent_rub: float
-    approved_by: str | None = None  # audit-ok[field_default]: HitlDecidedPayload.approved_by optional on wire
-    decided_by: str | None = None  # audit-ok[field_default]: HitlDecidedPayload.decided_by optional on wire
-    delegated_by: str | None = None  # audit-ok[field_default]: HitlDecidedPayload.delegated_by optional on wire
-    proposal_id: str | None = None  # audit-ok[field_default]: HitlDecidedPayload.proposal_id optional on wire
-    keep_open: bool | None = None  # audit-ok[field_default]: HitlDecidedPayload.keep_open optional on wire
-    effect: str | None = None  # audit-ok[field_default]: HitlDecidedPayload.effect optional on wire
-    human_message: str | None = None  # audit-ok[field_default]: HitlDecidedPayload.human_message optional on wire
-    cost_estimate_rub: float | None = None  # audit-ok[field_default]: HitlDecidedPayload.cost_estimate_rub optional on wire
-    cost_rub: float | None = None  # audit-ok[field_default]: HitlDecidedPayload.cost_rub optional on wire
+    approved_by: str | None = None  # audit-ok[field_default]: HitlDecided.approved_by opt
+    decided_by: str | None = None  # audit-ok[field_default]: HitlDecided.decided_by opt
+    delegated_by: str | None = None  # audit-ok[field_default]: HitlDecided.delegated_by opt
+    proposal_id: str | None = None  # audit-ok[field_default]: HitlDecided.proposal_id opt
+    keep_open: bool | None = None  # audit-ok[field_default]: HitlDecided.keep_open opt
+    effect: str | None = None  # audit-ok[field_default]: HitlDecided.effect opt
+    human_message: str | None = None  # audit-ok[field_default]: HitlDecided.human_message opt
+    cost_estimate_rub: float | None = None  # audit-ok[field_default]: HitlDecided.cost_estimate_rub opt
+    cost_rub: float | None = None  # audit-ok[field_default]: HitlDecided.cost_rub opt
 
 
 class HitlTimedOutPayload(BaseModel):
@@ -402,11 +402,11 @@ class HitlTimedOutPayload(BaseModel):
     request_id: str
     reason: str
     spent_rub: float
-    proposal_id: str | None = None  # audit-ok[field_default]: HitlTimedOutPayload.proposal_id optional on wire
-    decided_by: str | None = None  # audit-ok[field_default]: HitlTimedOutPayload.decided_by optional on wire
-    delegated_by: str | None = None  # audit-ok[field_default]: HitlTimedOutPayload.delegated_by optional on wire
-    human_message: str | None = None  # audit-ok[field_default]: HitlTimedOutPayload.human_message optional on wire
-    effect: str | None = None  # audit-ok[field_default]: HitlTimedOutPayload.effect optional on wire
+    proposal_id: str | None = None  # audit-ok[field_default]: HitlTimedOut.proposal_id opt
+    decided_by: str | None = None  # audit-ok[field_default]: HitlTimedOut.decided_by opt
+    delegated_by: str | None = None  # audit-ok[field_default]: HitlTimedOut.delegated_by opt
+    human_message: str | None = None  # audit-ok[field_default]: HitlTimedOut.human_message opt
+    effect: str | None = None  # audit-ok[field_default]: HitlTimedOut.effect opt
 
 
 class HitlDeadlineExtendedPayload(BaseModel):
@@ -426,13 +426,13 @@ class BudgetDebitedPayload(BaseModel):
     model_config = _WIRE
     request_id: str
     spent_rub: str
-    task_id: str | None = None  # audit-ok[field_default]: BudgetDebitedPayload.task_id optional on wire
-    actual_rub: str | float | None = None  # audit-ok[field_default]: BudgetDebitedPayload.actual_rub optional on wire
-    budget: BudgetSnapshot | None = None  # audit-ok[field_default]: BudgetDebitedPayload.budget optional on wire
-    cost_estimate_rub: float | None = None  # audit-ok[field_default]: BudgetDebitedPayload.cost_estimate_rub optional on wire
-    decided_by: str | None = None  # audit-ok[field_default]: BudgetDebitedPayload.decided_by optional on wire
-    delegated_by: str | None = None  # audit-ok[field_default]: BudgetDebitedPayload.delegated_by optional on wire
-    reason: str | None = None  # audit-ok[field_default]: BudgetDebitedPayload.reason optional on wire
+    task_id: str | None = None  # audit-ok[field_default]: BudgetDebited.task_id opt
+    actual_rub: str | float | None = None  # audit-ok[field_default]: BudgetDebited.actual_rub opt
+    budget: BudgetSnapshot | None = None  # audit-ok[field_default]: BudgetDebited.budget opt
+    cost_estimate_rub: float | None = None  # audit-ok[field_default]: BudgetDebited.cost_estimate_rub opt
+    decided_by: str | None = None  # audit-ok[field_default]: BudgetDebited.decided_by opt
+    delegated_by: str | None = None  # audit-ok[field_default]: BudgetDebited.delegated_by opt
+    reason: str | None = None  # audit-ok[field_default]: BudgetDebited.reason opt
 
 
 class BudgetExceededPayload(BaseModel):
@@ -467,17 +467,17 @@ class ArtifactRegisteredPayload(BaseModel):
     sha256: str
     role: str
     kind: str | None
-    media_type: str | None = None  # audit-ok[field_default]: ArtifactRegisteredPayload.media_type optional on wire
-    size: StrictInt | None = None  # audit-ok[field_default]: ArtifactRegisteredPayload.size optional on wire
-    uri: str | None = None  # audit-ok[field_default]: ArtifactRegisteredPayload.uri optional on wire
-    produced_by: ToolCallRef | None = None  # audit-ok[field_default]: ArtifactRegisteredPayload.produced_by optional on wire
-    schema_ref: str | None = None  # audit-ok[field_default]: ArtifactRegisteredPayload.schema_ref optional on wire
-    producer: str | None = None  # audit-ok[field_default]: ArtifactRegisteredPayload.producer optional on wire
-    net_isolation: str | None = None  # audit-ok[field_default]: ArtifactRegisteredPayload.net_isolation optional on wire
-    fs_isolation: str | None = None  # audit-ok[field_default]: ArtifactRegisteredPayload.fs_isolation optional on wire
-    tainted: bool | None = None  # audit-ok[field_default]: ArtifactRegisteredPayload.tainted optional on wire
-    source_uri: str | None = None  # audit-ok[field_default]: ArtifactRegisteredPayload.source_uri optional on wire
-    stamped: bool | None = None  # audit-ok[field_default]: ArtifactRegisteredPayload.stamped optional on wire
+    media_type: str | None = None  # audit-ok[field_default]: ArtifactRegistered.media_type opt
+    size: StrictInt | None = None  # audit-ok[field_default]: ArtifactRegistered.size opt
+    uri: str | None = None  # audit-ok[field_default]: ArtifactRegistered.uri opt
+    produced_by: ToolCallRef | None = None  # audit-ok[field_default]: ArtifactRegistered.produced_by opt
+    schema_ref: str | None = None  # audit-ok[field_default]: ArtifactRegistered.schema_ref opt
+    producer: str | None = None  # audit-ok[field_default]: ArtifactRegistered.producer opt
+    net_isolation: str | None = None  # audit-ok[field_default]: ArtifactRegistered.net_isolation opt
+    fs_isolation: str | None = None  # audit-ok[field_default]: ArtifactRegistered.fs_isolation opt
+    tainted: bool | None = None  # audit-ok[field_default]: ArtifactRegistered.tainted opt
+    source_uri: str | None = None  # audit-ok[field_default]: ArtifactRegistered.source_uri opt
+    stamped: bool | None = None  # audit-ok[field_default]: ArtifactRegistered.stamped opt
 
 
 class LateWriteRejectedPayload(BaseModel):
@@ -514,8 +514,8 @@ class LeaseAcquiredPayload(BaseModel):
     model_config = _WIRE
     owner: str
     epoch: StrictInt
-    owner_nonce: str | None = None  # audit-ok[field_default]: LeaseAcquiredPayload.owner_nonce optional on wire
-    ttl_s: float | StrictInt | None = None  # audit-ok[field_default]: LeaseAcquiredPayload.ttl_s optional on wire
+    owner_nonce: str | None = None  # audit-ok[field_default]: LeaseAcquired.owner_nonce opt
+    ttl_s: float | StrictInt | None = None  # audit-ok[field_default]: LeaseAcquired.ttl_s opt
 
 
 class ResultPendingPayload(BaseModel):
@@ -531,19 +531,19 @@ class ReviewScheduledPayload(BaseModel):
     model_config = _WIRE
     kind: str
     task_id: str
-    attempt_id: str | None = None  # audit-ok[field_default]: ReviewScheduledPayload.attempt_id optional on wire
-    check_id: str | None = None  # audit-ok[field_default]: ReviewScheduledPayload.check_id optional on wire
-    item_id: str | None = None  # audit-ok[field_default]: ReviewScheduledPayload.item_id optional on wire
-    output_digest: str | None = None  # audit-ok[field_default]: ReviewScheduledPayload.output_digest optional on wire
-    review_key: str | None = None  # audit-ok[field_default]: ReviewScheduledPayload.review_key optional on wire
-    rubric_digest: str | None = None  # audit-ok[field_default]: ReviewScheduledPayload.rubric_digest optional on wire
-    reviewer_task_id: str | None = None  # audit-ok[field_default]: ReviewScheduledPayload.reviewer_task_id optional on wire
-    reviewer_attempt_id: str | None = None  # audit-ok[field_default]: ReviewScheduledPayload.reviewer_attempt_id optional on wire
-    status: str | None = None  # audit-ok[field_default]: ReviewScheduledPayload.status optional on wire
-    proposal_id: str | None = None  # audit-ok[field_default]: ReviewScheduledPayload.proposal_id optional on wire
-    deadline: str | None = None  # audit-ok[field_default]: ReviewScheduledPayload.deadline optional on wire
-    hitl_request_id: str | None = None  # audit-ok[field_default]: ReviewScheduledPayload.hitl_request_id optional on wire
-    proposer_attempt_id: str | None = None  # audit-ok[field_default]: ReviewScheduledPayload.proposer_attempt_id optional on wire
+    attempt_id: str | None = None  # audit-ok[field_default]: ReviewScheduled.attempt_id opt
+    check_id: str | None = None  # audit-ok[field_default]: ReviewScheduled.check_id opt
+    item_id: str | None = None  # audit-ok[field_default]: ReviewScheduled.item_id opt
+    output_digest: str | None = None  # audit-ok[field_default]: ReviewScheduled.output_digest opt
+    review_key: str | None = None  # audit-ok[field_default]: ReviewScheduled.review_key opt
+    rubric_digest: str | None = None  # audit-ok[field_default]: ReviewScheduled.rubric_digest opt
+    reviewer_task_id: str | None = None  # audit-ok[field_default]: ReviewScheduled.reviewer_task_id opt
+    reviewer_attempt_id: str | None = None  # audit-ok[field_default]: ReviewScheduled.reviewer_attempt_id opt
+    status: str | None = None  # audit-ok[field_default]: ReviewScheduled.status opt
+    proposal_id: str | None = None  # audit-ok[field_default]: ReviewScheduled.proposal_id opt
+    deadline: str | None = None  # audit-ok[field_default]: ReviewScheduled.deadline opt
+    hitl_request_id: str | None = None  # audit-ok[field_default]: ReviewScheduled.hitl_request_id opt
+    proposer_attempt_id: str | None = None  # audit-ok[field_default]: ReviewScheduled.proposer_attempt_id opt
 
 
 class ReviewRecordedPayload(BaseModel):
@@ -569,8 +569,8 @@ class ForkCreatedPayload(BaseModel):
     model_config = _WIRE
     parent_study_id: str
     study_id: str
-    clarifications: list[JsonValue] | None = None  # audit-ok[field_default]: ForkCreatedPayload.clarifications optional on wire
-    digest: str | None = None  # audit-ok[field_default]: ForkCreatedPayload.digest optional on wire
+    clarifications: list[JsonValue] | None = None  # audit-ok[field_default]: ForkCreated.clarifications opt
+    digest: str | None = None  # audit-ok[field_default]: ForkCreated.digest opt
 
 
 class VerdictSnapshotsRecordedPayload(BaseModel):
@@ -587,9 +587,9 @@ class GraphNodeUpsertedPayload(BaseModel):
     kind: str
     study_id: str
     attrs: dict[str, JsonValue]
-    ref_id: str | None = None  # audit-ok[field_default]: GraphNodeUpsertedPayload.ref_id optional on wire
-    parent_id: str | None = None  # audit-ok[field_default]: GraphNodeUpsertedPayload.parent_id optional on wire
-    created_at: str | None = None  # audit-ok[field_default]: GraphNodeUpsertedPayload.created_at optional on wire
+    ref_id: str | None = None  # audit-ok[field_default]: GraphNodeUpserted.ref_id opt
+    parent_id: str | None = None  # audit-ok[field_default]: GraphNodeUpserted.parent_id opt
+    created_at: str | None = None  # audit-ok[field_default]: GraphNodeUpserted.created_at opt
 
 
 class GraphEdgeAddedPayload(BaseModel):
@@ -600,7 +600,7 @@ class GraphEdgeAddedPayload(BaseModel):
     src_id: str
     dst_id: str
     attrs: dict[str, JsonValue]
-    created_at: str | None = None  # audit-ok[field_default]: GraphEdgeAddedPayload.created_at optional on wire
+    created_at: str | None = None  # audit-ok[field_default]: GraphEdgeAdded.created_at opt
 
 
 class EffectIntendedPayload(BaseModel):
@@ -612,7 +612,7 @@ class EffectIntendedPayload(BaseModel):
     study_id: str
     task_key: str
     tool: str
-    fingerprint: str | None = None  # audit-ok[field_default]: EffectIntendedPayload.fingerprint optional on wire
+    fingerprint: str | None = None  # audit-ok[field_default]: EffectIntended.fingerprint opt
 
 
 class EffectDonePayload(BaseModel):
@@ -622,8 +622,8 @@ class EffectDonePayload(BaseModel):
     result_ref: str | None
     status: str
     tool: str
-    detail: str | None = None  # audit-ok[field_default]: EffectDonePayload.detail optional on wire
-    error_kind: str | None = None  # audit-ok[field_default]: EffectDonePayload.error_kind optional on wire
+    detail: str | None = None  # audit-ok[field_default]: EffectDone.detail opt
+    error_kind: str | None = None  # audit-ok[field_default]: EffectDone.error_kind opt
 
 
 class SideEffectDeniedPayload(BaseModel):
@@ -678,7 +678,7 @@ class QuestionDisposeRejectedPayload(BaseModel):
     question_id: str
     reason: str
     report_line: str
-    row_key: str | None = None  # audit-ok[field_default]: QuestionDisposeRejectedPayload.row_key optional on wire
+    row_key: str | None = None  # audit-ok[field_default]: QuestionDisposeRejected.row_key opt
 
 
 class CheckProposedPayload(BaseModel):
