@@ -12,7 +12,7 @@ from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.job_events import JobEventType
 from coscientist.core.events.schema_gate import require_writer_schema_version
 
-TOOL_RESOLVED_TYPE: Literal["ToolResolved"] = "ToolResolved"
+TOOL_RESOLVED_TYPE = "ToolResolved"
 
 # Writer schema version constants (kept for call sites; must match upcasters).
 PLAN_EXPANDED_SCHEMA_VERSION = 5

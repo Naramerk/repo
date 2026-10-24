@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from coscientist.core.events.clock import Clock
-from coscientist.core.events.events import TOOL_RESOLVED_TYPE, UnstampedEvent, make_idem
+from coscientist.core.events.events import (
+    TOOL_RESOLVED_TYPE,
+    EventType,
+    UnstampedEvent,
+    make_idem,
+)
 from coscientist.core.events.ports import EventStore
 from coscientist.core.events.schema_versions import TOOL_RESOLVED_SCHEMA_VERSION
 from coscientist.core.events.tool_resolved import MatchInfo, ToolResolvedPayload
@@ -57,7 +64,7 @@ async def resolve_against_catalog(
     await store.append(
         UnstampedEvent(
             study_id=need.study_id,
-            type=TOOL_RESOLVED_TYPE,
+            type=cast(EventType, TOOL_RESOLVED_TYPE),
             entity_key=resolution.task_id,
             idem_key=make_idem(TOOL_RESOLVED_TYPE, resolution.task_id),
             payload=resolution.model_dump(mode="json"),
