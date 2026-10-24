@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 import sys
 import textwrap
-from collections.abc import Awaitable, Callable
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -12,8 +12,8 @@ import pytest
 from pydantic import ValidationError
 
 from coscientist.core.execution.domain import HitlPolicy
+from coscientist.mcp.client import McpClient
 from coscientist.mcp.config import StdioServerConfig
-from coscientist.mcp.errors import McpError
 from coscientist.tools.contract import CallCtx
 from coscientist.tools.mcp_adapter import McpAdapterError, McpToolProfile
 from coscientist.tools.router import (
@@ -32,7 +32,7 @@ SERVER_B = "paper-analysis"
 
 
 class _NoFetch:
-    async def fetch(self, *a: Any, **k: Any) -> Any:
+    async def fetch(self, url: str, *, max_bytes: int, timeout_s: float) -> bytes:
         raise AssertionError("no fetch")
 
 
@@ -66,12 +66,7 @@ def _router_cfg(*routes: McpServerRoute) -> ToolRouterConfig:
     return ToolRouterConfig(servers=routes)
 
 
-def _set_aclose(session: Any, fn: Callable[[], Awaitable[None]]) -> None:
-    """Replace ``aclose`` without ``type: ignore`` (session typed as Any)."""
-    session.aclose = fn
-
-
-def _stdio_client(*names: str) -> Any:
+def _stdio_client(*names: str) -> McpClient:
     return make_client(
         make_config(
             servers=tuple(
@@ -203,14 +198,15 @@ async def test_open_duplicate_mcp_tool_key() -> None:
 
 @pytest.mark.asyncio
 async def test_attach_session_bind_failure() -> None:
-    router = ToolRouter(_router_cfg(_route(SERVER_A, tools={"missing-tool": _profile()})))
+    # echo is listed on the fake server; extra binding → mcp_adapter.py unknown-tools path.
+    router = ToolRouter(_router_cfg(_route(SERVER_A, tools={"echo": _profile(), "missing-tool": _profile()})))
     client = _stdio_client(SERVER_A)
     async with FakeStdioServer(default_handler) as server:
         session = await client.connect_memory(SERVER_A, server.client)
         try:
-            with pytest.raises(ToolRouterError, match="McpToolProfile|unknown tools|missing") as ei:
+            with pytest.raises(ToolRouterError, match="McpToolProfile for unknown tools") as ei:
                 await router.attach_session(session, server_name=SERVER_A)
-            assert isinstance(ei.value.__cause__, (McpAdapterError, McpError))
+            assert isinstance(ei.value.__cause__, McpAdapterError)
         finally:
             await session.aclose()
 
@@ -254,10 +250,12 @@ async def test_router_aclose_closes_all_then_raises() -> None:
         async def _ok() -> None:
             closed.append("second")
 
-        _set_aclose(sess1, _boom)
-        _set_aclose(sess2, _ok)
-        with pytest.raises(ToolRouterCloseError, match="session close failed \\(1\\)") as ei:
-            await router.aclose()
+        with (
+            patch.object(sess1, "aclose", side_effect=_boom),
+            patch.object(sess2, "aclose", side_effect=_ok),
+        ):
+            with pytest.raises(ToolRouterCloseError, match="session close failed \\(1\\)") as ei:
+                await router.aclose()
         assert closed == ["first", "second"]
         assert isinstance(ei.value, ToolRouterError)
         assert isinstance(ei.value.__cause__, OSError)
@@ -282,10 +280,12 @@ async def test_router_aclose_preserves_all_close_causes() -> None:
         async def _boom2() -> None:
             raise TimeoutError("close-b")
 
-        _set_aclose(sess1, _boom1)
-        _set_aclose(sess2, _boom2)
-        with pytest.raises(ToolRouterCloseError, match="session close failed \\(2\\)") as ei:
-            await router.aclose()
+        with (
+            patch.object(sess1, "aclose", side_effect=_boom1),
+            patch.object(sess2, "aclose", side_effect=_boom2),
+        ):
+            with pytest.raises(ToolRouterCloseError, match="session close failed \\(2\\)") as ei:
+                await router.aclose()
         err = ei.value
         assert len(err.causes) == 2
         assert isinstance(err.causes[0], OSError) and str(err.causes[0]) == "close-a"
@@ -296,8 +296,9 @@ async def test_router_aclose_preserves_all_close_causes() -> None:
 
 
 def test_tool_router_close_error_requires_causes() -> None:
-    with pytest.raises(TypeError, match="causes"):
-        ToolRouterCloseError("x", **{})
+    causes = inspect.signature(ToolRouterCloseError.__init__).parameters["causes"]
+    assert causes.kind is inspect.Parameter.KEYWORD_ONLY
+    assert causes.default is inspect.Parameter.empty
     with pytest.raises(ValueError, match="non-empty"):
         ToolRouterCloseError("x", causes=())
 
