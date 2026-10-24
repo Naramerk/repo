@@ -13,6 +13,7 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
+    PlanRole,
 )
 from coscientist.core.execution.inputs import InputUnavailable, bind_inputs, worst_provenance
 
@@ -31,7 +32,8 @@ def _task(key: str, outcome: TaskOutcome | None, *, inputs=None):
         state=TaskState.DONE if outcome else TaskState.PENDING,
         outcome=outcome,
         deadline=datetime(2026, 1, 1, tzinfo=UTC),
-    )
+        plan_role=PlanRole.NONE,
+)
 
 
 def test_forbid_failed_dep_raises():

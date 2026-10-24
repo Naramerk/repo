@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from coscientist.core.events.errors import JournalFormatError
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.store_db import JOURNAL_STORE_FORMAT, parse_store_format_marker
@@ -161,8 +162,10 @@ def test_event_envelope_rejects_bool_schema_version():
             idem_key="k",
             payload={},
             ts=datetime(2024, 1, 1, tzinfo=UTC),
-            schema_version=True,  # type: ignore[arg-type]
-        )
+            schema_version=True,  # type: ignore[arg-type],
+                    epoch=0,
+                    payload_digest=payload_digest({}),
+                )
 
 
 @pytest.mark.parametrize("raw", [" 1", "01", "+1", "1.0", "true", ""])
@@ -252,16 +255,19 @@ async def test_write_rejects_schema_version_not_equal_writer(tmp_path: Path):
         with pytest.raises(JournalFormatError, match="!= writer"):
             # Bypass StrictInt by mutating after construct is impossible (frozen);
             # insert via raw SQL path is covered below — here use model_construct.
+            from coscientist.core.events.digest import payload_digest as _pd
+
+            payload = {"study_id": "s"}
             ev = EventEnvelope.model_construct(
                 study_id="s",
                 type="StudyCreated",
                 entity_key="s",
                 idem_key=make_idem("StudyCreated", "s"),
-                payload={"study_id": "s"},
+                payload=payload,
                 ts=datetime(2024, 1, 1, tzinfo=UTC),
                 schema_version=2,
                 epoch=0,
-                payload_digest="",
+                payload_digest=_pd(payload),
             )
             await store.append(ev)
     finally:
@@ -399,6 +405,13 @@ async def test_attempt_started_missing_attempt_role_raises(tmp_path: Path):
         },
         ts=datetime(2024, 1, 1, tzinfo=UTC),
         schema_version=1,
-    )
+epoch=0, payload_digest=payload_digest({
+            "attempt_id": "a1",
+            "task_id": "t1",
+            "task_key": "E1",
+            "inputs": [],
+            "tainted_context": False,
+        }),
+)
     with pytest.raises(JournalFormatError, match="attempt_role"):
         rt._project_local(ev)  # noqa: SLF001

@@ -18,6 +18,7 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
+    PlanRole,
 )
 
 
@@ -120,7 +121,8 @@ def test_question_disposition_computed_from_verdict():
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=now,
-    )
+        plan_role=PlanRole.NONE,
+)
     study = Study(
         study_id=sid,
         profile="research",

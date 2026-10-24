@@ -37,6 +37,7 @@ from coscientist.core.execution.domain import (
     QuestionSpec,
     RequirementRef,
     TaskSpec,
+    PlanRole,
 )
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
@@ -1023,7 +1024,7 @@ def test_r17_violation_invalid():
 
 
 def test_minimal_report_hypotheses_truncation_le_10kb():
-    from coscientist.core.events.digest import canonical_json
+    from coscientist.core.events.digest import canonical_json, payload_digest
     from coscientist.core.execution.domain import Task, TaskKind, TaskOutcome, TaskSpec, TaskState
     from coscientist.core.finalize.minimal_report import MAX_BYTES, build_minimal_report
 
@@ -1035,7 +1036,8 @@ def test_minimal_report_hypotheses_truncation_le_10kb():
             state=TaskState.DONE,
             outcome=TaskOutcome.SUCCESS,
             deadline=__import__("datetime").datetime(2026, 1, 1),
-        )
+        plan_role=PlanRole.NONE,
+)
     }
     hyps = [
         {
@@ -2382,7 +2384,9 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
                 ).model_dump(mode="json"),
                 ts=clock.now(),
                 schema_version=writer_schema_version('GraphNodeUpserted'),
-            ),
+                    epoch=0,
+                    payload_digest=payload_digest(GraphNode),
+                ),
             EventEnvelope(
                 study_id=sid,
                 type="GraphEdgeAdded",
@@ -2397,7 +2401,9 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
                 ).model_dump(mode="json"),
                 ts=clock.now(),
                 schema_version=writer_schema_version('GraphEdgeAdded'),
-            ),
+                    epoch=0,
+                    payload_digest=payload_digest(GraphEdge),
+                ),
         ]
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)

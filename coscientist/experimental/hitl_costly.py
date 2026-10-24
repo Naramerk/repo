@@ -6,6 +6,7 @@ from typing import Any, Protocol
 
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.schema_versions import TASK_DONE_SCHEMA_VERSION
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import HitlRequest, Task, TaskOutcome, TaskState
@@ -130,6 +131,8 @@ class CostlyHitlMixin:
     ) -> None:
         assert self.study is not None
         gate = self.study.hitl_policy.gate("costly_or_nonreal")
+        if gate is None:
+            raise ValueError("HITL kind 'costly_or_nonreal' has no gate in hitl_policy")
         mode = gate.on_timeout
         cost = float(h.cost_rub)
         budget = self._ensure_delegated_budget()
@@ -173,7 +176,19 @@ class CostlyHitlMixin:
                         },
                         ts=now,
                         schema_version=writer_schema_version('HitlDecided'),
-                    )
+epoch=0, payload_digest=payload_digest({
+                            "request_id": h.request_id,
+                            "decision": "delegate",
+                            "by": "human",
+                            "decided_by": ev.get("decided_by"),
+                            "delegated_by": ev.get("delegated_by"),
+                            "reason": ev["reason"],
+                            "spent_rub": 0.0,
+                            "human_message": ev.get("human_message"),
+                            "effect": effect_s,
+                            "keep_open": True,
+                        }),
+)
                 ]
             )
             return
@@ -198,7 +213,16 @@ class CostlyHitlMixin:
                         },
                         ts=now,
                         schema_version=writer_schema_version('HitlTimedOut'),
-                    )
+epoch=0, payload_digest=payload_digest({
+                            "request_id": h.request_id,
+                            "reason": ev["reason"],
+                            "decided_by": ev.get("decided_by"),
+                            "delegated_by": ev.get("delegated_by"),
+                            "spent_rub": 0.0,
+                            "human_message": ev.get("human_message"),
+                            "effect": effect_s,
+                        }),
+)
                 ]
             )
         if use_decided:
@@ -232,7 +256,9 @@ class CostlyHitlMixin:
                         payload=payload,
                         ts=now,
                         schema_version=writer_schema_version('HitlDecided'),
-                    )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
                 ]
             )
             if effect is CostlyEffect.RUN and decided_by == "critic":
@@ -262,7 +288,12 @@ class CostlyHitlMixin:
                             },
                             ts=now,
                             schema_version=TASK_DONE_SCHEMA_VERSION,
-                        )
+epoch=0, payload_digest=payload_digest({
+                                "task_id": h.task_id,
+                                "outcome": TaskOutcome.SKIPPED.value,
+                                "reason": reason,
+                            }),
+)
                     ]
                 )
                 await self._skip_dependents(task)
@@ -285,7 +316,12 @@ class CostlyHitlMixin:
                     },
                     ts=now,
                     schema_version=TASK_DONE_SCHEMA_VERSION,
-                )
+epoch=0, payload_digest=payload_digest({
+                        "task_id": h.task_id,
+                        "outcome": TaskOutcome.FAILED.value,
+                        "reason": "human_timeout",
+                    }),
+)
             ]
         )
         await self._skip_dependents(task)

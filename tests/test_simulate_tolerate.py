@@ -8,6 +8,7 @@ import pytest
 
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.upcasters import writer_schema_version
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.execution.domain import (
     ExperimentMethod,
     InputSpec,
@@ -17,6 +18,7 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
+    PlanRole,
 )
 from coscientist.core.execution.inputs import InputUnavailable, bind_inputs
 from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
@@ -37,7 +39,8 @@ def _task(key: str, outcome: TaskOutcome | None, *, inputs=None, **spec_kw):
         state=TaskState.DONE if outcome else TaskState.PENDING,
         outcome=outcome,
         deadline=datetime(2026, 1, 1, tzinfo=UTC),
-    )
+        plan_role=PlanRole.NONE,
+)
 
 
 def test_default_forbid_no_stubs():
@@ -233,7 +236,8 @@ async def test_hc_skipped_when_study_cancelled(tmp_path, clock, runtime_cls):
                 payload={"study_id": sid, "by": "user"},
                 ts=clock.now(),
                 schema_version=writer_schema_version('StudyCancelled'),
-            )
+epoch=0, payload_digest=payload_digest({"study_id": sid, "by": "user"}),
+)
         ]
     )
     await rt.tick()

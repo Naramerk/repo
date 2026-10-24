@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.execution.domain import (
     ExpansionRequest,
     PlanRole,
@@ -42,22 +43,20 @@ PLAN_N_CRITIC_CRITERIA: list[RequirementRef] = [
 def task_is_plan_n(task: Any) -> bool:
     """True when ``Task.plan_role == PLAN_N`` (sole wire signal).
 
-    Missing ``plan_role`` (legacy/test doubles) is not PLAN-n — never inferred
-    from criteria / key prefix.
+    Missing / invalid ``plan_role`` raises (fail-closed) — never inferred from
+    criteria / key prefix / silent False.
     """
-    role = getattr(task, "plan_role", None)
+    if not hasattr(task, "plan_role"):
+        raise JournalFormatError("task missing required plan_role")
+    role = task.plan_role
     if role is None:
-        return False
-    if not isinstance(role, PlanRole):
-        try:
-            role = PlanRole(str(role))
-        except ValueError:
-            return False
-    return role == PlanRole.PLAN_N
-
-
-# Back-compat name used by older call sites.
-task_has_plan_n_critic = task_is_plan_n
+        raise JournalFormatError("task.plan_role must not be null")
+    if isinstance(role, PlanRole):
+        return role == PlanRole.PLAN_N
+    try:
+        return PlanRole(str(role)) == PlanRole.PLAN_N
+    except ValueError as e:
+        raise JournalFormatError(f"task.plan_role invalid: {role!r}") from e
 
 
 def critic_gate(

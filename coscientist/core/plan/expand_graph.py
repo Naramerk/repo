@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.ids import question_node_id, task_id
 from coscientist.core.events.schema_versions import (
     ATTEMPT_CLOSED_SCHEMA_VERSION,
@@ -56,7 +57,9 @@ def plan_graph_events(
             ).model_dump(mode="json"),
             ts=now,
             schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
-        )
+                    epoch=0,
+                    payload_digest=payload_digest(GraphNode),
+                )
     )
     if not prev_pid:
         return events
@@ -78,7 +81,9 @@ def plan_graph_events(
                 ).model_dump(mode="json"),
                 ts=now,
                 schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(GraphNode),
+                )
         )
     eid = f"supersedes:{pnid}:{prev_nid}"
     events.append(
@@ -98,7 +103,9 @@ def plan_graph_events(
             ).model_dump(mode="json"),
             ts=now,
             schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
-        )
+                    epoch=0,
+                    payload_digest=payload_digest(GraphEdge),
+                )
     )
     return events
 
@@ -163,7 +170,9 @@ def question_graph_events(
                 ).model_dump(mode="json"),
                 ts=now,
                 schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(GraphNode),
+                )
         )
         parent = getattr(q, "parent_id", None)
         if parent:
@@ -194,6 +203,8 @@ def question_graph_events(
                     ).model_dump(mode="json"),
                     ts=now,
                     schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
+                    epoch=0,
+                    payload_digest=payload_digest(GraphEdge),
                 )
             )
     added_ids = {q.id for q in added_questions}
@@ -217,6 +228,8 @@ def question_graph_events(
                     ).model_dump(mode="json"),
                     ts=now,
                     schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
+                    epoch=0,
+                    payload_digest=payload_digest(GraphNode),
                 )
             )
         if runtime.graph.get_node(new_nid) is None and s.new_id not in added_ids:
@@ -236,6 +249,8 @@ def question_graph_events(
                     ).model_dump(mode="json"),
                     ts=now,
                     schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
+                    epoch=0,
+                    payload_digest=payload_digest(GraphNode),
                 )
             )
         eid = f"supersedes:{new_nid}:{old_nid}"
@@ -256,7 +271,9 @@ def question_graph_events(
                 ).model_dump(mode="json"),
                 ts=now,
                 schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(GraphEdge),
+                )
         )
     return events
 
@@ -289,7 +306,13 @@ def skip_superseded_task_events(
                         },
                         ts=now,
                         schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
-                    )
+epoch=0, payload_digest=payload_digest({
+                            "attempt_id": aid,
+                            "closed": True,
+                            "close_reason": CloseReason.CANCELLED.value,
+                            "task_id": tid,
+                        }),
+)
                 )
         events.append(
             EventEnvelope(
@@ -304,6 +327,11 @@ def skip_superseded_task_events(
                 },
                 ts=now,
                 schema_version=TASK_DONE_SCHEMA_VERSION,
-            )
+epoch=0, payload_digest=payload_digest({
+                    "task_id": tid,
+                    "outcome": TaskOutcome.SKIPPED.value,
+                    "reason": TaskReason.SUPERSEDED.value,
+                }),
+)
         )
     return events

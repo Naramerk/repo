@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import (
     EventEnvelope,
     make_idem,
@@ -106,11 +107,14 @@ def _delegated_by_from_hitl(
     if bound not in allowed:
         return f"hitl_wrong_target:{bound}"
     # Sole decision signal: HitlDecided.delegated_by (no approved_by/decided_by aliases).
+    # Timeout must not auto-expand (fail-closed) — only an explicit human decision.
     if "delegated_by" not in row:
         return "missing_hitl_decided"
     db = row["delegated_by"]
-    if db in ("human", "timeout"):
-        return db  # type: ignore[return-value]
+    if db == "human":
+        return "human"
+    if db == "timeout":
+        return "hitl_timeout_refused"
     return "missing_hitl_decided"
 
 async def expand_plan(
@@ -184,7 +188,7 @@ async def _expand_plan(
         derived = _delegated_by_from_hitl(
             runtime, hitl_request_id, after_task=after_task, plan_key=plan_key
         )
-        if isinstance(derived, str) and derived not in ("human", "timeout"):
+        if derived != "human":
             await refuse_expansion(
                 runtime,
                 after_task,
@@ -192,7 +196,7 @@ async def _expand_plan(
                 detail=str(derived)[:DETAIL_MAX_LEN],
             )
             return None
-        delegated_by = derived  # type: ignore[assignment]
+        delegated_by = "human"
 
     added_questions = list(added_questions or [])
     superseded_tasks = list(superseded_tasks or [])
@@ -225,7 +229,12 @@ async def _expand_plan(
     budget = study.replan_budget_s()
     remaining_budget = budget - used
     ed = study.effective_deadline()
-    time_left = max(0.0, (ed - now).total_seconds())
+    time_left = (ed - now).total_seconds()
+    if time_left < 0.0:
+        await refuse_expansion(
+            runtime, after_task, reason="expansion_limit", detail="past_deadline"
+        )
+        return None
     if replan_allocated_s is not None:
         allocate = float(replan_allocated_s)
     else:
@@ -486,7 +495,9 @@ async def _expand_plan(
                 payload=task.model_dump(mode="json"),
                 ts=now,
                 schema_version=TASK_CREATED_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(task.model_dump),
+                )
         )
 
     payload = {
@@ -514,7 +525,9 @@ async def _expand_plan(
             payload=payload,
             ts=now,
             schema_version=PLAN_EXPANDED_SCHEMA_VERSION,
-        )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
     )
     await runtime._append(events)  # noqa: SLF001
     # B1: newly added foreach templates whose of_task is already DONE.

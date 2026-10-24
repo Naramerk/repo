@@ -9,6 +9,7 @@ from typing import Any
 import coscientist.core.finalize.finalize as finalize_mod
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.events.clock import Clock
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import CASUnavailable, Conflict, LeaseLost, SandboxInfraError
 from coscientist.core.events.events import (
     EventEnvelope,
@@ -256,7 +257,9 @@ class LifecycleMixin:
                 payload=study.model_dump(mode="json"),
                 ts=now,
                 schema_version=STUDY_CREATED_SCHEMA_VERSION,
-            ),
+                    epoch=0,
+                    payload_digest=payload_digest(study.model_dump),
+                ),
             EventEnvelope(
                 study_id=sid,
                 type="GraphNodeUpserted",
@@ -272,7 +275,9 @@ class LifecycleMixin:
                 ).model_dump(mode="json"),
                 ts=now,
                 schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
-            ),
+                    epoch=0,
+                    payload_digest=payload_digest(GraphNode),
+                ),
         ]
         events.extend(user_events)
         if isinstance(decision, IntakeRefuse):
@@ -290,7 +295,12 @@ class LifecycleMixin:
                     },
                     ts=now,
                     schema_version=STUDY_REFUSED_SCHEMA_VERSION,
-                )
+epoch=0, payload_digest=payload_digest({
+                        "kind": decision.kind.value,
+                        "reason": decision.reason,
+                        "classifier_error": decision.classifier_error,
+                    }),
+)
             )
             await self._append(events)
             self.store.study_id = sid
@@ -332,6 +342,8 @@ class LifecycleMixin:
                     payload=task.model_dump(mode="json"),
                     ts=now,
                     schema_version=TASK_CREATED_SCHEMA_VERSION,
+                    epoch=0,
+                    payload_digest=payload_digest(task.model_dump),
                 )
             )
             # Graph nodes for stages: only schema kinds. SPEC/HYP/LIT are DAG
@@ -524,7 +536,9 @@ class LifecycleMixin:
                 payload=plan.model_dump(mode="json"),
                 ts=now,
                 schema_version=PLAN_ACCEPTED_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(plan.model_dump),
+                )
         ]
         # Question nodes so claim ``about`` can bind without auto-creating targets.
         graph = getattr(self, "graph", None)
@@ -556,6 +570,8 @@ class LifecycleMixin:
                     ).model_dump(mode="json"),
                     ts=now,
                     schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
+                    epoch=0,
+                    payload_digest=payload_digest(GraphNode),
                 )
             )
         # PR16: decomposes edges on accept (child → parent); acyclicity already checked.
@@ -584,6 +600,8 @@ class LifecycleMixin:
                     ).model_dump(mode="json"),
                     ts=now,
                     schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
+                    epoch=0,
+                    payload_digest=payload_digest(GraphEdge),
                 )
             )
         # Freeze rubric digests onto criterion-like nodes (frozen_at_seq via projection).
@@ -623,7 +641,9 @@ class LifecycleMixin:
                         ).model_dump(mode="json"),
                         ts=now,
                         schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
-                    )
+                    epoch=0,
+                    payload_digest=payload_digest(GraphNode),
+                )
                 )
         # Freeze plan criteria at accept (DESIGN_M1 §6 / frozen_at_seq).
         seen_criteria: set[str] = set()
@@ -671,7 +691,9 @@ class LifecycleMixin:
                         ).model_dump(mode="json"),
                         ts=now,
                         schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
-                    )
+                    epoch=0,
+                    payload_digest=payload_digest(GraphNode),
+                )
                 )
         plan_tid = task_id(sid, "PLAN")
         if plan_tid in self.tasks and self.tasks[plan_tid].state != TaskState.DONE:
@@ -688,7 +710,12 @@ class LifecycleMixin:
                     },
                     ts=now,
                     schema_version=TASK_DONE_SCHEMA_VERSION,
-                )
+epoch=0, payload_digest=payload_digest({
+                        "task_id": plan_tid,
+                        "outcome": TaskOutcome.SUCCESS.value,
+                        "reason": None,
+                    }),
+)
             )
         effective = self.study.effective_deadline()
         from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
@@ -702,6 +729,7 @@ class LifecycleMixin:
                 spec=frozen_spec,
                 state=TaskState.PENDING,
                 deadline=effective,
+                plan_role=PlanRole.NONE,
             )
             events.append(
                 EventEnvelope(
@@ -712,6 +740,8 @@ class LifecycleMixin:
                     payload=task.model_dump(mode="json"),
                     ts=now,
                     schema_version=TASK_CREATED_SCHEMA_VERSION,
+                    epoch=0,
+                    payload_digest=payload_digest(task.model_dump),
                 )
             )
         await self._append(events)
@@ -732,13 +762,20 @@ class LifecycleMixin:
             if store is not None:
                 plans = await store.get_projection("plans")
         for plan in plans:
-            for q in plan.get("questions") or []:
+            if "questions" not in plan:
+                continue
+            raw_qs = plan["questions"]
+            if not isinstance(raw_qs, list):
+                raise ValueError("plan.questions must be list")
+            for q in raw_qs:
                 if not isinstance(q, dict):
                     continue
-                qid = str(q.get("id", ""))
-                text = str(q.get("text", ""))
+                if "id" not in q:
+                    raise ValueError("plan question missing id")
+                qid = str(q["id"])
                 if not qid:
                     continue
+                text = str(q["text"]) if "text" in q else ""
                 if qid in texts and texts[qid] != text:
                     raise ValueError(f"question id {qid!r} text conflict")
                 texts[qid] = text

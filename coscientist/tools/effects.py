@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.digest import canonical_json, sha256_hex, payload_digest
 from coscientist.core.events.errors import ArtifactRejected
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.upcasters import writer_schema_version
@@ -438,7 +438,14 @@ async def _journal_attempt_tainted(
         },
         ts=datetime.now(UTC),
         schema_version=writer_schema_version("AttemptTainted"),
-    )
+epoch=0, payload_digest=payload_digest({
+            "attempt_id": attempt_id,
+            "reason": "source_fetch",
+            "call_id": call_id,
+            "tool": tool,
+            "is_fetch": True,
+        }),
+)
     stored = await writer.append(ev)
     cache: dict[str, bool] | None = getattr(writer, "_pr18_taint_by_attempt", None)
     if cache is not None:
@@ -523,7 +530,15 @@ async def _deny(
             },
             ts=datetime.now(UTC),
             schema_version=writer_schema_version("SideEffectDenied"),
-        ),
+epoch=0, payload_digest=payload_digest({
+                "key": deny_key,
+                "tool": tool,
+                "task_key": ctx.task_key,
+                "attempt_id": ctx.attempt_id,
+                "effect": effect,
+                "reason": reason,
+            }),
+),
         on_event,
     )
 
@@ -736,7 +751,22 @@ async def invoke_tool(
             },
             ts=now,
             schema_version=1,
-        ),
+epoch=0, payload_digest=payload_digest({
+                "key": key,
+                "study_id": ctx.study_id,
+                "task_key": ctx.task_key,
+                "tool": name,
+                "args_digest": digest,
+                "effect": effect,
+                "attempt_id": ctx.attempt_id,
+                "fingerprint": effect_fingerprint(
+                    study_id=ctx.study_id,
+                    task_key=ctx.task_key,
+                    tool=name,
+                    args_digest=digest,
+                ),
+            }),
+),
         on_event,
     )
     idx.note_intended(
@@ -776,7 +806,16 @@ async def invoke_tool(
                     },
                     ts=datetime.now(UTC),
                     schema_version=1,
-                ),
+epoch=0, payload_digest=payload_digest({
+                        "key": key,
+                        "result_ref": None,
+                        "tool": name,
+                        "attempt_id": ctx.attempt_id,
+                        "status": "failed",
+                        "error_kind": "transport_unsent",
+                        "detail": err.detail,
+                    }),
+),
                 on_event,
             )
             idx.note_done(key, {"key": key, "status": "failed"})
@@ -823,7 +862,9 @@ async def invoke_tool(
             payload=done_payload,
             ts=datetime.now(UTC),
             schema_version=writer_schema_version("EffectDone"),
-        ),
+                    epoch=0,
+                    payload_digest=payload_digest(done_payload),
+                ),
         on_event,
     )
     idx.note_done(key, done_payload)

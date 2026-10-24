@@ -378,7 +378,11 @@ class SqliteEventStore:
         finalized = batch_finalized or self._study_is_finalized()
         if not finalized:
             return
-        digest = event.payload_digest or payload_digest(event.payload)
+        if not isinstance(event.payload_digest, str) or not event.payload_digest:
+            raise JournalFormatError(
+                f"{event.type}: payload_digest required non-empty"
+            )
+        digest = event.payload_digest
         existing = self._conn.execute(
             "SELECT seq, payload_digest FROM events WHERE idem_key=?",
             (event.idem_key,),
@@ -534,7 +538,17 @@ class SqliteEventStore:
     def _insert_one(
         self, event: EventEnvelope
     ) -> tuple[EventEnvelope | None, Idempotent | None]:
-        digest = event.payload_digest or payload_digest(event.payload)
+        if not isinstance(event.payload_digest, str) or not event.payload_digest:
+            raise JournalFormatError(
+                f"{event.type}: payload_digest required non-empty"
+            )
+        digest = event.payload_digest
+        expected_digest = payload_digest(event.payload)
+        if digest != expected_digest:
+            raise JournalFormatError(
+                f"{event.type}: payload_digest mismatch "
+                f"(got {digest}, expected {expected_digest})"
+            )
         version = require_exact_int(
             event.schema_version, what=f"{event.type}.schema_version"
         )

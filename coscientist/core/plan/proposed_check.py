@@ -33,7 +33,7 @@ from typing import Any, AsyncIterator, Literal, Mapping
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.claims.rubric import freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric
-from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.digest import canonical_json, sha256_hex, payload_digest
 from coscientist.core.events.errors import (
     AttemptClosedError,
     InvalidStatus,
@@ -511,7 +511,9 @@ async def propose_check(
             payload=proposal.model_dump(mode="json"),
             ts=now,
             schema_version=CHECK_PROPOSED_SCHEMA_VERSION,
-        )
+                    epoch=0,
+                    payload_digest=payload_digest(proposal.model_dump),
+                )
     ]
 
     hitl_rid: str | None = None
@@ -522,6 +524,10 @@ async def propose_check(
         hitl_rid = hitl_request_id()
         task = runtime.tasks.get(task_id)
         gate = study.hitl_policy.gate("proposed_check")
+        if gate is None:
+            raise JournalFormatError(
+                "HITL kind 'proposed_check' has no gate in hitl_policy"
+            )
         to = timeout_s if timeout_s is not None else gate.timeout_s
         deadline = min(
             now + timedelta(seconds=to),
@@ -550,7 +556,9 @@ async def propose_check(
                 payload=req.model_dump(mode="json"),
                 ts=now,
                 schema_version=HITL_OPENED_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(req.model_dump),
+                )
         )
 
     await _append_events(runtime, events)
@@ -648,7 +656,11 @@ async def _close_task_proposal_quota(
                     },
                     ts=now,
                     schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
-                )
+epoch=0, payload_digest=payload_digest({
+                        "attempt_id": attempt_id,
+                        "close_reason": CloseReason.FAILED.value,
+                    }),
+)
             )
     if task is not None and task.state != TaskState.DONE:
         events.append(
@@ -664,7 +676,12 @@ async def _close_task_proposal_quota(
                 },
                 ts=now,
                 schema_version=TASK_DONE_SCHEMA_VERSION,
-            )
+epoch=0, payload_digest=payload_digest({
+                    "task_id": task_id,
+                    "outcome": TaskOutcome.FAILED.value,
+                    "reason": TaskReason.PROPOSAL_QUOTA.value,
+                }),
+)
         )
     if not events:
         return
@@ -925,7 +942,9 @@ async def bind_proposed_check_reviewer(
                 payload=payload,
                 ts=now,
                 schema_version=REVIEW_SCHEDULED_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
         ],
     )
 
@@ -1012,7 +1031,9 @@ async def approve_check(
             payload=payload,
             ts=now,
             schema_version=CHECK_APPROVED_SCHEMA_VERSION,
-        )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
         # HitlDecided(by=human) must already be journaled (answer_hitl); do not mint it
         # here — that would let source=api|hitl approve from propose_check's HitlOpened alone.
         await _append_events(runtime, [ev])
@@ -1095,7 +1116,9 @@ async def reject_check(
                 payload=payload,
                 ts=now,
                 schema_version=CHECK_REJECTED_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
         ]
         if hitl_request_id_s and reason == "human_timeout":
             events.append(
@@ -1112,7 +1135,13 @@ async def reject_check(
                     },
                     ts=now,
                     schema_version=writer_schema_version('HitlTimedOut'),
-                )
+epoch=0, payload_digest=payload_digest({
+                        "request_id": hitl_request_id_s,
+                        "reason": "human_timeout",
+                        "proposal_id": str(proposal_id_s),
+                        "spent_rub": 0.0,
+                    }),
+)
             )
         # Human reject: HitlDecided(by=human, decision=reject) must already be journaled
         # (answer_hitl); do not mint a decision here.
@@ -1138,6 +1167,10 @@ async def schedule_proposed_check_review(
     assert study is not None
     now = runtime.clock.now()
     gate = study.hitl_policy.gate("proposed_check")
+    if gate is None:
+        raise JournalFormatError(
+            "HITL kind 'proposed_check' has no gate in hitl_policy"
+        )
     to = timeout_s if timeout_s is not None else gate.timeout_s
     try:
         prop_task_id = str(row["task_id"])
@@ -1183,7 +1216,17 @@ async def schedule_proposed_check_review(
                 },
                 ts=now,
                 schema_version=REVIEW_SCHEDULED_SCHEMA_VERSION,
-            )
+epoch=0, payload_digest=payload_digest({
+                    "kind": "proposed_check_review",
+                    "proposal_id": str(proposal_id_s),
+                    "hitl_request_id": hitl_request_id_s,
+                    "task_id": prop_task_id,
+                    "reviewer_task_id": designated or None,
+                    "proposer_attempt_id": proposer_attempt_id,
+                    "deadline": deadline.isoformat(),
+                    "status": "pending",
+                }),
+)
         ],
     )
 

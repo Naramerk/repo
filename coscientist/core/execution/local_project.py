@@ -111,7 +111,13 @@ class LocalProjectMixin:
         if plan_key and plan_key in reqs:
             reqs.pop(plan_key, None)
         if after_task:
-            for k in [k for k, m in reqs.items() if str(m.get("after_task") or "") == after_task]:
+            drop: list[str] = []
+            for k, m in reqs.items():
+                if not isinstance(m, dict) or "after_task" not in m:
+                    continue
+                if m["after_task"] == after_task:
+                    drop.append(k)
+            for k in drop:
                 reqs.pop(k, None)
 
     def _project_local(self, ev: EventEnvelope) -> None:
@@ -119,31 +125,47 @@ class LocalProjectMixin:
         if ev.type == "StudyCreated":
             self.study = Study.model_validate(p)
         elif ev.type == "StudyRefused":
+            if "reason" not in p:
+                raise JournalFormatError("StudyRefused: missing reason")
             self._intake_refusal = IntakeRefuse(
                 kind=RefusalKind(p["kind"]),
-                reason=str(p.get("reason") or ""),
-                classifier_error=bool(p.get("classifier_error", False)),
+                reason=str(p["reason"]),
+                classifier_error=bool(p["classifier_error"])
+                if "classifier_error" in p
+                else False,
             )
         elif ev.type == "BudgetDebited":
-            spent = Decimal(str(p.get("spent_rub") or 0))
+            if "spent_rub" not in p:
+                raise JournalFormatError("BudgetDebited: missing spent_rub")
+            spent = Decimal(str(p["spent_rub"]))
             self._study_spent_rub += spent
             tid = p.get("task_id")
             if tid:
                 raw_spent = getattr(self, "_task_spent_rub", None)
-                if not isinstance(raw_spent, dict):
+                if raw_spent is None:
                     raw_spent = {}
                     self._task_spent_rub = raw_spent
-                raw_spent[str(tid)] = Decimal(str(raw_spent.get(str(tid), 0))) + spent
+                elif not isinstance(raw_spent, dict):
+                    raise JournalFormatError(
+                        f"_task_spent_rub must be dict, got {type(raw_spent).__name__}"
+                    )
+                prev = raw_spent[str(tid)] if str(tid) in raw_spent else Decimal("0")
+                raw_spent[str(tid)] = Decimal(str(prev)) + spent
         elif ev.type == "BudgetSharesAdjusted":
             from coscientist.core.plan.share_alloc import fold_budget_shares_adjusted
 
             fold_budget_shares_adjusted(self, p)
         elif ev.type == "BudgetExceeded":
-            if str(p.get("scope") or "study") == "study":
+            if "scope" not in p:
+                raise JournalFormatError("BudgetExceeded: missing scope")
+            scope = str(p["scope"])
+            if scope == "study":
                 self._budget_exceeded = True
-            elif str(p.get("scope") or "") == "task":
+            elif scope == "task":
                 # Task-level exceed is folded via TaskDone(budget); flag unused.
                 pass
+            else:
+                raise JournalFormatError(f"BudgetExceeded: unknown scope {scope!r}")
         elif ev.type == "PlanAccepted":
             self.plans[ev.entity_key] = dict(p)
         elif ev.type == "PlanExpanded":
@@ -213,8 +235,10 @@ class LocalProjectMixin:
                 refusals.append(dict(p))
             else:
                 self._expansion_refusals = [dict(p)]
+            after_raw = p["after_task"] if "after_task" in p else None
+            after_clear = str(after_raw) if isinstance(after_raw, str) and after_raw else None
             self._clear_expand_request(
-                after_task=str(p.get("after_task") or "") or None,
+                after_task=after_clear,
                 plan_key=p.get("plan_key"),
             )
             # PR11: loop refuse must restore status on replay.
@@ -223,18 +247,36 @@ class LocalProjectMixin:
 
                 fold_loop_expansion_refused(self, p)
         elif ev.type == "HitlOpened":
-            rid = str(p.get("request_id") or ev.entity_key)
+            if "request_id" in p and isinstance(p["request_id"], str) and p["request_id"]:
+                rid = str(p["request_id"])
+            elif ev.entity_key:
+                rid = str(ev.entity_key)
+            else:
+                raise JournalFormatError("HitlOpened: missing request_id")
             opens = getattr(self, "_hitl_requests", None)
-            if not isinstance(opens, dict):
+            if opens is None:
                 self._hitl_requests = {}
                 opens = self._hitl_requests
+            elif not isinstance(opens, dict):
+                raise JournalFormatError(
+                    f"_hitl_requests must be dict, got {type(opens).__name__}"
+                )
             opens[rid] = dict(p)
         elif ev.type == "HitlDecided":
-            rid = str(p.get("request_id") or ev.entity_key)
+            if "request_id" in p and isinstance(p["request_id"], str) and p["request_id"]:
+                rid = str(p["request_id"])
+            elif ev.entity_key:
+                rid = str(ev.entity_key)
+            else:
+                raise JournalFormatError("HitlDecided: missing request_id")
             decisions = getattr(self, "_hitl_decisions", None)
-            if not isinstance(decisions, dict):
+            if decisions is None:
                 self._hitl_decisions = {}
                 decisions = self._hitl_decisions
+            elif not isinstance(decisions, dict):
+                raise JournalFormatError(
+                    f"_hitl_decisions must be dict, got {type(decisions).__name__}"
+                )
             decisions[rid] = dict(p)
             # Close the open gate unless keep_open / WAIT. Do not merge decision
             # payload fields into the HitlOpened row (request ≠ decision).
@@ -256,7 +298,12 @@ class LocalProjectMixin:
         elif ev.type == "ArtifactRegistered":
             # PR15: core-stamped Artifact.kind (experiment_design / contradiction_map).
             # Journal is authority; meta mutation only here (after successful append).
-            art_id = str(p.get("artifact_id") or ev.entity_key or "")
+            if "artifact_id" in p and isinstance(p["artifact_id"], str) and p["artifact_id"]:
+                art_id = str(p["artifact_id"])
+            elif ev.entity_key:
+                art_id = str(ev.entity_key)
+            else:
+                art_id = ""
             kind = p.get("kind")
             if art_id and kind and bool(p.get("stamped")):
                 arts = getattr(self, "artifacts", None)
@@ -320,21 +367,28 @@ class LocalProjectMixin:
             clean = {k: v for k, v in p.items() if k not in drop}
             self.tasks[p["task_id"]] = Task.model_validate(clean)
             # Fold PLAN-n replan_allocated_s (reserve spent creating the container).
-            if "replan_allocated_s" in p:
-                alloc = float(p["replan_allocated_s"])
-                self._replan_used_s = float(self._replan_used_s) + alloc
-            else:
-                alloc = 0.0
-            pending_exp = p.get("pending_expansion")
-            after = p.get("expand_after_task")
             # Sole PLAN-n signal is Task.plan_role on the folded Task payload.
             from coscientist.core.execution.domain import PlanRole
 
             folded = self.tasks[p["task_id"]]
+            if folded.plan_role is None:
+                raise JournalFormatError("TaskCreated: plan_role required")
+            pending_exp = p.get("pending_expansion")
+            after = p.get("expand_after_task")
             if folded.plan_role == PlanRole.PLAN_N:
+                if "replan_allocated_s" not in p:
+                    raise JournalFormatError(
+                        "TaskCreated(plan_n): replan_allocated_s required"
+                    )
+                alloc = float(p["replan_allocated_s"])
+                self._replan_used_s = float(self._replan_used_s) + alloc
                 if not isinstance(after, str) or not after:
                     raise JournalFormatError(
                         "TaskCreated(plan_n): expand_after_task required non-empty str"
+                    )
+                if pending_exp is not None and not isinstance(pending_exp, dict):
+                    raise JournalFormatError(
+                        "TaskCreated(plan_n): pending_expansion must be dict or null"
                     )
                 tkey = folded.spec.task_key
                 reqs = self._expand_requests
@@ -343,16 +397,20 @@ class LocalProjectMixin:
                     reqs = self._expand_requests
                 reqs[tkey] = {
                     "after_task": after,
-                    "pending": pending_exp if isinstance(pending_exp, dict) else None,
+                    "pending": pending_exp,
                     "replan_allocated_s": alloc,
                 }
                 if not isinstance(self._expand_pending, set):
                     self._expand_pending = set()
                 self._expand_pending.add(after)
-            elif after is not None:
-                raise JournalFormatError(
-                    "TaskCreated: expand_after_task only valid when plan_role=plan_n"
-                )
+            else:
+                if "replan_allocated_s" in p:
+                    alloc = float(p["replan_allocated_s"])
+                    self._replan_used_s = float(self._replan_used_s) + alloc
+                if after is not None:
+                    raise JournalFormatError(
+                        "TaskCreated: expand_after_task only valid when plan_role=plan_n"
+                    )
         elif ev.type == "AttemptStarted":
             row = dict(p)
             # Schema v1: required on the wire (no upcaster/default fill).
@@ -499,7 +557,9 @@ class LocalProjectMixin:
             if isinstance(dep_provenance, dict):
                 tkey = t.spec.task_key
                 if tkey not in dep_provenance:
-                    oc = str(p.get("outcome") or "")
+                    if "outcome" not in p:
+                        raise JournalFormatError("TaskDone: missing outcome")
+                    oc = str(p["outcome"])
                     if oc in (TaskOutcome.FAILED.value, "FAILED"):
                         dep_provenance[tkey] = "stub"
                     elif oc in (TaskOutcome.PARTIAL.value, "PARTIAL"):

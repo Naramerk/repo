@@ -26,6 +26,7 @@ from coscientist.checks.kinds.quote_norm import (
     token_boundary_match,
 )
 from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -33,6 +34,7 @@ from coscientist.core.execution.domain import (
     CodeCheck,
     HitlPolicy,
     Outcome,
+    PlanRole,
     ReqStatus,
     RequirementRef,
     SourceQuote,
@@ -1160,8 +1162,7 @@ def test_evaluate_task_checks_passes_fetched(tmp_path: Path):
         ),
         arts,
         attempt_id="att",
-        task_kind="literature",
-        task_key="LIT-0",
+        plan_role=PlanRole.NONE,
         fetched_digests={paper.sha256},
     )
     assert any(r.status is ReqStatus.MET for r in results)
@@ -1424,7 +1425,13 @@ async def test_direct_writer_append_source_fetched_rejected(tmp_path: Path, cloc
         },
         ts=datetime.now(UTC),
         schema_version=1,
-    )
+epoch=0, payload_digest=payload_digest({
+            "call_id": "a:1",
+            "tool": "papers_get",
+            "digest": "abc",
+            "url": "https://x",
+        }),
+)
     with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
         await rt.writer.append(ev)
     with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
@@ -1599,7 +1606,13 @@ def test_projection_source_fetched_requires_fetch_call_pairing():
         ts=datetime.now(UTC),
         schema_version=1,
         seq=1,
-    )
+epoch=0, payload_digest=payload_digest({
+            "call_id": "att:1",
+            "tool": "papers_get",
+            "digest": "deadbeef",
+            "url": "https://x",
+        }),
+)
     apply_to_map(proj, sf)
     assert not proj.get("source_fetches")
     _put(proj, "attempts", "att", {"attempt_id": "att", "reason": "keep_me"})
@@ -1618,7 +1631,14 @@ def test_projection_source_fetched_requires_fetch_call_pairing():
         ts=datetime.now(UTC),
         schema_version=1,
         seq=2,
-    )
+epoch=0, payload_digest=payload_digest({
+            "attempt_id": "att",
+            "reason": "source_fetch",
+            "call_id": "att:1",
+            "tool": "papers_get",
+            "is_fetch": True,
+        }),
+)
     # Registry must know papers_get as is_fetch for the marker check.
     _reset_registry_for_tests()
     _register_tool_for_tests(
@@ -1827,7 +1847,13 @@ def test_core_cannot_bypass_source_fetched_with_bool_flag(tmp_path: Path, clock)
             },
             ts=datetime.now(UTC),
             schema_version=1,
-        )
+epoch=0, payload_digest=payload_digest({
+                "call_id": "a:1",
+                "tool": "papers_get",
+                "digest": "abc",
+                "url": "https://x",
+            }),
+)
         # No kwarg / empty id / random id — all refused (effects registry).
         with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
             await rt.store.append_many([ev])
@@ -1975,7 +2001,9 @@ def test_attempt_tainted_without_is_fetch_does_not_pair():
                 ts=datetime.now(UTC),
                 schema_version=1,
                 seq=1,
-            ),
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                ),
             EventEnvelope(
                 study_id="s",
                 type="SourceFetched",
@@ -1990,7 +2018,13 @@ def test_attempt_tainted_without_is_fetch_does_not_pair():
                 ts=datetime.now(UTC),
                 schema_version=1,
                 seq=2,
-            ),
+epoch=0, payload_digest=payload_digest({
+                    "call_id": "att:1",
+                    "tool": "papers_get",
+                    "digest": "deadbeef",
+                    "url": "https://x",
+                }),
+),
         ],
     )
     assert "deadbeef" not in idx.digests()
@@ -2006,7 +2040,9 @@ def test_attempt_tainted_without_is_fetch_does_not_pair():
             ts=datetime.now(UTC),
             schema_version=1,
             seq=1,
-        ),
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                ),
     )
     assert not proj.get("fetch_calls")
 
@@ -2319,7 +2355,13 @@ def test_fetch_integrity_row_key_without_call_id():
         },
         ts=datetime.now(UTC),
         schema_version=1,
-    )
+epoch=0, payload_digest=payload_digest({
+            "kind": "fetch_tool_reclassified",
+            "tool": "papers_get",
+            "call_id": "",
+            "internal_error": True,
+        }),
+)
     folded = fold_events([ev])
     assert "papers_get" in (folded.get("fetch_integrity") or {})
     # Round-trip via _row_key after store-shaped row.

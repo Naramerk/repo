@@ -11,6 +11,7 @@ from coscientist.core.events.errors import (
     ArtifactCorrupt,
     CatalogError,
     CoreBugError,
+    JournalFormatError,
     SandboxInfraError,
 )
 from coscientist.core.execution.artifacts import (
@@ -880,8 +881,6 @@ def evaluate_task_checks(
     attempt_id: str | None = None,
     task_id: str | None = None,
     output_digest: str | None = None,
-    task_kind: str | None = None,
-    task_key: str | None = None,
     plan_role: PlanRole | str | None = None,
     fetched_digests: frozenset[str] | Collection[str] | None = None,
     proposals: dict[str, dict[str, Any]] | None = None,
@@ -911,14 +910,17 @@ def evaluate_task_checks(
 
     # Sole PLAN-n signal is Task.plan_role (passed as plan_role=...).
     if plan_role is None:
-        role_tok = PlanRole.NONE
-    elif isinstance(plan_role, PlanRole):
+        raise JournalFormatError("evaluate_task_checks: plan_role required")
+    if isinstance(plan_role, PlanRole):
         role_tok = plan_role
     else:
-        role_tok = PlanRole(str(plan_role))
+        try:
+            role_tok = PlanRole(str(plan_role))
+        except ValueError as e:
+            raise JournalFormatError(
+                f"evaluate_task_checks: invalid plan_role {plan_role!r}"
+            ) from e
     is_core_plan_n = role_tok == PlanRole.PLAN_N
-    _ = task_kind
-    _ = task_key
 
     for i, ref in enumerate(refs):
         tmpl = by_id.get(ref.template_id)

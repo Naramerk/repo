@@ -146,6 +146,8 @@ async def _upsert_hyps(rt, *, of_task: str, n: int) -> None:
                     payload=node.model_dump(mode="json"),
                     ts=now,
                     schema_version=writer_schema_version('GraphNodeUpserted'),
+                    epoch=0,
+                    payload_digest=payload_digest(node.model_dump),
                 )
             ]
         )
@@ -748,7 +750,7 @@ async def _plan_one(rt, *, share: float = 0.5):
 )
 async def test_debit_cost_rub_on_every_result_path(tmp_path, clock, monkeypatch, path):
     """B1: cost_rub debits on scientific/timeout/same_digest/core_bug/catalog/infra."""
-    from coscientist.core.events.digest import canonical_json, sha256_hex
+    from coscientist.core.events.digest import canonical_json, sha256_hex, payload_digest
     from coscientist.core.events.errors import CatalogError
     from coscientist.core.execution.domain import CheckResult, ReqStatus
 
@@ -914,7 +916,24 @@ async def test_budget_debit_atomic_crash_between_recover(tmp_path, clock):
                 },
                 ts=now,
                 schema_version=1,
-            )
+epoch=0, payload_digest=payload_digest({
+                    "result_id": f"r:{aid}",
+                    "attempt_id": aid,
+                    "task_id": tid,
+                    "outcome": "FAILED",
+                    "computed_outcome": "FAILED",
+                    "reason": "failed",
+                    "provenance": "real",
+                    "check_results": [],
+                    "unassessed": [],
+                    "artifacts": [],
+                    "agent_claim": None,
+                    "inputs": [],
+                    "result_class": "scientific",
+                    "charged": True,
+                    "payload_digest": "x",
+                }),
+)
         ]
     )
     await close_runtime(rt)

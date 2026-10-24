@@ -5,7 +5,6 @@ Returns error detail strings; never raises to the tick/record path.
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING, Any
 
 from coscientist.core.claims.rubric_types import VALID_FINAL_TYPES, FinalType
@@ -55,11 +54,16 @@ def _rollup_from_plans(plan_rows: list[Any]) -> tuple[RollupRule | None, str | N
     if not plan_rows:
         return None, "missing_plan_rollup"
     last = plan_rows[-1]
-    try:
-        if isinstance(last, dict):
-            if "rollup" not in last:
-                return None, "missing_plan_rollup"
+    if isinstance(last, dict):
+        if "rollup" not in last:
+            return None, "missing_plan_rollup"
+        try:
             return _require_rollup(last["rollup"]), None
+        except ValueError as e:
+            return None, str(e)
+    if not hasattr(last, "rollup"):
+        return None, "missing_plan_rollup"
+    try:
         return _require_rollup(last.rollup), None
     except ValueError as e:
         return None, str(e)
@@ -83,17 +87,24 @@ def task_kind_for_route(route: object) -> TaskKind:
 
 
 def next_kind_index(runtime: StudyRuntime, prefix: str, tasks: list[TaskSpec]) -> int:
-    """Next ``{prefix}-<n>`` index from runtime tasks + candidates."""
+    """Next index from structural route/prefix counts (no task_key regex parse)."""
     n = 0
-    pat = re.compile(rf"^{re.escape(prefix)}-(\d+)$")
     for rt_task in runtime.tasks.values():
-        m = pat.match(rt_task.spec.task_key)
-        if m:
-            n = max(n, int(m.group(1)) + 1)
+        try:
+            if _prefix_for_route(rt_task.spec.route) == prefix:
+                n += 1
+        except UnknownRouteError as e:
+            raise JournalFormatError(
+                f"next_kind_index: bad route on {rt_task.spec.task_key!r}"
+            ) from e
     for spec in tasks:
-        m = pat.match(spec.task_key)
-        if m:
-            n = max(n, int(m.group(1)) + 1)
+        try:
+            if _prefix_for_route(spec.route) == prefix:
+                n += 1
+        except UnknownRouteError as e:
+            raise JournalFormatError(
+                f"next_kind_index: bad route on {spec.task_key!r}"
+            ) from e
     return n
 
 
@@ -393,14 +404,15 @@ def _question_ref_from_edge(runtime: StudyRuntime, sid: str, dst_id: str) -> str
         raise JournalFormatError(f"decomposes dst not question: {dst_id!r}")
     if isinstance(dst.ref_id, str) and dst.ref_id:
         return dst.ref_id
+    # Structural: dst must equal question_node_id(sid, qid); recover qid via strip.
     prefix = f"{sid}:question:"
-    expected = question_node_id(sid, "")
-    _ = expected
-    if not dst_id.startswith(prefix):
+    if not isinstance(dst_id, str) or not dst_id.startswith(prefix):
         raise JournalFormatError(f"decomposes dst id layout invalid: {dst_id!r}")
     qid = dst_id[len(prefix) :]
     if not qid:
         raise JournalFormatError(f"decomposes dst empty question id: {dst_id!r}")
+    if question_node_id(sid, qid) != dst_id:
+        raise JournalFormatError(f"decomposes dst id not canonical: {dst_id!r}")
     return qid
 
 
@@ -438,12 +450,19 @@ def task_produced_countable_claims(runtime: StudyRuntime, tkey: str) -> bool:
     by = filtered_claims_by_target(runtime.graph, study_id=sid, results=runtime.results)
     for claims in by.values():
         for c in claims:
-            aid = getattr(c, "attempt_id", None)
+            if not hasattr(c, "attempt_id"):
+                raise JournalFormatError("claim missing attempt_id")
+            aid = c.attempt_id
             # Empty/missing attempt_id → not countable for this task (skip, no invent).
             if not isinstance(aid, str) or not aid:
                 continue
-            # Structured attempt ids are ``{task_id}#{n}`` — not free substring match.
-            if aid.startswith(f"{tid}#") and c.counts():
+            # Structured attempt ids are ``{task_id}#{n}`` — exact prefix + numeric suffix.
+            if "#" not in aid:
+                continue
+            base, _, n = aid.partition("#")
+            if base != tid or not n.isdigit():
+                continue
+            if c.counts():
                 return True
     return False
 

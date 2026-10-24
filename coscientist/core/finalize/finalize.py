@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from coscientist.core.claims.dispositions import dispositions, report_hypothesis_verdicts
 from coscientist.core.claims.reasons import TaskReason, TerminalReason
-from coscientist.core.events.digest import canonical_json
+from coscientist.core.events.digest import canonical_json, payload_digest
 from coscientist.core.events.errors import (
     CASUnavailable,
     Conflict,
@@ -181,8 +181,10 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
             if reason and reason not in seen:
                 try:
                     TaskReason(reason)
-                except ValueError:
-                    continue
+                except ValueError as e:
+                    raise JournalFormatError(
+                        f"TaskDone.reason not a TaskReason: {reason!r}"
+                    ) from e
                 seen.append(str(reason))
                 line = sandbox_timeout_report_line(
                     str(reason),
@@ -499,7 +501,9 @@ async def _append_finalized(runtime: StudyRuntime, *, sid: str, payload: dict[st
                 payload=payload,
                 ts=now,
                 schema_version=STUDY_FINALIZED_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
         ]
     )
 

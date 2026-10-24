@@ -10,6 +10,7 @@ import pytest
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import Disposition, TaskReason, TerminalReason
 from coscientist.core.events.ids import hypothesis_node_id
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -22,6 +23,7 @@ from coscientist.core.execution.domain import (
     TaskKind,
     TaskSpec,
     TaskState,
+    PlanRole,
 )
 from coscientist.core.execution.recover import recover
 from coscientist.core.plan.loop import loop_is_complete, loop_status
@@ -757,7 +759,8 @@ def test_pred_criterion_met_reads_check_results():
                     ),
                     state=TaskState.DONE,
                     deadline=datetime.now(timezone.utc),
-                )
+        plan_role=PlanRole.NONE,
+)
             }
             self.attempts = {"a1": {"task_id": "t1"}}
             self.results = {
@@ -973,7 +976,8 @@ def test_survivors_le_real_graph_scope_filter():
                     ),
                     state=TaskState.DONE,
                     deadline=now,
-                ),
+        plan_role=PlanRole.NONE,
+),
                 "t_out": Task(
                     task_id=f"{sid}/{outside_key}",
                     kind=TaskKind.EXPERIMENT,
@@ -985,7 +989,8 @@ def test_survivors_le_real_graph_scope_filter():
                     ),
                     state=TaskState.DONE,
                     deadline=now,
-                ),
+        plan_role=PlanRole.NONE,
+),
             }
 
     rt = RT()
@@ -1663,7 +1668,24 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
                     },
                     ts=rt2.clock.now(),
                     schema_version=PLAN_ACCEPTED_SCHEMA_VERSION,
-                )
+epoch=0, payload_digest=payload_digest({
+                        "plan_id": "pl_corrupt_loops",
+                        "study_id": sid,
+                        "revision": 9999,
+                        "hypothesis_id": None,
+                        "tasks": [],
+                        "questions": [{"id": "Q1", "text": "q"}],
+                        "expand_after": [],
+                        "loops": [
+                            {
+                                "loop_id": "L1",
+                                "body": "not-a-list",
+                                "until": {"name": "no_change", "params": {}},
+                                "max_iter": 2,
+                            }
+                        ],
+                    }),
+)
             ]
         )
         await recover(rt2)

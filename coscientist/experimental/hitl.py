@@ -6,8 +6,8 @@ from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from typing import Any, Self
 
-from coscientist.core.events.digest import canonical_json, sha256_hex
-from coscientist.core.events.errors import Conflict
+from coscientist.core.events.digest import canonical_json, sha256_hex, payload_digest
+from coscientist.core.events.errors import Conflict, JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hitl_request_id, study_id
 from coscientist.core.events.schema_versions import GRAPH_NODE_UPSERTED_SCHEMA_VERSION
@@ -59,6 +59,8 @@ class HitlForkMixin(CostlyHitlMixin):
         if kind in ("plan", "plan_approval", "plan_expansion"):
             after = after or task.spec.task_key
         gate = self.study.hitl_policy.gate(kind)
+        if gate is None:
+            raise ValueError(f"HITL kind {kind!r} has no gate in hitl_policy")
         to = timeout_s if timeout_s is not None else gate.timeout_s
         deadline = min(
             now + timedelta(seconds=to),
@@ -87,6 +89,8 @@ class HitlForkMixin(CostlyHitlMixin):
                     payload=req.model_dump(mode="json"),
                     ts=now,
                     schema_version=writer_schema_version('HitlOpened'),
+                    epoch=0,
+                    payload_digest=payload_digest(req.model_dump),
                 )
             ]
         )
@@ -104,16 +108,20 @@ class HitlForkMixin(CostlyHitlMixin):
         if not h.open:
             return
         if h.kind == "costly_or_nonreal":
-            answer = {
-                "accept": "approve",
-                "approve": "approve",
-                "reject": "reject",
-                "delegate": "delegate",
-            }.get(decision, decision)
+            # Costly path wire tokens: approve|reject|delegate (accept maps to approve).
+            if decision == "accept":
+                answer = "approve"
+            elif decision in ("approve", "reject", "delegate"):
+                answer = decision
+            else:
+                raise ValueError(f"unknown costly HITL decision: {decision!r}")
             await self._apply_costly_or_nonreal(
                 h, answer=answer, critic_accepts=critic_accepts  # type: ignore[arg-type]
             )
             return
+        # Canonical decision tokens for non-costly gates (no accept↔approve alias).
+        if decision not in ("accept", "reject", "delegate"):
+            raise ValueError(f"unknown HITL decision: {decision!r}")
         # PR20: proposed_check HITL — CheckApproved / CheckRejected (core decides counts).
         if h.kind == "proposed_check":
             await self._answer_proposed_check(
@@ -152,10 +160,18 @@ class HitlForkMixin(CostlyHitlMixin):
                     },
                     ts=now,
                     schema_version=writer_schema_version("HitlDecided"),
-                )
+epoch=0, payload_digest=payload_digest({
+                        "request_id": request_id,
+                        "decision": decision,
+                        "by": "human",
+                        "delegated_by": "human",
+                        "reason": "answered",
+                        "spent_rub": 0.0,
+                    }),
+)
             ]
         )
-        if decision in ("accept", "approve"):
+        if decision == "accept":
             if h.kind == "budget":
                 await self._apply_budget_hitl(
                     h, request_id, expansion, approved_by="human"
@@ -327,16 +343,31 @@ class HitlForkMixin(CostlyHitlMixin):
         # Serialize accept/delegate/reject: only the journal winner runs side effects.
         async with self._proposed_check_decision_lock(pid):
             # Refresh open flag under the lock (concurrent answer may have closed it).
-            live = self.hitl.get(request_id) if hasattr(self, "hitl") else h
-            if live is not None and not getattr(live, "open", True):
+            if not hasattr(self, "hitl"):
+                raise JournalFormatError("HITL map missing on runtime")
+            live = self.hitl.get(request_id)
+            if live is None:
+                live = h
+            if not hasattr(live, "open"):
+                raise JournalFormatError(
+                    f"HITL request {request_id!r} missing required 'open'"
+                )
+            if not live.open:
                 return
-            existing = getattr(self, "_hitl_decisions", None) or {}
-            if isinstance(existing, dict) and request_id in existing:
+            existing = getattr(self, "_hitl_decisions", None)
+            if existing is None:
+                existing = {}
+            elif not isinstance(existing, dict):
+                raise JournalFormatError(
+                    f"_hitl_decisions must be dict, got {type(existing).__name__}"
+                )
+            if request_id in existing:
                 return
 
             now = self.clock.now()
             decided_idem = make_idem("HitlDecided", request_id)
-            if decision in ("accept", "approve"):
+            # Canonical proposed_check decisions: accept | delegate | reject (no approve alias).
+            if decision == "accept":
                 want = "accept"
                 payload: dict[str, Any] = {
                     "request_id": request_id,
@@ -360,7 +391,7 @@ class HitlForkMixin(CostlyHitlMixin):
                     "keep_open": False,
                     "effect": "WAIT_REVIEWER",
                 }
-            else:
+            elif decision == "reject":
                 want = "reject"
                 payload = {
                     "request_id": request_id,
@@ -370,6 +401,10 @@ class HitlForkMixin(CostlyHitlMixin):
                     "proposal_id": pid,
                     "spent_rub": 0.0,
                 }
+            else:
+                raise ValueError(
+                    f"proposed_check HITL decision must be accept|delegate|reject, got {decision!r}"
+                )
 
             try:
                 await self._append(
@@ -382,7 +417,9 @@ class HitlForkMixin(CostlyHitlMixin):
                             payload=payload,
                             ts=now,
                             schema_version=writer_schema_version('HitlDecided'),
-                        )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
                     ]
                 )
             except Conflict:
@@ -390,8 +427,15 @@ class HitlForkMixin(CostlyHitlMixin):
                 return
 
             # Journal is authority: only the folded winner may approve/reject/schedule.
-            folded = (getattr(self, "_hitl_decisions", None) or {}).get(request_id)
-            if not isinstance(folded, dict) or str(folded.get("decision") or "") != want:
+            decisions = getattr(self, "_hitl_decisions", None)
+            if not isinstance(decisions, dict):
+                raise JournalFormatError("_hitl_decisions missing after HitlDecided")
+            folded = decisions.get(request_id)
+            if not isinstance(folded, dict):
+                return
+            if "decision" not in folded:
+                raise JournalFormatError("HitlDecided fold missing 'decision'")
+            if str(folded["decision"]) != want:
                 return
 
             if want == "accept":
@@ -433,29 +477,53 @@ class HitlForkMixin(CostlyHitlMixin):
         if h.kind == "proposed_check":
             from coscientist.core.plan.proposed_check import reject_check
 
-            pid = str(getattr(h, "payload_ref", None) or "").strip()
-            if not pid:
-                return
+            if not isinstance(h.payload_ref, str) or not h.payload_ref.strip():
+                raise JournalFormatError(
+                    f"proposed_check HITL {h.request_id!r} missing payload_ref"
+                )
+            pid = h.payload_ref.strip()
             async with self._proposed_check_decision_lock(pid):
-                live = self.hitl.get(h.request_id) if hasattr(self, "hitl") else h
-                if live is not None and not getattr(live, "open", True):
+                if not hasattr(self, "hitl"):
+                    raise JournalFormatError("HITL map missing on runtime")
+                live = self.hitl.get(h.request_id)
+                if live is None:
+                    live = h
+                if not hasattr(live, "open"):
+                    raise JournalFormatError(
+                        f"HITL request {h.request_id!r} missing required 'open'"
+                    )
+                if not live.open:
                     return
                 # Journal wins before any side effect.
-                existing = getattr(self, "_hitl_decisions", None) or {}
-                dec = (
-                    existing.get(h.request_id) if isinstance(existing, dict) else None
-                )
+                existing = getattr(self, "_hitl_decisions", None)
+                if existing is None:
+                    existing = {}
+                elif not isinstance(existing, dict):
+                    raise JournalFormatError(
+                        f"_hitl_decisions must be dict, got {type(existing).__name__}"
+                    )
+                dec = existing.get(h.request_id)
                 if isinstance(dec, dict):
-                    d = str(dec.get("decision") or "").strip()
+                    if "decision" not in dec or "by" not in dec:
+                        raise JournalFormatError(
+                            f"HitlDecided for {h.request_id!r} missing decision/by"
+                        )
+                    d = str(dec["decision"]).strip()
                     decided_by = str(dec["by"]).strip()
                     if decided_by == "human" and d in (
                         "accept",
-                        "approve",
                         "delegate",
                         "reject",
                     ):
                         return
-                row = (getattr(self, "_check_proposals", None) or {}).get(pid)
+                proposals = getattr(self, "_check_proposals", None)
+                if proposals is None:
+                    proposals = {}
+                elif not isinstance(proposals, dict):
+                    raise JournalFormatError(
+                        f"_check_proposals must be dict, got {type(proposals).__name__}"
+                    )
+                row = proposals.get(pid)
                 if isinstance(row, dict) and row.get("status") in (
                     "approved",
                     "rejected",
@@ -484,21 +552,32 @@ class HitlForkMixin(CostlyHitlMixin):
                     },
                     ts=now,
                     schema_version=writer_schema_version('HitlTimedOut'),
-                )
+epoch=0, payload_digest=payload_digest({
+                        "request_id": h.request_id,
+                        "reason": "human_timeout",
+                        "spent_rub": 0.0,
+                    }),
+)
             ]
         )
-        if h.kind not in (
-            "plan_approval",
-            "plan_expansion",
-            "spec_approval",
-            "plan",
-            "hypotheses",
-            "report",
-        ):
+        # Fail-closed: missing study/policy/gate → refuse (never invent on_timeout=delegate).
+        if self.study is None or self.study.hitl_policy is None:
+            task = self.tasks[h.task_id]
+            from coscientist.core.execution.domain import TaskState
+
+            if task.state != TaskState.DONE:
+                await self._fail_task_human_timeout(h, task)
             return
-        policy = self.study.hitl_policy if self.study else None
-        gate = policy.gate(h.kind) if policy else None
-        on_timeout = gate.on_timeout if gate else "delegate"
+        policy = self.study.hitl_policy
+        gate = policy.gate(h.kind)
+        if gate is None:
+            task = self.tasks[h.task_id]
+            from coscientist.core.execution.domain import TaskState
+
+            if task.state != TaskState.DONE:
+                await self._fail_task_human_timeout(h, task)
+            return
+        on_timeout = gate.on_timeout
         if on_timeout in ("delegate", "delegate_capped"):
             await self._critic_decide(h, decision="accept", delegated_by="timeout")
             return
@@ -541,7 +620,17 @@ class HitlForkMixin(CostlyHitlMixin):
                     },
                     ts=now,
                     schema_version=writer_schema_version('HitlDecided'),
-                )
+epoch=0, payload_digest=payload_digest({
+                        "request_id": h.request_id,
+                        "decision": decision,
+                        "by": "policy",
+                        "decided_by": "critic",
+                        "approved_by": "critic",
+                        "delegated_by": delegated_by,
+                        "reason": reason,
+                        "spent_rub": 0.0,
+                    }),
+)
             ]
         )
         # Mark plan node when «decide yourself» / timeout delegate (graph attrs).
@@ -587,6 +676,8 @@ class HitlForkMixin(CostlyHitlMixin):
                     payload=node.model_dump(mode="json"),
                     ts=now,
                     schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
+                    epoch=0,
+                    payload_digest=payload_digest(node.model_dump),
                 )
             ]
         )
@@ -618,7 +709,9 @@ class HitlForkMixin(CostlyHitlMixin):
             payload=node.model_dump(mode="json"),
             ts=now,
             schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
-        )])
+                    epoch=0,
+                    payload_digest=payload_digest(node.model_dump),
+                )])
 
     async def _apply_budget_hitl(
         self,
@@ -659,7 +752,13 @@ class HitlForkMixin(CostlyHitlMixin):
                         },
                         ts=self.clock.now(),
                         schema_version=_BUDGET_SHARES_REFUSED_SV,
-                    )
+epoch=0, payload_digest=payload_digest({
+                            "request_id": request_id,
+                            "reason": "critic_rejected",
+                            "detail": str(err) if err is not None else "invalid",
+                            "approved_by": approved_by,
+                        }),
+)
                 ]
             )
             return
@@ -670,7 +769,9 @@ class HitlForkMixin(CostlyHitlMixin):
             payload=payload,
             ts=self.clock.now(),
             schema_version=_BUDGET_SHARES_ADJUSTED_SV,
-        )])
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )])
 
     def _depends_transitively(self, task: Task, key: str) -> bool:
         seen: set[str] = set()
@@ -722,7 +823,11 @@ class HitlForkMixin(CostlyHitlMixin):
                         },
                         ts=now,
                         schema_version=writer_schema_version('HitlDeadlineExtended'),
-                    )
+epoch=0, payload_digest=payload_digest({
+                            "request_id": h.request_id,
+                            "deadline": new_dl.isoformat(),
+                        }),
+)
                 ]
             )
 

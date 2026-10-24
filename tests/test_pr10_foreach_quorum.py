@@ -9,6 +9,7 @@ import pytest
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.ids import hypothesis_node_id, task_id
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref
@@ -193,6 +194,8 @@ async def _upsert_selected_hypotheses(
                     payload=node.model_dump(mode="json"),
                     ts=now,
                     schema_version=writer_schema_version('GraphNodeUpserted'),
+                    epoch=0,
+                    payload_digest=payload_digest(node.model_dump),
                 )
             ]
         )
@@ -372,7 +375,9 @@ async def test_foreach_natural_sort_and_source_task_required(tmp_path, clock, ru
                 ).model_dump(mode="json"),
                 ts=rt.clock.now(),
                 schema_version=writer_schema_version('GraphNodeUpserted'),
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(GraphNode),
+                )
         ]
     )
     aid = await rt.start_attempt("E0")
@@ -524,7 +529,24 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                 },
                 ts=now,
                 schema_version=1,
-            ),
+epoch=0, payload_digest=payload_digest({
+                    "attempt_id": aid,
+                    "n": 1,
+                    "dispatch_id": f"dispatch:{aid}",
+                    "route_returned": False,
+                    "closed": False,
+                    "close_reason": None,
+                    "provenance": "real",
+                    "agent_output_digest": None,
+                    "deadline": (now + timedelta(seconds=60)).isoformat(),
+                    "task_id": e0_tid,
+                    "study_id": sid,
+                    "inputs": [],
+                    "limitations": [],
+                    "attempt_role": "agent",
+                    "charged": True,
+                }),
+),
             EventEnvelope(
                 study_id=sid,
                 type="AttemptClosed",
@@ -538,7 +560,13 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                 },
                 ts=now,
                 schema_version=1,
-            ),
+epoch=0, payload_digest=payload_digest({
+                    "attempt_id": aid,
+                    "closed": True,
+                    "close_reason": CloseReason.RESULT.value,
+                    "task_id": e0_tid,
+                }),
+),
             EventEnvelope(
                 study_id=sid,
                 type="TaskDone",
@@ -551,7 +579,12 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                 },
                 ts=now,
                 schema_version=1,
-            ),
+epoch=0, payload_digest=payload_digest({
+                    "task_id": e0_tid,
+                    "outcome": TaskOutcome.SUCCESS.value,
+                    "reason": None,
+                }),
+),
         ]
     )
     await close_runtime(rt)
@@ -1237,6 +1270,8 @@ async def test_foreach_missing_and_non_numeric_rank(tmp_path, clock, runtime_cls
                     ).model_dump(mode="json"),
                     ts=now,
                     schema_version=writer_schema_version('GraphNodeUpserted'),
+                    epoch=0,
+                    payload_digest=payload_digest(GraphNode),
                 )
             ]
         )

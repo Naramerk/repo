@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from coscientist.core.events.digest import payload_digest
+
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -22,6 +24,7 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
+    PlanRole,
 )
 from coscientist.core.finalize.study_view import study_view
 from tests.helpers import close_runtime, open_runtime
@@ -135,7 +138,8 @@ def _task(
         outcome=outcome,
         deadline=now,
         attempts=attempts or [],
-    )
+        plan_role=PlanRole.NONE,
+)
 
 
 def test_study_view_stubbed_computed():
@@ -321,7 +325,9 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
                 payload=study_payload,
                 ts=now,
                 schema_version=1,
-            ),
+                    epoch=0,
+                    payload_digest=payload_digest(study_payload),
+                ),
             EventEnvelope(
                 study_id=sid,
                 type="TaskCreated",
@@ -330,7 +336,9 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
                 payload=task_payload,
                 ts=now,
                 schema_version=1,
-            ),
+                    epoch=0,
+                    payload_digest=payload_digest(task_payload),
+                ),
         ]
     )
     await store.release_lease("seeder", store.epoch)

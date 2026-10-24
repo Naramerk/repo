@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from coscientist.core.events.errors import HitlUnsupported
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import GateConfig, HitlPolicy
@@ -207,7 +208,9 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
                         payload=hitl_payload,
                         ts=now,
                         schema_version=writer_schema_version('HitlOpened'),
-                    ),
+                    epoch=0,
+                    payload_digest=payload_digest(hitl_payload),
+                ),
                     EventEnvelope(
                         study_id="st_race",
                         type="TaskDone",
@@ -220,7 +223,12 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
                         },
                         ts=now,
                         schema_version=1,
-                    ),
+epoch=0, payload_digest=payload_digest({
+                            "task_id": "st_race/REPORT",
+                            "outcome": TaskOutcome.SKIPPED.value,
+                            "reason": "cancelled",
+                        }),
+),
                 ]
             )
             await racer.release_lease("racer", racer.epoch)

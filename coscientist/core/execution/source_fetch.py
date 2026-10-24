@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from coscientist.core.events.errors import ArtifactRejected, FetchToolReclassified
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.schema_versions import (
     ATTEMPT_TAINTED_SCHEMA_VERSION,
@@ -314,7 +315,13 @@ async def journal_fetch_integrity_raised(
             },
             ts=datetime.now(UTC),
             schema_version=FETCH_INTEGRITY_RAISED_SCHEMA_VERSION,
-        )
+epoch=0, payload_digest=payload_digest({
+                "kind": "fetch_tool_reclassified",
+                "tool": tool,
+                "call_id": call_id,
+                "internal_error": True,
+            }),
+)
         try:
             stored = await writer.append(ev)
         except Idempotent:
@@ -440,7 +447,13 @@ async def append_source_fetched(
         },
         ts=datetime.now(UTC),
         schema_version=SOURCE_FETCHED_SCHEMA_VERSION,
-    )
+epoch=0, payload_digest=payload_digest({
+            "call_id": call_id,
+            "tool": tool,
+            "digest": digest,
+            "url": url,
+        }),
+)
     # verify granted a write permit — release it if append fails so it never leaks.
     try:
         stored = await writer.append(ev, _source_fetched_cap_id=capability.id)
@@ -490,7 +503,14 @@ async def store_fetched_source(
         },
         ts=datetime.now(UTC),
         schema_version=ATTEMPT_TAINTED_SCHEMA_VERSION,
-    )
+epoch=0, payload_digest=payload_digest({
+            "attempt_id": attempt_id,
+            "reason": "source_fetch",
+            "call_id": call_id,
+            "tool": tool,
+            "is_fetch": True,
+        }),
+)
     stored_taint = await writer.append(tainted)
     _cache_note_fetch(writer, stored_taint)
     if on_event is not None:

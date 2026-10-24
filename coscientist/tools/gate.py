@@ -17,7 +17,7 @@ def side_effect_decision(policy: HitlPolicy) -> SideEffectDecision:
     anything other than ``allow`` as deny → ToolError(local).
     """
     gate = policy.gate("side_effect")
-    if not gate.enabled:
+    if gate is None or not gate.enabled:
         return "deny"
     raw = str(policy.defaults.get("side_effect", "deny")).lower()
     if raw not in ("deny", "allow", "ask"):

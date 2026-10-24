@@ -37,7 +37,8 @@ async def test_idempotent_same_payload(tmp_path: Path, clock: FakeClock):
         ts=clock.now(),
         payload_digest=payload_digest(payload),
         schema_version=writer_schema_version('StudyCreated'),
-    )
+epoch=0,
+)
     first = await store.append(ev)
     assert first.seq == 1
     with pytest.raises(Idempotent) as ei:
@@ -87,7 +88,8 @@ async def test_writer_idempotent_append_returns_existing(
         ts=clock.now(),
         payload_digest=payload_digest(payload),
         schema_version=writer_schema_version('StudyCreated'),
-    )
+epoch=0,
+)
     a = await writer.append(ev)
     b = await writer.append(ev)
     assert a.seq == b.seq == 1
@@ -108,7 +110,8 @@ async def test_conflict_different_payload(tmp_path: Path, clock: FakeClock):
         ts=clock.now(),
         payload_digest=payload_digest({"a": 1}),
         schema_version=writer_schema_version('StudyCreated'),
-    )
+epoch=0,
+)
     await store.append(ev1)
     ev2 = ev1.model_copy(
         update={"payload": {"a": 2}, "payload_digest": payload_digest({"a": 2})}
@@ -144,7 +147,9 @@ async def test_lease_epoch_fencing(tmp_path: Path, clock: FakeClock):
                 payload={},
                 ts=clock.now(),
                 schema_version=writer_schema_version('StudyCreated'),
-            )
+                    epoch=0,
+                    payload_digest=payload_digest({}),
+                )
         )
     await store.close()
 
@@ -167,7 +172,9 @@ async def test_seeded_owner_epoch_without_nonce_cannot_write(
                 payload={},
                 ts=clock.now(),
                 schema_version=writer_schema_version('StudyCreated'),
-            )
+                    epoch=0,
+                    payload_digest=payload_digest({}),
+                )
         )
     await store.close()
 
@@ -351,7 +358,13 @@ async def test_event_loop_progresses_during_slow_write(
                     },
                     ts=clock.now(),
                     schema_version=writer_schema_version('GraphNodeUpserted'),
-                )
+epoch=0, payload_digest=payload_digest({
+                        "node_id": "st_slow:probe",
+                        "kind": "study",
+                        "study_id": "st_slow",
+                        "ref_id": "st_slow",
+                    }),
+)
             ]
         )
     )
@@ -416,7 +429,13 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(
                     },
                     ts=clock.now(),
                     schema_version=writer_schema_version('GraphNodeUpserted'),
-                )
+epoch=0, payload_digest=payload_digest({
+                        "node_id": "st_rd:probe",
+                        "kind": "study",
+                        "study_id": "st_rd",
+                        "ref_id": "st_rd",
+                    }),
+)
             ]
         )
     )
@@ -447,7 +466,8 @@ async def test_append_rejects_datetime_in_payload(tmp_path: Path, clock: FakeClo
                 # Skip digest so we exercise json.dumps in _insert_one.
                 payload_digest="a" * 64,
                 schema_version=writer_schema_version('StudyCreated'),
-            )
+epoch=0,
+)
         )
     await store.close()
 

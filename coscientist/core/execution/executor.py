@@ -120,16 +120,17 @@ def _check_role(c: Any) -> str:
     role = _check_field(c, "role")
     if role in ("prediction", "validity", "unknown"):
         return str(role)
-    return "unknown"
+    if role is None:
+        raise JournalFormatError("check missing role")
+    raise JournalFormatError(f"check role invalid: {role!r}")
 
 def _is_rubric_check(c: Any) -> bool:
     """Rubric checks are validity-role but must not flip claim validity_ok (PR13)."""
     effect = _check_field(c, "effect")
     if isinstance(effect, dict) and effect.get("rubric_kind") == "rubric":
         return True
-    tid = str(_check_field(c, "template_id") or "")
-    cid = str(_check_field(c, "check_id") or "")
-    return tid.startswith("rubric:") or cid.startswith("rubric:")
+    # No template_id/check_id prefix heuristic (rule 6) — structural effect only.
+    return False
 
 def _required_validity_failed(checks: list[Any]) -> bool:
     """True when a required validity check FAILED (Duhem–Quine cap).
@@ -388,18 +389,29 @@ def _derive_claim_core_attrs(
     frozen = _criterion_is_frozen(graph, study_id, key)
     crit = _criterion_freeze_attrs(graph, study_id, key)
     sesoi = crit.get("sesoi")
-    uses_sesoi = bool(crit.get("uses_sesoi", False))
-    predicts_null = bool(crit.get("predicts_null", False))
-    predicted_direction = str(crit.get("predicted_direction") or "two_sided")
+    uses_sesoi = bool(crit["uses_sesoi"]) if "uses_sesoi" in crit else False
+    predicts_null = bool(crit["predicts_null"]) if "predicts_null" in crit else False
+    if "predicted_direction" in crit:
+        predicted_direction = str(crit["predicted_direction"])
+    else:
+        predicted_direction = "two_sided"
+    if predicted_direction not in ("positive", "negative", "two_sided"):
+        raise JournalFormatError(
+            f"criterion predicted_direction invalid: {predicted_direction!r}"
+        )
     pred_statuses: list[str] = []
     has_prediction_check = False
     for c in checks or ():
         if _check_role(c) == "prediction":
             has_prediction_check = True
             st = getattr(getattr(c, "status", None), "value", getattr(c, "status", None))
-            pred_statuses.append(str(st or ""))
+            if st is None:
+                raise JournalFormatError("prediction check missing status")
+            pred_statuses.append(str(st))
     if not pred_statuses and status in ("met", "not_met", "unassessed"):
-        pred_statuses = ["PASSED" if status == "met" else ("FAILED" if status == "not_met" else "")]
+        pred_statuses = [
+            "PASSED" if status == "met" else ("FAILED" if status == "not_met" else "")
+        ]
     # Effect from CheckResult.effect only — never agent detail / claim attrs.
     effect, used_sesoi = _effect_from_checks(list(checks or []), attempt_id=attempt_id)
     from coscientist.checks.kinds._util import check_is_guest_timeout
@@ -657,7 +669,11 @@ class Executor:
                     },
                     ts=self.clock.now(),
                     schema_version=ROUTE_RETURNED_SCHEMA_VERSION,
-                )
+epoch=0, payload_digest=payload_digest({
+                        "attempt_id": attempt_id,
+                        "agent_output_digest": digest,
+                    }),
+)
             ],
             require_open_attempt=attempt_id,
         )
@@ -682,7 +698,8 @@ class Executor:
                         payload={"attempt_id": attempt_id, "reason": "attempt_closed"},
                         ts=self.clock.now(),
                         schema_version=LATE_WRITE_REJECTED_SCHEMA_VERSION,
-                    )
+epoch=0, payload_digest=payload_digest({"attempt_id": attempt_id, "reason": "attempt_closed"}),
+)
                 ]
             )
             raise AttemptClosedError(attempt_id)
@@ -746,9 +763,7 @@ class Executor:
                     attempt_id=attempt_id,
                     task_id=task_id,
                     output_digest=output_digest,
-                    task_kind=str(getattr(task.kind, "value", task.kind)),
-                    task_key=task.spec.task_key,
-                    plan_role=getattr(task, "plan_role", None),
+                    plan_role=task.plan_role,
                     fetched_digests=fetch_idx.digests_for_attempt(attempt_id),
                     proposals=proposals if isinstance(proposals, dict) else {},
                     attempts=attempts_bag,
@@ -938,7 +953,11 @@ class Executor:
                             },
                             ts=self.clock.now(),
                             schema_version=DOWNGRADE_REJECTED_SCHEMA_VERSION,
-                        )
+epoch=0, payload_digest=payload_digest({
+                                "attempt_id": attempt_id,
+                                "reason": "downgrade requires reason and refs",
+                            }),
+)
                     ]
                 )
             else:
@@ -983,7 +1002,14 @@ class Executor:
                     },
                     ts=self.clock.now(),
                     schema_version=RESULT_PENDING_SCHEMA_VERSION,
-                )
+epoch=0, payload_digest=payload_digest({
+                        "attempt_id": attempt_id,
+                        "task_id": task_id,
+                        "agent_output_digest": output_digest,
+                        "reason": "required_checks_pending",
+                        "check_results": [c.model_dump(mode="json") for c in checks],
+                    }),
+)
             ]
             pending_events.extend(
                 review_scheduled_events(
@@ -1274,7 +1300,18 @@ class Executor:
                     },
                     ts=self.clock.now(),
                     schema_version=REVIEW_RECORDED_SCHEMA_VERSION,
-                )
+epoch=0, payload_digest=payload_digest({
+                        "review_key": key,
+                        "attempt_id": attempt_id,
+                        "task_id": task_id,
+                        "check_id": parent_check,
+                        "item_id": item,
+                        "output_digest": output_digest,
+                        "status": wait_status.value,
+                        "failure_kind": fk,
+                        "retry": retries,
+                    }),
+)
             ]
         )
         return await self.record(attempt_id, out)
@@ -1381,7 +1418,8 @@ class Executor:
                     payload={"error": detail, "reason": reason},
                     ts=self.clock.now(),
                     schema_version=writer_schema_version(event_type),
-                )
+epoch=0, payload_digest=payload_digest({"error": detail, "reason": reason}),
+)
             ]
         )
         return await self._commit_result(
@@ -1569,7 +1607,9 @@ class Executor:
                 payload=payload,
                 ts=now,
                 schema_version=RESULT_RECORDED_SCHEMA_VERSION,
-            ),
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                ),
             EventEnvelope(
                 study_id=study_id,
                 type="AttemptClosed",
@@ -1578,7 +1618,9 @@ class Executor:
                 payload=close_payload,
                 ts=now,
                 schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
-            ),
+                    epoch=0,
+                    payload_digest=payload_digest(close_payload),
+                ),
         ]
         if not schedule_retry:
             done_payload: dict[str, Any] = {
@@ -1600,6 +1642,8 @@ class Executor:
                     payload=done_payload,
                     ts=now,
                     schema_version=TASK_DONE_SCHEMA_VERSION,
+                    epoch=0,
+                    payload_digest=payload_digest(done_payload),
                 )
             )
         # PR12: debit actual cost_rub in the SAME append batch as the result

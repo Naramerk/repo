@@ -17,6 +17,7 @@ from typing import Any, Mapping
 import pytest
 
 from coscientist.core.events.clock import SystemClock
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.projections import _row_key, fold_events
 from coscientist.core.events.upcasters import writer_schema_version
@@ -311,7 +312,11 @@ async def _run_load(
                     },
                     ts=clock.now(),
                     schema_version=writer_schema_version('RouteReturned'),
-                )
+epoch=0, payload_digest=payload_digest({
+                        "attempt_id": aid,
+                        "agent_output_digest": f"d{random.randrange(1 << 20)}",
+                    }),
+)
             )
         await record_success(rt, aid, arts)
 
@@ -354,7 +359,14 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
             },
             ts=now,
             schema_version=1,
-        )
+epoch=0, payload_digest=payload_digest({
+                "attempt_id": aid,
+                "reason": "source_fetch",
+                "call_id": call_id,
+                "tool": tool,
+                "is_fetch": True,
+            }),
+)
     )
 
     cap = _mint_fetch_capability_for_tests(
@@ -382,7 +394,14 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
             },
             ts=now,
             schema_version=1,
-        ),
+epoch=0, payload_digest=payload_digest({
+                "call_id": call_id,
+                "tool": tool,
+                "digest": digest,
+                "url": "https://example.org/p",
+                "attempt_id": aid,
+            }),
+),
         _source_fetched_cap_id=cap.id,
     )
 
@@ -400,7 +419,13 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
             },
             ts=now,
             schema_version=1,
-        )
+epoch=0, payload_digest=payload_digest({
+                "kind": "fetch_tool_reclassified",
+                "tool": "legacy_fetch",
+                "call_id": "integrity-seed",
+                "internal_error": True,
+            }),
+)
     )
 
     rid = "hitl-seed-1"
@@ -419,7 +444,14 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
             },
             ts=now,
             schema_version=writer_schema_version('HitlOpened'),
-        )
+epoch=0, payload_digest=payload_digest({
+                "request_id": rid,
+                "kind": "plan_approval",
+                "task_id": f"{sid}/PLAN",
+                "open": True,
+                "cost_rub": 0.0,
+            }),
+)
     )
 
     # PR16: GraphNodeUpserted + GraphEdgeAdded(kind=decomposes) must project via
@@ -442,7 +474,14 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
                 },
                 ts=now,
                 schema_version=1,
-            )
+epoch=0, payload_digest=payload_digest({
+                    "node_id": nid,
+                    "kind": "question",
+                    "study_id": sid,
+                    "ref_id": ref,
+                    "attrs": {"formulation": text},
+                }),
+)
         )
     eid = f"decomposes:{q_child}:{q_root}"
     await rt.writer.append(
@@ -461,7 +500,15 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
             },
             ts=now,
             schema_version=1,
-        )
+epoch=0, payload_digest=payload_digest({
+                "edge_id": eid,
+                "kind": "decomposes",
+                "study_id": sid,
+                "src_id": q_child,
+                "dst_id": q_root,
+                "attrs": {"origin": "explicit"},
+            }),
+)
     )
 
     # PR15: QuestionDisposed + QuestionDisposeRejected (dirty-key tables).
@@ -480,7 +527,14 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
             },
             ts=now,
             schema_version=1,
-        )
+epoch=0, payload_digest=payload_digest({
+                "question_id": "Qseed",
+                "disposition": "infeasible",
+                "reason": "seed",
+                "refs": ["hitl:h-seed"],
+                "design_artifact_id": None,
+            }),
+)
     )
     await rt.writer.append(
         EventEnvelope(
@@ -498,7 +552,15 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
             },
             ts=now,
             schema_version=1,
-        )
+epoch=0, payload_digest=payload_digest({
+                "question_id": "Qrej",
+                "disposition": "needs_more_data",
+                "detail": "missing_experiment_design: seed",
+                "reason": "missing_experiment_design",
+                "report_line": "не выполнено: needs_more_data без дизайна эксперимента",
+                "row_key": "Qrej:deadbeefdeadbeef",
+            }),
+)
     )
 
 
@@ -715,7 +777,11 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
                     },
                     ts=clock.now(),
                     schema_version=writer_schema_version('RouteReturned'),
-                )
+epoch=0, payload_digest=payload_digest({
+                        "attempt_id": f"{sid}/EXP-delay:{i}",
+                        "agent_output_digest": f"d{i}",
+                    }),
+)
             )
         lat = rt.writer.latency_samples_ms()
         await close_runtime(rt)

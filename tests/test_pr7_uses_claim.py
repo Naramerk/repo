@@ -8,9 +8,10 @@ import pytest
 
 from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.ids import experiment_node_id
 from coscientist.core.events.upcasters import writer_schema_version
-from coscientist.core.execution.domain import InputSpec, TaskSpec
+from coscientist.core.execution.domain import InputSpec, TaskSpec, PlanRole
 from coscientist.core.execution.inputs import (
     InputUnavailable,
     bind_inputs,
@@ -233,7 +234,9 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
                 ).model_dump(mode="json"),
                 ts=clock.now(),
                 schema_version=writer_schema_version('GraphNodeUpserted'),
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(GraphNode),
+                )
         ]
     )
     await rt.accept_plan(
@@ -384,6 +387,8 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
                     ).model_dump(mode="json"),
                     ts=clock.now(),
                     schema_version=writer_schema_version('GraphEdgeAdded'),
+                    epoch=0,
+                    payload_digest=payload_digest(GraphEdge),
                 )
             ]
         )
@@ -422,7 +427,8 @@ async def test_replay_task_created_input_kind_default(tmp_path, clock, runtime_c
         ),
         state=TaskState.PENDING,
         deadline=datetime(2026, 1, 1, tzinfo=UTC),
-    )
+        plan_role=PlanRole.NONE,
+)
     payload = legacy.model_dump(mode="json")
     # Omit kind/ref — model_validate must still default kind=artifact on reopen.
     for inp in payload["spec"]["inputs"]:
@@ -438,7 +444,9 @@ async def test_replay_task_created_input_kind_default(tmp_path, clock, runtime_c
                 payload=payload,
                 ts=clock.now(),
                 schema_version=1,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
         ]
     )
     await close_runtime(rt)
@@ -509,7 +517,23 @@ async def test_replay_attempt_started_inputs_empty(tmp_path, clock, runtime_cls)
                 },
                 ts=clock.now(),
                 schema_version=1,
-            )
+epoch=0, payload_digest=payload_digest({
+                    "attempt_id": aid,
+                    "n": 1,
+                    "dispatch_id": f"dispatch:{aid}",
+                    "route_returned": False,
+                    "closed": False,
+                    "close_reason": None,
+                    "provenance": "real",
+                    "agent_output_digest": None,
+                    "deadline": (clock.now() + timedelta(seconds=30)).isoformat(),
+                    "task_id": tid,
+                    "study_id": sid,
+                    "inputs": [],
+                    "attempt_role": "agent",
+                    "charged": True,
+                }),
+)
         ]
     )
     await close_runtime(rt)

@@ -26,6 +26,7 @@ from coscientist.core.execution.domain import (
     RequirementRef,
     TaskOutcome,
     TaskSpec,
+    PlanRole,
 )
 from coscientist.core.plan.plan_validate import (
     freeze_plan_rubrics,
@@ -172,7 +173,18 @@ async def _record_hitl_expand(rt, **kwargs):
                 },
                 ts=rt.clock.now(),
                 schema_version=writer_schema_version('HitlOpened'),
-            )
+epoch=0, payload_digest=payload_digest({
+                    "request_id": rid,
+                    "kind": "plan_expansion",
+                    "payload_ref": tid,
+                    "deadline": (rt.clock.now() + timedelta(seconds=60)).isoformat(),
+                    "study_id": rt.study.study_id,
+                    "task_id": tid,
+                    "expand_after_task": str(after),
+                    "open": True,
+                    "cost_rub": 0.0,
+                }),
+)
         ]
     )
     await rt._append(
@@ -192,7 +204,15 @@ async def _record_hitl_expand(rt, **kwargs):
                 },
                 ts=rt.clock.now(),
                 schema_version=writer_schema_version('HitlDecided'),
-            )
+epoch=0, payload_digest=payload_digest({
+                    "request_id": rid,
+                    "decision": "accept",
+                    "by": "human",
+                    "delegated_by": "human",
+                    "reason": "answered",
+                    "spent_rub": 0.0,
+                }),
+)
         ]
     )
     return await rt.expand_plan(**kwargs, hitl_request_id=rid)
@@ -832,7 +852,8 @@ def test_final_type_both_requires_verdict_and_rubric(clock):
         deadline=clock.now() + timedelta(hours=1),
         attempts=["a1"],
         outcome=TaskOutcome.SUCCESS,
-    )
+        plan_role=PlanRole.NONE,
+)
     plans = {
         "p1": {
             "questions": [{"id": "Q1", "text": "both?", "final_type": "both"}],
@@ -930,7 +951,8 @@ def test_study_view_uses_study_fulfilled_final_types():
         deadline=__import__("datetime").datetime(2026, 1, 1, tzinfo=__import__("datetime").timezone.utc),
         outcome=TaskOutcome.SUCCESS,
         attempts=["a0"],
-    )
+        plan_role=PlanRole.NONE,
+)
     # Task-level SUCCESS would be fulfilled, but artifact+refuted must cap at partial.
     view = study_view(
         [t],
@@ -1045,7 +1067,7 @@ def test_review_key_empty_fields_fail_closed():
 
 def test_plan_refused_idem_hashes_full_detail():
     from coscientist.core.claims.reviews import plan_refused_idem
-    from coscientist.core.events.digest import sha256_hex
+    from coscientist.core.events.digest import sha256_hex, payload_digest
     from coscientist.core.events.events import make_idem
     from coscientist.core.plan.plan_validate import refuse_detail
 
@@ -1082,7 +1104,8 @@ def test_both_rubric_pending_own_reason(clock):
         deadline=clock.now() + timedelta(hours=1),
         attempts=["a1"],
         outcome=TaskOutcome.SUCCESS,
-    )
+        plan_role=PlanRole.NONE,
+)
     plans = {
         "p1": {
             "questions": [{"id": "Q1", "text": "q", "final_type": "both"}],
@@ -1361,7 +1384,13 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
         },
         ts=clock.now(),
         schema_version=writer_schema_version('ReviewRecorded'),
-    )
+epoch=0, payload_digest=payload_digest({
+            "review_key": '["t","a1","c","i","d"]',
+            "status": "PENDING",
+            "retry": "not-an-int",
+            "attempt_id": "a1",
+        }),
+)
     with pytest.raises(JudgePendingCorrupt, match="retry_corrupt"):
         rebuild_judge_state([bad], artifacts=None)
 
@@ -1430,7 +1459,18 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
                 },
                 ts=rt.clock.now(),
                 schema_version=writer_schema_version('ReviewRecorded'),
-            )
+epoch=0, payload_digest=payload_digest({
+                    "review_key": key,
+                    "attempt_id": aid,
+                    "task_id": rt.attempts[aid]["task_id"],
+                    "check_id": f"rubric:{rub.digest}#out",
+                    "item_id": "adequate",
+                    "output_digest": dig,
+                    "status": "PENDING",
+                    "failure_kind": "timeout",
+                    "retry": {"bad": True},
+                }),
+)
         ]
     )
     await close_runtime(rt)
@@ -1585,7 +1625,8 @@ def test_met_one_task_never_covers_another(clock):
         deadline=clock.now() + timedelta(hours=1),
         outcome=TaskOutcome.SUCCESS,
         attempts=["a0"],
-    )
+        plan_role=PlanRole.NONE,
+)
     t1 = Task(
         task_id="s/E1",
         kind=TaskKind.EXPERIMENT,
@@ -1594,7 +1635,8 @@ def test_met_one_task_never_covers_another(clock):
         deadline=clock.now() + timedelta(hours=1),
         outcome=TaskOutcome.SUCCESS,
         attempts=["a1"],
-    )
+        plan_role=PlanRole.NONE,
+)
     results = {
         "a0": {
             "attempt_id": "a0",

@@ -24,6 +24,7 @@ from typing import Any
 
 from coscientist.core.claims.reasons import RefusalKind
 from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.schema_versions import ARTIFACT_REGISTERED_SCHEMA_VERSION
 from coscientist.core.execution._attempt_frame import attempt_active
 from coscientist.core.execution.domain import Artifact
@@ -202,7 +203,9 @@ def register_user_input_artifacts(
                 payload=payload,
                 ts=now,
                 schema_version=ARTIFACT_REGISTERED_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
         )
         ids.append(art.artifact_id)
     return ids, events

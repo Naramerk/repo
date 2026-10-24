@@ -227,18 +227,16 @@ class HitlPolicy(Frozen):
         }
     )
 
-    def gate(self, kind: str) -> GateConfig:
+    def gate(self, kind: str) -> GateConfig | None:
+        """Return configured gate, or None when kind is unknown (fail-closed)."""
         if kind in self.gates:
             return self.gates[kind]
-        alias = {"plan": "plan_approval", "plan_approval": "plan"}.get(kind)
-        if alias and alias in self.gates:
-            return self.gates[alias]
-        default_ot: OnTimeout = "fail" if kind == "costly_or_nonreal" else self.on_timeout
-        return GateConfig(
-            enabled=True,
-            timeout_s=self.timeout_s.get(kind, 1800),
-            on_timeout=default_ot,
-        )
+        # Sole alias: historical ``plan`` ↔ ``plan_approval`` wire names.
+        if kind == "plan" and "plan_approval" in self.gates:
+            return self.gates["plan_approval"]
+        if kind == "plan_approval" and "plan" in self.gates:
+            return self.gates["plan"]
+        return None
 
 
 ArtifactRole = Literal["paper", "data", "code", "figure", "table", "log", "report"]
@@ -509,7 +507,12 @@ class Study(Frozen):
     def replan_budget_s(self) -> float:
         """Total seconds reserved for PLAN-n / expansions (fixed at create)."""
         span = (self.effective_deadline() - self.created_at).total_seconds()
-        return max(0.0, float(self.replan_reserve) * span)
+        if span < 0.0:
+            raise ValueError(f"replan_budget_s: negative span {span}")
+        reserve = float(self.replan_reserve)
+        if reserve < 0.0:
+            raise ValueError(f"replan_budget_s: negative replan_reserve {reserve}")
+        return reserve * span
 
 
 class Plan(Frozen):
@@ -539,7 +542,8 @@ class Task(Frozen):
     attempts: list[str] = Field(default_factory=list)
     inherited_from: str | None = None
     # Sole wire signal for PLAN-n vs bootstrap PLAN (not criteria / key prefix).
-    plan_role: PlanRole = PlanRole.NONE
+    # Required on the wire — no silent NONE default (fail-closed).
+    plan_role: PlanRole
 
 
 class InputBinding(Frozen):

@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from coscientist.core.events.clock import FakeClock
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import AttemptClosedError, CatalogError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.store import SqliteEventStore
@@ -27,6 +28,7 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
+    PlanRole,
 )
 from coscientist.core.execution.executor import Executor
 from coscientist.core.execution.machine import new_owner
@@ -105,14 +107,16 @@ def test_b1_closed_only_when_all_tasks_done():
             state=TaskState.DONE,
             outcome=TaskOutcome.SUCCESS,
             deadline=now,
-        ),
+        plan_role=PlanRole.NONE,
+),
         Task(
             task_id="st/B",
             kind=TaskKind.EXPERIMENT,
             spec=spec.model_copy(update={"task_key": "B"}),
             state=TaskState.RUNNING,
             deadline=now,
-        ),
+        plan_role=PlanRole.NONE,
+),
     ]
     assert study_view(tasks).phase == "running"
     assert study_view([]).phase == "running"
@@ -159,7 +163,20 @@ async def _seed_open_attempt(writer: StudyWriter, attempt: object, clock: FakeCl
             },
             ts=clock.now(),
             schema_version=writer_schema_version('AttemptStarted'),
-        )
+epoch=0, payload_digest=payload_digest({
+                "attempt_id": aid,
+                "n": 1,
+                "dispatch_id": f"dispatch:{aid}",
+                "route_returned": False,
+                "closed": False,
+                "close_reason": None,
+                "provenance": attempt.provenance,  # type: ignore[attr-defined]
+                "agent_output_digest": None,
+                "deadline": clock.now().isoformat(),
+                "task_id": attempt.task_id,  # type: ignore[attr-defined]
+                "study_id": attempt.study_id,  # type: ignore[attr-defined]
+            }),
+)
     )
 
 
@@ -188,7 +205,8 @@ async def test_b2_matching_value_in_raw_artifact_is_success(tmp_path, catalog):
         state=TaskState.RUNNING,
         deadline=clock.now() + timedelta(hours=1),
         attempts=["st_b2/EXP-1#1"],
-    )
+        plan_role=PlanRole.NONE,
+)
     attempt = type(
         "Att",
         (),
@@ -250,7 +268,8 @@ async def test_review_scheduled_on_every_record_path(tmp_path, catalog):
         state=TaskState.RUNNING,
         deadline=clock.now() + timedelta(hours=1),
         attempts=["st_r/EXP-1#1"],
-    )
+        plan_role=PlanRole.NONE,
+)
     attempt = type(
         "Att",
         (),
@@ -340,7 +359,8 @@ async def test_downgrade_without_refs_rejected(tmp_path, catalog):
         state=TaskState.RUNNING,
         deadline=clock.now() + timedelta(hours=1),
         attempts=["st_d/EXP-1#1"],
-    )
+        plan_role=PlanRole.NONE,
+)
     attempt = type(
         "Att",
         (),

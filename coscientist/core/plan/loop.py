@@ -15,6 +15,7 @@ from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.events.errors import JournalFormatError, LeaseLost
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import (
     EventEnvelope,
     make_idem,
@@ -108,14 +109,14 @@ def is_loop_dep(key: str) -> bool:
     return str(key).startswith(LOOP_DEP_PREFIX)
 
 def parse_loop_dep(key: str) -> str | None:
-    """Return NFKC-normalized loop_id from ``loop:<id>``, or None if not a barrier."""
+    """Return NFKC-normalized loop_id from ``loop:<id>``, or None if not a barrier.
+
+    Malformed ``loop:`` keys raise ``PlanInvalid`` (fail-closed) — never swallow.
+    """
     if not is_loop_dep(key):
         return None
     raw = str(key)[len(LOOP_DEP_PREFIX) :]
-    try:
-        return normalize_loop_id(raw)
-    except PlanInvalid:
-        return None
+    return normalize_loop_id(raw)
 
 def loop_plan_id(study_id: str, loop_id: str, iter_n: int, rev: int) -> str:
     return f"pl_loop_{study_id}_{loop_id}_i{iter_n}_r{rev}"
@@ -130,7 +131,15 @@ def _loops_from_plans(runtime: StudyRuntime) -> list[LoopSpec]:
     plans = list(runtime.plans.values())
     plans.sort(key=lambda p: require_exact_int(p["revision"], what="plan.revision"))
     for p in plans:
-        raw = p["loops"] if "loops" in p else []
+        if "loops" not in p:
+            continue
+        raw = p["loops"]
+        if raw is None:
+            raise JournalFormatError("plan.loops must not be null")
+        if not isinstance(raw, list):
+            raise JournalFormatError(
+                f"plan.loops must be list, got {type(raw).__name__}"
+            )
         if not raw:
             continue
         for item in raw:
@@ -143,9 +152,13 @@ def _loops_from_plans(runtime: StudyRuntime) -> list[LoopSpec]:
 
 def _loop_state(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
     st = runtime._loop_state
-    if not isinstance(st, dict):
+    if st is None:
         runtime._loop_state = {}  # noqa: SLF001
-        st = runtime._loop_state  # noqa: SLF001
+        return runtime._loop_state  # noqa: SLF001
+    if not isinstance(st, dict):
+        raise JournalFormatError(
+            f"_loop_state must be dict, got {type(st).__name__}"
+        )
     return st
 
 def loop_status(runtime: StudyRuntime, loop_id: str) -> str | None:
@@ -375,11 +388,27 @@ async def materialize_loop_iter(
     study = runtime.study
     sid = study.study_id
     st = _loop_state(runtime)
-    row = st.get(loop.loop_id) or {}
+    raw_row = st.get(loop.loop_id)
+    if raw_row is None:
+        row: dict[str, Any] = {}
+    elif not isinstance(raw_row, dict):
+        raise JournalFormatError(
+            f"loop state for {loop.loop_id!r} must be dict, got {type(raw_row).__name__}"
+        )
+    else:
+        row = raw_row
     if row.get("status") in ("done", "capped"):
         return None
     # Idempotent: already materialized this iter.
-    existing = (row.get("iters") or {}).get(str(iter_n))
+    if "iters" in row:
+        iters_map = row["iters"]
+        if not isinstance(iters_map, dict):
+            raise JournalFormatError(
+                f"loop.iters must be dict, got {type(iters_map).__name__}"
+            )
+        existing = iters_map.get(str(iter_n))
+    else:
+        existing = None
     if existing:
         return None
 
@@ -495,12 +524,15 @@ async def materialize_loop_iter(
         except ValueError as e:
             await _refuse_loop(runtime, loop, detail=str(e))
             return None
+        from coscientist.core.execution.domain import PlanRole
+
         task = Task(
             task_id=tid,
             kind=kind,
             spec=frozen_spec,
             state=TaskState.PENDING,
             deadline=ed,
+            plan_role=PlanRole.NONE,
         )
         events.append(
             EventEnvelope(
@@ -511,7 +543,9 @@ async def materialize_loop_iter(
                 payload=task.model_dump(mode="json"),
                 ts=now,
                 schema_version=TASK_CREATED_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(task.model_dump),
+                )
         )
 
     payload = {
@@ -546,7 +580,9 @@ async def materialize_loop_iter(
             payload=payload,
             ts=now,
             schema_version=PLAN_EXPANDED_SCHEMA_VERSION,
-        )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
     )
     await runtime._append(events)  # noqa: SLF001
     return pid
@@ -596,7 +632,9 @@ async def _emit_loop_capped(
         payload=payload,
         ts=now,
         schema_version=LOOP_CAPPED_SCHEMA_VERSION,
-    )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
     await runtime._append([ev])  # noqa: SLF001
 
 async def _emit_loop_refused(
@@ -645,7 +683,17 @@ async def _emit_loop_refused(
             },
             ts=now,
             schema_version=LOOP_REFUSED_SCHEMA_VERSION,
-        ),
+epoch=0, payload_digest=payload_digest({
+                "loop_id": loop.loop_id,
+                "iter": iter_n,
+                "max_iter": max_i,
+                "reason": reason,
+                "detail": detail_s,
+                "scope_hypotheses": scope_h,
+                "scope_questions": scope_q,
+                "until": until,
+            }),
+),
         EventEnvelope(
             study_id=sid,
             type="LoopCapped",
@@ -664,7 +712,18 @@ async def _emit_loop_refused(
             },
             ts=now,
             schema_version=LOOP_CAPPED_SCHEMA_VERSION,
-        ),
+epoch=0, payload_digest=payload_digest({
+                "loop_id": loop.loop_id,
+                "iter": iter_n,
+                "max_iter": max_i,
+                "survivors": None,  # never recompute — predicate may be what failed
+                "scope_hypotheses": scope_h,
+                "scope_questions": scope_q,
+                "until": until,
+                "reason": reason,
+                "detail": detail_s,
+            }),
+),
         EventEnvelope(
             study_id=sid,
             type="ExpansionRefused",
@@ -683,7 +742,16 @@ async def _emit_loop_refused(
             },
             ts=now,
             schema_version=EXPANSION_REFUSED_SCHEMA_VERSION,
-        ),
+epoch=0, payload_digest=payload_digest({
+                "after_task": after,
+                "reason": "invalid",
+                "detail": detail_s,
+                "plan_key": None,
+                "loop_id": loop.loop_id,
+                "loop": True,
+                "loop_reason": reason,
+            }),
+),
     ]
     await runtime._append(events)  # noqa: SLF001
 
@@ -719,7 +787,9 @@ async def _emit_loop_completed(
         payload=payload,
         ts=now,
         schema_version=LOOP_COMPLETED_SCHEMA_VERSION,
-    )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
     await runtime._append([ev])  # noqa: SLF001
 
 async def _refuse_loop(
@@ -762,7 +832,16 @@ async def _emit_loop_advance_failed(
                 },
                 ts=now,
                 schema_version=EXPANSION_REFUSED_SCHEMA_VERSION,
-            )
+epoch=0, payload_digest=payload_digest({
+                    "after_task": None,
+                    "reason": "invalid",
+                    "detail": detail_s,
+                    "plan_key": None,
+                    "loop": True,
+                    "loop_reason": LOOP_REASON_ERROR,
+                    "report_line": "не выполнено: внутренняя ошибка (loop)",
+                }),
+)
         ]
     )
 
@@ -972,9 +1051,9 @@ def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
         iter_n = require_exact_int(payload["loop_iter"], what="PlanExpanded.loop_iter")
     except KeyError as e:
         raise JournalFormatError("PlanExpanded(loop): missing 'loop_iter'") from e
-    raw_added = payload.get("added_tasks")
-    if raw_added is None:
-        raw_added = []
+    if "added_tasks" not in payload:
+        raise JournalFormatError("PlanExpanded(loop): missing added_tasks")
+    raw_added = payload["added_tasks"]
     if not isinstance(raw_added, list):
         raise JournalFormatError("PlanExpanded(loop): added_tasks must be list")
     keys: list[str] = []
@@ -984,26 +1063,38 @@ def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
                 raise JournalFormatError("PlanExpanded(loop): added_tasks entry missing task_key")
             keys.append(t["task_key"])
         else:
-            tk = getattr(t, "task_key", None)
+            if not hasattr(t, "task_key"):
+                raise JournalFormatError("PlanExpanded(loop): added_tasks entry missing task_key")
+            tk = t.task_key
             if not isinstance(tk, str) or not tk:
                 raise JournalFormatError("PlanExpanded(loop): added_tasks entry missing task_key")
             keys.append(tk)
-    keys = [k for k in keys if k]
     st = _loop_state(runtime)
-    row = dict(st[lid]) if lid in st else {}
-    raw_iters = row["iters"] if "iters" in row else {}
-    if not isinstance(raw_iters, dict):
-        raise JournalFormatError("PlanExpanded(loop): iters must be dict")
-    iters = dict(raw_iters)
+    if lid in st:
+        prev = st[lid]
+        if not isinstance(prev, dict):
+            raise JournalFormatError(
+                f"PlanExpanded(loop): prior state must be dict, got {type(prev).__name__}"
+            )
+        row = dict(prev)
+    else:
+        row = {}
+    if "iters" in row:
+        raw_iters = row["iters"]
+        if not isinstance(raw_iters, dict):
+            raise JournalFormatError("PlanExpanded(loop): iters must be dict")
+        iters = dict(raw_iters)
+    else:
+        iters = {}
     iters[str(iter_n)] = keys
     row["iters"] = iters
     # Missing iter = first PlanExpanded for this loop (no prior tip).
     # When present, require_exact_int rejects bool/str/float (False must not bypass).
     if "iter" in row:
         prev_iter = require_exact_int(row["iter"], what="loop.iter")
+        row["iter"] = max(prev_iter, iter_n)
     else:
-        prev_iter = 0
-    row["iter"] = max(prev_iter, iter_n)
+        row["iter"] = iter_n
     if row.get("status") not in ("done", "capped"):
         row["status"] = "running"
     st[lid] = row
@@ -1017,18 +1108,31 @@ def fold_loop_capped(runtime: Any, payload: dict[str, Any]) -> None:
     )
     iter_n = _require_loop_iter(payload, what="LoopCapped")
     st = _loop_state(runtime)
-    row = dict(st[lid]) if lid in st else {}
+    if lid in st:
+        prev = st[lid]
+        if not isinstance(prev, dict):
+            raise JournalFormatError(
+                f"LoopCapped: prior state must be dict, got {type(prev).__name__}"
+            )
+        row = dict(prev)
+    else:
+        row = {}
     row["status"] = "refused" if reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED) else "capped"
     row["iter"] = iter_n
-    row["survivors"] = payload.get("survivors")
+    if "survivors" in payload:
+        row["survivors"] = payload["survivors"]
     row["reason"] = reason
     if "detail" in payload and payload["detail"] is not None:
         row["detail"] = str(payload["detail"])[:DETAIL_MAX_LEN]
     st[lid] = row
     capped = runtime._loop_capped
-    if not isinstance(capped, dict):
+    if capped is None:
         runtime._loop_capped = {}
         capped = runtime._loop_capped
+    elif not isinstance(capped, dict):
+        raise JournalFormatError(
+            f"_loop_capped must be dict, got {type(capped).__name__}"
+        )
     capped[lid] = dict(payload)
 
 def fold_loop_refused(runtime: Any, payload: dict[str, Any]) -> None:
@@ -1037,7 +1141,15 @@ def fold_loop_refused(runtime: Any, payload: dict[str, Any]) -> None:
         raise JournalFormatError("LoopRefused: missing loop_id")
     lid = payload["loop_id"]
     st = _loop_state(runtime)
-    row = dict(st[lid]) if lid in st else {}
+    if lid in st:
+        prev = st[lid]
+        if not isinstance(prev, dict):
+            raise JournalFormatError(
+                f"LoopRefused: prior state must be dict, got {type(prev).__name__}"
+            )
+        row = dict(prev)
+    else:
+        row = {}
     if row.get("status") in ("done", "capped", "refused"):
         return
     reason = _require_loop_reason(
@@ -1061,16 +1173,29 @@ def fold_loop_completed(runtime: Any, payload: dict[str, Any]) -> None:
     )
     iter_n = _require_loop_iter(payload, what="LoopCompleted")
     st = _loop_state(runtime)
-    row = dict(st[lid]) if lid in st else {}
+    if lid in st:
+        prev = st[lid]
+        if not isinstance(prev, dict):
+            raise JournalFormatError(
+                f"LoopCompleted: prior state must be dict, got {type(prev).__name__}"
+            )
+        row = dict(prev)
+    else:
+        row = {}
     row["status"] = "done"
     row["iter"] = iter_n
-    row["survivors"] = payload.get("survivors")
+    if "survivors" in payload:
+        row["survivors"] = payload["survivors"]
     row["complete_reason"] = reason
     st[lid] = row
     done = runtime._loop_done
-    if not isinstance(done, set):
+    if done is None:
         runtime._loop_done = set()
         done = runtime._loop_done
+    elif not isinstance(done, set):
+        raise JournalFormatError(
+            f"_loop_done must be set, got {type(done).__name__}"
+        )
     done.add(lid)
 
 def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
@@ -1078,13 +1203,21 @@ def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
 
     Does not populate ``_loop_capped`` (LoopCapped's job).
     """
-    if not payload.get("loop") and not payload.get("loop_id"):
+    if not payload.get("loop") and "loop_id" not in payload:
         return
-    lid = str(payload.get("loop_id") or "")
-    if not lid:
-        return
+    if "loop_id" not in payload or not isinstance(payload["loop_id"], str) or not payload["loop_id"]:
+        raise JournalFormatError("ExpansionRefused(loop): missing loop_id")
+    lid = payload["loop_id"]
     st = _loop_state(runtime)
-    row = dict(st[lid]) if lid in st else {}
+    if lid in st:
+        prev = st[lid]
+        if not isinstance(prev, dict):
+            raise JournalFormatError(
+                f"ExpansionRefused(loop): prior state must be dict, got {type(prev).__name__}"
+            )
+        row = dict(prev)
+    else:
+        row = {}
     if row.get("status") in ("done", "capped", "refused"):
         return
     loop_reason = _require_loop_reason(

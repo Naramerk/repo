@@ -13,7 +13,7 @@ from coscientist.core.claims.claims import (
     whitelist_claim_attrs,
 )
 from coscientist.core.claims.graph import GraphEdge, GraphNode
-from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.digest import canonical_json, sha256_hex, payload_digest
 from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id
@@ -408,25 +408,38 @@ def claim_nodes_from_attempt(
             "pointer_empty",
         ):
             attrs["exclusion_reason"] = excl
-        oc = core.get("claim_outcome") or core.get("outcome")
+        # Sole outcome key is claim_outcome (no outcome alias dual-lookup).
+        if "claim_outcome" in core:
+            oc = core["claim_outcome"]
+        elif "outcome" in core:
+            raise JournalFormatError(
+                "claim core uses deprecated 'outcome'; require 'claim_outcome'"
+            )
+        else:
+            oc = None
         if oc not in ("consistent", "inconsistent", "indeterminate"):
-            # Derive from criterion_status when static derived= omits PR8b fields.
-            status = str(attrs.get("criterion_status") or "unassessed")
+            # Derive from required criterion_status (already validated above).
+            status = str(attrs["criterion_status"])
             oc = {
                 "met": "consistent",
                 "not_met": "inconsistent",
                 "unassessed": "indeterminate",
             }.get(status)
-        if oc in ("consistent", "inconsistent", "indeterminate"):
-            attrs["claim_outcome"] = oc
-            attrs["outcome"] = oc
+            if oc is None:
+                raise JournalFormatError(
+                    f"claim criterion_status cannot derive outcome: {status!r}"
+                )
+        attrs["claim_outcome"] = oc
+        attrs["outcome"] = oc
         # sesoi only from core (catalog-frozen criterion) — never stamp 0.0 freely.
         for num_key in ("p_value", "power", "sesoi", "alpha"):
             if core.get(num_key) is not None:
                 try:
                     attrs[num_key] = float(core[num_key])
-                except (TypeError, ValueError):
-                    pass
+                except (TypeError, ValueError) as e:
+                    raise JournalFormatError(
+                        f"claim {num_key} must be numeric, got {core[num_key]!r}"
+                    ) from e
         for flag in ("uses_sesoi", "used_sesoi", "predicts_null"):
             if flag in core:
                 attrs[flag] = bool(core.get(flag))
@@ -445,18 +458,25 @@ def claim_nodes_from_attempt(
         if core.get("experiment_id"):
             attrs["experiment_id"] = str(core["experiment_id"])
         else:
-            # attempt_id = "{task_id}#{n}" → experiment_id = task_id
-            attrs["experiment_id"] = (
-                attempt_id.rsplit("#", 1)[0] if attempt_id else ""
-            )
+            # Structured attempt ids are ``{task_id}#{n}`` — require that shape.
+            if not isinstance(attempt_id, str) or "#" not in attempt_id:
+                raise JournalFormatError(
+                    f"claim experiment_id missing and attempt_id not structured: {attempt_id!r}"
+                )
+            attrs["experiment_id"] = attempt_id.rsplit("#", 1)[0]
+            if not attrs["experiment_id"]:
+                raise JournalFormatError(
+                    f"claim experiment_id empty from attempt_id: {attempt_id!r}"
+                )
         if core.get("independence_key"):
             attrs["independence_key"] = str(core["independence_key"])
         else:
             from coscientist.core.claims.verdict import independence_key_for
 
-            attrs["independence_key"] = independence_key_for(
-                experiment_id=str(attrs.get("experiment_id") or "")
-            )
+            exp_id = attrs.get("experiment_id")
+            if not isinstance(exp_id, str) or not exp_id:
+                raise JournalFormatError("claim experiment_id required for independence_key")
+            attrs["independence_key"] = independence_key_for(experiment_id=exp_id)
         if "refute_capable" in core:
             attrs["refute_capable"] = bool(core.get("refute_capable"))
         if "severe" in core:
@@ -519,7 +539,9 @@ def claim_nodes_from_attempt(
                 payload=node.model_dump(mode="json"),
                 ts=now,
                 schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(node.model_dump),
+                )
         )
         have_about = False
         if graph is not None:
@@ -551,6 +573,8 @@ def claim_nodes_from_attempt(
                     payload=edge.model_dump(mode="json"),
                     ts=now,
                     schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
+                    epoch=0,
+                    payload_digest=payload_digest(edge.model_dump),
                 )
             )
     return events, drops
@@ -591,7 +615,9 @@ def uses_claim_graph_events(
                 payload=node.model_dump(mode="json"),
                 ts=now,
                 schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(node.model_dump),
+                )
         )
     for b in claim_bindings:
         assert b.ref is not None
@@ -616,7 +642,9 @@ def uses_claim_graph_events(
                 payload=edge.model_dump(mode="json"),
                 ts=now,
                 schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(edge.model_dump),
+                )
         )
     return events
 

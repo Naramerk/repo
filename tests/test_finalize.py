@@ -11,7 +11,7 @@ import pytest
 
 from coscientist.core.claims.dispositions import dispositions
 from coscientist.core.claims.reasons import NotAttemptedReason, TaskReason, TerminalReason
-from coscientist.core.events.digest import canonical_json
+from coscientist.core.events.digest import canonical_json, payload_digest
 from coscientist.core.events.errors import Conflict, Idempotent, StudyClosedError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.metrics import late_write_rejected_total
@@ -26,6 +26,7 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
+    PlanRole,
 )
 from coscientist.core.finalize.finalize import (
     contributing_reasons_ordered,
@@ -91,7 +92,8 @@ def _task(key, *, outcome=TaskOutcome.SUCCESS, reason=None, required=True,
         spec=TaskSpec(task_key=key, title=key, goal="g", route="experiment", required=required),
         state=state, outcome=outcome if state == TaskState.DONE else None,
         reason=reason, deadline=_TS,
-    )
+        plan_role=PlanRole.NONE,
+)
 
 
 def _spec(key, addresses=None, deps=None):
@@ -157,7 +159,9 @@ def test_contributing_reasons_ordered_by_seq():
             study_id="s", type="TaskDone", entity_key=key, idem_key=key,
             payload={"reason": reason}, ts=_TS, seq=seq,
             schema_version=writer_schema_version('TaskDone'),
-        )
+                    epoch=0,
+                    payload_digest=payload_digest({"reason": reason}),
+                )
     assert contributing_reasons_ordered([td("a", "budget", 2), td("b", "cancelled", 1), td("c", "budget", 3)]) == [
         "cancelled", "budget", "не выполнено: бюджет задачи исчерпан",
     ]
@@ -355,7 +359,13 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
                     },
                     ts=clock.now(),
                     schema_version=1,
-                )
+epoch=0, payload_digest=payload_digest({
+                        "attempt_id": aid,
+                        "closed": True,
+                        "close_reason": CloseReason.BUDGET.value,
+                        "task_id": a.task_id,
+                    }),
+)
             )
     events.append(
         EventEnvelope(
@@ -370,7 +380,12 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
             },
             ts=clock.now(),
             schema_version=1,
-        )
+epoch=0, payload_digest=payload_digest({
+                "task_id": a.task_id,
+                "outcome": TaskOutcome.SKIPPED.value,
+                "reason": TaskReason.BUDGET.value,
+            }),
+)
     )
     await rt._append(events)
     await rt.tick()
@@ -531,7 +546,9 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
             payload=payload,
             ts=now,
             schema_version=1,
-        )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
     )
     await store.release_lease("seed", store.epoch)
     await store.close()
@@ -696,7 +713,9 @@ def _study_finalized_envelope(sid: str, clock, *, idem_key: str, payload: dict) 
         payload=payload,
         ts=clock.now(),
         schema_version=1,
-    )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
 
 
 @pytest.mark.asyncio
@@ -775,7 +794,8 @@ async def test_identical_finalize_retry_returns_original(tmp_path, clock):
                 payload={"task_id": "late", "outcome": "FAILED", "reason": "failed"},
                 ts=clock.now(),
                 schema_version=1,
-            )
+epoch=0, payload_digest=payload_digest({"task_id": "late", "outcome": "FAILED", "reason": "failed"}),
+)
         )
     # Writer path (append_many): returns existing envelope.
     out = await rt.store.append_many(
@@ -890,7 +910,19 @@ async def test_append_many_study_finalized_then_other_rejects(tmp_path, clock):
         },
         ts=clock.now(),
         schema_version=1,
-    )
+epoch=0, payload_digest=payload_digest({
+            "task_id": f"{sid}/X",
+            "kind": "experiment",
+            "spec": {
+                "task_key": "X",
+                "title": "x",
+                "goal": "g",
+                "route": "experiment",
+            },
+            "state": "PENDING",
+            "deadline": clock.now().isoformat(),
+        }),
+)
     with pytest.raises(StudyClosedError):
         await rt.store.append_many([sf, late])
     events = await rt.store.read_all()
@@ -1309,7 +1341,13 @@ async def test_fetch_integrity_raised_before_finalize_then_guard(tmp_path, clock
         },
         ts=clock.now(),
         schema_version=1,
-    )
+epoch=0, payload_digest=payload_digest({
+            "kind": "fetch_tool_reclassified",
+            "tool": "papers_get",
+            "call_id": "call1",
+            "internal_error": True,
+        }),
+)
     stored_fir = (await rt.store.append_many([fir]))[0]
     assert stored_fir.type == "FetchIntegrityRaised"
     await rt.finalize(trigger="all_done")
@@ -1334,7 +1372,13 @@ async def test_fetch_integrity_raised_before_finalize_then_guard(tmp_path, clock
                 },
                 ts=clock.now(),
                 schema_version=1,
-            )
+epoch=0, payload_digest=payload_digest({
+                    "kind": "fetch_tool_reclassified",
+                    "tool": "papers_get",
+                    "call_id": "call2",
+                    "internal_error": True,
+                }),
+)
         )
     # Identical FIR retry is idempotent (same as SF: check before StudyClosedError).
     with pytest.raises(Idempotent) as ei:
@@ -1358,7 +1402,8 @@ async def test_write_after_finalized_rejected_no_event(tmp_path, clock):
             idem_key=make_idem("TaskDone", tid, "late"),
             payload={"task_id": tid, "outcome": "FAILED", "reason": "failed"},
             ts=clock.now(), schema_version=1,
-        ))
+epoch=0, payload_digest=payload_digest({"task_id": tid, "outcome": "FAILED", "reason": "failed"}),
+))
     assert late_write_rejected_total["TaskDone"] >= 1
     assert len(await rt.store.read_all()) == n_before
     await close_runtime(rt)
@@ -1481,7 +1526,9 @@ async def test_finalized_rollback_allows_retry_then_closes(tmp_path, clock, monk
         payload=_fin_payload(study_id=sid),
         ts=clock.now(),
         schema_version=1,
-    )
+                    epoch=0,
+                    payload_digest=payload_digest(_fin_payload),
+                )
     with pytest.raises(RuntimeError, match="after_insert_before_commit"):
         if via == "append_many":
             await store.append_many([fin_ev])
@@ -1504,7 +1551,8 @@ async def test_finalized_rollback_allows_retry_then_closes(tmp_path, clock, monk
                 payload={"task_id": "x", "outcome": "FAILED", "reason": "failed"},
                 ts=clock.now(),
                 schema_version=1,
-            )
+epoch=0, payload_digest=payload_digest({"task_id": "x", "outcome": "FAILED", "reason": "failed"}),
+)
         )
     await close_runtime(rt)
 
@@ -1538,7 +1586,9 @@ async def test_lease_reacquire_sees_peer_finalize(tmp_path, clock):
             payload=_fin_payload(study_id=sid),
             ts=clock.now(),
             schema_version=1,
-        )
+                    epoch=0,
+                    payload_digest=payload_digest(_fin_payload),
+                )
     )
     await store_b.release_lease("b", store_b.epoch)
     await store_b.close()
@@ -1555,7 +1605,8 @@ async def test_lease_reacquire_sees_peer_finalize(tmp_path, clock):
                 payload={"task_id": "late", "outcome": "FAILED", "reason": "failed"},
                 ts=clock.now(),
                 schema_version=1,
-            )
+epoch=0, payload_digest=payload_digest({"task_id": "late", "outcome": "FAILED", "reason": "failed"}),
+)
         )
     study_closed = await store_a.get_row("studies", sid)
     assert study_closed is not None and study_closed.get("finalized") is True

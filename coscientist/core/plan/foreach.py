@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.errors import JournalFormatError, LeaseLost
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import (
     EventEnvelope,
     make_idem,
@@ -92,7 +93,7 @@ def select_foreach_items(
     """
     graph = getattr(runtime, "graph", None)
     if graph is None:
-        return [], []
+        raise JournalFormatError("foreach requires runtime.graph")
     try:
         nodes = list(graph.nodes_by_kind(fe.kind))
     except KeyError as e:
@@ -100,16 +101,18 @@ def select_foreach_items(
     scored: list[tuple[tuple, str]] = []
     notes: list[str] = []
     for node in nodes:
-        attrs = dict(node.attrs or {})
+        attrs = dict(node.attrs) if node.attrs is not None else {}
         src = attrs.get("source_task")
         if src is None or str(src) != fe.of_task:
             continue
-        logical = str(node.ref_id or attrs.get("id") or "")
-        if not logical:
-            nid = str(node.node_id)
-            logical = nid.rsplit(":", 1)[-1] if ":" in nid else nid
-        if not logical:
-            continue
+        if isinstance(node.ref_id, str) and node.ref_id:
+            logical = node.ref_id
+        elif isinstance(attrs.get("id"), str) and attrs["id"]:
+            logical = str(attrs["id"])
+        else:
+            raise JournalFormatError(
+                f"foreach node {node.node_id!r} missing structural id/ref_id"
+            )
         if fe.selector == "selected" and not bool(attrs.get("selected", False)):
             continue
         key, note = _rank_key(logical, attrs)
@@ -342,12 +345,15 @@ async def materialize_foreach(
         frozen_spec = freeze_task_sandbox_limits(spec, catalog)
         tid = task_id(sid, frozen_spec.task_key)
         kind = task_kind_for_route(frozen_spec.route)
+        from coscientist.core.execution.domain import PlanRole
+
         task = Task(
             task_id=tid,
             kind=kind,
             spec=frozen_spec,
             state=TaskState.PENDING,
             deadline=ed,
+            plan_role=PlanRole.NONE,
         )
         events.append(
             EventEnvelope(
@@ -358,7 +364,9 @@ async def materialize_foreach(
                 payload=task.model_dump(mode="json"),
                 ts=now,
                 schema_version=TASK_CREATED_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(task.model_dump),
+                )
         )
 
     payload = {
@@ -396,7 +404,9 @@ async def materialize_foreach(
             payload=payload,
             ts=now,
             schema_version=PLAN_EXPANDED_SCHEMA_VERSION,
-        )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
     )
     await runtime._append(events)  # noqa: SLF001
     children = getattr(runtime, "_foreach_children", None)

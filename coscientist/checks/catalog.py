@@ -95,12 +95,19 @@ def load_catalog(
             raise CatalogError(
                 f"template {t.get('id')!r} needs role prediction|validity, got {role!r}"
             )
-        uses_sesoi = bool(t.get("uses_sesoi", False))
+        uses_sesoi = bool(t["uses_sesoi"]) if "uses_sesoi" in t else False
         sesoi = t.get("sesoi")
         sesoi_min = t.get("sesoi_min")
         sesoi_max = t.get("sesoi_max")
-        predicts_null = bool(t.get("predicts_null", False))
-        direction = t.get("predicted_direction", "two_sided")
+        predicts_null = bool(t["predicts_null"]) if "predicts_null" in t else False
+        if "predicted_direction" in t:
+            direction = t["predicted_direction"]
+        elif role == "prediction":
+            raise CatalogError(
+                f"template {t.get('id')!r} prediction role requires predicted_direction"
+            )
+        else:
+            direction = "two_sided"
         if direction not in ("positive", "negative", "two_sided"):
             raise CatalogError(
                 f"template {t.get('id')!r} bad predicted_direction {direction!r}"
@@ -159,8 +166,8 @@ def load_catalog(
                 check=check,
                 role=role,
                 kind=tmpl_kind,
-                required=bool(t.get("required", True)),
-                version=str(t.get("version", "1")),
+                required=bool(t["required"]) if "required" in t else True,
+                version=str(t["version"]) if "version" in t else "1",
                 uses_sesoi=uses_sesoi,
                 sesoi=sesoi_f,
                 sesoi_min=sesoi_min_f,
@@ -170,7 +177,11 @@ def load_catalog(
             )
         )
 
-    defaults_raw = data.get("defaults", {})
+    if "defaults" not in data:
+        raise CatalogError("catalog missing defaults")
+    defaults_raw = data["defaults"]
+    if not isinstance(defaults_raw, dict):
+        raise CatalogError("catalog defaults must be dict")
     defaults = {str(k): list(v) for k, v in defaults_raw.items()}
     if kind_registry is not None:
         for k in defaults:
@@ -192,11 +203,19 @@ def load_catalog(
             if tid not in tmpl_ids:
                 raise CatalogError(f"defaults[{kind}] unknown template {tid}")
 
-    code_outputs = [str(x) for x in data.get("code_output_names", []) or []]
+    if "code_output_names" in data:
+        raw_outs = data["code_output_names"]
+        if not isinstance(raw_outs, list):
+            raise CatalogError("code_output_names must be list")
+        code_outputs = [str(x) for x in raw_outs]
+    else:
+        code_outputs = []
+    edition = str(data["edition"]) if "edition" in data else ""
+    sources = dict(data["sources_sha256"]) if "sources_sha256" in data else {}
     return Catalog(
         catalog_version=str(data["catalog_version"]),
-        edition=str(data.get("edition", "")),
-        sources_sha256=dict(data.get("sources_sha256", {})),
+        edition=edition,
+        sources_sha256=sources,
         rules=rules,
         templates=templates,
         defaults=defaults,
@@ -259,6 +278,7 @@ def minimal_test_catalog() -> Catalog:
                     "role": "prediction",
                     "kind": "catalog",
                     "required": True,
+                    "predicted_direction": "two_sided",
                 },
                 {
                     "id": "value_match_sesoi",
@@ -372,6 +392,7 @@ def minimal_test_catalog() -> Catalog:
                     "role": "prediction",
                     "kind": "proposed",
                     "required": True,
+                    "predicted_direction": "two_sided",
                 },
                 # PLAN-n critic markers (kind=plan_n_critic). Valid only on Task.plan_role=plan_n.
                 *[

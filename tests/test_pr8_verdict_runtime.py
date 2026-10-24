@@ -16,6 +16,7 @@ from coscientist.core.claims.dispositions import dispositions
 from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore, default_execution_registry
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.ids import claim_node_id, question_node_id
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
@@ -29,6 +30,7 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
+    PlanRole,
 )
 from coscientist.core.execution.inputs import (
     InputUnavailable,
@@ -277,7 +279,8 @@ def test_garbage_attrs_dropped_not_raised():
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=datetime(2026, 1, 1, tzinfo=UTC),
-    )
+        plan_role=PlanRole.NONE,
+)
     d = dispositions(
         tasks={t.task_id: t},
         plans={
@@ -500,7 +503,9 @@ async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime
                 ).model_dump(mode="json"),
                 ts=clock.now(),
                 schema_version=writer_schema_version('GraphNodeUpserted'),
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(GraphNode),
+                )
         ]
     )
     rt.results[aid_fake] = {
@@ -710,7 +715,8 @@ def test_dispositions_from_verdict_counting_claims():
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=now,
-    )
+        plan_role=PlanRole.NONE,
+)
     study = Study(
         study_id=sid,
         profile="research",
@@ -896,7 +902,8 @@ def test_criterion_status_not_met_from_failed_check():
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=now,
-    )
+        plan_role=PlanRole.NONE,
+)
     checks = [
         CheckResult(
             check_id="value_match#0",
@@ -964,7 +971,8 @@ def test_frozen_normalizes_check_id_to_template_id():
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=now,
-    )
+        plan_role=PlanRole.NONE,
+)
     checks = [
         CheckResult(
             check_id="value_match#0",
@@ -1003,7 +1011,8 @@ def test_criterion_match_is_exact_not_endswith():
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=now,
-    )
+        plan_role=PlanRole.NONE,
+)
     checks = [
         CheckResult(
             check_id="1#0",

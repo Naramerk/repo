@@ -279,7 +279,7 @@ async def test_finalize_conflict_without_event_reraises(tmp_path, clock, monkeyp
 
 
 def test_rich_payload_bound_truncates_or_raises():
-    from coscientist.core.events.digest import canonical_json
+    from coscientist.core.events.digest import canonical_json, payload_digest
     from coscientist.core.finalize.finalize import (
         MAX_FINALIZED_PAYLOAD_BYTES,
         _bound_rich_payload,
@@ -494,7 +494,17 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
                 },
                 ts=now,
                 schema_version=1,
-            ),
+epoch=0, payload_digest=payload_digest({
+                    "study_id": sid,
+                    "profile": "research",
+                    "request": "legacy",
+                    "catalog_version": "0.1.0",
+                    "hitl_policy": HitlPolicy().model_dump(mode="json"),
+                    "deadline": dl.isoformat(),
+                    "created_at": now.isoformat(),
+                    "finalize_reserve_s": 5,
+                }),
+),
             EventEnvelope(
                 study_id=sid,
                 type="PlanAccepted",
@@ -519,7 +529,24 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
                 },
                 ts=now,
                 schema_version=1,
-            ),
+epoch=0, payload_digest=payload_digest({
+                    "plan_id": "pl_old",
+                    "study_id": sid,
+                    "revision": 1,
+                    "hypothesis_id": None,
+                    "tasks": [
+                        {
+                            "task_key": "E1",
+                            "title": "e1",
+                            "goal": "g",
+                            "route": "experiment",
+                            "depends_on": ["PLAN"],
+                            "addresses": [],
+                        }
+                    ],
+                    "questions": [],
+                }),
+),
             EventEnvelope(
                 study_id=sid,
                 type="TaskCreated",
@@ -545,7 +572,25 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
                 },
                 ts=now,
                 schema_version=1,
-            ),
+epoch=0, payload_digest=payload_digest({
+                    "task_id": f"{sid}/E1",
+                    "kind": TaskKind.EXPERIMENT.value,
+                    "spec": {
+                        "task_key": "E1",
+                        "title": "e1",
+                        "goal": "g",
+                        "route": "experiment",
+                        "depends_on": ["PLAN"],
+                        "addresses": [],
+                    },
+                    "state": TaskState.PENDING.value,
+                    "outcome": None,
+                    "reason": None,
+                    "deadline": dl.isoformat(),
+                    "attempts": [],
+                    "inherited_from": None,
+                }),
+),
         ]
     )
     await store.release_lease("seeder", store.epoch)
@@ -582,7 +627,8 @@ def test_terminal_reason_for(impl):
         TaskOutcome,
         TaskSpec,
         TaskState,
-    )
+    PlanRole,
+)
 
     now = datetime(2026, 1, 1, tzinfo=UTC)
     t = Task(
@@ -593,7 +639,8 @@ def test_terminal_reason_for(impl):
         outcome=TaskOutcome.FAILED,
         reason=TaskReason.HUMAN_TIMEOUT,
         deadline=now,
-    )
+        plan_role=PlanRole.NONE,
+)
     assert (
         impl.terminal_reason_for(
             "all_done", tasks={"a": t}, question_dispositions={}

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import task_id
 from coscientist.core.events.schema_versions import (
@@ -164,7 +165,13 @@ async def refuse_expansion(
                 },
                 ts=now,
                 schema_version=EXPANSION_REFUSED_SCHEMA_VERSION,
-            )
+epoch=0, payload_digest=payload_digest({
+                    "after_task": after_task,
+                    "reason": reason,
+                    "detail": detail,
+                    "plan_key": plan_key,
+                }),
+)
         ]
     )
 
@@ -182,11 +189,11 @@ def _replan_allocate_s(runtime: StudyRuntime) -> float:
     used = float(runtime._replan_used_s)
     budget = study.replan_budget_s() - used
     ed = study.effective_deadline()
-    return min(
-        float(study.plan_timeout_s),
-        max(0.0, budget),
-        max(0.0, (ed - now).total_seconds()),
-    )
+    time_left = (ed - now).total_seconds()
+    # Refuse negative budgets/time rather than clamping to 0 (fail-closed).
+    if budget < 0.0 or time_left < 0.0:
+        return 0.0
+    return min(float(study.plan_timeout_s), budget, time_left)
 
 async def ensure_plan_n_task(
     runtime: StudyRuntime,
@@ -252,7 +259,9 @@ async def ensure_plan_n_task(
                 payload=payload,
                 ts=now,
                 schema_version=TASK_CREATED_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
         ]
     )
     # replan_allocated_s is folded from TaskCreated in local_project (B3 / minor).

@@ -19,8 +19,9 @@ class EventEnvelope(BaseModel):
     payload: dict[str, Any]
     ts: datetime
     schema_version: StrictInt
-    epoch: int = 0
-    payload_digest: str = ""
+    # Required on the wire (no silent 0 / "" defaults).
+    epoch: StrictInt
+    payload_digest: str
 
 
 # Typed payload helpers used by the machine / executor.

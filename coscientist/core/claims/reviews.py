@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from coscientist.core.events.digest import sha256_hex
+from coscientist.core.events.digest import sha256_hex, payload_digest
 from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.upcasters import writer_schema_version
@@ -141,10 +141,10 @@ def review_scheduled_events(
                 f"got {type(item_statuses).__name__}"
             )
         if isinstance(item_statuses, dict):
-            _PENDING = {ReqStatus.PENDING.value, ReqStatus.UNASSESSED.value}
+            # Sole pending token is PENDING (UNASSESSED is a different status).
             for item_id, st in item_statuses.items():
                 st_s = st.value if isinstance(st, ReqStatus) else st
-                if st_s not in _PENDING and item_id not in pending:
+                if st_s != ReqStatus.PENDING.value and item_id not in pending:
                     continue
                 key = review_key(
                     task_id=task_id,
@@ -178,7 +178,21 @@ def review_scheduled_events(
                         },
                         ts=now,
                         schema_version=writer_schema_version('ReviewScheduled'),
-                    )
+epoch=0, payload_digest=payload_digest({
+                            "review_key": key,
+                            "check_id": str(c.check_id),
+                            "item_id": str(item_id),
+                            "attempt_id": attempt_id,
+                            "task_id": task_id,
+                            "output_digest": output_digest,
+                            "kind": "rubric_judge",
+                            "rubric_digest": (
+                                effect["rubric_digest"]
+                                if isinstance(effect, dict) and "rubric_digest" in effect
+                                else None
+                            ),
+                        }),
+)
                 )
             continue
         if not c.is_code and c.status in (
@@ -212,7 +226,16 @@ def review_scheduled_events(
                     },
                     ts=now,
                     schema_version=writer_schema_version('ReviewScheduled'),
-                )
+epoch=0, payload_digest=payload_digest({
+                        "review_key": key,
+                        "check_id": str(c.check_id),
+                        "item_id": "",
+                        "attempt_id": attempt_id,
+                        "task_id": task_id,
+                        "output_digest": output_digest,
+                        "kind": "review_check",
+                    }),
+)
             )
     return events
 

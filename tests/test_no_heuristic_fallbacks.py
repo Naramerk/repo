@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from coscientist.core.events.digest import payload_digest
+
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -571,7 +573,18 @@ def test_attempt_started_cap_initializes_spent_zero():
         },
         ts=datetime(2024, 1, 1, tzinfo=UTC),
         schema_version=writer_schema_version("AttemptStarted"),
-    )
+epoch=0, payload_digest=payload_digest({
+            "attempt_id": "a1",
+            "task_id": "t1",
+            "task_key": "E1",
+            "attempt_role": "agent",
+            "allocated_budget_rub": "10",
+            "inputs": [],
+            "tainted_context": False,
+            "charged": True,
+            "provenance": "real",
+        }),
+)
     rt._project_local(ev)  # noqa: SLF001
     assert rt._task_budget_alloc["t1"] == Decimal("10")
     assert rt._task_spent_rub["t1"] == Decimal("0")
@@ -790,7 +803,9 @@ def _envelope(etype: str, payload: dict, *, entity_key: str = "a1"):
         payload=payload,
         ts=datetime(2024, 1, 1, tzinfo=UTC),
         schema_version=1,
-    )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
 
 
 def test_result_pending_requires_attempt_id_and_digest():
@@ -1213,6 +1228,8 @@ async def test_source_fetched_requires_tool_and_call_id(tmp_path):
         payload={"call_id": "c1"},  # missing tool
         ts=now,
         schema_version=writer_schema_version("SourceFetched"),
+        epoch=0,
+        payload_digest=payload_digest({"call_id": "c1"}),
     )
     with pytest.raises(JournalFormatError, match="tool"):
         await store.append_many([bad_tool], _source_fetched_cap_id="cap")
@@ -1224,6 +1241,8 @@ async def test_source_fetched_requires_tool_and_call_id(tmp_path):
         payload={"tool": "", "call_id": "c1"},
         ts=now,
         schema_version=writer_schema_version("SourceFetched"),
+        epoch=0,
+        payload_digest=payload_digest({"tool": "", "call_id": "c1"}),
     )
     with pytest.raises(JournalFormatError, match="tool"):
         await store.append_many([bad_tool2], _source_fetched_cap_id="cap")
@@ -1235,6 +1254,320 @@ async def test_source_fetched_requires_tool_and_call_id(tmp_path):
         payload={"tool": "papers_get", "call_id": ""},
         ts=now,
         schema_version=writer_schema_version("SourceFetched"),
+        epoch=0,
+        payload_digest=payload_digest({"tool": "papers_get", "call_id": ""}),
     )
     with pytest.raises(JournalFormatError, match="call_id"):
         await store.append_many([bad_call], _source_fetched_cap_id="cap")
+
+
+# --- Review @02ec75e: loop / HITL / PlanRole / inputs / finalize fail-closed ---
+
+
+def test_fold_loop_expansion_refused_missing_loop_id():
+    with pytest.raises(JournalFormatError, match="missing loop_id"):
+        fold_loop_expansion_refused(_RT(), {"loop": True, "loop_reason": LOOP_REASON_ERROR})
+
+
+def test_fold_loop_plan_expanded_requires_added_tasks():
+    with pytest.raises(JournalFormatError, match="missing added_tasks"):
+        fold_loop_plan_expanded(
+            _RT(),
+            {"loop": True, "loop_id": "L1", "loop_iter": 1},
+        )
+
+
+def test_parse_loop_dep_invalid_raises():
+    from coscientist.core.plan.loop import parse_loop_dep
+
+    with pytest.raises(PlanInvalid):
+        parse_loop_dep("loop:\x00bad")
+
+
+def test_loop_state_non_dict_raises():
+    from coscientist.core.plan.loop import _loop_state
+
+    rt = _RT()
+    rt._loop_state = []  # type: ignore[assignment]
+    with pytest.raises(JournalFormatError, match="_loop_state must be dict"):
+        _loop_state(rt)
+
+
+def test_hitl_policy_gate_unknown_kind_returns_none():
+    from coscientist.core.execution.domain import HitlPolicy
+
+    assert HitlPolicy().gate("not_a_real_gate") is None
+
+
+def test_expand_refuses_timeout_delegated_by():
+    from coscientist.core.plan.expand import _delegated_by_from_hitl
+
+    rt = _RT()
+    rt._hitl_expand_used = set()
+    rt._hitl_decisions = {
+        "h1": {"delegated_by": "timeout", "decision": "accept"},
+    }
+    rt._hitl_requests = {
+        "h1": {"kind": "plan_expansion", "expand_after_task": "E0"},
+    }
+    assert _delegated_by_from_hitl(rt, "h1", after_task="E0") == "hitl_timeout_refused"
+
+
+def test_task_is_plan_n_missing_role_raises():
+    from coscientist.core.plan.expand_critic import task_is_plan_n
+
+    with pytest.raises(JournalFormatError, match="plan_role"):
+        task_is_plan_n(SimpleNamespace())
+
+
+def test_task_is_plan_n_invalid_role_raises():
+    from coscientist.core.plan.expand_critic import task_is_plan_n
+
+    with pytest.raises(JournalFormatError, match="invalid"):
+        task_is_plan_n(SimpleNamespace(plan_role="not_a_role"))
+
+
+def test_task_has_plan_n_critic_alias_removed():
+    import coscientist.core.plan.expand_critic as ec
+
+    assert not hasattr(ec, "task_has_plan_n_critic")
+
+
+def test_task_plan_role_required_no_default():
+    from datetime import UTC, datetime
+
+    from coscientist.core.execution.domain import Task, TaskKind, TaskSpec, TaskState
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Task(
+            task_id="s/E0",
+            kind=TaskKind.EXPERIMENT,
+            spec=TaskSpec(task_key="E0", title="t", goal="g", route="experiment"),
+            state=TaskState.PENDING,
+            deadline=datetime.now(UTC),
+        )
+
+
+def test_event_envelope_epoch_digest_required():
+    from datetime import UTC, datetime
+
+    from coscientist.core.events.events import EventEnvelope
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        EventEnvelope(
+            study_id="s",
+            type="StudyCreated",
+            entity_key="s",
+            idem_key="k",
+            payload={},
+            ts=datetime.now(UTC),
+            schema_version=1,
+        )
+
+
+def test_finalize_unknown_task_reason_refuses():
+    from datetime import UTC, datetime
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.finalize.finalize import contributing_reasons_ordered
+
+    ev = EventEnvelope(
+        study_id="s",
+        type="TaskDone",
+        entity_key="t",
+        idem_key="k",
+        payload={"reason": "not_a_task_reason"},
+        ts=datetime.now(UTC),
+        schema_version=1,
+        epoch=0,
+        payload_digest=payload_digest({"reason": "not_a_task_reason"}),
+    )
+    with pytest.raises(JournalFormatError, match="TaskDone.reason"):
+        contributing_reasons_ordered([ev])
+
+
+def test_next_kind_index_uses_route_counts_not_regex():
+    from datetime import UTC, datetime
+
+    from coscientist.core.execution.domain import (
+        PlanRole,
+        Route,
+        Task,
+        TaskKind,
+        TaskSpec,
+        TaskState,
+    )
+    from coscientist.core.plan.expand_validate import next_kind_index
+
+    rt = _RT()
+    rt.tasks = {
+        "s/EXP-0": Task(
+            task_id="s/EXP-0",
+            kind=TaskKind.EXPERIMENT,
+            spec=TaskSpec(
+                task_key="CUSTOM",
+                title="t",
+                goal="g",
+                route=Route.EXPERIMENT,
+            ),
+            state=TaskState.PENDING,
+            deadline=datetime.now(UTC),
+            plan_role=PlanRole.NONE,
+        )
+    }
+    # Structural: one experiment route → next index 1 (not regex on CUSTOM).
+    assert next_kind_index(rt, "EXP", []) == 1
+
+
+def test_reviews_pending_excludes_unassessed_alias():
+    """UNASSESSED must not schedule like PENDING (no alias set)."""
+    from datetime import UTC, datetime
+
+    from coscientist.core.claims.reviews import review_scheduled_events
+    from coscientist.core.execution.domain import CheckResult, ReqStatus
+
+    checks = [
+        CheckResult(
+            check_id="c1",
+            template_id="human_review",
+            status=ReqStatus.UNASSESSED,
+            is_code=False,
+            role="validity",
+            required=True,
+            effect={"item_statuses": {"i1": ReqStatus.UNASSESSED.value}},
+        )
+    ]
+    evs = review_scheduled_events(
+        study_id="s",
+        attempt_id="a#1",
+        task_id="s/E0",
+        output_digest="d" * 64,
+        checks=checks,
+        now=datetime.now(UTC),
+    )
+    # item_statuses UNASSESSED alone (not in pending_items) → no schedule.
+    assert evs == []
+
+
+def test_replan_budget_negative_span_raises():
+    from datetime import UTC, datetime, timedelta
+
+    from coscientist.core.execution.domain import HitlPolicy, Study
+
+    now = datetime.now(UTC)
+    s = Study(
+        study_id="s",
+        profile="p",
+        request="r",
+        catalog_version="1",
+        hitl_policy=HitlPolicy(),
+        deadline=now - timedelta(seconds=10),
+        created_at=now,
+        finalize_reserve_s=0,
+    )
+    with pytest.raises(ValueError, match="negative span"):
+        s.replan_budget_s()
+
+
+def test_local_project_plan_n_requires_alloc_and_pending_dict():
+    from datetime import UTC, datetime
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.execution.domain import (
+        PlanRole,
+        Route,
+        TaskKind,
+        TaskSpec,
+        TaskState,
+    )
+    from coscientist.core.execution.local_project import LocalProjectMixin
+
+    class _LP(LocalProjectMixin):
+        def __init__(self) -> None:
+            self.tasks = {}
+            self._replan_used_s = 0.0
+            self._expand_requests = {}
+            self._expand_pending = set()
+
+    lp = _LP()
+    spec = TaskSpec(
+        task_key="PLAN-1",
+        title="t",
+        goal="g",
+        route=Route.PLANNER,
+    )
+    payload = {
+        "task_id": "s/PLAN-1",
+        "kind": TaskKind.PLAN.value,
+        "spec": spec.model_dump(mode="json"),
+        "state": TaskState.PENDING.value,
+        "deadline": datetime.now(UTC).isoformat(),
+        "plan_role": PlanRole.PLAN_N.value,
+        "expand_after_task": "E0",
+        "pending_expansion": "not-a-dict",
+        "replan_allocated_s": 1.0,
+    }
+    ev = EventEnvelope(
+        study_id="s",
+        type="TaskCreated",
+        entity_key="s/PLAN-1",
+        idem_key="k",
+        payload=payload,
+        ts=datetime.now(UTC),
+        schema_version=1,
+        epoch=0,
+        payload_digest=payload_digest(payload),
+    )
+    with pytest.raises(JournalFormatError, match="pending_expansion"):
+        lp._project_local(ev)
+
+
+def test_inputs_rejects_outcome_alias_without_claim_outcome():
+    from datetime import UTC, datetime
+
+    from coscientist.core.claims.graph import GraphNode, GraphStore
+    from coscientist.core.events.ids import question_node_id
+    from coscientist.core.execution.inputs import claim_nodes_from_attempt
+
+    g = GraphStore()
+    qid = "Q1"
+    nid = question_node_id("s", qid)
+    g.upsert_node(
+        GraphNode(
+            node_id=nid,
+            kind="question",
+            study_id="s",
+            ref_id=qid,
+            attrs={},
+            created_at=datetime.now(UTC),
+        )
+    )
+
+    def derive(raw, ok):
+        return {
+            "criterion_status": "met",
+            "evidence_kind": "computational",
+            "frozen": True,
+            "lit_own_criterion": False,
+            "accepted": True,
+            "validity_ok": True,
+            "check_role": "prediction",
+            "outcome": "consistent",  # deprecated alias
+            "predicted_direction": "two_sided",
+            "predicts_null": False,
+        }
+
+    with pytest.raises(JournalFormatError, match="claim_outcome"):
+        claim_nodes_from_attempt(
+            study_id="s",
+            attempt_id="s/E0#1",
+            provenance="real",
+            claims=[{"id": "c1", "text": "t", "target": qid}],
+            now=datetime.now(UTC),
+            graph=g,
+            attempt_outcome="SUCCESS",
+            infra_failure=False,
+            derive_attrs=derive,
+        )

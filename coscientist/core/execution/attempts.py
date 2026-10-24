@@ -9,6 +9,7 @@ from typing import Any
 from coscientist.core.claims.claims import compute_verdict_snapshots
 from coscientist.core.claims.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.ids import attempt_id, task_id
 from coscientist.core.events.schema_versions import (
     ATTEMPT_CLOSED_SCHEMA_VERSION,
@@ -442,7 +443,9 @@ class AttemptsMixin:
                 ts=now,
                 # schema_version from UPCASTERS (schema v1 baseline = writer v1).
                 schema_version=ATTEMPT_STARTED_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(payload),
+                )
         ]
         # Persist full verdict snapshots used at bind (not digest-only).
         bound_verdicts = {
@@ -465,7 +468,13 @@ class AttemptsMixin:
                     },
                     ts=now,
                     schema_version=VERDICT_SNAPSHOTS_RECORDED_SCHEMA_VERSION,
-                )
+epoch=0, payload_digest=payload_digest({
+                        "study_id": sid,
+                        "attempt_id": aid,
+                        "scope": "bind",
+                        "snapshots": bound_verdicts,
+                    }),
+)
             )
         # PR7: uses_claim edges for kind=claim inputs (DESIGN_M1 §3).
         events.extend(
@@ -512,7 +521,14 @@ class AttemptsMixin:
                 },
                 ts=now,
                 schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
-            )
+epoch=0, payload_digest=payload_digest({
+                    "attempt_id": aid,
+                    "closed": True,
+                    "close_reason": cr_s,
+                    "retryable": retryable,
+                    "task_id": tid,
+                }),
+)
         ]
         # Budget uses charged attempts (required stamped field on every attempt row).
         from coscientist.core.events.errors import JournalFormatError
@@ -543,7 +559,12 @@ class AttemptsMixin:
                     },
                     ts=now,
                     schema_version=TASK_DONE_SCHEMA_VERSION,
-                )
+epoch=0, payload_digest=payload_digest({
+                        "task_id": tid,
+                        "outcome": TaskOutcome.FAILED.value,
+                        "reason": TaskReason.FAILED.value,
+                    }),
+)
             )
         else:
             # P3: leave PENDING with retry_at — never RUNNING without an open attempt.
@@ -616,7 +637,13 @@ class AttemptsMixin:
                         },
                         ts=now,
                         schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
-                    )
+epoch=0, payload_digest=payload_digest({
+                            "attempt_id": aid,
+                            "closed": True,
+                            "close_reason": cr_s,
+                            "task_id": task.task_id,
+                        }),
+)
                 )
                 t = self._attempt_tasks.pop(aid, None)
                 if t:
@@ -637,6 +664,8 @@ class AttemptsMixin:
                 payload=done_payload,
                 ts=now,
                 schema_version=TASK_DONE_SCHEMA_VERSION,
-            )
+                    epoch=0,
+                    payload_digest=payload_digest(done_payload),
+                )
         )
         await self._append(events)
