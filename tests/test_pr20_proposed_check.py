@@ -18,7 +18,7 @@ from coscientist.core.claims.claims import RuntimeClaim
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.verdict import claim_is_severe, exclusion_reason, hypothesis_verdict
-from coscientist.core.events.clock import SystemClock, FakeClock
+from coscientist.core.events.clock import FakeClock, SystemClock
 from coscientist.core.events.errors import AttemptClosedError, Conflict, StudyClosedError
 from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import hitl_request_id
