@@ -75,7 +75,7 @@
 - [CAP #19](docs/CAPABILITIES.md?plain=1#L28) / [#21](docs/CAPABILITIES.md?plain=1#L30) prep.
 ### [M1] CLI ``coscientist run`` (DESIGN §13 / §12.2)
 
-- Entry point `coscientist run <task>`: create_study, planner + executor-route via `LlmAgentAdapter`, tick until closed by deadline; JSON summary writes per-role usage. Requires `--tools-json` for `StaticToolRouter` until G7 MCP router; wires `PromptRegistry` + role `Budget`. [DESIGN §13](docs/DESIGN.md#13-порядок-работ).
+- Entry point `coscientist run <task>`: honest journal cycle — `tz_spec`→SPEC record, HYP/LIT pass-record (Need off), planner→`accept_plan`, executor-route→`Executor.record`, REPORT record, `tick` to `all_done`/`fulfilled`. No stage cancel, no production `clock.set`. Explicit args (study-id, require-hypotheses, reserve, lease TTL, rng seed, budget caps, max-ticks). `CliRefuse` + non-zero exit. `--tools-json` until G7 MCP. Gaps: hypothesizer/researcher, MCP ToolRouter. [DESIGN §12.2](docs/DESIGN.md#122-сценарии-и-пороги) / [§13](docs/DESIGN.md#13-порядок-работ).
 
 ### [M2] continue_session §3.6 partition
 - `partition_fork` / `fork()` + `last_fork`; durable empty-nonce idempotency via
