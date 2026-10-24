@@ -1064,6 +1064,7 @@ def test_minimal_report_hypotheses_truncation_le_10kb():
     from coscientist.core.execution.domain import Task, TaskKind, TaskOutcome, TaskSpec, TaskState
     from coscientist.core.finalize.minimal_report import MAX_BYTES, build_minimal_report
 
+    aid = "st/T0/a0"
     tasks = {
         "st/T0": Task(
             task_id="st/T0",
@@ -1072,8 +1073,10 @@ def test_minimal_report_hypotheses_truncation_le_10kb():
             state=TaskState.DONE,
             outcome=TaskOutcome.SUCCESS,
             deadline=__import__("datetime").datetime(2026, 1, 1),
+            attempts=[aid],
         )
     }
+    attempts = {aid: {"closed": True, "provenance": "real", "task_id": "st/T0"}}
     hyps = [
         {
             "hypothesis_id": f"H{i}",
@@ -1104,9 +1107,9 @@ def test_minimal_report_hypotheses_truncation_le_10kb():
         contributing_reasons=[],
         verdict="partial",
         tasks=tasks,
-        attempts={},
+        attempts=attempts,
         question_dispositions={
-            "Q1": {"disposition": "survived", "reason": "", "formulation": "q"}
+            "Q1": {"disposition": "survived", "reason": "survived", "formulation": "q"}
         },
         fallback_reason=None,
         hypotheses=hyps,

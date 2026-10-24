@@ -31,23 +31,42 @@ MAX_BYTES = 10_240
 def _task_provenance(
     task: Task, attempts: Mapping[str, Mapping[str, Any]]
 ) -> Provenance:
+    """Provenance of the last closed attempt — never invent ``real``.
+
+    Missing / null / unknown provenance on a closed attempt, or no closed
+    attempt at all → ``MinimalReportRefuse`` (DESIGN_M1 §6.7: legacy rename
+    is an upcaster job; the report layer does not guess).
+    """
     for aid in reversed(task.attempts):
         if aid not in attempts:
             continue
         att = attempts[aid]
         if not att.get("closed"):
             continue
-        # Pre-R16a: missing provenance on a closed attempt means real.
-        if "provenance" in att:
-            prov = str(att["provenance"])
-        else:
-            prov = "real"
+        if "provenance" not in att or att["provenance"] is None:
+            raise MinimalReportRefuse(
+                f"task {task.spec.task_key!r}: closed attempt provenance required"
+            )
+        prov = str(att["provenance"])
         if prov not in VALID_PROVENANCE:
             raise MinimalReportRefuse(
                 f"task {task.spec.task_key!r}: unknown provenance {prov!r}"
             )
         return prov  # type: ignore[return-value]
-    return "real"
+    raise MinimalReportRefuse(
+        f"task {task.spec.task_key!r}: closed attempt provenance required"
+    )
+
+
+def _has_closed_attempt(
+    task: Task, attempts: Mapping[str, Mapping[str, Any]]
+) -> bool:
+    for aid in task.attempts:
+        if aid not in attempts:
+            continue
+        if attempts[aid].get("closed"):
+            return True
+    return False
 
 
 def _summary(
@@ -62,9 +81,7 @@ def _summary(
             counts[t.outcome.value] += 1
     m = len(questions)
     k = sum(
-        1
-        for q in questions
-        if q.get("disposition") in (Disposition.NOT_ATTEMPTED, "not_attempted")
+        1 for q in questions if q.get("disposition") is Disposition.NOT_ATTEMPTED
     )
     return (
         f"Study закрыто: {terminal_reason}; задач {n} "
@@ -82,13 +99,17 @@ def _sections(
     human: list[str] = []
     for t in tasks:
         key = t.spec.task_key
+        if t.outcome in {TaskOutcome.FAILED, TaskOutcome.SKIPPED} and t.reason:
+            human.append(key)
+        # real/stub need closed-attempt provenance; never invent (SKIPPED
+        # never-started tasks stay out of those lists).
+        if not _has_closed_attempt(t, attempts):
+            continue
         prov = _task_provenance(t, attempts)
         if t.outcome in {TaskOutcome.SUCCESS, TaskOutcome.PARTIAL} and prov == "real":
             real.append(key)
         if prov in {"partial", "stub"}:
             stub.append(key)
-        if t.outcome in {TaskOutcome.FAILED, TaskOutcome.SKIPPED} and t.reason:
-            human.append(key)
     return MinimalReportSections(real=real, stub=stub, human=human)
 
 
@@ -176,6 +197,11 @@ def assemble_minimal_report(
             raise MinimalReportRefuse(
                 f"task {t.spec.task_key!r}: outcome required"
             )
+        if not _has_closed_attempt(t, attempts):
+            # No closed attempt → no provenance to attribute (do not invent
+            # ``real``, which would also land SUCCESS/PARTIAL in section real).
+            # Summary still counts the task; row omitted.
+            continue
         reason_s: str | None
         if isinstance(t.reason, TaskReason):
             reason_s = t.reason.value

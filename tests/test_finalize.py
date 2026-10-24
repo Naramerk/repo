@@ -10,7 +10,11 @@ import jsonschema
 import pytest
 
 from coscientist.core.claims.dispositions import dispositions
-from coscientist.core.claims.reasons import NotAttemptedReason, TaskReason, TerminalReason
+from coscientist.core.claims.reasons import (
+    NotAttemptedReason,
+    TaskReason,
+    TerminalReason,
+)
 from coscientist.core.events.digest import canonical_json
 from coscientist.core.events.errors import Conflict, Idempotent, StudyClosedError
 from coscientist.core.events.events import PLAN_ACCEPTED_SCHEMA_VERSION, EventEnvelope, make_idem
@@ -103,13 +107,31 @@ def _fin(events):
 
 
 def _task(key, *, outcome=TaskOutcome.SUCCESS, reason=None, required=True,
-          kind=TaskKind.EXPERIMENT, state=TaskState.DONE):
+          kind=TaskKind.EXPERIMENT, state=TaskState.DONE, attempts=None):
     return Task(
         task_id=f"st/{key}", kind=kind,
         spec=TaskSpec(task_key=key, title=key, goal="g", route="experiment", required=required),
         state=state, outcome=outcome if state == TaskState.DONE else None,
         reason=reason, deadline=_TS,
+        attempts=list(attempts) if attempts is not None else [],
     )
+
+
+def _closed_attempts(
+    *keys: str, provenance: str = "real"
+) -> tuple[dict[str, Task], dict[str, dict]]:
+    """DONE SUCCESS tasks with a closed attempt carrying provenance."""
+    tasks: dict[str, Task] = {}
+    attempts: dict[str, dict] = {}
+    for key in keys:
+        aid = f"st/{key}/a0"
+        tasks[f"st/{key}"] = _task(key, attempts=[aid])
+        attempts[aid] = {
+            "closed": True,
+            "provenance": provenance,
+            "task_id": f"st/{key}",
+        }
+    return tasks, attempts
 
 
 def _spec(key, addresses=None, deps=None):
@@ -436,9 +458,10 @@ def test_minimal_report_le_10kb():
 
 
 def test_minimal_report_schema_valid():
+    tasks, attempts = _closed_attempts("A")
     report = build_minimal_report(
         study_id="st", terminal_reason="completed", trigger="all_done", contributing_reasons=[],
-        verdict="partial", tasks={"st/A": _task("A")}, attempts={},
+        verdict="partial", tasks=tasks, attempts=attempts,
         question_dispositions={"Q1": {"disposition": "not_attempted", "reason": "no_task", "formulation": "q"}},
         fallback_reason=None,
     )
@@ -449,6 +472,7 @@ def test_minimal_report_schema_valid():
     schema = json.loads(schema_path.read_text())
     jsonschema.validate(report.model_dump(mode="json"), schema)
     assert isinstance(report, MinimalReport)
+    tasks_md, attempts_md = _closed_attempts("A")
     md = render_markdown_report(
         assemble_minimal_report(
             study_id="st_md",
@@ -456,8 +480,8 @@ def test_minimal_report_schema_valid():
             trigger="all_done",
             contributing_reasons=[],
             verdict="partial",
-            tasks={"st/A": _task("A")},
-            attempts={},
+            tasks=tasks_md,
+            attempts=attempts_md,
             question_dispositions={
                 "Q1": {
                     "disposition": "not_attempted",
@@ -555,14 +579,15 @@ def test_assemble_refuses_done_task_without_outcome():
 
 
 def test_render_markdown_note_and_single_tasks_path():
+    tasks, attempts = _closed_attempts("A")
     report = assemble_minimal_report(
         study_id="st_note",
         terminal_reason="completed",
         trigger="all_done",
         contributing_reasons=[],
         verdict="partial",
-        tasks={"st/A": _task("A")},
-        attempts={},
+        tasks=tasks,
+        attempts=attempts,
         question_dispositions={
             "Q1": {
                 "disposition": "answered",
@@ -573,12 +598,90 @@ def test_render_markdown_note_and_single_tasks_path():
         },
         fallback_reason=None,
     )
-    md = render_markdown_report(report, tasks={"st/A": _task("A")})
+    md = render_markdown_report(report, tasks=tasks)
     assert "note=priority note" in md
     assert "`A` [experiment] SUCCESS" in md
     # Runtime tasks must not invent a second Tasks section path.
     assert md.count("## Tasks") == 1
     assert "/PENDING" not in md and "TaskState" not in md
+
+
+def test_assemble_refuses_unknown_disposition_and_provenance():
+    from coscientist.core.finalize.minimal_report import _task_provenance
+
+    with pytest.raises(MinimalReportRefuse, match="unknown disposition"):
+        assemble_minimal_report(
+            study_id="st",
+            terminal_reason="completed",
+            trigger="all_done",
+            contributing_reasons=[],
+            verdict="partial",
+            tasks={},
+            attempts={},
+            question_dispositions={
+                "Q1": {
+                    "disposition": "not_a_disposition",
+                    "reason": "x",
+                    "formulation": "q",
+                }
+            },
+            fallback_reason=None,
+        )
+    tasks, attempts = _closed_attempts("A", provenance="bogus")
+    with pytest.raises(MinimalReportRefuse, match="unknown provenance"):
+        assemble_minimal_report(
+            study_id="st",
+            terminal_reason="completed",
+            trigger="all_done",
+            contributing_reasons=[],
+            verdict="partial",
+            tasks=tasks,
+            attempts=attempts,
+            question_dispositions={},
+            fallback_reason=None,
+        )
+    tasks_miss, _ = _closed_attempts("A")
+    attempts_miss = {
+        "st/A/a0": {"closed": True, "task_id": "st/A"}  # provenance absent
+    }
+    with pytest.raises(MinimalReportRefuse, match="closed attempt provenance required"):
+        assemble_minimal_report(
+            study_id="st",
+            terminal_reason="completed",
+            trigger="all_done",
+            contributing_reasons=[],
+            verdict="partial",
+            tasks=tasks_miss,
+            attempts=attempts_miss,
+            question_dispositions={},
+            fallback_reason=None,
+        )
+    # No closed attempt at all → refuse (never invent real).
+    with pytest.raises(MinimalReportRefuse, match="closed attempt provenance required"):
+        _task_provenance(_task("A"), {})
+
+
+@pytest.mark.asyncio
+async def test_build_finalized_payload_requires_observations():
+    from coscientist.core.finalize.finalize import _build_finalized_payload
+
+    class _RT:
+        tasks: dict = {}
+        attempts: dict = {}
+        study = None
+
+    with pytest.raises(RuntimeError, match="runtime._observations required"):
+        await _build_finalized_payload(
+            _RT(),  # type: ignore[arg-type]
+            sid="st",
+            trigger="all_done",
+            term=TerminalReason.COMPLETED,
+            contrib=[],
+            verdict="failed",
+            qdisp={},
+            hypothesis_verdicts={},
+            hypotheses_unavailable=None,
+        )
 
 
 def test_report_not_required_verdict():

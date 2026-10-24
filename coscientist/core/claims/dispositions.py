@@ -386,9 +386,8 @@ def _dispositions_inner(
                         continue
                 row: dict[str, Any] = {
                     "disposition": disp,
-                    # Verdict path: no separate not-attempted reason; empty string
-                    # (never null — MinimalReportQuestionRow.reason is StrictStr).
-                    "reason": "",
+                    # Verdict path: reason is the question verdict that drove disp.
+                    "reason": str(v),
                     "reason_detail": [],
                     "formulation": text,
                     "verdict": v,
