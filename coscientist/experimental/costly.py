@@ -33,7 +33,7 @@ def _require_bool(value: object, *, what: str) -> bool:
 
 
 class DelegatedBudget:
-    """Budget(delegated_costly, max_llm_calls=100, max_tokens=1000000, max_tool_calls=500), ₽: stateful counter; actual spend is debited after each attempt."""
+    """Budget(delegated_costly, max_llm_calls=100, max_tokens=1000000, max_tool_calls=500), ₽: stateful counter; actual spend is debited after each attempt."""  # noqa: E501
 
     def __init__(self, limit_rub: float) -> None:
         self.limit_rub = _require_float(limit_rub, what="limit_rub")
@@ -105,7 +105,7 @@ def costly_gate(
         eff = (
             CostlyEffect.RUN
             if answer == "approve"
-            else CostlyEffect.SKIPPED_HUMAN_REJECTED  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            else CostlyEffect.SKIPPED_HUMAN_REJECTED  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         )
         return eff, {
             "decided_by": "human",
@@ -158,7 +158,7 @@ def costly_gate(
     eff = (
         CostlyEffect.RUN
         if critic_accepts
-        else CostlyEffect.SKIPPED_CRITIC_REJECTED  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        else CostlyEffect.SKIPPED_CRITIC_REJECTED  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
     )
     return (
         eff,
@@ -174,7 +174,7 @@ def costly_gate(
 
 def settle(event: dict[str, Any], budget: DelegatedBudget | None, actual_rub: float):
     """After the attempt: debit actual spend (if budgeted) and record it for the report."""
-    if budget is not None and event.get("decided_by") == "critic":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    if budget is not None and event.get("decided_by") == "critic":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         budget.debit(actual_rub, event["cost_estimate_rub"])
     event["spent_rub"] = actual_rub
     return event

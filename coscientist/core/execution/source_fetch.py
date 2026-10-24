@@ -29,7 +29,6 @@ from coscientist.core.events.errors import (
     JournalFormatError,
 )
 from coscientist.core.events.events import (
-    UnstampedEvent,
     StoredEvent,
     UnstampedEvent,
     make_idem,
@@ -185,7 +184,7 @@ def task_needs_source_fetch(catalog: Catalog, spec: TaskSpec) -> bool:
         for tid in catalog.defaults["experiment"]:
             refs.append(RequirementRef(template_id=tid, required=True))
     for ref in refs:
-        tmpl = by_id.get(ref.template_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        tmpl = by_id.get(ref.template_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         if tmpl is None:
             continue
         check = tmpl.check
@@ -225,7 +224,7 @@ def source_fetched_paired_with_fetch_call(
         return False
     call_id = _optional_payload_str(payload, "call_id")
     tool = _optional_payload_str(payload, "tool")
-    return fetch_calls.get(call_id) == tool  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    return fetch_calls.get(call_id) == tool  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
 
 
 @dataclass
@@ -253,7 +252,7 @@ class SourceFetchIndex:
         if not call_id and not tool:
             return
         for row in self.reclassified:
-            if row.get("call_id") == call_id and row.get("tool") == tool:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            if row.get("call_id") == call_id and row.get("tool") == tool:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 return
         self.reclassified.append({"call_id": call_id, "tool": tool})
 
@@ -278,7 +277,7 @@ class SourceFetchIndex:
     def digests_for_attempt(self, attempt_id: str) -> frozenset[str]:
         if not attempt_id:
             return frozenset()
-        bag = self.by_attempt.get(attempt_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        bag = self.by_attempt.get(attempt_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         if bag is None:
             return frozenset()
         return frozenset(bag)
@@ -295,7 +294,7 @@ def note_fetch_call_from_attempt_tainted(payload: dict[str, Any]) -> tuple[str, 
     """
     if _optional_payload_str(payload, "reason") != "source_fetch":
         return None
-    is_fetch = payload.get("is_fetch")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    is_fetch = payload.get("is_fetch")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     if is_fetch is not True:
         return None
     tool = _optional_payload_str(payload, "tool")
@@ -366,7 +365,7 @@ async def journal_fetch_integrity_raised(
         call_id = _optional_payload_str(issue, "call_id")
         if not tool and not call_id:
             continue
-        entity = call_id if call_id else tool  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        entity = call_id if call_id else tool  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         ev = UnstampedEvent(
             study_id=study_id,
             type="FetchIntegrityRaised",
@@ -571,7 +570,7 @@ async def store_fetched_source(
     # put asserts bound (no consume); append verifies+consumes.
     art = artifacts.put_fetched(
         content,
-        make_tool_ref(call_id, tool=tool, args=url),
+        make_tool_ref(call_id, tool=tool, args=url, attempt_id=attempt_id),
         name=name,
         media_type=media_type,
         role=role,

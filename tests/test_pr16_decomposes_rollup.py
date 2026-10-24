@@ -90,7 +90,7 @@ def _exp(
         expected_outputs=outs,
         criteria=criteria
         if criteria is not None
-        else ([RequirementRef(template_id="rubric_check", required=True)] if rubric else []), required=True, tolerate_failed_dep=False)
+        else ([RequirementRef(template_id="rubric_check", required=True)] if rubric else []), required=True, tolerate_failed_dep=False)  # noqa: E501
 
 
 def _q(qid: str, text: str, *, parent: str | None = None, origin: str | None = None) -> QuestionSpec:
@@ -961,7 +961,7 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
                         role="report",
                         rubric=rub, required=True)
                 ],
-                criteria=[RequirementRef(template_id="rubric_check", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="rubric_check", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         added_questions=[],
         superseded_tasks=["E1"],
@@ -1201,7 +1201,7 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
         depends_on=["E0"],
         addresses=["Q1"],
         criteria=[RequirementRef(template_id="value_match", required=True)],
-        foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"), required=True, tolerate_failed_dep=False)
+        foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"), required=True, tolerate_failed_dep=False)  # noqa: E501
     await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")])
     now = rt.clock.now()
     for i, hid in enumerate(("H0", "H1")):
@@ -1320,7 +1320,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
             route="experiment",
             depends_on=[],
             addresses=["Q1"],
-            criteria=[RequirementRef(template_id="value_match", required=True)], required=True, tolerate_failed_dep=False)
+            criteria=[RequirementRef(template_id="value_match", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
     ]
     await rt.accept_plan(
         [

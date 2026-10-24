@@ -170,7 +170,7 @@ def validate_final_types(
             if qid in cover:
                 cover[qid].append(spec)
 
-    check_ids = set(active_question_ids) if active_question_ids is not None else set(q_by_id)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+    check_ids = set(active_question_ids) if active_question_ids is not None else set(q_by_id)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
     for qid in sorted(check_ids):
         q = q_by_id.get(qid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if q is None:
@@ -202,7 +202,7 @@ def refuse_detail(err: BaseException | str, *, truncate: bool) -> str:
     ``truncate=True`` only for human-facing report snippets — never before
     ``plan_refused_idem`` (idem must hash the full detail).
     """
-    msg = str(err) if not isinstance(err, BaseException) else str(err)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+    msg = str(err) if not isinstance(err, BaseException) else str(err)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
     if msg:
         full = msg
     else:
@@ -215,7 +215,7 @@ async def apply_plan_refused(
     runtime: Any,
     *,
     detail: str,
-    report_line: str = PLAN_REFUSED_LINE,  # audit-ok[named_default]: named constant / enum member default; not silent invent
+    report_line: str = PLAN_REFUSED_LINE,  # audit-ok[named_default]: named constant / enum member default; not silent invent  # noqa: E501
 ) -> str:
     """Canonical plan refusal (PR13; #24 reuses — do not fork).
 
@@ -278,7 +278,7 @@ async def apply_plan_refused(
                     "outcome": (
                         TaskOutcome.FAILED.value
                         if t.spec.task_key == "PLAN"
-                        else TaskOutcome.SKIPPED.value  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+                        else TaskOutcome.SKIPPED.value  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
                     ),
                     "reason": TaskReason.SCHEMA_INVALID.value,
                     "detail": detail,
@@ -311,7 +311,7 @@ def validate_rubric_immutable(
         if t.task_key in skip:
             continue
         new_d = _rubric_digest_of(t)
-        old_d = prev_digests.get(t.task_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        old_d = prev_digests.get(t.task_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         if old_d is None or new_d is None:
             continue
         if new_d != old_d:
@@ -437,7 +437,7 @@ def validate_decomposes(
                 if qid in cover:
                     cover[qid].append(spec.task_key)
         for leaf in leaf_ids(parent_of):
-            leaf_cover = cover.get(leaf)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            leaf_cover = cover.get(leaf)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if (leaf_cover is not None and leaf_cover) or leaf in disposed:
                 continue
             raise ValueError(

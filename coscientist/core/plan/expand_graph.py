@@ -299,11 +299,11 @@ def skip_superseded_task_events(
     events = []
     for tkey in superseded_tasks:
         tid = task_id(sid, tkey)
-        task = runtime.tasks.get(tid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        task = runtime.tasks.get(tid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         if task is None or task.state == TaskState.DONE:
             continue
         for aid in task.attempts:
-            attempt = runtime.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            attempt = runtime.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if attempt is None:
                 raise JournalFormatError(
                     f"attempt {aid!r} missing from runtime.attempts"

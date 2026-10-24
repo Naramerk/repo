@@ -89,10 +89,10 @@ def _delegated_by_from_hitl(
     """
     if hitl_request_id in runtime._hitl_expand_used:
         return "hitl_already_used"
-    row = runtime._hitl_decisions.get(hitl_request_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    row = runtime._hitl_decisions.get(hitl_request_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     if row is None:
         return "missing_hitl_decided"
-    req = runtime._hitl_requests.get(hitl_request_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    req = runtime._hitl_requests.get(hitl_request_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     if req is None:
         return "missing_hitl_opened"
     kind = req.get("kind")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
@@ -101,7 +101,7 @@ def _delegated_by_from_hitl(
     if kind not in _PLAN_EXPAND_HITL_KINDS:
         return f"hitl_wrong_kind:{kind}"
     # Expansion only when expand_after_task is explicitly set (no task_key fallback).
-    bound = req.get("expand_after_task")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    bound = req.get("expand_after_task")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     if not isinstance(bound, str) or not bound:
         return "hitl_unbound"
     allowed = {after_task}
@@ -181,7 +181,7 @@ async def _expand_plan(
     replan_allocated_s: float | None,
     plan_key: str | None,
 ) -> str | None:
-    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
+    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
         return None
     study = runtime.study
     sid = study.study_id
@@ -245,7 +245,7 @@ async def _expand_plan(
         return None
 
     raw_used = runtime._replan_used_s
-    if type(raw_used) not in (int, float) or isinstance(raw_used, bool):  # audit-ok[or_call]: coalesce existing call result; no invented literal
+    if type(raw_used) not in (int, float) or isinstance(raw_used, bool):  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
         raise TypeError(
             f"_replan_used_s must be int|float, got {type(raw_used).__name__}"
         )
@@ -269,7 +269,7 @@ async def _expand_plan(
         allocate = float(replan_allocated_s)  # audit-ok[coerce_float]: coerce after int|float type gate
     else:
         plan_to = study.plan_timeout_s
-        if type(plan_to) not in (int, float) or isinstance(plan_to, bool):  # audit-ok[or_call]: coalesce existing call result; no invented literal
+        if type(plan_to) not in (int, float) or isinstance(plan_to, bool):  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
             raise TypeError(
                 f"plan_timeout_s must be int|float, got {type(plan_to).__name__}"
             )
@@ -320,7 +320,7 @@ async def _expand_plan(
             return None
         prev_pid = raw_pid
         prev_tasks = [
-            TaskSpec.model_validate(t) if isinstance(t, dict) else t  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            TaskSpec.model_validate(t) if isinstance(t, dict) else t  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
             for t in prev["tasks"]
         ]
         for q in prev["questions"]:
@@ -404,7 +404,7 @@ async def _expand_plan(
     still_kept: list[TaskSpec] = []  # audit-ok[field_default]: structural empty = building kept list
     for t in kept:
         tid_exist = task_id(sid, t.task_key)
-        rt_task = runtime.tasks.get(tid_exist)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        rt_task = runtime.tasks.get(tid_exist)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         already_done = rt_task is not None and rt_task.state == TaskState.DONE
         if already_done:
             still_kept.append(t)
@@ -414,8 +414,8 @@ async def _expand_plan(
             superseded_old=superseded_old,
             active_q_after=active_q_after,
             protected_keys=protected,
-            blocked_questions=blocked_qs if qkind == "agent" else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
-            refute_keys=refute_keys if qkind == "agent" else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            blocked_questions=blocked_qs if qkind == "agent" else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+            refute_keys=refute_keys if qkind == "agent" else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         ):
             skip_keys.add(t.task_key)
         else:
@@ -425,7 +425,7 @@ async def _expand_plan(
 
     if prev is not None:
         prev_questions = [
-            QuestionSpec.model_validate(q) if isinstance(q, dict) else q  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            QuestionSpec.model_validate(q) if isinstance(q, dict) else q  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
             for q in prev["questions"]
         ]
     else:
@@ -446,7 +446,7 @@ async def _expand_plan(
         plan_origin=plan_origin,
     )
     by_new = {q.id: q for q in stamped_new}
-    all_questions = [by_new.get(q.id, q) for q in all_questions]  # audit-ok[dict_get_default]: explicit default only for structural absent key
+    all_questions = [by_new.get(q.id, q) for q in all_questions]  # audit-ok[dict_get_default]: explicit default only for structural absent key  # noqa: E501
     if prev is None:
         await refuse_expansion(
             runtime, after_task, reason="invalid", detail="missing_plan_rollup"
@@ -474,7 +474,7 @@ async def _expand_plan(
 
     if prev is not None and "loops" in prev:
         prev_loops = [
-            LoopSpec.model_validate(x) if isinstance(x, dict) else x  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            LoopSpec.model_validate(x) if isinstance(x, dict) else x  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
             for x in prev["loops"]
         ]
     else:
@@ -715,7 +715,7 @@ async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str |
         )
         return None
     raw_already = meta["replan_allocated_s"]
-    if type(raw_already) not in (int, float) or isinstance(raw_already, bool):  # audit-ok[or_call]: coalesce existing call result; no invented literal
+    if type(raw_already) not in (int, float) or isinstance(raw_already, bool):  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
         await refuse_expansion(
             runtime,
             after,

@@ -113,7 +113,7 @@ def _exp(
         depends_on=depends_on or ["PLAN"],
         addresses=addresses or [],
         expected_outputs=outs,
-        criteria=criteria if criteria is not None else ([RequirementRef(template_id="rubric_check", required=True)] if rubric else []), required=True, tolerate_failed_dep=False)
+        criteria=criteria if criteria is not None else ([RequirementRef(template_id="rubric_check", required=True)] if rubric else []), required=True, tolerate_failed_dep=False)  # noqa: E501
 
 
 async def _boot(tmp_path, clock, sid: str, *, cancel_stages: bool = True):
@@ -785,7 +785,7 @@ async def test_plan_refused_invalid_rubric_still_finalizes(tmp_path, clock):
         depends_on=["PLAN"],
         addresses=["Q1"],
         criteria=[],
-        expected_outputs=[OutputSpec(name="main", media_type="text/markdown", role="report", required=True)], required=True, tolerate_failed_dep=False)
+        expected_outputs=[OutputSpec(name="main", media_type="text/markdown", role="report", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
     pid = await rt.accept_plan([bad], questions=[q])
     assert pid == ""
     events = await rt.store.read_all()
@@ -1317,7 +1317,7 @@ async def test_e2e_downgrade_unaddressed_question_view_matches(tmp_path, clock):
     rt, _ex, arts = await _boot_stages_ok(tmp_path, clock, "st_pr13_downgrade")
     # E0 does not address Q1 → disposition not_attempted; tasks can still all SUCCESS.
     await rt.accept_plan(
-        [_exp("E0", addresses=[], rubric=None, criteria=[RequirementRef(template_id="artifact_present", required=True)])],
+        [_exp("E0", addresses=[], rubric=None, criteria=[RequirementRef(template_id="artifact_present", required=True)])],  # noqa: E501
         questions=[QuestionSpec(id="Q1", text="orphan question", final_type="verdict")],
     )
     ex, arts = attach_executor(rt, tmp_path)

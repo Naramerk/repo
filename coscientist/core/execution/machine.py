@@ -68,7 +68,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self.store = store
         self.writer = writer
         self.clock = clock or SystemClock()  # audit-ok[or_call]: coalesce existing call result; no invented literal
-        self.registry = registry or default_execution_registry()  # audit-ok[or_call]: coalesce existing call result; no invented literal
+        self.registry = registry or default_execution_registry()  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
         self.graph = GraphStore(self.registry)
         self.max_attempts = max_attempts
         self.owner = owner
@@ -120,8 +120,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self._hitl_requests = {}
         self._hitl_expand_used = set()
         # PR20: per-proposal decision locks (HITL answer/timeout/approve serialize).
-        self._hitl_decision_locks: dict[str, Any] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
-        self._hitl_decision_lock_owners: dict[str, Any] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
+        self._hitl_decision_locks: dict[str, Any] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value  # noqa: E501
+        self._hitl_decision_lock_owners: dict[str, Any] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value  # noqa: E501
         # PR10: foreach_template → concrete EXP keys (folded from PlanExpanded).
         self._foreach_children = {}
         # PR11: LoopSpec runtime (folded from PlanExpanded(loop) / LoopCapped).
@@ -129,8 +129,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self._loop_capped = {}
         self._loop_done = set()
         # PR20: CheckProposed / Approved / Rejected (folded from journal).
-        self._check_proposals: dict[str, Any] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
-        self._observations: list[Any] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
+        self._check_proposals: dict[str, Any] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value  # noqa: E501
+        self._observations: list[Any] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value  # noqa: E501
 
     def bind_executor(self, executor: Any) -> Any:
         """Wire production ``graph`` into Executor (laundering + about edges)."""
@@ -163,11 +163,11 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                     "task_id": d["task_id"],
                     "study_id": d["study_id"],
                     "inputs": list(d["inputs"]),
-                    "agent_output_digest": d.get("agent_output_digest"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                    "agent_output_digest": d.get("agent_output_digest"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                     "charged": d["charged"],
-                    "n": d.get("n"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-                    "allocated_budget_rub": d.get("allocated_budget_rub"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-                    "budget_limit_rub": d.get("budget_limit_rub"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                    "n": d.get("n"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                    "allocated_budget_rub": d.get("allocated_budget_rub"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                    "budget_limit_rub": d.get("budget_limit_rub"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 },
             )()
 
@@ -178,9 +178,9 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             catalog,
             artifacts,
             clock=self.clock,
-            get_attempt=get_attempt or _default_attempt,  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
+            get_attempt=get_attempt or _default_attempt,  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
             get_task=get_task or (lambda tid: self.tasks[tid]),
-            on_events=on_events or self._project_local,  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
+            on_events=on_events or self._project_local,  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
             review_statuses=review_statuses,
             get_graph=lambda: self.graph,
             get_results=lambda: self.results,
@@ -205,7 +205,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             require_open_attempt: str | None = None,
         ) -> None:
             await orig_append(events, require_open_attempt=require_open_attempt)
-            if self._finalized or self._lease_lost or self._finalizing:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
+            if self._finalized or self._lease_lost or self._finalizing:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
                 return
             from coscientist.core.plan.expand import maybe_expand_after_task_done
             from coscientist.core.plan.foreach import maybe_foreach_after_task_done
@@ -214,7 +214,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             for ev in events:
                 if ev.type != "TaskDone":
                     continue
-                t = self.tasks.get(ev.entity_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                t = self.tasks.get(ev.entity_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 if t is not None and t.reason == TaskReason.SUPERSEDED:
                     # Foreach template: expand_after only; always advance loops.
                     if t.spec.task_key in self._foreach_children:
@@ -259,7 +259,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 # Superseded non-foreach: skip expand (same-batch PlanExpanded).
                 # Foreach template SUPERSEDED counts as done for expand_after
                 # (consistent with REFUSED).
-                t = self.tasks.get(tid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                t = self.tasks.get(tid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 if t is not None and t.reason == TaskReason.SUPERSEDED:
                     if t.spec.task_key in self._foreach_children:
                         await maybe_expand_after_task_done(self, tid)
@@ -277,19 +277,19 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             from coscientist.core.plan.loop import capped_scope_questions
 
             arts = self.artifacts
-            lookup = arts.get_meta if arts is not None else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            lookup = arts.get_meta if arts is not None else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
             qdisp = dispositions(
                 tasks=self.tasks,
                 plans=self.plans,
                 graph=self.graph,
                 study=self.study,
                 results=self.results,
-                artifact_lookup=lookup if callable(lookup) else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+                artifact_lookup=lookup if callable(lookup) else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
                 loop_capped_questions=capped_scope_questions(self),
                 question_disposals=self.question_disposals,
                 journal_kinds=self.artifact_kinds,
             )
-        ed = self.study.effective_deadline() if self.study else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        ed = self.study.effective_deadline() if self.study else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         ftypes = None
         if self.plans:
             from coscientist.core.claims.rubric import question_final_types
@@ -307,7 +307,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         )
 
     def _attempt_row(self, aid: str) -> dict[str, Any]:
-        row = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        row = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         if row is None:
             raise JournalFormatError(f"attempt row missing: {aid!r}")
         return row
@@ -327,7 +327,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             if t.deadline > ed:
                 return False
             for a in t.attempts:
-                ad = self._attempt_row(a).get("deadline")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                ad = self._attempt_row(a).get("deadline")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 if ad is None:
                     continue
                 if isinstance(ad, str):
@@ -342,7 +342,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         try:
             if self.store.epoch is None:
                 raise LeaseLost("no lease epoch set")
-            ttl = self.store.lease_ttl_s if ttl_s is None else ttl_s  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            ttl = self.store.lease_ttl_s if ttl_s is None else ttl_s  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
             await self.store.renew_lease(self.owner, self.store.epoch, ttl_s=ttl)
         except LeaseLost:
             self._lease_lost = True
@@ -353,7 +353,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
 
     async def note_budget_exceeded(self) -> None:
         """Persist study-level ``BudgetExceeded`` (folded → budget finalize trigger)."""
-        if self.study is None or self._budget_exceeded or self._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
+        if self.study is None or self._budget_exceeded or self._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
             return
         sid = self.study.study_id
         await self._append(
@@ -390,7 +390,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             payload.update(extra)
         if task_id:
             payload["task_id"] = task_id
-        actual_rub = payload["actual_rub"] if "actual_rub" in payload else spent  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        actual_rub = payload["actual_rub"] if "actual_rub" in payload else spent  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         await self._append(
             [
                 UnstampedEvent(
@@ -426,7 +426,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
 
     async def _emit_study_budget_if_exhausted(self) -> None:
         """Production producer: spend via BudgetDebited → BudgetExceeded(study)."""
-        if self._budget_exceeded or self._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
+        if self._budget_exceeded or self._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
             return
         if self._study_budget_exhausted():
             await self.note_budget_exceeded()
@@ -449,7 +449,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         raise LeaseLost. P5 (task.deadline < effective_deadline) runs before
         study-deadline close (б) on the same tick.
         """
-        if self.study is None or self._lease_lost:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
+        if self.study is None or self._lease_lost:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
             return
         await self.ensure_lease()
         if self._finalized:
@@ -562,13 +562,13 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
     async def _fire_due_retries(self, now: datetime) -> None:
         if self._lease_lost or self._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
             return
-        ed = self.study.effective_deadline() if self.study else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        ed = self.study.effective_deadline() if self.study else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         for tid, retry_at in list(self._retry_at.items()):
-            if self._lease_lost or self._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
+            if self._lease_lost or self._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
                 return
             if now < retry_at:
                 continue
-            task = self.tasks.get(tid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            task = self.tasks.get(tid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if task is None or task.state == TaskState.DONE:
                 self._retry_at.pop(tid, None)
                 continue
@@ -585,7 +585,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 continue
             # Inherit provenance only from a prior closed attempt (never invent "real").
             prov = (
-                self._provenance_for_retry(tid) if task.attempts else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+                self._provenance_for_retry(tid) if task.attempts else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
             )
             self._retry_at.pop(tid, None)
             # None = honest refuse (zero share / empty pool); task already SKIPPED.

@@ -90,9 +90,9 @@ async def test_depends_on_failed_parent_skipped(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),
+                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),  # noqa: E501
             TaskSpec(
-                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"], required=True, tolerate_failed_dep=False),
+                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"], required=True, tolerate_failed_dep=False),  # noqa: E501
         ],
         questions=[],
     )
@@ -126,9 +126,9 @@ async def test_cancel_task_cascades_via_hc(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),
+                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),  # noqa: E501
             TaskSpec(
-                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"], required=True, tolerate_failed_dep=False),
+                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"], required=True, tolerate_failed_dep=False),  # noqa: E501
         ],
         questions=[],
     )
@@ -169,9 +169,9 @@ async def test_hc_skipped_when_budget_exceeded(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),
+                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),  # noqa: E501
             TaskSpec(
-                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"], required=True, tolerate_failed_dep=False),
+                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"], required=True, tolerate_failed_dep=False),  # noqa: E501
         ],
         questions=[],
     )
@@ -209,9 +209,9 @@ async def test_hc_skipped_when_study_cancelled(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),
+                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),  # noqa: E501
             TaskSpec(
-                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"], required=True, tolerate_failed_dep=False),
+                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"], required=True, tolerate_failed_dep=False),  # noqa: E501
         ],
         questions=[],
     )
@@ -259,7 +259,7 @@ async def test_tolerate_failed_dep(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),
+                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),  # noqa: E501
             TaskSpec(
                 task_key="C",
                 title="c",

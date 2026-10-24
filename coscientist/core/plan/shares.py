@@ -255,9 +255,9 @@ def apply_foreach_parent_shares(
     tb, td = template.budget_share, template.deadline_share
     if plan_tasks is not None:
         if tb is None:
-            tb = resolve_shares(plan_tasks, "budget_share").get(template.task_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            tb = resolve_shares(plan_tasks, "budget_share").get(template.task_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         if td is None:
-            td = resolve_shares(plan_tasks, "deadline_share").get(template.task_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            td = resolve_shares(plan_tasks, "deadline_share").get(template.task_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     if share_cap is not None:
         cap = _coerce_share(share_cap, what="share_cap")
         if tb is None:

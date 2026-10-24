@@ -186,7 +186,7 @@ def _effect_provenance_fields(
     ``trusted`` = producer core, or sandbox with both net and fs isolation hard.
     ``countable`` = core catalog evaluation on an artifact bound to this attempt.
     """
-    meta = artifacts.get_meta(artifact_id) if artifact_id else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+    meta = artifacts.get_meta(artifact_id) if artifact_id else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
     if meta is None:
         producer = "agent"
         call_id = ""
@@ -261,7 +261,7 @@ def _extract_ci(doc: Any, left: Any) -> dict[str, float] | None:
         candidates.append(left)
     if isinstance(doc, dict):
         candidates.append(doc)
-        if isinstance(doc.get("effect"), dict):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        if isinstance(doc.get("effect"), dict):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             candidates.append(doc["effect"])
     for raw in candidates:
         if not isinstance(raw, dict):
@@ -271,7 +271,7 @@ def _extract_ci(doc: Any, left: Any) -> dict[str, float] | None:
         try:
             lo = _as_float(raw["ci_low"], what="ci_low")
             hi = _as_float(raw["ci_high"], what="ci_high")
-            if raw.get("est") is not None:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            if raw.get("est") is not None:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 est = _as_float(raw["est"], what="est")
             else:
                 est = (lo + hi) / 2.0
@@ -303,7 +303,7 @@ def evaluate_code_check(
             out_name = check.output
             if not out_name:
                 raise JournalFormatError("artifact_exists requires non-empty output")
-            handle = out.outputs.get(out_name)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            handle = out.outputs.get(out_name)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if handle is None:
                 return _no_effect_result(
                     check_id=check_id,
@@ -349,7 +349,7 @@ def evaluate_code_check(
                 raise JournalFormatError(
                     f"{check.kind} requires non-empty output"
                 )
-            handle = out.outputs.get(check.output)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            handle = out.outputs.get(check.output)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if handle is None:
                 return _no_effect_result(
                     check_id=check_id,
@@ -471,7 +471,7 @@ def evaluate_code_check(
             return CheckResult(
                 check_id=check_id,
                 template_id=template_id,
-                status=ReqStatus.MET if ok else ReqStatus.FAILED,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+                status=ReqStatus.MET if ok else ReqStatus.FAILED,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
                 is_code=True,
                 required=True,
                 role=role,
@@ -490,7 +490,7 @@ def evaluate_code_check(
         if check.kind == "schema_valid":
             if not check.output:
                 raise JournalFormatError("schema_valid requires non-empty output")
-            handle = out.outputs.get(check.output)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            handle = out.outputs.get(check.output)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if handle is None:
                 return _no_effect_result(
                     check_id=check_id,
@@ -629,7 +629,7 @@ def evaluate_code_check(
     except Exception as e:
         # Unexpected core bugs: neither infra nor scientific (B3).
         # Never convert unexpected exceptions into FAILED CheckResult.
-        raise CoreBugError(f"core_bug:{e.__class__.__name__}:{e}") from e  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
+        raise CoreBugError(f"core_bug:{e.__class__.__name__}:{e}") from e  # audit-ok[broad_except]: cleanup then re-raise; does not swallow  # noqa: E501
 
     return CheckResult(
         check_id=check_id,
@@ -685,7 +685,7 @@ def template_to_requirement(
     tmpl: RequirementTemplate,
     node_id: str,
     *,
-    status: ReqStatus = ReqStatus.PENDING,  # audit-ok[named_default]: named constant / enum member default; not silent invent
+    status: ReqStatus = ReqStatus.PENDING,  # audit-ok[named_default]: named constant / enum member default; not silent invent  # noqa: E501
     req_id: str | None = None,
 ) -> NodeRequirement:
     """Build a NodeRequirement from the agent-facing template view (no check body)."""
@@ -737,7 +737,7 @@ def _evaluate_proposed_check(
     if not isinstance(ref.params, dict):
         raise JournalFormatError("proposed_check RequirementRef.params must be dict")
     params = ref.params
-    pid_raw = params.get("proposal_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    pid_raw = params.get("proposal_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     if pid_raw is None:
         pid = ""
     else:
@@ -781,7 +781,7 @@ def _evaluate_proposed_check(
     if role_raw not in ("prediction", "validity"):
         raise CatalogError(f"proposed_check row bad role: {role_raw!r}")
     role: CheckRole = role_raw  # type: ignore[assignment]
-    base_effect["proposal_digest"] = row.get("proposal_digest")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    base_effect["proposal_digest"] = row.get("proposal_digest")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     if "delegated" in row:
         base_effect["delegated"] = _as_bool(row["delegated"], what="delegated")
     else:
@@ -789,12 +789,12 @@ def _evaluate_proposed_check(
     base_effect["bound_task_id"] = row["bound_task_id"]
     base_effect["bound_target"] = row["bound_target"]
     # Target must be on the RequirementRef (params); no fallback to bound_target.
-    eval_target = params.get("target")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    eval_target = params.get("target")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     prereg_err = assert_proposal_preregistered_for_eval(
         row,
         attempt_id=attempt_id,
         task_id=task_id,
-        target=str(eval_target) if eval_target is not None else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        target=str(eval_target) if eval_target is not None else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         attempts=attempts,
         results=results,
     )
@@ -803,7 +803,7 @@ def _evaluate_proposed_check(
             check_id=check_id,
             template_id=PROPOSED_CHECK_TEMPLATE_ID,
             status=ReqStatus.FAILED,
-            is_code=row.get("check") is not None,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            is_code=row.get("check") is not None,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             required=ref.required,
             role=role,
             detail=prereg_err,
@@ -832,7 +832,7 @@ def _evaluate_proposed_check(
                 check_id=check_id,
                 template_id=PROPOSED_CHECK_TEMPLATE_ID,
                 status=ReqStatus.FAILED,
-                is_code=row.get("check") is not None,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                is_code=row.get("check") is not None,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 required=ref.required,
                 role=role,
                 detail=(
@@ -851,7 +851,7 @@ def _evaluate_proposed_check(
             check_id=check_id,
             template_id=PROPOSED_CHECK_TEMPLATE_ID,
             status=ReqStatus.FAILED,
-            is_code=row.get("check") is not None,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            is_code=row.get("check") is not None,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             required=ref.required,
             role=role,
             detail=f"unapproved_check:rejected:{reject_detail}",
@@ -864,7 +864,7 @@ def _evaluate_proposed_check(
             check_id=check_id,
             template_id=PROPOSED_CHECK_TEMPLATE_ID,
             status=ReqStatus.PENDING,
-            is_code=row.get("check") is not None,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            is_code=row.get("check") is not None,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             required=ref.required,
             role=role,
             detail="unapproved_check:pending_approval",
@@ -880,7 +880,7 @@ def _evaluate_proposed_check(
             check_id=check_id,
             template_id=PROPOSED_CHECK_TEMPLATE_ID,
             status=ReqStatus.FAILED,
-            is_code=row.get("check") is not None,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            is_code=row.get("check") is not None,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             required=ref.required,
             role=role,
             detail=f"unapproved_check:task_mismatch:{bound_task}!={task_id}",
@@ -891,13 +891,13 @@ def _evaluate_proposed_check(
         delegated = _as_bool(row["delegated"], what="delegated")
     else:
         delegated = False
-    if row.get("rubric") is not None:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    if row.get("rubric") is not None:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         from coscientist.checks.kinds.rubric import evaluate_rubric
         from coscientist.core.execution.domain import CodeCheck as CC
 
         rub = rubric_from_proposal(row)
         # Qualitative proposed rubric — never severe (DESIGN_M1 §16).
-        sentinel = CC(kind="rubric", output="main", rubric=rub)
+        sentinel = CC(kind="rubric", output="main", rubric=rub, allow_network=False)
         cr = evaluate_rubric(
             sentinel,
             template_id=PROPOSED_CHECK_TEMPLATE_ID,
@@ -922,7 +922,7 @@ def _evaluate_proposed_check(
             {
                 "proposed_check": True,
                 "proposal_id": pid,
-                "proposal_digest": row.get("proposal_digest"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "proposal_digest": row.get("proposal_digest"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 "delegated": delegated,
                 "qualitative": True,
                 "never_severe": True,
@@ -971,10 +971,10 @@ def _evaluate_proposed_check(
         predicts_null_v = _as_bool(row["predicts_null"], what="predicts_null")
     else:
         predicts_null_v = False
-    if row.get("sesoi") is not None:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    if row.get("sesoi") is not None:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         sesoi_v = row.get("sesoi")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     else:
-        sesoi_v = row.get("threshold")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        sesoi_v = row.get("threshold")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     cr = evaluate_code_check(
         check,
         template_id=PROPOSED_CHECK_TEMPLATE_ID,
@@ -998,7 +998,7 @@ def _evaluate_proposed_check(
         {
             "proposed_check": True,
             "proposal_id": pid,
-            "proposal_digest": row.get("proposal_digest"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            "proposal_digest": row.get("proposal_digest"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             "delegated": delegated,
         }
     )
@@ -1093,7 +1093,7 @@ def evaluate_task_checks(
     is_core_plan_n = role_tok == PlanRole.PLAN_N
 
     for i, ref in enumerate(refs):
-        tmpl = by_id.get(ref.template_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        tmpl = by_id.get(ref.template_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         cid = f"{ref.template_id}#{i}"
         if tmpl is None:
             results.append(
@@ -1287,7 +1287,7 @@ def evaluate_task_checks(
             effect = r.effect
         else:
             effect = {}
-        dig = effect.get("rubric_digest")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        dig = effect.get("rubric_digest")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         if dig:
             already.add(f"rubric:{dig}")
     results.extend(

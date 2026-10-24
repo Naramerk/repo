@@ -46,7 +46,7 @@ def _body(key: str = "BODY", *, depends_on: list[str] | None = None) -> list[Tas
             route="experiment",
             depends_on=list(depends_on or []),
             addresses=["Q1"],
-            criteria=[RequirementRef(template_id="value_match", required=True)], required=True, tolerate_failed_dep=False)
+            criteria=[RequirementRef(template_id="value_match", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
     ]
 
 
@@ -246,7 +246,7 @@ async def test_loop_max_iter_missing_honest_refusal(tmp_path, clock, runtime_cls
                 route="experiment",
                 depends_on=["PLAN"],
                 addresses=["Q1"],
-                criteria=[RequirementRef(template_id="value_match", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="value_match", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
         loops=[

@@ -8,7 +8,7 @@ from typing import Any
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
 from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.events import UnstampedEvent, StoredEvent
+from coscientist.core.events.events import StoredEvent, UnstampedEvent
 from coscientist.core.execution.domain import HitlRequest
 from coscientist.core.finalize.study_view import study_view
 from coscientist.experimental.costly import DelegatedBudget
@@ -37,7 +37,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
             if self.study and self.study.budget and self.study.budget.delegated_costly is not None:
                 # Budget.delegated_costly is Decimal; DelegatedBudget requires float.
                 self.delegated_budget = DelegatedBudget(
-                    float(self.study.budget.delegated_costly)  # audit-ok[coerce_float]: Decimal→float for DelegatedBudget wire
+                    float(self.study.budget.delegated_costly)  # audit-ok[coerce_float]: Decimal→float for DelegatedBudget wire  # noqa: E501
                 )
             return
         if ev.type == "BudgetDebited":
@@ -63,10 +63,10 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
             super()._project_local(ev)
             return
         if ev.type in ("HitlDecided", "HitlTimedOut"):
-            if p.get("keep_open") or p.get("effect") == "WAIT":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            if p.get("keep_open") or p.get("effect") == "WAIT":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 self._hitl_notices.append(dict(p))
             else:
-                h = self.hitl.get(p["request_id"])  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                h = self.hitl.get(p["request_id"])  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 if h:
                     self.hitl[p["request_id"]] = h.model_copy(update={"open": False})
             if "spent_rub" in p:
@@ -83,7 +83,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
                 super()._project_local(ev)
             return
         if ev.type == "HitlDeadlineExtended":
-            h = self.hitl.get(p["request_id"])  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            h = self.hitl.get(p["request_id"])  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if h and "deadline" in p:
                 dl = p["deadline"]
                 if isinstance(dl, str):
@@ -102,7 +102,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
         except AttributeError:
             arts = None
         try:
-            lookup = arts.get_meta if arts is not None else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            lookup = arts.get_meta if arts is not None else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         except AttributeError:
             lookup = None
         try:
@@ -128,14 +128,14 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
                 graph=graph,
                 study=self.study,
                 results=results,
-                artifact_lookup=lookup if callable(lookup) else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+                artifact_lookup=lookup if callable(lookup) else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
                 question_disposals=question_disposals,
                 journal_kinds=journal_kinds,
             )
             if self.plans
             else None
         )
-        ed = self.study.effective_deadline() if self.study else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        ed = self.study.effective_deadline() if self.study else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         return study_view(
             self.tasks.values(),
             open_hitl=open_hitl,
@@ -158,7 +158,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
         return True
 
     async def tick(self) -> None:
-        if self.study is None or self._lease_lost:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
+        if self.study is None or self._lease_lost:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
             return
         await self.ensure_lease()
         now = self.clock.now()

@@ -118,7 +118,7 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                inputs=[InputSpec(kind="verdict", from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False)
+                inputs=[InputSpec(kind="verdict", from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         questions=[],
     )
@@ -153,7 +153,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                inputs=[InputSpec(kind="artifact", from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False)
+                inputs=[InputSpec(kind="artifact", from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         questions=[],
     )
@@ -184,7 +184,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                inputs=[InputSpec(kind="claim", from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False)
+                inputs=[InputSpec(kind="claim", from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         questions=[],
     )
@@ -241,7 +241,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                inputs=[InputSpec(kind="claim", ref=claim_id, from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False)
+                inputs=[InputSpec(kind="claim", ref=claim_id, from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         questions=[],
     )
@@ -317,7 +317,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
                 goal="g",
                 route="experiment",
                 depends_on=["E0"],
-                inputs=[InputSpec(kind="claim", ref=claim_id, from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False),
+                inputs=[InputSpec(kind="claim", ref=claim_id, from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False),  # noqa: E501
         ],
         questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )

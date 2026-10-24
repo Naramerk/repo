@@ -89,7 +89,7 @@ def _task(key, *, outcome=TaskOutcome.SUCCESS, reason=None, required=True,
           kind=TaskKind.EXPERIMENT, state=TaskState.DONE):
     return Task(
         task_id=f"st/{key}", kind=kind,
-        spec=TaskSpec(task_key=key, title=key, goal="g", route="experiment", required=required, tolerate_failed_dep=False),
+        spec=TaskSpec(task_key=key, title=key, goal="g", route="experiment", required=required, tolerate_failed_dep=False),  # noqa: E501
         state=state, outcome=outcome if state == TaskState.DONE else None,
         reason=reason, deadline=_TS,
         plan_role=PlanRole.NONE,
@@ -101,14 +101,14 @@ def _spec(key, addresses=None, deps=None):
         task_key=key, title=key, goal="g", route="experiment",
         depends_on=deps or ["PLAN"], addresses=addresses or [],
     # Explicit criterion — PlanValidator does not credit catalog defaults.
-    criteria=[RequirementRef(template_id="artifact_present", required=True)] if addresses else [], required=True, tolerate_failed_dep=False)
+    criteria=[RequirementRef(template_id="artifact_present", required=True)] if addresses else [], required=True, tolerate_failed_dep=False)  # noqa: E501
 
 
 def test_same_tick_tiebreak():
     assert pick_finalize_trigger(cancelled=True, budget=True, deadline=True, refused=False, all_done=False) == "cancel"
     assert pick_finalize_trigger(budget=True, deadline=True, cancelled=False, refused=False, all_done=False) == "budget"
     assert pick_finalize_trigger(refused=True, deadline=True, cancelled=False, budget=False, all_done=False) == "intake"
-    assert pick_finalize_trigger(deadline=True, all_done=True, cancelled=False, budget=False, refused=False) == "deadline"
+    assert pick_finalize_trigger(deadline=True, all_done=True, cancelled=False, budget=False, refused=False) == "deadline"  # noqa: E501
 
 
 def test_terminal_reason_trigger_cancel():
@@ -328,9 +328,9 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="A", title="a", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),
+                task_key="A", title="a", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),  # noqa: E501
             TaskSpec(
-                task_key="B", title="b", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),
+                task_key="B", title="b", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),  # noqa: E501
         ],
         questions=[],
     )
@@ -600,7 +600,7 @@ async def test_phase_finalizing_between_done_and_finalized(tmp_path, clock):
 async def test_conclusion_per_question(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_cq")
     rt.artifacts = LocalArtifactStore(tmp_path / "arts")
-    qs = [QuestionSpec(id="Q1", text="one", final_type="verdict"), QuestionSpec(id="Q2", text="two", final_type="verdict")]
+    qs = [QuestionSpec(id="Q1", text="one", final_type="verdict"), QuestionSpec(id="Q2", text="two", final_type="verdict")]  # noqa: E501
     await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs)
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
@@ -1394,7 +1394,7 @@ async def test_p5_after_long_downtime_uses_task_deadline(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_ua")
-    pid = await rt.accept_plan([_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok", final_type="verdict")])
+    pid = await rt.accept_plan([_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok", final_type="verdict")])  # noqa: E501
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]

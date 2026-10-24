@@ -736,7 +736,7 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="exec_ok", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="exec_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ]
     )
     aid = await rt.start_attempt("E1")
@@ -810,7 +810,7 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="exec_ok", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="exec_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ]
     )
     aid = await rt.start_attempt("E1")
@@ -1348,7 +1348,7 @@ def test_agent_facing_view_never_includes_holdout_or_scorer():
             output="predictions",
             op=">=",
             target=0.5,
-            tests={"test_x.py": "def test_x():\n    assert False\n"}, allow_network=False), uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            tests={"test_x.py": "def test_x():\n    assert False\n"}, allow_network=False), uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
     view = agent_facing_template_view(tmpl)
     blob = json.dumps(view, default=str)
     # Kind name may contain the substring; secrets / payloads must not.
@@ -1684,7 +1684,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="exec_sleep", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="exec_sleep", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ]
     )
     from coscientist.core.finalize.finalize import IDLE_TIMEOUT_RU, TIMEOUT_BUDGET_RU
@@ -1827,7 +1827,7 @@ async def test_timeout_with_stuck_drain_charges_attempt(
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="exec_busy_hold", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="exec_busy_hold", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ]
     )
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
@@ -2024,7 +2024,7 @@ async def test_infra_failure_does_not_charge_attempt(
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="exec_ok", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="exec_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ]
     )
     aid = await rt.start_attempt("E1")
@@ -2111,7 +2111,7 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="exec_sleep", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="exec_sleep", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ]
     )
     empty = AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS, summary="")
@@ -2578,7 +2578,7 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="pred_only", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="pred_only", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ]
     )
 

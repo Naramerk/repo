@@ -935,7 +935,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["P1"],
-                inputs=[InputSpec(from_task="P1", output="main", mode="forbid", kind="artifact")], required=True, tolerate_failed_dep=False),
+                inputs=[InputSpec(from_task="P1", output="main", mode="forbid", kind="artifact")], required=True, tolerate_failed_dep=False),  # noqa: E501
         ],
         questions=[],
     )

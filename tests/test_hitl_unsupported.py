@@ -128,9 +128,9 @@ async def test_core_rejects_wait_keep_open_hitl_gate(tmp_path, clock):
             "costly_or_nonreal": GateConfig(
                 enabled=True, timeout_s=30, on_timeout="fail"
             )
-        }, timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"})
+        }, timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"})  # noqa: E501
     root, rt = await _boot_exp(tmp_path, clock, hitl_policy=policy)
-    # No Budget(delegated_costly, max_llm_calls=100, max_tokens=1000000, max_tool_calls=500) → «реши сам» yields WAIT / keep_open.
+    # No Budget(delegated_costly, max_llm_calls=100, max_tokens=1000000, max_tool_calls=500) → «реши сам» yields WAIT / keep_open.  # noqa: E501
     rid = await rt.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=100)
     await rt.answer_hitl(rid, "delegate",
             critic_accepts=True)

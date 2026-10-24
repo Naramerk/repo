@@ -107,7 +107,7 @@ def critic_gate(
             tmpl_id = ref.template_id
             if not isinstance(tmpl_id, str) or not tmpl_id:
                 return f"missing_template_id:{spec.task_key}"
-            tmpl = by_id.get(tmpl_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            tmpl = by_id.get(tmpl_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if tmpl is None:
                 return f"unknown_template_id:{tmpl_id}:{spec.task_key}"
             if tmpl.kind == TemplateKind.PLAN_N_CRITIC:
@@ -118,7 +118,7 @@ def critic_gate(
         known: dict[str, Any] = {}  # audit-ok[field_default]: structural empty = no prior questions (absent)
     else:
         prev_tasks = [
-            TaskSpec.model_validate(t) if isinstance(t, dict) else t  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            TaskSpec.model_validate(t) if isinstance(t, dict) else t  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
             for t in prev["tasks"]
         ]
         known = {}

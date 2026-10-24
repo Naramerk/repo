@@ -10,7 +10,7 @@ STANCE = {"met": "supports", "not_met": "refutes", "unassessed": "inconclusive"}
 
 TestsIntent = Literal["confirm", "refute"]
 # Named export for callers that pass intent= explicitly. Not a silent model field default.
-DEFAULT_TESTS_INTENT: TestsIntent = "confirm"  # audit-ok[field_default]: named TestsIntent wire default (not silent invent)
+DEFAULT_TESTS_INTENT: TestsIntent = "confirm"  # audit-ok[field_default]: named TestsIntent wire default (not silent invent)  # noqa: E501
 
 
 def claim_stance(criterion_status: str) -> Literal["supports", "refutes", "inconclusive"]:

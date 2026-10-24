@@ -15,7 +15,7 @@ from coscientist.core.events.errors import JournalFormatError
 JOURNAL_STORE_FORMAT = 1
 _STORE_FORMAT_KEY = "store_format"
 # Strict decimal text: reject " 1", "01", "+1", "1.0", bool-ish, etc.
-_STRICT_INT_TEXT = re.compile(  # audit-ok[re_compile]: allowlist parser for store_format marker (not key/name heuristic)
+_STRICT_INT_TEXT = re.compile(  # audit-ok[re_compile]: allowlist parser for store_format marker (not key/name heuristic)  # noqa: E501
     r"(0|[1-9][0-9]*)"
 )
 

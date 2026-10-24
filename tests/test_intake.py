@@ -28,7 +28,7 @@ async def test_intake_empty_request():
 
 @pytest.mark.asyncio
 async def test_intake_budget_zero():
-    r = await intake("q", [], "research", Budget(max_cost_rub=Decimal("0"), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500))
+    r = await intake("q", [], "research", Budget(max_cost_rub=Decimal("0"), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500))  # noqa: E501
     assert isinstance(r, IntakeRefuse)
     assert r.kind == RefusalKind.BUDGET_ZERO
 
@@ -63,7 +63,7 @@ async def test_intake_duration_too_short():
 async def test_intake_accepts_ok():
     assert isinstance(
         await intake(
-            "do science", [], "research", Budget(max_cost_rub=Decimal("100"), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500)
+            "do science", [], "research", Budget(max_cost_rub=Decimal("100"), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500)  # noqa: E501
         ),
         IntakeAccept,
     )

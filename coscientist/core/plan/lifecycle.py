@@ -148,7 +148,7 @@ class LifecycleMixin:
             raise TypeError(
                 f"create_study requires datetime deadline, got {type(deadline).__name__}"
             )
-        sid = sid or self.store.study_id or study_id()  # audit-ok[or_call]: coalesce existing call result; no invented literal # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
+        sid = sid or self.store.study_id or study_id()  # audit-ok[or_call]: coalesce existing call result; no invented literal # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
         now = self.clock.now()
         dl = deadline
         finalize_reserve_s = config.finalize_reserve_s
@@ -218,7 +218,7 @@ class LifecycleMixin:
 
         # Profile owns caps; optional client_input_limits may only LOWER.
         profile_limits = (
-            input_limits if input_limits is not None else default_input_limits()  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            input_limits if input_limits is not None else default_input_limits()  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         )
         decision: IntakeAccept | IntakeRefuse
         limits = profile_limits
@@ -254,7 +254,7 @@ class LifecycleMixin:
                 )
                 limits = profile_limits  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
         user_ids: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
-        user_events: list[UnstampedEvent] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
+        user_events: list[UnstampedEvent] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value  # noqa: E501
         if not isinstance(decision, IntakeRefuse) and inputs:
             try:
                 user_ids, user_events = register_user_input_artifacts(
@@ -271,7 +271,7 @@ class LifecycleMixin:
                 decision = IntakeRefuse(
                     e.kind
                     if isinstance(e.kind, RefusalKind)
-                    else RefusalKind.INPUT_INVALID,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+                    else RefusalKind.INPUT_INVALID,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
                     _or_empty_str(e.reason)[:200],
                 )
                 user_ids, user_events = [], []
@@ -384,8 +384,8 @@ class LifecycleMixin:
                 kind=kind,
                 spec=spec,
                 state=TaskState.PENDING,
-                deadline=plan_deadline if kind != TaskKind.REPORT else effective,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
-                plan_role=PlanRole.BOOTSTRAP if kind == TaskKind.PLAN else PlanRole.NONE,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+                deadline=plan_deadline if kind != TaskKind.REPORT else effective,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+                plan_role=PlanRole.BOOTSTRAP if kind == TaskKind.PLAN else PlanRole.NONE,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
             )
             events.append(
                 UnstampedEvent(
@@ -446,13 +446,13 @@ class LifecycleMixin:
         from coscientist.core.plan.shares import critic_plan_shares
 
         LOOP_PLAN_REFUSED_LINE = "не выполнено: план отклонён (LoopSpec)"
-        named_subs: list[QuestionSpec] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
+        named_subs: list[QuestionSpec] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value  # noqa: E501
         # All plan validation → PlanRefused (never raw ValueError to callers).
         raw_loops = _or_empty_list(loops)
         loop_specs: list = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
         try:
             tasks = [
-                t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+                t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
                 for t in _or_empty_list(tasks)
             ]
             if questions is None and spec_output is not None:
@@ -462,7 +462,7 @@ class LifecycleMixin:
                 ]
             questions = _or_empty_list(questions)
             raw_subs = [
-                s if isinstance(s, QuestionSpec) else QuestionSpec.model_validate(s)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+                s if isinstance(s, QuestionSpec) else QuestionSpec.model_validate(s)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
                 for s in _or_empty_list(subquestions)
             ]
             questions, named_subs = merge_plan_questions(questions, raw_subs)
@@ -510,7 +510,7 @@ class LifecycleMixin:
             catalog = self.catalog
             if catalog is None:
                 executor = self.executor
-                catalog = None if executor is None else executor.catalog  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+                catalog = None if executor is None else executor.catalog  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
             validate_plan_criteria(tasks, catalog)
             tasks, questions = freeze_plan_rubrics(
                 tasks,
@@ -524,9 +524,9 @@ class LifecycleMixin:
             assert_decomposes_acyclic(parent_map_from_questions(questions))
             loop_ids = {ls.loop_id for ls in loop_specs}
             # NFKC-normalize loop:<id> barriers and store normalized deps on tasks.
-            rewritten: list[TaskSpec] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
+            rewritten: list[TaskSpec] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value  # noqa: E501
             for t in tasks:
-                new_deps: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
+                new_deps: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value  # noqa: E501
                 changed = False
                 for d in t.depends_on:
                     if not is_loop_dep(d):
@@ -545,7 +545,7 @@ class LifecycleMixin:
                         changed = True
                     new_deps.append(nd)
                 rewritten.append(
-                    t.model_copy(update={"depends_on": new_deps}) if changed else t  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+                    t.model_copy(update={"depends_on": new_deps}) if changed else t  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
                 )
             tasks = rewritten
         except PlanInvalid as e:
@@ -555,7 +555,7 @@ class LifecycleMixin:
                 report_line=LOOP_PLAN_REFUSED_LINE,
             )
         except (ValueError, ValidationError) as e:
-            line = LOOP_PLAN_REFUSED_LINE if raw_loops else PLAN_REFUSED_LINE  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            line = LOOP_PLAN_REFUSED_LINE if raw_loops else PLAN_REFUSED_LINE  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
             return await apply_plan_refused(
                 self, detail=refuse_detail(e, truncate=False), report_line=line
             )  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
@@ -705,8 +705,8 @@ class LifecycleMixin:
                 if graph is not None and graph.get_node(cnid) is not None:
                     existing = graph.get_node(cnid)
                     if existing is not None and (
-                        existing.attrs.get("frozen_at_seq") is not None  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-                        or existing.attrs.get("frozen") is True  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                        existing.attrs.get("frozen_at_seq") is not None  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                        or existing.attrs.get("frozen") is True  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                     ):
                         continue
                 # SESOI / predicts_null from catalog template only — never params.
@@ -716,7 +716,7 @@ class LifecycleMixin:
                 cattrs["alpha"] = _CRITERION_ALPHA
                 if catalog is not None:
                     by_id = {t.id: t for t in catalog.templates}
-                    tmpl = by_id.get(key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                    tmpl = by_id.get(key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                     if tmpl is not None:
                         uses = tmpl.uses_sesoi
                         cattrs["uses_sesoi"] = uses
@@ -854,7 +854,7 @@ class LifecycleMixin:
                 # Expand revisions may depend on keys that only exist as runtime
                 # tasks (already DONE) — callers pass those via merged still_kept
                 # (including PLAN-n task_keys). No string-prefix classification.
-                if d in keys or d in STAGE_DEP_KEYS or is_loop_dep(d):  # audit-ok[or_call]: coalesce existing call result; no invented literal
+                if d in keys or d in STAGE_DEP_KEYS or is_loop_dep(d):  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
                     continue
                 raise ValueError(f"unknown dependency {d}")
         by = {t.task_key: t.depends_on for t in tasks}

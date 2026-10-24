@@ -743,7 +743,7 @@ async def test_quorum_tie_exact(tmp_path, clock, runtime_cls):
         addresses=["Q1"],
         criteria=[RequirementRef(template_id="artifact_present", required=True)],
         tolerate_failed_dep=True,
-        inputs=[InputSpec(from_task=k, output="main", quorum=2, mode="forbid", kind="artifact") for k in ("A", "B", "C")], required=True)
+        inputs=[InputSpec(from_task=k, output="main", quorum=2, mode="forbid", kind="artifact") for k in ("A", "B", "C")], required=True)  # noqa: E501
     await rt.accept_plan(tasks + [summary], questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")])
     for key in ("A", "B"):
         aid = await rt.start_attempt(key)
@@ -971,7 +971,7 @@ async def test_quorum_zero_inputs_edge(tmp_path, clock, runtime_cls):
         depends_on=["FE"],
         addresses=["Q1"],
         criteria=[RequirementRef(template_id="artifact_present", required=True)],
-        inputs=[InputSpec(from_task="FE", output="main", quorum=1, mode="forbid", kind="artifact")], required=True, tolerate_failed_dep=False)
+        inputs=[InputSpec(from_task="FE", output="main", quorum=1, mode="forbid", kind="artifact")], required=True, tolerate_failed_dep=False)  # noqa: E501
     await rt.accept_plan([e0, fe, summary], questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")])
     aid = await rt.start_attempt("E0")
     await _ok(rt, arts, aid)
@@ -1307,7 +1307,7 @@ def test_quorum_rejects_zero():
                     title="s",
                     goal="g",
                     route="experiment",
-                    inputs=[InputSpec(from_task="A", output="main", quorum=0, mode="forbid", kind="artifact")], required=True, tolerate_failed_dep=False)
+                    inputs=[InputSpec(from_task="A", output="main", quorum=0, mode="forbid", kind="artifact")], required=True, tolerate_failed_dep=False)  # noqa: E501
             ]
         )
 

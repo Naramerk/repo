@@ -21,7 +21,7 @@ class _Item:
 class StudyWriter:
     """Serializes all study mutations through one queue (maxsize=1000)."""
 
-    def __init__(self, store: SqliteEventStore, *, maxsize: int = 1000) -> None:  # audit-ok[number_outside_domain]: platform constant documented at call site
+    def __init__(self, store: SqliteEventStore, *, maxsize: int = 1000) -> None:  # audit-ok[number_outside_domain]: platform constant documented at call site  # noqa: E501
         self.store = store
         self.queue: asyncio.Queue[_Item | None] = asyncio.Queue(maxsize=maxsize)
         self._task: asyncio.Task[None] | None = None
@@ -76,7 +76,7 @@ class StudyWriter:
                 result = await item.coro_factory()
                 if not item.future.done():
                     item.future.set_result(result)
-            except Exception as e:  # audit-ok[broad_except]: queue worker must set_exception so waiters see all failures
+            except Exception as e:  # audit-ok[broad_except]: queue worker must set_exception so waiters see all failures  # noqa: E501
                 if not item.future.done():
                     item.future.set_exception(e)
             finally:

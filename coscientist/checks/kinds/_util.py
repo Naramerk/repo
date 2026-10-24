@@ -55,7 +55,7 @@ def _tag_local(tag: str, suffix: str) -> bool:
     if tag == suffix:
         return True
     # Clark notation / suffixed names: "{ns}testsuites" or "ns:testsuites"
-    return tag.endswith("}" + suffix) or tag.endswith(":" + suffix)  # audit-ok[or_call]: XML local-name suffix match # audit-ok[str_endswith]: XML local-name suffix match  # audit-ok[str_endswith]: allowlist suffix check (not name heuristic)  # audit-ok[str_endswith]: allowlist suffix check (not name heuristic)
+    return tag.endswith("}" + suffix) or tag.endswith(":" + suffix)  # audit-ok[or_call]: XML local-name suffix match # audit-ok[str_endswith]: XML local-name suffix match  # audit-ok[str_endswith]: allowlist suffix check (not name heuristic)  # audit-ok[str_endswith]: allowlist suffix check (not name heuristic)  # noqa: E501
 
 
 def _attempt_call_id(attempt_id: str | None, check_id: str, *, channel: str) -> str:
@@ -75,8 +75,8 @@ def raise_if_infra(
     note: str | None = None,
 ) -> None:
     if status in INFRA_STATUSES:
-        n = note if note is not None else soft_isolation_note(net_isolation, fs_isolation)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
-        full = f"{reason}; {n}" if n else reason  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        n = note if note is not None else soft_isolation_note(net_isolation, fs_isolation)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        full = f"{reason}; {n}" if n else reason  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         raise SandboxInfraError(full, transient=False)
 
 
@@ -93,7 +93,7 @@ def store_log(
     call = _attempt_call_id(attempt_id, check_id, channel="sandbox")
     art = artifacts.put_sandbox(
         body,
-        make_tool_ref(call, tool="sandbox"),
+        make_tool_ref(call, tool="sandbox", attempt_id=call),
         name=name,
         media_type="text/plain",
         role="log",
@@ -131,7 +131,7 @@ def base_result(
     return CheckResult(
         check_id=check_id,
         template_id=template_id,
-        status=ReqStatus.MET if ok else ReqStatus.FAILED,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        status=ReqStatus.MET if ok else ReqStatus.FAILED,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         is_code=True,
         required=True,
         role=role,
@@ -179,7 +179,7 @@ def pointer_get(doc: Any, pointer: str | None) -> Any:
         elif isinstance(cur, list):
             if not part.isdigit():
                 raise KeyError(pointer)
-            cur = cur[require_exact_int(int(part), what="json_pointer.index")]  # audit-ok[coerce_int]: coerce after digit allowlist
+            cur = cur[require_exact_int(int(part), what="json_pointer.index")]  # audit-ok[coerce_int]: coerce after digit allowlist  # noqa: E501
         else:
             raise KeyError(pointer)
     return cur
@@ -291,9 +291,9 @@ def check_is_guest_timeout(check: Any) -> bool:
         return False  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
     if not isinstance(effect, dict):
         return False
-    kind = effect.get("timeout_kind")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    kind = effect.get("timeout_kind")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     if kind is None:
-        kind = effect.get("reason")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        kind = effect.get("reason")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     return kind in TIMEOUT_KINDS
 
 

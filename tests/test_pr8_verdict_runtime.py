@@ -389,7 +389,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="value_match", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="value_match", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
@@ -1029,7 +1029,7 @@ def test_criterion_match_is_exact_not_endswith():
         task_id="st/E0",
         kind=TaskKind.EXPERIMENT,
         spec=TaskSpec(
-            task_key="E0", title="e", goal="g", route="experiment", criteria=[], required=True, tolerate_failed_dep=False),
+            task_key="E0", title="e", goal="g", route="experiment", criteria=[], required=True, tolerate_failed_dep=False),  # noqa: E501
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=now,

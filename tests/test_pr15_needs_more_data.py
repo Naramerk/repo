@@ -176,7 +176,9 @@ def test_output_spec_kind_enforced_by_plan_validator():
             name="main",
             media_type="text/markdown",
             role="report",
-            kind="not_a_kind",  # type: ignore[arg-type], required=True)
+            kind="not_a_kind",  # type: ignore[arg-type]
+            required=True,
+        )
 
 
 def test_needs_more_data_requires_design_validation():
@@ -284,7 +286,9 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
             name="main",
             media_type="text/plain",
             role="code",
-            evidence_kind="not_a_kind",  # type: ignore[arg-type], required=True)
+            evidence_kind="not_a_kind",  # type: ignore[arg-type]
+            required=True,
+        )
     bad_role = TaskSpec(
         task_key="D1",
         title="t",

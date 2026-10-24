@@ -64,7 +64,7 @@ def _rollup_from_plans(plan_rows: list[Any]) -> tuple[RollupRule | None, str | N
     try:
         rollup = last.rollup
     except AttributeError:
-        return None, "missing_plan_rollup"  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
+        return None, "missing_plan_rollup"  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class  # noqa: E501
     try:
         return _require_rollup(rollup), None
     except ValueError as e:
@@ -72,7 +72,7 @@ def _rollup_from_plans(plan_rows: list[Any]) -> tuple[RollupRule | None, str | N
 
 
 def _prefix_for_route(route: object) -> str:
-    raw = route.value if isinstance(route, Route) else route  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+    raw = route.value if isinstance(route, Route) else route  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
     try:
         return parse_route(raw).key_prefix
     except UnknownRouteError:
@@ -81,7 +81,7 @@ def _prefix_for_route(route: object) -> str:
 
 def task_kind_for_route(route: object) -> TaskKind:
     """Map canonical ``TaskSpec.route`` to ``TaskKind`` via ``Route`` enum."""
-    raw = route.value if isinstance(route, Route) else route  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+    raw = route.value if isinstance(route, Route) else route  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
     try:
         return parse_route(raw).task_kind
     except UnknownRouteError:
@@ -254,7 +254,7 @@ def _validate(
     catalog = runtime.catalog
     if catalog is None:
         executor = runtime.executor
-        catalog = executor.catalog if executor is not None else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        catalog = executor.catalog if executor is not None else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
     validate_plan_criteria(merged, catalog)
     # M1 PR13: final_type + rubric immutability (change only via supersede).
     from coscientist.core.plan.plan_validate import validate_plan_final_types_or_err
@@ -268,7 +268,7 @@ def _validate(
     else:
         plan_rows = []
     for plan in plan_rows:
-        qs = plan["questions"] if isinstance(plan, dict) else plan.questions  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        qs = plan["questions"] if isinstance(plan, dict) else plan.questions  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         if qs is None:
             return "plan_questions_missing"
         for q in qs:
@@ -283,7 +283,7 @@ def _validate(
                 try:
                     prev_final[qid] = _require_final_type(q["final_type"], qid=qid)
                 except ValueError as e:
-                    return str(e)  # audit-ok[except_silent_return]: validate → typed refuse detail (never invent final_type)
+                    return str(e)  # audit-ok[except_silent_return]: validate → typed refuse detail (never invent final_type)  # noqa: E501
             else:
                 qid = q.id
                 if not isinstance(qid, str) or not qid:
@@ -291,7 +291,7 @@ def _validate(
                 try:
                     prev_final[qid] = _require_final_type(q.final_type, qid=qid)
                 except ValueError as e:
-                    return str(e)  # audit-ok[except_silent_return]: validate → typed refuse detail (never invent final_type)
+                    return str(e)  # audit-ok[except_silent_return]: validate → typed refuse detail (never invent final_type)  # noqa: E501
     q_for_validate: list[QuestionSpec] = list(added_questions)
     seen_q = {q.id for q in q_for_validate}
     for qid, text in texts.items():
@@ -312,7 +312,7 @@ def _validate(
         if rollup_err is not None:
             return rollup_err
     ft_kwargs: dict[str, Any] = {
-        "active_question_ids": active_qs if active_qs else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        "active_question_ids": active_qs if active_qs else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         "prev_tasks": prev_tasks,
         "superseded_tasks": set(superseded_tasks),
         "catalog": catalog,
@@ -330,7 +330,7 @@ def _validate(
     parent_of: dict[str, str | None] = {q.id: q.parent_id for q in added_questions}
     # Prior plan questions may already carry parent_id.
     for plan in plan_rows:
-        qs = plan["questions"] if isinstance(plan, dict) else plan.questions  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        qs = plan["questions"] if isinstance(plan, dict) else plan.questions  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         if qs is None:
             return "plan_questions_missing"
         for q in qs:
@@ -340,11 +340,11 @@ def _validate(
                 qid = q["id"]
                 if not isinstance(qid, str) or not qid:
                     return "plan_question_id_not_str"
-                parent = q.get("parent_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                parent = q.get("parent_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 if parent is not None and not isinstance(parent, str):
                     return f"plan_question_parent_id_not_str:{qid}"
                 if qid not in parent_of or parent_of[qid] is None:
-                    parent_of[qid] = parent if parent else parent_of.get(qid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+                    parent_of[qid] = parent if parent else parent_of.get(qid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
             else:
                 qid = q.id
                 if not isinstance(qid, str) or not qid:
@@ -353,7 +353,7 @@ def _validate(
                 if parent is not None and not isinstance(parent, str):
                     return f"plan_question_parent_id_not_str:{qid}"
                 if qid not in parent_of or parent_of[qid] is None:
-                    parent_of[qid] = parent if parent else parent_of.get(qid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+                    parent_of[qid] = parent if parent else parent_of.get(qid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
     for qid in texts:
         if qid not in parent_of:
             parent_of[qid] = _parent_from_graph(runtime, sid, qid)
@@ -381,7 +381,7 @@ def _validate(
         by_id = {q.id: q for q in q_for_validate}
         q_all: list[QuestionSpec] = []  # audit-ok[field_default]: structural empty = building q list
         for qid, parent in parent_of.items():
-            existing = by_id.get(qid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            existing = by_id.get(qid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if existing is not None:
                 if parent and existing.parent_id is None:
                     q_all.append(existing.model_copy(update={"parent_id": parent}))
@@ -422,7 +422,6 @@ def _validate(
 
 
 def _question_ref_from_edge(runtime: StudyRuntime, sid: str, dst_id: str) -> str:
-    from coscientist.core.events.ids import question_node_id
 
     dst = runtime.graph.get_node(dst_id)
     if dst is None:
@@ -484,7 +483,7 @@ def task_produced_countable_claims(runtime: StudyRuntime, tkey: str) -> bool:
                 raise JournalFormatError(
                     f"claim attempt_id not structured: {aid!r}"
                 )
-            base, sep, n = aid.partition("#")  # audit-ok[str_partition]: after count('#')==1 gate; structured attempt_id
+            base, sep, n = aid.partition("#")  # audit-ok[str_partition]: after count('#')==1 gate; structured attempt_id  # noqa: E501
             if not sep or not base or not n.isdigit():
                 raise JournalFormatError(
                     f"claim attempt_id not structured: {aid!r}"

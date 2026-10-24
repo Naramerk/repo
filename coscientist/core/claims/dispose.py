@@ -82,6 +82,12 @@ class DisposeRejected(ValueError):
     """Disposal refused (missing refs / design / unknown question)."""
 
 
+def _dump_dispose_ref(r: DisposeRef | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(r, DisposeRef):
+        return r.model_dump(mode="json")
+    return dict(r)
+
+
 def _coerce_dispose_ref(r: object) -> DisposeRef:
     """Accept DisposeRef or ``{kind, id}`` dict; refuse prefix-only strings."""
     if isinstance(r, DisposeRef):
@@ -159,14 +165,7 @@ def question_disposed_event(
         "question_id": disposal.question_id,
         "disposition": disposal.disposition,
         "reason": disposal.reason,
-        "refs": [
-            (
-                r.model_dump(mode="json")
-                if isinstance(r, DisposeRef)
-                else dict(r)
-            )  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
-            for r in disposal.refs
-        ],
+        "refs": [_dump_dispose_ref(r) for r in disposal.refs],
         "design_artifact_id": disposal.design_artifact_id,
     }
     return UnstampedEvent(
@@ -274,7 +273,7 @@ def fold_question_disposed(
         "disposition": _require_payload_str(payload, "disposition", what="QuestionDisposed"),
         "reason": _require_payload_str(payload, "reason", what="QuestionDisposed"),
         "refs": refs_list,
-        "design_artifact_id": payload.get("design_artifact_id"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        "design_artifact_id": payload.get("design_artifact_id"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     }
 
 
@@ -293,8 +292,8 @@ def fold_question_dispose_rejected(
     else:
         report_line = dispose_reject_report_line(detail)
     row = {
-        "question_id": payload.get("question_id"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-        "disposition": payload.get("disposition"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        "question_id": payload.get("question_id"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        "disposition": payload.get("disposition"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         "detail": detail,
         "reason": _require_payload_str(payload, "reason", what="QuestionDisposeRejected"),
         "report_line": report_line,
@@ -308,7 +307,7 @@ def fold_question_dispose_rejected(
             raise JournalFormatError(
                 f"disposal reject detail must be str, got {type(ex_detail).__name__}"
             )
-        if sha256_hex(ex_detail)[:16] == dig and existing.get("question_id") == row[  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        if sha256_hex(ex_detail)[:16] == dig and existing.get("question_id") == row[  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             "question_id"
         ]:
             return
@@ -340,14 +339,14 @@ async def dispose_question(
     disp_hint: str | None = None
 
     if isinstance(disposal, dict):
-        raw_qid = disposal.get("question_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        raw_qid = disposal.get("question_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         if raw_qid is None or raw_qid == "":
             qid_hint = None
         elif isinstance(raw_qid, str):
             qid_hint = raw_qid
         else:
             raise TypeError(f"question_id must be str, got {type(raw_qid).__name__}")
-        raw_disp = disposal.get("disposition")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        raw_disp = disposal.get("disposition")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         if raw_disp is None or raw_disp == "":
             disp_hint = None
         elif isinstance(raw_disp, str):
@@ -392,10 +391,10 @@ async def dispose_question(
         validate_disposal(
             disposal,
             known_question_ids=set(qmap),
-            journal_kinds=kinds if isinstance(kinds, dict) else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            journal_kinds=kinds if isinstance(kinds, dict) else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
             tasks=tasks,
             results=results,
-            covering_task_keys=set(cover.get(disposal.question_id, set())),  # audit-ok[dict_get_default]: explicit default only for structural absent key
+            covering_task_keys=set(cover.get(disposal.question_id, set())),  # audit-ok[dict_get_default]: explicit default only for structural absent key  # noqa: E501
         )
     except DisposeRejected as e:
         await _journal_reject(

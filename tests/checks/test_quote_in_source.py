@@ -754,7 +754,7 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         questions=[],
     )
@@ -882,7 +882,7 @@ async def test_store_fetched_source_journals_and_matches(
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         questions=[],
     )
@@ -974,7 +974,7 @@ async def test_source_fetched_survives_crash_reopen(
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         questions=[],
     )
@@ -1065,7 +1065,7 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         questions=[],
     )
@@ -1201,7 +1201,7 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         questions=[],
     )
@@ -1342,7 +1342,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         questions=[],
     )
@@ -1523,7 +1523,7 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         questions=[],
     )
@@ -1672,7 +1672,7 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         questions=[],
     )
@@ -1764,7 +1764,7 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         questions=[],
     )
@@ -1874,7 +1874,7 @@ async def test_append_failure_on_second_digest_clears_permits(
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         questions=[],
     )

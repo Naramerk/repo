@@ -7,10 +7,9 @@ exceptions become refuse-style report lines — never crash finalize.
 
 from __future__ import annotations
 
-from enum import StrEnum
-
 import logging
 import unicodedata
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
@@ -176,7 +175,7 @@ def _loop_state(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
 
 def loop_status(runtime: StudyRuntime, loop_id: str) -> str | None:
     """None when loop row absent; otherwise require a non-empty status string."""
-    row = _loop_state(runtime).get(loop_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    row = _loop_state(runtime).get(loop_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     if row is None:
         return None
     if not isinstance(row, dict):
@@ -192,7 +191,7 @@ def loop_is_complete(runtime: StudyRuntime, loop_id: str) -> bool:
     return loop_status(runtime, loop_id) in ("done", "capped", "refused")
 
 def iter_keys(runtime: StudyRuntime, loop_id: str, iter_n: int) -> list[str]:
-    row = _loop_state(runtime).get(loop_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    row = _loop_state(runtime).get(loop_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     if row is None:
         raise JournalFormatError(f"loop.iters: unknown loop {loop_id!r}")
     if not isinstance(row, dict):
@@ -211,7 +210,7 @@ def iter_keys(runtime: StudyRuntime, loop_id: str, iter_n: int) -> list[str]:
     return [str(k) for k in keys]
 
 def current_iter(runtime: StudyRuntime, loop_id: str) -> int:
-    row = _loop_state(runtime).get(loop_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    row = _loop_state(runtime).get(loop_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     if row is None:
         return 0
     if not isinstance(row, dict):
@@ -253,7 +252,7 @@ def validate_loop_specs(
     from coscientist.core.execution.domain import STAGE_DEP_KEYS as stage
     for raw in loops:
         if isinstance(raw, dict):
-            if "max_iter" not in raw or raw.get("max_iter") is None:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            if "max_iter" not in raw or raw.get("max_iter") is None:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 raise PlanInvalid(
                     "LoopSpec.max_iter is required "
                     "(honest refusal: unbounded loops forbidden)"
@@ -263,7 +262,7 @@ def validate_loop_specs(
             except PlanInvalid:
                 raise
             except Exception as e:
-                raise PlanInvalid(f"invalid LoopSpec: {e}") from e  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
+                raise PlanInvalid(f"invalid LoopSpec: {e}") from e  # audit-ok[broad_except]: cleanup then re-raise; does not swallow  # noqa: E501
         else:
             ls = raw
         lid = normalize_loop_id(ls.loop_id)
@@ -352,8 +351,8 @@ def loop_known(runtime: StudyRuntime, loop_id: str) -> bool:
 
 def _deps_ready(runtime: StudyRuntime, keys: list[str]) -> bool:
     for d in keys:
-        dep_id = task_id(runtime.study.study_id, d) if runtime.study else d  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
-        dep = runtime.tasks.get(dep_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        dep_id = task_id(runtime.study.study_id, d) if runtime.study else d  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        dep = runtime.tasks.get(dep_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         if dep is None:
             matches = [t for t in runtime.tasks.values() if t.spec.task_key == d]
             dep = matches[0] if matches else None
@@ -432,7 +431,7 @@ async def materialize_loop_iter(
         )
     else:
         row = raw_row
-    if row.get("status") in (LoopStatus.DONE.value, LoopStatus.CAPPED.value):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    if row.get("status") in (LoopStatus.DONE.value, LoopStatus.CAPPED.value):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         return None
     # Idempotent: already materialized this iter.
     if "iters" in row:
@@ -441,7 +440,7 @@ async def materialize_loop_iter(
             raise JournalFormatError(
                 f"loop.iters must be dict, got {type(iters_map).__name__}"
             )
-        existing = iters_map.get(str(iter_n))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        existing = iters_map.get(str(iter_n))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     else:
         existing = None
     if existing:
@@ -495,10 +494,10 @@ async def materialize_loop_iter(
         return None
     new_rev = prev_rev + 1
     prev_tasks = [
-        TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in prev["tasks"]  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in prev["tasks"]  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
     ]
     prev_questions = [
-        QuestionSpec.model_validate(q) if isinstance(q, dict) else q  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        QuestionSpec.model_validate(q) if isinstance(q, dict) else q  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         for q in prev["questions"]
     ]
     if "loops" in prev:
@@ -525,7 +524,7 @@ async def materialize_loop_iter(
         questions=list(prev_questions),
         expand_after=expand_after,
         loops=[
-            LoopSpec.model_validate(x) if isinstance(x, dict) else x for x in prev_loops  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            LoopSpec.model_validate(x) if isinstance(x, dict) else x for x in prev_loops  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         ]
         or [loop], rollup="all")
     ed = study.effective_deadline()
@@ -630,7 +629,7 @@ async def _emit_loop_capped(
     loop: LoopSpec,
     *,
     iter_n: int,
-    reason: str = LOOP_REASON_ITERATION_CAP,  # audit-ok[named_default]: named constant / enum member default; not silent invent
+    reason: str = LOOP_REASON_ITERATION_CAP,  # audit-ok[named_default]: named constant / enum member default; not silent invent  # noqa: E501
     detail: str | None = None,
     survivors: int | None = None,
 ) -> None:
@@ -700,7 +699,7 @@ async def _emit_loop_refused(
     sid = runtime.study.study_id
     now = runtime.clock.now()
     detail_s = detail[:DETAIL_MAX_LEN]
-    after = loop.depends_on[0] if loop.depends_on else loop.loop_id  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+    after = loop.depends_on[0] if loop.depends_on else loop.loop_id  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
     until = loop.until.model_dump(mode="json")
     scope_h = list(loop.scope_hypotheses)
     scope_q = list(loop.scope_questions)
@@ -813,7 +812,7 @@ async def _refuse_loop(
     loop: LoopSpec,
     *,
     detail: str,
-    reason: str = LOOP_REASON_REFUSED,  # audit-ok[named_default]: named constant / enum member default; not silent invent
+    reason: str = LOOP_REASON_REFUSED,  # audit-ok[named_default]: named constant / enum member default; not silent invent  # noqa: E501
 ) -> None:
     """Journal LoopRefused + LoopCapped(reason≠iteration_cap) for live ≡ replay."""
     cur = current_iter(runtime, loop.loop_id)
@@ -866,7 +865,7 @@ async def finalize_loop_internal_error(
     same as #21). Expected predicate failures use ``_refuse_loop`` instead.
     Closes any RUNNING tasks/attempts before finalize so the journal is honest.
     """
-    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
+    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
         return
     detail = f"loop_advance:{type(exc).__name__}:{exc}"[:200]
     # Suppress expand/foreach/loop hooks on nested _append(TaskDone) while closing.
@@ -919,7 +918,7 @@ async def refuse_orphaned_loop_barriers(runtime: StudyRuntime) -> int:
 
     A dropped / never-accepted LoopSpec must not leave dependents PENDING forever.
     """
-    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
+    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
         return 0
     n = 0
     for task in list(runtime.tasks.values()):
@@ -985,7 +984,7 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
     disguise as iteration_cap). Does not re-raise after finalize.
     """
     done: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
-    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
+    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
         return done
     try:
         await refuse_orphaned_loop_barriers(runtime)
@@ -994,7 +993,7 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
         raise
     except Exception as e:  # noqa: BLE001
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
-        return done  # audit-ok[broad_except]: cleanup then re-raise; does not swallow # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
+        return done  # audit-ok[broad_except]: cleanup then re-raise; does not swallow # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class  # noqa: E501
     for loop in loops:
         if runtime._finalized:
             break
@@ -1028,7 +1027,7 @@ async def maybe_loop_after_task_done(
     runtime: StudyRuntime, task_id_full: str
 ) -> list[str]:
     """After any TaskDone, try to advance loops (deps ready or iter complete)."""
-    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
+    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
         return []
     return await maybe_advance_loops(runtime)
 
@@ -1038,7 +1037,7 @@ async def resume_pending_loops(runtime: StudyRuntime) -> int:
     Unexpected errors are journaled + finalized inside ``maybe_advance_loops``;
     this wrapper also catch-finalizes so recover never aborts before ``tick()``.
     """
-    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
+    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
         return 0
     try:
         got = await maybe_advance_loops(runtime)
@@ -1047,7 +1046,7 @@ async def resume_pending_loops(runtime: StudyRuntime) -> int:
         raise
     except Exception as e:  # noqa: BLE001
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
-        return 0  # audit-ok[broad_except]: cleanup then re-raise; does not swallow # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
+        return 0  # audit-ok[broad_except]: cleanup then re-raise; does not swallow # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class  # noqa: E501
 
 def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
     """Rebuild ``_loop_state`` from a PlanExpanded(loop=true) payload."""
@@ -1106,7 +1105,7 @@ def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
         row["iter"] = max(prev_iter, iter_n)
     else:
         row["iter"] = iter_n
-    if row.get("status") not in (LoopStatus.DONE.value, LoopStatus.CAPPED.value):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    if row.get("status") not in (LoopStatus.DONE.value, LoopStatus.CAPPED.value):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         row["status"] = LoopStatus.RUNNING.value
     st[lid] = row
 
@@ -1162,7 +1161,7 @@ def fold_loop_refused(runtime: Any, payload: dict[str, Any]) -> None:
         row = dict(prev)
     else:
         row = {}
-    if row.get("status") in ("done", "capped", "refused"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    if row.get("status") in ("done", "capped", "refused"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         return
     reason = _require_loop_reason(
         payload, key="reason", allowed=LOOP_REFUSED_REASONS, what="LoopRefused"
@@ -1219,7 +1218,7 @@ def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
 
     Does not populate ``_loop_capped`` (LoopCapped's job).
     """
-    if not payload.get("loop") and "loop_id" not in payload:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    if not payload.get("loop") and "loop_id" not in payload:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         return
     if "loop_id" not in payload or not isinstance(payload["loop_id"], str) or not payload["loop_id"]:
         raise JournalFormatError("ExpansionRefused(loop): missing loop_id")
@@ -1234,7 +1233,7 @@ def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
         row = dict(prev)
     else:
         row = {}
-    if row.get("status") in ("done", "capped", "refused"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    if row.get("status") in ("done", "capped", "refused"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         return
     loop_reason = _require_loop_reason(
         payload,
@@ -1264,7 +1263,7 @@ def capped_scope_questions(runtime: Any) -> dict[str, dict[str, Any]]:
     ``TerminalReason.INTERNAL_ERROR`` (never map error-path loops to cap).
     """
     capped = _require_loop_capped(runtime)
-    out: dict[str, dict[str, Any]] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
+    out: dict[str, dict[str, Any]] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value  # noqa: E501
     for _lid, p in capped.items():
         if not isinstance(p, dict):
             raise JournalFormatError(

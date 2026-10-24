@@ -10,7 +10,7 @@ import json
 import sqlite3
 import threading
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -68,7 +68,7 @@ def _map_sqlite_open_error(exc: sqlite3.Error) -> Exception:
     try:
         code = exc.sqlite_errorcode
     except AttributeError:
-        return JournalUnavailableError(f"journal unavailable: {exc}")  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
+        return JournalUnavailableError(f"journal unavailable: {exc}")  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class  # noqa: E501
     if code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
         return JournalLockedError(f"journal locked: {exc}")
     if code in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
@@ -107,27 +107,28 @@ class SqliteEventStore:
         self._db_lock = threading.RLock()
         self._read_lock = threading.RLock()
         with self._db_lock:
-            self._conn = None
+            conn: sqlite3.Connection | None = None
             try:
-                self._conn = _open_conn(self.db_path)
-                self._conn.execute("PRAGMA journal_mode=WAL")
-                self._conn.execute("PRAGMA synchronous=FULL")
-                self._conn.execute("PRAGMA busy_timeout=5000")
-                ensure_journal_store_format(self._conn)
+                conn = _open_conn(self.db_path)
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=FULL")
+                conn.execute("PRAGMA busy_timeout=5000")
+                ensure_journal_store_format(conn)
+                self._conn = conn
                 self._ensure_lease_nonce_column()
                 self._conn.commit()
             except JournalFormatError:
-                if self._conn is not None:
-                    self._conn.close()
+                if conn is not None:
+                    conn.close()
                 raise
             except sqlite3.Error as e:
-                if self._conn is not None:
-                    self._conn.close()
+                if conn is not None:
+                    conn.close()
                 raise _map_sqlite_open_error(e) from e
             except Exception:
-                if self._conn is not None:
-                    self._conn.close()
-                raise  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
+                if conn is not None:
+                    conn.close()
+                raise  # audit-ok[broad_except]: cleanup then re-raise
         try:
             self._read_conn = _open_conn(self.db_path, readonly=True)
         except sqlite3.Error as e:
@@ -188,7 +189,7 @@ class SqliteEventStore:
 
     async def acquire_lease(self, owner: str, ttl_s: float | None = None) -> int:
         """Acquire/renew lease; same owner name + different nonce → LeaseLost while live."""
-        ttl = self.lease_ttl_s if ttl_s is None else ttl_s  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        ttl = self.lease_ttl_s if ttl_s is None else ttl_s  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         return await self._to_thread(lambda: self._acquire_lease_locked(owner, ttl))
 
     def _acquire_lease_locked(self, owner: str, ttl: float) -> int:
@@ -204,7 +205,7 @@ class SqliteEventStore:
             row = cur.fetchone()
             if row is None:
                 epoch = 1  # audit-ok[literal_assign]: lease/bootstrap literal required by store protocol
-                nonce = self.owner_nonce or _new_owner_nonce()  # audit-ok[or_call]: coalesce existing call result; no invented literal
+                nonce = self.owner_nonce or _new_owner_nonce()  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
                 self._conn.execute(
                     "INSERT INTO lease(study_id, owner, owner_nonce, epoch, "
                     "expires_at) VALUES (?,?,?,?,?)",
@@ -229,7 +230,7 @@ class SqliteEventStore:
                         f"lease held by {row['owner']} until {row['expires_at']}"
                     )
                 if exp > now and row["owner"] == owner:
-                    nonce = self.owner_nonce or _new_owner_nonce()  # audit-ok[or_call]: coalesce existing call result; no invented literal
+                    nonce = self.owner_nonce or _new_owner_nonce()  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
                     if held_nonce != nonce:
                         raise LeaseLost(
                             "lease held by same owner name with different nonce"
@@ -266,8 +267,8 @@ class SqliteEventStore:
         *,
         nonce: str | None = None,
     ) -> None:
-        ttl = self.lease_ttl_s if ttl_s is None else ttl_s  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
-        nonce = self.owner_nonce if nonce is None else nonce  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        ttl = self.lease_ttl_s if ttl_s is None else ttl_s  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        nonce = self.owner_nonce if nonce is None else nonce  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         if not nonce:
             raise LeaseLost("renew failed: missing owner nonce")
         await self._to_thread(
@@ -298,7 +299,7 @@ class SqliteEventStore:
         *,
         nonce: str | None = None,
     ) -> None:
-        nonce = self.owner_nonce if nonce is None else nonce  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        nonce = self.owner_nonce if nonce is None else nonce  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         if not nonce:
             raise LeaseLost("release failed: missing owner nonce")
         await self._to_thread(lambda: self._release_lease_locked(owner, epoch, nonce))
@@ -344,7 +345,7 @@ class SqliteEventStore:
             raise LeaseLost("no lease owner set")
         if self.epoch is None:
             raise LeaseLost("no lease epoch set")
-        ttl = self.lease_ttl_s if ttl_s is None else ttl_s  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        ttl = self.lease_ttl_s if ttl_s is None else ttl_s  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
         now = self.clock.now()
         cur = self._conn.execute(
             "UPDATE lease SET expires_at=? "
@@ -380,11 +381,11 @@ class SqliteEventStore:
         if self._finalized_cached is True:
             return True
         row = self._get_row_write("meta", self.study_id)
-        if row and row.get("finalized"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        if row and row.get("finalized"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             self._finalized_cached = True
             return True
         study = self._get_row_write("studies", self.study_id)
-        if study and study.get("finalized"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        if study and study.get("finalized"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             self._finalized_cached = True
             return True
         return False
@@ -414,7 +415,7 @@ class SqliteEventStore:
             batch_flag = False
         else:
             batch_flag = batch_finalized
-        finalized = batch_flag or self._study_is_finalized()  # audit-ok[or_call]: coalesce existing call result; no invented literal
+        finalized = batch_flag or self._study_is_finalized()  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
         if not finalized:
             return
         existing = self._conn.execute(
@@ -502,7 +503,7 @@ class SqliteEventStore:
             batch_finalized = self._study_is_finalized()
             if require_open_attempt is not None:
                 row = self._get_row_write("attempts", require_open_attempt)
-                if row is None or row.get("closed"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # audit-ok[or_call]: coalesce existing call result; no invented literal
+                if row is None or row.get("closed"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
                     raise AttemptClosedError(require_open_attempt)
             for ev in events:
                 stamped = stamp_envelope(ev, epoch=write_epoch)
@@ -694,7 +695,7 @@ class SqliteEventStore:
             (table, key),
         )
         row = cur.fetchone()
-        return json.loads(row["data"]) if row else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        return json.loads(row["data"]) if row else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
 
     def _upsert_projection_write(
         self, table: str, key: str, data: dict[str, Any]
@@ -721,7 +722,7 @@ class SqliteEventStore:
                 (table, key),
             )
             row = cur.fetchone()
-            return json.loads(row["data"]) if row else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            return json.loads(row["data"]) if row else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
 
         return await self._read_thread(_read)
 

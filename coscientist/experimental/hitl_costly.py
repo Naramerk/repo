@@ -85,7 +85,7 @@ class CostlyHitlMixin:
     async def cancel_task(
         self,
         task_key_or_id: str,
-        reason: str | TaskReason = TaskReason.CANCELLED,  # audit-ok[named_default]: named constant / enum member default; not silent invent
+        reason: str | TaskReason = TaskReason.CANCELLED,  # audit-ok[named_default]: named constant / enum member default; not silent invent  # noqa: E501
     ) -> None:
         raise NotImplementedError
 
@@ -109,7 +109,7 @@ class CostlyHitlMixin:
         """Debit actual spend after a delegated attempt; persist via BudgetDebited."""
         if self.study is None:
             raise JournalFormatError("settle_delegated_spend requires study")
-        pending = self._pending_costly_events.get(request_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        pending = self._pending_costly_events.get(request_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         if not pending:
             return {"spent_rub": 0.0}
         budget = self._ensure_delegated_budget()
@@ -120,11 +120,11 @@ class CostlyHitlMixin:
             request_id=request_id,
             extra={
                 "actual_rub": actual_rub,
-                "cost_estimate_rub": pending.get("cost_estimate_rub"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-                "decided_by": settled.get("decided_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-                "delegated_by": settled.get("delegated_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-                "reason": settled.get("reason"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-                "budget": budget.to_state() if budget else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+                "cost_estimate_rub": pending.get("cost_estimate_rub"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                "decided_by": settled.get("decided_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                "delegated_by": settled.get("delegated_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                "reason": settled.get("reason"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                "budget": budget.to_state() if budget else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
             },
         )
         self._pending_costly_events.pop(request_id, None)
@@ -184,11 +184,11 @@ class CostlyHitlMixin:
                             "request_id": h.request_id,
                             "decision": "delegate",
                             "by": "human",
-                            "decided_by": ev.get("decided_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-                            "delegated_by": ev.get("delegated_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                            "decided_by": ev.get("decided_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                            "delegated_by": ev.get("delegated_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                             "reason": reason,
                             "spent_rub": 0.0,
-                            "human_message": ev.get("human_message"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                            "human_message": ev.get("human_message"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                             "effect": effect_s,
                             "keep_open": True,
                         },
@@ -199,7 +199,7 @@ class CostlyHitlMixin:
             )
             return
 
-        use_decided = answer is not None or ev.get("decided_by") is not None  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        use_decided = answer is not None or ev.get("decided_by") is not None  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         if answer is None:
             await self._append(
                 [
@@ -211,10 +211,10 @@ class CostlyHitlMixin:
                         payload={
                             "request_id": h.request_id,
                             "reason": ev["reason"],
-                            "decided_by": ev.get("decided_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-                            "delegated_by": ev.get("delegated_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                            "decided_by": ev.get("decided_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                            "delegated_by": ev.get("delegated_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                             "spent_rub": 0.0,
-                            "human_message": ev.get("human_message"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                            "human_message": ev.get("human_message"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                             "effect": effect_s,
                         },
                         ts=now,
@@ -223,7 +223,7 @@ class CostlyHitlMixin:
                 ]
             )
         if use_decided:
-            decided_by = ev.get("decided_by")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            decided_by = ev.get("decided_by")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if decided_by == "human":
                 by = "human"
                 approved_by = "human"
@@ -241,11 +241,11 @@ class CostlyHitlMixin:
                 "by": by,
                 "decided_by": decided_by,
                 "approved_by": approved_by,
-                "delegated_by": ev.get("delegated_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "delegated_by": ev.get("delegated_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 "reason": ev["reason"],
                 "spent_rub": 0.0,
                 "cost_estimate_rub": ev["cost_estimate_rub"],
-                "human_message": ev.get("human_message"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "human_message": ev.get("human_message"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 "effect": effect_s,
             }
             await self._append(

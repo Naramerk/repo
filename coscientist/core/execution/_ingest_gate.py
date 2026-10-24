@@ -122,7 +122,7 @@ class UserInputRegistrationError(Exception):
     """Fail-closed: user inputs present but CAS registration cannot complete."""
 
     def __init__(
-        self, reason: str, *, kind: RefusalKind = RefusalKind.INPUT_INVALID  # audit-ok[named_default]: named constant / enum member default; not silent invent
+        self, reason: str, *, kind: RefusalKind = RefusalKind.INPUT_INVALID  # audit-ok[named_default]: named constant / enum member default; not silent invent  # noqa: E501
     ) -> None:
         self.reason = reason
         self.kind = kind
@@ -204,6 +204,7 @@ def register_user_input_artifacts(
             call_id=f"user-input:{study_id}:{i}:{inp.name}",
             tool="user_input",
             args=inp.name,
+            attempt_id=f"user-input:{study_id}",
         )
         try:
             art = put_user(

@@ -110,7 +110,7 @@ def _evaluate(
     evaluate_code_check: Any | None,
 ) -> CheckResult:
     # Plan-frozen OutputSpec.rubric wins over catalog placeholder rubric.
-    raw = output_rubric if output_rubric is not None else check.rubric  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+    raw = output_rubric if output_rubric is not None else check.rubric  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
     if raw is None:
         return CheckResult(
             check_id=check_id,
@@ -123,7 +123,7 @@ def _evaluate(
         used_sesoi=False,
     )
     rubric = _as_rubric(raw)
-    item_statuses: dict[str, ReqStatus] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
+    item_statuses: dict[str, ReqStatus] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value  # noqa: E501
     details: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
     pending_items: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
     has_judge = False
@@ -142,8 +142,8 @@ def _evaluate(
         if item.check == "judge":
             has_judge = True
             # Scoped lookup only — never fall back to bare item.id.
-            st = review_statuses.get(item_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-            fk = failure_kinds.get(item_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            st = review_statuses.get(item_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            fk = failure_kinds.get(item_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if item_key in judge_retry:
                 retries = require_exact_int(judge_retry[item_key], what=f"judge_retry[{item_key}]")
             else:

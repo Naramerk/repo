@@ -1280,11 +1280,11 @@ def test_hitl_policy_gate_plan_plan_approval_alias_removed():
     """gate('plan') must not resolve a plan_approval-only map (and vice versa)."""
     from coscientist.core.execution.domain import GateConfig, HitlPolicy
 
-    only_approval = HitlPolicy(gates={"plan_approval": GateConfig(timeout_s=42, on_timeout="delegate", enabled=True)}, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"})
+    only_approval = HitlPolicy(gates={"plan_approval": GateConfig(timeout_s=42, on_timeout="delegate", enabled=True)}, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"})  # noqa: E501
     assert only_approval.gate("plan_approval") is not None
     assert only_approval.gate("plan") is None
 
-    only_plan = HitlPolicy(gates={"plan": GateConfig(timeout_s=42, on_timeout="delegate", enabled=True)}, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"})
+    only_plan = HitlPolicy(gates={"plan": GateConfig(timeout_s=42, on_timeout="delegate", enabled=True)}, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"})  # noqa: E501
     assert only_plan.gate("plan") is not None
     assert only_plan.gate("plan_approval") is None
 
@@ -1341,7 +1341,7 @@ async def test_open_hitl_plan_requires_expand_after_task():
             self.study = SimpleNamespace(
                 study_id="s",
                 hitl_policy=HitlPolicy(
-                    gates={"plan_approval": GateConfig(timeout_s=60, on_timeout="delegate", enabled=True)}, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"}),
+                    gates={"plan_approval": GateConfig(timeout_s=60, on_timeout="delegate", enabled=True)}, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"}),  # noqa: E501
                 effective_deadline=lambda: now + timedelta(hours=1),
             )
             self.hitl: dict[str, HitlRequest] = {}
@@ -1350,7 +1350,7 @@ async def test_open_hitl_plan_requires_expand_after_task():
                     task_id="s/E0",
                     kind=TaskKind.EXPERIMENT,
                     spec=TaskSpec(
-                        task_key="E0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),
+                        task_key="E0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),  # noqa: E501
                     state=TaskState.PENDING,
                     deadline=now + timedelta(hours=1),
                     plan_role=PlanRole.NONE,
@@ -1407,7 +1407,7 @@ async def test_hitl_no_gate_timeout_fails():
             self.study = SimpleNamespace(
                 study_id="s",
                 hitl_policy=HitlPolicy(
-                    gates={"plan_approval": GateConfig(timeout_s=60, on_timeout="delegate", enabled=True)}, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"}),
+                    gates={"plan_approval": GateConfig(timeout_s=60, on_timeout="delegate", enabled=True)}, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"}),  # noqa: E501
             )
             self.hitl: dict[str, HitlRequest] = {}
             self.tasks = {
@@ -1415,7 +1415,7 @@ async def test_hitl_no_gate_timeout_fails():
                     task_id="s/E0",
                     kind=TaskKind.EXPERIMENT,
                     spec=TaskSpec(
-                        task_key="E0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),
+                        task_key="E0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),  # noqa: E501
                     state=TaskState.RUNNING,
                     deadline=now + timedelta(hours=1),
                     plan_role=PlanRole.NONE,
@@ -1506,7 +1506,7 @@ def test_task_plan_role_required_no_default():
         Task(
             task_id="s/E0",
             kind=TaskKind.EXPERIMENT,
-            spec=TaskSpec(task_key="E0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),
+            spec=TaskSpec(task_key="E0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),  # noqa: E501
             state=TaskState.PENDING,
             deadline=datetime.now(UTC),
         )
@@ -1834,7 +1834,7 @@ def test_r4_frozen_criterion_requires_sesoi_attrs():
         task_id=f"{sid}/E0",
         kind=TaskKind.EXPERIMENT,
         spec=TaskSpec(
-            task_key="E0", title="e", goal="g", route="experiment", criteria=[], required=True, tolerate_failed_dep=False),
+            task_key="E0", title="e", goal="g", route="experiment", criteria=[], required=True, tolerate_failed_dep=False),  # noqa: E501
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=now,
@@ -1891,7 +1891,7 @@ def test_r4_unassessed_pred_statuses_use_unassessed_token(monkeypatch):
         task_id="st/E0",
         kind=TaskKind.EXPERIMENT,
         spec=TaskSpec(
-            task_key="E0", title="e", goal="g", route="experiment", criteria=[], required=True, tolerate_failed_dep=False),
+            task_key="E0", title="e", goal="g", route="experiment", criteria=[], required=True, tolerate_failed_dep=False),  # noqa: E501
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=now,
@@ -2132,7 +2132,7 @@ def test_r4_evaluate_proposed_kind_id_mismatch_raises(tmp_path):
                 title="t",
                 goal="g",
                 route="experiment",
-                criteria=[RequirementRef(template_id="proposed_check", required=True)], required=True, tolerate_failed_dep=False),
+                criteria=[RequirementRef(template_id="proposed_check", required=True)], required=True, tolerate_failed_dep=False),  # noqa: E501
             AgentTaskOutput(summary=""),
             LocalArtifactStore(tmp_path / "cas"),
             plan_role=PlanRole.NONE,
@@ -2156,7 +2156,7 @@ def test_r4_evaluate_plan_role_rejects_str_coercion():
         with pytest.raises(JournalFormatError, match="PlanRole\\|str"):
             evaluate_task_checks(
                 minimal_test_catalog(),
-                TaskSpec(task_key="E0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),
+                TaskSpec(task_key="E0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),  # noqa: E501
                 AgentTaskOutput(summary=""),
                 LocalArtifactStore(Path(td)),
                 plan_role=_Weird(),  # type: ignore[arg-type]
@@ -2228,7 +2228,7 @@ def test_r4_evaluate_proposed_predicted_direction_required(monkeypatch, tmp_path
             judge_retry={},
             failure_kinds={},
             fetched_digests=None,
-            spec=TaskSpec(task_key="E0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),
+            spec=TaskSpec(task_key="E0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),  # noqa: E501
             attempts={"a#1": {"_seq": 2}},
             results={},
         )
@@ -2309,7 +2309,7 @@ def test_r4_rubric_requires_output_no_main_default(tmp_path):
                 title="t",
                 goal="g",
                 route="experiment",
-                criteria=[RequirementRef(template_id="rubric_bare", required=True)], required=True, tolerate_failed_dep=False),
+                criteria=[RequirementRef(template_id="rubric_bare", required=True)], required=True, tolerate_failed_dep=False),  # noqa: E501
             AgentTaskOutput(summary=""),
             LocalArtifactStore(tmp_path / "cas"),
             plan_role=PlanRole.NONE,
@@ -2365,7 +2365,7 @@ async def test_materialize_loop_iter_none_study_raises():
     loop = LoopSpec(
         loop_id="L1",
         body=[
-            TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT, required=True, tolerate_failed_dep=False)
+            TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT, required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         until=LoopPredicate(name="survivors_le", params={"n": 0}),
         max_iter=2,
@@ -2383,7 +2383,7 @@ async def test_emit_loop_capped_none_study_raises():
     loop = LoopSpec(
         loop_id="L1",
         body=[
-            TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT, required=True, tolerate_failed_dep=False)
+            TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT, required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         until=LoopPredicate(name="survivors_le", params={"n": 0}),
         max_iter=1,
@@ -2419,7 +2419,7 @@ def test_validate_loop_specs_none_hypothesis_id_raises():
     from coscientist.core.execution.domain import LoopPredicate, LoopSpec, Route, TaskSpec
     from coscientist.core.plan.loop import validate_loop_specs
 
-    body = [TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT, required=True, tolerate_failed_dep=False)]
+    body = [TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT, required=True, tolerate_failed_dep=False)]  # noqa: E501
     loop = LoopSpec.model_construct(
         loop_id="L1",
         body=body,
@@ -2641,7 +2641,7 @@ def test_task_created_non_plan_n_rejects_replan_allocated_s():
             self._expand_requests = {}
             self._expand_pending = set()
 
-    spec = TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT, required=True, tolerate_failed_dep=False)
+    spec = TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT, required=True, tolerate_failed_dep=False)  # noqa: E501
     payload = {
         "task_id": "s/E0",
         "kind": TaskKind.EXPERIMENT.value,
@@ -3198,14 +3198,13 @@ def test_blocker_store_naive_datetime_errors():
 
 def test_blocker_store_insert_empty_payload_digest_reachable():
     """Empty payload_digest refused at StoredEvent/stamp (store path never sees "")."""
+    import inspect
     from datetime import UTC, datetime
 
     from pydantic import ValidationError
 
-    from coscientist.core.events.errors import JournalFormatError
-    from coscientist.core.events.events import StoredEvent
-    import inspect
     from coscientist.core.events import store as store_mod
+    from coscientist.core.events.events import StoredEvent
 
     with pytest.raises(ValidationError):
         StoredEvent(
@@ -3226,10 +3225,11 @@ def test_blocker_store_insert_empty_payload_digest_reachable():
 
 
 def test_journal_format_error_carries_store_format(tmp_path):
+    import sqlite3
+
     from coscientist.core.events.errors import JournalFormatError
     from coscientist.core.events.store import SqliteEventStore
     from coscientist.core.events.store_db import JOURNAL_STORE_FORMAT
-    import sqlite3
 
     db = tmp_path / "old.db"
     conn = sqlite3.connect(db)
@@ -3346,10 +3346,10 @@ def test_blocker_catalog_refuses_holdout_output_pop():
 
 def test_blocker_artifact_belongs_uses_attempt_id_not_prefix():
     from datetime import UTC, datetime
+    from types import SimpleNamespace
 
     from coscientist.checks.evaluate import artifact_belongs_to_attempt
     from coscientist.core.execution.domain import ToolCallRef
-    from types import SimpleNamespace
 
     produced = ToolCallRef(
         call_id="other_attempt:1",
@@ -3364,9 +3364,10 @@ def test_blocker_artifact_belongs_uses_attempt_id_not_prefix():
 
 
 def test_blocker_plan_n_key_single_allocator():
-    from coscientist.core.plan.expand_critic import next_plan_n_key
     import inspect
+
     from coscientist.core.plan import expand_trigger
+    from coscientist.core.plan.expand_critic import next_plan_n_key
 
     assert next_plan_n_key(expansions=0, existing_plan_n=0) == "PLAN-1"
     assert next_plan_n_key(expansions=2, existing_plan_n=1) == "PLAN-4"
@@ -3410,9 +3411,10 @@ def test_blocker_executor_result_content_digest_not_nested_payload_digest():
 
 
 def test_blocker_loop_status_enum():
-    from coscientist.core.plan.loop import LoopStatus
     import inspect
+
     from coscientist.core.plan import loop as loop_mod
+    from coscientist.core.plan.loop import LoopStatus
 
     assert LoopStatus.RUNNING.value == "running"
     src = inspect.getsource(loop_mod)

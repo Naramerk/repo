@@ -144,7 +144,7 @@ def test_last_resort_payload_constants_only():
 async def test_i2_conclusions_after_restart(tmp_path, clock):
     sid = "st_i2"
     rt = await _boot(tmp_path, clock, sid)
-    qs = [QuestionSpec(id="Q1", text="one", final_type="verdict"), QuestionSpec(id="Q2", text="two", final_type="verdict")]
+    qs = [QuestionSpec(id="Q1", text="one", final_type="verdict"), QuestionSpec(id="Q2", text="two", final_type="verdict")]  # noqa: E501
     await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs)
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
@@ -564,11 +564,11 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
 def test_pick_finalize_trigger(impl):
     assert impl.pick_finalize_trigger(
         cancelled=True, budget=True, deadline=True, refused=False, all_done=False) == "cancel"
-    assert impl.pick_finalize_trigger(budget=True, deadline=True, cancelled=False, refused=False, all_done=False) == "budget"
-    assert impl.pick_finalize_trigger(refused=True, deadline=True, cancelled=False, budget=False, all_done=False) == "intake"
-    assert impl.pick_finalize_trigger(deadline=True, all_done=True, cancelled=False, budget=False, refused=False) == "deadline"
-    assert impl.pick_finalize_trigger(all_done=True, cancelled=False, budget=False, refused=False, deadline=False) == "all_done"
-    assert impl.pick_finalize_trigger(cancelled=False, budget=False, refused=False, deadline=False, all_done=False) is None
+    assert impl.pick_finalize_trigger(budget=True, deadline=True, cancelled=False, refused=False, all_done=False) == "budget"  # noqa: E501
+    assert impl.pick_finalize_trigger(refused=True, deadline=True, cancelled=False, budget=False, all_done=False) == "intake"  # noqa: E501
+    assert impl.pick_finalize_trigger(deadline=True, all_done=True, cancelled=False, budget=False, refused=False) == "deadline"  # noqa: E501
+    assert impl.pick_finalize_trigger(all_done=True, cancelled=False, budget=False, refused=False, deadline=False) == "all_done"  # noqa: E501
+    assert impl.pick_finalize_trigger(cancelled=False, budget=False, refused=False, deadline=False, all_done=False) is None  # noqa: E501
 
 
 def test_terminal_reason_for(impl):

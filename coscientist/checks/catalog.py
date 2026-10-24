@@ -92,7 +92,7 @@ def _validate_code_check(raw: dict[str, Any]) -> dict[str, Any]:
     out = dict(raw)
     if "allow_network" not in out:
         raise CatalogError(
-            f"CodeCheck.allow_network required (template check kind={out.get('kind')!r})"  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            f"CodeCheck.allow_network required (template check kind={out.get('kind')!r})"  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         )
     if "holdout_output" in out:
         raise CatalogError(
@@ -162,7 +162,7 @@ def load_catalog(
         if not isinstance(t, dict):
             raise CatalogError("catalog_template_v1:entry_must_be_object")
         if not t.get("text_ru"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-            raise CatalogError(f"template {t.get('id')!r} missing text_ru")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            raise CatalogError(f"template {t.get('id')!r} missing text_ru")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         tid = t.get("id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         method_sources = _require_list(
             t, "method_sources", where=f"catalog_template_v1:{tid}"
@@ -191,7 +191,7 @@ def load_catalog(
         predicts_null = _require_template_bool(t, "predicts_null", tid)
         required = _require_template_bool(t, "required", tid)
         version = _require_template_str(t, "version", tid)
-        direction = t.get("predicted_direction")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        direction = t.get("predicted_direction")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         if direction not in _PREDICTED_DIRECTIONS:
             raise CatalogError(
                 f"catalog_template_v1:{tid}:predicted_direction_required_got_{direction!r}"
@@ -201,12 +201,12 @@ def load_catalog(
                 f"template {tid!r}: min_power is not supported in M1 "
                 "(deferred until the core computes power)"
             )
-        sesoi_f = _optional_float(t.get("sesoi"), what=f"template {tid!r}:sesoi")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        sesoi_f = _optional_float(t.get("sesoi"), what=f"template {tid!r}:sesoi")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         sesoi_min_f = _optional_float(
-            t.get("sesoi_min"), what=f"template {tid!r}:sesoi_min"  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            t.get("sesoi_min"), what=f"template {tid!r}:sesoi_min"  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         )
         sesoi_max_f = _optional_float(
-            t.get("sesoi_max"), what=f"template {tid!r}:sesoi_max"  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            t.get("sesoi_max"), what=f"template {tid!r}:sesoi_max"  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         )
         if uses_sesoi:
             if sesoi_f is None:
@@ -265,7 +265,7 @@ def load_catalog(
     defaults_raw = data["defaults"]
     if not isinstance(defaults_raw, dict):
         raise CatalogError("catalog defaults must be dict")
-    defaults: dict[str, list[Any]] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
+    defaults: dict[str, list[Any]] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value  # noqa: E501
     for k, v in defaults_raw.items():
         if not isinstance(k, str) or not k:
             raise CatalogError(

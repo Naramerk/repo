@@ -10,7 +10,7 @@ from typing import Any
 from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore
 from coscientist.core.claims.reasons import RefusalKind, TaskReason
 from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.events import UnstampedEvent, StoredEvent
+from coscientist.core.events.events import StoredEvent, UnstampedEvent
 from coscientist.core.execution.domain import Study, Task, TaskOutcome, TaskState
 from coscientist.core.plan.intake import IntakeRefuse
 
@@ -223,9 +223,9 @@ class LocalProjectMixin:
             # B3: expansion counts + replan_used from events (not live counters).
             # Foreach (PR10) does not spend agent/human expansion quota.
             # Foreach (PR10) / Loop (PR11) do not spend agent/human expansion quota.
-            if not p.get("foreach") and not p.get("loop"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            if not p.get("foreach") and not p.get("loop"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 # timeout → agent quota (DESIGN_M1 §4); only human skips agent quota.
-                if p.get("delegated_by") == "human":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                if p.get("delegated_by") == "human":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                     self._human_expansions = self._human_expansions + 1
                 else:
                     self._agent_expansions = self._agent_expansions + 1
@@ -233,15 +233,15 @@ class LocalProjectMixin:
                 self._replan_used_s = self._replan_used_s + _as_float(
                     p["replan_allocated_s"], what="replan_allocated_s"
                 )
-            after = p.get("after_task")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            after = p.get("after_task")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if after is not None and isinstance(self._expand_pending, set):
                 self._expand_pending.discard(str(after))
             # Clear PLAN-n pending rebuilt from TaskCreated (MAJOR replay leak).
             self._clear_expand_request(
-                after_task=str(after) if after is not None else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
-                plan_key=p.get("plan_key"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                after_task=str(after) if after is not None else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+                plan_key=p.get("plan_key"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             )
-            rid = p.get("hitl_request_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            rid = p.get("hitl_request_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if rid:
                 used = self._hitl_expand_used
                 if not isinstance(used, set):
@@ -250,18 +250,18 @@ class LocalProjectMixin:
                 used.add(str(rid))
             # PR10: rebuild foreach child index from journal (restart == live).
             if p.get("foreach"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-                tmpl_raw = p.get("foreach_template")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                tmpl_raw = p.get("foreach_template")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 if isinstance(tmpl_raw, str):
                     tmpl = tmpl_raw
                 else:
                     tmpl = ""
-                added = p.get("added_tasks")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                added = p.get("added_tasks")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 if added is None:
                     added = []
                 kids = []
                 for t in added:
                     if isinstance(t, dict):
-                        tk = t.get("task_key")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                        tk = t.get("task_key")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                     else:
                         tk = t.task_key
                     if isinstance(tk, str) and tk:
@@ -305,10 +305,10 @@ class LocalProjectMixin:
                 )
             self._clear_expand_request(
                 after_task=after_raw,
-                plan_key=p.get("plan_key"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                plan_key=p.get("plan_key"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             )
             # PR11: loop refuse must restore status on replay.
-            if p.get("loop") or p.get("loop_id"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # audit-ok[or_call]: coalesce existing call result; no invented literal
+            if p.get("loop") or p.get("loop_id"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
                 from coscientist.core.plan.loop import fold_loop_expansion_refused
 
                 fold_loop_expansion_refused(self, p)
@@ -348,7 +348,7 @@ class LocalProjectMixin:
             # payload fields into the HitlOpened row (request ≠ decision).
             opens = self._hitl_requests
             if isinstance(opens, dict) and rid in opens:
-                keep_open = p.get("keep_open") is True or p.get("effect") == "WAIT"  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                keep_open = p.get("keep_open") is True or p.get("effect") == "WAIT"  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 opens[rid] = {**opens[rid], "open": keep_open}
         elif ev.type in (
             "CheckProposed",
@@ -371,7 +371,7 @@ class LocalProjectMixin:
             else:
                 raise JournalFormatError("ArtifactRegistered: missing artifact_id")
             kind = p.get("kind")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-            if art_id and kind and p.get("stamped") is True:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            if art_id and kind and p.get("stamped") is True:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 arts = self.artifacts
                 if arts is None:
                     # open_runtime folds before make_executor — defer stamp apply.
@@ -445,8 +445,8 @@ class LocalProjectMixin:
             folded = self.tasks[p["task_id"]]
             if folded.plan_role is None:
                 raise JournalFormatError("TaskCreated: plan_role required")
-            pending_exp = p.get("pending_expansion")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-            after = p.get("expand_after_task")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            pending_exp = p.get("pending_expansion")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            after = p.get("expand_after_task")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if folded.plan_role == PlanRole.PLAN_N:
                 if "replan_allocated_s" not in p:
                     raise JournalFormatError(
@@ -523,13 +523,13 @@ class LocalProjectMixin:
                 "reason": None,
             }
             # PR12: journaled P2 deadline renorm (replay == live).
-            if p.get("share_renorm") and p.get("deadline") is not None:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            if p.get("share_renorm") and p.get("deadline") is not None:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 raw_dl: Any = p["deadline"]
                 if isinstance(raw_dl, str):
                     raw_dl = datetime.fromisoformat(raw_dl)
                 upd["deadline"] = raw_dl
             self.tasks[p["task_id"]] = t.model_copy(update=upd)
-            bud_alloc = p.get("allocated_budget_rub")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            bud_alloc = p.get("allocated_budget_rub")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if bud_alloc is not None:
                 raw_caps = self._task_budget_alloc
                 if not isinstance(raw_caps, dict):
@@ -547,7 +547,7 @@ class LocalProjectMixin:
             self._retry_at.pop(p["task_id"], None)
         elif ev.type == "AttemptClosed":
             aid = p["attempt_id"]
-            att = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            att = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if att is None:
                 att = {}
             else:
@@ -555,8 +555,8 @@ class LocalProjectMixin:
             att.update(p)
             att["closed"] = True
             self.attempts[aid] = att
-            tid = p.get("task_id") or att.get("task_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # audit-ok[or_call]: coalesce existing call result; no invented literal
-            if tid and p.get("retry_at"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            tid = p.get("task_id") or att.get("task_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
+            if tid and p.get("retry_at"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 t = self.tasks[tid]
                 if t.state != TaskState.DONE:
                     retry_at = p["retry_at"]
@@ -570,22 +570,22 @@ class LocalProjectMixin:
                         }
                     )
         elif ev.type == "RouteReturned":
-            aid = p.get("attempt_id") or ev.entity_key  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
-            prior = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            aid = p.get("attempt_id") or ev.entity_key  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
+            prior = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if prior is None:
                 prior = {}
             att = {
                 **prior,
                 "route_returned": True,
-                "agent_output_digest": p.get("agent_output_digest"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "agent_output_digest": p.get("agent_output_digest"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             }
             self.attempts[aid] = att
         elif ev.type == "ResultPending":
             # PR13: keep agent_output_digest on the open attempt for judge restart.
-            aid = p.get("attempt_id") or ev.entity_key  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
-            dig = p.get("agent_output_digest")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            aid = p.get("attempt_id") or ev.entity_key  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
+            dig = p.get("agent_output_digest")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if aid and dig:
-                prior = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                prior = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 if prior is None:
                     prior = {}
                 self.attempts[aid] = {**prior, "agent_output_digest": dig}
@@ -598,10 +598,10 @@ class LocalProjectMixin:
             # Populate dep_outputs from named outputs for InputSpec.bind.
             dep_outputs = self.dep_outputs
             dep_provenance = self.dep_provenance
-            aid = p.get("attempt_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            aid = p.get("attempt_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if not isinstance(aid, str) or not aid:
                 raise JournalFormatError("ResultRecorded: missing attempt_id")
-            att_row = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            att_row = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             result_tid: str | None = None
             if isinstance(att_row, dict) and "task_id" in att_row:
                 result_tid = _req_str(att_row, "task_id")
@@ -609,7 +609,7 @@ class LocalProjectMixin:
                 result_tid = _req_str(p, "task_id")
             if isinstance(dep_outputs, dict) and result_tid and result_tid in self.tasks:
                 tkey = self.tasks[result_tid].spec.task_key
-                omap = p.get("output_map")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                omap = p.get("output_map")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                 if isinstance(omap, dict) and omap:
                     dep_outputs[tkey] = {str(k): str(v) for k, v in omap.items() if v}
                 # No silent main←artifacts[0] invent (rule 12). Absent output_map
@@ -625,7 +625,7 @@ class LocalProjectMixin:
                     dep_provenance[tkey] = prov
         elif ev.type == "TaskDone":
             t = self.tasks[p["task_id"]]
-            reason = p.get("reason")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            reason = p.get("reason")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             self.tasks[p["task_id"]] = t.model_copy(
                 update={
                     "state": TaskState.DONE,
@@ -666,8 +666,8 @@ class LocalProjectMixin:
                 # Plan-freeze: stamp frozen_at_seq from journal seq when missing.
                 if (
                     node.kind == "criterion"
-                    and node.attrs.get("frozen") is True  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-                    and node.attrs.get("frozen_at_seq") is None  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                    and node.attrs.get("frozen") is True  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                    and node.attrs.get("frozen_at_seq") is None  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
                     and ev.seq is not None
                 ):
                     node = node.model_copy(
@@ -680,7 +680,7 @@ class LocalProjectMixin:
                     )
                 self.graph.upsert_node(node)
             if node.kind == "claim":
-                self._invalidate_verdict_snapshots_for_target(node.attrs.get("target"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                self._invalidate_verdict_snapshots_for_target(node.attrs.get("target"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         elif ev.type == "GraphEdgeAdded":
             # Fail loudly: missing endpoints / illegal pairs are journal bugs.
             edge = GraphEdge.model_validate(p)
@@ -699,7 +699,7 @@ class LocalProjectMixin:
                         )
                 self._invalidate_verdict_snapshots_for_target(logical)
         elif ev.type == "VerdictSnapshotsRecorded":
-            snaps = p.get("snapshots")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            snaps = p.get("snapshots")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             if snaps is None:
                 snaps = {}
             if isinstance(snaps, dict):
@@ -713,7 +713,7 @@ class LocalProjectMixin:
         self.verdict_snapshots.pop(key, None)
         # Kind-prefixed keys (question:Q1 / hypothesis:H1) if present.
         # Kind-prefixed keys (question:Q1 / hypothesis:H1) if present.
-        kind_prefix = key.split(":", 1)[0] if ":" in key else ""  # audit-ok[str_split]: kind:ref key parse # audit-ok[ternary_default]: kind:ref key parse  # audit-ok[ternary_default]: branch selects typed literal required by contract
+        kind_prefix = key.split(":", 1)[0] if ":" in key else ""  # audit-ok[str_split]: kind:ref key parse # audit-ok[ternary_default]: kind:ref key parse  # audit-ok[ternary_default]: branch selects typed literal required by contract  # noqa: E501
         if kind_prefix not in ("question", "hypothesis"):
             self.verdict_snapshots.pop(f"question:{key}", None)
             self.verdict_snapshots.pop(f"hypothesis:{key}", None)
@@ -729,7 +729,7 @@ class LocalProjectMixin:
                 existing is not None
                 and existing.kind in ("question", "hypothesis")
                 and existing.attrs
-                and not incoming.attrs.get("formulation")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                and not incoming.attrs.get("formulation")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
             ):
                 # Preserve formulation from accept_plan when finalize row is sparse.
                 merged = incoming.model_copy(
@@ -745,6 +745,6 @@ class LocalProjectMixin:
                 # study/question node may be missing in sparse journals
                 pass  # audit-ok[except_pass]: best-effort secondary close after primary error path
         # Keep hypothesis_verdicts separate from bind's verdict_snapshots cache.
-        hv = payload.get("hypothesis_verdicts")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        hv = payload.get("hypothesis_verdicts")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
         if isinstance(hv, dict):
             self.hypothesis_verdicts.update({str(k): dict(v) for k, v in hv.items() if isinstance(v, dict)})

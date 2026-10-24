@@ -277,7 +277,7 @@ async def test_propose_preregisters_digest_before_result(tmp_path: Path) -> None
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         row = rt._check_proposals[pid]
         digest = row["proposal_digest"]
@@ -330,7 +330,7 @@ async def test_unapproved_check_excluded_from_verdict(tmp_path: Path) -> None:
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         _set_proposed_criteria(rt, exp_tid, pid, "q1")
         aid = await rt.start_attempt("EXP")
@@ -389,7 +389,7 @@ async def test_approved_executable_counts_like_catalog(tmp_path: Path) -> None:
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         await _approve_human(rt, pid, exp_tid)
         assert rt._check_proposals[pid]["status"] == "approved"
@@ -584,7 +584,7 @@ async def test_proposal_quota_closes_task(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid1
         pid2 = await propose_check(
             rt,
@@ -596,7 +596,7 @@ async def test_proposal_quota_closes_task(tmp_path: Path) -> None:
             check=_value_check(target=2),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid2 is None
         task = rt.tasks[exp_tid]
         assert task.reason == TaskReason.PROPOSAL_QUOTA
@@ -629,7 +629,7 @@ async def test_max_proposals_zero_immediate_quota(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid is None
         assert rt.tasks[exp_tid].reason == TaskReason.PROPOSAL_QUOTA
     finally:
@@ -656,7 +656,7 @@ async def test_quota_close_late_record_attempt_closed(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid1
         pid2 = await propose_check(
             rt,
@@ -668,7 +668,7 @@ async def test_quota_close_late_record_attempt_closed(tmp_path: Path) -> None:
             check=_value_check(target=2),
             task_id=exp_tid,
             attempt_id=aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid2 is None
         assert rt.attempts[aid].get("closed")
         ex, arts = attach_executor(rt, tmp_path)
@@ -716,7 +716,7 @@ async def test_reject_and_timeout_still_finalize(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         await reject_check(rt, pid, source="timeout", reason="human_timeout", delegated=False)
         assert rt._check_proposals[pid]["status"] == "rejected"
@@ -767,7 +767,7 @@ async def test_post_delegate_timeout_equiv_reject(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         await schedule_proposed_check_review(rt, pid, timeout_s=5)
         assert rt._proposed_check_reviews[pid]["status"] == "pending"
@@ -802,7 +802,7 @@ async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         # Authentic HitlDecided before finalize so approve auth reaches StudyClosedError.
         closed_hitl_rid = await _plant_human_hitl_decision(rt, pid, exp_tid)
@@ -844,7 +844,7 @@ async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
                 check=_value_check(target=9),
                 task_id=exp_tid,
                 attempt_id=proposer_aid,
-                open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+                open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         with pytest.raises(StudyClosedError):
             await approve_check(rt, pid, source="api", hitl_request_id_s=closed_hitl_rid, delegated=False)
         with pytest.raises(StudyClosedError):
@@ -885,7 +885,7 @@ async def test_kill_reopen_restores_proposals(tmp_path: Path) -> None:
             check=_value_check(target=7),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         digest = rt._check_proposals[pid]["proposal_digest"]
     finally:
@@ -927,7 +927,7 @@ async def test_restart_open_hitl_and_delegated_review_live_eq_replay(
             task_id=exp_tid,
             attempt_id=proposer_aid,
             open_hitl=True,
-            timeout_s=120, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            timeout_s=120, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         await schedule_proposed_check_review(rt, pid, timeout_s=60)
         live_status = rt._check_proposals[pid]["status"]
@@ -979,7 +979,7 @@ async def test_delegated_reviewer_adversarial(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         # Designated reviewer task — foreign live attempts must not bind.
         await schedule_proposed_check_review(
@@ -1076,7 +1076,7 @@ async def test_bind_closed_designated_reviewer_fail_closed(tmp_path: Path) -> No
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         await schedule_proposed_check_review(
             rt, pid, timeout_s=60, reviewer_task_id=rev_tid
@@ -1112,7 +1112,7 @@ async def test_bind_requires_reviewer_task_id_on_schedule(tmp_path: Path) -> Non
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         await schedule_proposed_check_review(rt, pid, timeout_s=60)
         assert not rt._proposed_check_reviews[pid].get("reviewer_task_id")
@@ -1142,7 +1142,7 @@ async def test_approve_source_human_and_reviewer_guards(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         with pytest.raises(TypeError):
             await approve_check(rt, pid, by="human", delegated=False)  # type: ignore[call-arg]
@@ -1210,7 +1210,7 @@ async def test_prereg_after_attempt_fails_eval(tmp_path: Path) -> None:
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         await _approve_human(rt, pid, exp_tid)
         _set_proposed_criteria(rt, exp_tid, pid, "q1")
@@ -1270,7 +1270,7 @@ async def test_approval_cannot_bind_another_task_id(tmp_path: Path) -> None:
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         await _approve_human(rt, pid, exp_tid)
         _set_proposed_criteria(rt, exp2_tid, pid, "q1")
@@ -1339,7 +1339,7 @@ async def test_cannot_propose_after_result_recorded(tmp_path: Path) -> None:
                 check=_value_check(target=1),
                 task_id=exp_tid,
                 attempt_id=proposer_aid,
-                open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+                open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
     finally:
         await close_runtime(rt)
 
@@ -1426,7 +1426,7 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         ref = requirement_ref_for_proposal(pid, target="q1", required=True)
         # Re-accept not needed — plan already has EXP; expand criteria via propose bind.
@@ -1568,7 +1568,7 @@ def test_proposal_requires_rejected_templates() -> None:
                 measures="m",
                 check=_value_check(target=1),
                 justification="because",
-                rejected_templates=[], target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id="")
+                rejected_templates=[], target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id="")  # noqa: E501
         )
 
 
@@ -1587,7 +1587,7 @@ def test_proposal_rubric_xor_check() -> None:
                 check=_value_check(target=1),
                 rubric=rub,
                 justification="j",
-                rejected_templates=_rejected(), target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id="")
+                rejected_templates=_rejected(), target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id="")  # noqa: E501
         )
 
 
@@ -1606,25 +1606,25 @@ def test_nfkc_digest_composed_decomposed_same() -> None:
         justification="j",
         rejected_templates=_rejected(),
     )
-    d1 = compute_proposal_digest(CheckProposal(**base, measures=nfc, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
-    d2 = compute_proposal_digest(CheckProposal(**base, measures=nfd, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
+    d1 = compute_proposal_digest(CheckProposal(**base, measures=nfc, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
+    d2 = compute_proposal_digest(CheckProposal(**base, measures=nfd, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
     assert d1 == d2
-    d3 = compute_proposal_digest(CheckProposal(**base, measures="other", target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
+    d3 = compute_proposal_digest(CheckProposal(**base, measures="other", target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
     assert d3 != d1
     # Targets likewise NFKC-normalized in the prereg body.
-    t1 = compute_proposal_digest(CheckProposal(**{**base, "measures": "m", "target": nfc}, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
-    t2 = compute_proposal_digest(CheckProposal(**{**base, "measures": "m", "target": nfd}, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
+    t1 = compute_proposal_digest(CheckProposal(**{**base, "measures": "m", "target": nfc}, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
+    t2 = compute_proposal_digest(CheckProposal(**{**base, "measures": "m", "target": nfd}, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
     assert t1 == t2
     # Fullwidth digits/letters and ligatures collapse under NFKC.
     fw = "ｃａｆｅ\uff11"  # fullwidth cafe + fullwidth 1
     lig = "ﬁ"  # fi ligature
     assert unicodedata.normalize("NFKC", fw) == "cafe1"
     assert unicodedata.normalize("NFKC", lig) == "fi"
-    d_fw = compute_proposal_digest(CheckProposal(**base, measures=fw, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
-    d_fw_ascii = compute_proposal_digest(CheckProposal(**base, measures="cafe1", target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
+    d_fw = compute_proposal_digest(CheckProposal(**base, measures=fw, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
+    d_fw_ascii = compute_proposal_digest(CheckProposal(**base, measures="cafe1", target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
     assert d_fw == d_fw_ascii
-    d_lig = compute_proposal_digest(CheckProposal(**base, measures=lig, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
-    d_fi = compute_proposal_digest(CheckProposal(**base, measures="fi", target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
+    d_lig = compute_proposal_digest(CheckProposal(**base, measures=lig, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
+    d_fi = compute_proposal_digest(CheckProposal(**base, measures="fi", target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
     assert d_lig == d_fi
 
 
@@ -1647,7 +1647,7 @@ async def test_unicode_measures_and_target(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         row = rt._check_proposals[pid]
         assert row["measures"] == unicodedata.normalize("NFKC", measures)
@@ -1668,7 +1668,7 @@ def test_nan_inf_threshold_rejected_at_validate() -> None:
                 check=_value_check(target=1),
                 justification="j",
                 rejected_templates=_rejected(),
-                threshold=float("nan"), target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id="")
+                threshold=float("nan"), target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id="")  # noqa: E501
         )
     with pytest.raises(ValueError, match="finite"):
         validate_proposal_content(
@@ -1680,7 +1680,7 @@ def test_nan_inf_threshold_rejected_at_validate() -> None:
                 check=_value_check(target=1),
                 justification="j",
                 rejected_templates=_rejected(),
-                sesoi=math.inf, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id="")
+                sesoi=math.inf, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id="")  # noqa: E501
         )
 
 
@@ -1773,7 +1773,7 @@ async def test_refuse_propose_during_live_attempt_adversarial(tmp_path: Path) ->
                 check=_value_check(target=1),
                 task_id=exp_tid,
                 attempt_id=proposer_aid,
-                open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+                open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
     finally:
         await close_runtime(rt)
 
@@ -1796,7 +1796,7 @@ async def test_refuse_new_pid_after_result_adversarial(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         await _approve_human(rt, pid, exp_tid)
         aid = await rt.start_attempt("EXP")
@@ -1825,7 +1825,7 @@ async def test_refuse_new_pid_after_result_adversarial(tmp_path: Path) -> None:
                 check=_value_check(target=2),
                 task_id=exp_tid,
                 attempt_id=proposer_aid,
-                open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+                open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
     finally:
         await close_runtime(rt)
 
@@ -1918,7 +1918,7 @@ async def test_api_approve_without_principal_fail_closed(tmp_path: Path) -> None
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         # Arbitrary non-empty string alone must never authenticate by=human.
         with pytest.raises(ValueError, match="hitl_request_id|HitlOpened|HitlDecided"):
@@ -1959,7 +1959,7 @@ async def test_propose_open_hitl_api_approve_author_rid_fail_closed(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         # Author's HitlOpened from propose_check — no HitlDecided yet.
         author_rids = [
@@ -1975,7 +1975,7 @@ async def test_propose_open_hitl_api_approve_author_rid_fail_closed(
                 for rid, row in opens.items()
                 if isinstance(row, dict) and row.get("payload_ref") == pid
             ]
-        assert author_rids, "propose_check(open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided") must journal HitlOpened"
+        assert author_rids, 'propose_check(open_hitl=True) must journal HitlOpened'
         rid = author_rids[0]
         with pytest.raises(ValueError, match="HitlDecided"):
             await approve_check(rt, pid, source="api", hitl_request_id_s=rid, delegated=False)
@@ -2011,7 +2011,7 @@ async def test_hitl_empty_kind_ref_fail_closed(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         study = rt.study
         assert study is not None
@@ -2085,7 +2085,7 @@ async def test_approval_cannot_satisfy_other_target_same_task(tmp_path: Path) ->
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         await _approve_human(rt, pid, exp_tid)
         # Criterion pretends the same proposal covers q2 — must fail-closed.
@@ -2223,7 +2223,7 @@ async def test_reject_stale_in_tick_after_deadline(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         await schedule_proposed_check_review(rt, pid, timeout_s=30)
         assert rt._proposed_check_reviews[pid]["status"] == "pending"
@@ -2262,7 +2262,7 @@ async def test_check_proposed_idem_without_digest(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         events = await rt.store.read_all()
         proposed = [e for e in events if e.type == "CheckProposed"]
@@ -2303,7 +2303,7 @@ async def test_hitl_concurrent_decisions_first_wins(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         rid = next(
             r
@@ -2379,7 +2379,7 @@ async def test_hitl_timeout_vs_accept_serialized(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         rid = next(
             r
@@ -2473,7 +2473,7 @@ async def test_stale_review_timeout_vs_approve_serialized(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         await schedule_proposed_check_review(
             rt, pid, timeout_s=5, reviewer_task_id=rev_tid
@@ -2557,7 +2557,7 @@ async def test_approve_already_rejected_raises_for_external(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         # Bind reviewer while still proposed, then reject — approve must fail-closed.
         await schedule_proposed_check_review(
@@ -2610,7 +2610,7 @@ async def test_reject_already_approved_raises_except_timeout(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         rid = await _approve_human(rt, pid, exp_tid, source="api")
         assert rt._check_proposals[pid]["status"] == "approved"
@@ -2656,7 +2656,7 @@ async def test_consume_reject_between_bind_and_lock_raises(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         await schedule_proposed_check_review(
             rt, pid, timeout_s=60, reviewer_task_id=rev_tid
@@ -2805,7 +2805,7 @@ async def test_answer_hitl_empty_and_foreign_proposal_id_guards(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         rid = next(
             r
@@ -2851,7 +2851,7 @@ async def test_timeout_between_hitl_decided_and_approve_fail_closed(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         rid = await _plant_human_hitl_decision(rt, pid, exp_tid, decision="accept")
         assert rt._check_proposals[pid]["status"] == "proposed"
@@ -2886,7 +2886,7 @@ async def test_hitl_decided_empty_and_foreign_proposal_id_fail_closed(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         study = rt.study
         assert study is not None
@@ -2989,7 +2989,7 @@ async def test_orphaned_hitl_accept_retry_approve(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
         assert pid
         rid = await _plant_human_hitl_decision(rt, pid, exp_tid, decision="accept")
         assert rt._check_proposals[pid]["status"] == "proposed"

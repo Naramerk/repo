@@ -1031,7 +1031,7 @@ def test_minimal_report_hypotheses_truncation_le_10kb():
         "st/T0": Task(
             task_id="st/T0",
             kind=TaskKind.EXPERIMENT,
-            spec=TaskSpec(task_key="T0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),
+            spec=TaskSpec(task_key="T0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),  # noqa: E501
             state=TaskState.DONE,
             outcome=TaskOutcome.SUCCESS,
             deadline=__import__("datetime").datetime(2026, 1, 1),

@@ -27,12 +27,12 @@ UPCASTERS = {}
 
 def register_upcaster(event_type: str, from_version: int, fn: Upcaster) -> None:
     """Register ``from_version → from_version+1``. Duplicate (type, from_version) raises."""
-    if not isinstance(from_version, int) or isinstance(from_version, bool) or from_version < 1:  # audit-ok[or_call]: coalesce existing call result; no invented literal
+    if not isinstance(from_version, int) or isinstance(from_version, bool) or from_version < 1:  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
         raise ValueError(
             f"register_upcaster {event_type!r}: from_version must be int >= 1, "
             f"got {from_version!r}"
         )
-    bucket = UPCASTERS.get(event_type)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    bucket = UPCASTERS.get(event_type)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     if bucket is None:
         bucket = {}
         UPCASTERS[event_type] = bucket
@@ -59,7 +59,7 @@ def writer_schema_version(event_type: str) -> int:
     from coscientist.core.events.events import EventType
 
     known = set(get_args(EventType))
-    versions = UPCASTERS.get(event_type)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    versions = UPCASTERS.get(event_type)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     if versions is None:
         if event_type not in known:
             raise JournalFormatError(f"unknown event type for writer: {event_type!r}")
@@ -75,7 +75,7 @@ def assert_upcaster_chain_continuous(event_type: str, writer_version: int) -> No
         raise ValueError(f"{event_type}: writer_version must be >= 1")
     # Refuse unknown types (same gate as writer_schema_version); empty bucket = v1.
     writer_schema_version(event_type)
-    bucket = UPCASTERS.get(event_type)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    bucket = UPCASTERS.get(event_type)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     if bucket is None:
         bucket = {}
     missing = [v for v in range(1, writer_version) if v not in bucket]
@@ -158,7 +158,7 @@ def upcast(
         )
 
     data = dict(payload)
-    bucket = UPCASTERS.get(event_type)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    bucket = UPCASTERS.get(event_type)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     if bucket is None:
         bucket = {}
     while version < writer:

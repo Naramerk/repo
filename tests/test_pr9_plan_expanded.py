@@ -126,7 +126,7 @@ def _task(*, key, addresses, depends_on, criteria=True, **kw):
         route=kw.get("route", "experiment"),
         depends_on=depends_on,
         addresses=addresses,
-        criteria=[RequirementRef(template_id="value_match", required=True)] if criteria else [], required=True, tolerate_failed_dep=False)
+        criteria=[RequirementRef(template_id="value_match", required=True)] if criteria else [], required=True, tolerate_failed_dep=False)  # noqa: E501
 
 
 @pytest.mark.asyncio
@@ -1364,7 +1364,7 @@ async def test_hitl_open_plan_approval_keeps_kind_and_binds(tmp_path, clock):
             gates={
                 "plan_approval": GateConfig(timeout_s=42, on_timeout="fail", enabled=True),
                 "plan_expansion": GateConfig(timeout_s=180, on_timeout="delegate", enabled=True),
-            }, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"}),
+            }, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"}),  # noqa: E501
     )
     attach_executor(rt, tmp_path)
     await _boot_plan(
@@ -1576,7 +1576,7 @@ async def test_hitl_plan_approval_timeout_fail_no_auto_accept(tmp_path, clock):
                 "plan_approval": GateConfig(timeout_s=1, on_timeout="fail", enabled=True),
                 # If kind were renamed, this default would wrongly auto-delegate.
                 "plan_expansion": GateConfig(timeout_s=180, on_timeout="delegate", enabled=True),
-            }, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"}),
+            }, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"}),  # noqa: E501
     )
     attach_executor(rt, tmp_path)
     await _boot_plan(
@@ -1636,7 +1636,7 @@ async def test_plan_expansion_marker_not_met_on_exp(tmp_path, clock, runtime_cls
         route="experiment",
         depends_on=["PLAN"],
         addresses=["Q1"],
-        criteria=[RequirementRef(template_id="plan_expansion_schema", required=True)], required=True, tolerate_failed_dep=False)
+        criteria=[RequirementRef(template_id="plan_expansion_schema", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
     from coscientist.core.execution.domain import PlanRole
 
     checks = evaluate_task_checks(
@@ -1691,7 +1691,7 @@ async def test_critic_rejects_plan_expansion_marker_on_added(tmp_path, clock, ru
                 route="experiment",
                 depends_on=["E0"],
                 addresses=["Q1"],
-                criteria=[RequirementRef(template_id="plan_expansion_schema", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="plan_expansion_schema", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         reason="forge",
     )
@@ -1707,7 +1707,7 @@ async def test_critic_rejects_plan_expansion_marker_on_added(tmp_path, clock, ru
                 route="experiment",
                 depends_on=["E0"],
                 addresses=["Q1"],
-                criteria=[RequirementRef(template_id="not_in_catalog_xyz", required=True)], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="not_in_catalog_xyz", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
         ],
         reason="forge",
     )
@@ -1742,7 +1742,10 @@ async def test_false_confirm_cannot_unprotect_prediction_task(tmp_path, clock, r
                 depends_on=["E0"],
                 addresses=["Q1"],
                 criteria=[RequirementRef(template_id="value_match", required=True)],  # prediction
-                tests_intent="confirm",  # false confirm — must not unprotect, required=True, tolerate_failed_dep=False),
+                tests_intent="confirm",  # false confirm — must not unprotect
+                required=True,
+                tolerate_failed_dep=False,
+            ),
         ],
         questions=[QuestionSpec(id="Q1", text="old", final_type="verdict")],
     )
