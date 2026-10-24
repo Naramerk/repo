@@ -97,7 +97,7 @@ class KindSpec(Frozen):
     description: str = ""
     prefix: str | None = None
     fields: tuple[AttrFieldSpec, ...]
-    discriminator: str | None = None
+    discriminator: str | None = None  # audit-ok[field_default]: None when kind has no variants arm
     variants: tuple[KindVariant, ...] = ()
 
 

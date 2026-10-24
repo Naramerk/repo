@@ -406,7 +406,7 @@ def test_study_created_v12_upcaster_refuses_missing_and_non_int():
         _study_created_v12_to_v13_catalog_version({"catalog_version": "0.1.0"})
     assert _study_created_v12_to_v13_catalog_version({"catalog_version": 4})[
         "catalog_version"
-    ] == 3
+    ] == 4
     assert STUDY_CREATED_SCHEMA_VERSION == writer_schema_version("StudyCreated")
 
 
@@ -566,7 +566,7 @@ def test_legacy_string_catalog_version_refused_with_versioned_reason():
     msg = str(ei.value)
     assert "catalog_version_must_be_strict_int_got_str" in msg
     assert "'0.2.0'" in msg
-    assert "supported=[3]" in msg
+    assert "supported=[4]" in msg
     assert f"history={catalog_mod.LEGACY_STRING_CATALOG_VERSION_REFUSED}" in msg
     with pytest.raises(CatalogError, match="unsupported_catalog_version:2"):
         load_catalog({**blob, "catalog_version": 2}, kind_registry=default_execution_registry())

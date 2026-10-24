@@ -158,7 +158,23 @@ def _plan_accept_freeze_rows(
                             cattrs["target"] = raw_check.target
                 elif isinstance(raw_check, CodeCheck):
                     if raw_check.kind == "rubric":
+                        # KindSpec rubric arm (affects_stance=false) — digest identity;
+                        # same flag as checks.kinds.rubric effect (DESIGN_M1 §6.2).
+                        from coscientist.core.claims.rubric import freeze_rubric
+
                         cattrs["check"] = "rubric"
+                        cattrs["affects_stance"] = False
+                        rub = raw_check.rubric
+                        if rub is None:
+                            raise CatalogError(
+                                f"criterion_freeze_rubric_required:{key}"
+                            )
+                        dig = freeze_rubric(rub).digest
+                        if not isinstance(dig, str) or not dig:
+                            raise CatalogError(
+                                f"criterion_freeze_rubric_digest_required:{key}"
+                            )
+                        cattrs["rubric_digest"] = dig
                     else:
                         cattrs["check"] = "code"
                     for pk in ("metric", "op", "target"):

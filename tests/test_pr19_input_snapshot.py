@@ -1319,7 +1319,7 @@ async def test_api_validation_error_becomes_study_finalized(tmp_path, catalog):
     rt = await open_runtime(tmp_path, sid, catalog=catalog)
     events = await rt.store.read_all()
     refused = _assert_one_study_refused(events, kind=RefusalKind.INPUT_INVALID.value)
-    assert refused.payload.get("catalog_version") == 3
+    assert refused.payload.get("catalog_version") == 4
     _assert_one_study_finalized(events)
     await close_runtime(rt)
 
