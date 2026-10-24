@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Final, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
@@ -12,7 +12,10 @@ from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.job_events import JobEventType
 from coscientist.core.events.schema_gate import require_writer_schema_version
 
-TOOL_RESOLVED_TYPE = "ToolResolved"
+# Final+Literal member of EventType; cast avoids AnnAssign Constant (audit field_default).
+TOOL_RESOLVED_TYPE: Final[Literal["ToolResolved"]] = cast(
+    Literal["ToolResolved"], "ToolResolved"
+)
 
 # Writer schema version constants (kept for call sites; must match upcasters).
 PLAN_EXPANDED_SCHEMA_VERSION = 5
