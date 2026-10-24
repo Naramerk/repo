@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import random
 from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -30,27 +32,49 @@ from coscientist.agents.schemas import (
     TaskSpecDraft,
     ToolArg,
 )
+from coscientist.core.events.clock import FakeClock
 from coscientist.core.execution.domain import Budget, Need
 from coscientist.llm.client import LlmClient
 from coscientist.llm.transport import TransportResponse
+from coscientist.tools.contract import CallCtx, ToolOutput, ToolSpec
 from coscientist.tools.resolve import Resolution, ToolNeed
-from tests.llm.test_client import FakeClock, _config, _ok_body
+from tests.llm.test_client import FakeClock as LlmFakeClock
+from tests.llm.test_client import _config, _ok_body
 
-_ROLE_PROMPTS = {"planner": ROLE_PLANNER_REF, "executor-route": ROLE_EXECUTOR_REF, "tz_spec": ROLE_TZ_SPEC_REF}
+_ROLE_PROMPTS = {
+    "planner": ROLE_PLANNER_REF,
+    "executor-route": ROLE_EXECUTOR_REF,
+    "tz_spec": ROLE_TZ_SPEC_REF,
+}
 
 
-def _budget(*, max_llm_calls: int = 10, max_tokens: int = 100_000, max_tool_calls: int = 50) -> Budget:
+def _budget(
+    *,
+    max_llm_calls: int = 10,
+    max_tokens: int = 100_000,
+    max_tool_calls: int = 50,
+    deadline: datetime | None = None,
+) -> Budget:
     return Budget(
         max_llm_calls=max_llm_calls,
         max_tokens=max_tokens,
         max_cost_rub=None,
         max_tool_calls=max_tool_calls,
-        deadline=None,
+        deadline=deadline,
     )
 
 
-def _named_tools(*names: str) -> list[Any]:
-    return [SimpleNamespace(spec=SimpleNamespace(name=n)) for n in names]
+@dataclass(frozen=True)
+class _NamedTool:
+    spec: ToolSpec
+
+    async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+        del args, ctx
+        raise AssertionError("NamedTool.call must not be invoked; use ToolRouter")
+
+
+def _named_tools(*names: str) -> list[_NamedTool]:
+    return [_NamedTool(ToolSpec(name=n)) for n in names]
 
 
 class FakeToolRouter:
@@ -174,7 +198,7 @@ def _plan_out_json() -> str:
                 criteria=("artifact_present",),
             ),
         ),
-        questions=(QuestionDraft(id="Q1", text="two tasks?", final_type="verdict"),),
+        questions=(QuestionDraft(id="Q1", text="two tasks?", final_type="artifact"),),
         hypotheses=Need(kind="need", needed=False, reason="not required for two_tasks"),
         literature=Need(kind="need", needed=False, reason="not required for two_tasks"),
     )
@@ -191,12 +215,12 @@ def _exec_out_json(*, tool: str) -> str:
 
 def _client(bodies: list[bytes], *, monkeypatch: pytest.MonkeyPatch) -> LlmClient:
     monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
-    clock = FakeClock()
+    clock = LlmFakeClock()
 
     async def sleep(_delay: float) -> None:
         return None
 
-    async def wait_for(awaitable, *, timeout_s: float):
+    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
         del timeout_s
         return await awaitable
 
@@ -215,22 +239,40 @@ def _adapter(
     *,
     router: FakeToolRouter | None = None,
     role_models: Mapping[str, str] | None = None,
+    role_prompts: Mapping[str, Any] | None = None,
+    clock: FakeClock | None = None,
 ) -> LlmAgentAdapter:
+    if role_models is None:
+        models = {"planner": "test-model", "executor-route": "test-model", "tz_spec": "test-model"}
+    else:
+        models = dict(role_models)
+    if role_prompts is None:
+        prompts_map = dict(_ROLE_PROMPTS)
+    else:
+        prompts_map = dict(role_prompts)
+    if router is None:
+        tool_router: FakeToolRouter = FakeToolRouter(tools={})
+    else:
+        tool_router = router
+    if clock is None:
+        wall: FakeClock = FakeClock()
+    else:
+        wall = clock
     return LlmAgentAdapter(
         client,
-        role_models=dict(
-            role_models or {"planner": "test-model", "executor-route": "test-model", "tz_spec": "test-model"}
-        ),
-        tool_router=router or FakeToolRouter(tools={}),
+        role_models=models,
+        tool_router=tool_router,
         prompts=role_prompt_registry(),
-        role_prompts=_ROLE_PROMPTS,
+        role_prompts=prompts_map,
+        clock=wall,
     )
 
 
 @pytest.mark.asyncio
 async def test_planner_structured_plan_out_records_usage(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _client(
-        [_ok_body(content=_plan_out_json(), prompt_tokens=11, completion_tokens=7)], monkeypatch=monkeypatch
+        [_ok_body(content=_plan_out_json(), prompt_tokens=11, completion_tokens=7)],
+        monkeypatch=monkeypatch,
     )
     adapter = _adapter(client)
     run = await adapter.run(
@@ -277,12 +319,12 @@ async def test_structured_request_includes_response_format_and_prompt_ref(
 ) -> None:
     transport = CassetteTransport([_ok_body(content=_plan_out_json())])
     monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
-    clock = FakeClock()
+    clock = LlmFakeClock()
 
     async def sleep(_delay: float) -> None:
         return None
 
-    async def wait_for(awaitable, *, timeout_s: float):
+    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
         del timeout_s
         return await awaitable
 
@@ -304,30 +346,54 @@ async def test_structured_request_includes_response_format_and_prompt_ref(
     body = transport.requests[0]
     assert body["response_format"]["type"] == "json_schema"
     assert body["response_format"]["json_schema"]["strict"] is True
+    assert "schema" in body["response_format"]["json_schema"]
     system = body["messages"][0]["content"]
     assert "planner" in system
     assert "{{" not in system
 
 
-def test_role_models_missing_planner_raises() -> None:
+def test_role_models_missing_planner_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(AgentError, match="role_models must include"):
-        LlmAgentAdapter(
-            client=SimpleNamespace(),  # type: ignore[arg-type]
+        _adapter(
+            _client([], monkeypatch=monkeypatch),
             role_models={"executor-route": "m", "tz_spec": "m"},
-            tool_router=FakeToolRouter(tools={}),
-            prompts=role_prompt_registry(),
-            role_prompts=_ROLE_PROMPTS,
         )
 
 
-def test_role_models_empty_model_raises() -> None:
+def test_role_models_empty_model_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(AgentError, match="non-empty str"):
-        LlmAgentAdapter(
-            client=SimpleNamespace(),  # type: ignore[arg-type]
+        _adapter(
+            _client([], monkeypatch=monkeypatch),
             role_models={"planner": " ", "executor-route": "m", "tz_spec": "m"},
+        )
+
+
+def test_role_prompts_missing_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(AgentError, match="role_prompts must include"):
+        LlmAgentAdapter(
+            _client([], monkeypatch=monkeypatch),
+            role_models={"planner": "m", "executor-route": "m", "tz_spec": "m"},
             tool_router=FakeToolRouter(tools={}),
             prompts=role_prompt_registry(),
-            role_prompts=_ROLE_PROMPTS,
+            role_prompts={"planner": ROLE_PLANNER_REF, "executor-route": ROLE_EXECUTOR_REF},
+            clock=FakeClock(),
+        )
+
+
+def test_role_prompts_non_prompt_ref_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    bad_prompts: Any = {
+        "planner": "not-a-ref",
+        "executor-route": ROLE_EXECUTOR_REF,
+        "tz_spec": ROLE_TZ_SPEC_REF,
+    }
+    with pytest.raises(AgentError, match="must be PromptRef"):
+        LlmAgentAdapter(
+            _client([], monkeypatch=monkeypatch),
+            role_models={"planner": "m", "executor-route": "m", "tz_spec": "m"},
+            tool_router=FakeToolRouter(tools={}),
+            prompts=role_prompt_registry(),
+            role_prompts=bad_prompts,
+            clock=FakeClock(),
         )
 
 
@@ -335,7 +401,12 @@ def test_role_models_empty_model_raises() -> None:
 async def test_unsupported_role_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _adapter(_client([_ok_body(content=_plan_out_json())], monkeypatch=monkeypatch))
     with pytest.raises(AgentError, match="unsupported role"):
-        await adapter.run("critic", StudyContext(study_id="s", request="r", profile="p"), [], _budget())
+        await adapter.run(
+            "critic",
+            StudyContext(study_id="s", request="r", profile="p"),
+            [],
+            _budget(),
+        )
 
 
 @pytest.mark.asyncio
@@ -355,6 +426,23 @@ async def test_invalid_input_type_raises(monkeypatch: pytest.MonkeyPatch) -> Non
     adapter = _adapter(_client([], monkeypatch=monkeypatch))
     with pytest.raises(AgentError, match="invalid StudyContext"):
         await adapter.run("planner", {"study_id": 1, "request": "r", "profile": "p"}, [], _budget())
+
+
+@pytest.mark.asyncio
+async def test_wrong_basemodel_input_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _adapter(_client([], monkeypatch=monkeypatch))
+    with pytest.raises(AgentError, match="expected StudyContext"):
+        await adapter.run(
+            "planner",
+            PlanOut(
+                tasks=(),
+                questions=(),
+                hypotheses=Need(kind="need", needed=False, reason="off"),
+                literature=Need(kind="need", needed=False, reason="off"),
+            ),
+            [],
+            _budget(),
+        )
 
 
 @pytest.mark.asyncio
@@ -385,6 +473,58 @@ async def test_budget_none_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_budget_wrong_type_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _adapter(_client([], monkeypatch=monkeypatch))
+    with pytest.raises(AgentError, match="must be Budget"):
+        await adapter.run(
+            "planner",
+            StudyContext(study_id="s", request="r", profile="p"),
+            [],
+            SimpleNamespace(max_llm_calls=1),
+        )
+
+
+@pytest.mark.asyncio
+async def test_tools_not_list_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _adapter(_client([], monkeypatch=monkeypatch))
+    bad_tools: Any = ("not", "a", "list")
+    with pytest.raises(AgentError, match="tools must be a list"):
+        await adapter.run(
+            "planner",
+            StudyContext(study_id="s", request="r", profile="p"),
+            bad_tools,
+            _budget(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_tools_missing_spec_name_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _adapter(_client([], monkeypatch=monkeypatch))
+    with pytest.raises(AgentError, match="spec.name"):
+        await adapter.run(
+            "planner",
+            StudyContext(study_id="s", request="r", profile="p"),
+            [SimpleNamespace(spec=SimpleNamespace(name=None))],
+            _budget(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_tool_arg_invalid_json_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _adapter(
+        _client([], monkeypatch=monkeypatch),
+        router=FakeToolRouter(tools={"dataset_overview": {"ok": True}}),
+    )
+    with pytest.raises(AgentError, match="value_json is not valid JSON"):
+        await adapter.run(
+            "executor-route",
+            _route_in(args=(ToolArg(key="limit", value_json="not-json"),)),
+            _named_tools("dataset_overview"),
+            _budget(),
+        )
+
+
+@pytest.mark.asyncio
 async def test_tool_not_in_allow_list_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _adapter(
         _client([], monkeypatch=monkeypatch),
@@ -395,6 +535,21 @@ async def test_tool_not_in_allow_list_raises(monkeypatch: pytest.MonkeyPatch) ->
             "executor-route",
             _route_in(),
             _named_tools("other_tool"),
+            _budget(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_empty_allow_list_with_tools_hint_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _adapter(
+        _client([], monkeypatch=monkeypatch),
+        router=FakeToolRouter(tools={"dataset_overview": {"ok": True}}),
+    )
+    with pytest.raises(AgentError, match="tools list is empty"):
+        await adapter.run(
+            "executor-route",
+            _route_in(),
+            [],
             _budget(),
         )
 
@@ -411,6 +566,90 @@ async def test_budget_max_tool_calls_raises(monkeypatch: pytest.MonkeyPatch) -> 
             _route_in(),
             _named_tools("dataset_overview"),
             _budget(max_tool_calls=0),
+        )
+
+
+@pytest.mark.asyncio
+async def test_budget_max_llm_calls_zero_raises_before_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _adapter(_client([], monkeypatch=monkeypatch))
+    with pytest.raises(AgentError, match="max_llm_calls exceeded"):
+        await adapter.run(
+            "planner",
+            StudyContext(study_id="s", request="r", profile="p"),
+            [],
+            _budget(max_llm_calls=0),
+        )
+
+
+@pytest.mark.asyncio
+async def test_budget_naive_deadline_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _adapter(_client([], monkeypatch=monkeypatch))
+    with pytest.raises(AgentError, match="timezone-aware"):
+        await adapter.run(
+            "planner",
+            StudyContext(study_id="s", request="r", profile="p"),
+            [],
+            _budget(deadline=datetime(2026, 1, 1)),
+        )
+
+
+@pytest.mark.asyncio
+async def test_budget_deadline_exceeded_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    wall = FakeClock(start=datetime(2026, 6, 1, tzinfo=UTC))
+    adapter = _adapter(_client([], monkeypatch=monkeypatch), clock=wall)
+    with pytest.raises(AgentError, match="budget.deadline exceeded"):
+        await adapter.run(
+            "planner",
+            StudyContext(study_id="s", request="r", profile="p"),
+            [],
+            _budget(deadline=wall.now()),
+        )
+
+
+@pytest.mark.asyncio
+async def test_budget_max_tokens_exceeded_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _adapter(
+        _client(
+            [_ok_body(content=_plan_out_json(), prompt_tokens=80, completion_tokens=30)],
+            monkeypatch=monkeypatch,
+        )
+    )
+    with pytest.raises(AgentError, match="max_tokens exceeded"):
+        await adapter.run(
+            "planner",
+            StudyContext(study_id="s", request="r", profile="p"),
+            [],
+            _budget(max_tokens=50),
+        )
+
+
+@pytest.mark.asyncio
+async def test_tool_result_not_json_serializable_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _BadRouter(FakeToolRouter):
+        async def call(
+            self,
+            tool_name: str,
+            args: Mapping[str, Any],
+            *,
+            study_id: str,
+            task_key: str,
+            attempt_id: str,
+        ) -> Mapping[str, Any]:
+            del tool_name, args, study_id, task_key, attempt_id
+            return {"x": object()}
+
+    adapter = _adapter(
+        _client([], monkeypatch=monkeypatch),
+        router=_BadRouter(tools={"dataset_overview": {"ok": True}}),
+    )
+    with pytest.raises(AgentError, match="JSON-serializable"):
+        await adapter.run(
+            "executor-route",
+            _route_in(),
+            _named_tools("dataset_overview"),
+            _budget(),
         )
 
 
@@ -434,6 +673,22 @@ def test_agent_run_has_error_field() -> None:
         tool_calls=(),
     )
     assert run.error == "boom"
+
+
+def test_json_schema_response_format_is_typed() -> None:
+    from coscientist.llm.types import ChatMessage, JsonSchemaResponseFormat, StructuredLlmRequest
+
+    fmt = JsonSchemaResponseFormat(name="planner", strict=True, schema={"type": "object"})
+    req = StructuredLlmRequest(
+        model="m",
+        messages=[ChatMessage(role="user", content="x")],
+        response_format=fmt,
+    )
+    payload = req.response_format.to_openai_payload()
+    assert payload == {
+        "type": "json_schema",
+        "json_schema": {"name": "planner", "strict": True, "schema": {"type": "object"}},
+    }
 
 
 @pytest.mark.asyncio

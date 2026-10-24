@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -21,9 +22,10 @@ from coscientist.agents.schemas import (
     ToolArg,
     ToolCallRef,
 )
+from coscientist.core.events.clock import Clock
 from coscientist.core.execution.domain import Budget
 from coscientist.llm.client import LlmClient
-from coscientist.llm.types import ChatMessage, StructuredLlmRequest, Usage
+from coscientist.llm.types import ChatMessage, JsonSchemaResponseFormat, StructuredLlmRequest, Usage
 from coscientist.tools.resolve import ToolNeed, ToolRouter, call_via_router
 
 _T = TypeVar("_T", bound=BaseModel)
@@ -41,17 +43,13 @@ _OUTPUT_MODELS: dict[str, type[BaseModel]] = {
 _CONTEXT_ROLES = frozenset({_ROLE_PLANNER, _ROLE_TZ_SPEC})
 
 
-def _json_schema_response_format(model: type[BaseModel], *, name: str) -> dict[str, Any]:
+def _json_schema_response_format(model: type[BaseModel], *, name: str) -> JsonSchemaResponseFormat:
     """OpenAI-compatible json_schema response_format (strict)."""
-    schema = model.model_json_schema()
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": name,
-            "strict": True,
-            "schema": schema,
-        },
-    }
+    return JsonSchemaResponseFormat(
+        name=name,
+        strict=True,
+        schema=model.model_json_schema(),
+    )
 
 
 def _tool_names(tools: Sequence[Any]) -> frozenset[str]:
@@ -83,11 +81,20 @@ def _require_budget(budget: Any) -> Budget:
     return budget
 
 
-def _assert_budget_allows_llm(budget: Budget, *, llm_calls_used: int) -> None:
+def _assert_budget_allows_llm(
+    budget: Budget,
+    *,
+    llm_calls_used: int,
+    now: datetime,
+) -> None:
     if llm_calls_used >= budget.max_llm_calls:
         raise AgentError("budget.max_llm_calls exceeded")
-    if budget.deadline is not None and budget.deadline.tzinfo is None:
+    if budget.deadline is None:
+        return
+    if budget.deadline.tzinfo is None:
         raise AgentError("budget.deadline must be timezone-aware when set")
+    if now >= budget.deadline:
+        raise AgentError("budget.deadline exceeded")
 
 
 def _assert_budget_tokens(budget: Budget, usage: Usage) -> None:
@@ -102,6 +109,7 @@ class LlmAgentAdapter:
     ``role_models`` maps role → provider model id (from profile; required, no fallback).
     Tool calls go through ``call_via_router`` (fake in tests; MCP = G7).
     System prompts come from ``PromptRegistry`` via ``role_prompts`` (CAP #27).
+    ``clock`` supplies wall time for ``Budget.deadline`` enforcement (DESIGN §7.4).
     """
 
     def __init__(
@@ -112,6 +120,7 @@ class LlmAgentAdapter:
         tool_router: ToolRouter,
         prompts: PromptRegistry,
         role_prompts: Mapping[str, PromptRef],
+        clock: Clock,
     ) -> None:
         missing_models = [r for r in _REQUIRED_ROLES if r not in role_models]
         if missing_models:
@@ -135,6 +144,7 @@ class LlmAgentAdapter:
         self._router = tool_router
         self._prompts = prompts
         self._role_prompts = dict(role_prompts)
+        self._clock = clock
 
     async def run(self, role: str, input: Any, tools: list[Any], budget: Any) -> AgentRun:
         budget_b = _require_budget(budget)
@@ -162,7 +172,12 @@ class LlmAgentAdapter:
                 "tool_results": [r.model_dump() for r in tool_refs],
             }
 
-        _assert_budget_allows_llm(budget_b, llm_calls_used=0)
+        llm_calls_used = 0
+        _assert_budget_allows_llm(
+            budget_b,
+            llm_calls_used=llm_calls_used,
+            now=self._clock.now(),
+        )
         system = self._prompts.render(self._role_prompts[role], {"role": role})
         request = StructuredLlmRequest(
             model=model_id,
@@ -176,6 +191,7 @@ class LlmAgentAdapter:
             response_format=_json_schema_response_format(out_cls, name=role.replace("-", "_")),
         )
         response = await self._client.complete(request)
+        llm_calls_used += 1
         usage = response.usage
         _assert_budget_tokens(budget_b, usage)
         try:

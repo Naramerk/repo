@@ -25,6 +25,7 @@ from coscientist.llm.runtime import AsyncSleep, AsyncWaitFor, Clock
 from coscientist.llm.transport import Transport, TransportResponse
 from coscientist.llm.types import (
     ChatMessage,
+    JsonSchemaResponseFormat,
     LlmRequest,
     LlmResponse,
     StructuredLlmRequest,
@@ -36,6 +37,7 @@ __all__ = [
     "AsyncWaitFor",
     "ChatMessage",
     "Clock",
+    "JsonSchemaResponseFormat",
     "LlmClient",
     "LlmClockError",
     "LlmConfig",
