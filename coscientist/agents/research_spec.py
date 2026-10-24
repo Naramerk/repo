@@ -8,27 +8,22 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
+from coscientist.agents.strict import NONBLANK, AgentModel
 
-class SpecModel(BaseModel):
-    """Frozen, strict, no extras — SPEC output must match the schema exactly."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-
+# Alias kept for SPEC call sites / docs that say SpecModel.
+SpecModel = AgentModel
 
 ConstraintSubtype = Literal["resource", "data", "norm", "ethics", "domain", "profile"]
 MetricOp = Literal["<", "<=", "==", ">=", ">", "in"]
 MetricCheck = Literal["code", "review", "rubric"]
 
-# At least one non-whitespace character (rejects "" and "   "; spaces elsewhere OK).
-_NONBLANK = r".*\S.*"
-
 
 class Goal(SpecModel):
     """Study goal (RESEARCH_MODEL ``study.goal`` / graph_schema Goal)."""
 
-    statement: str = Field(pattern=_NONBLANK)
+    statement: str = Field(pattern=NONBLANK)
     research_form: str | None = None  # audit-ok[field_default]: graph_schema Goal.research_form optional
     trl: int | None = None  # audit-ok[field_default]: graph_schema Goal.trl optional
 
@@ -37,16 +32,16 @@ class Constraint(SpecModel):
     """Study constraint; node only when measured_by points at it."""
 
     subtype: ConstraintSubtype
-    content: str = Field(pattern=_NONBLANK)
+    content: str = Field(pattern=NONBLANK)
     limit: str | None = None  # audit-ok[field_default]: graph_schema constraint.limit optional
 
 
 class SuccessMetric(SpecModel):
     """Study-level success criterion (maps to criterion nodes from SPEC)."""
 
-    metric: str = Field(pattern=_NONBLANK)
+    metric: str = Field(pattern=NONBLANK)
     op: MetricOp
-    target: str = Field(pattern=_NONBLANK)
+    target: str = Field(pattern=NONBLANK)
     check: MetricCheck
     tolerance: Annotated[float | None, Field(ge=0, allow_inf_nan=False)] = None  # audit-ok[field_default]: tol
 
@@ -57,8 +52,8 @@ class ResearchSpec(SpecModel):
     Fields: object, goal, scope, constraints, success_metrics.
     """
 
-    object: str = Field(pattern=_NONBLANK)
+    object: str = Field(pattern=NONBLANK)
     goal: Goal
-    scope: str = Field(pattern=_NONBLANK)
+    scope: str = Field(pattern=NONBLANK)
     constraints: tuple[Constraint, ...]
     success_metrics: tuple[SuccessMetric, ...]

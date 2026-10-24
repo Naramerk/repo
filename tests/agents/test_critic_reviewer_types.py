@@ -92,7 +92,7 @@ def test_critic_rejects_unknown_decision() -> None:
 def test_critic_frozen() -> None:
     v = _critic()
     with pytest.raises(ValidationError, match="frozen"):
-        setattr(v, "decision", "reject")  # noqa: B010 — avoid assignment type:ignore
+        v.__setattr__("decision", "reject")
 
 
 def test_review_pass_requires_evidence() -> None:
@@ -106,14 +106,10 @@ def test_review_fail_allows_empty_evidence() -> None:
     assert v.evidence == ()
 
 
-def test_review_rejects_blank_reason() -> None:
-    with pytest.raises(ValidationError, match="non-blank string"):
-        _review(reasons=("ok", "  "))
-
-
 def test_review_round_trip_json() -> None:
-    v = _review(evidence=(_eref(json_pointer=None),))
+    v = _review(evidence=(_eref(json_pointer=""),))
     assert v.model_validate_json(v.model_dump_json()) == v
+    assert v.evidence[0].json_pointer == ""
 
 
 def test_review_evidence_requires_json_pointer_key() -> None:
@@ -121,6 +117,11 @@ def test_review_evidence_requires_json_pointer_key() -> None:
         ReviewEvidenceRef.model_validate(
             {"artifact_id": "art_1", "digest": "a" * 64}
         )
+
+
+def test_review_rejects_blank_reason_via_field_pattern() -> None:
+    with pytest.raises(ValidationError, match="string_pattern_mismatch"):
+        _review(reasons=("ok", "  "))
 
 
 def test_review_rejects_extra_field() -> None:

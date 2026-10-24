@@ -13,6 +13,9 @@ from coscientist.agents.critic import CRITIC_PROMPT_REF
 from coscientist.agents.prompts.registry import PromptRef, PromptRegistry, PromptTemplate
 from coscientist.agents.reviewer import REVIEWER_PROMPT_REF
 
+# CRITIC_PROMPT_REF / REVIEWER_PROMPT_REF remain the single source for id/version
+# on the templates below; refs() is derived from _BUILTIN only.
+
 CRITIC_PROMPT_TEMPLATE = PromptTemplate(
     prompt_id=CRITIC_PROMPT_REF.prompt_id,
     version=CRITIC_PROMPT_REF.version,
@@ -37,7 +40,8 @@ REVIEWER_PROMPT_TEMPLATE = PromptTemplate(
         "Evidence refs JSON:\n{{evidence_json}}\n\n"
         "Return only a ReviewVerdict JSON object with fields "
         "decision (pass|fail|unassessed), reasons, evidence "
-        "(list of {artifact_id, digest, json_pointer|null}), "
+        "(list of {artifact_id, digest, json_pointer}); "
+        "json_pointer is a required RFC 6901 string (\"\" = whole artifact). "
         "reviewer, and model. "
         "For pass, evidence must be non-empty.\n"
     ),
@@ -56,7 +60,10 @@ def builtin_role_prompt_templates() -> tuple[PromptTemplate, ...]:
 
 
 def builtin_role_prompt_refs() -> frozenset[PromptRef]:
-    return frozenset({CRITIC_PROMPT_REF, REVIEWER_PROMPT_REF})
+    """Refs derived from shipped templates (same id/version as *_PROMPT_REF)."""
+    return frozenset(
+        PromptRef(prompt_id=t.prompt_id, version=t.version) for t in _BUILTIN
+    )
 
 
 def builtin_role_prompt_registry() -> PromptRegistry:

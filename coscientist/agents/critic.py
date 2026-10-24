@@ -8,30 +8,22 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
 from coscientist.agents.prompts.registry import PromptRef
-
-# At least one non-whitespace character (rejects "" and "   ").
-_NONBLANK = r".*\S.*"
+from coscientist.agents.strict import NONBLANK, AgentModel
 
 CriticDecision = Literal["accept", "revise", "reject"]
 
 
-class CriticModel(BaseModel):
-    """Frozen, strict, no extras — critic output must match the schema exactly."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-
-
-class CriticIssue(CriticModel):
+class CriticIssue(AgentModel):
     """One critic finding; ``path`` is a plan/task locator (e.g. task_key)."""
 
-    path: str = Field(pattern=_NONBLANK)
-    message: str = Field(pattern=_NONBLANK)
+    path: str = Field(pattern=NONBLANK)
+    message: str = Field(pattern=NONBLANK)
 
 
-class CriticVerdict(CriticModel):
+class CriticVerdict(AgentModel):
     """Critic role output (DESIGN §7.1): accept | revise | reject + issues.
 
     ``revise`` / ``reject`` require a non-empty ``issues`` tuple (fail-closed).
