@@ -105,9 +105,7 @@ def test_stub_partial_excluded_before_counting():
         refutation_priority=True,
     )
     assert v == "refuted" and rule == "k_ref"
-    v2, _, _, _ = hypothesis_verdict(
-        [real_ref], True, refutations_needed=1, refutation_priority=True
-    )
+    v2, _, _, _ = hypothesis_verdict([real_ref], True, refutations_needed=1, refutation_priority=True)
     assert v2 == "refuted"
 
 
@@ -153,9 +151,7 @@ def test_refuted_k_ref_1():
         sesoi=None,
         refute_capable=False,
     )
-    assert hypothesis_verdict([ref], True, refutations_needed=1, refutation_priority=True)[
-        0
-    ] == "refuted"
+    assert hypothesis_verdict([ref], True, refutations_needed=1, refutation_priority=True)[0] == "refuted"
 
 
 def test_refutation_priority_false_conflict_inconclusive():
@@ -168,12 +164,7 @@ def test_refutation_priority_false_conflict_inconclusive():
         refute_capable=False,
     )
     con = _c(independence_key="c", attempt_id="C#1", experiment_id="C", intent="refute")
-    assert (
-        hypothesis_verdict(
-            [con, ref], True, refutations_needed=1, refutation_priority=False
-        )[0]
-        == "inconclusive"
-    )
+    assert hypothesis_verdict([con, ref], True, refutations_needed=1, refutation_priority=False)[0] == "inconclusive"
 
 
 def test_survived_single_severe():
@@ -191,9 +182,7 @@ def test_supported_needs_two_independent_one_refute_intent():
         experiment_id="B",
         artifact_id="Art2",
     )
-    assert (
-        hypothesis_verdict([a, b], True, supported_needed=2)[0] == "supported"
-    )
+    assert hypothesis_verdict([a, b], True, supported_needed=2)[0] == "supported"
     dup = _c(
         intent="refute",
         independence_key="a",
@@ -201,9 +190,7 @@ def test_supported_needs_two_independent_one_refute_intent():
         experiment_id="A",
         artifact_id="Art3",
     )
-    assert (
-        hypothesis_verdict([a, dup], True, supported_needed=2)[0] == "survived"
-    )
+    assert hypothesis_verdict([a, dup], True, supported_needed=2)[0] == "survived"
 
 
 def test_refute_intent_needs_failable_prediction():
@@ -319,9 +306,7 @@ def test_null_claim_requires_tost():
     assert tost_holds_numerically(sesoi=1.0, effect=effect)
     # Severe-grade TOST requires countable core-evaluated evidence.
     assert not tost_holds(sesoi=1.0, effect=effect)
-    assert tost_holds(
-        sesoi=1.0, effect={**effect, "countable": True, "core_evaluated": True}
-    )
+    assert tost_holds(sesoi=1.0, effect={**effect, "countable": True, "core_evaluated": True})
     v, oc, _ = classify_outcome(
         validity_ok=True,
         prediction_statuses=["PASSED"],
@@ -586,9 +571,7 @@ def test_output_kinds_from_catalog_ignores_planner_role():
     assert kinds == {"dataset": "data", "script": "code", "other": "data"}
     # Empty catalog list → everything data (planner cannot override).
     empty = type("C", (), {"code_output_names": []})()
-    assert output_kinds_from_catalog(
-        output_names=["dataset"], catalog=empty
-    ) == {"dataset": "data"}
+    assert output_kinds_from_catalog(output_names=["dataset"], catalog=empty) == {"dataset": "data"}
 
 
 def test_artifact_role_code_skipped():
@@ -618,9 +601,7 @@ def test_all_code_upstream_intermediate_is_root():
         def __init__(self, sha: str, role: str) -> None:
             self.sha256 = sha
             self.role = role
-            self.media_type = (
-                "text/x-python" if role == "code" else "application/json"
-            )
+            self.media_type = "text/x-python" if role == "code" else "application/json"
 
     def lookup(aid: str):
         if aid == code_id:
@@ -738,9 +719,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
     from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_spoof"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -764,9 +743,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
                 depends_on=["PLAN"],
                 expected_outputs=[
                     # Planner declares role=code; catalog does not list "dataset".
-                    OutputSpec(
-                        name="dataset", media_type="application/json", role="code"
-                    )
+                    OutputSpec(name="dataset", media_type="application/json", role="code")
                 ],
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
@@ -783,7 +760,9 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     aid_p = await rt.start_attempt("P0")
     # Spoof: agent labels bytes as python; planner role=code — catalog still data.
     raw = arts.put(
@@ -901,17 +880,20 @@ def test_tost_requires_real_ci_and_countable():
         severe=None,
     )
     assert claim_is_severe(c) is False
-    assert refute_intent_counts(
-        _c(
-            intent="refute",
-            predicts_null=True,
-            used_sesoi=True,
-            uses_sesoi=True,
-            sesoi=sesoi,
-            effect=no_count,
-            refute_capable=True,  # forged True must not win
+    assert (
+        refute_intent_counts(
+            _c(
+                intent="refute",
+                predicts_null=True,
+                used_sesoi=True,
+                uses_sesoi=True,
+                sesoi=sesoi,
+                effect=no_count,
+                refute_capable=True,  # forged True must not win
+            )
         )
-    ) is False
+        is False
+    )
 
 
 def test_value_matches_never_used_sesoi():
@@ -932,13 +914,13 @@ def test_value_matches_never_used_sesoi():
         )
         cr = evaluate_code_check(
             CodeCheck(
-            kind="value_matches",
-            output="main",
-            pointer="/count",
-            target=225,
-            allow_network=False,
-            allow_cgroup_degraded=False,
-        ),
+                kind="value_matches",
+                output="main",
+                pointer="/count",
+                target=225,
+                allow_network=False,
+                allow_cgroup_degraded=False,
+            ),
             template_id="value_match",
             check_id="value_match#0",
             out=AgentTaskOutput(
@@ -982,16 +964,8 @@ def test_refuted_k_ref_2_needs_independent():
         sesoi=None,
         refute_capable=False,
     )
-    assert (
-        hypothesis_verdict([r1], True, refutations_needed=2, refutation_priority=True)[0]
-        == "inconclusive"
-    )
-    assert (
-        hypothesis_verdict(
-            [r1, r2], True, refutations_needed=2, refutation_priority=True
-        )[0]
-        == "refuted"
-    )
+    assert hypothesis_verdict([r1], True, refutations_needed=2, refutation_priority=True)[0] == "inconclusive"
+    assert hypothesis_verdict([r1, r2], True, refutations_needed=2, refutation_priority=True)[0] == "refuted"
 
 
 def test_inc_below_k_ref_inconclusive():
@@ -1003,9 +977,7 @@ def test_inc_below_k_ref_inconclusive():
         sesoi=None,
         refute_capable=False,
     )
-    v, _, _, rule = hypothesis_verdict(
-        [r1], True, refutations_needed=2, refutation_priority=True
-    )
+    v, _, _, rule = hypothesis_verdict([r1], True, refutations_needed=2, refutation_priority=True)
     assert v == "inconclusive" and rule == "inc_below_k_ref"
 
 
@@ -1042,10 +1014,7 @@ def test_legacy_claims_never_supported():
         artifact_id="B",
         sesoi=0.5,
     )
-    assert (
-        hypothesis_verdict([legacy, other], True, supported_needed=2)[0]
-        == "inconclusive"
-    )
+    assert hypothesis_verdict([legacy, other], True, supported_needed=2)[0] == "inconclusive"
 
 
 def test_r17_violation_invalid():
@@ -1108,11 +1077,13 @@ def test_minimal_report_hypotheses_truncation_le_10kb():
         verdict="partial",
         tasks=tasks,
         attempts=attempts,
-        question_dispositions={
-            "Q1": {"disposition": "survived", "reason": "survived", "formulation": "q"}
-        },
+        question_dispositions={"Q1": {"disposition": "survived", "reason": "survived", "formulation": "q"}},
         fallback_reason=None,
         hypotheses=hyps,
+        refusal=None,
+        hypotheses_unavailable=None,
+        custom_checks=[],
+        observations=[],
     )
     assert len(canonical_json(report.model_dump(mode="json"))) <= MAX_BYTES
 
@@ -1143,9 +1114,7 @@ class VerdictPropertyMachine(RuleBasedStateMachine):
 
     @rule(
         validity=st.sampled_from(["valid", "invalid"]),
-        outcome=st.sampled_from(
-            ["consistent", "inconsistent", "indeterminate", None]
-        ),
+        outcome=st.sampled_from(["consistent", "inconsistent", "indeterminate", None]),
         provenance=st.sampled_from(["real", "partial", "stub"]),
         data=st.sampled_from(["D0", "D1", "D2"]),
         code=st.sampled_from(["C0", "C1"]),
@@ -1229,9 +1198,7 @@ class VerdictPropertyMachine(RuleBasedStateMachine):
             predicted_direction="positive",
             data_digests=digests,
             check_role="prediction",
-            refute_capable=bool(
-                with_threshold and not legacy and intent == "refute" and not lit
-            ),
+            refute_capable=bool(with_threshold and not legacy and intent == "refute" and not lit),
             exclusion_reason=(
                 "validity_failed"
                 if validity == "invalid"
@@ -1275,11 +1242,7 @@ class VerdictPropertyMachine(RuleBasedStateMachine):
         if v != "supported":
             return
         counted = [c for c in self.claims if c.counts()]
-        severe = [
-            c
-            for c in counted
-            if c.claim_outcome == "consistent" and claim_is_severe(c)
-        ]
+        severe = [c for c in counted if c.claim_outcome == "consistent" and claim_is_severe(c)]
         assert severe and all(claim_is_severe(c) for c in severe)
         keys = {c.independence_key for c in severe}
         assert len(keys) >= self.k_sup
@@ -1291,11 +1254,7 @@ class VerdictPropertyMachine(RuleBasedStateMachine):
         if v != "refuted":
             return
         counted = [c for c in self.claims if c.counts()]
-        keys = {
-            c.independence_key
-            for c in counted
-            if c.claim_outcome == "inconsistent"
-        }
+        keys = {c.independence_key for c in counted if c.claim_outcome == "inconsistent"}
         assert len(keys) >= self.k_ref
 
     @invariant()
@@ -1330,9 +1289,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
     from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_nose"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -1360,7 +1317,9 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"count": 225}',
@@ -1381,9 +1340,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
     claim = by["question:Q1"][0]
     assert claim.severe is False
     assert claim.sesoi is None
-    d = dispositions(
-        tasks=rt.tasks, plans=rt.plans, graph=rt.graph, study=rt.study, results=rt.results
-    )
+    d = dispositions(tasks=rt.tasks, plans=rt.plans, graph=rt.graph, study=rt.study, results=rt.results)
     assert d["Q1"]["verdict"] != "supported"
     assert d["Q1"]["verdict"] == "inconclusive"
     await close_runtime(rt)
@@ -1396,9 +1353,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
     from coscientist.core.execution.domain import ExperimentMethod
 
     sid = "st_indep"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -1423,15 +1378,9 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 depends_on=["PLAN"],
                 expected_outputs=[
                     # Planner may lie with role=code; catalog decides kinds.
-                    OutputSpec(
-                        name="dataset", media_type="application/json", role="code"
-                    ),
-                    OutputSpec(
-                        name="data_b", media_type="application/json", role="data"
-                    ),
-                    OutputSpec(
-                        name="code", media_type="text/x-python", role="code"
-                    ),
+                    OutputSpec(name="dataset", media_type="application/json", role="code"),
+                    OutputSpec(name="data_b", media_type="application/json", role="data"),
+                    OutputSpec(name="code", media_type="text/x-python", role="code"),
                 ],
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
@@ -1526,7 +1475,9 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     aid_p = await rt.start_attempt("P_RAW")
     da = arts.put(
         b'{"count": 1}',
@@ -1634,9 +1585,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
     from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_agent_ref"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -1663,7 +1612,9 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     aid0 = await rt.start_attempt("E0", provenance="real")
     art = arts.put(
         b'{"count": 999}',
@@ -1685,9 +1636,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
     assert (c.effect or {}).get("countable") is True
     assert (c.effect or {}).get("trusted") is False
     assert c.claim_outcome == "inconsistent"
-    d = dispositions(
-        tasks=rt.tasks, plans=rt.plans, graph=rt.graph, study=rt.study, results=rt.results
-    )
+    d = dispositions(tasks=rt.tasks, plans=rt.plans, graph=rt.graph, study=rt.study, results=rt.results)
     assert d["Q1"]["verdict"] == "refuted"
     await close_runtime(rt)
 
@@ -1698,9 +1647,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
     from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_foreign"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -1727,7 +1674,9 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     aid = await rt.start_attempt("E0")
     foreign = arts.put(
         b'{"count": 225}',
@@ -1739,9 +1688,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
         aid,
         AgentTaskOutput(
             summary="x",
-            outputs={
-                "main": ArtifactHandle(artifact_id=foreign.artifact_id, name="main")
-            },
+            outputs={"main": ArtifactHandle(artifact_id=foreign.artifact_id, name="main")},
             values={"count": 225},
             claims=[{"id": "c1", "target": "Q1"}],
         ),
@@ -1761,9 +1708,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
     assert q["disposition"] == "inconclusive"
     assert q["reason"] == "foreign_artifact"
     assert q["reason"] != "unclear"
-    assert any(
-        e.get("reason") == "foreign_artifact" for e in (q.get("excluded_claims") or [])
-    )
+    assert any(e.get("reason") == "foreign_artifact" for e in (q.get("excluded_claims") or []))
     assert fin.payload.get("report_artifact_id") or fin.payload.get("minimal_report")
     await close_runtime(rt)
 
@@ -1772,9 +1717,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
 async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
     """record→finalize: no output submitted → output_not_submitted on StudyFinalized."""
     sid = "st_no_out"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -1801,7 +1744,9 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     aid = await rt.start_attempt("E0")
     await rt.executor.record(
         aid,
@@ -1826,18 +1771,13 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
     assert q["disposition"] == "inconclusive"
     assert q["reason"] == "output_not_submitted"
     assert q["reason"] != "unclear"
-    assert any(
-        e.get("reason") == "output_not_submitted"
-        for e in (q.get("excluded_claims") or [])
-    )
+    assert any(e.get("reason") == "output_not_submitted" for e in (q.get("excluded_claims") or []))
     assert fin.payload.get("report_artifact_id") or fin.payload.get("minimal_report")
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
-async def test_e2e_agent_put_two_independent_mets_supported(
-    tmp_path, clock, runtime_cls
-):
+async def test_e2e_agent_put_two_independent_mets_supported(tmp_path, clock, runtime_cls):
     """Live supported: agent put + core SESOI eval, two independent mets."""
     from datetime import UTC, datetime
 
@@ -1847,9 +1787,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
     from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_agent_sup"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -1876,9 +1814,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
-                expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data")
-                ],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json", role="data")],
             ),
             TaskSpec(
                 task_key="P2",
@@ -1888,9 +1824,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
-                expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data")
-                ],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json", role="data")],
             ),
             TaskSpec(
                 task_key="E1",
@@ -1914,7 +1848,9 @@ async def test_e2e_agent_put_two_independent_mets_supported(
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     now = datetime.now(UTC)
     hid = hypothesis_node_id(sid, "H1")
     rt.graph.upsert_node(
@@ -1994,9 +1930,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
     assert all((c.effect or {}).get("trusted") is False for c in hyps)
     assert all((c.effect or {}).get("countable") is True for c in hyps)
     assert all(c.severe for c in hyps)
-    v, _, _, rule = hypothesis_verdict(
-        hyps, True, supported_needed=2, refutations_needed=1, refutation_priority=True
-    )
+    v, _, _, rule = hypothesis_verdict(hyps, True, supported_needed=2, refutations_needed=1, refutation_priority=True)
     assert v == "supported" and rule == "support_min"
 
     await rt.start_attempt("REPORT")
@@ -2011,9 +1945,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
 
 
 @pytest.mark.asyncio
-async def test_e2e_sandbox_metric_trusted_tag_and_countable(
-    tmp_path, clock, runtime_cls
-):
+async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, runtime_cls):
     """Sandbox put stamps trusted=True; still countable for verdicts (PR17 path)."""
     from datetime import UTC, datetime
 
@@ -2024,9 +1956,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
     from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_sandbox"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -2053,9 +1983,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
-                expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data")
-                ],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json", role="data")],
             ),
             TaskSpec(
                 task_key="P2",
@@ -2065,9 +1993,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
-                expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data")
-                ],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json", role="data")],
             ),
             TaskSpec(
                 task_key="E1",
@@ -2078,9 +2004,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 inputs=[InputSpec(from_task="P1", output="main")],
                 criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
-                expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data")
-                ],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json", role="data")],
             ),
             TaskSpec(
                 task_key="E2",
@@ -2091,19 +2015,17 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 inputs=[InputSpec(from_task="P2", output="main")],
                 criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
-                expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data")
-                ],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json", role="data")],
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     # Hypothesis + tests.intent=refute so capable refute counts toward supported.
     now = datetime(2026, 1, 1, tzinfo=UTC)
     hid = hypothesis_node_id(sid, "H1")
-    rt.graph.upsert_node(
-        GraphNode(node_id=hid, kind="hypothesis", study_id=sid, ref_id="H1", attrs={})
-    )
+    rt.graph.upsert_node(GraphNode(node_id=hid, kind="hypothesis", study_id=sid, ref_id="H1", attrs={}))
     for tk in ("E1", "E2"):
         eid = experiment_node_id(sid, tk)
         if rt.graph.get_node(eid) is None:
@@ -2176,16 +2098,12 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
     assert all((c.effect or {}).get("trusted") is True for c in hyps)
     assert all((c.effect or {}).get("countable") is True for c in hyps)
     assert all(c.severe for c in hyps)
-    v, _, _, rule = hypothesis_verdict(
-        hyps, True, supported_needed=2, refutations_needed=1, refutation_priority=True
-    )
+    v, _, _, rule = hypothesis_verdict(hyps, True, supported_needed=2, refutations_needed=1, refutation_priority=True)
     assert v == "supported" and rule == "support_min"
 
     # Separate study: sandbox failing metric → refuted + trusted tag.
     sid2 = "st_sandbox_ref"
-    rt2 = await open_runtime(
-        tmp_path / "ref", sid2, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt2 = await open_runtime(tmp_path / "ref", sid2, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt2.create_study(
         profile="research",
         request="q",
@@ -2212,7 +2130,9 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     aid_f = await rt2.start_attempt("E0", provenance="real")
     art_f = arts2.put_sandbox(
         b'{"count": 999}',
@@ -2254,9 +2174,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
     from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_v1"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -2295,7 +2213,9 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"effect": 2.0}',
@@ -2320,9 +2240,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
     await close_runtime(rt)
 
     # Reopen: journaled snapshot preferred.
-    rt2 = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
-    )
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
     assert rt2.verdict_snapshots.get("Q1", {}).get("verdict") == snap1.get("verdict")
     assert rt2.study.supported_needed == 2
     await close_runtime(rt2)
@@ -2331,9 +2249,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
 @pytest.mark.asyncio
 async def test_aggregate_evalue_rejected_at_create(tmp_path, clock, runtime_cls):
     sid = "st_ev"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     with pytest.raises(ValueError, match="evalue"):
         await rt.create_study(
             profile="research",
@@ -2349,18 +2265,14 @@ async def test_aggregate_evalue_rejected_at_create(tmp_path, clock, runtime_cls)
 
 
 @pytest.mark.asyncio
-async def test_forged_severe_refute_capable_recomputed_on_replay(
-    tmp_path, clock, runtime_cls
-):
+async def test_forged_severe_refute_capable_recomputed_on_replay(tmp_path, clock, runtime_cls):
     """Legacy/forged severe=True / refute_capable=True must not survive read/replay."""
     from coscientist.core.claims.graph import GraphEdge, GraphNode
     from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.events.ids import claim_node_id, question_node_id
 
     sid = "st_forge"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -2386,7 +2298,9 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     cid = claim_node_id(sid, "forged")
     qid = question_node_id(sid, "Q1")
     aid = f"{sid}/E0#1"
@@ -2431,7 +2345,8 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
                         "sesoi": 0.5,
                     },
                 ).model_dump(mode="json"),
-                ts=clock.now(), schema_version=writer_schema_version("GraphNodeUpserted"), 
+                ts=clock.now(),
+                schema_version=writer_schema_version("GraphNodeUpserted"),
             ),
             EventEnvelope(
                 study_id=sid,
@@ -2445,7 +2360,8 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
                     dst_id=qid,
                     study_id=sid,
                 ).model_dump(mode="json"),
-                ts=clock.now(), schema_version=writer_schema_version("GraphEdgeAdded"), 
+                ts=clock.now(),
+                schema_version=writer_schema_version("GraphEdgeAdded"),
             ),
         ]
     )
@@ -2459,9 +2375,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
     assert refute_intent_counts(claim) is False
 
     await close_runtime(rt)
-    rt2 = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
-    )
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
     by2 = filtered_claims_by_target(rt2.graph, study_id=sid, results=rt2.results)
     claim2 = by2["question:Q1"][0]
     assert claim2.severe is False
@@ -2476,9 +2390,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
     from coscientist.core.execution.artifacts import make_tool_ref
 
     sid = "st_tost"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -2505,7 +2417,9 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"effect": {"est": 0.0, "ci_low": -0.1, "ci_high": 0.1}}',

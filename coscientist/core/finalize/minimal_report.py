@@ -12,7 +12,13 @@ from pydantic import ValidationError
 
 from coscientist.core.claims.reasons import Disposition, TaskReason
 from coscientist.core.events.digest import canonical_json
-from coscientist.core.execution.domain import Provenance, Task, TaskOutcome, TaskState
+from coscientist.core.execution.domain import (
+    Provenance,
+    Task,
+    TaskOutcome,
+    TaskState,
+    parse_provenance,
+)
 from coscientist.core.finalize.minimal_report_models import (
     MinimalReport,
     MinimalReportRefuse,
@@ -22,9 +28,7 @@ from coscientist.core.finalize.minimal_report_models import (
 MAX_BYTES = 10_240
 
 
-def _task_provenance(
-    task: Task, attempts: Mapping[str, Mapping[str, Any]]
-) -> Provenance:
+def _task_provenance(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> Provenance:
     """Provenance of the last closed attempt — never invent ``real``.
 
     Missing / null / unknown provenance on a closed attempt, or no closed
@@ -37,28 +41,15 @@ def _task_provenance(
         att = attempts[aid]
         if not att.get("closed"):
             continue
-        if "provenance" not in att or att["provenance"] is None:
-            raise MinimalReportRefuse(
-                f"task {task.spec.task_key!r}: closed attempt provenance required"
-            )
-        raw = str(att["provenance"])
-        if raw == "real":
-            return "real"
-        if raw == "partial":
-            return "partial"
-        if raw == "stub":
-            return "stub"
-        raise MinimalReportRefuse(
-            f"task {task.spec.task_key!r}: unknown provenance {raw!r}"
-        )
-    raise MinimalReportRefuse(
-        f"task {task.spec.task_key!r}: closed attempt provenance required"
-    )
+        raw = att["provenance"] if "provenance" in att else None
+        try:
+            return parse_provenance(raw, owner=f"task {task.spec.task_key!r}")
+        except ValueError as e:
+            raise MinimalReportRefuse(str(e)) from e
+    raise MinimalReportRefuse(f"task {task.spec.task_key!r}: closed attempt provenance required")
 
 
-def _has_closed_attempt(
-    task: Task, attempts: Mapping[str, Mapping[str, Any]]
-) -> bool:
+def _has_closed_attempt(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> bool:
     for aid in task.attempts:
         if aid not in attempts:
             continue
@@ -78,9 +69,7 @@ def _summary(
         if t.outcome is not None:
             counts[t.outcome.value] += 1
     m = len(questions)
-    k = sum(
-        1 for q in questions if q.get("disposition") is Disposition.NOT_ATTEMPTED
-    )
+    k = sum(1 for q in questions if q.get("disposition") is Disposition.NOT_ATTEMPTED)
     return (
         f"Study закрыто: {terminal_reason}; задач {n} "
         f"(SUCCESS {counts['SUCCESS']}, PARTIAL {counts['PARTIAL']}, "
@@ -89,9 +78,7 @@ def _summary(
     )
 
 
-def _sections(
-    tasks: list[Task], attempts: Mapping[str, Mapping[str, Any]]
-) -> MinimalReportSections:
+def _sections(tasks: list[Task], attempts: Mapping[str, Mapping[str, Any]]) -> MinimalReportSections:
     real: list[str] = []
     stub: list[str] = []
     human: list[str] = []
@@ -122,40 +109,30 @@ def assemble_minimal_report(
     attempts: Mapping[str, Mapping[str, Any]],
     question_dispositions: Mapping[str, Mapping[str, Any]],
     fallback_reason: str | None,
-    refusal: str | None = None,
-    hypotheses: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None = None,
-    hypotheses_unavailable: str | None = None,
-    custom_checks: Sequence[Mapping[str, Any]] | None = None,
-    observations: Sequence[Mapping[str, Any] | str] | None = None,
+    refusal: str | None,
+    hypotheses: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]],
+    hypotheses_unavailable: str | None,
+    custom_checks: Sequence[Mapping[str, Any]],
+    observations: Sequence[Mapping[str, Any] | str],
 ) -> MinimalReport:
     """Full (non-truncated) typed minimal report."""
     task_list = sorted(tasks.values(), key=lambda t: t.spec.task_key)
     q_rows: list[dict[str, Any]] = []
     for qid, d in sorted(question_dispositions.items()):
-        if (
-            "formulation" not in d
-            or "disposition" not in d
-            or "reason" not in d
-        ):
-            raise MinimalReportRefuse(
-                f"question {qid!r}: formulation/disposition/reason required"
-            )
+        if "formulation" not in d or "disposition" not in d or "reason" not in d:
+            raise MinimalReportRefuse(f"question {qid!r}: formulation/disposition/reason required")
         formulation = d["formulation"]
         disposition = d["disposition"]
         reason = d["reason"]
         if formulation is None or disposition is None or reason is None:
-            raise MinimalReportRefuse(
-                f"question {qid!r}: formulation/disposition/reason must be non-null"
-            )
+            raise MinimalReportRefuse(f"question {qid!r}: formulation/disposition/reason must be non-null")
         if isinstance(disposition, Disposition):
             disp = disposition
         else:
             try:
                 disp = Disposition(str(disposition))
             except ValueError as e:
-                raise MinimalReportRefuse(
-                    f"question {qid!r}: unknown disposition {disposition!r}"
-                ) from e
+                raise MinimalReportRefuse(f"question {qid!r}: unknown disposition {disposition!r}") from e
         note_raw = d.get("note")
         row: dict[str, Any] = {
             "question_id": str(qid),
@@ -166,35 +143,31 @@ def assemble_minimal_report(
         }
         q_rows.append(row)
     if isinstance(hypotheses, Mapping):
-        h_rows: list[dict[str, Any]] = []
+        h_rows: list[dict[str, object]] = []
         for hid, v in sorted(hypotheses.items()):
             if not isinstance(v, Mapping):
-                raise MinimalReportRefuse(
-                    f"hypothesis {hid!r}: expected mapping row, got {type(v).__name__}"
-                )
+                raise MinimalReportRefuse(f"hypothesis {hid!r}: expected mapping row, got {type(v).__name__}")
             row_h = dict(v)
             rid = row_h.get("hypothesis_id")
             if rid is None:
-                raise MinimalReportRefuse(
-                    f"hypothesis {hid!r}: hypothesis_id required in row"
-                )
+                raise MinimalReportRefuse(f"hypothesis {hid!r}: hypothesis_id required in row")
             if str(rid) != str(hid):
-                raise MinimalReportRefuse(
-                    f"hypothesis key {hid!r} != row hypothesis_id {rid!r}"
-                )
+                raise MinimalReportRefuse(f"hypothesis key {hid!r} != row hypothesis_id {rid!r}")
             h_rows.append(row_h)
-    elif hypotheses is None:
-        h_rows = []
     else:
-        h_rows = [dict(h) for h in hypotheses]
+        h_rows = []
+        for h in hypotheses:
+            row_h = dict(h)
+            rid = row_h.get("hypothesis_id")
+            if rid is None:
+                raise MinimalReportRefuse("hypothesis list row: hypothesis_id required")
+            h_rows.append(row_h)
     t_rows: list[dict[str, Any]] = []
     for t in task_list:
         if t.state != TaskState.DONE and t.outcome is None:
             continue
         if t.outcome is None:
-            raise MinimalReportRefuse(
-                f"task {t.spec.task_key!r}: outcome required"
-            )
+            raise MinimalReportRefuse(f"task {t.spec.task_key!r}: outcome required")
         reason_s: str | None
         if isinstance(t.reason, TaskReason):
             reason_s = t.reason.value
@@ -217,21 +190,15 @@ def assemble_minimal_report(
             }
         )
     q_n = len(q_rows)
-    na_n = sum(
-        1 for q in q_rows if q["disposition"] is Disposition.NOT_ATTEMPTED
-    )
-    if custom_checks is None:
-        checks: list[dict[str, Any]] = []
-    else:
-        checks = [dict(c) for c in custom_checks]
-    obs_list: list[Any] = []
-    if observations is not None:
-        for obs in observations:
-            if isinstance(obs, Mapping):
-                obs_list.append(dict(obs))
-            else:
-                obs_list.append(obs)
-    raw: dict[str, Any] = {
+    na_n = sum(1 for q in q_rows if q["disposition"] is Disposition.NOT_ATTEMPTED)
+    checks: list[dict[str, object]] = [dict(c) for c in custom_checks]
+    obs_list: list[str | dict[str, object]] = []
+    for obs in observations:
+        if isinstance(obs, Mapping):
+            obs_list.append(dict(obs))
+        else:
+            obs_list.append(obs)
+    raw: dict[str, object] = {
         "study_id": study_id,
         "terminal_reason": terminal_reason,
         "trigger": trigger,
@@ -268,11 +235,11 @@ def build_minimal_report(
     attempts: Mapping[str, Mapping[str, Any]],
     question_dispositions: Mapping[str, Mapping[str, Any]],
     fallback_reason: str | None,
-    refusal: str | None = None,
-    hypotheses: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None = None,
-    hypotheses_unavailable: str | None = None,
-    custom_checks: Sequence[Mapping[str, Any]] | None = None,
-    observations: Sequence[Mapping[str, Any] | str] | None = None,
+    refusal: str | None,
+    hypotheses: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]],
+    hypotheses_unavailable: str | None,
+    custom_checks: Sequence[Mapping[str, Any]],
+    observations: Sequence[Mapping[str, Any] | str],
 ) -> MinimalReport:
     return truncate_minimal_report(
         assemble_minimal_report(
@@ -304,9 +271,7 @@ def truncate_minimal_report(report: MinimalReport) -> MinimalReport:
     if _jcs_size(out) <= MAX_BYTES:
         return out
     out = out.model_copy(update={"truncated": True})
-    qs = [
-        q.model_copy(update={"formulation": q.formulation[:80]}) for q in out.questions
-    ]
+    qs = [q.model_copy(update={"formulation": q.formulation[:80]}) for q in out.questions]
     out = out.model_copy(update={"questions": qs})
     if _jcs_size(out) <= MAX_BYTES:
         return out
@@ -332,9 +297,9 @@ def truncate_minimal_report(report: MinimalReport) -> MinimalReport:
 def render_markdown_report(
     report: MinimalReport,
     *,
+    tasks: Mapping[str, Task],
     as_of: str | None = None,
     plans: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None = None,
-    tasks: Mapping[str, Task] | None = None,
 ) -> str:
     """Deterministic MD report from typed ``MinimalReport`` (no LLM)."""
     study_id = report.study_id
@@ -353,11 +318,8 @@ def render_markdown_report(
         for q in report.questions
     }
     custom_checks = list(report.custom_checks)
-    observations: list[Any] = list(report.observations)
-    if tasks is None:
-        task_map: Mapping[str, Task] = {}
-    else:
-        task_map = tasks
+    observations: list[str | dict[str, object]] = list(report.observations)
+    task_map = tasks
     lines = [
         f"# Study report `{study_id}`",
         "",
@@ -382,16 +344,12 @@ def render_markdown_report(
         lines.append("_No questions._")
     for q in report.questions:
         extra = f"; note={q.note}" if q.note is not None else ""
-        lines.append(
-            f"- `{q.question_id}`: {q.disposition.value} ({q.reason}) — "
-            f"{q.formulation}{extra}"
-        )
+        lines.append(f"- `{q.question_id}`: {q.disposition.value} ({q.reason}) — {q.formulation}{extra}")
     lines.extend(["", "## Tasks"])
     # Single path: Tasks section always from typed MinimalReport rows.
     for row in report.tasks:
         lines.append(
-            f"- `{row.task_key}` [{row.kind}] {row.outcome.value} "
-            f"reason={row.reason} provenance={row.provenance}"
+            f"- `{row.task_key}` [{row.kind}] {row.outcome.value} reason={row.reason} provenance={row.provenance}"
         )
     tree = render_subtask_tree(
         question_dispositions=question_dispositions,
@@ -411,8 +369,7 @@ def render_markdown_report(
             delg = "delegated" if c.get("delegated") else "human"
             measures = _escape_report_text(c.get("measures") or "")
             lines.append(
-                f"- `{c.get('proposal_id')}` status={c.get('status')} "
-                f"by={who}/{delg} — {measures} (не каталожная)"
+                f"- `{c.get('proposal_id')}` status={c.get('status')} by={who}/{delg} — {measures} (не каталожная)"
             )
     lines.extend(["", "## Observations"])
     if not observations:
@@ -467,10 +424,7 @@ def render_subtask_tree(
         disp = d.get("disposition", "?")
         reason = d.get("reason")
         pad = "  " * indent
-        lines.append(
-            f"{pad}- `{qid}` origin={origin} rev={rev}: {disp}"
-            + (f" ({reason})" if reason else "")
-        )
+        lines.append(f"{pad}- `{qid}` origin={origin} rev={rev}: {disp}" + (f" ({reason})" if reason else ""))
         for tkey in sorted(cover.get(qid) or ()):
             t = by_key.get(tkey)
             if t is None and tkey in superseded:
@@ -480,9 +434,7 @@ def render_subtask_tree(
                 lines.append(f"{pad}  - `{tkey}` (missing)")
                 continue
             key_fmt = f"~~`{tkey}`~~" if tkey in superseded else f"`{tkey}`"
-            lines.append(
-                f"{pad}  - {key_fmt}: {t.state.value}/{t.outcome} reason={t.reason}"
-            )
+            lines.append(f"{pad}  - {key_fmt}: {t.state.value}/{t.outcome} reason={t.reason}")
         for child in kids.get(qid) or []:
             _emit_question(child, indent + 1)
 

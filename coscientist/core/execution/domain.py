@@ -75,6 +75,22 @@ VALID_PROVENANCE: frozenset[str] = frozenset({"real", "partial", "stub"})
 PROVENANCE_RANK: dict[str, int] = {"real": 0, "partial": 1, "stub": 2}
 
 
+def parse_provenance(raw: object, *, owner: str) -> Provenance:
+    """Require provenance — never invent ``real`` (DESIGN_M1 §6.7).
+
+    ``raw`` is the field value (caller passes ``None`` when the key is absent).
+    """
+    if raw is None:
+        raise ValueError(f"{owner}: provenance required")
+    if not isinstance(raw, str) or raw not in VALID_PROVENANCE:
+        raise ValueError(f"{owner}: unknown provenance {raw!r}")
+    if raw == "real":
+        return "real"
+    if raw == "partial":
+        return "partial"
+    return "stub"
+
+
 def worst_provenance(*values: Provenance) -> Provenance:
     """Least favorable under real < partial < stub. Empty → stub."""
     if not values:
@@ -333,9 +349,7 @@ class FrozenCheckLimits(Frozen):
     def _opt_host_seconds(cls, v: object) -> float | None:
         return None if v is None else _strict_real(v, name="host budget")
 
-    @field_validator(
-        "memory_mb", "max_output_bytes", "pids_max", "rlimit_nproc", mode="before"
-    )
+    @field_validator("memory_mb", "max_output_bytes", "pids_max", "rlimit_nproc", mode="before")
     @classmethod
     def _opt_positive_int(cls, v: object) -> int | None:
         return None if v is None else _strict_pos_int(v, name="limit")
@@ -344,9 +358,7 @@ class FrozenCheckLimits(Frozen):
     @classmethod
     def _toggle_bool(cls, v: object) -> object:
         if not isinstance(v, bool):
-            raise ValueError(
-                f"security toggle must be bool, got {type(v).__name__}"
-            )
+            raise ValueError(f"security toggle must be bool, got {type(v).__name__}")
         return v
 
 
@@ -794,9 +806,7 @@ class CodeCheck(Frozen):
             return None
         # bool is a subclass of int — reject before numeric coercion.
         if isinstance(v, bool) or not isinstance(v, (int, float)):
-            raise ValueError(
-                f"host budget must be a real number, got {type(v).__name__}"
-            )
+            raise ValueError(f"host budget must be a real number, got {type(v).__name__}")
         fv = float(v)
         if not math.isfinite(fv) or fv <= 0.0:
             raise ValueError(f"host budget must be finite and > 0, got {v!r}")
@@ -809,9 +819,7 @@ class CodeCheck(Frozen):
         if v is None:
             return None
         if isinstance(v, bool) or not isinstance(v, (int, float)):
-            raise ValueError(
-                f"rerun_tol must be a real number, got {type(v).__name__}"
-            )
+            raise ValueError(f"rerun_tol must be a real number, got {type(v).__name__}")
         fv = float(v)
         if not math.isfinite(fv) or fv < 0.0:
             raise ValueError(f"rerun_tol must be finite and >= 0, got {v!r}")
@@ -830,9 +838,7 @@ class CodeCheck(Frozen):
         if v is None:
             return None
         if isinstance(v, bool) or not isinstance(v, int):
-            raise ValueError(
-                f"limit must be int (not bool/str), got {type(v).__name__}"
-            )
+            raise ValueError(f"limit must be int (not bool/str), got {type(v).__name__}")
         if v <= 0:
             raise ValueError(f"limit must be > 0, got {v!r}")
         return v
@@ -841,9 +847,7 @@ class CodeCheck(Frozen):
     @classmethod
     def _security_toggle_bool(cls, v: object) -> object:
         if not isinstance(v, bool):
-            raise ValueError(
-                f"security toggle must be bool, got {type(v).__name__}"
-            )
+            raise ValueError(f"security toggle must be bool, got {type(v).__name__}")
         return v
 
     @model_validator(mode="after")
@@ -855,9 +859,7 @@ class CodeCheck(Frozen):
             if self.rerun_tol is None:
                 raise ValueError("reproducible_rerun requires rerun_tol")
             if self.tolerance is not None:
-                raise ValueError(
-                    "reproducible_rerun: rerun_tol only (tolerance forbidden)"
-                )
+                raise ValueError("reproducible_rerun: rerun_tol only (tolerance forbidden)")
         elif self.kind == "metric_on_holdout":
             if not self.output:
                 raise ValueError("metric_on_holdout requires output")
@@ -910,9 +912,7 @@ class RequirementTemplate(Frozen):
     @classmethod
     def _tmpl_exempt_must_be_bool(cls, v: object) -> object:
         if not isinstance(v, bool):
-            raise ValueError(
-                f"exempt_from_freeze must be bool, got {type(v).__name__}"
-            )
+            raise ValueError(f"exempt_from_freeze must be bool, got {type(v).__name__}")
         return v
 
 

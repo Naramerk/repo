@@ -22,28 +22,20 @@ from coscientist.core.claims.rubric import (
 from coscientist.core.claims.rules import priority_refuted_support_note
 from coscientist.core.claims.verdict import NO_EFFECT_EXCLUSION_REASONS
 from coscientist.core.execution.domain import (
-    VALID_PROVENANCE,
     Provenance,
     Study,
     Task,
     TaskOutcome,
     TaskState,
+    parse_provenance,
 )
 from coscientist.core.plan.question_tasks import known_questions, question_tasks
 
 
-def _snap_provenance(snap: Mapping[str, Any], hid: str) -> Provenance:
+def _snap_provenance(snap: Mapping[str, object], hid: str) -> Provenance:
     """Require snap provenance — never invent ``real`` (DESIGN_M1 §6.7)."""
-    if "provenance" not in snap or snap["provenance"] is None:
-        raise ValueError(f"hypothesis {hid!r}: provenance required")
-    raw = snap["provenance"]
-    if not isinstance(raw, str) or raw not in VALID_PROVENANCE:
-        raise ValueError(f"hypothesis {hid!r}: unknown provenance {raw!r}")
-    if raw == "real":
-        return "real"
-    if raw == "partial":
-        return "partial"
-    return "stub"
+    raw = snap["provenance"] if "provenance" in snap else None
+    return parse_provenance(raw, owner=f"hypothesis {hid!r}")
 
 
 def _task_by_key(tasks: Mapping[str, Task]) -> dict[str, Task]:
@@ -313,9 +305,7 @@ def _dispositions_inner(
                 continue
             # PR15: needs_more_data is an honest artifact-path final (design report).
             explicit_art = (question_disposals or {}).get(qid)
-            if explicit_art and str(explicit_art.get("disposition") or "") == (
-                Disposition.NEEDS_MORE_DATA.value
-            ):
+            if explicit_art and str(explicit_art.get("disposition") or "") == (Disposition.NEEDS_MORE_DATA.value):
                 from coscientist.core.claims.experiment_design import (
                     MISSING_DESIGN_REASON,
                     design_artifact_ok,
@@ -542,11 +532,7 @@ def _dispositions_inner(
 
     parent_ids = set(children_map(parent_map_from_plans(plans)))
     skip_cap = {qid for qid in parent_ids if not cover.get(qid)}
-    scoped_capped = {
-        qid: meta
-        for qid, meta in (loop_capped_questions or {}).items()
-        if qid not in skip_cap
-    }
+    scoped_capped = {qid: meta for qid, meta in (loop_capped_questions or {}).items() if qid not in skip_cap}
     apply_loop_cap_dispositions(result, scoped_capped)
     _stamp_honest_terminals(result)
     return apply_rollup(result, plans=plans)

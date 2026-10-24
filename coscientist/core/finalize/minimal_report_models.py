@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, StrictStr
 
 from coscientist.core.claims.reasons import Disposition
@@ -62,9 +60,9 @@ class MinimalReport(BaseModel):
     verdict: StrictStr
     tasks: list[MinimalReportTaskRow]
     questions: list[MinimalReportQuestionRow]
-    hypotheses: list[dict[str, Any]]
+    hypotheses: list[dict[str, object]]
     hypotheses_unavailable: StrictStr | None
     sections: MinimalReportSections
-    custom_checks: list[dict[str, Any]]
-    observations: list[StrictStr | dict[str, Any]]
+    custom_checks: list[dict[str, object]]
+    observations: list[StrictStr | dict[str, object]]
     truncated: StrictBool

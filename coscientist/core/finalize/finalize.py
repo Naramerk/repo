@@ -281,6 +281,7 @@ def contributing_reasons_ordered(
             seen.append(line)
     return seen
 
+
 def _append_loop_capped_report_line(seen: list[str], p: dict[str, Any]) -> None:
     """DESIGN_M1 §4: iteration_cap vs refuse/error (never disguise bugs as cap)."""
     try:
@@ -391,8 +392,7 @@ def last_resort_payload(
         trigger=trigger,
         contributing_reasons=[],
         summary=(
-            f"Study закрыто: {term}; задач 0 (SUCCESS 0, PARTIAL 0, "
-            f"FAILED 0, SKIPPED 0); вопросов 0, not_attempted 0"
+            f"Study закрыто: {term}; задач 0 (SUCCESS 0, PARTIAL 0, FAILED 0, SKIPPED 0); вопросов 0, not_attempted 0"
         ),
         question_count=0,
         not_attempted_count=0,
@@ -495,9 +495,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     runtime._finalized = True  # noqa: SLF001
 
 
-async def _sync_finalized_from_store(
-    runtime: StudyRuntime, *, sid: str, err: BaseException
-) -> None:
+async def _sync_finalized_from_store(runtime: StudyRuntime, *, sid: str, err: BaseException) -> None:
     """On Conflict/StudyClosedError: succeed only if StudyFinalized idem exists."""
     expected = make_idem("StudyFinalized", sid)
     for ev in await runtime.store.read_all():
@@ -583,9 +581,8 @@ def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
     lookup = getattr(arts, "get_meta", None)
     return lookup if callable(lookup) else None
 
-async def _build_rich_payload(
-    runtime: StudyRuntime, *, sid: str, trigger: FinalizeTrigger
-) -> dict[str, Any]:
+
+async def _build_rich_payload(runtime: StudyRuntime, *, sid: str, trigger: FinalizeTrigger) -> dict[str, Any]:
     # Reclassified fetch tools: journal diagnostic so contrib includes internal_error;
     # paired SourceFetched stays uncounted (fold catches FetchToolReclassified).
     from coscientist.core.events.projections import fold_events
@@ -726,10 +723,7 @@ async def _build_finalized_payload(
     minimal: MinimalReport | None
     minimal = None
     refusal = _refusal_payload(runtime, trigger)
-    try:
-        observations: list[Any] = list(runtime._observations)
-    except AttributeError as e:
-        raise RuntimeError("runtime._observations required") from e
+    observations: list[str | dict[str, object]] = list(runtime.observations)
     custom_checks = _safe_custom_checks(runtime)
     try:
         report_artifact_id = await _primary_report_path(
@@ -782,9 +776,7 @@ async def _build_finalized_payload(
         "hypotheses_unavailable": hypotheses_unavailable,
         "report_artifact_id": report_artifact_id,
         "conclusion_ids": conclusion_ids,
-        "minimal_report": (
-            None if minimal is None else minimal.model_dump(mode="json")
-        ),
+        "minimal_report": (None if minimal is None else minimal.model_dump(mode="json")),
         "fallback_reason": fallback,
         "refusal": refusal,
         "custom_checks": custom_checks,
@@ -818,7 +810,7 @@ async def _primary_report_path(
     hypotheses: Mapping[str, Mapping[str, Any]],
     hypotheses_unavailable: str | None,
     custom_checks: list[dict[str, Any]],
-    observations: list[Any],
+    observations: list[str | dict[str, object]],
 ) -> str:
     study = getattr(runtime, "study", None)
     as_of_raw = getattr(study, "as_of", None) if study is not None else None
