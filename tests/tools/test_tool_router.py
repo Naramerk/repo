@@ -19,6 +19,7 @@ from coscientist.tools.router import (
     MCP_SERVER_PAPERS_SEARCH,
     McpServerRoute,
     ToolRouter,
+    ToolRouterCloseError,
     ToolRouterConfig,
     ToolRouterError,
 )
@@ -239,9 +240,10 @@ async def test_router_aclose_closes_all_then_raises() -> None:
 
         sess1.aclose = _boom  # type: ignore[method-assign]
         sess2.aclose = _ok  # type: ignore[method-assign]
-        with pytest.raises(ToolRouterError, match="session close failed \\(1\\)") as ei:
+        with pytest.raises(ToolRouterCloseError, match="session close failed \\(1\\)") as ei:
             await router.aclose()
         assert closed == ["first", "second"]
+        assert isinstance(ei.value, ToolRouterError)
         assert isinstance(ei.value.__cause__, OSError)
         assert len(ei.value.causes) == 1 and isinstance(ei.value.causes[0], OSError)
         with pytest.raises(ToolRouterError, match="not open"):
@@ -250,7 +252,7 @@ async def test_router_aclose_closes_all_then_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_router_aclose_preserves_all_close_causes() -> None:
-    """Two close failures → ToolRouterError.causes + ExceptionGroup hold both."""
+    """Two close failures → ToolRouterCloseError.causes + ExceptionGroup hold both."""
     router = ToolRouter(_router_cfg(_route(MCP_SERVER_PAPERS_SEARCH), _route(MCP_SERVER_PAPER_ANALYSIS)))
     client = _dual_client()
     async with FakeStdioServer(default_handler) as s1, FakeStdioServer(default_handler) as s2:
@@ -267,7 +269,7 @@ async def test_router_aclose_preserves_all_close_causes() -> None:
 
         sess1.aclose = _boom1  # type: ignore[method-assign]
         sess2.aclose = _boom2  # type: ignore[method-assign]
-        with pytest.raises(ToolRouterError, match="session close failed \\(2\\)") as ei:
+        with pytest.raises(ToolRouterCloseError, match="session close failed \\(2\\)") as ei:
             await router.aclose()
         err = ei.value
         assert len(err.causes) == 2
@@ -276,6 +278,13 @@ async def test_router_aclose_preserves_all_close_causes() -> None:
         assert "close-a" in str(err) and "close-b" in str(err)
         assert isinstance(err.__cause__, ExceptionGroup)
         assert [type(e) for e in err.__cause__.exceptions] == [OSError, TimeoutError]
+
+
+def test_tool_router_close_error_requires_causes() -> None:
+    with pytest.raises(TypeError):
+        ToolRouterCloseError("x")  # type: ignore[call-arg]
+    with pytest.raises(ValueError, match="non-empty"):
+        ToolRouterCloseError("x", causes=())
 
 
 @pytest.mark.asyncio
