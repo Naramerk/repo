@@ -1541,17 +1541,26 @@ def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
         "StudyCreated",
         11,
         {
-            "catalog_version": 3, "study_id": "s", "as_of": None, "user_input_ids": [],
-            "max_proposals": 5, "require_hypotheses": False,
+            "catalog_version": 3,
+            "study_id": "s",
+            "as_of": None,
+            "user_input_ids": [],
+            "max_proposals": 5,
+            "require_hypotheses": False,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
     assert p["max_proposals"] == 5
     v2, p2 = upcast(
-        "StudyCreated", 11, {
-            "study_id": "s", "as_of": None, "user_input_ids": [], "catalog_version": 3,
+        "StudyCreated",
+        11,
+        {
+            "study_id": "s",
+            "as_of": None,
+            "user_input_ids": [],
+            "catalog_version": 3,
             "require_hypotheses": False,
-        }
+        },
     )
     assert v2 == STUDY_CREATED_SCHEMA_VERSION
     assert p2["max_proposals"] == 3
