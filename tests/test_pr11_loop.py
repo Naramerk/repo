@@ -960,7 +960,7 @@ def test_survivors_le_real_graph_scope_filter():
                 refutations_needed=1,
                 refutation_priority=True,
                 confirmations_needed=1,
-                supported_needed=2,
+                supported_needed=2, require_hypotheses=False,
             )
             self.graph = GraphStore(default_execution_registry())
             self.artifacts = None

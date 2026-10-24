@@ -1514,6 +1514,7 @@ async def test_post_studies_conflict_requires_same_request_study_created(
                     "hitl_policy": {},
                     "deadline": "2026-01-02T00:00:00+00:00",
                     "created_at": "2026-01-01T00:00:00+00:00",
+                    "require_hypotheses": False,
                 },
                 ts=rt.clock.now(),
                 schema_version=13,

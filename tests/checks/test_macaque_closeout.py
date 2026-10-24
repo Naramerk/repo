@@ -94,7 +94,7 @@ def _study(**over: object) -> Study:
         catalog_version=3,
         hitl_policy=HitlPolicy(),
         deadline=datetime(2026, 1, 2, tzinfo=UTC),
-        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC), require_hypotheses=False,
     )
     base.update(over)
     return Study(**base)
