@@ -16,6 +16,45 @@ from coscientist.core.plan.intake import IntakeRefuse
 
 log = logging.getLogger(__name__)
 
+
+def _req_str(d: dict, key: str) -> str:
+    from coscientist.core.events.errors import JournalFormatError
+    if key not in d:
+        raise JournalFormatError(f"payload missing {key!r}")
+    v = d[key]
+    if not isinstance(v, str):
+        raise JournalFormatError(f"payload {key!r} must be str, got {type(v).__name__}")
+    return v
+
+
+def _req_bool(d: dict, key: str) -> bool:
+    from coscientist.core.events.errors import JournalFormatError
+    if key not in d:
+        raise JournalFormatError(f"payload missing {key!r}")
+    v = d[key]
+    if type(v) is not bool:
+        raise JournalFormatError(f"payload {key!r} must be bool, got {type(v).__name__}")
+    return v
+
+
+def _as_float(value: object, *, what: str) -> float:
+    from coscientist.core.events.errors import JournalFormatError
+    if type(value) is bool or not isinstance(value, (int, float)):
+        raise JournalFormatError(f"{what} must be numeric, got {type(value).__name__}")
+    return float(value)  # audit-ok: coerce after int|float type gate
+
+
+def _as_decimal(value: object, *, what: str):
+    from decimal import Decimal
+    from coscientist.core.events.errors import JournalFormatError
+    if isinstance(value, Decimal):
+        return value
+    if type(value) is bool or not isinstance(value, (int, float, str)):
+        raise JournalFormatError(f"{what} must be Decimal-compatible, got {type(value).__name__}")
+    return Decimal(str(value))  # audit-ok: float→Decimal via str (stdlib exactness)
+
+
+
 class LocalProjectMixin:
     """Fold journal events into StudyRuntime local maps (no HITL)."""
 
@@ -60,7 +99,7 @@ class LocalProjectMixin:
         ``artifact_kinds[aid]`` on failure — otherwise ``design_artifact_ok``
         would unlock ``needs_more_data`` without a real design artifact.
         """
-        arts = getattr(self, "artifacts", None)
+        arts = self.artifacts
         if arts is None:
             return False
         from coscientist.core.events.errors import ArtifactRejected
@@ -69,10 +108,10 @@ class LocalProjectMixin:
         try:
             apply_kind_stamp(arts, artifact_id, kind)
         except ArtifactRejected:
-            kinds = getattr(self, "artifact_kinds", None)
+            kinds = self.artifact_kinds
             if isinstance(kinds, dict):
                 kinds.pop(artifact_id, None)
-            miss = getattr(self, "_stamp_meta_missing", None)
+            miss = self._stamp_meta_missing
             if not isinstance(miss, list):
                 self._stamp_meta_missing = []
                 miss = self._stamp_meta_missing
@@ -89,11 +128,11 @@ class LocalProjectMixin:
 
     def _flush_pending_kind_stamps(self) -> None:
         """Apply stamps deferred because fold ran before artifacts were bound."""
-        pending = getattr(self, "_pending_kind_stamps", None)
+        pending = self._pending_kind_stamps
         if not pending:
             return
         self._pending_kind_stamps = []
-        kinds = getattr(self, "artifact_kinds", None)
+        kinds = self.artifact_kinds
         if not isinstance(kinds, dict):
             self.artifact_kinds = {}
             kinds = self.artifact_kinds
@@ -105,13 +144,13 @@ class LocalProjectMixin:
         self, *, after_task: str | None = None, plan_key: str | None = None
     ) -> None:
         """Drop PLAN-n pending entries once PlanExpanded / ExpansionRefused folds."""
-        reqs = getattr(self, "_expand_requests", None)
+        reqs = self._expand_requests
         if not isinstance(reqs, dict) or not reqs:
             return
         if plan_key and plan_key in reqs:
             reqs.pop(plan_key, None)
         if after_task:
-            drop: list[str] = []
+            drop = []
             for k, m in reqs.items():
                 if not isinstance(m, dict) or "after_task" not in m:
                     raise JournalFormatError(f"_expand_requests[{k!r}] corrupt")
@@ -131,19 +170,19 @@ class LocalProjectMixin:
                 raise JournalFormatError("StudyRefused: missing classifier_error")
             self._intake_refusal = IntakeRefuse(
                 kind=RefusalKind(p["kind"]),
-                reason=str(p["reason"]),
-                classifier_error=bool(p["classifier_error"]),
+                reason=_req_str(p, "reason"),
+                classifier_error=_req_bool(p, "classifier_error"),
             )
         elif ev.type == "BudgetDebited":
             if "spent_rub" not in p:
                 raise JournalFormatError("BudgetDebited: missing spent_rub")
-            spent = Decimal(str(p["spent_rub"]))
+            spent = _as_decimal(p["spent_rub"], what="spent_rub")
             self._study_spent_rub += spent
             if "task_id" in p:
                 tid = p["task_id"]
                 if not isinstance(tid, str) or not tid:
                     raise JournalFormatError("BudgetDebited: empty task_id")
-                raw_spent = getattr(self, "_task_spent_rub", None)
+                raw_spent = self._task_spent_rub
                 if raw_spent is None:
                     raw_spent = {}
                     self._task_spent_rub = raw_spent
@@ -153,7 +192,7 @@ class LocalProjectMixin:
                     )
                 key = str(tid)
                 if key in raw_spent:
-                    raw_spent[key] = Decimal(str(raw_spent[key])) + spent
+                    raw_spent[key] = _as_decimal(raw_spent[key], what="task_spent") + spent
                 else:
                     raw_spent[key] = spent
         elif ev.type == "BudgetSharesAdjusted":
@@ -163,7 +202,7 @@ class LocalProjectMixin:
         elif ev.type == "BudgetExceeded":
             if "scope" not in p:
                 raise JournalFormatError("BudgetExceeded: missing scope")
-            scope = str(p["scope"])
+            scope = _req_str(p, "scope")
             if scope == "study":
                 self._budget_exceeded = True
             elif scope == "task":
@@ -181,12 +220,12 @@ class LocalProjectMixin:
             if not p.get("foreach") and not p.get("loop"):
                 # timeout → agent quota (DESIGN_M1 §4); only human skips agent quota.
                 if p.get("delegated_by") == "human":
-                    self._human_expansions = int(getattr(self, "_human_expansions", 0)) + 1
+                    self._human_expansions = self._human_expansions + 1
                 else:
-                    self._agent_expansions = int(getattr(self, "_agent_expansions", 0)) + 1
+                    self._agent_expansions = self._agent_expansions + 1
             if "replan_allocated_s" in p:
-                self._replan_used_s = float(self._replan_used_s) + float(
-                    p["replan_allocated_s"]
+                self._replan_used_s = self._replan_used_s + _as_float(
+                    p["replan_allocated_s"], what="replan_allocated_s"
                 )
             after = p.get("after_task")
             if after is not None and isinstance(self._expand_pending, set):
@@ -198,22 +237,30 @@ class LocalProjectMixin:
             )
             rid = p.get("hitl_request_id")
             if rid:
-                used = getattr(self, "_hitl_expand_used", None)
+                used = self._hitl_expand_used
                 if not isinstance(used, set):
                     self._hitl_expand_used = set()
                     used = self._hitl_expand_used
                 used.add(str(rid))
             # PR10: rebuild foreach child index from journal (restart == live).
             if p.get("foreach"):
-                tmpl = str(p.get("foreach_template") or "")
-                kids = [
-                    str(t.get("task_key") if isinstance(t, dict) else getattr(t, "task_key", ""))
-                    for t in (p.get("added_tasks") or [])
-                ]
+                tmpl_raw = p.get("foreach_template")
+                tmpl = tmpl_raw if isinstance(tmpl_raw, str) else ""
+                added = p.get("added_tasks")
+                if added is None:
+                    added = []
+                kids = []
+                for t in added:
+                    if isinstance(t, dict):
+                        tk = t.get("task_key")
+                    else:
+                        tk = t.task_key
+                    if isinstance(tk, str) and tk:
+                        kids.append(tk)
                 kids = [k for k in kids if k]
-                children = getattr(self, "_foreach_children", None)
+                children = self._foreach_children
                 if not isinstance(children, dict):
-                    self._foreach_children: dict[str, list[str]] = {}
+                    self._foreach_children = {}
                     children = self._foreach_children
                 if tmpl:
                     children[tmpl] = kids
@@ -235,7 +282,7 @@ class LocalProjectMixin:
 
             fold_loop_completed(self, p)
         elif ev.type == "ExpansionRefused":
-            refusals = getattr(self, "_expansion_refusals", None)
+            refusals = self._expansion_refusals
             if isinstance(refusals, list):
                 refusals.append(dict(p))
             else:
@@ -258,12 +305,12 @@ class LocalProjectMixin:
                 fold_loop_expansion_refused(self, p)
         elif ev.type == "HitlOpened":
             if "request_id" in p and isinstance(p["request_id"], str) and p["request_id"]:
-                rid = str(p["request_id"])
+                rid = p["request_id"]
             elif ev.entity_key:
-                rid = str(ev.entity_key)
+                rid = ev.entity_key
             else:
                 raise JournalFormatError("HitlOpened: missing request_id")
-            opens = getattr(self, "_hitl_requests", None)
+            opens = self._hitl_requests
             if opens is None:
                 self._hitl_requests = {}
                 opens = self._hitl_requests
@@ -274,12 +321,12 @@ class LocalProjectMixin:
             opens[rid] = dict(p)
         elif ev.type == "HitlDecided":
             if "request_id" in p and isinstance(p["request_id"], str) and p["request_id"]:
-                rid = str(p["request_id"])
+                rid = p["request_id"]
             elif ev.entity_key:
-                rid = str(ev.entity_key)
+                rid = ev.entity_key
             else:
                 raise JournalFormatError("HitlDecided: missing request_id")
-            decisions = getattr(self, "_hitl_decisions", None)
+            decisions = self._hitl_decisions
             if decisions is None:
                 self._hitl_decisions = {}
                 decisions = self._hitl_decisions
@@ -290,9 +337,9 @@ class LocalProjectMixin:
             decisions[rid] = dict(p)
             # Close the open gate unless keep_open / WAIT. Do not merge decision
             # payload fields into the HitlOpened row (request ≠ decision).
-            opens = getattr(self, "_hitl_requests", None)
+            opens = self._hitl_requests
             if isinstance(opens, dict) and rid in opens:
-                keep_open = bool(p.get("keep_open") or p.get("effect") == "WAIT")
+                keep_open = p.get("keep_open") is True or p.get("effect") == "WAIT"
                 opens[rid] = {**opens[rid], "open": keep_open}
         elif ev.type in (
             "CheckProposed",
@@ -309,24 +356,24 @@ class LocalProjectMixin:
             # PR15: core-stamped Artifact.kind (experiment_design / contradiction_map).
             # Journal is authority; meta mutation only here (after successful append).
             if "artifact_id" in p and isinstance(p["artifact_id"], str) and p["artifact_id"]:
-                art_id = str(p["artifact_id"])
+                art_id = p["artifact_id"]
             elif ev.entity_key:
-                art_id = str(ev.entity_key)
+                art_id = ev.entity_key
             else:
                 raise JournalFormatError("ArtifactRegistered: missing artifact_id")
             kind = p.get("kind")
-            if art_id and kind and bool(p.get("stamped")):
-                arts = getattr(self, "artifacts", None)
+            if art_id and kind and p.get("stamped") is True:
+                arts = self.artifacts
                 if arts is None:
                     # open_runtime folds before make_executor — defer stamp apply.
                     # Do not set artifact_kinds until soft stamp succeeds (flush).
-                    pending = getattr(self, "_pending_kind_stamps", None)
+                    pending = self._pending_kind_stamps
                     if not isinstance(pending, list):
                         self._pending_kind_stamps = []
                         pending = self._pending_kind_stamps
                     pending.append((art_id, str(kind)))
                 elif self._apply_kind_stamp_soft(art_id, str(kind)):
-                    kinds = getattr(self, "artifact_kinds", None)
+                    kinds = self.artifact_kinds
                     if not isinstance(kinds, dict):
                         self.artifact_kinds = {}
                         kinds = self.artifact_kinds
@@ -334,19 +381,23 @@ class LocalProjectMixin:
         elif ev.type == "QuestionDisposed":
             from coscientist.core.claims.dispose import fold_question_disposed
 
-            store = getattr(self, "question_disposals", None)
+            store = self.question_disposals
             if not isinstance(store, dict):
                 self.question_disposals = {}
                 store = self.question_disposals
-            fold_question_disposed(store, p if isinstance(p, dict) else {})
+            if not isinstance(p, dict):
+                raise JournalFormatError("QuestionDisposed payload must be dict")
+            fold_question_disposed(store, p)
         elif ev.type == "QuestionDisposeRejected":
             from coscientist.core.claims.dispose import fold_question_dispose_rejected
 
-            notes = getattr(self, "_disposal_rejects", None)
+            notes = self._disposal_rejects
             if not isinstance(notes, list):
                 self._disposal_rejects = []
                 notes = self._disposal_rejects
-            fold_question_dispose_rejected(notes, p if isinstance(p, dict) else {})
+            if not isinstance(p, dict):
+                raise JournalFormatError("QuestionDisposeRejected payload must be dict")
+            fold_question_dispose_rejected(notes, p)
         elif ev.type == "StudyFinalized":
             # First-wins: ignore duplicate StudyFinalized on replay (legacy journals).
             # Record a taint mark so reopen/report can surface the I3 breach.
@@ -355,16 +406,16 @@ class LocalProjectMixin:
                     "ignoring duplicate StudyFinalized study_id=%s seq=%s "
                     "(first-wins; local fold skipped; tainted)",
                     ev.study_id,
-                    getattr(ev, "seq", None),
+                    ev.seq,
                 )
-                dups = getattr(self, "_duplicate_study_finalized", None)
+                dups = self._duplicate_study_finalized
                 if not isinstance(dups, list):
                     self._duplicate_study_finalized = []
                     dups = self._duplicate_study_finalized
                 dups.append(
                     {
                         "study_id": ev.study_id,
-                        "seq": getattr(ev, "seq", None),
+                        "seq": ev.seq,
                         "tainted": True,
                     }
                 )
@@ -450,7 +501,7 @@ class LocalProjectMixin:
             row["provenance"] = p["provenance"]
             # Open until AttemptClosed — required by _close_open_work (no missing key).
             row["closed"] = False
-            if getattr(ev, "seq", None) is not None:
+            if ev.seq is not None:
                 row["_seq"] = ev.seq
             self.attempts[p["attempt_id"]] = row
             t = self.tasks[p["task_id"]]
@@ -471,14 +522,14 @@ class LocalProjectMixin:
             self.tasks[p["task_id"]] = t.model_copy(update=upd)
             bud_alloc = p.get("allocated_budget_rub")
             if bud_alloc is not None:
-                raw_caps = getattr(self, "_task_budget_alloc", None)
+                raw_caps = self._task_budget_alloc
                 if not isinstance(raw_caps, dict):
                     raw_caps = {}
                     self._task_budget_alloc = raw_caps
-                tid = str(p["task_id"])
-                raw_caps[tid] = Decimal(str(bud_alloc))
+                tid = _req_str(p, "task_id")
+                raw_caps[tid] = _as_decimal(bud_alloc, what="allocated_budget_rub")
                 # Cap implies a spent entry (0 until BudgetDebited) — readers must not invent.
-                raw_spent = getattr(self, "_task_spent_rub", None)
+                raw_spent = self._task_spent_rub
                 if not isinstance(raw_spent, dict):
                     raw_spent = {}
                     self._task_spent_rub = raw_spent
@@ -486,10 +537,15 @@ class LocalProjectMixin:
                     raw_spent[tid] = Decimal("0")
             self._retry_at.pop(p["task_id"], None)
         elif ev.type == "AttemptClosed":
-            att = self.attempts.get(p["attempt_id"], {})
+            aid = p["attempt_id"]
+            att = self.attempts.get(aid)
+            if att is None:
+                att = {}
+            else:
+                att = dict(att)
             att.update(p)
             att["closed"] = True
-            self.attempts[p["attempt_id"]] = att
+            self.attempts[aid] = att
             tid = p.get("task_id") or att.get("task_id")
             if tid and p.get("retry_at"):
                 t = self.tasks[tid]
@@ -506,9 +562,11 @@ class LocalProjectMixin:
                     )
         elif ev.type == "RouteReturned":
             aid = p.get("attempt_id") or ev.entity_key
-            att = self.attempts.get(aid, {})
+            prior = self.attempts.get(aid)
+            if prior is None:
+                prior = {}
             att = {
-                **att,
+                **prior,
                 "route_returned": True,
                 "agent_output_digest": p.get("agent_output_digest"),
             }
@@ -518,26 +576,28 @@ class LocalProjectMixin:
             aid = p.get("attempt_id") or ev.entity_key
             dig = p.get("agent_output_digest")
             if aid and dig:
-                att = self.attempts.get(aid, {})
-                self.attempts[aid] = {**att, "agent_output_digest": dig}
+                prior = self.attempts.get(aid)
+                if prior is None:
+                    prior = {}
+                self.attempts[aid] = {**prior, "agent_output_digest": dig}
         elif ev.type == "ResultRecorded":
             row = dict(p)
-            if getattr(ev, "seq", None) is not None:
+            if ev.seq is not None:
                 row["_seq"] = ev.seq
             self.results[p["result_id"]] = row
             self.results[p["attempt_id"]] = row
             # Populate dep_outputs from named outputs for InputSpec.bind.
-            dep_outputs = getattr(self, "dep_outputs", None)
-            dep_provenance = getattr(self, "dep_provenance", None)
+            dep_outputs = self.dep_outputs
+            dep_provenance = self.dep_provenance
             aid = p.get("attempt_id")
             if not isinstance(aid, str) or not aid:
                 raise JournalFormatError("ResultRecorded: missing attempt_id")
             att_row = self.attempts.get(aid)
             result_tid: str | None = None
             if isinstance(att_row, dict) and "task_id" in att_row:
-                result_tid = str(att_row["task_id"])
+                result_tid = _req_str(att_row, "task_id")
             elif "task_id" in p:
-                result_tid = str(p["task_id"])
+                result_tid = _req_str(p, "task_id")
             if isinstance(dep_outputs, dict) and result_tid and result_tid in self.tasks:
                 tkey = self.tasks[result_tid].spec.task_key
                 omap = p.get("output_map")
@@ -568,13 +628,13 @@ class LocalProjectMixin:
             # fail_attempt / infra paths may close without ResultRecorded — stamp
             # dep provenance so simulate/partial bind_inputs stays fail-closed
             # without inventing "real".
-            dep_provenance = getattr(self, "dep_provenance", None)
+            dep_provenance = self.dep_provenance
             if isinstance(dep_provenance, dict):
                 tkey = t.spec.task_key
                 if tkey not in dep_provenance:
                     if "outcome" not in p:
                         raise JournalFormatError("TaskDone: missing outcome")
-                    oc = str(p["outcome"])
+                    oc = _req_str(p, "outcome")
                     if oc in (TaskOutcome.FAILED.value, "FAILED"):
                         dep_provenance[tkey] = "stub"
                     elif oc in (TaskOutcome.PARTIAL.value, "PARTIAL"):
@@ -589,29 +649,29 @@ class LocalProjectMixin:
                 existing is not None
                 and existing.kind in ("question", "hypothesis")
                 and node.kind == existing.kind
-                and not (node.attrs or {})
-                and (existing.attrs or {})
+                and not node.attrs
+                and existing.attrs
             ):
                 pass  # keep existing
             else:
                 # Plan-freeze: stamp frozen_at_seq from journal seq when missing.
                 if (
                     node.kind == "criterion"
-                    and bool((node.attrs or {}).get("frozen"))
-                    and (node.attrs or {}).get("frozen_at_seq") is None
+                    and node.attrs.get("frozen") is True
+                    and node.attrs.get("frozen_at_seq") is None
                     and ev.seq is not None
                 ):
                     node = node.model_copy(
                         update={
                             "attrs": {
-                                **(node.attrs or {}),
-                                "frozen_at_seq": int(ev.seq),
+                                **node.attrs,
+                                "frozen_at_seq": ev.seq,
                             }
                         }
                     )
                 self.graph.upsert_node(node)
             if node.kind == "claim":
-                self._invalidate_verdict_snapshots_for_target((node.attrs or {}).get("target"))
+                self._invalidate_verdict_snapshots_for_target(node.attrs.get("target"))
         elif ev.type == "GraphEdgeAdded":
             # Fail loudly: missing endpoints / illegal pairs are journal bugs.
             edge = GraphEdge.model_validate(p)
@@ -622,12 +682,17 @@ class LocalProjectMixin:
                 logical = None
                 if dst is not None:
                     prefix = f"{ev.study_id}:{dst.kind}:"
-                    logical = (
-                        edge.dst_id[len(prefix) :] if edge.dst_id.startswith(prefix) else (dst.ref_id or edge.dst_id)
-                    )
+                    if edge.dst_id.startswith(prefix):  # audit-ok: study-scoped node id prefix strip
+                        logical = edge.dst_id[len(prefix) :]
+                    elif dst.ref_id is not None:
+                        logical = dst.ref_id
+                    else:
+                        logical = edge.dst_id
                 self._invalidate_verdict_snapshots_for_target(logical)
         elif ev.type == "VerdictSnapshotsRecorded":
-            snaps = p.get("snapshots") or {}
+            snaps = p.get("snapshots")
+            if snaps is None:
+                snaps = {}
             if isinstance(snaps, dict):
                 self.verdict_snapshots.update({str(k): dict(v) for k, v in snaps.items() if isinstance(v, dict)})
 
@@ -638,7 +703,9 @@ class LocalProjectMixin:
         key = str(target)
         self.verdict_snapshots.pop(key, None)
         # Kind-prefixed keys (question:Q1 / hypothesis:H1) if present.
-        if ":" not in key or key.split(":", 1)[0] not in ("question", "hypothesis"):
+        # Kind-prefixed keys (question:Q1 / hypothesis:H1) if present.
+        kind_prefix = key.split(":", 1)[0] if ":" in key else ""  # audit-ok: kind:ref key parse
+        if kind_prefix not in ("question", "hypothesis"):
             self.verdict_snapshots.pop(f"question:{key}", None)
             self.verdict_snapshots.pop(f"hypothesis:{key}", None)
 
@@ -652,11 +719,13 @@ class LocalProjectMixin:
             if (
                 existing is not None
                 and existing.kind in ("question", "hypothesis")
-                and (existing.attrs or {})
-                and not (incoming.attrs or {}).get("formulation")
+                and existing.attrs
+                and not incoming.attrs.get("formulation")
             ):
                 # Preserve formulation from accept_plan when finalize row is sparse.
-                merged = incoming.model_copy(update={"attrs": {**(existing.attrs or {}), **(incoming.attrs or {})}})
+                merged = incoming.model_copy(
+                    update={"attrs": {**existing.attrs, **incoming.attrs}}
+                )
                 self.graph.upsert_node(merged)
             else:
                 self.graph.upsert_node(incoming)
