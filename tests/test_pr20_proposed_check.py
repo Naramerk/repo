@@ -62,6 +62,7 @@ from coscientist.tools.contract import CallCtx
 from coscientist.tools.propose_check_tool import ProposeCheckTool
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 from tests.helpers import (
+    NEED_OFF,
     attach_executor,
     close_runtime,
     open_runtime,
@@ -143,7 +144,7 @@ async def _boot_plan(rt, tasks, *, questions=None):
     for key in ("HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
-    await rt.accept_plan(tasks, questions=questions or [])
+    await rt.accept_plan(tasks, questions=questions or [], hypotheses=NEED_OFF, literature=NEED_OFF)
     return proposer_aid
 
 

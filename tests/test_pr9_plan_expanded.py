@@ -29,14 +29,16 @@ from coscientist.core.execution.domain import (
 from coscientist.core.plan.expand import apply_pending_expansion
 from coscientist.core.plan.expand_trigger import maybe_expand_after_task_done, refuse_expansion
 from coscientist.core.plan.supersede import question_is_superseded
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import NEED_OFF, attach_executor, close_runtime, open_runtime
 
 
 async def _boot_plan(rt, *, tasks, questions, expand_after=None):
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
-    await rt.accept_plan(tasks, questions=questions, expand_after=expand_after or [])
+    await rt.accept_plan(tasks, questions=questions, expand_after=expand_after or [],
+        hypotheses=NEED_OFF, literature=NEED_OFF,
+    )
 
 
 async def _record_hitl_opened(

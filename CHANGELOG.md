@@ -2,7 +2,15 @@
 
 ## Unreleased
 
+<<<<<<< HEAD
 ### Graph schema parse (G7 split 1/2) [M1] — AttrType; `GRAPH_SCHEMA_VERSION`; required attrs; explicit `null_ok`. [DESIGN §2](docs/DESIGN.md#2-доменная-модель), [CAP #14](docs/CAPABILITIES.md?plain=1#L23).
+=======
+### G4 Need
+
+- `Need` + `Plan.hypotheses`/`literature`; PlanAccepted v12 upcaster (`legacy_absent` for old journals only); `accept_plan` omit → `PlanNeedRefuse` (no silent default). No `Study.require_hypotheses` in this slice. [CAP #2](docs/CAPABILITIES.md); [DESIGN §2](docs/DESIGN.md#2-доменные-типы).
+
+
+>>>>>>> 1c0a4e2 (fix(G4): Need + omit→PlanNeedRefuse + NEED_OFF call sites)
 ### Docs — #16/#17 handoff ([report-s3.md](docs/handoff/report-s3.md))
 - Queue issues [#117](https://github.com/Naramerk/repo/issues/117)–[#128](https://github.com/Naramerk/repo/issues/128); `nir.py` body = core `render_markdown_report`; Depends-only ordering.
 - [CAPABILITIES.md](docs/CAPABILITIES.md) #16/#17; [DESIGN.md](docs/DESIGN.md) §9–§11 / §10; [DESIGN_M1.md](docs/DESIGN_M1.md) I1.

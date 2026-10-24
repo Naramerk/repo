@@ -24,6 +24,7 @@ from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     Budget,
     HitlPolicy,
+    Need,
     Plan,
     QuestionSpec,
     Study,
@@ -402,6 +403,8 @@ class LifecycleMixin:
         spec_output: dict[str, Any] | None = None,
         expand_after: list[str] | None = None,
         loops: list[Any] | None = None,
+        hypotheses: Need | dict[str, Any] | None = None,
+        literature: Need | dict[str, Any] | None = None,
     ) -> str:
         """Accept a plan revision.
 
@@ -536,6 +539,13 @@ class LifecycleMixin:
             from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 
             tasks = [freeze_task_sandbox_limits(spec, catalog) for spec in tasks]
+            # G4: omit → PlanNeedRefuse (PlanNeedRefuse ⊂ ValueError → PlanRefused).
+            from coscientist.core.plan.need import resolve_plan_needs
+
+            hyp_need, lit_need = resolve_plan_needs(
+                hypotheses=hypotheses,
+                literature=literature,
+            )
         except PlanInvalid as e:
             return await apply_plan_refused(
                 self,
@@ -572,6 +582,8 @@ class LifecycleMixin:
             loops=loop_specs,
             subquestions=named_subs,
             rollup=rollup,  # type: ignore[arg-type]
+            hypotheses=hyp_need,
+            literature=lit_need,
         )
         events: list[EventEnvelope] = [
             EventEnvelope(

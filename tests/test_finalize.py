@@ -37,6 +37,7 @@ from coscientist.core.finalize.minimal_report import MAX_BYTES, build_minimal_re
 from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.question_tasks import question_tasks, questions_from_spec_output
 from tests.helpers import (
+    NEED_OFF,
     attach_executor,
     close_runtime,
     open_runtime,
@@ -276,7 +277,7 @@ def test_upcast_taskcreated_input_mode_old_default():
 
 def test_upcast_planaccepted_questions_default():
     v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
-    assert v == 11 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
+    assert v == 12 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
     assert p.get("rollup") == "all" and p.get("subquestions") == []
 
     # PR13 rubric (v8); PR11 loops (v9); PR16 rollup (v10); PR15 kind (v11).
@@ -294,7 +295,7 @@ def test_upcast_planaccepted_questions_default():
             ],
         },
     )
-    assert v2 == 11
+    assert v2 == 12
     assert p2["questions"][0]["final_type"] == "verdict"
     assert p2["loops"] == []
     assert p2.get("rollup") == "all"
@@ -517,7 +518,7 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     a = rt.tasks[f"{sid}/A"]
     events: list[EventEnvelope] = []
     for aid in a.attempts:
@@ -758,7 +759,7 @@ async def test_all_done_budget_reasons_finalize_all_done(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_finalize_zero_questions(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_zq")
-    await rt.accept_plan([_spec("E1")], questions=[], revision=1)
+    await rt.accept_plan([_spec("E1")], questions=[], revision=1, hypotheses=NEED_OFF, literature=NEED_OFF)
     await _skip_all(rt)
     await rt.tick()
     assert _fin(await rt.store.read_all()).payload["question_dispositions"] == {}
@@ -772,7 +773,7 @@ async def test_report_task_failed_still_report(tmp_path, clock):
     rt.artifacts = arts
     for key in ("SPEC", "HYP", "LIT"):
         await record_success(rt, await rt.start_attempt(key), arts)
-    await rt.accept_plan([])
+    await rt.accept_plan([], hypotheses=NEED_OFF, literature=NEED_OFF)
     await rt.fail_attempt(await rt.start_attempt("REPORT"), retryable=False)
     await rt.tick()
     ev = _fin(await rt.store.read_all())
@@ -795,7 +796,9 @@ async def test_conclusion_per_question(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_cq")
     rt.artifacts = LocalArtifactStore(tmp_path / "arts")
     qs = [QuestionSpec(id="Q1", text="one"), QuestionSpec(id="Q2", text="two")]
-    await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs)
+    await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs,
+        hypotheses=NEED_OFF, literature=NEED_OFF,
+    )
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     ev = _fin(await rt.store.read_all())
@@ -848,7 +851,9 @@ async def test_finalize_total_on_cas_failure(tmp_path, clock):
 async def test_finalized_dispositions_replay(tmp_path, clock):
     sid = "st_rep"
     rt = await _boot(tmp_path, clock, sid)
-    await rt.accept_plan([_spec("E1", ["Q1"])], questions=[QuestionSpec(id="Q1", text="why")])
+    await rt.accept_plan([_spec("E1", ["Q1"])], questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF, literature=NEED_OFF,
+    )
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     payload = _fin(await rt.store.read_all()).payload["question_dispositions"]
@@ -1416,7 +1421,7 @@ async def test_plan_refused_and_normal_finalize_exactly_one(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_sf_plan")
     await rt.accept_plan(
         [_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")]
-    )
+    , hypotheses=NEED_OFF, literature=NEED_OFF)
     events = await rt.store.read_all()
     assert any(e.type == "PlanRefused" for e in events)
     _fin(events)
@@ -1590,7 +1595,9 @@ async def test_p5_after_long_downtime_uses_task_deadline(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_ua")
-    pid = await rt.accept_plan([_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")])
+    pid = await rt.accept_plan([_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")],
+        hypotheses=NEED_OFF, literature=NEED_OFF,
+    )
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
@@ -1602,8 +1609,12 @@ async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_accept_plan_rejects_question_text_conflict(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_qc")
-    await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="one")], revision=1)
-    pid = await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="other")], revision=2)
+    await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="one")], revision=1,
+        hypotheses=NEED_OFF, literature=NEED_OFF,
+    )
+    pid = await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="other")], revision=2,
+        hypotheses=NEED_OFF, literature=NEED_OFF,
+    )
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]

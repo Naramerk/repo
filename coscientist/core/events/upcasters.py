@@ -943,6 +943,20 @@ register_upcaster("TaskCreated", 10, _task_created_v10_to_v11_loop)
 register_upcaster("TaskCreated", 11, _task_created_v11_to_v12_output_kind)
 register_upcaster("TaskCreated", 12, _task_created_v12_to_v13_evidence_kind)
 register_upcaster("TaskCreated", 13, _task_created_v13_to_v14_sandbox_freeze)
+def _plan_accepted_v11_to_v12_need(payload: dict[str, Any]) -> dict[str, Any]:
+    """G4: Plan.hypotheses / Plan.literature Need; missing key → legacy_absent.
+
+    Events must not import ``core.plan.need``. Explicit ``None`` is left alone
+    (fail-closed at Plan validate); only a missing key is filled.
+    """
+    out = dict(payload)
+    absent = {"needed": False, "reason": "legacy_absent"}
+    if "hypotheses" not in out:
+        out["hypotheses"] = dict(absent)
+    if "literature" not in out:
+        out["literature"] = dict(absent)
+    return out
+
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)
 register_upcaster("PlanAccepted", 2, _plan_accepted_v2_to_v3_check_role)
 register_upcaster("PlanAccepted", 3, _plan_accepted_v3_to_v4_expand_after)
@@ -953,6 +967,7 @@ register_upcaster("PlanAccepted", 7, _plan_accepted_v7_to_v8_rubric)
 register_upcaster("PlanAccepted", 8, _plan_accepted_v8_to_v9_loops)
 register_upcaster("PlanAccepted", 9, _plan_accepted_v9_to_v10_decomposes)
 register_upcaster("PlanAccepted", 10, _plan_accepted_v10_to_v11_pr15_kinds)
+register_upcaster("PlanAccepted", 11, _plan_accepted_v11_to_v12_need)
 register_upcaster("PlanExpanded", 1, _plan_expanded_v1_to_v2_rubric)
 register_upcaster("PlanExpanded", 2, _plan_expanded_v2_to_v3_loop)
 register_upcaster("PlanExpanded", 3, _plan_expanded_v3_to_v4_decomposes)

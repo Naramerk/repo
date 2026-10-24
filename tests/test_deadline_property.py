@@ -31,7 +31,7 @@ from coscientist.core.execution.domain import Clarification, TaskSpec, TaskState
 from coscientist.core.execution.hitl_guard import supports_hitl
 from coscientist.core.execution.inputs import InputUnavailable
 from coscientist.core.execution.recover import recover
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import NEED_OFF, close_runtime, open_runtime
 
 # Expected failures when a random rule hits an invalid transition / missing key.
 # Do not include AssertionError — that would swallow production asserts.
@@ -142,7 +142,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
                     depends_on=["EXP-1"],
                 ),
             ]
-            self._call(self.rt.accept_plan(specs))
+            self._call(self.rt.accept_plan(specs, hypotheses=NEED_OFF, literature=NEED_OFF))
         return "EXP-1"
 
     @rule(key=task_keys, target=attempt_ids)

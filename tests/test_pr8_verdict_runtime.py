@@ -37,7 +37,7 @@ from coscientist.core.execution.inputs import (
     collect_bindable_claims,
     verdict_binding_digest,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import NEED_OFF, attach_executor, close_runtime, open_runtime
 from tests.test_inputs import _task
 
 _DERIVED_OK = {
@@ -370,7 +370,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     assert rt.graph.get_node(question_node_id(sid, "Q1")) is not None
     aid0 = await rt.start_attempt("E0")
     content = b'{"count": 225}'
@@ -431,7 +431,7 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid0 = await rt.start_attempt("E0")
     # No artifact → artifact_present (validity) FAILED → scientific.
     result = await ex.record(
@@ -599,7 +599,7 @@ async def test_accept_plan_allows_verdict_kind(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     await close_runtime(rt)
 
 
@@ -646,7 +646,7 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid0 = await rt.start_attempt("E0", provenance="real")
     content = b'{"count": 225}'
     art = arts.put(
@@ -775,7 +775,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid0 = await rt.start_attempt("E0")
     content = b'{"effect": 2.0}'
     art = arts.put(
@@ -1066,7 +1066,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     assert any(n.kind == "criterion" for n in rt.graph.nodes_by_kind("criterion"))
     aid0 = await rt.start_attempt("E0", provenance="real")
     # value_match required, target 225 — wrong count ⇒ FAILED/PARTIAL scientific.
@@ -1152,7 +1152,7 @@ async def test_validity_failed_claim_invalid_inconclusive(
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid0 = await rt.start_attempt("E0", provenance="real")
     # No artifact → artifact_present FAILED (validity).
     await rt.executor.record(
@@ -1227,7 +1227,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
@@ -1263,7 +1263,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     assert pid2 == ""
     events2 = await rt2.store.read_all()
     refused2 = [e for e in events2 if e.type == "PlanRefused"]
@@ -1325,7 +1325,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid = await rt.start_attempt("E_ref", provenance="real")
     await rt.record_budget_debit(spent_rub=Decimal("1.00"), request_id="debit-1")
     art = arts.put(
@@ -1676,7 +1676,7 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
                 )
             ],
             questions=[QuestionSpec(id="Q1", text="why")],
-        )
+         hypotheses=NEED_OFF, literature=NEED_OFF)
         aid0 = await rt.start_attempt("E0")
         art = rt.artifacts.put(
             b'{"count": 225}',
@@ -1913,7 +1913,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid0 = await rt.start_attempt("E0", provenance="real")
     art = arts.put(
         b'{"count": 225}',
@@ -2016,7 +2016,7 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"count": 225}',

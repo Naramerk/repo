@@ -20,7 +20,7 @@ from coscientist.core.execution.domain import (
 )
 from coscientist.core.plan.expand_critic import PLAN_N_CRITIC_CRITERIA
 from coscientist.core.plan.expand_trigger import maybe_expand_after_task_done
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import NEED_OFF, attach_executor, close_runtime, open_runtime
 
 PLAN_N_FREEZE_SKIP_IDS = frozenset(r.template_id for r in PLAN_N_CRITIC_CRITERIA)
 
@@ -105,7 +105,7 @@ async def test_expand_trigger_prod_catalog_plan_n_and_resume(tmp_path, clock):
             ],
             questions=[QuestionSpec(id="Q1", text="why")],
             expand_after=["E0"],
-        )
+         hypotheses=NEED_OFF, literature=NEED_OFF)
         tid = f"{sid}/E0"
         await rt._append(
             [
