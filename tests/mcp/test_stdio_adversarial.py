@@ -21,7 +21,6 @@ from coscientist.mcp.stdio import StdioTransport
 from tests.mcp.conftest import (
     FakeClock,
     SystemClock,
-    fake_wait_for,
     make_client,
     make_config,
     system_sleep,
@@ -32,27 +31,30 @@ from tests.mcp.test_client import RecordingFetcher
 
 
 @pytest.mark.asyncio
-async def test_stderr_flood_trips_max_stderr_bytes() -> None:
+async def test_stderr_flood_trips_max_stderr_bytes(tmp_path: Any) -> None:
+    from pathlib import Path
+
+    ready = Path(tmp_path) / "flooded"
     script = textwrap.dedent(
-        """
+        f"""
         import sys, json, time
         init = sys.stdin.readline()
         req = json.loads(init)
-        sys.stdout.write(json.dumps({
+        sys.stdout.write(json.dumps({{
             "jsonrpc": "2.0",
             "id": req["id"],
-            "result": {
+            "result": {{
                 "protocolVersion": req["params"]["protocolVersion"],
-                "capabilities": {},
-                "serverInfo": {"name": "flood", "version": "0"},
-            },
-        }) + "\\n")
+                "capabilities": {{}},
+                "serverInfo": {{"name": "flood", "version": "0"}},
+            }},
+        }}) + "\\n")
         sys.stdout.flush()
         sys.stdin.readline()  # initialized
-        # Write far past the pipe buffer after overflow; drain must keep reading.
         for _ in range(50):
             sys.stderr.write("Z" * 65536)
             sys.stderr.flush()
+        open({str(ready)!r}, "w").write("1")
         time.sleep(30)
         """
     )
@@ -75,12 +77,19 @@ async def test_stderr_flood_trips_max_stderr_bytes() -> None:
     )
     client = make_client(cfg, file_fetcher=RecordingFetcher({}))
     session = await client.connect("flood")
-    for _ in range(1000):
-        if session._stdio._stderr_overflow:  # noqa: SLF001
-            break
-        await asyncio.sleep(0)
-    else:
-        pytest.fail("stderr overflow not observed")
+
+    def _wait_ready() -> None:
+        import time
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if ready.exists():
+                return
+            time.sleep(0.01)
+        raise TimeoutError("child never finished stderr flood")
+
+    await asyncio.to_thread(_wait_ready)
+    assert session._stdio is not None and session._stdio._stderr_overflow  # noqa: SLF001
     with pytest.raises(McpResponseLimitError, match="max_stderr_bytes") as ei:
         await session.list_tools()
     assert ei.value.limit == 4096
@@ -122,33 +131,52 @@ async def test_stdio_timeout_kills_process_group_including_grandchild() -> None:
                 env_keys=(),
             ),
         ),
-        list_tools_timeout_s=0.3,
+        list_tools_timeout_s=30.0,
         terminate_grace_s=0.15,
         kill_grace_s=0.5,
         process_group_poll_interval_s=0.05,
     )
-    # FakeClock + fake_wait_for for request deadlines; system_sleep so kill_grace
-    # polling waits on real SIGKILL (fake_sleep would expire FakeClock first).
     clock = FakeClock()
+    allow = {"n": 0}
+
+    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+        allow["n"] += 1
+        # Allow initialize receive; force-timeout tools/list (no 0.3s wall wait).
+        if allow["n"] == 1:
+            return await awaitable
+        if allow["n"] == 2:
+            if asyncio.iscoroutine(awaitable):
+                awaitable.close()
+            raise TimeoutError()
+        # Reap / later waits use a real timeout.
+        return await asyncio.wait_for(awaitable, timeout=timeout_s)
+
     client = make_client(
         cfg,
         file_fetcher=RecordingFetcher({}),
         clock=clock,
         sleep=system_sleep(),
-        wait_for=fake_wait_for(clock),
+        wait_for=wait_for,
     )
     session = await client.connect("hang")
+    assert session._stdio is not None
     pgid = session._stdio._pgid  # noqa: SLF001
     with pytest.raises(McpTimeoutError, match="stdio receive exceeded configured timeout"):
         await session.list_tools()
-    for _ in range(1000):
-        try:
-            os.killpg(pgid, 0)
-        except ProcessLookupError:
-            break
-        await asyncio.sleep(0)
-    else:
-        pytest.fail("process group still alive after timeout reap")
+
+    def _wait_dead() -> None:
+        import time
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(pgid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.01)
+        raise TimeoutError("process group still alive after timeout reap")
+
+    await asyncio.to_thread(_wait_dead)
 
 
 @pytest.mark.asyncio

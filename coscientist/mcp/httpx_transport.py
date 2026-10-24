@@ -118,6 +118,11 @@ class HttpxTransport:
             response = await client.send(request, stream=True)
         except httpx.TimeoutException as exc:
             raise McpTimeoutError("httpx request exceeded timeout_s") from exc
+        except httpx.InvalidURL as exc:
+            raise McpTransportError(
+                f"httpx invalid URL: {exc}",
+                retryable=False,
+            ) from exc
         except httpx.HTTPError as exc:
             raise McpTransportError(
                 f"httpx transport error: {type(exc).__name__}",

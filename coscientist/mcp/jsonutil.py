@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import json
+import sys
 from typing import Any
 
-from coscientist.mcp.errors import McpProtocolError
+from coscientist.mcp.errors import IntegerDomainError, McpProtocolError
 
-# Reject pathological int strings (DoS); well above JSON-RPC id / cursor sizes.
-_MAX_INT_DIGITS = 4300
+# IEEE-754 / JS Number.MAX_SAFE_INTEGER — larger ints are not interoperable.
+_MAX_SAFE_INTEGER = 2**53
+
+
+def _max_int_digits() -> int:
+    """Digit cap from the interpreter; fall back when unlimited (0)."""
+    limit = sys.get_int_max_str_digits()
+    return limit if limit > 0 else 4300
 
 
 def _reject_constant(name: str) -> None:
@@ -16,13 +23,19 @@ def _reject_constant(name: str) -> None:
 
 
 def _parse_int(literal: str) -> int:
-    if len(literal) > _MAX_INT_DIGITS:
+    if len(literal) > _max_int_digits():
         raise ValueError("JSON integer exceeds maximum digit length")
-    return int(literal)
+    value = int(literal)
+    if value > _MAX_SAFE_INTEGER or value < -_MAX_SAFE_INTEGER:
+        raise IntegerDomainError(
+            f"JSON integer outside ±2^53 domain: {value}",
+            value=value,
+        )
+    return value
 
 
 def loads_strict(raw: bytes) -> Any:
-    """Parse UTF-8 JSON; reject NaN/Infinity and oversized integers."""
+    """Parse UTF-8 JSON; reject NaN/Infinity, oversized digit strings, and ±2^53 ints."""
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -33,6 +46,8 @@ def loads_strict(raw: bytes) -> Any:
             parse_constant=_reject_constant,
             parse_int=_parse_int,
         )
+    except IntegerDomainError as exc:
+        raise IntegerDomainError(exc.detail, value=exc.value, raw_bytes=raw) from exc
     except (json.JSONDecodeError, ValueError) as exc:
         raise McpProtocolError("response is not JSON", raw_bytes=raw) from exc
 

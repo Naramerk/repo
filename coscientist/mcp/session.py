@@ -8,6 +8,7 @@ from typing import Any
 from coscientist.mcp.config import McpClientConfig
 from coscientist.mcp.digest import content_digest
 from coscientist.mcp.errors import (
+    IntegerDomainError,
     McpError,
     McpProtocolError,
     McpResponseLimitError,
@@ -158,17 +159,27 @@ class McpSession:
             result,
             allowed_schemes=frozenset(self._config.fetch_uri_schemes),
         )
-        files = await fetch_files(
-            uris,
-            fetcher=self._file_fetcher,
-            max_bytes=self._config.max_file_bytes,
-            max_files=self._config.max_files_per_call,
-            max_total_bytes=self._config.max_files_total_bytes,
-            timeout_s=self._config.files_fetch_timeout_s,
-            clock=self._clock,
-            wait_for=self._wait_for,
-        )
-        digest = content_digest(result)
+        # Digest before fetch so IntegerDomainError / JCS failures never download.
+        try:
+            digest = content_digest(result)
+        except (IntegerDomainError, McpError):
+            await self._fail_close()
+            raise
+        try:
+            files = await fetch_files(
+                uris,
+                fetcher=self._file_fetcher,
+                max_bytes=self._config.max_file_bytes,
+                max_files=self._config.max_files_per_call,
+                max_total_bytes=self._config.max_files_total_bytes,
+                timeout_s=self._config.files_fetch_timeout_s,
+                file_timeout_s=self._config.file_fetch_timeout_s,
+                clock=self._clock,
+                wait_for=self._wait_for,
+            )
+        except IntegerDomainError:
+            await self._fail_close()
+            raise
         return CallToolReply(
             content_digest=digest,
             raw_bytes=raw,
@@ -265,7 +276,7 @@ class McpSession:
         except McpTimeoutError:
             await self._cancel_and_close(req_id)
             raise
-        except McpResponseLimitError:
+        except (IntegerDomainError, McpResponseLimitError):
             await self._fail_close()
             raise
 
@@ -289,7 +300,7 @@ class McpSession:
         except McpTimeoutError:
             await self._cancel_and_close(req_id)
             raise
-        except (McpProtocolError, McpTransportError, McpResponseLimitError):
+        except (IntegerDomainError, McpProtocolError, McpTransportError, McpResponseLimitError):
             await self._fail_close()
             raise
         if status == 404 and allow_session_reset and self._http.session_id is not None:
@@ -335,7 +346,7 @@ class McpSession:
                 raise
             try:
                 message = loads_strict(raw)
-            except McpProtocolError:
+            except (IntegerDomainError, McpProtocolError):
                 await self._fail_close()
                 raise
             if not isinstance(message, dict):

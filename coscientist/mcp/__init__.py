@@ -18,6 +18,7 @@ from coscientist.mcp.config import (
     StreamableHttpServerConfig,
 )
 from coscientist.mcp.errors import (
+    IntegerDomainError,
     McpConfigError,
     McpError,
     McpProtocolError,
@@ -33,6 +34,7 @@ from coscientist.mcp.types import CallToolReply, FetchedFile, ListToolsReply, Mc
 __all__ = [
     "CallToolReply",
     "FetchedFile",
+    "IntegerDomainError",
     "ListToolsReply",
     "McpClient",
     "McpClientConfig",

@@ -21,7 +21,7 @@ from coscientist.mcp import (
 )
 from coscientist.mcp.digest import content_digest, sha256_hex
 from coscientist.mcp.transport import HttpStream
-from tests.mcp.conftest import make_client, make_config
+from tests.mcp.conftest import FakeClock, fake_sleep, make_client, make_config
 from tests.mcp.fake_server import FakeStdioServer, default_handler
 
 
@@ -379,10 +379,27 @@ async def test_timeout_sends_cancelled_notification() -> None:
                 finally:
                     self._to_server.task_done()
 
+    clock = FakeClock()
+    allow = {"n": 0}
+
+    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+        import asyncio
+
+        allow["n"] += 1
+        if allow["n"] == 1:
+            return await awaitable
+        if asyncio.iscoroutine(awaitable):
+            awaitable.close()
+        clock.advance(timeout_s)
+        raise TimeoutError()
+
     async with HangServer(default_handler) as server:
         client = make_client(
-            make_config(list_tools_timeout_s=0.15),
+            make_config(list_tools_timeout_s=1.5),
             file_fetcher=RecordingFetcher({}),
+            clock=clock,
+            sleep=fake_sleep(clock),
+            wait_for=wait_for,
         )
         session = await client.connect_memory("fake", server.client)
         from coscientist.mcp import McpTimeoutError
@@ -797,10 +814,33 @@ async def test_streamable_http_overall_deadline_ignores_sse_keepalives_real_sock
                 api_key_env="COSCI_TEST_MCP_KEY",
             ),
         ),
-        list_tools_timeout_s=0.4,
-        notification_timeout_s=0.4,
+        list_tools_timeout_s=30.0,
+        notification_timeout_s=30.0,
     )
-    client = make_client(cfg, file_fetcher=RecordingFetcher({}), http_transport=transport)
+    clock = FakeClock()
+    allow = {"n": 0}
+
+    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+        import asyncio
+
+        allow["n"] += 1
+        # initialize + notifications/initialized; force-timeout tools/list.
+        if allow["n"] <= 2:
+            return await awaitable
+        if allow["n"] == 3:
+            if asyncio.iscoroutine(awaitable):
+                awaitable.close()
+            raise TimeoutError()
+        return await asyncio.wait_for(awaitable, timeout=timeout_s)
+
+    client = make_client(
+        cfg,
+        file_fetcher=RecordingFetcher({}),
+        http_transport=transport,
+        clock=clock,
+        sleep=fake_sleep(clock),
+        wait_for=wait_for,
+    )
     try:
         session = await client.connect("remote")
         with pytest.raises(McpTimeoutError, match="exceeded configured timeout"):
@@ -1098,11 +1138,28 @@ async def test_cancel_notify_failure_still_closes_on_timeout() -> None:
         async def join_outbound(self) -> None:
             await self._inner.join_outbound()
 
+    clock = FakeClock()
+    allow = {"n": 0}
+
+    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+        import asyncio
+
+        allow["n"] += 1
+        if allow["n"] == 1:
+            return await awaitable
+        if asyncio.iscoroutine(awaitable):
+            awaitable.close()
+        clock.advance(timeout_s)
+        raise TimeoutError()
+
     async with HangServer(default_handler) as server:
         tracked = FailCancelTransport(server.client)
         client = make_client(
-            make_config(list_tools_timeout_s=0.15),
+            make_config(list_tools_timeout_s=1.5),
             file_fetcher=RecordingFetcher({}),
+            clock=clock,
+            sleep=fake_sleep(clock),
+            wait_for=wait_for,
         )
         session = await client.connect_memory("fake", tracked)  # type: ignore[arg-type]
         with pytest.raises(McpTimeoutError, match="memory transport receive exceeded timeout"):

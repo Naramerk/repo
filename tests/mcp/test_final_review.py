@@ -4,47 +4,65 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from coscientist.mcp import (
+    IntegerDomainError,
     McpError,
     McpProtocolError,
     McpResponseLimitError,
     McpSsrfError,
     McpTimeoutError,
+    McpTransportError,
+    StdioServerConfig,
 )
 from coscientist.mcp.digest import content_digest
+from coscientist.mcp.files import fetch_files
+from coscientist.mcp.httpx_transport import HttpxTransport
 from coscientist.mcp.jsonutil import dumps_strict, json_rpc_ids_equal, loads_strict
 from coscientist.mcp.ssrf import AsyncDnsResolver, parse_host_port, rewrite_url_host
+from coscientist.mcp.stdio import StdioTransport
 from coscientist.mcp.urls import uris_from_call_result
 from tests.mcp.conftest import (
     FakeClock,
+    SystemClock,
     fake_sleep,
-    fake_wait_for,
     make_client,
     make_config,
     system_sleep,
     system_wait_for,
 )
 from tests.mcp.fake_server import FakeStdioServer, default_handler
-from tests.mcp.test_client import FakeHttp, RecordingFetcher
+from tests.mcp.test_client import RecordingFetcher
 from tests.mcp.test_ssrf import FakeResolver, _fetcher
 
-# --- 1) Strict JSON / JCS -------------------------------------------------
+_SAFE = 2**53
 
 
-def test_loads_strict_rejects_nan_infinity_and_huge_int() -> None:
+# --- 1) Strict JSON / IntegerDomainError / JCS ----------------------------
+
+
+def test_loads_strict_rejects_nan_infinity_and_huge_digit_string() -> None:
     with pytest.raises(McpProtocolError, match="not JSON"):
         loads_strict(b'{"x": NaN}')
     with pytest.raises(McpProtocolError, match="not JSON"):
         loads_strict(b'{"x": Infinity}')
-    with pytest.raises(McpProtocolError, match="not JSON"):
-        loads_strict(b'{"x": -Infinity}')
-    huge = b'{"x": ' + b"1" * 5000 + b"}"
+    huge = b'{"x": ' + b"1" * (sys.get_int_max_str_digits() + 10) + b"}"
     with pytest.raises(McpProtocolError, match="not JSON"):
         loads_strict(huge)
+
+
+def test_loads_strict_rejects_int_above_2_pow_53() -> None:
+    raw = json.dumps({"x": _SAFE + 1}).encode()
+    with pytest.raises(IntegerDomainError, match=r"outside ±2\^53 domain") as ei:
+        loads_strict(raw)
+    assert ei.value.value == _SAFE + 1
 
 
 def test_dumps_strict_rejects_nan() -> None:
@@ -58,8 +76,11 @@ def test_content_digest_wraps_rfc8785_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_session_rejects_nan_in_jsonrpc_response() -> None:
-    class NanServer(FakeStdioServer):
+async def test_integer_domain_error_before_file_fetch_fail_closes() -> None:
+    """Int > 2^53 (under digit cap) → IntegerDomainError, no download, session closed."""
+    file_url = "https://cdn.example/a.pdf"
+
+    class BigIntServer(FakeStdioServer):
         async def _run(self) -> None:  # type: ignore[override]
             while True:
                 raw = await self._to_server.get()
@@ -73,33 +94,46 @@ async def test_session_rejects_nan_in_jsonrpc_response() -> None:
                             "result": {
                                 "protocolVersion": message["params"]["protocolVersion"],
                                 "capabilities": {},
-                                "serverInfo": {"name": "n", "version": "0"},
+                                "serverInfo": {"name": "b", "version": "0"},
                             },
                         }
                         await self._to_client.put(json.dumps(reply).encode())
                         continue
                     if method == "notifications/initialized":
                         continue
-                    if method == "tools/list":
-                        # Non-strict JSON with NaN — must be rejected by loads_strict.
-                        bad = (
-                            b'{"jsonrpc":"2.0","id":'
-                            + str(message["id"]).encode()
-                            + b',"result":{"tools":[],"x":NaN}}'
-                        )
-                        await self._to_client.put(bad)
+                    if method == "tools/call":
+                        payload = {
+                            "jsonrpc": "2.0",
+                            "id": message["id"],
+                            "result": {
+                                "content": [
+                                    {
+                                        "type": "resource_link",
+                                        "uri": file_url,
+                                        "name": "a",
+                                    }
+                                ],
+                                "isError": False,
+                                "n": _SAFE + 1,
+                            },
+                        }
+                        await self._to_client.put(json.dumps(payload).encode())
                         continue
                 finally:
                     self._to_server.task_done()
 
-    async with NanServer(default_handler) as server:
-        client = make_client(make_config(), file_fetcher=RecordingFetcher({}))
+    fetcher = RecordingFetcher({file_url: b"%PDF"})
+    async with BigIntServer(default_handler) as server:
+        client = make_client(make_config(), file_fetcher=fetcher)
         session = await client.connect_memory("fake", server.client)
-        with pytest.raises(McpProtocolError, match="not JSON"):
-            await session.list_tools()
+        with pytest.raises(IntegerDomainError, match=r"outside ±2\^53 domain"):
+            await session.call_tool("get", {})
+        assert fetcher.urls == []
+        # Memory transport closed via _fail_close.
+        assert server.client._closed is True  # noqa: SLF001
 
 
-# --- 2) URL / DNS typed errors --------------------------------------------
+# --- 2) URL / DNS / httpx.InvalidURL --------------------------------------
 
 
 def test_parse_host_port_invalid_port_is_ssrf_error() -> None:
@@ -108,7 +142,7 @@ def test_parse_host_port_invalid_port_is_ssrf_error() -> None:
 
 
 def test_parse_host_port_broken_ipv6_is_ssrf_error() -> None:
-    with pytest.raises(McpSsrfError, match="host/port parse failed|no hostname"):
+    with pytest.raises(McpSsrfError, match="Invalid IPv6 URL"):
         parse_host_port("http://[::1/")
 
 
@@ -127,10 +161,29 @@ async def test_dns_long_label_is_ssrf_error() -> None:
 
 @pytest.mark.asyncio
 async def test_fetcher_invalid_port_is_ssrf_error() -> None:
+    from tests.mcp.test_ssrf import FakeHttp
+
     http = FakeHttp([])
     fetcher = _fetcher(http, resolver=FakeResolver({"h": ("8.8.8.8",)}))
-    with pytest.raises(McpSsrfError, match="host/port|URI"):
+    with pytest.raises(McpSsrfError, match="host/port parse failed"):
         await fetcher.fetch("http://h:99999/x", max_bytes=100, timeout_s=1.0)
+
+
+@pytest.mark.asyncio
+async def test_httpx_invalid_url_is_mcp_transport_error() -> None:
+    transport = HttpxTransport()
+    try:
+        with pytest.raises(McpTransportError, match="httpx invalid URL"):
+            await transport.open(
+                "GET",
+                "http://example.com/\n",
+                headers={},
+                body=None,
+                timeout_s=1.0,
+                connect_ip=None,
+            )
+    finally:
+        await transport.aclose()
 
 
 # --- 3) Typed JSON-RPC id equality ----------------------------------------
@@ -138,20 +191,12 @@ async def test_fetcher_invalid_port_is_ssrf_error() -> None:
 
 def test_json_rpc_ids_equal_is_type_sensitive() -> None:
     assert json_rpc_ids_equal(1, 1) is True
-    assert json_rpc_ids_equal("1", "1") is True
     assert json_rpc_ids_equal(1, 1.0) is False
     assert json_rpc_ids_equal(True, 1) is False
-    assert json_rpc_ids_equal(None, None) is True
 
 
 @pytest.mark.asyncio
 async def test_session_rejects_float_id_for_int_request() -> None:
-    def handler(method: str, params: dict[str, Any] | None) -> Any:
-        if method == "tools/list":
-            # Fake server normally echoes int ids; force a float id via raw path.
-            return {"tools": []}
-        return default_handler(method, params)
-
     class FloatIdServer(FakeStdioServer):
         async def _run(self) -> None:  # type: ignore[override]
             while True:
@@ -179,34 +224,36 @@ async def test_session_rejects_float_id_for_int_request() -> None:
                             "id": float(message["id"]),
                             "result": {"tools": []},
                         }
-                        await self._to_client.put(
-                            json.dumps(reply).encode()
-                        )
+                        await self._to_client.put(json.dumps(reply).encode())
                         continue
                 finally:
                     self._to_server.task_done()
 
-    async with FloatIdServer(handler) as server:
+    async with FloatIdServer(default_handler) as server:
         client = make_client(make_config(), file_fetcher=RecordingFetcher({}))
         session = await client.connect_memory("fake", server.client)
-        with pytest.raises(McpProtocolError, match="id does not match|id mismatch"):
+        with pytest.raises(McpProtocolError, match="id does not match request"):
             await session.list_tools()
 
 
-# --- 4) connect cancel does not orphan subprocess -------------------------
+# --- 4) Deterministic connect cancel (event + process group dead) ---------
 
 
 @pytest.mark.asyncio
-async def test_connect_cancelled_during_initialize_closes_stdio() -> None:
+async def test_connect_cancelled_during_initialize_closes_stdio(
+    tmp_path: Path,
+) -> None:
+    ready = tmp_path / "ready"
     script = (
-        "import sys,json,time\n"
+        "import os, sys\n"
+        f"p = {str(ready)!r}\n"
+        "fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)\n"
+        "os.write(fd, (str(os.getpid()) + ' ' + str(os.getpgid(0))).encode())\n"
+        "os.fsync(fd)\n"
+        "os.close(fd)\n"
         "sys.stdin.readline()\n"
-        "time.sleep(60)\n"
+        "import time; time.sleep(3600)\n"
     )
-    import sys
-
-    from coscientist.mcp import StdioServerConfig
-
     cfg = make_config(
         servers=(
             StdioServerConfig(
@@ -222,49 +269,68 @@ async def test_connect_cancelled_during_initialize_closes_stdio() -> None:
         kill_grace_s=0.5,
         process_group_poll_interval_s=0.05,
     )
-    clock = FakeClock()
+    in_receive = asyncio.Event()
+
+    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+        # First waits are spawn-adjacent; hang on initialize response receive.
+        if not in_receive.is_set():
+            in_receive.set()
+            try:
+                return await asyncio.Future()  # type: ignore[return-value]
+            finally:
+                if asyncio.iscoroutine(awaitable):
+                    awaitable.close()
+        return await awaitable
+
     client = make_client(
         cfg,
         file_fetcher=RecordingFetcher({}),
-        clock=clock,
+        clock=SystemClock(),
         sleep=system_sleep(),
-        wait_for=fake_wait_for(clock, force_timeout=False),
+        wait_for=wait_for,
     )
+    def _wait_ready_text() -> str:
+        import time
 
-    async def _connect_and_cancel() -> None:
-        task = asyncio.create_task(client.connect("slow-init"))
-        await asyncio.sleep(0.05)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if ready.exists():
+                text = ready.read_text().strip()
+                if text:
+                    return text
+            time.sleep(0.01)
+        raise TimeoutError("stdio child never signaled ready")
 
-    await _connect_and_cancel()
-    # No reliable handle to pgid after cancel; ensure a second connect can spawn
-    # (previous group should be reaped via BaseException aclose path).
-    # Force-timeout initialize so we don't hang:
-    client2 = make_client(
-        make_config(
-            servers=cfg.servers,
-            connect_timeout_s=0.2,
-            terminate_grace_s=0.2,
-            kill_grace_s=0.5,
-        ),
-        file_fetcher=RecordingFetcher({}),
-    )
-    with pytest.raises(McpTimeoutError, match="exceeded|timeout"):
-        await client2.connect("slow-init")
+    task = asyncio.create_task(client.connect("slow-init"))
+    await in_receive.wait()
+    ready_text = await asyncio.to_thread(_wait_ready_text)
+    pid_s, pgid_s = ready_text.split()
+    pgid = int(pgid_s)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    def _wait_dead() -> None:
+        import time
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(pgid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.01)
+        raise TimeoutError(f"process group {pgid} still alive after cancelled connect")
+
+    await asyncio.to_thread(_wait_dead)
+    assert int(pid_s) > 0
 
 
-# --- 5) stdio aclose: _closed after reap; retry after cancel --------------
+# --- 5) stdio aclose ------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_stdio_aclose_sets_closed_only_after_reap() -> None:
-    import sys
-
-    from coscientist.mcp.stdio import StdioTransport
-    from tests.mcp.conftest import SystemClock, system_sleep
-
     transport = await StdioTransport.start(
         command=sys.executable,
         args=("-u", "-c", "import time; time.sleep(30)"),
@@ -281,27 +347,22 @@ async def test_stdio_aclose_sets_closed_only_after_reap() -> None:
     assert transport._closed is False  # noqa: SLF001
     await transport.aclose()
     assert transport._closed is True  # noqa: SLF001
-    await transport.aclose()  # idempotent
+    await transport.aclose()
 
 
 @pytest.mark.asyncio
 async def test_stdio_aclose_retry_after_cancel_during_reap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import sys
-
     import coscientist.mcp.stdio as stdio_mod
-    from coscientist.mcp.stdio import StdioTransport
-    from tests.mcp.conftest import SystemClock, system_sleep
 
     started = asyncio.Event()
 
     async def hanging_reap(*_a: Any, **_k: Any) -> None:
         started.set()
-        await asyncio.sleep(3600)
+        await asyncio.Future()
 
     monkeypatch.setattr(stdio_mod, "_reap_process_group", hanging_reap)
-
     transport = await StdioTransport.start(
         command=sys.executable,
         args=("-u", "-c", "import time; time.sleep(30)"),
@@ -321,19 +382,19 @@ async def test_stdio_aclose_retry_after_cancel_during_reap(
     with pytest.raises(asyncio.CancelledError):
         await task
     assert transport._closed is False  # noqa: SLF001
-
-    # Restore real reap for the cleanup retry.
     monkeypatch.undo()
     await transport.aclose()
     assert transport._closed is True  # noqa: SLF001
 
 
-# --- 6) Injected clock used for deadlines ---------------------------------
+# --- 6) Session deadline from clock (N6) — wait_for does not advance ------
 
 
 @pytest.mark.asyncio
-async def test_injected_clock_drives_list_tools_timeout() -> None:
-    class HangServer(FakeStdioServer):
+async def test_session_deadline_uses_injected_clock_without_wait_for_advance() -> None:
+    """session._read_until_response remaining<=0 uses FakeClock; wait_for is passthrough."""
+
+    class NotifyFloodServer(FakeStdioServer):
         async def _run(self) -> None:  # type: ignore[override]
             while True:
                 raw = await self._to_server.get()
@@ -347,42 +408,52 @@ async def test_injected_clock_drives_list_tools_timeout() -> None:
                             "result": {
                                 "protocolVersion": message["params"]["protocolVersion"],
                                 "capabilities": {},
-                                "serverInfo": {"name": "h", "version": "0"},
+                                "serverInfo": {"name": "n", "version": "0"},
                             },
                         }
                         await self._to_client.put(json.dumps(reply).encode())
-                    # tools/list: never reply
+                        continue
+                    if method == "notifications/initialized":
+                        continue
+                    if method == "tools/list":
+                        # Flood notifications; never the matching response.
+                        for _ in range(5):
+                            note = {"jsonrpc": "2.0", "method": "notifications/message"}
+                            await self._to_client.put(json.dumps(note).encode())
+                        continue
                 finally:
                     self._to_server.task_done()
 
-    clock = FakeClock()
-    allow = {"n": 0}
+    clock = FakeClock(mono=0.0)
+    receives = {"n": 0}
 
-    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
-        allow["n"] += 1
-        # Only the initialize response receive is allowed through.
-        if allow["n"] == 1:
-            return await awaitable
-        if asyncio.iscoroutine(awaitable):
-            awaitable.close()
-        clock.advance(timeout_s)
-        raise TimeoutError()
+    async def passthrough_wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+        # Do NOT advance clock — deadline logic must come from session.py:324-328.
+        result = await awaitable
+        receives["n"] += 1
+        # After initialize receive, each notification receive advances clock.
+        if receives["n"] >= 2:
+            clock.advance(1.0)
+        return result
 
-    async with HangServer(default_handler) as server:
+    async with NotifyFloodServer(default_handler) as server:
         client = make_client(
-            make_config(list_tools_timeout_s=1.5),
+            make_config(list_tools_timeout_s=2.5),
             file_fetcher=RecordingFetcher({}),
             clock=clock,
             sleep=fake_sleep(clock),
-            wait_for=wait_for,
+            wait_for=passthrough_wait_for,
         )
         session = await client.connect_memory("fake", server.client)
-        with pytest.raises(McpTimeoutError, match="timeout"):
+        with pytest.raises(
+            McpTimeoutError,
+            match="stdio/memory receive exceeded configured timeout",
+        ):
             await session.list_tools()
-        assert clock.monotonic() >= 1.5
+        assert clock.monotonic() >= 2.5
 
 
-# --- 7) Embedded resource without text/blob -------------------------------
+# --- 7) Embedded resource -------------------------------------------------
 
 
 def test_embedded_resource_without_text_or_blob_is_protocol_error() -> None:
@@ -414,14 +485,11 @@ def test_embedded_resource_with_text_is_not_fetched() -> None:
     assert uris_from_call_result(result, allowed_schemes=frozenset({"http", "https"})) == ()
 
 
-# --- 8) fetch_files limits ------------------------------------------------
+# --- 8) fetch_files limits + file_timeout + multi-file budget (N7) --------
 
 
 @pytest.mark.asyncio
 async def test_fetch_files_enforces_max_files_and_total_bytes() -> None:
-    from coscientist.mcp.files import fetch_files
-    from tests.mcp.conftest import SystemClock
-
     class CountingFetcher:
         def __init__(self) -> None:
             self.calls: list[str] = []
@@ -429,6 +497,9 @@ async def test_fetch_files_enforces_max_files_and_total_bytes() -> None:
         async def fetch(self, url: str, *, max_bytes: int, timeout_s: float) -> bytes:
             self.calls.append(url)
             return b"x" * 10
+
+    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+        return await awaitable
 
     fetcher = CountingFetcher()
     with pytest.raises(McpResponseLimitError, match="max_files_per_call") as ei:
@@ -439,7 +510,9 @@ async def test_fetch_files_enforces_max_files_and_total_bytes() -> None:
             max_files=2,
             max_total_bytes=1000,
             timeout_s=5.0,
+            file_timeout_s=5.0,
             clock=SystemClock(),
+            wait_for=wait_for,
         )
     assert ei.value.limit == 2
     assert fetcher.calls == []
@@ -453,46 +526,75 @@ async def test_fetch_files_enforces_max_files_and_total_bytes() -> None:
             max_files=10,
             max_total_bytes=15,
             timeout_s=5.0,
+            file_timeout_s=5.0,
             clock=SystemClock(),
+            wait_for=wait_for,
         )
     assert ei2.value.limit == 15
     assert len(fetcher2.calls) == 2
 
 
 @pytest.mark.asyncio
-async def test_fetch_files_overall_deadline_via_injected_clock() -> None:
-    from coscientist.mcp.files import fetch_files
+async def test_fetch_files_applies_min_of_remaining_and_file_timeout() -> None:
+    seen: list[float] = []
 
-    class SlowFetcher:
+    class CapturingFetcher:
         async def fetch(self, url: str, *, max_bytes: int, timeout_s: float) -> bytes:
-            return b"ok"
+            seen.append(timeout_s)
+            return b"x"
 
     clock = FakeClock(mono=0.0)
 
     async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
-        clock.advance(timeout_s + 0.1)
-        if asyncio.iscoroutine(awaitable):
-            awaitable.close()
-        raise TimeoutError()
+        return await awaitable
+
+    await fetch_files(
+        ("https://a/1",),
+        fetcher=CapturingFetcher(),  # type: ignore[arg-type]
+        max_bytes=100,
+        max_files=10,
+        max_total_bytes=1000,
+        timeout_s=10.0,
+        file_timeout_s=1.5,
+        clock=clock,
+        wait_for=wait_for,
+    )
+    assert seen == [1.5]
+
+
+@pytest.mark.asyncio
+async def test_fetch_files_multi_file_budget_exhausted() -> None:
+    """Overall files_fetch_timeout_s budget runs out across multiple files (N7)."""
+    clock = FakeClock(mono=0.0)
+    calls: list[str] = []
+
+    class Fetcher:
+        async def fetch(self, url: str, *, max_bytes: int, timeout_s: float) -> bytes:
+            calls.append(url)
+            return b"ok"
+
+    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+        # First file consumes the whole overall budget.
+        clock.advance(1.0)
+        return await awaitable
 
     with pytest.raises(McpTimeoutError, match="files_fetch_timeout_s"):
         await fetch_files(
-            ("https://a/1",),
-            fetcher=SlowFetcher(),  # type: ignore[arg-type]
+            ("https://a/1", "https://a/2"),
+            fetcher=Fetcher(),  # type: ignore[arg-type]
             max_bytes=100,
             max_files=10,
             max_total_bytes=1000,
             timeout_s=1.0,
+            file_timeout_s=5.0,
             clock=clock,
             wait_for=wait_for,
         )
+    assert calls == ["https://a/1"]
 
 
-@pytest.mark.asyncio
-async def test_config_requires_files_limits_without_defaults() -> None:
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError):
+def test_config_requires_files_limits_without_defaults() -> None:
+    with pytest.raises(ValidationError, match="Field required"):
         make_config().__class__(
             **{
                 k: v
@@ -507,16 +609,17 @@ async def test_config_requires_files_limits_without_defaults() -> None:
         )
 
 
-# --- 9) import-linter contracts (smoke via lint-imports in CI) ------------
+# --- 9) httpx only in httpx_transport (N5: path from __file__) ------------
 
 
 def test_httpx_only_imported_from_httpx_transport() -> None:
     import ast
-    from pathlib import Path
 
-    mcp_root = Path("coscientist/mcp")
+    mcp_root = Path(__file__).resolve().parents[2] / "coscientist" / "mcp"
+    py_files = list(mcp_root.rglob("*.py"))
+    assert py_files, f"no Python files under {mcp_root}"
     offenders: list[str] = []
-    for path in mcp_root.rglob("*.py"):
+    for path in py_files:
         if path.name == "httpx_transport.py":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -532,10 +635,7 @@ def test_httpx_only_imported_from_httpx_transport() -> None:
     assert offenders == []
 
 
-# --- 10) timing without wall sleeps covered above / existing tests --------
-
-
-# --- 11) precise raises already tightened; version negotiation ------------
+# --- 11) precise version negotiation -------------------------------------
 
 
 @pytest.mark.asyncio

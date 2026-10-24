@@ -154,8 +154,9 @@ async def fetch_files(
     max_files: int,
     max_total_bytes: int,
     timeout_s: float,
+    file_timeout_s: float,
     clock: Clock,
-    wait_for: AsyncWaitFor | None = None,
+    wait_for: AsyncWaitFor,
 ) -> tuple[FetchedFile, ...]:
     if len(uris) > max_files:
         raise McpResponseLimitError(
@@ -169,14 +170,12 @@ async def fetch_files(
         remaining = deadline - clock.monotonic()
         if remaining <= 0:
             raise McpTimeoutError("files fetch exceeded files_fetch_timeout_s")
+        per_file_timeout = min(remaining, file_timeout_s)
         try:
-            if wait_for is not None:
-                raw = await wait_for(
-                    fetcher.fetch(uri, max_bytes=max_bytes, timeout_s=remaining),
-                    timeout_s=remaining,
-                )
-            else:
-                raw = await fetcher.fetch(uri, max_bytes=max_bytes, timeout_s=remaining)
+            raw = await wait_for(
+                fetcher.fetch(uri, max_bytes=max_bytes, timeout_s=per_file_timeout),
+                timeout_s=per_file_timeout,
+            )
         except TimeoutError as exc:
             raise McpTimeoutError("files fetch exceeded files_fetch_timeout_s") from exc
         total_bytes += len(raw)

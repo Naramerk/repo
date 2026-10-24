@@ -46,6 +46,16 @@ class McpProtocolError(McpError):
         super().__init__(detail)
 
 
+class IntegerDomainError(McpError):
+    """JSON integer outside the interoperable ±2^53 domain (below digit-length cap)."""
+
+    def __init__(self, detail: str, *, value: int, raw_bytes: bytes | None = None) -> None:
+        self.detail = detail
+        self.value = value
+        self.raw_bytes = raw_bytes
+        super().__init__(detail)
+
+
 class McpResponseLimitError(McpError):
     """Response or downloaded file exceeded a configured byte limit."""
 
