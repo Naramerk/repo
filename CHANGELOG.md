@@ -73,6 +73,9 @@
 - Core `StudyNotFound` on `StudyService` port; `DataRootStudyService` real adapter.
 - Contract tests (fakes + data-root); payload copy locked.
 - [CAP #19](docs/CAPABILITIES.md?plain=1#L28) / [#21](docs/CAPABILITIES.md?plain=1#L30) prep.
+### [M1] CLI ``coscientist run`` (DESIGN §13 / §12.2)
+
+- Entry point `coscientist run <task>`: create_study, planner + executor-route via `LlmAgentAdapter`, tick until closed by deadline; JSON summary writes per-role usage. StaticToolRouter until G7 MCP router. [DESIGN §13](docs/DESIGN.md#13-порядок-работ).
 
 ### [M2] continue_session §3.6 partition
 - `partition_fork` / `fork()` + `last_fork`; durable empty-nonce idempotency via
