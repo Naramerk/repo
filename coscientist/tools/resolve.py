@@ -15,7 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class _ToolSpecName(Protocol):
     """Minimal ``ToolSpec`` surface for AgentPort allow-lists (name only)."""
 
-    name: str
+    @property
+    def name(self) -> str: ...
 
 
 class NamedTool(Protocol):
@@ -25,7 +26,8 @@ class NamedTool(Protocol):
     stand-in keyed by ``spec.name``.
     """
 
-    spec: _ToolSpecName
+    @property
+    def spec(self) -> _ToolSpecName: ...
 
 
 class ToolNeed(BaseModel):
