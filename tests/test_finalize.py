@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -582,7 +583,7 @@ _ASSEMBLE_EMPTY = dict(
     [
         (
             {"Q1": {"disposition": "not_attempted", "reason": "no_task"}},
-            "formulation/disposition/reason",
+            re.escape("formulation/disposition/reason"),
         ),
         (
             {
@@ -592,10 +593,57 @@ _ASSEMBLE_EMPTY = dict(
                     "formulation": "q",
                 }
             },
-            "non-null",
+            re.escape("non-null"),
+        ),
+        (
+            {1: {"disposition": "not_attempted", "reason": "no_task", "formulation": "q"}},
+            re.escape("question key must be str, got int"),
+        ),
+        (
+            {
+                "Q1": {
+                    "disposition": "not_attempted",
+                    "reason": "no_task",
+                    "formulation": 1,
+                }
+            },
+            re.escape("formulation must be str, got int"),
+        ),
+        (
+            {
+                "Q1": {
+                    "disposition": "not_attempted",
+                    "reason": 1,
+                    "formulation": "q",
+                }
+            },
+            re.escape("reason must be str, got int"),
+        ),
+        (
+            {"Q1": {"disposition": 1, "reason": "x", "formulation": "q"}},
+            re.escape("disposition must be Disposition|str, got int"),
+        ),
+        (
+            {
+                "Q1": {
+                    "disposition": "not_attempted",
+                    "reason": "no_task",
+                    "formulation": "q",
+                    "note": 1,
+                }
+            },
+            re.escape("note must be str|None, got int"),
         ),
     ],
-    ids=["missing-formulation", "null-reason"],
+    ids=[
+        "missing-formulation",
+        "null-reason",
+        "non-str-key",
+        "formulation-type",
+        "reason-type",
+        "disposition-type",
+        "note-type",
+    ],
 )
 def test_assemble_refuses_bad_question_fields(qdisp, match):
     with pytest.raises(MinimalReportRefuse, match=match):
@@ -605,15 +653,55 @@ def test_assemble_refuses_bad_question_fields(qdisp, match):
 @pytest.mark.parametrize(
     ("hypotheses", "match"),
     [
-        ({"H1": {"verdict": "untested"}}, "hypothesis_id required"),
-        ({"H1": {"hypothesis_id": "H2", "verdict": "untested"}}, "!="),
-        ({"H1": "not-a-mapping"}, "expected mapping row"),
+        ({"H1": {"verdict": "untested"}}, re.escape("hypothesis_id required")),
+        ({"H1": {"hypothesis_id": "H2", "verdict": "untested"}}, re.escape("!=")),
+        ({"H1": "not-a-mapping"}, re.escape("expected mapping row")),
+        ({1: {"hypothesis_id": "1"}}, re.escape("hypothesis key must be str, got int")),
+        (
+            {"H1": {"hypothesis_id": 1}},
+            re.escape("hypothesis_id must be str, got int"),
+        ),
+        (
+            [{"hypothesis_id": 1}],
+            re.escape("hypothesis list row: hypothesis_id must be str, got int"),
+        ),
     ],
-    ids=["missing-id", "key-mismatch", "non-mapping"],
+    ids=[
+        "missing-id",
+        "key-mismatch",
+        "non-mapping",
+        "non-str-key",
+        "id-type-map",
+        "id-type-list",
+    ],
 )
 def test_assemble_refuses_bad_hypothesis_rows(hypotheses, match):
     with pytest.raises(MinimalReportRefuse, match=match):
         assemble_minimal_report(**{**_ASSEMBLE_EMPTY, "hypotheses": hypotheses})
+
+
+@pytest.mark.parametrize(
+    ("reason", "match"),
+    [
+        ("not_a_reason", re.escape("unknown reason 'not_a_reason'")),
+        ("", re.escape("unknown reason ''")),
+        (42, re.escape("reason must be TaskReason|str|None, got int")),
+    ],
+    ids=["unknown-str", "empty-str", "non-taskreason-type"],
+)
+def test_assemble_refuses_bad_task_reason(reason, match):
+    t = Task.model_construct(
+        task_id="st/A",
+        kind=TaskKind.EXPERIMENT,
+        spec=TaskSpec(task_key="A", title="A", goal="g", route="experiment"),
+        state=TaskState.DONE,
+        outcome=TaskOutcome.SUCCESS,
+        reason=reason,
+        deadline=_TS,
+        attempts=[],
+    )
+    with pytest.raises(MinimalReportRefuse, match=match):
+        assemble_minimal_report(**{**_ASSEMBLE_EMPTY, "tasks": {"st/A": t}})
 
 
 def test_assemble_refuses_non_str_observation():

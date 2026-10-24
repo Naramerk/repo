@@ -27,7 +27,10 @@ from coscientist.checks.kinds.quote_norm import (
     quote_in_normalized_source,
     token_boundary_match,
 )
+from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import ArtifactRejected, CatalogError
+from coscientist.core.events.events import make_idem
+from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -2172,8 +2175,6 @@ def _complete_legacy_freeze_fields_without_provenance(db_path: Path) -> None:
         }
     }
 
-    from coscientist.core.events.digest import canonical_json, sha256_hex
-
     def _patch_study_created(p: dict) -> None:
         p["catalog_version"] = 3
         p["require_hypotheses"] = False
@@ -2208,10 +2209,6 @@ async def _seed_reclassify_open_journal(tmp_path: Path, clock) -> tuple[str, str
     construction (never patched onto a legacy row; never invent ``real``).
     ``SourceFetched`` is SQL-inserted (store append requires a fetch capability).
     """
-    from coscientist.core.events.digest import canonical_json, sha256_hex
-    from coscientist.core.events.events import make_idem
-    from coscientist.core.events.store import SqliteEventStore
-
     sid = "st_reclass_open"
     digest = _RECLASS_FETCH_DIGEST
     call_id = _RECLASS_CALL_ID
