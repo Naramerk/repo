@@ -96,7 +96,7 @@ def _encode_request(
         max_tokens_field: max_completion_tokens,
     }
     if isinstance(request, StructuredLlmRequest):
-        payload["response_format"] = request.response_format
+        payload["response_format"] = request.response_format.to_openai_payload()
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
