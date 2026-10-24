@@ -30,7 +30,13 @@ class Usage(BaseModel):
 
     prompt_tokens: int = Field(ge=0)
     completion_tokens: int = Field(ge=0)
-    latency_ms: float = Field(ge=0.0)
+    latency_ms: float = Field(
+        ge=0.0,
+        description=(
+            "Wall-clock milliseconds for LlmClient.complete including retries and backoff; "
+            "when returned from ProviderAdapter.complete alone, milliseconds for that one attempt."
+        ),
+    )
 
 
 class LlmResponse(BaseModel):

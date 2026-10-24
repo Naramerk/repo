@@ -1,4 +1,10 @@
-"""HTTP transport protocol used by provider adapters. Tests inject a fake."""
+"""HTTP transport protocol used by provider adapters. Tests inject a fake.
+
+Implementations must raise :class:`~coscientist.llm.errors.LlmTransportError` or
+:class:`~coscientist.llm.errors.LlmTimeoutError` for failures. Any other exception
+is wrapped by the OpenAI-compatible provider into ``LlmTransportError`` using
+``LlmConfig.unexpected_transport_retryable``.
+"""
 
 from __future__ import annotations
 

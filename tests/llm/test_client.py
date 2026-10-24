@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import ast
+import asyncio
 import json
+import random
+from pathlib import Path
 from typing import Any, Mapping
 
 import pytest
 from pydantic import ValidationError
 
+import coscientist.llm as llm_package
 from coscientist.llm import (
     ChatMessage,
     LlmClient,
     LlmConfig,
     LlmConfigError,
+    LlmFinishReasonError,
     LlmProviderError,
     LlmRequest,
     LlmResponseError,
@@ -27,11 +33,18 @@ def _config(**overrides: Any) -> LlmConfig:
         "base_url": "https://example.test/v1",
         "api_key_env": "COSCI_TEST_LLM_KEY",
         "timeout_s": 1.0,
+        "total_deadline_s": 30.0,
         "max_retries": 0,
         "retry_backoff_s": 0.0,
+        "retry_backoff_multiplier": 2.0,
+        "retry_backoff_jitter_s": 0.0,
+        "retry_backoff_max_s": 60.0,
         "retry_on_timeout": False,
-        "retryable_status_codes": (503,),
+        "honor_retry_after": True,
+        "retryable_status_codes": (503, 429),
         "max_completion_tokens": 64,
+        "accepted_finish_reasons": ("stop",),
+        "unexpected_transport_retryable": False,
     }
     base.update(overrides)
     return LlmConfig(**base)
@@ -95,6 +108,26 @@ class FakeTransport:
         return outcome
 
 
+class HangingTransport:
+    """Ignores timeout_s so asyncio.wait_for in LlmClient must cancel the call."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        body: bytes,
+        timeout_s: float,
+    ) -> TransportResponse:
+        self.calls += 1
+        await asyncio.sleep(3600)
+        raise AssertionError("hang should have been cancelled")
+
+
 @pytest.fixture
 def api_key(monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setenv("COSCI_TEST_LLM_KEY", "secret-test-key")
@@ -143,6 +176,56 @@ async def test_missing_api_key_env_is_config_error(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
+async def test_empty_api_key_is_config_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "")
+    client = LlmClient(
+        _config(),
+        FakeTransport([TransportResponse(status_code=200, headers={}, body=_ok_body())]),
+    )
+    with pytest.raises(LlmConfigError):
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+
+
+@pytest.mark.asyncio
+async def test_whitespace_only_api_key_is_config_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "   \t  ")
+    client = LlmClient(
+        _config(),
+        FakeTransport([TransportResponse(status_code=200, headers={}, body=_ok_body())]),
+    )
+    with pytest.raises(LlmConfigError):
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+
+
+@pytest.mark.asyncio
+async def test_config_error_str_repr_never_include_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "sk-live-super-secret-value-xyz"
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", secret)
+    # Force a config error path that runs after env read would have the secret:
+    # delete after client construction so complete() sees missing env.
+    client = LlmClient(
+        _config(),
+        FakeTransport([TransportResponse(status_code=200, headers={}, body=_ok_body())]),
+    )
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "   ")
+    with pytest.raises(LlmConfigError) as ei:
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+    assert secret not in str(ei.value)
+    assert secret not in repr(ei.value)
+    assert secret not in ei.value.args[0]
+
+
+@pytest.mark.asyncio
 async def test_provider_error_not_retryable_by_default(api_key: str) -> None:
     transport = FakeTransport(
         [
@@ -179,6 +262,65 @@ async def test_retries_only_configured_status_codes(api_key: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_retries_exhausted(api_key: str) -> None:
+    transport = FakeTransport(
+        [
+            TransportResponse(status_code=503, headers={}, body=b"a"),
+            TransportResponse(status_code=503, headers={}, body=b"b"),
+            TransportResponse(status_code=503, headers={}, body=b"c"),
+        ]
+    )
+    client = LlmClient(
+        _config(max_retries=2, retryable_status_codes=(503,), retry_backoff_s=0.0),
+        transport,
+    )
+    with pytest.raises(LlmProviderError) as ei:
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+    assert ei.value.status_code == 503
+    assert len(transport.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_429_honors_retry_after(api_key: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    sleeps: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+    transport = FakeTransport(
+        [
+            TransportResponse(
+                status_code=429,
+                headers={"Retry-After": "0.25"},
+                body=b"rate",
+            ),
+            TransportResponse(status_code=200, headers={}, body=_ok_body(content="ok")),
+        ]
+    )
+    client = LlmClient(
+        _config(
+            max_retries=1,
+            retryable_status_codes=(429,),
+            honor_retry_after=True,
+            retry_backoff_s=100.0,
+            retry_backoff_multiplier=2.0,
+            retry_backoff_jitter_s=0.0,
+            retry_backoff_max_s=1000.0,
+        ),
+        transport,
+        rng=random.Random(0),
+    )
+    resp = await client.complete(
+        LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+    )
+    assert resp.content == "ok"
+    assert sleeps == [0.25]
+
+
+@pytest.mark.asyncio
 async def test_transport_retryable_flag_respected(api_key: str) -> None:
     transport = FakeTransport(
         [
@@ -203,6 +345,18 @@ async def test_transport_non_retryable_fails_immediately(api_key: str) -> None:
             LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
         )
     assert len(transport.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_unexpected_transport_exception_wrapped(api_key: str) -> None:
+    transport = FakeTransport([RuntimeError("boom")])
+    client = LlmClient(_config(unexpected_transport_retryable=False), transport)
+    with pytest.raises(LlmTransportError) as ei:
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+    assert ei.value.retryable is False
+    assert ei.value.detail == "RuntimeError"
 
 
 @pytest.mark.asyncio
@@ -235,6 +389,20 @@ async def test_timeout_retries_when_enabled(api_key: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_wait_for_timeout_on_hanging_transport(api_key: str) -> None:
+    transport = HangingTransport()
+    client = LlmClient(
+        _config(timeout_s=0.05, total_deadline_s=1.0, retry_on_timeout=False),
+        transport,
+    )
+    with pytest.raises(LlmTimeoutError):
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+    assert transport.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_malformed_response_is_typed_error(api_key: str) -> None:
     transport = FakeTransport(
         [TransportResponse(status_code=200, headers={}, body=b'{"choices":[]}')]
@@ -244,6 +412,69 @@ async def test_malformed_response_is_typed_error(api_key: str) -> None:
         await client.complete(
             LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
         )
+
+
+@pytest.mark.asyncio
+async def test_non_json_response_is_typed_error(api_key: str) -> None:
+    transport = FakeTransport(
+        [TransportResponse(status_code=200, headers={}, body=b"not-json")]
+    )
+    client = LlmClient(_config(), transport)
+    with pytest.raises(LlmResponseError, match="not JSON"):
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+
+
+@pytest.mark.asyncio
+async def test_non_utf8_response_is_typed_error(api_key: str) -> None:
+    transport = FakeTransport(
+        [TransportResponse(status_code=200, headers={}, body=b"\xff\xfe not utf-8")]
+    )
+    client = LlmClient(_config(), transport)
+    with pytest.raises(LlmResponseError, match="not UTF-8"):
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+
+
+@pytest.mark.asyncio
+async def test_finish_reason_length_raises(api_key: str) -> None:
+    transport = FakeTransport(
+        [
+            TransportResponse(
+                status_code=200,
+                headers={},
+                body=_ok_body(content="cut", finish_reason="length"),
+            )
+        ]
+    )
+    client = LlmClient(_config(accepted_finish_reasons=("stop",)), transport)
+    with pytest.raises(LlmFinishReasonError) as ei:
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+    assert ei.value.finish_reason == "length"
+    assert ei.value.content == "cut"
+
+
+@pytest.mark.asyncio
+async def test_finish_reason_content_filter_raises(api_key: str) -> None:
+    transport = FakeTransport(
+        [
+            TransportResponse(
+                status_code=200,
+                headers={},
+                body=_ok_body(content="", finish_reason="content_filter"),
+            )
+        ]
+    )
+    client = LlmClient(_config(), transport)
+    with pytest.raises(LlmFinishReasonError) as ei:
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+    assert ei.value.finish_reason == "content_filter"
 
 
 @pytest.mark.asyncio
@@ -274,9 +505,17 @@ def test_config_requires_timeout_and_limits() -> None:
             api_key_env="K",
             max_retries=0,
             retry_backoff_s=0.0,
+            retry_backoff_multiplier=2.0,
+            retry_backoff_jitter_s=0.0,
+            retry_backoff_max_s=1.0,
             retry_on_timeout=False,
+            honor_retry_after=False,
             retryable_status_codes=(),
             max_completion_tokens=1,
+            accepted_finish_reasons=("stop",),
+            unexpected_transport_retryable=False,
+            total_deadline_s=1.0,
+            # timeout_s missing
         )
 
 
@@ -308,13 +547,23 @@ async def test_provider_error_detail_does_not_echo_body(api_key: str) -> None:
 
 
 def test_llm_package_does_not_import_core() -> None:
-    import coscientist.llm as llm_pkg
-    import coscientist.llm.client as client_mod
-    import coscientist.llm.openai_compat as openai_mod
-
-    for mod in (llm_pkg, client_mod, openai_mod):
-        for name, value in vars(mod).items():
-            if name.startswith("_"):
-                continue
-            modname = getattr(value, "__module__", "") or ""
-            assert not modname.startswith("coscientist.core"), modname
+    root = Path(llm_package.__file__).resolve().parent
+    offenders: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "coscientist.core" or alias.name.startswith(
+                        "coscientist.core."
+                    ):
+                        offenders.append(f"{path.name}:{node.lineno}:import {alias.name}")
+            elif isinstance(node, ast.ImportFrom):
+                mod = node.module or ""
+                if mod == "coscientist.core" or mod.startswith("coscientist.core."):
+                    offenders.append(f"{path.name}:{node.lineno}:from {mod}")
+                if mod == "coscientist" and any(
+                    alias.name == "core" for alias in node.names
+                ):
+                    offenders.append(f"{path.name}:{node.lineno}:from coscientist import core")
+    assert offenders == []

@@ -94,10 +94,18 @@ source_modules = ["coscientist.core"]
 forbidden_modules = ["coscientist.experimental"]
 
 [[tool.importlinter.contracts]]
-name = "llm must not import coscientist.core"
+name = "llm must not import core, tools, or agents"
 type = "forbidden"
 source_modules = ["coscientist.llm"]
-forbidden_modules = ["coscientist.core"]
+forbidden_modules = ["coscientist.core", "coscientist.tools", "coscientist.agents"]
+
+[[tool.importlinter.contracts]]
+name = "agents layer above tools and llm"
+type = "layers"
+layers = [
+  "coscientist.agents",
+  "coscientist.tools | coscientist.llm",
+]
 
 [[tool.importlinter.contracts]]
 name = "agents must not import api"
@@ -110,6 +118,12 @@ name = "tools must not import api"
 type = "forbidden"
 source_modules = ["coscientist.tools"]
 forbidden_modules = ["coscientist.api"]
+
+[[tool.importlinter.contracts]]
+name = "tools must not import agents or llm"
+type = "forbidden"
+source_modules = ["coscientist.tools"]
+forbidden_modules = ["coscientist.agents", "coscientist.llm"]
 
 [[tool.importlinter.contracts]]
 name = "invoke_tool is the only tools entry (no direct contract/effects import)"

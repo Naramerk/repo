@@ -600,18 +600,23 @@ agents/   — вызывает llm + tools.invoke_tool; не хранит сос
 class LlmConfig(BaseModel):  # frozen; все поля обязательны — без defaults в коде
     base_url: str                 # OpenAI-compatible api_base (…/v1)
     api_key_env: str              # имя env-переменной; значение ключа только из env
-    timeout_s: float
+    timeout_s: float              # на одну попытку
+    total_deadline_s: float       # wall-clock на все попытки + backoff
     max_retries: int
-    retry_backoff_s: float
-    retry_on_timeout: bool
+    retry_backoff_s: float; retry_backoff_multiplier: float
+    retry_backoff_jitter_s: float; retry_backoff_max_s: float
+    retry_on_timeout: bool; honor_retry_after: bool
     retryable_status_codes: tuple[int, ...]
     max_completion_tokens: int    # уходит в max_tokens запроса
+    accepted_finish_reasons: tuple[str, ...]  # иначе LlmFinishReasonError
+    unexpected_transport_retryable: bool
 
 class LlmRequest(BaseModel):
     model: str; messages: list[ChatMessage]
 
 class Usage(BaseModel):
-    prompt_tokens: int; completion_tokens: int; latency_ms: float
+    prompt_tokens: int; completion_tokens: int
+    latency_ms: float  # wall-clock LlmClient.complete (retries+backoff)
 
 class LlmResponse(BaseModel):
     content: str; model: str; finish_reason: str; usage: Usage
@@ -623,9 +628,9 @@ class Transport(Protocol):  # тесты — fake; сеть не в unit-тес�
     async def request(self, method, url, *, headers, body, timeout_s) -> TransportResponse: ...
 ```
 
-- Реализация: `OpenAICompatibleProvider` + `LlmClient` (retry/timeout по `LlmConfig`).
+- Реализация: `OpenAICompatibleProvider` + `LlmClient` (retry/timeout/deadline по `LlmConfig`; exponential backoff + jitter; `Retry-After` при `honor_retry_after`).
 - Usage (prompt/completion tokens + latency) возвращается на каждый успешный `complete`.
-- Типизированные ошибки: `LlmConfigError`, `LlmTimeoutError`, `LlmTransportError`, `LlmProviderError`, `LlmResponseError`. Нет угадывания retryable по тексту/форме ответа — только флаги и `retryable_status_codes` из config.
+- Типизированные ошибки: `LlmConfigError`, `LlmTimeoutError`, `LlmTransportError`, `LlmProviderError`, `LlmResponseError`, `LlmFinishReasonError`. Нет угадывания retryable по тексту/форме ответа — только флаги и `retryable_status_codes` из config. `finish_reason` ∉ `accepted_finish_reasons` → ошибка (не silent success для `length`/`content_filter`).
 - Секреты только из env; тела запросов/ответов и ключи не логируются и не печатаются.
 - Порт агента (поверх клиента; wiring в M2):
 

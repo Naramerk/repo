@@ -11,6 +11,7 @@ from coscientist.llm.config import LlmConfig
 from coscientist.llm.errors import (
     LlmConfigError,
     LlmError,
+    LlmFinishReasonError,
     LlmProviderError,
     LlmResponseError,
     LlmTimeoutError,
@@ -27,6 +28,7 @@ __all__ = [
     "LlmConfig",
     "LlmConfigError",
     "LlmError",
+    "LlmFinishReasonError",
     "LlmProviderError",
     "LlmRequest",
     "LlmResponse",
