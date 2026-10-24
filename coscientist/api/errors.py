@@ -1,8 +1,9 @@
-"""Typed API refusals (DESIGN §9). Fail-closed — never invent missing studies or seq."""
+"""Typed API refusals (DESIGN §9). Fail-closed — never invent missing studies or seq.
+
+``StudyNotFound`` lives only in ``coscientist.core.events.errors`` (no re-export).
+"""
 
 from __future__ import annotations
-
-from coscientist.core.events.errors import StudyNotFound as StudyNotFound
 
 
 class ApiRefuse(Exception):

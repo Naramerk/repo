@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+### M5 API — cayman closeout (StudyNotFound path + loop gate)
+- `StudyNotFound` only from `core.events.errors` (no api/ports re-export); reason required.
+- Loop gate via `aio_events._get_running_loop()` (no try/except swallow); generator drift tests.
+- Contract tests: `match=` + parametrize `ids`; idem key import from core.
+
 ### M5 API — study_view under running loop → StudyViewLoopRefuse
-- Explicit `get_running_loop` gate (no CPython message parse); typed refuse + test.
+- Explicit loop presence gate before `asyncio.run`; typed refuse + test.
 
 ### M5 API — study_id format owned by core/events/ids
 - `STUDY_ID_RE` / `is_study_id` / `study_id_from_idempotency_key` next to `study_id()`.

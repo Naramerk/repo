@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from asyncio import events as aio_events
 from pathlib import Path
 
 from coscientist.api.errors import StudyIdRefuse, StudyViewLoopRefuse
@@ -38,14 +39,8 @@ class DataRootStudyService:
         self._catalog = catalog
 
     def study_view(self, study_id: str) -> StudyView:
-        # Explicit loop gate before asyncio.run — never parse CPython exception text.
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError as exc:
-            # Documented signal: no running loop. Subclasses → re-raise.
-            if type(exc) is not RuntimeError:
-                raise
-        else:
+        # Same primitive asyncio.run uses — no try/except, no CPython message parse.
+        if aio_events._get_running_loop() is not None:
             raise StudyViewLoopRefuse("study_view_requires_no_running_event_loop")
         return asyncio.run(self._study_view_async(study_id))
 
@@ -53,14 +48,12 @@ class DataRootStudyService:
         sid = require_study_id(study_id)
         db_path = study_events_db(self._root, sid)
         if not db_path.is_file():
-            raise StudyNotFound(sid)
+            raise StudyNotFound(sid, reason="study_not_found")
         # Journal exists — open_runtime may mkdir; never reached for missing studies.
-        rt = await open_runtime(
-            self._root, sid, catalog=self._catalog, runtime_cls=ApiStudyRuntime
-        )
+        rt = await open_runtime(self._root, sid, catalog=self._catalog, runtime_cls=ApiStudyRuntime)
         try:
             if rt.study is None:
-                raise StudyNotFound(sid)
+                raise StudyNotFound(sid, reason="study_not_found")
             return rt.view()
         finally:
             await close_runtime(rt)

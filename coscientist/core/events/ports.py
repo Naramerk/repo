@@ -5,16 +5,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Protocol
 
-from coscientist.core.events.errors import StudyNotFound
 from coscientist.core.events.events import StoredEvent, UnstampedEvent
 from coscientist.core.execution.domain import Artifact, StudyView
 
-# Re-export for StudyService callers (typed missing-study contract).
 __all__ = [
     "AgentPort",
     "ArtifactStore",
     "EventStore",
-    "StudyNotFound",
     "StudyService",
 ]
 

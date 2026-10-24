@@ -8,8 +8,10 @@ import time
 
 from coscientist.core.events.digest import sha256_hex
 
-# study_id() body: 11 hex ms + token_hex(8); idem: st_idem_ + 24 hex of key digest.
-_STUDY_ULID_HEX_LEN = 11 + 16
+# Single source for study_id / st_idem_* body lengths (generators + STUDY_ID_RE).
+_STUDY_MS_HEX_LEN = 11
+_STUDY_RAND_HEX_LEN = 16  # secrets.token_hex(8)
+_STUDY_ULID_HEX_LEN = _STUDY_MS_HEX_LEN + _STUDY_RAND_HEX_LEN
 _IDEM_STUDY_HEX_LEN = 24
 STUDY_ID_RE = re.compile(
     rf"^st_(?:[0-9a-f]{{{_STUDY_ULID_HEX_LEN}}}"
@@ -20,8 +22,8 @@ STUDY_ID_RE = re.compile(
 def _ulid_like() -> str:
     """Monotonic-ish id without an external ulid dependency."""
     ms = int(time.time() * 1000)
-    rand = secrets.token_hex(8)
-    return f"{ms:011x}{rand}"
+    rand = secrets.token_hex(_STUDY_RAND_HEX_LEN // 2)
+    return f"{ms:0{_STUDY_MS_HEX_LEN}x}{rand}"
 
 
 def is_study_id(value: str) -> bool:

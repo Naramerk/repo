@@ -41,9 +41,7 @@ class EventWire(Frozen):
 def require_study_id(study_id: object) -> str:
     """Fail-closed study_id gate via core ``is_study_id`` (no path escape)."""
     if not isinstance(study_id, str):
-        raise StudyIdRefuse(
-            f"study_id must be str, got {type(study_id).__name__}"
-        )
+        raise StudyIdRefuse(f"study_id must be str, got {type(study_id).__name__}")
     if not study_id or study_id != study_id.strip():
         raise StudyIdRefuse("study_id_empty_or_whitespace")
     if not is_study_id(study_id):
@@ -54,10 +52,7 @@ def require_study_id(study_id: object) -> str:
 def require_after_seq(after: object) -> int:
     """``after`` must be a non-negative StrictInt (bool refused)."""
     if isinstance(after, bool) or type(after) is not int:
-        raise AfterSeqRefuse(
-            "after_must_be_strict_int_got_"
-            f"{type(after).__name__}:{after!r}"
-        )
+        raise AfterSeqRefuse(f"after_must_be_strict_int_got_{type(after).__name__}:{after!r}")
     if after < 0:
         raise AfterSeqRefuse(f"after_must_be_non_negative_got_{after}")
     return after
@@ -93,17 +88,13 @@ async def list_study_events(
     """
     sid = require_study_id(study_id)
     if store.study_id != sid:
-        raise StudyStoreMismatch(
-            f"store_study_id_mismatch:path={sid!r}:store={store.study_id!r}"
-        )
+        raise StudyStoreMismatch(f"store_study_id_mismatch:path={sid!r}:store={store.study_id!r}")
     after_seq = require_after_seq(after)
     rows = await store.read_after(after_seq)
     wires: list[EventWire] = []
     for row in rows:
         wire = event_to_wire(row)
         if wire.study_id != sid:
-            raise StudyStoreMismatch(
-                f"event_study_id_mismatch:path={sid!r}:event={wire.study_id!r}:seq={wire.seq}"
-            )
+            raise StudyStoreMismatch(f"event_study_id_mismatch:path={sid!r}:event={wire.study_id!r}:seq={wire.seq}")
         wires.append(wire)
     return wires

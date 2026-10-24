@@ -1509,8 +1509,8 @@ async def test_post_studies_conflict_requires_same_request_study_created(
         )
 
     # Seed a StudyCreated for a *different* request under the same study_id.
-    from coscientist.api.studies import study_id_from_idempotency_key
     from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.ids import study_id_from_idempotency_key
 
     key = "conflict-other-req"
     sid = study_id_from_idempotency_key(key)

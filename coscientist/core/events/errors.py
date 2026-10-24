@@ -71,7 +71,7 @@ class StudyClosedError(CoreError):
 class StudyNotFound(CoreError):
     """No study journal / projection for ``study_id`` (StudyService contract)."""
 
-    def __init__(self, study_id: str, *, reason: str = "study_not_found") -> None:
+    def __init__(self, study_id: str, *, reason: str) -> None:
         self.study_id = study_id
         self.reason = reason
         super().__init__(reason)

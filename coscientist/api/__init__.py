@@ -5,7 +5,6 @@ from coscientist.api.errors import (
     ApiRefuse,
     EventWireRefuse,
     StudyIdRefuse,
-    StudyNotFound,
     StudyStoreMismatch,
     StudyViewLoopRefuse,
 )
@@ -28,7 +27,6 @@ __all__ = [
     "EventWire",
     "EventWireRefuse",
     "StudyIdRefuse",
-    "StudyNotFound",
     "StudyStoreMismatch",
     "StudyViewLoopRefuse",
     "event_to_wire",
