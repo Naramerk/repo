@@ -76,7 +76,8 @@
               "needs_more_data",
               "infeasible",
               "ill_posed",
-              "not_attempted"
+              "not_attempted",
+              "rubric_not_met"
             ]
           },
           "reason": {"type": "string", "maxLength": 200}

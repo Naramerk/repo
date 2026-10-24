@@ -18,6 +18,7 @@ DispositionLit = Literal[
     "infeasible",
     "ill_posed",
     "not_attempted",
+    "rubric_not_met",
 ]
 
 
