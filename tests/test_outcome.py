@@ -156,8 +156,12 @@ async def _seed_open_attempt(writer: StudyWriter, attempt: object, clock: FakeCl
                 "deadline": clock.now().isoformat(),
                 "task_id": attempt.task_id,  # type: ignore[attr-defined]
                 "study_id": attempt.study_id,  # type: ignore[attr-defined]
+                "inputs": [],
+                "tainted_context": False,
+                "limitations": [],
+                "attempt_role": "agent",
             },
-            ts=clock.now(), schema_version=writer_schema_version("AttemptStarted"), 
+            ts=clock.now(), schema_version=writer_schema_version("AttemptStarted"),
         )
     )
 

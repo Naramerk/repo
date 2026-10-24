@@ -1754,6 +1754,7 @@ async def test_prior_attempt_missing_digest_version_drift_unknown(tmp_path, cloc
                 "attempt_id": fake_aid,
                 "n": 1,
                 "dispatch_id": f"dispatch:{fake_aid}",
+                "route_returned": False,
                 "task_id": task.task_id,
                 "study_id": sid,
                 "provenance": "real",
@@ -1762,6 +1763,8 @@ async def test_prior_attempt_missing_digest_version_drift_unknown(tmp_path, cloc
                     {"input": "x", "artifact_id": "art_old", "source": "real"}
                 ],
                 "tainted_context": False,
+                "limitations": [],
+                "attempt_role": "agent",
             },
             ts=clock.now(),
             schema_version=writer_schema_version("AttemptStarted"),
@@ -1988,6 +1991,7 @@ async def test_prior_attempt_legacy_digest_drift_unknown(
                 "attempt_id": fake_aid,
                 "n": 1,
                 "dispatch_id": f"dispatch:{fake_aid}",
+                "route_returned": False,
                 "task_id": task.task_id,
                 "study_id": sid,
                 "provenance": "real",
@@ -2001,6 +2005,8 @@ async def test_prior_attempt_legacy_digest_drift_unknown(
                     }
                 ],
                 "tainted_context": False,
+                "limitations": [],
+                "attempt_role": "agent",
             },
             ts=clock.now(),
             schema_version=writer_schema_version("AttemptStarted"),

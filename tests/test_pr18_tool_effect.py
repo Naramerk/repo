@@ -183,6 +183,9 @@ async def _journal_attempt(
             payload={
                 "attempt_id": attempt_id,
                 "n": 1,
+                "dispatch_id": f"dispatch:{attempt_id}",
+                "route_returned": False,
+                "closed": False,
                 "task_id": f"{sid}/{task_key}",
                 "study_id": sid,
                 "provenance": "real",
@@ -190,6 +193,7 @@ async def _journal_attempt(
                 "inputs": [],
                 "tainted_context": tainted,
                 "limitations": [],
+                "attempt_role": "agent",
             },
             ts=datetime.now(UTC),
             schema_version=writer_schema_version("AttemptStarted"),
