@@ -726,7 +726,6 @@ async def _build_finalized_payload(
     minimal: MinimalReport | None
     minimal = None
     refusal = _refusal_payload(runtime, trigger)
-    hyp_map: Mapping[str, Mapping[str, Any]] = hypothesis_verdicts
     try:
         observations: list[Any] = list(runtime._observations)
     except AttributeError as e:
@@ -742,7 +741,7 @@ async def _build_finalized_payload(
             contrib=contrib,
             qdisp=qdisp,
             refusal=refusal,
-            hypotheses=hyp_map,
+            hypotheses=hypothesis_verdicts,
             hypotheses_unavailable=hypotheses_unavailable,
             custom_checks=custom_checks,
             observations=observations,
@@ -764,7 +763,7 @@ async def _build_finalized_payload(
                 question_dispositions=qdisp,
                 fallback_reason=fallback,
                 refusal=refusal,
-                hypotheses=hyp_map,
+                hypotheses=hypothesis_verdicts,
                 hypotheses_unavailable=hypotheses_unavailable,
                 custom_checks=custom_checks,
                 observations=observations,
@@ -779,7 +778,7 @@ async def _build_finalized_payload(
         "contributing_reasons": contrib,
         "verdict": verdict,
         "question_dispositions": qdisp,
-        "hypothesis_verdicts": dict(hyp_map),
+        "hypothesis_verdicts": dict(hypothesis_verdicts),
         "hypotheses_unavailable": hypotheses_unavailable,
         "report_artifact_id": report_artifact_id,
         "conclusion_ids": conclusion_ids,

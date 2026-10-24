@@ -13,11 +13,11 @@ from pydantic import ValidationError
 from coscientist.core.claims.reasons import Disposition, TaskReason
 from coscientist.core.events.digest import canonical_json
 from coscientist.core.execution.domain import (
+    VALID_PROVENANCE,
     Provenance,
     Task,
     TaskOutcome,
     TaskState,
-    VALID_PROVENANCE,
 )
 from coscientist.core.finalize.minimal_report_models import (
     MinimalReport,
@@ -32,14 +32,21 @@ def _task_provenance(
     task: Task, attempts: Mapping[str, Mapping[str, Any]]
 ) -> Provenance:
     for aid in reversed(task.attempts):
-        att = attempts.get(aid, {})
-        if att.get("closed"):
-            prov = str(att.get("provenance", "real"))
-            if prov not in VALID_PROVENANCE:
-                raise MinimalReportRefuse(
-                    f"task {task.spec.task_key!r}: unknown provenance {prov!r}"
-                )
-            return prov  # type: ignore[return-value]
+        if aid not in attempts:
+            continue
+        att = attempts[aid]
+        if not att.get("closed"):
+            continue
+        if "provenance" not in att:
+            raise MinimalReportRefuse(
+                f"task {task.spec.task_key!r}: closed attempt provenance required"
+            )
+        prov = str(att["provenance"])
+        if prov not in VALID_PROVENANCE:
+            raise MinimalReportRefuse(
+                f"task {task.spec.task_key!r}: unknown provenance {prov!r}"
+            )
+        return prov  # type: ignore[return-value]
     return "real"
 
 
@@ -161,8 +168,9 @@ def assemble_minimal_report(
             raise MinimalReportRefuse(
                 f"task {t.spec.task_key!r}: outcome required"
             )
+        reason_s: str | None
         if isinstance(t.reason, TaskReason):
-            reason_s: str | None = t.reason.value
+            reason_s = t.reason.value
         elif t.reason:
             reason_s = str(t.reason)
         else:
