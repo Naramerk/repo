@@ -59,26 +59,16 @@ def _spec(**over: object) -> ResearchSpec:
 def test_research_spec_accepts_cap1_fields() -> None:
     spec = _spec()
     assert spec.object == "catalyst X"
-    assert spec.goal == Goal(
-        statement="measure X under Y", research_form=None, trl=None
-    )
+    assert spec.goal == Goal(statement="measure X under Y", research_form=None, trl=None)
     assert spec.scope == "peer-reviewed literature 2015+"
-    assert spec.constraints == (
-        Constraint(subtype="resource", content="max 10 LLM calls", limit=None),
-    )
-    assert spec.success_metrics == (
-        SuccessMetric(
-            metric="sources", op=">=", target="5", check="code", tolerance=None
-        ),
-    )
+    assert spec.constraints == (Constraint(subtype="resource", content="max 10 LLM calls", limit=None),)
+    assert spec.success_metrics == (SuccessMetric(metric="sources", op=">=", target="5", check="code", tolerance=None),)
 
 
 def test_research_spec_round_trip_json() -> None:
     spec = _spec(
         goal=_goal(research_form="empirical", trl=3),
-        constraints=(
-            _constraint(subtype="ethics", content="no human subjects", limit="n/a"),
-        ),
+        constraints=(_constraint(subtype="ethics", content="no human subjects", limit="n/a"),),
         success_metrics=(
             _metric(
                 metric="coverage",
@@ -248,10 +238,6 @@ def test_research_spec_json_round_trip_equality() -> None:
         goal=Goal(statement="g", research_form=None, trl=None),
         scope="s",
         constraints=(Constraint(subtype="data", content="csv only", limit=None),),
-        success_metrics=(
-            SuccessMetric(
-                metric="n", op="==", target="1", check="code", tolerance=None
-            ),
-        ),
+        success_metrics=(SuccessMetric(metric="n", op="==", target="1", check="code", tolerance=None),),
     )
     assert ResearchSpec.model_validate_json(spec.model_dump_json()) == spec

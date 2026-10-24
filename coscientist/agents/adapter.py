@@ -3,23 +3,27 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from coscientist.agents.prompts.registry import PromptRef, PromptRegistry
 from coscientist.agents.schemas import (
     AgentError,
     AgentRun,
     ExecutorRouteIn,
     ExecutorRouteOut,
+    PlannedToolCall,
     PlanOut,
     StudyContext,
+    ToolArg,
     ToolCallRef,
 )
+from coscientist.core.execution.domain import Budget
 from coscientist.llm.client import LlmClient
 from coscientist.llm.types import ChatMessage, StructuredLlmRequest, Usage
-from coscientist.tools.router import ToolNeed, ToolRouter
+from coscientist.tools.resolve import ToolNeed, ToolRouter, call_via_router
 
 _T = TypeVar("_T", bound=BaseModel)
 
@@ -45,11 +49,54 @@ def _json_schema_response_format(model: type[BaseModel], *, name: str) -> dict[s
     }
 
 
+def _tool_names(tools: Sequence[Any]) -> frozenset[str]:
+    names: set[str] = set()
+    for tool in tools:
+        spec = getattr(tool, "spec", None)
+        name = getattr(spec, "name", None)
+        if type(name) is not str or not name.strip():
+            raise AgentError("tools entries must expose spec.name as a non-empty str")
+        names.add(name)
+    return frozenset(names)
+
+
+def _args_mapping(args: tuple[ToolArg, ...]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for arg in args:
+        try:
+            out[arg.key] = json.loads(arg.value_json)
+        except json.JSONDecodeError as exc:
+            raise AgentError(f"tool arg {arg.key!r} value_json is not valid JSON: {exc}") from exc
+    return out
+
+
+def _require_budget(budget: Any) -> Budget:
+    if budget is None:
+        raise AgentError("budget is required (no defaults)")
+    if not isinstance(budget, Budget):
+        raise AgentError(f"budget must be Budget, got {type(budget).__name__}")
+    return budget
+
+
+def _assert_budget_allows_llm(budget: Budget, *, llm_calls_used: int) -> None:
+    if llm_calls_used >= budget.max_llm_calls:
+        raise AgentError("budget.max_llm_calls exceeded")
+    if budget.deadline is not None and budget.deadline.tzinfo is None:
+        raise AgentError("budget.deadline must be timezone-aware when set")
+
+
+def _assert_budget_tokens(budget: Budget, usage: Usage) -> None:
+    total = usage.prompt_tokens + usage.completion_tokens
+    if total > budget.max_tokens:
+        raise AgentError("budget.max_tokens exceeded")
+
+
 class LlmAgentAdapter:
     """Implements ``core.events.ports.AgentPort`` without editing ports.py.
 
     ``role_models`` maps role → provider model id (from profile; required, no fallback).
-    Tool calls go through the injected ``ToolRouter`` (fake in tests; MCP = G7).
+    Tool calls go through ``call_via_router`` (fake in tests; MCP = G7).
+    System prompts come from ``PromptRegistry`` via ``role_prompts`` (CAP #27).
     """
 
     def __init__(
@@ -58,44 +105,58 @@ class LlmAgentAdapter:
         *,
         role_models: Mapping[str, str],
         tool_router: ToolRouter,
+        prompts: PromptRegistry,
+        role_prompts: Mapping[str, PromptRef],
     ) -> None:
         if _ROLE_PLANNER not in role_models or _ROLE_EXECUTOR not in role_models:
             raise AgentError("role_models must include 'planner' and 'executor-route' (no defaults)")
+        if _ROLE_PLANNER not in role_prompts or _ROLE_EXECUTOR not in role_prompts:
+            raise AgentError("role_prompts must include 'planner' and 'executor-route' (no defaults)")
         for role, model in role_models.items():
             if type(model) is not str or not model.strip():
                 raise AgentError(f"role_models[{role!r}] must be a non-empty str")
+        for role, ref in role_prompts.items():
+            if not isinstance(ref, PromptRef):
+                raise AgentError(f"role_prompts[{role!r}] must be PromptRef")
+            prompts.get(ref)
         self._client = client
         self._role_models = dict(role_models)
         self._router = tool_router
+        self._prompts = prompts
+        self._role_prompts = dict(role_prompts)
 
     async def run(self, role: str, input: Any, tools: list[Any], budget: Any) -> AgentRun:
-        del tools, budget  # port surface; tools resolved via ToolRouter
+        budget_b = _require_budget(budget)
+        if not isinstance(tools, list):
+            raise AgentError("tools must be a list")
+        allowed = _tool_names(tools)
         if role not in _OUTPUT_MODELS:
             raise AgentError(f"unsupported role {role!r}")
+        if role not in self._role_models:
+            raise AgentError(f"no model configured for role {role!r}")
         model_id = self._role_models[role]
         out_cls = _OUTPUT_MODELS[role]
         tool_refs: list[ToolCallRef] = []
-        usage_acc = Usage(prompt_tokens=0, completion_tokens=0, latency_ms=0.0)
 
         if role == _ROLE_PLANNER:
             ctx = _parse_input(StudyContext, input)
             user_payload = ctx.model_dump()
         else:
             route_in = _parse_input(ExecutorRouteIn, input)
-            tool_refs = await self._run_tools(route_in)
+            tool_refs = await self._run_tools(route_in, allowed=allowed, budget=budget_b)
             user_payload = {
                 "task": route_in.task.model_dump(),
-                "dependency_context": route_in.dependency_context,
+                "study_id": route_in.study_id,
+                "attempt_id": route_in.attempt_id,
                 "tool_results": [r.model_dump() for r in tool_refs],
             }
 
+        _assert_budget_allows_llm(budget_b, llm_calls_used=0)
+        system = self._prompts.render(self._role_prompts[role], {"role": role})
         request = StructuredLlmRequest(
             model=model_id,
             messages=[
-                ChatMessage(
-                    role="system",
-                    content=(f"You are the {role} role. Reply with JSON matching the response_format schema only."),
-                ),
+                ChatMessage(role="system", content=system),
                 ChatMessage(
                     role="user",
                     content=json.dumps(user_payload, ensure_ascii=False, separators=(",", ":")),
@@ -104,36 +165,57 @@ class LlmAgentAdapter:
             response_format=_json_schema_response_format(out_cls, name=role.replace("-", "_")),
         )
         response = await self._client.complete(request)
-        usage = Usage(
-            prompt_tokens=usage_acc.prompt_tokens + response.usage.prompt_tokens,
-            completion_tokens=usage_acc.completion_tokens + response.usage.completion_tokens,
-            latency_ms=usage_acc.latency_ms + response.usage.latency_ms,
-        )
+        usage = response.usage
+        _assert_budget_tokens(budget_b, usage)
         try:
             parsed = out_cls.model_validate_json(response.content)
         except ValidationError as exc:
             raise AgentError(f"{role} output failed schema validation: {exc}") from exc
-        return AgentRun(output=parsed, usage=usage, tool_calls=tuple(tool_refs))
+        return AgentRun(output=parsed, error=None, usage=usage, tool_calls=tuple(tool_refs))
 
-    async def _run_tools(self, route_in: ExecutorRouteIn) -> list[ToolCallRef]:
+    async def _run_tools(
+        self,
+        route_in: ExecutorRouteIn,
+        *,
+        allowed: frozenset[str],
+        budget: Budget,
+    ) -> list[ToolCallRef]:
+        hints = route_in.task.tools_hint
+        if hints and not allowed:
+            raise AgentError("executor-route tools list is empty but task.tools_hint is not")
+        if len(hints) > budget.max_tool_calls:
+            raise AgentError("budget.max_tool_calls exceeded")
+        args_by_name = {c.tool_name: c for c in route_in.tool_args}
         refs: list[ToolCallRef] = []
-        study_id = route_in.dependency_context.get("study_id")
-        attempt_id = route_in.dependency_context.get("attempt_id")
-        if type(study_id) is not str or not study_id:
-            raise AgentError("executor-route dependency_context.study_id must be str")
-        if type(attempt_id) is not str or not attempt_id:
-            raise AgentError("executor-route dependency_context.attempt_id must be str")
-        for hint in route_in.task.tools_hint:
+        for hint in hints:
+            if hint not in allowed:
+                raise AgentError(f"tool {hint!r} not in AgentPort.tools allow-list")
+            planned: PlannedToolCall = args_by_name[hint]
             resolution = self._router.resolve(ToolNeed(kind="by_name", value=hint))
-            refs.append(ToolCallRef(tool_name=hint, resolution_status=resolution.status))
             if resolution.status != "tool_found" or resolution.tool_name is None:
-                continue
-            await self._router.call(
+                raise AgentError(
+                    f"tool resolve for {hint!r} refused: status={resolution.status!r} "
+                    "(fail-closed; only tool_found may proceed)"
+                )
+            result = await call_via_router(
+                self._router,
                 resolution.tool_name,
-                {},
-                study_id=study_id,
+                _args_mapping(planned.args),
+                study_id=route_in.study_id,
                 task_key=route_in.task.task_key,
-                attempt_id=attempt_id,
+                attempt_id=route_in.attempt_id,
+            )
+            try:
+                result_json = json.dumps(dict(result), ensure_ascii=False, separators=(",", ":"))
+            except (TypeError, ValueError) as exc:
+                raise AgentError(f"tool {hint!r} result is not JSON-serializable: {exc}") from exc
+            refs.append(
+                ToolCallRef(
+                    tool_name=resolution.tool_name,
+                    resolution_status=resolution.status,
+                    args=planned.args,
+                    result_json=result_json,
+                )
             )
         return refs
 
@@ -141,9 +223,9 @@ class LlmAgentAdapter:
 def _parse_input(model: type[_T], raw: Any) -> _T:
     if isinstance(raw, model):
         return raw
+    if isinstance(raw, BaseModel):
+        raise AgentError(f"invalid {model.__name__}: expected {model.__name__} or mapping, got {type(raw).__name__}")
     try:
-        if isinstance(raw, BaseModel):
-            return model.model_validate(raw.model_dump())
         return model.model_validate(raw)
     except ValidationError as exc:
         raise AgentError(f"invalid {model.__name__}: {exc}") from exc

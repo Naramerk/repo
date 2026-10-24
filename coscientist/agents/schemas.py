@@ -1,10 +1,10 @@
-"""Typed role I/O for planner and executor-route (DESIGN §7.1)."""
+"""Typed role I/O for planner and executor-route (DESIGN §7.1 / §7.2)."""
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from coscientist.core.execution.domain import Need
 from coscientist.llm.types import Usage
@@ -60,36 +60,74 @@ class PlanOut(AgentModel):
     literature: Need
 
 
+class ToolArg(AgentModel):
+    """One tool argument — value is a JSON text (closed schema for strict outputs)."""
+
+    key: str = Field(min_length=1)
+    value_json: str = Field(min_length=1)
+
+
+class PlannedToolCall(AgentModel):
+    """Typed tool invocation requested for executor-route (args, not empty ``{}``)."""
+
+    tool_name: str = Field(min_length=1)
+    args: tuple[ToolArg, ...]
+
+
+class JsonEntry(AgentModel):
+    """Closed key/JSON-value pair (OpenAI strict json_schema forbids open dicts)."""
+
+    key: str = Field(min_length=1)
+    value_json: str = Field(min_length=1)
+
+
 class ExecutorRouteIn(AgentModel):
-    """executor-route input: task draft + dependency context blob."""
+    """executor-route input: task draft + typed study/attempt ids + tool args."""
 
     task: TaskSpecDraft
-    dependency_context: dict[str, Any]
+    study_id: str = Field(min_length=1)
+    attempt_id: str = Field(min_length=1)
+    tool_args: tuple[PlannedToolCall, ...]
+
+    @model_validator(mode="after")
+    def _tool_args_cover_hints(self) -> ExecutorRouteIn:
+        hints = list(self.task.tools_hint)
+        names = [c.tool_name for c in self.tool_args]
+        if sorted(names) != sorted(hints):
+            raise ValueError(
+                f"tool_args tool_name set must match task.tools_hint exactly (hints={hints!r}, args={names!r})"
+            )
+        if len(names) != len(set(names)):
+            raise ValueError("tool_args tool_name values must be unique")
+        return self
 
 
 class ExecutorRouteOut(AgentModel):
     """Minimal executor structured output for M1 wiring (maps toward AgentTaskOutput)."""
 
     summary: str = Field(min_length=1)
-    values: dict[str, Any]
+    values: tuple[JsonEntry, ...]
     tool_found: tuple[str, ...]
 
 
 class ToolCallRef(AgentModel):
     tool_name: str = Field(min_length=1)
     resolution_status: Literal["tool_found", "tool_built", "coder", "tool_missing"]
+    args: tuple[ToolArg, ...]
+    result_json: str | None
 
 
 class AgentRun(AgentModel):
-    """Result of ``AgentPort.run`` (DESIGN §7.2). ``usage`` always set on success."""
+    """Result of ``AgentPort.run`` (DESIGN §7.2)."""
 
     output: BaseModel | None
+    error: str | None
     usage: Usage
     tool_calls: tuple[ToolCallRef, ...]
 
 
 class AgentError(Exception):
-    """Typed agent failure — not an ``AgentRun.error`` string field."""
+    """Typed agent refuse / configuration failure."""
 
     def __init__(self, detail: str) -> None:
         self.detail = detail
