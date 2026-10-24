@@ -540,9 +540,8 @@ class McpReply(BaseModel):
 - Stdio: process group; SIGTERM → grace → SIGKILL → reap group; stderr keep-drain (cap `max_stderr_bytes`); embedded `\n` forbidden.
 - File URLs: SSRF policy + streaming limit; secrets only from env; never logged.
 
-### 6.1 Контракт
-<!-- heading anchor: #sec-6-1-contract -->
 <a id="sec-6-1-contract"></a>
+### 6.1 Контракт
 
 ```python
 class ToolSpec(BaseModel):
