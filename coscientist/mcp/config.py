@@ -5,23 +5,39 @@ from __future__ import annotations
 import math
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from coscientist.mcp.schemes import HARD_FETCH_SCHEMES
+
+
+def _identifier(value: str) -> str:
+    if not value or any(ch.isspace() for ch in value):
+        raise ValueError(f"must be non-empty without whitespace: {value!r}")
+    return value
+
+
+Identifier = Annotated[str, AfterValidator(_identifier)]
 
 
 class StdioServerConfig(BaseModel):
     """Launch a local MCP server as a stdio subprocess (own process group)."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     transport: Literal["stdio"]
-    name: str = Field(min_length=1)
+    name: Identifier
     command: str = Field(min_length=1)
     args: tuple[str, ...]
     env_keys: tuple[str, ...]
 
-    @field_validator("name", "command")
+    @field_validator("command")
     @classmethod
     def _no_surrounding_whitespace(cls, v: str) -> str:
         if v != v.strip():
@@ -40,19 +56,12 @@ class StdioServerConfig(BaseModel):
 class StreamableHttpServerConfig(BaseModel):
     """Connect to a remote MCP server over Streamable HTTP."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     transport: Literal["streamable_http"]
-    name: str = Field(min_length=1)
+    name: Identifier
     url: str = Field(min_length=1)
     api_key_env: str | None
-
-    @field_validator("name", "url")
-    @classmethod
-    def _no_surrounding_whitespace(cls, v: str) -> str:
-        if v != v.strip():
-            raise ValueError("must not have leading/trailing whitespace")
-        return v
 
     @field_validator("url")
     @classmethod
