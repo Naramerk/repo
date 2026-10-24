@@ -486,6 +486,24 @@ def test_assemble_refuses_missing_question_fields():
             },
             fallback_reason=None,
         )
+    with pytest.raises(MinimalReportRefuse, match="non-null"):
+        assemble_minimal_report(
+            study_id="st",
+            terminal_reason="completed",
+            trigger="all_done",
+            contributing_reasons=[],
+            verdict="partial",
+            tasks={},
+            attempts={},
+            question_dispositions={
+                "Q1": {
+                    "disposition": "answered",
+                    "reason": None,
+                    "formulation": "q",
+                }
+            },
+            fallback_reason=None,
+        )
 
 
 def test_assemble_refuses_hypothesis_id_mismatch_and_missing():

@@ -113,12 +113,20 @@ def assemble_minimal_report(
     task_list = sorted(tasks.values(), key=lambda t: t.spec.task_key)
     q_rows: list[dict[str, Any]] = []
     for qid, d in sorted(question_dispositions.items()):
-        formulation = d.get("formulation")
-        disposition = d.get("disposition")
-        reason = d.get("reason")
-        if formulation is None or disposition is None or reason is None:
+        if (
+            "formulation" not in d
+            or "disposition" not in d
+            or "reason" not in d
+        ):
             raise MinimalReportRefuse(
                 f"question {qid!r}: formulation/disposition/reason required"
+            )
+        formulation = d["formulation"]
+        disposition = d["disposition"]
+        reason = d["reason"]
+        if formulation is None or disposition is None or reason is None:
+            raise MinimalReportRefuse(
+                f"question {qid!r}: formulation/disposition/reason must be non-null"
             )
         if isinstance(disposition, Disposition):
             disp = disposition
