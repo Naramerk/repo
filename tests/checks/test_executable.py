@@ -1206,6 +1206,7 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(tmp_path, cloc
                 criteria=[RequirementRef(template_id="exec_ok")],
             )
         ],
+        questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
     )
@@ -1285,6 +1286,7 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
                 criteria=[RequirementRef(template_id="exec_ok")],
             )
         ],
+        questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
     )
@@ -2593,6 +2595,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
                 criteria=[RequirementRef(template_id="exec_sleep")],
             )
         ],
+        questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
     )
@@ -2736,6 +2739,7 @@ async def test_timeout_with_stuck_drain_charges_attempt(tmp_path, clock, runtime
                 criteria=[RequirementRef(template_id="exec_busy_hold")],
             )
         ],
+        questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
     )
@@ -2929,6 +2933,7 @@ async def test_infra_failure_does_not_charge_attempt(tmp_path, clock, runtime_cl
                 criteria=[RequirementRef(template_id="exec_ok")],
             )
         ],
+        questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
     )
@@ -3020,6 +3025,7 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
                 criteria=[RequirementRef(template_id="exec_sleep")],
             )
         ],
+        questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
     )
@@ -3089,6 +3095,7 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
                 sandbox_memory_mb=1,
             )
         ],
+        questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
     )
@@ -3420,6 +3427,7 @@ async def test_alternating_prediction_timeouts_elevate_untestable(tmp_path, cloc
                 ],
             )
         ],
+        questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
     )
@@ -3543,6 +3551,7 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(tmp_path,
                 criteria=[RequirementRef(template_id="pred_only")],
             )
         ],
+        questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
     )

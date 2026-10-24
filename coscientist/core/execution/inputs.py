@@ -581,7 +581,7 @@ def uses_claim_graph_events(
     # KindSpec requires attempts — real attempt ids only (never invent []).
     if graph is None or graph.get_node(exp_id) is None:
         seen: set[str] = set()
-        attempt_rows: list[dict[str, Any]] = []
+        attempt_rows: list[dict[str, object]] = []
         for aid in list(task.attempts) + (
             [current_attempt_id] if type(current_attempt_id) is str and current_attempt_id else []
         ):
@@ -591,7 +591,7 @@ def uses_claim_graph_events(
             attempt_rows.append({"attempt_id": aid})
         if not attempt_rows:
             raise InputUnavailable("experiment_attempts_required")
-        attrs: dict[str, Any] = {
+        attrs: dict[str, object] = {
             "task_key": task.spec.task_key,
             "title": task.spec.title,
             "goal": task.spec.goal,

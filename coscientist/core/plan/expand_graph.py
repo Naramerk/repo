@@ -50,7 +50,7 @@ def plan_graph_events(
         "hypotheses": hypotheses.model_dump(mode="json"),
         "literature": literature.model_dump(mode="json"),
     }
-    attrs: dict[str, Any] = {"revision": new_rev, **needs}
+    attrs: dict[str, object] = {"revision": new_rev, **needs}
     if delegated_by:
         attrs["delegated_by"] = delegated_by
         attrs["approved_by"] = "critic"
@@ -185,9 +185,7 @@ def question_graph_events(
         if parent:
             # Acyclicity on every decomposes write (DESIGN_M1 §10).
             q_origin = getattr(q, "origin", None)
-            edge_origin = (
-                q_origin if q_origin in ("explicit", "implicit", "emergent") else "emergent"
-            )
+            edge_origin = q_origin if q_origin in ("explicit", "implicit", "emergent") else "emergent"
             parent_of[q.id] = str(parent)
             parent_of.setdefault(str(parent), None)
             assert_decomposes_acyclic(parent_of)

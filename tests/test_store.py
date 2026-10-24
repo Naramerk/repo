@@ -191,7 +191,7 @@ async def test_replay_equals_projection(tmp_path: Path, clock: FakeClock, runtim
     for key in ("SPEC", "HYP", "LIT"):
         aid = await rt.start_attempt(key)
         await record_success(rt, aid, arts)
-    await rt.accept_plan([exp_spec("EXP-1")], hypotheses=NEED_OFF, literature=NEED_OFF)
+    await rt.accept_plan([exp_spec("EXP-1")], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF)
     aid = await rt.start_attempt("EXP-1")
     await record_success(rt, aid, arts)
     await rt.cancel_task("REPORT", reason="budget")

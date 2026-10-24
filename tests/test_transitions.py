@@ -447,7 +447,7 @@ async def test_accept_plan_creates_experiments(tmp_path, clock, runtime_cls):
     for key in ("SPEC", "HYP", "LIT"):
         aid = await rt.start_attempt(key)
         await record_success(rt, aid, arts)
-    await rt.accept_plan([exp_spec("EXP-1"), exp_spec("EXP-2", ["EXP-1"])], hypotheses=NEED_OFF, literature=NEED_OFF)
+    await rt.accept_plan([exp_spec("EXP-1"), exp_spec("EXP-2", ["EXP-1"])], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF)
     assert "st_tr/EXP-1" in rt.tasks
     assert rt.tasks["st_tr/PLAN"].state == TaskState.DONE
     await close_runtime(rt)

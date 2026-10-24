@@ -151,7 +151,8 @@ def minimal_test_catalog() -> Catalog:
                         "kind": "value_matches",
                         "output": "main",
                         "pointer": "/count",
-                        # KindSpec metric = authored pointer (same check row; no invent).
+                        # KindSpec metric = authored pointer (DESIGN.md:882 article_small:
+                        # «225 соединений = 225»; metric is the JSON pointer, not invent).
                         "metric": "/count",
                         "op": "==",
                         "target": 225,
@@ -178,6 +179,7 @@ def minimal_test_catalog() -> Catalog:
                         "kind": "value_matches",
                         "output": "main",
                         "pointer": "/count",
+                        # Same pointer-as-metric rule as value_match (DESIGN.md:882).
                         "metric": "/count",
                         "op": "==",
                         "target": 225,

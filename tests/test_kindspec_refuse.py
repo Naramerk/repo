@@ -281,6 +281,7 @@ async def test_accept_plan_refuses_criterion_freeze_incomplete(tmp_path) -> None
                     criteria=[RequirementRef(template_id="bare_artifact")],
                 )
             ],
+            questions=[],
             hypotheses=NEED_OFF,
             literature=NEED_OFF,
         )
@@ -481,3 +482,297 @@ def test_graph_writer_rubric_stance_true_without_metric_refused() -> None:
         match=r"criterion missing required attrs: .*metric",
     ):
         graph_node_upserted(node=node, ts=now, registry=reg, idem_extra=())
+
+
+def test_rubric_freeze_digest_required_raises() -> None:
+    from coscientist.core.claims.rubric_types import Rubric, RubricItem
+    from coscientist.core.events.errors import CatalogError
+    from coscientist.core.execution.domain import OutputSpec
+    from coscientist.core.plan.lifecycle import _plan_accept_freeze_rows
+
+    rub = Rubric.model_construct(
+        items=[RubricItem(id="a", text="A", required=True, check="judge")],
+        aggregate="all",
+        digest="",
+    )
+    spec = TaskSpec(
+        task_key="EXP-1",
+        title="t",
+        goal="g",
+        route="experiment",
+        expected_outputs=[OutputSpec(name="main", media_type="text/plain", rubric=rub)],
+    )
+    with pytest.raises(CatalogError, match=r"rubric_freeze_digest_required:output='main'"):
+        _plan_accept_freeze_rows(sid="s", tasks=[spec], catalog=None, graph=None)
+
+
+def test_criterion_freeze_catalog_templates_required_raises() -> None:
+    from coscientist.core.events.errors import CatalogError
+    from coscientist.core.execution.domain import Catalog
+    from coscientist.core.plan.lifecycle import _plan_accept_freeze_rows
+
+    catalog = Catalog.model_construct(
+        catalog_version=4,
+        edition="t",
+        sources_sha256={"t": "abc"},
+        rules=[],
+        templates="not-a-list",
+        defaults={},
+        code_output_names=[],
+    )
+    spec = TaskSpec(
+        task_key="EXP-1",
+        title="t",
+        goal="g",
+        route="experiment",
+        criteria=[RequirementRef(template_id="x")],
+    )
+    with pytest.raises(
+        CatalogError,
+        match=r"criterion_freeze_catalog_templates_required:got_str",
+    ):
+        _plan_accept_freeze_rows(sid="s", tasks=[spec], catalog=catalog, graph=None)
+
+
+def test_criterion_freeze_bad_ref_raises() -> None:
+    from coscientist.core.events.errors import CatalogError
+    from coscientist.core.plan.lifecycle import _plan_accept_freeze_rows
+
+    spec = TaskSpec.model_construct(
+        task_key="EXP-1",
+        title="t",
+        goal="g",
+        route="experiment",
+        criteria=["not-a-ref"],
+    )
+    with pytest.raises(CatalogError, match=r"criterion_freeze_bad_ref:str"):
+        _plan_accept_freeze_rows(sid="s", tasks=[spec], catalog=None, graph=None)
+
+
+def test_criterion_freeze_empty_template_id_raises() -> None:
+    from coscientist.core.events.errors import CatalogError
+    from coscientist.core.plan.lifecycle import _plan_accept_freeze_rows
+
+    spec = TaskSpec.model_construct(
+        task_key="EXP-1",
+        title="t",
+        goal="g",
+        route="experiment",
+        criteria=[RequirementRef.model_construct(template_id="")],
+    )
+    with pytest.raises(CatalogError, match=r"criterion_freeze_empty_template_id"):
+        _plan_accept_freeze_rows(sid="s", tasks=[spec], catalog=None, graph=None)
+
+
+def test_criterion_freeze_existing_attrs_not_mapping_raises() -> None:
+    from coscientist.core.claims.graph import GraphNode, GraphStore, default_execution_registry
+    from coscientist.core.events.errors import CatalogError
+    from coscientist.core.events.ids import criterion_node_id
+    from coscientist.core.plan.lifecycle import _plan_accept_freeze_rows
+
+    sid = "s"
+    key = "tmpl_x"
+    cnid = criterion_node_id(sid, key)
+    graph = GraphStore(default_execution_registry())
+    graph.upsert_node(
+        GraphNode.model_construct(
+            node_id=cnid,
+            kind="criterion",
+            study_id=sid,
+            ref_id=key,
+            attrs="not-a-mapping",
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    spec = TaskSpec(
+        task_key="EXP-1",
+        title="t",
+        goal="g",
+        route="experiment",
+        criteria=[RequirementRef(template_id=key)],
+    )
+    with pytest.raises(
+        CatalogError,
+        match=r"criterion_freeze_existing_attrs_not_mapping:tmpl_x:str",
+    ):
+        _plan_accept_freeze_rows(sid=sid, tasks=[spec], catalog=None, graph=graph)
+
+
+def test_criterion_freeze_rubric_required_raises() -> None:
+    from coscientist.core.events.errors import CatalogError
+    from coscientist.core.execution.domain import Catalog, CodeCheck, RequirementTemplate
+    from coscientist.core.plan.lifecycle import _plan_accept_freeze_rows
+
+    check = CodeCheck.model_construct(
+        kind="rubric",
+        rubric=None,
+        allow_network=False,
+        allow_cgroup_degraded=False,
+    )
+    tmpl = RequirementTemplate.model_construct(
+        id="rub_needed",
+        title="w",
+        text_ru="w",
+        method_sources=["test"],
+        rule_ids=["R23"],
+        applies_to=["experiment"],
+        check=check,
+        role="validity",
+        required=True,
+        version=1,
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
+        exempt_from_freeze=False,
+    )
+    catalog = Catalog.model_construct(
+        catalog_version=4,
+        edition="t",
+        sources_sha256={"t": "abc"},
+        rules=[],
+        templates=[tmpl],
+        defaults={},
+        code_output_names=[],
+    )
+    spec = TaskSpec(
+        task_key="EXP-1",
+        title="t",
+        goal="g",
+        route="experiment",
+        criteria=[RequirementRef(template_id="rub_needed")],
+    )
+    with pytest.raises(CatalogError, match=r"criterion_freeze_rubric_required:rub_needed"):
+        _plan_accept_freeze_rows(sid="s", tasks=[spec], catalog=catalog, graph=None)
+
+
+def test_criterion_freeze_rubric_digest_required_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    from coscientist.core.claims.rubric_types import Rubric, RubricItem
+    from coscientist.core.events.errors import CatalogError
+    from coscientist.core.execution.domain import Catalog, CodeCheck, RequirementTemplate
+    from coscientist.core.plan import lifecycle as life
+
+    rub = Rubric(
+        items=[RubricItem(id="a", text="A", required=True, check="judge")],
+        aggregate="all",
+    )
+    check = CodeCheck.model_construct(
+        kind="rubric",
+        rubric=rub,
+        allow_network=False,
+        allow_cgroup_degraded=False,
+    )
+    tmpl = RequirementTemplate.model_construct(
+        id="rub_dig",
+        title="w",
+        text_ru="w",
+        method_sources=["test"],
+        rule_ids=["R23"],
+        applies_to=["experiment"],
+        check=check,
+        role="validity",
+        required=True,
+        version=1,
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
+        exempt_from_freeze=False,
+    )
+    catalog = Catalog.model_construct(
+        catalog_version=4,
+        edition="t",
+        sources_sha256={"t": "abc"},
+        rules=[],
+        templates=[tmpl],
+        defaults={},
+        code_output_names=[],
+    )
+    spec = TaskSpec(
+        task_key="EXP-1",
+        title="t",
+        goal="g",
+        route="experiment",
+        criteria=[RequirementRef(template_id="rub_dig")],
+    )
+
+    def _empty_digest(r: object) -> object:
+        return SimpleNamespace(digest="")
+
+    monkeypatch.setattr("coscientist.core.claims.rubric.freeze_rubric", _empty_digest)
+    with pytest.raises(CatalogError, match=r"criterion_freeze_rubric_digest_required:rub_dig"):
+        life._plan_accept_freeze_rows(sid="s", tasks=[spec], catalog=catalog, graph=None)
+
+
+def test_criterion_freeze_variant_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    from coscientist.core.claims.graph import GraphSchemaError
+    from coscientist.core.events.errors import CatalogError
+    from coscientist.core.execution.domain import Catalog, CodeCheck, RequirementTemplate
+    from coscientist.core.plan import lifecycle as life
+
+    check = CodeCheck.model_construct(
+        kind="artifact_exists",
+        metric="m",
+        op="==",
+        target=1,
+        allow_network=False,
+        allow_cgroup_degraded=False,
+    )
+    tmpl = RequirementTemplate.model_construct(
+        id="var_x",
+        title="w",
+        text_ru="w",
+        method_sources=["test"],
+        rule_ids=["R23"],
+        applies_to=["experiment"],
+        check=check,
+        role="validity",
+        required=True,
+        version=1,
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
+        exempt_from_freeze=False,
+    )
+    catalog = Catalog.model_construct(
+        catalog_version=4,
+        edition="t",
+        sources_sha256={"t": "abc"},
+        rules=[],
+        templates=[tmpl],
+        defaults={},
+        code_output_names=[],
+    )
+    spec = TaskSpec(
+        task_key="EXP-1",
+        title="t",
+        goal="g",
+        route="experiment",
+        criteria=[RequirementRef(template_id="var_x")],
+    )
+
+    def _boom(*_a: object, **_k: object) -> set[str]:
+        raise GraphSchemaError("no unique variant match (matched=0)")
+
+    monkeypatch.setattr(life, "required_attr_names", _boom)
+    with pytest.raises(
+        CatalogError,
+        match=r"criterion_freeze_variant:var_x:no unique variant match",
+    ):
+        life._plan_accept_freeze_rows(sid="s", tasks=[spec], catalog=catalog, graph=None)
+
+
+@pytest.mark.asyncio
+async def test_known_question_texts_refuses_none_and_non_list() -> None:
+    from coscientist.core.plan.lifecycle import LifecycleMixin
+
+    class _RT(LifecycleMixin):
+        def __init__(self) -> None:
+            self.plans = {"p1": {"questions": None}}
+            self.store = SimpleNamespace(get_projection=lambda *_a, **_k: [])
+
+    rt = _RT()
+    with pytest.raises(ValueError, match=r"plan questions required \(got None\)"):
+        await rt._known_question_texts()
+
+    rt.plans = {"p1": {"questions": {"id": "Q1"}}}
+    with pytest.raises(ValueError, match=r"plan questions must be a list, got dict"):
+        await rt._known_question_texts()

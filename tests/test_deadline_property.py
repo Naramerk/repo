@@ -141,7 +141,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
                     depends_on=["EXP-1"],
                 ),
             ]
-            self._call(self.rt.accept_plan(specs, hypotheses=NEED_OFF, literature=NEED_OFF))
+            self._call(self.rt.accept_plan(specs, questions=[], hypotheses=NEED_OFF, literature=NEED_OFF))
         return "EXP-1"
 
     @rule(key=task_keys, target=attempt_ids)

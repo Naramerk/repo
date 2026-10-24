@@ -49,7 +49,7 @@ async def test_accept_plan_agent_exempt_from_freeze_is_plan_refused(tmp_path, cl
                 ],
             }
         ]
-    , hypotheses=NEED_OFF, literature=NEED_OFF)
+    , questions=[], hypotheses=NEED_OFF, literature=NEED_OFF)
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]

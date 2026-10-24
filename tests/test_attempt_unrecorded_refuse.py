@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 
 import pytest
 
@@ -79,7 +78,7 @@ def test_project_attempt_started_keeps_unrecorded_marker() -> None:
 def test_projection_attempt_started_stores_unrecorded_not_bool() -> None:
     from coscientist.core.events.projections import apply_to_map
 
-    proj: dict[str, Any] = {}
+    proj: dict[str, object] = {}
     ev = StoredEvent(
         study_id="st",
         type="AttemptStarted",
@@ -113,9 +112,7 @@ def test_projection_attempt_started_stores_unrecorded_not_bool() -> None:
 
 
 @pytest.mark.asyncio
-async def test_executor_mark_route_returned_refuses_unrecorded_closed(
-    tmp_path, clock
-) -> None:
+async def test_executor_mark_route_returned_refuses_unrecorded_closed(tmp_path, clock) -> None:
     from datetime import timedelta
 
     rt = await open_runtime(tmp_path, "st_unrec_closed", clock=clock, owner="t1")

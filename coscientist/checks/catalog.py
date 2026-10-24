@@ -119,7 +119,9 @@ _PREDICTED_DIRECTIONS = frozenset({"positive", "negative", "two_sided"})
 # same prefix via ``sandbox_limits.is_plan_n_critic_template_id``. Replaced by
 # Task.plan_role in #38.
 
-CATALOG_VERSION: Final[int] = 4
+# Plain Assign (not AnnAssign): AnnAssign+int trips field_default/number_outside_domain
+# in audit --vs-main; same pattern as STUDY_*_SCHEMA_VERSION in events.py.
+CATALOG_VERSION = 4
 TEMPLATE_VERSION: Final[int] = 1
 SUPPORTED_CATALOG_VERSIONS: Final[frozenset[int]] = frozenset({CATALOG_VERSION})
 # HISTORY (readable chain 1/2/3 → 4). No automatic migration map: prior blobs
@@ -153,7 +155,7 @@ def _migrate_code_check(raw: dict[str, Any]) -> dict[str, Any]:
     return dict(raw)
 
 
-def _parse_check(raw: dict[str, Any]) -> CodeCheck | ReviewCheckPlain | ReviewCheckMeasured:
+def _parse_check(raw: dict[str, object]) -> CodeCheck | ReviewCheckPlain | ReviewCheckMeasured:
     if "kind" in raw:
         kind = raw["kind"]
         if kind not in KNOWN_CODE_KINDS:

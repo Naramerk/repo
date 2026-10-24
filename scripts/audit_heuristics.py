@@ -61,7 +61,9 @@ META_RULES: dict[str, str] = {
 }
 
 # Non-greedy reason so multiple hand markers may share one line.
-_MARKER_RE = re.compile(r"audit-ok\[([a-z0-9_]+)\]:\s*(.+?)(?=\s+audit-ok\[|$)")
+_MARKER_RE = re.compile(
+    r"audit-ok\[([a-z0-9_]+)\]:\s*(.+?)(?=\s+audit-ok\[|$)"
+)
 _MARKER_ANY_RE = re.compile(r"audit-ok\[")
 _MAX_REASON_REPEAT = 3
 
@@ -114,17 +116,6 @@ def _literal_repr(node: ast.AST) -> str:
     return type(node).__name__
 
 
-def _annotation_is_final(ann: ast.AST) -> bool:
-    """True for ``Final`` or ``Final[...]`` (typing.Final module constants)."""
-    if isinstance(ann, ast.Name) and ann.id == "Final":
-        return True
-    if isinstance(ann, ast.Attribute) and ann.attr == "Final":
-        return True
-    if isinstance(ann, ast.Subscript):
-        return _annotation_is_final(ann.value)
-    return False
-
-
 def _is_display_empty(node: ast.AST) -> bool:
     if isinstance(node, ast.Constant) and node.value in ("", None, 0, 0.0, False):
         return True
@@ -161,7 +152,8 @@ class HeuristicVisitor(ast.NodeVisitor):
             broad = True
             detail = f"except {t.id}"
         elif isinstance(t, ast.Tuple) and any(
-            isinstance(x, ast.Name) and x.id in {"Exception", "BaseException"} for x in t.elts
+            isinstance(x, ast.Name) and x.id in {"Exception", "BaseException"}
+            for x in t.elts
         ):
             broad = True
             detail = "except (... Exception/BaseException ...)"
@@ -204,7 +196,9 @@ class HeuristicVisitor(ast.NodeVisitor):
                     self._add(v, "or_slice", "or slice")
                 elif isinstance(v, ast.BinOp):
                     self._add(v, "or_binop", "or BinOp")
-                elif _is_display_empty(v) or (isinstance(v, ast.Constant) and isinstance(v.value, str)):
+                elif _is_display_empty(v) or (
+                    isinstance(v, ast.Constant) and isinstance(v.value, str)
+                ):
                     self._add(v, "or_empty", f"or {_literal_repr(v)}")
         self.generic_visit(node)
 
@@ -232,9 +226,7 @@ class HeuristicVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-        # ``Final`` / ``Final[...]`` module constants are not Pydantic/dataclass
-        # field defaults — do not flag them as field_default / number_outside_domain.
-        if node.value is not None and not _annotation_is_final(node.annotation):
+        if node.value is not None:
             self._field_default(node, node.value)
         self.generic_visit(node)
 
@@ -266,15 +258,21 @@ def _parse_markers(path: Path, source: str) -> tuple[list[Marker], list[Hit]]:
         if _MARKER_ANY_RE.search(line) and not found:
             # likely malformed
             if re.search(r"audit-ok\b", line):
-                meta.append(Hit(path, i, 0, "bad_marker_form", "audit-ok must be audit-ok[<rule>]: <reason>"))
+                meta.append(
+                    Hit(path, i, 0, "bad_marker_form", "audit-ok must be audit-ok[<rule>]: <reason>")
+                )
             continue
         seen_rules: set[str] = set()
         for m in found:
             rule, reason = m.group(1), m.group(2).strip()
             if rule not in RULES:
-                meta.append(Hit(path, i, m.start(), "unknown_rule", f"unknown rule id {rule!r}"))
+                meta.append(
+                    Hit(path, i, m.start(), "unknown_rule", f"unknown rule id {rule!r}")
+                )
             if rule in seen_rules:
-                meta.append(Hit(path, i, m.start(), "duplicate_audit_ok", f"duplicate audit-ok[{rule}]"))
+                meta.append(
+                    Hit(path, i, m.start(), "duplicate_audit_ok", f"duplicate audit-ok[{rule}]")
+                )
             seen_rules.add(rule)
             if not reason:
                 meta.append(Hit(path, i, m.start(), "bad_marker_form", "empty reason"))
@@ -503,7 +501,10 @@ def main(argv: list[str] | None = None) -> int:
 
     by_rule = Counter(h.rule for h in filtered)
     files = {h.path for h in filtered}
-    print(f"{len(filtered)} unjustified hit(s) in {len(files)} file(s); {len(all_markers)} audit-ok marker(s)")
+    print(
+        f"{len(filtered)} unjustified hit(s) in {len(files)} file(s); "
+        f"{len(all_markers)} audit-ok marker(s)"
+    )
     if filtered:
         for h in sorted(filtered, key=lambda x: (_rel(x.path), x.line, x.rule)):
             print(f"  {_rel(h.path)}:{h.line}: [{h.rule}] {h.detail}")

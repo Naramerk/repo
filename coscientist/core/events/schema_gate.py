@@ -11,11 +11,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import lru_cache
-from typing import Any, get_args
+from typing import get_args
 
 from coscientist.core.events.errors import JournalFormatError
 
-PayloadValidator = Callable[[dict[str, Any]], dict[str, Any]]
+PayloadValidator = Callable[[dict[str, object]], dict[str, object]]
 
 
 def _known_event_types() -> set[str]:
@@ -31,7 +31,7 @@ def _payload_validators() -> dict[str, PayloadValidator]:
     from coscientist.core.events.payload_schemas import PAYLOAD_MODELS, validate_event_payload
 
     def _bound(et: str) -> PayloadValidator:
-        def _fn(raw: dict[str, Any]) -> dict[str, Any]:
+        def _fn(raw: dict[str, object]) -> dict[str, object]:
             return validate_event_payload(et, raw)
 
         return _fn
@@ -56,17 +56,11 @@ def require_writer_schema_version(event_type: str) -> int:
     return writer_schema_version(event_type)
 
 
-def upcast_strict(
-    event_type: str, schema_version: int, payload: dict[str, Any]
-) -> tuple[int, dict[str, Any]]:
+def upcast_strict(event_type: str, schema_version: int, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
     """Upcast then apply registered payload schema (fail-closed if none)."""
     from coscientist.core.events.upcasters import UPCASTERS, upcast
 
-    if (
-        type(schema_version) is not int
-        or isinstance(schema_version, bool)
-        or schema_version < 1
-    ):
+    if type(schema_version) is not int or isinstance(schema_version, bool) or schema_version < 1:
         raise JournalFormatError(
             f"{event_type}: invalid schema_version {schema_version!r}",
             expected_store_format=None,
@@ -81,8 +75,7 @@ def upcast_strict(
     writer_v = require_writer_schema_version(event_type)
     if schema_version > writer_v:
         raise JournalFormatError(
-            f"{event_type}: schema_version {schema_version} ahead of "
-            f"writer v{writer_v}",
+            f"{event_type}: schema_version {schema_version} ahead of writer v{writer_v}",
             expected_store_format=None,
             found_store_format=None,
         )

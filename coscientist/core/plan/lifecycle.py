@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -239,6 +240,10 @@ class LifecycleMixin:
     clock: Clock
     study: Study | None
     tasks: dict[str, Task]
+    graph: GraphStore
+    catalog: Catalog | None
+    plans: dict[str, dict[str, object]]
+    executor: Any | None
     _intake_refusal: IntakeRefuse | None
 
     async def append_events(self, events: list[EventEnvelope]) -> None:
@@ -314,7 +319,7 @@ class LifecycleMixin:
         max_task_budget_share: float = 1.0,
         max_proposals: int = 3,
         require_hypotheses: bool,
-        inputs: list[Any] | None = None,
+        inputs: Sequence[object] = (),
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,
         as_of: datetime | None = None,
@@ -399,10 +404,7 @@ class LifecycleMixin:
                     decision = IntakeRefuse(refuse_kind, str(refuse_reason)[:200])
                 else:
                     limits = merged
-                    if inputs is None:
-                        intake_inputs: list[object] = []
-                    else:
-                        intake_inputs = list(inputs)
+                    intake_inputs: list[object] = list(inputs)
                     decision = await intake(
                         request,
                         intake_inputs,
@@ -440,9 +442,7 @@ class LifecycleMixin:
                 if isinstance(e.kind, RefusalKind):
                     decision = IntakeRefuse(e.kind, str(e.reason)[:200])
                 else:
-                    decision = IntakeRefuse(
-                        RefusalKind.INPUT_INVALID, str(e.reason)[:200]
-                    )
+                    decision = IntakeRefuse(RefusalKind.INPUT_INVALID, str(e.reason)[:200])
                 user_ids, user_events = [], []
             except Exception as e:  # noqa: BLE001 — registration bugs → refuse
                 decision = IntakeRefuse(
@@ -587,12 +587,12 @@ class LifecycleMixin:
         tasks: list[TaskSpec],
         *,
         questions: list[QuestionSpec] | None = None,
-        subquestions: list[QuestionSpec] | None = None,
+        subquestions: Sequence[QuestionSpec] = (),
         rollup: str = "all",
         revision: int = 1,
-        spec_output: dict[str, Any] | None = None,
-        expand_after: list[str] | None = None,
-        loops: list[Any] | None = None,
+        spec_output: dict[str, object] | None = None,
+        expand_after: Sequence[str] = (),
+        loops: Sequence[object] = (),
         hypotheses: Need | None = None,
         literature: Need | None = None,
     ) -> str:
@@ -626,9 +626,9 @@ class LifecycleMixin:
         LOOP_PLAN_REFUSED_LINE = "не выполнено: план отклонён (LoopSpec)"
         named_subs: list[QuestionSpec] = []
         # All plan validation → PlanRefused (never raw ValueError to callers).
-        raw_loops: list[LoopSpec] | list[dict[str, object]] | None
         raw_loops = loops
         loop_specs: list[LoopSpec] = []
+        expand_after_keys: list[str] = list(expand_after)
         plan_refuse = None
         try:
             parsed_tasks: list[TaskSpec] = []
@@ -639,57 +639,42 @@ class LifecycleMixin:
                     parsed_tasks.append(TaskSpec.model_validate(t))
             tasks = parsed_tasks
             if questions is None and spec_output is not None:
-                questions = [
-                    QuestionSpec.model_validate(q)
-                    for q in questions_from_spec_output(spec_output)
-                ]
+                questions = [QuestionSpec.model_validate(q) for q in questions_from_spec_output(spec_output)]
             if questions is None:
-                questions = []
-            else:
-                questions = list(questions)
+                raise ValueError("questions required (pass [] if empty; or pass spec_output)")
+            questions = list(questions)
             parsed_subs: list[QuestionSpec] = []
-            if subquestions is not None:
-                for s in subquestions:
-                    if isinstance(s, QuestionSpec):
-                        parsed_subs.append(s)
-                    else:
-                        parsed_subs.append(QuestionSpec.model_validate(s))
+            for s in subquestions:
+                if isinstance(s, QuestionSpec):
+                    parsed_subs.append(s)
+                else:
+                    parsed_subs.append(QuestionSpec.model_validate(s))
             questions, named_subs = merge_plan_questions(questions, parsed_subs)
             from coscientist.core.plan.decomposes import stamp_question_origins
 
-            questions = stamp_question_origins(
-                questions, named_sub_ids={s.id for s in named_subs}
-            )
-            named_from_parent = [
-                q for q in questions if getattr(q, "parent_id", None)
-            ]
+            questions = stamp_question_origins(questions, named_sub_ids={s.id for s in named_subs})
+            named_from_parent = [q for q in questions if q.parent_id is not None]
             if named_from_parent:
                 named_subs = named_from_parent
-            if expand_after is None:
-                expand_after = []
-            else:
-                expand_after = list(expand_after)
             self._validate_dag(tasks)
             known_texts = await self._known_question_texts()
             self._validate_questions(questions, known_texts)
             known_texts = {**known_texts, **{q.id: q.text for q in questions}}
             self._validate_addresses(tasks, set(known_texts))
             task_keys = {t.task_key for t in tasks}
-            for k in expand_after:
+            for k in expand_after_keys:
                 if k not in task_keys:
                     raise ValueError(f"expand_after unknown task_key: {k!r}")
             known_keys = {t.spec.task_key for t in self.tasks.values()} | task_keys
-            graph = getattr(self, "graph", None)
             known_hyps: set[str] = set()
-            if graph is not None:
-                for node in graph.nodes_by_kind("hypothesis"):
-                    hid = str(getattr(node, "ref_id", None) or "")
-                    if hid:
-                        known_hyps.add(hid)
+            for node in self.graph.nodes_by_kind("hypothesis"):
+                hid = node.ref_id
+                if isinstance(hid, str) and hid:
+                    known_hyps.add(hid)
             loop_specs = validate_loop_specs(
                 raw_loops,
                 known_keys=known_keys,
-                max_loop_iter=int(getattr(self.study, "max_loop_iter", 8) or 8),
+                max_loop_iter=int(self.study.max_loop_iter),
                 known_questions=set(known_texts),
                 known_hypotheses=known_hyps,
             )
@@ -701,7 +686,9 @@ class LifecycleMixin:
             share_err = critic_plan_shares(tasks, study=self.study)
             if share_err is not None:
                 raise ValueError(share_err)
-            catalog = getattr(self, "catalog", None) or getattr(getattr(self, "executor", None), "catalog", None)
+            catalog = self.catalog
+            if catalog is None and self.executor is not None:
+                catalog = self.executor.catalog
             validate_plan_criteria(tasks, catalog)
             tasks, questions = freeze_plan_rubrics(
                 tasks,
@@ -709,8 +696,8 @@ class LifecycleMixin:
                 catalog=catalog,
                 subquestions=named_subs,
                 rollup=rollup,
-                max_depth=int(getattr(self.study, "max_depth", 8) or 8),
-                max_tasks=int(getattr(self.study, "max_tasks", 64) or 64),
+                max_depth=int(self.study.max_depth),
+                max_tasks=int(self.study.max_tasks),
             )
             assert_decomposes_acyclic(parent_map_from_questions(questions))
             loop_ids = {ls.loop_id for ls in loop_specs}
@@ -754,7 +741,7 @@ class LifecycleMixin:
                 sid=sid,
                 tasks=tasks,
                 catalog=catalog,
-                graph=getattr(self, "graph", None),
+                graph=self.graph,
             )
         except PlanInvalid as e:
             plan_refuse = (refuse_detail(e), LOOP_PLAN_REFUSED_LINE)
@@ -775,7 +762,6 @@ class LifecycleMixin:
             return await apply_plan_refused(self, detail=detail, report_line=report_line)
         # try-success path always binds these (mypy: narrow after refuse return).
         assert isinstance(questions, list)
-        assert isinstance(expand_after, list)
         pid = plan_id()
         plan = Plan(
             plan_id=pid,
@@ -784,7 +770,7 @@ class LifecycleMixin:
             hypothesis_id=None,
             tasks=tasks,
             questions=questions,
-            expand_after=expand_after,
+            expand_after=list(expand_after_keys),
             loops=loop_specs,
             subquestions=named_subs,
             rollup=rollup,  # type: ignore[arg-type]
@@ -803,21 +789,17 @@ class LifecycleMixin:
             )
         ]
         # Question nodes so claim ``about`` can bind without auto-creating targets.
-        graph = getattr(self, "graph", None)
         for q in questions:
             qnid = question_node_id(sid, q.id)
-            if graph is not None and graph.get_node(qnid) is not None:
+            if self.graph.get_node(qnid) is not None:
                 continue  # never clobber existing attrs
-            final_type = getattr(q, "final_type", None)
-            if final_type is None:
-                final_type = "verdict"
-            q_attrs: dict[str, Any] = {
+            q_attrs: dict[str, object] = {
                 "formulation": q.text,
-                "final_type": final_type,
+                "final_type": q.final_type,
             }
-            if getattr(q, "parent_id", None):
+            if q.parent_id is not None:
                 q_attrs["parent_id"] = q.parent_id
-            if getattr(q, "origin", None):
+            if q.origin is not None:
                 q_attrs["origin"] = q.origin
             events.append(
                 EventEnvelope(
@@ -839,13 +821,13 @@ class LifecycleMixin:
             )
         # PR16: decomposes edges on accept (child → parent); acyclicity already checked.
         for q in questions:
-            parent = getattr(q, "parent_id", None)
-            if not parent:
+            parent = q.parent_id
+            if parent is None:
                 continue
             qnid = question_node_id(sid, q.id)
             pn = question_node_id(sid, str(parent))
             eid = f"decomposes:{qnid}:{pn}"
-            origin = getattr(q, "origin", None)
+            origin = q.origin
             if origin is None:
                 origin = "explicit"
             events.append(
@@ -957,22 +939,18 @@ class LifecycleMixin:
 
     async def _known_question_texts(self) -> dict[str, str]:
         texts: dict[str, str] = {}
-        local = getattr(self, "plans", None)
-        plans = list(local.values()) if isinstance(local, dict) else []
+        plans: list[object] = list(self.plans.values())
         if not plans:
-            store = getattr(self, "store", None)
-            if store is not None:
-                plans = await store.get_projection("plans")
+            plans = await self.store.get_projection("plans")
         for plan in plans:
+            if not isinstance(plan, dict):
+                raise ValueError(f"plan projection must be a mapping, got {type(plan).__name__}")
             raw_qs = plan.get("questions")
             if raw_qs is None:
-                plan_questions: list[object] = []
-            elif isinstance(raw_qs, list):
-                plan_questions = list(raw_qs)
-            else:
-                raise ValueError(
-                    f"plan questions must be a list, got {type(raw_qs).__name__}"
-                )
+                raise ValueError("plan questions required (got None)")
+            if not isinstance(raw_qs, list):
+                raise ValueError(f"plan questions must be a list, got {type(raw_qs).__name__}")
+            plan_questions: list[object] = list(raw_qs)
             for q in plan_questions:
                 if not isinstance(q, dict):
                     continue

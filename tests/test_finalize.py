@@ -1185,7 +1185,7 @@ async def test_report_task_failed_still_report(tmp_path, clock):
     rt.artifacts = arts
     for key in ("SPEC", "HYP", "LIT"):
         await record_success(rt, await rt.start_attempt(key), arts)
-    await rt.accept_plan([], hypotheses=NEED_OFF, literature=NEED_OFF)
+    await rt.accept_plan([], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF)
     await rt.fail_attempt(await rt.start_attempt("REPORT"), retryable=False)
     await rt.tick()
     ev = _fin(await rt.store.read_all())

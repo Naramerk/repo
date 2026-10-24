@@ -50,7 +50,7 @@ async def test_hitl_delegate_records_critic(tmp_path, clock):
     aid = await rt.start_attempt("SPEC")
     await record_success(rt, aid, arts)
     await rt.accept_plan(
-        [TaskSpec(task_key="EXP-1", title="e", goal="e", route="experiment")],
+        [TaskSpec(task_key="EXP-1", title="e", goal="e", route="experiment")], questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
     )
@@ -72,7 +72,7 @@ async def test_hitl_human_delegate_records_critic(tmp_path, clock):
     aid = await rt.start_attempt("SPEC")
     await record_success(rt, aid, arts)
     await rt.accept_plan(
-        [TaskSpec(task_key="EXP-1", title="e", goal="e", route="experiment")],
+        [TaskSpec(task_key="EXP-1", title="e", goal="e", route="experiment")], questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
     )

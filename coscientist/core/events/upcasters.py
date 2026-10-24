@@ -919,12 +919,12 @@ _ATTEMPT_STARTED_UNRECORDED_FIELDS = (
 ATTEMPT_STARTED_UNRECORDED_SINCE = 10
 
 
-def _attempt_started_v10_to_v11_unrecorded(payload: dict[str, Any]) -> dict[str, Any]:
+def _attempt_started_v10_to_v11_unrecorded(payload: dict[str, object]) -> dict[str, object]:
     """Carry only journalled forever-fields; absent → AttemptUnrecorded (no invent).
 
     Also drops legacy ``task_key`` (never a writer AttemptStarted field).
     """
-    out = dict(payload)
+    out: dict[str, object] = dict(payload)
     if "task_key" in out:
         del out["task_key"]
     pad = {
