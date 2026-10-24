@@ -181,6 +181,8 @@ async def test_coder_timeout_kills_guest_process_group(
     real_kill = coder_run._kill_sandbox_guest
 
     async def _spy_kill(
+        jobs: InMemoryJobStore,
+        jid: str,
         proc: BaseProcess,
         *,
         guest_pgid: int,
@@ -190,6 +192,8 @@ async def test_coder_timeout_kills_guest_process_group(
     ) -> bool:
         seen_pgid.append(guest_pgid)
         return await real_kill(
+            jobs,
+            jid,
             proc,
             guest_pgid=guest_pgid,
             term_grace_s=term_grace_s,
@@ -229,7 +233,9 @@ async def test_coder_timeout_kills_guest_process_group(
     assert "JobTimedOut" in _types(journal)
     assert "JobCancelled" in _types(journal)
     assert seen_pgid and seen_pgid[0] > 0, "guest pgid was never captured"
-    assert not coder_run._pg_alive(seen_pgid[0]), "guest process group still alive after killpg"
+    with pytest.raises(ProcessLookupError):
+        os.killpg(seen_pgid[0], 0)
+    assert "JobGuestProcessGroupGone" in _types(journal)
     jobs.close()
 
 
@@ -446,9 +452,21 @@ async def test_kill_sandbox_guest_unpublished_pgid_returns_false() -> None:
         def kill(self) -> None:
             raise AssertionError("kill must not run when already dead")
 
+    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
+    journal = _Journal()
+    jobs = _jobs(clock, journal)
+    jid = jobs.submit(
+        "coder",
+        {"call_id": "dead"},
+        "att#dead",
+        clock.now() + timedelta(seconds=30),
+    )
+    jobs.mark_running(jid)
     done = asyncio.Event()
     done.set()
     killed = await coder_run._kill_sandbox_guest(
+        jobs,
+        jid,
         _DeadProc(),
         guest_pgid=0,
         term_grace_s=0.01,
@@ -456,6 +474,8 @@ async def test_kill_sandbox_guest_unpublished_pgid_returns_false() -> None:
         guest_done=done,
     )
     assert killed is False
+    assert "JobGuestProcessGroupGone" not in _types(journal)
+    jobs.close()
 
 
 @pytest.mark.parametrize(
@@ -474,86 +494,122 @@ def test_set_guest_pgid_refuses_non_positive(bad: object) -> None:
         coder_run._set_guest_pgid(_Slot(), bad)
 
 
-def test_pg_state_alive(monkeypatch: pytest.MonkeyPatch) -> None:
+def _running_job() -> tuple[InMemoryJobStore, _Journal, str]:
+    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
+    journal = _Journal()
+    jobs = _jobs(clock, journal)
+    jid = jobs.submit(
+        "coder",
+        {"call_id": "pg"},
+        "att#pg",
+        clock.now() + timedelta(seconds=30),
+    )
+    jobs.mark_running(jid)
+    return jobs, journal, jid
+
+
+def test_signal_or_record_gone_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    jobs, journal, jid = _running_job()
     monkeypatch.setattr(os, "killpg", lambda _pgid, _sig: None)
-    assert coder_run._pg_state(4242) == "alive"
+    assert coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=signal.SIGTERM) == "ok"
+    assert "JobGuestProcessGroupGone" not in _types(journal)
+    jobs.close()
 
 
-def test_pg_state_process_lookup_raises_gone_record(
+def test_signal_or_record_gone_journals_killpg_esrch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    jobs, journal, jid = _running_job()
+
     def _gone(_pgid: int, _sig: int) -> None:
         raise ProcessLookupError()
 
     monkeypatch.setattr(os, "killpg", _gone)
-    with pytest.raises(coder_run.ProcessGroupGone, match=r"pgid=4242.*op=probe") as ei:
-        coder_run._pg_state(4242)
-    assert ei.value.pgid == 4242
-    assert ei.value.op == "probe"
-    assert ei.value.sig_name is None
+    assert coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=signal.SIGKILL) == "gone"
+    gone_events = [e for e in journal.events if e.type == "JobGuestProcessGroupGone"]
+    assert len(gone_events) == 1
+    assert gone_events[0].payload["pgid"] == 4242
+    assert gone_events[0].payload["op"] == "killpg"
+    assert gone_events[0].payload["sig_name"] == "SIGKILL"
+    jobs.close()
 
 
-def test_pg_alive_maps_gone_record_to_false(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_signal_or_record_gone_journals_probe_esrch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jobs, journal, jid = _running_job()
+
     def _gone(_pgid: int, _sig: int) -> None:
         raise ProcessLookupError()
 
     monkeypatch.setattr(os, "killpg", _gone)
-    assert coder_run._pg_alive(4242) is False
+    assert coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=0) == "gone"
+    gone_events = [e for e in journal.events if e.type == "JobGuestProcessGroupGone"]
+    assert len(gone_events) == 1
+    assert gone_events[0].payload["op"] == "probe"
+    assert gone_events[0].payload["sig_name"] == "0"
+    jobs.close()
 
 
-def test_pg_state_permission_error_is_tool_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_signal_or_record_gone_probe_oserror_is_tool_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jobs, _journal, jid = _running_job()
+
     def _denied(_pgid: int, _sig: int) -> None:
         raise PermissionError("simulated_probe_denied")
 
     monkeypatch.setattr(os, "killpg", _denied)
     with pytest.raises(ToolError, match="probe failed"):
-        coder_run._pg_state(4242)
+        coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=0)
+    jobs.close()
 
 
-def test_killpg_signaled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(os, "killpg", lambda _pgid, _sig: None)
-    assert coder_run._killpg(4242, signal.SIGTERM) == "signaled"
-
-
-def test_killpg_process_lookup_raises_gone_record(
+def test_signal_or_record_gone_killpg_oserror_is_tool_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def _gone(_pgid: int, _sig: signal.Signals) -> None:
-        raise ProcessLookupError()
+    jobs, _journal, jid = _running_job()
 
-    monkeypatch.setattr(os, "killpg", _gone)
-    with pytest.raises(
-        coder_run.ProcessGroupGone,
-        match=r"pgid=4242.*op=killpg.*sig=SIGKILL",
-    ) as ei:
-        coder_run._killpg(4242, signal.SIGKILL)
-    assert ei.value.pgid == 4242
-    assert ei.value.op == "killpg"
-    assert ei.value.sig_name == "SIGKILL"
-
-
-def test_signal_guest_pg_maps_gone_record(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def _gone(_pgid: int, _sig: signal.Signals) -> None:
-        raise ProcessLookupError()
-
-    monkeypatch.setattr(os, "killpg", _gone)
-    outcome = coder_run._signal_guest_pg(4242, signal.SIGTERM)
-    assert outcome == coder_run.ProcessGroupGone(
-        pgid=4242,
-        op="killpg",
-        sig_name="SIGTERM",
-    )
-
-
-def test_killpg_oserror_is_tool_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _boom(_pgid: int, _sig: signal.Signals) -> None:
+    def _boom(_pgid: int, _sig: int) -> None:
         raise OSError("simulated_killpg_failure")
 
     monkeypatch.setattr(os, "killpg", _boom)
     with pytest.raises(ToolError, match="killpg\\(SIGTERM\\) failed"):
-        coder_run._killpg(4242, signal.SIGTERM)
+        coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=signal.SIGTERM)
+    jobs.close()
+
+
+@pytest.mark.parametrize(
+    ("pgid", "sig_name", "match"),
+    [
+        (0, "SIGTERM", "positive int"),
+        (4242, " ", "non-empty bare"),
+        (4242, "", "non-empty bare"),
+    ],
+    ids=["pgid_zero", "sig_whitespace", "sig_empty"],
+)
+def test_record_guest_process_group_gone_refuses(
+    pgid: int,
+    sig_name: str,
+    match: str,
+) -> None:
+    jobs, _journal, jid = _running_job()
+    with pytest.raises(ToolError, match=match):
+        jobs.record_guest_process_group_gone(
+            jid,
+            pgid=pgid,
+            op="killpg",
+            sig_name=sig_name,
+        )
+    jobs.close()
+
+
+def test_record_guest_process_group_gone_refuses_bad_op() -> None:
+    jobs, _journal, jid = _running_job()
+    kwargs: dict[str, object] = {"pgid": 4242, "op": "nope", "sig_name": "SIGTERM"}
+    with pytest.raises(ToolError, match="probe\\|killpg"):
+        jobs.record_guest_process_group_gone(jid, **kwargs)
+    jobs.close()
 
 
 @pytest.mark.asyncio
@@ -561,17 +617,17 @@ async def test_finally_probe_error_still_terminals_job(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ToolError from ``_pg_alive`` in finally must not leave the job live."""
+    """ToolError from probe in finally must not leave the job live."""
     clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
     journal = _Journal()
     jobs = _jobs(clock, journal)
     arts = LocalArtifactStore(tmp_path / "cas")
 
-    def _boom(_pgid: int) -> bool:
+    def _boom(*_args: object, **_kwargs: object) -> object:
         raise ToolError("local", "guest process group probe failed: simulated")
 
     monkeypatch.setattr(coder_run, "_sandbox_worker", _worker_publish_pgid_no_result)
-    monkeypatch.setattr(coder_run, "_pg_alive", _boom)
+    monkeypatch.setattr(coder_run, "_signal_or_record_gone", _boom)
 
     with pytest.raises(ToolError, match="exited without result"):
         await run_coder_job(

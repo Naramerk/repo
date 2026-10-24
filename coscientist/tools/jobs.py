@@ -22,6 +22,7 @@ from coscientist.core.events.job_events import (
     JobCancelFailedPayload,
     JobCancelledPayload,
     JobEventType,
+    JobGuestProcessGroupGonePayload,
     JobKind,
     JobStatus,
     JobStatusChangedPayload,
@@ -263,11 +264,7 @@ class InMemoryJobStore:
 
     def _apply_due_timeouts(self) -> None:
         now = self._clock.now()
-        overdue = [
-            jid
-            for jid, job in list(self._jobs.items())
-            if job_is_live(job.status) and now >= job.deadline
-        ]
+        overdue = [jid for jid, job in list(self._jobs.items()) if job_is_live(job.status) and now >= job.deadline]
         for jid in overdue:
             self._apply_timeout(jid)
 
@@ -311,6 +308,36 @@ class InMemoryJobStore:
             job_id,
             payload,
             make_idem("JobCancelFailed", job_id, reason),
+        )
+
+    def record_guest_process_group_gone(
+        self,
+        job_id: str,
+        *,
+        pgid: int,
+        op: Literal["probe", "killpg"],
+        sig_name: str,
+    ) -> None:
+        """Journal JobGuestProcessGroupGone (ESRCH — group already reaped)."""
+        if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 0:
+            raise ToolError("local", f"gone pgid must be positive int, got {pgid!r}")
+        if op not in ("probe", "killpg"):
+            raise ToolError("local", f"gone op must be probe|killpg, got {op!r}")
+        if not sig_name or sig_name.strip() != sig_name:
+            raise ToolError("local", "gone sig_name must be non-empty bare")
+        job = self.get(job_id)
+        payload = JobGuestProcessGroupGonePayload(
+            job_id=job_id,
+            attempt_id=job.attempt_id,
+            pgid=pgid,
+            op=op,
+            sig_name=sig_name,
+        ).model_dump(mode="json")
+        self._emit(
+            "JobGuestProcessGroupGone",
+            job_id,
+            payload,
+            make_idem("JobGuestProcessGroupGone", job_id, op, str(pgid), sig_name),
         )
 
     def _apply_timeout(self, job_id: str) -> Job:

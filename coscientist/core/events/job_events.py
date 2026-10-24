@@ -18,6 +18,7 @@ JobEventType = Literal[
     "JobTimedOut",
     "JobCancelled",
     "JobCancelFailed",
+    "JobGuestProcessGroupGone",
 ]
 
 _LIVE: frozenset[JobStatus] = frozenset({"queued", "running"})
@@ -111,4 +112,17 @@ class JobCancelFailedPayload(_JobPayload):
     @field_validator("reason")
     @classmethod
     def _reason(cls, v: str, info: ValidationInfo) -> str:
+        return require_nonblank(v, field=str(info.field_name))
+
+
+class JobGuestProcessGroupGonePayload(_JobPayload):
+    """Guest process group already reaped (ESRCH) — typed journaled outcome."""
+
+    pgid: int = Field(gt=0)
+    op: Literal["probe", "killpg"]
+    sig_name: str = Field(min_length=1)
+
+    @field_validator("sig_name")
+    @classmethod
+    def _sig_name(cls, v: str, info: ValidationInfo) -> str:
         return require_nonblank(v, field=str(info.field_name))

@@ -18,7 +18,7 @@ from datetime import datetime
 from functools import partial
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -52,19 +52,33 @@ class GuestPgidSlot(Protocol):
     def get_lock(self) -> AbstractContextManager[object]: ...
 
 
-@dataclass(frozen=True, slots=True)
-class ProcessGroupGone(Exception):
-    """Typed outcome: process group already reaped (ESRCH / ProcessLookupError)."""
+class CoderLimitsSpec(TypedDict):
+    """Wire subset of ``SandboxLimits`` stored on the job spec."""
 
-    pgid: int
-    op: Literal["probe", "killpg"]
-    sig_name: str | None
+    timeout_s: float
+    memory_mb: int
+    max_output_bytes: int
+    pids_max: int
+    rlimit_nproc: int
+    allow_network: bool
+    allow_cgroup_degraded: bool
+    reap_timeout_s: float
+    output_drain_join_s: float
 
-    def __str__(self) -> str:
-        base = f"process group gone: pgid={self.pgid} op={self.op}"
-        if self.sig_name is None:
-            return base
-        return f"{base} sig={self.sig_name}"
+
+class CoderOutputWire(TypedDict):
+    name: str
+    source: Literal["stdout", "stderr"]
+    media_type: str
+
+
+class CoderRequestSpec(TypedDict):
+    argv: list[str]
+    inputs: dict[str, str]
+    env: dict[str, str]
+    outputs: list[CoderOutputWire]
+    limits: CoderLimitsSpec
+    call_id: str
 
 
 @dataclass(frozen=True)
@@ -134,7 +148,7 @@ class CoderOutcome(BaseModel):
         return self
 
 
-def _limits_to_spec(limits: SandboxLimits) -> dict[str, Any]:
+def _limits_to_spec(limits: SandboxLimits) -> CoderLimitsSpec:
     return {
         "timeout_s": limits.timeout_s,
         "memory_mb": limits.memory_mb,
@@ -148,8 +162,8 @@ def _limits_to_spec(limits: SandboxLimits) -> dict[str, Any]:
     }
 
 
-def _request_spec(request: CoderRequest) -> dict[str, Any]:
-    outputs = [
+def _request_spec(request: CoderRequest) -> CoderRequestSpec:
+    outputs: list[CoderOutputWire] = [
         {
             "name": o.name,
             "source": o.source,
@@ -213,60 +227,46 @@ def _require_positive_seconds(name: str, value: float) -> float:
     return value
 
 
-def _pg_state(pgid: int) -> Literal["alive"]:
-    """Probe process group; ESRCH → ``ProcessGroupGone``; other OSError → ToolError."""
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError as e:
-        raise ProcessGroupGone(pgid=pgid, op="probe", sig_name=None) from e
-    except OSError as e:
-        raise ToolError(
-            "local",
-            f"guest process group probe failed: pgid={pgid}: {e}",
-        ) from e
-    return "alive"
-
-
-def _pg_alive(pgid: int) -> bool:
-    """True if process group responds to signal 0; ``ProcessGroupGone`` → False."""
-    try:
-        _pg_state(pgid)
-    except ProcessGroupGone as gone:
-        if gone.pgid != pgid:
-            raise
-    else:
-        return True
-    return False
-
-
-def _killpg(pgid: int, sig: signal.Signals) -> Literal["signaled"]:
-    """Signal process group; ESRCH → ``ProcessGroupGone``; other OSError → ToolError."""
-    try:
-        os.killpg(pgid, sig)
-    except ProcessLookupError as e:
-        raise ProcessGroupGone(pgid=pgid, op="killpg", sig_name=sig.name) from e
-    except OSError as e:
-        raise ToolError("local", f"killpg({sig.name}) failed: {e}") from e
-    return "signaled"
-
-
-def _signal_guest_pg(
+def _signal_or_record_gone(
+    jobs: InMemoryJobStore,
+    jid: str,
+    *,
     pgid: int,
-    sig: signal.Signals,
-) -> Literal["signaled"] | ProcessGroupGone:
-    """``killpg``; ESRCH yields the typed ``ProcessGroupGone`` record (journalable)."""
-    try:
-        _killpg(pgid, sig)
-    except ProcessGroupGone as gone:
-        if (
-            gone.pgid != pgid
-            or gone.op != "killpg"
-            or gone.sig_name != sig.name
-        ):
-            raise
+    sig: signal.Signals | Literal[0],
+) -> Literal["ok", "gone"]:
+    """Sole ``ProcessLookupError`` site: journal typed gone, continue explicit branch.
+
+    Lower kill/probe helpers must not catch ESRCH. Callers with job context use
+    this layer only.
+    """
+    op: Literal["probe", "killpg"]
+    sig_name: str
+    os_sig: int
+    if sig == 0:
+        op = "probe"
+        sig_name = "0"
+        os_sig = 0
     else:
-        return "signaled"
-    return ProcessGroupGone(pgid=pgid, op="killpg", sig_name=sig.name)
+        op = "killpg"
+        sig_name = sig.name
+        os_sig = int(sig)
+    try:
+        os.killpg(pgid, os_sig)
+    except ProcessLookupError:
+        jobs.record_guest_process_group_gone(
+            jid,
+            pgid=pgid,
+            op=op,
+            sig_name=sig_name,
+        )
+        return "gone"  # audit-ok[except_silent_return]: JobGuestProcessGroupGone journaled
+    except OSError as e:
+        if op == "probe":
+            detail = f"guest process group probe failed: pgid={pgid}: {e}"
+        else:
+            detail = f"killpg({sig_name}) failed: {e}"
+        raise ToolError("local", detail) from e
+    return "ok"
 
 
 def _set_guest_pgid(slot: GuestPgidSlot, pgid: object) -> None:
@@ -337,6 +337,8 @@ async def _await_guest_pgid(
 
 
 async def _kill_sandbox_guest(
+    jobs: InMemoryJobStore,
+    jid: str,
     proc: KillableProcess,
     *,
     guest_pgid: int,
@@ -347,6 +349,7 @@ async def _kill_sandbox_guest(
     """``killpg`` guest group (sandbox ``start_new_session``), then reap worker.
 
     Fail-closed: ``guest_pgid <= 0`` is not treated as gone — returns False.
+    ESRCH goes only through ``_signal_or_record_gone`` (journaled).
     """
     if guest_pgid <= 0:
         if proc.is_alive():
@@ -356,16 +359,16 @@ async def _kill_sandbox_guest(
                 await _wait_event(guest_done, timeout_s=reap_timeout_s)
         return False
 
-    _signal_guest_pg(guest_pgid, signal.SIGTERM)
+    _signal_or_record_gone(jobs, jid, pgid=guest_pgid, sig=signal.SIGTERM)
     if proc.is_alive():
         proc.terminate()
     if not await _wait_event(guest_done, timeout_s=term_grace_s):
-        if _pg_alive(guest_pgid):
-            _signal_guest_pg(guest_pgid, signal.SIGKILL)
+        if _signal_or_record_gone(jobs, jid, pgid=guest_pgid, sig=0) == "ok":
+            _signal_or_record_gone(jobs, jid, pgid=guest_pgid, sig=signal.SIGKILL)
         if not guest_done.is_set() and proc.is_alive():
             proc.kill()
         await _wait_event(guest_done, timeout_s=reap_timeout_s)
-    guest_gone = not _pg_alive(guest_pgid)
+    guest_gone = _signal_or_record_gone(jobs, jid, pgid=guest_pgid, sig=0) == "gone"
     return guest_done.is_set() and guest_gone
 
 
@@ -440,6 +443,8 @@ async def _stop_guest_or_record(
         )
     except ToolError:
         await _kill_sandbox_guest(
+            jobs,
+            jid,
             proc,
             guest_pgid=0,
             term_grace_s=limits.term_grace_s,
@@ -449,6 +454,8 @@ async def _stop_guest_or_record(
         jobs.record_cancel_failed(jid, unpublished_reason)
         return  # audit-ok[except_silent_return]: JobCancelFailed journaled (unpublished pgid)
     killed = await _kill_sandbox_guest(
+        jobs,
+        jid,
         proc,
         guest_pgid=pgid,
         term_grace_s=limits.term_grace_s,
@@ -572,9 +579,11 @@ async def run_coder_job(
             pgid = int(guest_pgid.value)
             still_running = proc.is_alive()
             if not still_running and pgid > 0:
-                still_running = _pg_alive(pgid)
+                still_running = _signal_or_record_gone(jobs, jid, pgid=pgid, sig=0) == "ok"
             if still_running:
                 await _kill_sandbox_guest(
+                    jobs,
+                    jid,
                     proc,
                     guest_pgid=pgid,
                     term_grace_s=request.limits.term_grace_s,
