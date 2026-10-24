@@ -22,12 +22,24 @@ from coscientist.core.claims.verdict import (
     distinct_by_key,
     exclusion_reason,
     hypothesis_report_row,
-    hypothesis_verdict,
+    hypothesis_verdict as _hypothesis_verdict,
     independence_key_for,
     refute_intent_counts,
     root_data_digests_from_bindings,
     tost_holds,
 )
+
+
+def hypothesis_verdict(claims, any_experiment_done=False, **kw):
+    """Test wrapper: fill required study caps (no silent product defaults)."""
+    caps = {
+        "refutations_needed": 1,
+        "refutation_priority": True,
+        "supported_needed": 2,
+        "confirmations_needed": 1,
+    }
+    caps.update(kw)
+    return _hypothesis_verdict(claims, any_experiment_done, **caps)
 from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -54,6 +66,7 @@ def _c(**kw) -> RuntimeClaim:
         attempt_id="A1#1",
         artifact_id="Art1",
         validity_ok=True,
+        validity="valid",
         claim_outcome="consistent",
         severe=True,
         independence_key="k1",
@@ -83,7 +96,7 @@ def _c(**kw) -> RuntimeClaim:
 
 
 def test_verdict_untested_no_claims():
-    assert hypothesis_verdict([], False)[0] == "untested"
+    assert hypothesis_verdict([], False, refutations_needed=1, refutation_priority=True, supported_needed=2, confirmations_needed=1)[0] == "untested"
 
 
 def test_stub_partial_excluded_before_counting():
@@ -103,12 +116,10 @@ def test_stub_partial_excluded_before_counting():
         [stub, real_ref],
         True,
         refutations_needed=1,
-        refutation_priority=True,
-    )
+        refutation_priority=True, supported_needed=2, confirmations_needed=1)
     assert v == "refuted" and rule == "k_ref"
     v2, _, _, _ = hypothesis_verdict(
-        [real_ref], True, refutations_needed=1, refutation_priority=True
-    )
+        [real_ref], True, refutations_needed=1, refutation_priority=True, supported_needed=2, confirmations_needed=1)
     assert v2 == "refuted"
 
 
@@ -124,7 +135,7 @@ def test_validity_failure_never_refutes():
         refute_capable=False,
     )
     assert not bad.counts()
-    v, _ = verdict([bad], True, refutation_priority=True)
+    v, _ = verdict([bad], True, refutation_priority=True, refutations_needed=1, supported_needed=2, k=1)
     assert v == "inconclusive"
 
 
@@ -142,7 +153,7 @@ def test_lit_not_counted():
 
 def test_only_excluded_is_inconclusive_not_untested():
     stub = _c(provenance="stub", severe=False, sesoi=None, refute_capable=False)
-    assert hypothesis_verdict([stub], True)[0] == "inconclusive"
+    assert hypothesis_verdict([stub], True, refutations_needed=1, refutation_priority=True, supported_needed=2, confirmations_needed=1)[0] == "inconclusive"
 
 
 def test_refuted_k_ref_1():
@@ -154,7 +165,7 @@ def test_refuted_k_ref_1():
         sesoi=None,
         refute_capable=False,
     )
-    assert hypothesis_verdict([ref], True, refutations_needed=1, refutation_priority=True)[
+    assert hypothesis_verdict([ref], True, refutations_needed=1, refutation_priority=True, supported_needed=2, confirmations_needed=1)[
         0
     ] == "refuted"
 
@@ -171,8 +182,7 @@ def test_refutation_priority_false_conflict_inconclusive():
     con = _c(independence_key="c", attempt_id="C#1", experiment_id="C", intent="refute")
     assert (
         hypothesis_verdict(
-            [con, ref], True, refutations_needed=1, refutation_priority=False
-        )[0]
+            [con, ref], True, refutations_needed=1, refutation_priority=False, supported_needed=2, confirmations_needed=1)[0]
         == "inconclusive"
     )
 
@@ -180,7 +190,7 @@ def test_refutation_priority_false_conflict_inconclusive():
 def test_survived_single_severe():
     """Defaults: supported_needed=2 → one severe is survived, never supported."""
     one = _c(intent="refute")
-    assert hypothesis_verdict([one], True, supported_needed=2)[0] == "survived"
+    assert hypothesis_verdict([one], True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)[0] == "survived"
 
 
 def test_supported_needs_two_independent_one_refute_intent():
@@ -193,7 +203,7 @@ def test_supported_needs_two_independent_one_refute_intent():
         artifact_id="Art2",
     )
     assert (
-        hypothesis_verdict([a, b], True, supported_needed=2)[0] == "supported"
+        hypothesis_verdict([a, b], True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)[0] == "supported"
     )
     dup = _c(
         intent="refute",
@@ -203,7 +213,7 @@ def test_supported_needs_two_independent_one_refute_intent():
         artifact_id="Art3",
     )
     assert (
-        hypothesis_verdict([a, dup], True, supported_needed=2)[0] == "survived"
+        hypothesis_verdict([a, dup], True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)[0] == "survived"
     )
 
 
@@ -228,7 +238,7 @@ def test_refute_intent_needs_failable_prediction():
         refute_capable=True,
     )
     assert not refute_intent_counts(a2)
-    assert hypothesis_verdict([a2, b], True, supported_needed=2)[0] == "survived"
+    assert hypothesis_verdict([a2, b], True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)[0] == "survived"
 
 
 def test_refuted_with_confirmations_reports_conflict_note():
@@ -414,7 +424,7 @@ def test_duplicate_runs_count_once():
         experiment_id="A1",
         artifact_id="A2",
     )
-    assert hypothesis_verdict([a, b], True, supported_needed=2)[0] == "survived"
+    assert hypothesis_verdict([a, b], True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)[0] == "survived"
 
 
 def test_independence_key_base_is_experiment_id_no_method():
@@ -779,7 +789,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
     # Spoof: agent labels bytes as python; planner role=code — catalog still data.
     raw = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid_p}:1"),
+        make_tool_ref(f"{aid_p}:1", attempt_id=aid_p),
         name="dataset",
         media_type="text/x-python",
         role="code",
@@ -800,7 +810,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
     aid_e = await rt.start_attempt("E0")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid_e}:1"),
+        make_tool_ref(f"{aid_e}:1", attempt_id=aid_e),
         name="main",
         media_type="application/json",
         role="data",
@@ -860,7 +870,7 @@ def test_non_countable_fail_is_indeterminate_not_refutation():
         },
         exclusion_reason="indeterminate",
     )
-    assert hypothesis_verdict([non_count], True)[0] == "inconclusive"
+    assert hypothesis_verdict([non_count], True, refutations_needed=1, refutation_priority=True, supported_needed=2, confirmations_needed=1)[0] == "inconclusive"
 
 
 def test_tost_requires_real_ci_and_countable():
@@ -970,13 +980,12 @@ def test_refuted_k_ref_2_needs_independent():
         refute_capable=False,
     )
     assert (
-        hypothesis_verdict([r1], True, refutations_needed=2, refutation_priority=True)[0]
+        hypothesis_verdict([r1], True, refutations_needed=2, refutation_priority=True, supported_needed=2, confirmations_needed=1)[0]
         == "inconclusive"
     )
     assert (
         hypothesis_verdict(
-            [r1, r2], True, refutations_needed=2, refutation_priority=True
-        )[0]
+            [r1, r2], True, refutations_needed=2, refutation_priority=True, supported_needed=2, confirmations_needed=1)[0]
         == "refuted"
     )
 
@@ -991,8 +1000,7 @@ def test_inc_below_k_ref_inconclusive():
         refute_capable=False,
     )
     v, _, _, rule = hypothesis_verdict(
-        [r1], True, refutations_needed=2, refutation_priority=True
-    )
+        [r1], True, refutations_needed=2, refutation_priority=True, supported_needed=2, confirmations_needed=1)
     assert v == "inconclusive" and rule == "inc_below_k_ref"
 
 
@@ -1030,7 +1038,7 @@ def test_legacy_claims_never_supported():
         sesoi=0.5,
     )
     assert (
-        hypothesis_verdict([legacy, other], True, supported_needed=2)[0]
+        hypothesis_verdict([legacy, other], True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)[0]
         == "inconclusive"
     )
 
@@ -1122,8 +1130,7 @@ class VerdictPropertyMachine(RuleBasedStateMachine):
             True,
             refutations_needed=self.k_ref,
             refutation_priority=self.priority,
-            supported_needed=self.k_sup,
-        )
+            supported_needed=self.k_sup, confirmations_needed=1)
 
     @rule(
         validity=st.sampled_from(["valid", "invalid"]),
@@ -1348,7 +1355,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid0}:1"),
+        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
         name="main",
         media_type="application/json",
         role="data",
@@ -1514,21 +1521,21 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
     aid_p = await rt.start_attempt("P_RAW")
     da = arts.put(
         b'{"count": 1}',
-        make_tool_ref(f"{aid_p}:da"),
+        make_tool_ref(f"{aid_p}:da", attempt_id=aid_p),
         name="dataset",
         media_type="application/json",
         role="data",  # role required (no media_type heuristic)
     )
     db = arts.put(
         b'{"count": 2}',
-        make_tool_ref(f"{aid_p}:db"),
+        make_tool_ref(f"{aid_p}:db", attempt_id=aid_p),
         name="data_b",
         media_type="application/json",
         role="data",
     )
     code = arts.put(
         b"print(1)",
-        make_tool_ref(f"{aid_p}:c"),
+        make_tool_ref(f"{aid_p}:c", attempt_id=aid_p),
         name="code",
         media_type="text/x-python",
         role="code",
@@ -1552,7 +1559,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
     aid_mid = await rt.start_attempt("P_MID")
     mid = arts.put(
         b'{"count": 1, "passed": true}',
-        make_tool_ref(f"{aid_mid}:m"),
+        make_tool_ref(f"{aid_mid}:m", attempt_id=aid_mid),
         name="mid",
         media_type="application/json",
         role="data",
@@ -1574,7 +1581,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
         aid = await rt.start_attempt(tk)
         art = arts.put(
             b'{"count": 225}',
-            make_tool_ref(f"{aid}:1"),
+            make_tool_ref(f"{aid}:1", attempt_id=aid),
             name="main",
             media_type="application/json",
             role="data",
@@ -1651,7 +1658,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
     aid0 = await rt.start_attempt("E0", provenance="real")
     art = arts.put(
         b'{"count": 999}',
-        make_tool_ref(f"{aid0}:1"),
+        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
         name="main",
         media_type="application/json",
         role="data",
@@ -1937,7 +1944,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
         aid = await rt.start_attempt(tk)
         art = arts.put(
             blob,
-            make_tool_ref(f"{aid}:1"),
+            make_tool_ref(f"{aid}:1", attempt_id=aid),
             name="main",
             media_type="application/json",
             role="data",
@@ -1956,7 +1963,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
         payload = f'{{"effect": {est}}}'.encode()
         art = arts.put(
             payload,
-            make_tool_ref(f"{aid}:1"),
+            make_tool_ref(f"{aid}:1", attempt_id=aid),
             name="main",
             media_type="application/json",
             role="data",
@@ -1983,8 +1990,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
     assert all((c.effect or {}).get("countable") is True for c in hyps)
     assert all(c.severe for c in hyps)
     v, _, _, rule = hypothesis_verdict(
-        hyps, True, supported_needed=2, refutations_needed=1, refutation_priority=True
-    )
+        hyps, True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)
     assert v == "supported" and rule == "support_min"
 
     await rt.start_attempt("REPORT")
@@ -2119,7 +2125,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
         aid = await rt.start_attempt(tk)
         art = arts.put_sandbox(
             blob,
-            make_tool_ref(f"{aid}:1"),
+            make_tool_ref(f"{aid}:1", attempt_id=aid),
             name="main",
             media_type="application/json",
             role="data",
@@ -2140,7 +2146,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
         payload = f'{{"effect": {est}}}'.encode()
         art = arts.put_sandbox(
             payload,
-            make_tool_ref(f"{aid}:1"),
+            make_tool_ref(f"{aid}:1", attempt_id=aid),
             name="main",
             media_type="application/json",
             role="data",
@@ -2169,8 +2175,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
     assert all((c.effect or {}).get("countable") is True for c in hyps)
     assert all(c.severe for c in hyps)
     v, _, _, rule = hypothesis_verdict(
-        hyps, True, supported_needed=2, refutations_needed=1, refutation_priority=True
-    )
+        hyps, True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)
     assert v == "supported" and rule == "support_min"
 
     # Separate study: sandbox failing metric → refuted + trusted tag.
@@ -2207,7 +2212,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
     aid_f = await rt2.start_attempt("E0", provenance="real")
     art_f = arts2.put_sandbox(
         b'{"count": 999}',
-        make_tool_ref(f"{aid_f}:1"),
+        make_tool_ref(f"{aid_f}:1", attempt_id=aid_f),
         name="main",
         media_type="application/json",
         net_isolation="hard",
@@ -2290,7 +2295,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"effect": 2.0}',
-        make_tool_ref(f"{aid0}:1"),
+        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
         name="main",
         media_type="application/json",
         role="data",
@@ -2501,7 +2506,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"effect": {"est": 0.0, "ci_low": -0.1, "ci_high": 0.1}}',
-        make_tool_ref(f"{aid0}:1"),
+        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
         name="main",
         media_type="application/json",
         role="data",

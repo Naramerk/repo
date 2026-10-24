@@ -474,12 +474,14 @@ def claim_nodes_from_attempt(
         else:
             from coscientist.core.claims.verdict import claim_is_severe
 
+            vok = attrs["validity_ok"]
             probe = type(
                 "P",
                 (),
                 {
                     "claim_outcome": attrs.get("claim_outcome"),
-                    "validity_ok": attrs["validity_ok"],
+                    "validity_ok": vok,
+                    "validity": "valid" if vok else "invalid",
                     "frozen": attrs["frozen"],
                     "sesoi": attrs.get("sesoi"),
                     "uses_sesoi": attrs.get("uses_sesoi"),

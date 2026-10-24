@@ -41,8 +41,8 @@ def test_plan_rejected_when_question_uncovered(impl):
 def test_h1_hypothesis_gets_verdict(impl):
     """H1: done experiments ⇒ verdict ≠ untested. PR8b: single severe confirm → survived."""
     # PR8b: no claims about target → untested (even if experiments ran).
-    assert impl.verdict([], any_experiment_done=True)[0] == "untested"
-    assert impl.verdict([impl.Claim("met")], any_experiment_done=True)[0] == "survived"
+    assert impl.verdict([], any_experiment_done=True, refutations_needed=1, refutation_priority=False, supported_needed=2, k=1)[0] == "untested"
+    assert impl.verdict([impl.Claim("met")], any_experiment_done=True, refutations_needed=1, refutation_priority=False, supported_needed=2, k=1)[0] == "survived"
     ftypes = {"Q1": "verdict"}
     assert not impl.study_fulfilled(
         {"Q1": "untested"}, all_required_success=True, question_final_types=ftypes
@@ -74,30 +74,30 @@ def test_k_confirmations_need_distinct_attempts_and_artifacts(impl):
     """PR8b: supported needs supported_needed severe + ≥1 capable refute intent."""
     same = [impl.Claim("met", intent="refute"), impl.Claim("met", intent="refute")]
     # Same independence_key → one key → survived.
-    assert impl.verdict(same, True, supported_needed=2)[0] == "survived"
+    assert impl.verdict(same, True, supported_needed=2, refutations_needed=1, refutation_priority=False, k=1)[0] == "survived"
     two = [
         impl.Claim("met", intent="refute", attempt_id="X1#1", artifact_id="A1"),
         impl.Claim("met", intent="confirm", attempt_id="X2#1", artifact_id="A2"),
     ]
-    assert impl.verdict(two, True, supported_needed=2)[0] == "supported"
+    assert impl.verdict(two, True, supported_needed=2, refutations_needed=1, refutation_priority=False, k=1)[0] == "supported"
 
 
 def test_conflict_and_caps(impl):
     conflict = [impl.Claim("met"), impl.Claim("not_met", attempt_id="X2#1", artifact_id="A2")]
-    assert impl.verdict(conflict, True)[0] == "inconclusive"
+    assert impl.verdict(conflict, True, refutations_needed=1, refutation_priority=False, supported_needed=2, k=1)[0] == "inconclusive"
     # PR8b: stub excluded before counting → no evidence → inconclusive.
-    assert impl.verdict([impl.Claim("met", provenance="stub")], True)[0] == "inconclusive"
+    assert impl.verdict([impl.Claim("met", provenance="stub")], True, refutations_needed=1, refutation_priority=False, supported_needed=2, k=1)[0] == "inconclusive"
     # Stub does not affect a real severe confirm (survived under PR8b).
     extra = impl.Claim("met", provenance="stub", attempt_outcome="PARTIAL", attempt_id="X3#1", artifact_id="A3")
-    assert impl.verdict([impl.Claim("met"), extra], True)[0] == "survived"
+    assert impl.verdict([impl.Claim("met"), extra], True, refutations_needed=1, refutation_priority=False, supported_needed=2, k=1)[0] == "survived"
 
 
 def test_literature_verdict_flag(impl):
     """PR8b: literature never counts (thresholds/priors only)."""
     lit = impl.Claim("met", evidence_kind="literature", lit_own_criterion=True)
-    assert impl.verdict([lit], True) == ("inconclusive", False)
-    assert impl.verdict([impl.Claim("met", evidence_kind="literature")], True) == ("inconclusive", False)
-    assert impl.verdict([], True) == ("untested", False)
+    assert impl.verdict([lit], True, refutations_needed=1, refutation_priority=False, supported_needed=2, k=1) == ("inconclusive", False)
+    assert impl.verdict([impl.Claim("met", evidence_kind="literature")], True, refutations_needed=1, refutation_priority=False, supported_needed=2, k=1) == ("inconclusive", False)
+    assert impl.verdict([], True, refutations_needed=1, refutation_priority=False, supported_needed=2, k=1) == ("untested", False)
 
 
 @pytest.mark.parametrize("impl", ["refmodel"], indirect=True)

@@ -214,7 +214,7 @@ class InputSpec(Frozen):
     ``kind=artifact`` (default): ``from_task`` + ``output`` resolve an artifact.
     ``kind=claim``: ``ref`` is a claim node id; core adds ``uses_claim`` at P2.
     ``kind=verdict``: ``ref`` is a hypothesis/question id; P2 binds a persisted
-    verdict snapshot digest (runtime ``verdict()``, M1 PR 8).
+    verdict snapshot digest (runtime ``verdict``, M1 PR 8).
 
     ``quorum`` (M1 PR10 fan-in): task starts when ≥ quorum inputs bind as
     real/partial; unbound / failed / stub inputs become experiment limitations.
@@ -370,7 +370,7 @@ class LoopSpec(Frozen):
     depends_on: list[str] = Field(default_factory=list)
 
 
-class Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, Frozen):
+class Budget(Frozen):
     max_llm_calls: int
     max_tokens: int
     max_cost_rub: Decimal | None = None

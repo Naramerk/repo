@@ -282,11 +282,6 @@ def _dispositions_inner(
             artifact_lookup=artifact_lookup,
         )
 
-    k_ref = study.refutations_needed if study is not None else 1
-    priority = study.refutation_priority if study is not None else False
-    conf_k = k if k is not None else (study.confirmations_needed if study is not None else 1)
-    supp_k = study.supported_needed if study is not None else 2
-
     final_types = question_final_types(plans)
     result: dict[str, dict[str, Any]] = {}
     for qid, text in qmap.items():
@@ -382,13 +377,20 @@ def _dispositions_inner(
             from coscientist.core.claims.derivation import by_theory_mark
             from coscientist.core.claims.verdict import disposition_for_question, hypothesis_verdict
 
+            if study is None:
+                raise JournalFormatError(
+                    "dispositions require study for verdict caps",
+                    field="study",
+                )
             v, _by_lit, by_theory, _rule = hypothesis_verdict(
                 claims,
                 any_exp,
-                refutations_needed=k_ref,
-                refutation_priority=priority,
-                supported_needed=supp_k,
-                confirmations_needed=conf_k,
+                refutations_needed=study.refutations_needed,
+                refutation_priority=study.refutation_priority,
+                supported_needed=study.supported_needed,
+                confirmations_needed=(
+                    k if k is not None else study.confirmations_needed
+                ),
             )
             if not by_theory:
                 by_theory = by_theory_mark(claims)
@@ -437,10 +439,10 @@ def _dispositions_inner(
                 note = priority_refuted_support_note(
                     claims,
                     any_exp,
-                    conf_k,
-                    refutations_needed=k_ref,
-                    refutation_priority=priority,
-                    supported_needed=supp_k,
+                    k if k is not None else study.confirmations_needed,
+                    refutations_needed=study.refutations_needed,
+                    refutation_priority=study.refutation_priority,
+                    supported_needed=study.supported_needed,
                 )
                 if note is not None:
                     row["note"] = note

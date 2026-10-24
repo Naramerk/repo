@@ -750,8 +750,7 @@ def test_derivation_verdict_marked():
         True,
         supported_needed=2,
         refutations_needed=1,
-        refutation_priority=False,
-    )
+        refutation_priority=False, confirmations_needed=1)
     assert v == "inconclusive"
     assert by_th is True
     assert rule == "derivation_review_only"
@@ -782,8 +781,7 @@ def test_derivation_verdict_marked():
         True,
         supported_needed=2,
         refutations_needed=1,
-        refutation_priority=False,
-    )
+        refutation_priority=False, confirmations_needed=1)
     assert v_mix == "survived"
     assert by_th_mix is True
 
@@ -833,8 +831,7 @@ def test_derivation_verdict_marked():
         True,
         supported_needed=2,
         refutations_needed=1,
-        refutation_priority=False,
-    )
+        refutation_priority=False, confirmations_needed=1)
     assert v2 == "supported"
     assert by_th2 is True
     assert rule2 == "support_min"

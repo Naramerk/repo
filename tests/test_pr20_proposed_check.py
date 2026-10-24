@@ -532,14 +532,12 @@ def test_delegated_does_not_tip_catalog_tie() -> None:
         [catalog_refute, catalog_support],
         refutations_needed=1,
         supported_needed=2,
-        refutation_priority=True,
-    )
+        refutation_priority=True, confirmations_needed=1)
     v_all, _, _, _ = hypothesis_verdict(
         [catalog_refute, catalog_support, delegated_extra],
         refutations_needed=1,
         supported_needed=2,
-        refutation_priority=True,
-    )
+        refutation_priority=True, confirmations_needed=1)
     assert v_all == v_cat
 
 
@@ -578,8 +576,7 @@ def test_delegated_zero_zero_catalog_not_supported() -> None:
         [_delegated("d1"), _delegated("d2")],
         refutations_needed=1,
         supported_needed=2,
-        refutation_priority=True,
-    )
+        refutation_priority=True, confirmations_needed=1)
     assert v != "supported"
 
 

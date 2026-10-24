@@ -1501,6 +1501,7 @@ def test_refute_timeout_hard_blocks_supported():
             attempt_id="A1#1",
             artifact_id="Art1",
             validity_ok=True,
+            validity="valid",
             claim_outcome="consistent",
             severe=True,
             independence_key="k1",
@@ -1520,6 +1521,7 @@ def test_refute_timeout_hard_blocks_supported():
                 "core_evaluated": True,
                 "countable": True,
                 "produced_by_call_id": "A1#1:1",
+                "attempt_id": "A1#1",
             },
             refute_capable=True,
         )
@@ -1547,9 +1549,17 @@ def test_refute_timeout_hard_blocks_supported():
             "core_evaluated": True,
             "countable": True,
             "produced_by_call_id": "A2#1:1",
+            "attempt_id": "A2#1",
         },
     )
-    assert hypothesis_verdict([a, b], True, supported_needed=2)[0] == "supported"
+    assert hypothesis_verdict(
+        [a, b],
+        True,
+        supported_needed=2,
+        refutations_needed=1,
+        refutation_priority=True,
+        confirmations_needed=1,
+    )[0] == "supported"
 
     timeout = severe(
         independence_key="k3",
@@ -1574,8 +1584,7 @@ def test_refute_timeout_hard_blocks_supported():
         },
     )
     v, _, _, rule = hypothesis_verdict(
-        [a, b, timeout], True, supported_needed=2
-    )
+        [a, b, timeout], True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)
     assert v != "supported"
     assert v == "untestable_by_agent"
     assert rule == "idle_timeout"
@@ -1600,7 +1609,7 @@ def test_refute_timeout_hard_blocks_supported():
             "produced_by_call_id": "A3#1:sandbox:pred",
         },
     )
-    v2, _, _, rule2 = hypothesis_verdict([a, b, wall], True, supported_needed=2)
+    v2, _, _, rule2 = hypothesis_verdict([a, b, wall], True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)
     assert v2 != "supported"
     assert v2 == "inconclusive"
     assert rule2 == "refute_unresolved"
@@ -1668,7 +1677,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
         # Distinct jail-mounted bytes so same-digest rejection does not fire.
         art = arts.put(
             f"# attempt-{i}\n".encode(),
-            make_tool_ref(f"{aid}:1", tool="agent"),
+            make_tool_ref(f"{aid}:1", tool="agent", attempt_id=aid),
             name="payload.py",
             media_type="text/x-python",
             role="code",

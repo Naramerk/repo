@@ -116,17 +116,18 @@ def _claim_counts(claim: _ClaimLike) -> bool:
 def verdict(
     claims: Sequence[_ClaimLike],
     any_experiment_done: bool,
-    k: int = 1,
+    k: int,
     *,
-    refutations_needed: int = 1,
-    refutation_priority: bool = False,
-    supported_needed: int = 2,
+    refutations_needed: int,
+    refutation_priority: bool,
+    supported_needed: int,
 ):
     """Hypothesis/question verdict (PR8b / DESIGN_HYP_DELTA).
 
     Stubs/partial/lit/invalid are excluded **before** counting. ``supported``
     needs ≥ ``supported_needed`` severe consistent claims with ≥1 capable
     ``intent=refute``. ``k`` is PR8 ``confirmations_needed`` (snapshot field).
+    Caps are required (pass from ``study.*``).
     """
     return hyp_verdict(
         claims,
@@ -141,11 +142,11 @@ def verdict(
 def priority_refuted_support_note(
     claims: Sequence[_ClaimLike],
     any_experiment_done: bool,
-    k: int = 1,
+    k: int,
     *,
-    refutations_needed: int = 1,
-    refutation_priority: bool = False,
-    supported_needed: int = 2,
+    refutations_needed: int,
+    refutation_priority: bool,
+    supported_needed: int,
 ) -> str | None:
     """PR8 note when refuted and stub/partial confirmations were excluded."""
     v, _ = verdict(

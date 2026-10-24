@@ -620,7 +620,9 @@ def test_gate_config_timeout_s_required():
     from coscientist.core.execution.domain import GATE_TIMEOUTS_S, GateConfig
 
     with pytest.raises(ValidationError):
-        GateConfig()
+        GateConfig(enabled=True, on_timeout="delegate")  # timeout_s required
+    with pytest.raises(ValidationError):
+        GateConfig(timeout_s=GATE_TIMEOUTS_S["spec_approval"], on_timeout="delegate")
     cfg = GateConfig(
         enabled=True,
         timeout_s=GATE_TIMEOUTS_S["spec_approval"],
@@ -631,15 +633,24 @@ def test_gate_config_timeout_s_required():
 
 def test_dispositions_missing_final_type_raises():
     """Fail-closed: no except→not_attempted invent when plan lacks final_type."""
+    from types import SimpleNamespace
+
     from coscientist.core.claims.dispositions import dispositions
     from coscientist.core.claims.graph import GraphStore, default_execution_registry
 
+    study = SimpleNamespace(
+        study_id="st",
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+    )
     with pytest.raises(JournalFormatError, match="final_type") as ei:
         dispositions(
             tasks={},
             plans={"pl": {"questions": [{"id": "Q1", "text": "why"}], "tasks": []}},
             graph=GraphStore(default_execution_registry()),
-            study=None,
+            study=study,
             results={},
         )
     assert ei.value.field == "final_type"
@@ -1330,3 +1341,351 @@ def test_disposition_cover_missing_task_key_raises():
             results={},
         )
     assert ei.value.field == "task_key"
+
+
+# --- Blocker 4: aliases ---
+
+
+def test_effective_outcome_refuses_outcome_alias():
+    """claim.outcome is not an alias for claim_outcome."""
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.verdict import effective_outcome
+
+    claim = SimpleNamespace(outcome="consistent", validity_ok=True, criterion_status="met")
+    # Missing claim_outcome → derive from criterion_status (not outcome alias).
+    assert effective_outcome(claim) == "consistent"  # via criterion_status met→consistent
+    bad = SimpleNamespace(
+        claim_outcome="bogus", validity_ok=True, criterion_status="met"
+    )
+    with pytest.raises(JournalFormatError, match="claim_outcome") as ei:
+        effective_outcome(bad)
+    assert ei.value.field == "claim_outcome"
+
+
+def test_source_id_for_claim_refuses_attempt_id_alias():
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.verdict import source_id_for_claim
+
+    with pytest.raises(JournalFormatError, match="experiment_id") as ei:
+        source_id_for_claim(SimpleNamespace(attempt_id="st/E1#1"))
+    assert ei.value.field == "experiment_id"
+
+
+def test_content_digest_refuses_digest_alias_without_sha256():
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.verdict import _content_digest
+
+    meta = SimpleNamespace(digest="abc")  # no sha256
+    with pytest.raises(JournalFormatError, match="sha256") as ei:
+        _content_digest("a1", artifact_lookup=lambda _i: meta)
+    assert ei.value.field == "sha256"
+
+
+def test_no_effect_detail_rejects_legacy_alias_strings():
+    from coscientist.core.execution.executor import _no_effect_reason_from_checks
+
+    assert (
+        _no_effect_reason_from_checks(
+            [{"role": "prediction", "status": "FAILED", "detail": "output_not_submitted"}]
+        )
+        == "output_not_submitted"
+    )
+    assert (
+        _no_effect_reason_from_checks(
+            [{"role": "prediction", "status": "FAILED", "detail": "output missing"}]
+        )
+        is None
+    )
+
+
+def test_effect_index_refuses_entity_key_alias():
+    from datetime import datetime, timezone
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.tools.effects import load_effect_index
+
+    ev = EventEnvelope(
+        study_id="st",
+        type="EffectIntended",
+        entity_key="ek-only",
+        idem_key="idem",
+        payload={},  # no key
+        ts=datetime.now(timezone.utc),
+    )
+    with pytest.raises(JournalFormatError, match="key") as ei:
+        load_effect_index([ev])
+    assert ei.value.field == "key"
+
+
+def test_proposed_check_requires_bound_task_id_not_task_id_alias():
+    """Approved proposal must carry bound_task_id — no task_id alias."""
+    import inspect
+
+    from coscientist.checks import evaluate as ev_mod
+
+    src = inspect.getsource(ev_mod._evaluate_proposed_check)
+    assert 'row.get("bound_task_id") or row.get("task_id")' not in src
+    assert 'bound_task_id' in src
+    assert 'no or fallback' not in src  # sanity
+    # Behavioral: missing bound_task_id raises before eval.
+    from coscientist.core.execution.domain import (
+        AgentTaskOutput,
+        RequirementRef,
+    )
+
+    row = {"status": "approved", "task_id": "st/E1", "check": None, "delegated": False}
+    ref = RequirementRef(template_id="proposed_check")
+    with pytest.raises(JournalFormatError, match="bound_task_id") as ei:
+        ev_mod._evaluate_proposed_check(
+            ref,
+            row=row,
+            check_id="pc#0",
+            role="prediction",
+            out=AgentTaskOutput(outputs={}),
+            artifacts=None,
+            task_id="st/E1",
+            attempt_id="st/E1#1",
+            catalog=None,
+            review_statuses={},
+            judge_retry={},
+            fetched_digests=None,
+        )
+    assert ei.value.field == "bound_task_id"
+
+
+# --- Blocker 5: domain defaults ---
+
+
+def test_effective_validity_requires_validity_field():
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.verdict import effective_validity
+
+    with pytest.raises(JournalFormatError, match="validity") as ei:
+        effective_validity(SimpleNamespace(validity_ok=True))
+    assert ei.value.field == "validity"
+
+
+def test_attempt_charged_requires_field():
+    from coscientist.core.execution.attempts import _attempt_charged
+
+    with pytest.raises(JournalFormatError, match="charged") as ei:
+        _attempt_charged({}, ctx="a1")
+    assert ei.value.field == "charged"
+
+
+def test_budget_limits_required():
+    from coscientist.core.execution.domain import Budget
+
+    with pytest.raises(ValidationError):
+        Budget(max_cost_rub=None)
+    b = Budget(max_llm_calls=1, max_tokens=2, max_tool_calls=3)
+    assert b.max_llm_calls == 1
+
+
+def test_loop_capped_requires_reason():
+    from coscientist.core.finalize.finalize import _append_loop_capped_report_line
+
+    seen: list[str] = []
+    with pytest.raises(JournalFormatError, match="reason") as ei:
+        _append_loop_capped_report_line(seen, {"iter": 1, "survivors": 0})
+    assert ei.value.field == "reason"
+
+
+def test_restore_output_requires_status():
+    from coscientist.tools.effects import _restore_output
+
+    with pytest.raises(JournalFormatError, match="status") as ei:
+        _restore_output(None, {"result_ref": "x"})
+    assert ei.value.field == "status"
+
+
+def test_plan_shares_requires_revision():
+    from types import SimpleNamespace
+
+    from coscientist.core.plan.shares import _plan_specs_for_shares
+
+    rt = SimpleNamespace(plans={"p1": {"tasks": []}}, tasks={})
+    with pytest.raises(JournalFormatError, match="revision") as ei:
+        _plan_specs_for_shares(rt)
+    assert ei.value.field == "revision"
+
+
+# --- Blocker 6: hypothesis_verdict required kwargs ---
+
+
+def test_hypothesis_verdict_kwargs_required():
+    import inspect
+
+    from coscientist.core.claims.verdict import hypothesis_verdict
+
+    params = inspect.signature(hypothesis_verdict).parameters
+    for name in (
+        "refutations_needed",
+        "refutation_priority",
+        "supported_needed",
+        "confirmations_needed",
+    ):
+        assert params[name].default is inspect.Parameter.empty, name
+
+
+# --- Blocker 7: API refuse without fake CreateStudyBody ---
+
+
+@pytest.mark.asyncio
+async def test_post_studies_parse_refuse_no_study_created(tmp_path, catalog):
+    """Invalid body → StudyRefused + StudyFinalized without StudyCreated / fake caps."""
+    from coscientist.api.studies import post_studies
+    from coscientist.core.execution.runtime_factory import close_runtime, open_runtime
+
+    out = await post_studies(
+        tmp_path,
+        b'{"request": "q"}',  # missing required caps
+        catalog=catalog,
+    )
+    sid = out["study_id"]
+    rt = await open_runtime(tmp_path, sid, catalog=catalog)
+    events = await rt.store.read_all()
+    types = [e.type for e in events]
+    assert "StudyCreated" not in types
+    assert types.count("StudyRefused") == 1
+    assert types.count("StudyFinalized") == 1
+    await close_runtime(rt)
+
+
+def test_create_study_body_request_nonempty_required():
+    from datetime import UTC, datetime
+
+    from coscientist.api.studies import CreateStudyBody
+
+    with pytest.raises(ValidationError):
+        CreateStudyBody(
+            profile="research",
+            request="",
+            catalog_version="t",
+            deadline=datetime(2099, 1, 1, tzinfo=UTC),
+            finalize_reserve_s=1,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            aggregate="count",
+            evalue_alpha=0.05,
+            max_expansions=0,
+            max_human_expansions=0,
+            replan_reserve=0.0,
+            max_tasks=1,
+            max_depth=1,
+            plan_timeout_s=1,
+            max_foreach_children=1,
+            max_loop_iter=1,
+            max_task_budget_share=1.0,
+            max_proposals=0,
+        )
+
+
+# --- Blocker 8: plan_timeout_s ---
+
+
+def test_lifecycle_plan_deadline_uses_study_plan_timeout_s():
+    """Source pin: plan_deadline uses study.plan_timeout_s (not now+600)."""
+    import inspect
+
+    from coscientist.core.plan import lifecycle as lc
+
+    src = inspect.getsource(lc.LifecycleMixin.create_study)
+    assert "study.plan_timeout_s" in src
+    assert "seconds=600" not in src
+
+
+# --- Blocker 9: schema constants ---
+
+
+def test_module_schema_version_constants():
+    from coscientist.core.execution import attempts, inputs, machine
+    from coscientist.tools import effects
+
+    assert attempts.ATTEMPT_CLOSED_SCHEMA_VERSION == 2
+    assert attempts.TASK_DONE_SCHEMA_VERSION == 2
+    assert attempts.VERDICT_SNAPSHOTS_RECORDED_SCHEMA_VERSION == 1
+    assert machine.BUDGET_EXCEEDED_SCHEMA_VERSION == 1
+    assert machine.ATTEMPT_CLOSED_SCHEMA_VERSION == 2
+    assert inputs.GRAPH_NODE_UPSERTED_SCHEMA_VERSION == 1
+    assert effects.EFFECT_INTENDED_SCHEMA_VERSION == 1
+    assert effects.EFFECT_DONE_SCHEMA_VERSION == 1
+
+
+# --- Blocker 10: silent skips ---
+
+
+def test_producer_index_bad_payload_raises():
+    from coscientist.core.claims.verdict import _producer_index
+
+    with pytest.raises(JournalFormatError, match="mapping") as ei:
+        _producer_index({"r1": "not-a-mapping"})
+    assert ei.value.field == "results"
+
+
+def test_foreach_does_not_swallow_journal_format_error():
+    import inspect
+
+    from coscientist.core.plan import foreach as fe
+
+    src = inspect.getsource(fe.materialize_ready_foreach)
+    assert "_refuse_and_skip_foreach" not in src
+    assert "raise" in src
+
+
+def test_attempt_closed_unknown_attempt_raises():
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.execution.local_project import LocalProjectMixin
+
+    host = SimpleNamespace(
+        attempts={},
+        tasks={},
+        _retry_at={},
+        study=None,
+        graph=None,
+        plans={},
+        results={},
+        artifact_kinds={},
+        hypothesis_verdicts={},
+    )
+    ev = EventEnvelope(
+        study_id="st",
+        type="AttemptClosed",
+        entity_key="missing#1",
+        idem_key="idem",
+        payload={"attempt_id": "missing#1", "closed": True, "charged": True},
+        ts=datetime.now(timezone.utc),
+    )
+    with pytest.raises(JournalFormatError, match="unknown attempt") as ei:
+        LocalProjectMixin._project_local(host, ev)
+    assert ei.value.field == "attempt_id"
+
+
+# --- MAJOR: refute_intent requires sesoi/used_sesoi ---
+
+
+def test_refute_intent_requires_sesoi_fields():
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.verdict import refute_intent_counts
+
+    claim = SimpleNamespace(
+        intent="refute",
+        frozen=True,
+        uses_sesoi=True,
+        predicts_null=False,
+        check_role="prediction",
+        # sesoi / used_sesoi absent
+    )
+    with pytest.raises(JournalFormatError, match="sesoi") as ei:
+        refute_intent_counts(claim)
+    assert ei.value.field == "sesoi"

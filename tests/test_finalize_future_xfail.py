@@ -45,7 +45,7 @@ def test_based_on_required_for_counted_dispositions():
 
 
 def test_question_disposition_computed_from_verdict():
-    """PR8: counting claims on graph → answered via verdict()."""
+    """PR8: counting claims on graph → answered via verdict."""
     from coscientist.core.claims.dispositions import dispositions
     from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore, default_execution_registry
     from coscientist.core.events.ids import question_node_id

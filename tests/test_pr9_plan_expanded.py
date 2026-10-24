@@ -1374,8 +1374,8 @@ async def test_hitl_open_plan_approval_keeps_kind_and_binds(tmp_path, clock):
         max_human_expansions=3,
         hitl_policy=HitlPolicy(
             gates={
-                "plan_approval": GateConfig(timeout_s=42, on_timeout="fail"),
-                "plan_expansion": GateConfig(timeout_s=180, on_timeout="delegate"),
+                "plan_approval": GateConfig(enabled=True, timeout_s=42, on_timeout="fail"),
+                "plan_expansion": GateConfig(enabled=True, timeout_s=180, on_timeout="delegate"),
             }
         ),
     )
@@ -1579,9 +1579,9 @@ async def test_hitl_plan_approval_timeout_fail_no_auto_accept(tmp_path, clock):
         max_human_expansions=3,
         hitl_policy=HitlPolicy(
             gates={
-                "plan_approval": GateConfig(timeout_s=1, on_timeout="fail"),
+                "plan_approval": GateConfig(enabled=True, timeout_s=1, on_timeout="fail"),
                 # If kind were renamed, this default would wrongly auto-delegate.
-                "plan_expansion": GateConfig(timeout_s=180, on_timeout="delegate"),
+                "plan_expansion": GateConfig(enabled=True, timeout_s=180, on_timeout="delegate"),
             }
         ),
     )

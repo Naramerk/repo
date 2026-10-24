@@ -23,10 +23,10 @@ def test_refute_intent_met_is_survived(impl):
     c = impl.Claim("met", intent="refute")
     assert c.stance == "supports"
     # supported_needed default 2: one severe refute-intent claim → survived.
-    assert impl.verdict([c], True)[0] == "survived"
-    assert impl.verdict([c], True, supported_needed=2)[0] == "survived"
+    assert impl.verdict([c], True, refutations_needed=1, refutation_priority=False, supported_needed=2, k=1)[0] == "survived"
+    assert impl.verdict([c], True, supported_needed=2, refutations_needed=1, refutation_priority=False, k=1)[0] == "survived"
     # Confirm alone never reaches supported (needs capable intent=refute).
-    assert impl.verdict([impl.Claim("met", intent="confirm")], True)[0] == "survived"
+    assert impl.verdict([impl.Claim("met", intent="confirm")], True, refutations_needed=1, refutation_priority=False, supported_needed=2, k=1)[0] == "survived"
 
 
 def test_refutation_priority_k_ref(impl):
@@ -35,14 +35,13 @@ def test_refutation_priority_k_ref(impl):
     ref1 = impl.Claim("not_met", attempt_id="R1", artifact_id="AR1")
     ref2 = impl.Claim("not_met", attempt_id="R2", artifact_id="AR2")
     # Without priority: conflict → inconclusive.
-    assert impl.verdict([sup, ref1], True, refutation_priority=False)[0] == "inconclusive"
+    assert impl.verdict([sup, ref1], True, refutation_priority=False, refutations_needed=1, supported_needed=2, k=1)[0] == "inconclusive"
     assert (
         impl.verdict(
             [sup, ref1],
             True,
             refutations_needed=1,
-            refutation_priority=True,
-        )[0]
+            refutation_priority=True, supported_needed=2, k=1)[0]
         == "refuted"
     )
     assert (
@@ -50,8 +49,7 @@ def test_refutation_priority_k_ref(impl):
             [sup, ref1],
             True,
             refutations_needed=2,
-            refutation_priority=True,
-        )[0]
+            refutation_priority=True, supported_needed=2, k=1)[0]
         == "inconclusive"
     )
     assert (
@@ -59,8 +57,7 @@ def test_refutation_priority_k_ref(impl):
             [sup, ref1, ref2],
             True,
             refutations_needed=2,
-            refutation_priority=True,
-        )[0]
+            refutation_priority=True, supported_needed=2, k=1)[0]
         == "refuted"
     )
     lit_ref = impl.Claim(
@@ -76,8 +73,7 @@ def test_refutation_priority_k_ref(impl):
             [sup, lit_ref],
             True,
             refutations_needed=1,
-            refutation_priority=True,
-        )[0]
+            refutation_priority=True, supported_needed=2, k=1)[0]
         == "survived"
     )
     stub_ref = impl.Claim(
@@ -89,8 +85,7 @@ def test_refutation_priority_k_ref(impl):
             [sup, stub_ref],
             True,
             refutations_needed=1,
-            refutation_priority=True,
-        )[0]
+            refutation_priority=True, supported_needed=2, k=1)[0]
         == "survived"
     )
 
@@ -110,12 +105,11 @@ def test_priority_refuted_not_capped_by_stub_supports(impl):
             [stub_sup, real_ref],
             True,
             refutations_needed=1,
-            refutation_priority=True,
-        )[0]
+            refutation_priority=True, supported_needed=2, k=1)[0]
         == "refuted"
     )
     # Without priority, stub excluded → only real ref → still refuted.
-    assert impl.verdict([stub_sup, real_ref], True, refutation_priority=False)[0] == "refuted"
+    assert impl.verdict([stub_sup, real_ref], True, refutation_priority=False, refutations_needed=1, supported_needed=2, k=1)[0] == "refuted"
     note = priority_refuted_support_note(
         [stub_sup, real_ref],
         True,
@@ -172,7 +166,7 @@ def test_r17_claim_excluded_from_verdict(impl):
         threshold_source_evidence_ids=frozenset(),
     )
     assert bad.counts() is True  # base RM §4.1
-    assert impl.verdict([bad], True)[0] == "inconclusive"
+    assert impl.verdict([bad], True, refutations_needed=1, refutation_priority=False, supported_needed=2, k=1)[0] == "inconclusive"
 
     only_threshold = impl.Claim(
         "met",
@@ -184,7 +178,7 @@ def test_r17_claim_excluded_from_verdict(impl):
         threshold_source_evidence_ids=frozenset({"ev_paper"}),
     )
     assert only_threshold.counts() is True
-    assert impl.verdict([only_threshold], True)[0] == "inconclusive"
+    assert impl.verdict([only_threshold], True, refutations_needed=1, refutation_priority=False, supported_needed=2, k=1)[0] == "inconclusive"
 
     good = impl.Claim(
         "met",
@@ -197,7 +191,7 @@ def test_r17_claim_excluded_from_verdict(impl):
     )
     assert good.counts() is True
     # PR8b: single severe confirm → survived (supported needs ≥2 + refute intent).
-    assert impl.verdict([good], True)[0] == "survived"
+    assert impl.verdict([good], True, refutations_needed=1, refutation_priority=False, supported_needed=2, k=1)[0] == "survived"
 
     # Refuting claim with empty confirming set still counts (R17 is confirm-only).
     ref_empty = impl.Claim(
@@ -210,7 +204,7 @@ def test_r17_claim_excluded_from_verdict(impl):
         threshold_source_evidence_ids=frozenset(),
     )
     assert ref_empty.stance == "refutes"
-    assert impl.verdict([ref_empty], True)[0] == "refuted"
+    assert impl.verdict([ref_empty], True, refutations_needed=1, refutation_priority=False, supported_needed=2, k=1)[0] == "refuted"
 
 
 def test_invalid_intent_raises(impl):
@@ -331,8 +325,7 @@ async def test_study_refutations_needed_to_verdict(tmp_path, clock, runtime_cls,
             [sup, ref1],
             True,
             refutations_needed=rt.study.refutations_needed,
-            refutation_priority=rt.study.refutation_priority,
-        )[0]
+            refutation_priority=rt.study.refutation_priority, supported_needed=2, k=1)[0]
         == "inconclusive"
     )
     assert (
@@ -340,8 +333,7 @@ async def test_study_refutations_needed_to_verdict(tmp_path, clock, runtime_cls,
             [sup, ref1, ref2],
             True,
             refutations_needed=rt.study.refutations_needed,
-            refutation_priority=rt.study.refutation_priority,
-        )[0]
+            refutation_priority=rt.study.refutation_priority, supported_needed=2, k=1)[0]
         == "refuted"
     )
     await close_runtime(rt)

@@ -581,6 +581,7 @@ def _derive_claim_core_attrs(
         {
             "claim_outcome": claim_outcome,
             "validity_ok": validity_ok,
+            "validity": "valid" if validity_ok else "invalid",
             "frozen": frozen,
             "sesoi": sesoi if isinstance(sesoi, float) else None,
             "uses_sesoi": uses_sesoi,

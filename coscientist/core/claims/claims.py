@@ -1,4 +1,4 @@
-"""Runtime claim projection for verdict() / dispositions (M1 PR8)."""
+"""Runtime claim projection for verdict / dispositions (M1 PR8)."""
 
 from __future__ import annotations
 
@@ -682,6 +682,7 @@ def runtime_claim_from_node(
             target_kind=target_kind,  # type: ignore[arg-type]
             node_id=node.node_id,
             validity_ok=bool(validity_ok),
+            validity=("valid" if validity_ok else "invalid"),
             check_role=check_role,
             exclusion_reason=exclusion_reason,
             claim_outcome=claim_outcome,
