@@ -2124,14 +2124,8 @@ _RECLASS_LEGACY_FIXTURE = (
     / "journals"
     / "reclassified_fetch_old"
 )
-_RECLASS_PROVENANCE_FIXTURE = (
-    Path(__file__).resolve().parents[1]
-    / "fixtures"
-    / "journals"
-    / "reclassified_fetch_provenance"
-)
 
-# Raw schema_version values committed in events.db (before upcast on open).
+# Raw schema_version values committed in reclassified_fetch_old/events.db.
 _RECLASS_RAW_SCHEMA_VERSIONS = (
     ("StudyCreated", 2),
     ("PlanAccepted", 1),
@@ -2140,6 +2134,12 @@ _RECLASS_RAW_SCHEMA_VERSIONS = (
     ("AttemptTainted", 1),
     ("SourceFetched", 1),
 )
+
+_RECLASS_FETCH_DIGEST = (
+    "bedb5c946e3618f42866f7c1acb5246a22b33648a3e59a79d42ddc680a7806bd"
+)
+_RECLASS_CALL_ID = "att_lit:1"
+_RECLASS_ATTEMPT_ID = "att_lit"
 
 
 def _assert_raw_fixture_schema_versions(db_path: Path) -> None:
@@ -2180,22 +2180,23 @@ def _install_reclassified_papers_get() -> None:
     freeze_registry()
 
 
-def _copy_reclass_journal(
-    tmp_path: Path, *, fixture_dir: Path, meta_name: str
-) -> tuple[str, str, str, Path]:
+def _copy_reclass_legacy_fixture(tmp_path: Path) -> tuple[str, str, str, Path]:
+    """Copy committed legacy journal; never invent AttemptStarted.provenance."""
     import shutil
     import sqlite3
 
     from coscientist.core.events.store_db import JOURNAL_STORE_FORMAT
 
-    meta = json.loads((fixture_dir.parent / meta_name).read_text())
+    meta = json.loads(
+        (_RECLASS_LEGACY_FIXTURE.parent / "reclassified_fetch_old.json").read_text()
+    )
     sid = str(meta["study_id"])
     digest = str(meta["digest"])
     call_id = str(meta["call_id"])
     dest = tmp_path / sid
     dest.mkdir(parents=True)
     db = dest / "events.db"
-    shutil.copy2(fixture_dir / "events.db", db)
+    shutil.copy2(_RECLASS_LEGACY_FIXTURE / "events.db", db)
     # Schema v1: fixture predates journal_meta.store_format; stamp the
     # current marker on the temp copy so open is allowed (payloads stay old).
     conn = sqlite3.connect(db)
@@ -2211,39 +2212,17 @@ def _copy_reclass_journal(
         conn.commit()
     finally:
         conn.close()
-    _complete_legacy_freeze_fields(db)
+    _complete_legacy_freeze_fields_without_provenance(db)
     return sid, digest, call_id, db
 
 
-def _copy_reclass_legacy_fixture(tmp_path: Path) -> tuple[str, str, str, Path]:
-    """Pre-provenance journal: AttemptStarted omits provenance (DESIGN_M1 §6.7)."""
-    return _copy_reclass_journal(
-        tmp_path,
-        fixture_dir=_RECLASS_LEGACY_FIXTURE,
-        meta_name="reclassified_fetch_old.json",
-    )
+def _complete_legacy_freeze_fields_without_provenance(db_path: Path) -> None:
+    """Complete freeze/study fields only — never touch AttemptStarted.provenance.
 
-
-def _copy_reclass_provenance_fixture(tmp_path: Path) -> tuple[str, str, str, Path]:
-    """Same old schemas; AttemptStarted.provenance is a committed journal fact."""
-    return _copy_reclass_journal(
-        tmp_path,
-        fixture_dir=_RECLASS_PROVENANCE_FIXTURE,
-        meta_name="reclassified_fetch_provenance.json",
-    )
-
-
-def _complete_legacy_freeze_fields(db_path: Path) -> None:
-    """Complete freeze/study fields writer/upcasters refuse to invent — temp only.
-
-    ``TaskCreated`` v13→v14 refuses a missing / null / empty
-    ``sandbox_check_limits``; ``Study.catalog_version`` must be StrictInt;
-    ``Study.require_hypotheses`` is required at StudyCreated v14.
-    Does **not** touch ``AttemptStarted.provenance``: absent provenance must
-    hit the real v9→v10 upcaster (``AttemptStarted.v10:provenance_required``);
-    journals that need a value carry it as committed payload
-    (``reclassified_fetch_provenance``). Committed rows stay old; patches
-    apply only on the temp copy so every other upcaster still runs on open.
+    ``TaskCreated`` v13→v14 / StudyCreated v13–v14 refuse missing freeze /
+    catalog / require_hypotheses. Provenance is intentionally left absent so
+    the real AttemptStarted v9→v10 upcaster can fail closed
+    (``AttemptStarted.v10:provenance_required``).
     """
     import sqlite3
 
@@ -2293,15 +2272,197 @@ def _complete_legacy_freeze_fields(db_path: Path) -> None:
         conn.close()
 
 
+async def _seed_reclassify_open_journal(
+    tmp_path: Path, clock
+) -> tuple[str, str, str]:
+    """Author a reclassify journal that already carries AttemptStarted.provenance.
+
+    Not a remap of ``reclassified_fetch_old``: rows are inserted as a new
+    journal. ``AttemptStarted.provenance=stub`` is present in the payload from
+    construction (never patched onto a legacy row; never invent ``real``).
+    ``SourceFetched`` is SQL-inserted (store append requires a fetch capability).
+    """
+    import sqlite3
+
+    from coscientist.core.events.digest import canonical_json, sha256_hex
+    from coscientist.core.events.events import make_idem
+    from coscientist.core.events.store import SqliteEventStore
+    from coscientist.core.execution.domain import HitlPolicy
+
+    sid = "st_reclass_open"
+    digest = _RECLASS_FETCH_DIGEST
+    call_id = _RECLASS_CALL_ID
+    attempt_id = _RECLASS_ATTEMPT_ID
+    root = tmp_path / sid
+    root.mkdir(parents=True)
+    db_path = root / "events.db"
+    # Create schema + store_format marker via the real store ctor.
+    store = SqliteEventStore(sid, db_path, clock=clock)
+    await store.close()
+
+    t0 = datetime(2024, 1, 1, tzinfo=UTC)
+    dl = t0 + timedelta(seconds=60)
+    freeze = {
+        "exec_ok": {
+            "timeout_s": 5.0,
+            "memory_mb": 64,
+            "max_output_bytes": 1024,
+            "pids_max": 16,
+            "rlimit_nproc": 16,
+            "reap_timeout_s": 1.0,
+            "output_drain_join_s": 1.0,
+            "allow_network": False,
+            "allow_cgroup_degraded": False,
+        }
+    }
+    rows: list[tuple[str, str, str, dict[str, Any], datetime, int]] = [
+        (
+            "StudyCreated",
+            sid,
+            make_idem("StudyCreated", sid),
+            {
+                "study_id": sid,
+                "profile": "research",
+                "request": "reclassify open journal",
+                "catalog_version": 3,
+                "hitl_policy": HitlPolicy().model_dump(mode="json"),
+                "deadline": dl.isoformat(),
+                "created_at": t0.isoformat(),
+                "finalize_reserve_s": 5,
+                "require_hypotheses": False,
+            },
+            t0,
+            2,
+        ),
+        (
+            "PlanAccepted",
+            "pl_reclass",
+            make_idem("PlanAccepted", "pl_reclass"),
+            {
+                "plan_id": "pl_reclass",
+                "study_id": sid,
+                "revision": 1,
+                "hypothesis_id": None,
+                "tasks": [
+                    {
+                        "task_key": "E1",
+                        "title": "e1",
+                        "goal": "g",
+                        "route": "experiment",
+                        "depends_on": ["PLAN"],
+                    }
+                ],
+            },
+            t0 + timedelta(seconds=1),
+            1,
+        ),
+        (
+            "TaskCreated",
+            f"{sid}/E1",
+            make_idem("TaskCreated", f"{sid}/E1"),
+            {
+                "task_id": f"{sid}/E1",
+                "kind": "experiment",
+                "spec": {
+                    "task_key": "E1",
+                    "title": "e1",
+                    "goal": "g",
+                    "route": "experiment",
+                    "depends_on": ["PLAN"],
+                    "sandbox_check_limits": dict(freeze),
+                },
+                "state": "PENDING",
+                "outcome": None,
+                "reason": None,
+                "deadline": dl.isoformat(),
+                "attempts": [],
+                "inherited_from": None,
+            },
+            t0 + timedelta(seconds=2),
+            2,
+        ),
+        (
+            "AttemptStarted",
+            attempt_id,
+            make_idem("AttemptStarted", attempt_id),
+            {
+                "attempt_id": attempt_id,
+                "task_id": f"{sid}/E1",
+                "task_key": "E1",
+                "inputs": [],
+                "tainted_context": False,
+                "provenance": "stub",
+            },
+            t0 + timedelta(seconds=3),
+            1,
+        ),
+        (
+            "AttemptTainted",
+            attempt_id,
+            make_idem("AttemptTainted", f"{attempt_id}:source_fetch:{call_id}"),
+            {
+                "attempt_id": attempt_id,
+                "reason": "source_fetch",
+                "call_id": call_id,
+                "tool": "papers_get",
+                "is_fetch": True,
+            },
+            t0 + timedelta(seconds=4),
+            1,
+        ),
+        (
+            "SourceFetched",
+            digest,
+            make_idem("SourceFetched", f"{digest}:{call_id}"),
+            {
+                "call_id": call_id,
+                "tool": "papers_get",
+                "digest": digest,
+                "url": "https://example.org/reclass-open",
+            },
+            t0 + timedelta(seconds=5),
+            1,
+        ),
+    ]
+    conn = sqlite3.connect(db_path)
+    try:
+        for seq, (etype, entity_key, idem_key, payload, ts, schema_v) in enumerate(
+            rows, start=1
+        ):
+            raw = canonical_json(payload)
+            conn.execute(
+                "INSERT INTO events("
+                "seq, study_id, type, entity_key, idem_key, payload, ts, "
+                "schema_version, epoch, payload_digest) VALUES ("
+                "?,?,?,?,?,?,?,?,?,?)",
+                (
+                    seq,
+                    sid,
+                    etype,
+                    entity_key,
+                    idem_key,
+                    raw,
+                    ts.isoformat(),
+                    schema_v,
+                    1,
+                    sha256_hex(raw),
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return sid, digest, call_id
+
+
 @pytest.mark.asyncio
 async def test_legacy_reclass_journal_refuses_missing_attempt_provenance(
     tmp_path: Path, clock
 ):
-    """DESIGN_M1 §6.7: unmodified legacy AttemptStarted → typed v10 refuse.
+    """DESIGN_M1 §6.7: legacy AttemptStarted without provenance → fail-closed.
 
-    ``reclassified_fetch_old`` omits provenance. Freeze/study fields are
-    completed for other upcasters; provenance is never patched. Open must
-    raise ``CatalogError`` with ``AttemptStarted.v10:provenance_required``.
+    ``reclassified_fetch_old`` omits provenance. Freeze/study fields may be
+    completed for other upcasters; provenance is never written. Open must
+    raise ``CatalogError`` with ``match=AttemptStarted.v10:provenance_required``.
     """
     import sqlite3
 
@@ -2331,29 +2492,26 @@ async def test_legacy_reclass_journal_refuses_missing_attempt_provenance(
 async def test_reclassified_tool_study_opens_finalizes_uncounted(
     tmp_path: Path, clock
 ):
-    """MAJOR: provenance journal opens under reclassified tool; natural finalize.
+    """MAJOR: authored journal with provenance opens under reclassified tool.
 
-    Committed journal (StudyCreated v2 / PlanAccepted v1 / TaskCreated v2 +
-    AttemptStarted with explicit provenance + AttemptTainted is_fetch=True +
-    SourceFetched). Upcasters run on open. Finalization via tick/deadline —
-    not finalize(trigger=...).
+    Seeded (not remapped legacy) journal: old schema versions + AttemptStarted
+    carrying ``provenance=stub`` as journal fact + AttemptTainted is_fetch=True
+    + SourceFetched. Upcasters run on open. Finalization via tick/deadline.
     """
     from coscientist.core.events.projections import fold_events
     from coscientist.core.execution.source_fetch import load_source_fetch_index_from_writer
 
-    sid, digest, call_id, db = _copy_reclass_provenance_fixture(tmp_path)
-    _assert_raw_fixture_schema_versions(db)
+    sid, digest, call_id = await _seed_reclassify_open_journal(tmp_path, clock)
 
     _install_reclassified_papers_get()
 
     catalog = _catalog_quote()
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog, owner="t2")
-    # Upcasters applied on read (StudyCreated lands at current schema).
     events_open = await rt.store.read_all()
     sc = next(e for e in events_open if e.type == "StudyCreated")
     assert sc.schema_version >= 9
     started = next(e for e in events_open if e.type == "AttemptStarted")
-    assert started.payload["provenance"] == "real"
+    assert started.payload["provenance"] == "stub"
     assert any(e.type == "FetchIntegrityRaised" for e in events_open)
 
     folded = fold_events(events_open)
@@ -2362,8 +2520,7 @@ async def test_reclassified_tool_study_opens_finalizes_uncounted(
 
     idx = await load_source_fetch_index_from_writer(rt.writer)
     assert digest not in idx.digests()
-    assert digest not in idx.digests_for_attempt("att_lit")
-    # Read path must not append further integrity events.
+    assert digest not in idx.digests_for_attempt(_RECLASS_ATTEMPT_ID)
     n_integrity = sum(1 for e in events_open if e.type == "FetchIntegrityRaised")
     await load_source_fetch_index_from_writer(rt.writer)
     assert (
@@ -2388,8 +2545,7 @@ async def test_reclassify_internal_error_survives_reconcile_failure(
     tmp_path: Path, clock, monkeypatch
 ):
     """MAJOR: fold_events fallback keeps internal_error when reconcile raises."""
-    sid, _digest, _call_id, db = _copy_reclass_provenance_fixture(tmp_path)
-    _assert_raw_fixture_schema_versions(db)
+    sid, _digest, _call_id = await _seed_reclassify_open_journal(tmp_path, clock)
     _install_reclassified_papers_get()
 
     async def boom(_writer):
@@ -2415,8 +2571,7 @@ async def test_open_reconcile_lease_lost_propagates(tmp_path: Path, clock, monke
     """LeaseLost from reconcile_fetch_integrity on open must not be swallowed."""
     from coscientist.core.events.errors import LeaseLost
 
-    sid, _digest, _call_id, db = _copy_reclass_provenance_fixture(tmp_path)
-    _assert_raw_fixture_schema_versions(db)
+    sid, _digest, _call_id = await _seed_reclassify_open_journal(tmp_path, clock)
     _install_reclassified_papers_get()
 
     async def boom_lease(_writer):
@@ -2436,8 +2591,7 @@ async def test_open_finalized_study_does_not_append_fetch_integrity(
     tmp_path: Path, clock
 ):
     """MAJOR: reopen of StudyFinalized must not journal FetchIntegrityRaised after it."""
-    sid, _digest, _call_id, db = _copy_reclass_provenance_fixture(tmp_path)
-    _assert_raw_fixture_schema_versions(db)
+    sid, _digest, _call_id = await _seed_reclassify_open_journal(tmp_path, clock)
     _install_reclassified_papers_get()
 
     rt = await open_runtime(
