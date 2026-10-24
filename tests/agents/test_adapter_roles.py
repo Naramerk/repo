@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from coscientist.agents.adapter import LlmAgentAdapter
+from coscientist.agents.prompts.registry import PromptRef
 from coscientist.agents.prompts.roles import (
     ROLE_EXECUTOR_REF,
     ROLE_PLANNER_REF,
@@ -239,7 +240,7 @@ def _adapter(
     *,
     router: FakeToolRouter | None = None,
     role_models: Mapping[str, str] | None = None,
-    role_prompts: Mapping[str, Any] | None = None,
+    role_prompts: Mapping[str, PromptRef] | None = None,
     clock: FakeClock | None = None,
 ) -> LlmAgentAdapter:
     if role_models is None:
@@ -381,7 +382,7 @@ def test_role_prompts_missing_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_role_prompts_non_prompt_ref_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    bad_prompts: Any = {
+    bad_prompts: Mapping[str, object] = {
         "planner": "not-a-ref",
         "executor-route": ROLE_EXECUTOR_REF,
         "tz_spec": ROLE_TZ_SPEC_REF,
@@ -392,7 +393,7 @@ def test_role_prompts_non_prompt_ref_raises(monkeypatch: pytest.MonkeyPatch) -> 
             role_models={"planner": "m", "executor-route": "m", "tz_spec": "m"},
             tool_router=FakeToolRouter(tools={}),
             prompts=role_prompt_registry(),
-            role_prompts=bad_prompts,
+            role_prompts=bad_prompts,  # runtime refuse: values must be PromptRef
             clock=FakeClock(),
         )
 
@@ -487,12 +488,12 @@ async def test_budget_wrong_type_raises(monkeypatch: pytest.MonkeyPatch) -> None
 @pytest.mark.asyncio
 async def test_tools_not_list_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _adapter(_client([], monkeypatch=monkeypatch))
-    bad_tools: Any = ("not", "a", "list")
+    bad_tools: object = ("not", "a", "list")
     with pytest.raises(AgentError, match="tools must be a list"):
         await adapter.run(
             "planner",
             StudyContext(study_id="s", request="r", profile="p"),
-            bad_tools,
+            bad_tools,  # runtime refuse: must be list[Tool]
             _budget(),
         )
 

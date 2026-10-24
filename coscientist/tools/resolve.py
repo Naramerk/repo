@@ -7,9 +7,25 @@ this Protocol + ``call_via_router`` so they never call ``Tool.call`` directly.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Literal, Protocol, Self
+from typing import Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class _ToolSpecName(Protocol):
+    """Minimal ``ToolSpec`` surface for AgentPort allow-lists (name only)."""
+
+    name: str
+
+
+class NamedTool(Protocol):
+    """Allow-list tool entry for ``AgentPort.run`` (DESIGN §7.2 ``tools: list[Tool]``).
+
+    Agents must not import ``tools.contract.Tool``; this Protocol is the resolve-port
+    stand-in keyed by ``spec.name``.
+    """
+
+    spec: _ToolSpecName
 
 
 class ToolNeed(BaseModel):
@@ -48,23 +64,23 @@ class ToolRouter(Protocol):
     async def call(
         self,
         tool_name: str,
-        args: Mapping[str, Any],
+        args: Mapping[str, object],
         *,
         study_id: str,
         task_key: str,
         attempt_id: str,
-    ) -> Mapping[str, Any]: ...
+    ) -> Mapping[str, object]: ...
 
 
 async def call_via_router(
     router: ToolRouter,
     tool_name: str,
-    args: Mapping[str, Any],
+    args: Mapping[str, object],
     *,
     study_id: str,
     task_key: str,
     attempt_id: str,
-) -> Mapping[str, Any]:
+) -> Mapping[str, object]:
     """Agent-facing ToolRouter entry (avoids ``Tool.call`` / bare ``.call`` in agents)."""
     return await router.call(
         tool_name,
