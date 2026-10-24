@@ -37,10 +37,9 @@ from coscientist.core.events.clock import FakeClock
 from coscientist.core.execution.domain import Need
 from coscientist.llm.client import LlmClient
 from coscientist.llm.errors import LlmTransportError
-from coscientist.tools.resolve import ToolNeed
+from coscientist.tools.router import ToolNeed
 from tests.agents.test_adapter_roles import (
     CassetteTransport,
-    FakeToolRouter,
     _exec_out_json,
     _plan_out_json,
 )
@@ -75,7 +74,7 @@ def _artifact_rubric() -> RubricDraft:
     )
 
 
-def _adapter(client: LlmClient, router: FakeToolRouter | StaticToolRouter) -> LlmAgentAdapter:
+def _adapter(client: LlmClient, router: StaticToolRouter) -> LlmAgentAdapter:
     return LlmAgentAdapter(
         client,
         role_models={
@@ -128,7 +127,7 @@ async def _run(
     monkeypatch: pytest.MonkeyPatch,
     bodies: list[bytes],
     require_hypotheses: bool = False,
-    router: FakeToolRouter | StaticToolRouter | None = None,
+    router: StaticToolRouter | None = None,
     max_ticks: int = 20,
     deadline_s: float = 3600.0,
     study_id: str = "two_tasks_study",
@@ -139,18 +138,15 @@ async def _run(
     max_tokens: int = 1_000_000,
     max_tool_calls: int = 50,
     task_text: str = "Build dataset overview and chemical space clustering.",
-) -> tuple[int, dict[str, Any], FakeToolRouter | StaticToolRouter]:
+) -> tuple[int, dict[str, Any], StaticToolRouter]:
     task = tmp_path / "two_tasks.txt"
     task.write_text(task_text, encoding="utf-8")
     if router is None:
-        r: FakeToolRouter | StaticToolRouter = FakeToolRouter(tools=_default_tools())
+        r = StaticToolRouter(tools=_default_tools())
     else:
         r = router
-    if isinstance(r, StaticToolRouter):
-        allowed = r.tool_names
-    else:
-        allowed = frozenset(r.tools)
     adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), r)
+    allowed = r.tool_names
     out = io.StringIO()
     code = await run_study(
         task_path=task,
@@ -203,11 +199,8 @@ async def test_run_study_fulfilled_records_executor_and_usage(tmp_path: Path, mo
     assert summary["usage"][0]["role"] == "tz_spec"
     assert any(u["role"] == "planner" for u in summary["usage"])
     assert any(u["role"] == "executor-route" for u in summary["usage"])
-    assert isinstance(router, FakeToolRouter)
-    assert [name for name, _args in router.calls] == [
-        "dataset_overview",
-        "chemical_space_clustering",
-    ]
+    assert isinstance(router, StaticToolRouter)
+    assert router.tool_names == frozenset({"dataset_overview", "chemical_space_clustering"})
 
 
 @pytest.mark.asyncio
@@ -295,7 +288,7 @@ async def test_run_study_arg_refuses(
 async def test_catalog_version_non_int_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     task = tmp_path / "t.txt"
     task.write_text("x", encoding="utf-8")
-    adapter = _adapter(_client([], monkeypatch=monkeypatch), FakeToolRouter(tools={}))
+    adapter = _adapter(_client([], monkeypatch=monkeypatch), StaticToolRouter(tools={"dataset_overview": {"ok": True}}))
     extras: dict[str, object] = {"catalog_version": "1"}
     with pytest.raises(CliRefuse, match="catalog_version must be int") as ei:
         await run_study(
@@ -510,22 +503,33 @@ def test_cli_refuse_rejects_zero_code() -> None:
 def test_static_tool_router_resolve_and_refuse_args() -> None:
     router = StaticToolRouter(tools={"t1": {"ok": True}})
     assert router.tool_names == frozenset({"t1"})
-    assert router.resolve(ToolNeed(kind="by_name", value="t1")).status == "tool_found"
+    found = router.resolve(ToolNeed(kind="by_name", value="t1"))
+    assert found.status == "tool_found"
+    assert found.server_name == "static"
+    assert found.tool_name == "t1"
     assert router.resolve(ToolNeed(kind="by_name", value="missing")).status == "tool_missing"
 
 
 @pytest.mark.asyncio
 async def test_static_tool_router_call_empty_args_ok() -> None:
+    from coscientist.core.execution.domain import HitlPolicy
+    from coscientist.tools.contract import CallCtx
+
     router = StaticToolRouter(tools={"t1": {"ok": True}})
-    result = await router.call("t1", {}, study_id="s", task_key="k", attempt_id="a")
-    assert result == {"ok": True}
+    ctx = CallCtx(study_id="s", task_key="k", attempt_id="a", hitl_policy=HitlPolicy())
+    result = await router.call("static", "t1", {}, ctx)
+    assert result.data == {"ok": True}
 
 
 @pytest.mark.asyncio
 async def test_static_tool_router_call_nonempty_args_refuses() -> None:
+    from coscientist.core.execution.domain import HitlPolicy
+    from coscientist.tools.contract import CallCtx
+
     router = StaticToolRouter(tools={"t1": {"ok": True}})
+    ctx = CallCtx(study_id="s", task_key="k", attempt_id="a", hitl_policy=HitlPolicy())
     with pytest.raises(ValueError, match="refuses non-empty args"):
-        await router.call("t1", {"x": 1}, study_id="s", task_key="k", attempt_id="a")
+        await router.call("static", "t1", {"x": 1}, ctx)
 
 
 @pytest.mark.asyncio

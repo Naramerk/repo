@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         "--tools-json",
         type=Path,
         required=True,
-        help="JSON object tool_name → result payload for StaticToolRouter (MCP = G7)",
+        help="JSON object tool_name → payload for StaticToolRouter cassette (subclass of MCP ToolRouter)",
     )
     run_p.add_argument("--study-id", type=str, required=True)
     run_p.add_argument(
@@ -340,7 +340,7 @@ async def run_study(
                     code=3,
                 )
             aid = await _require_attempt(rt, draft.task_key)
-            # StaticToolRouter refuses non-empty args; empty PlannedToolCall.args is the contract.
+            # StaticToolRouter cassette refuses non-empty args; empty PlannedToolCall.args.
             exec_run = await adapter.run(
                 "executor-route",
                 ExecutorRouteIn(

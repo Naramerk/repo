@@ -152,6 +152,9 @@ source_modules = ["coscientist.cli"]
 forbidden_modules = ["coscientist.mcp", "google"]
 ignore_imports = [
   "coscientist.cli.http_transport -> httpx",
+  # Concrete MCP ToolRouter (#139) used by LlmAgentAdapter / StaticToolRouter cassette.
+  "coscientist.tools.router -> coscientist.mcp.*",
+  "coscientist.tools.mcp_adapter -> coscientist.mcp.*",
 ]
 unmatched_ignore_imports_alerting = "error"
 
