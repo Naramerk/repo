@@ -32,3 +32,11 @@ class EventWireRefuse(ApiRefuse):
 
 class StudyViewLoopRefuse(ApiRefuse):
     """``DataRootStudyService.study_view`` called under a running event loop."""
+
+
+class CancelByRefuse(ApiRefuse):
+    """``by`` for POST cancel missing, non-str, empty, or whitespace-padded."""
+
+
+class StreamConfigRefuse(ApiRefuse):
+    """WS stream poll interval missing or not a positive number."""

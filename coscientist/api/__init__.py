@@ -1,9 +1,12 @@
-"""HTTP-facing study API surface (DESIGN §9). Core must not import this package."""
+"""HTTP-facing study API (DESIGN §9). FastAPI: ``coscientist.api.app.create_app``."""
 
+from coscientist.api.cancel import post_study_cancel, require_cancel_by
 from coscientist.api.errors import (
     AfterSeqRefuse,
     ApiRefuse,
+    CancelByRefuse,
     EventWireRefuse,
+    StreamConfigRefuse,
     StudyIdRefuse,
     StudyStoreMismatch,
     StudyViewLoopRefuse,
@@ -22,10 +25,12 @@ from coscientist.api.views import (
 __all__ = [
     "AfterSeqRefuse",
     "ApiRefuse",
+    "CancelByRefuse",
     "CreateStudyBody",
     "DataRootStudyService",
     "EventWire",
     "EventWireRefuse",
+    "StreamConfigRefuse",
     "StudyIdRefuse",
     "StudyStoreMismatch",
     "StudyViewLoopRefuse",
@@ -33,6 +38,8 @@ __all__ = [
     "get_study",
     "list_study_events",
     "post_studies",
+    "post_study_cancel",
     "require_after_seq",
+    "require_cancel_by",
     "require_study_id",
 ]
