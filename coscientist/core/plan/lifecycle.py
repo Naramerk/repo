@@ -438,13 +438,11 @@ class LifecycleMixin:
             except UserInputRegistrationError as e:
                 # Fail-closed: never Accept with silently dropped inputs.
                 if isinstance(e.kind, RefusalKind):
-                    reg_kind = e.kind
+                    decision = IntakeRefuse(e.kind, str(e.reason)[:200])
                 else:
-                    reg_kind = RefusalKind.INPUT_INVALID
-                decision = IntakeRefuse(
-                    reg_kind,
-                    str(e.reason)[:200],
-                )
+                    decision = IntakeRefuse(
+                        RefusalKind.INPUT_INVALID, str(e.reason)[:200]
+                    )
                 user_ids, user_events = [], []
             except Exception as e:  # noqa: BLE001 — registration bugs → refuse
                 decision = IntakeRefuse(
@@ -628,7 +626,8 @@ class LifecycleMixin:
         LOOP_PLAN_REFUSED_LINE = "не выполнено: план отклонён (LoopSpec)"
         named_subs: list[QuestionSpec] = []
         # All plan validation → PlanRefused (never raw ValueError to callers).
-        raw_loops: list[LoopSpec] | list[dict[str, object]] | None = loops
+        raw_loops: list[LoopSpec] | list[dict[str, object]] | None
+        raw_loops = loops
         loop_specs: list[LoopSpec] = []
         plan_refuse = None
         try:
