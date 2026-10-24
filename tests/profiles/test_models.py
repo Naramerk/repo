@@ -126,8 +126,10 @@ def test_mcp_http_url_whitespace_refused() -> None:
 def test_mcp_duplicate_names_refused() -> None:
     a = StdioServerConfig(transport="stdio", name="dup", command="a", args=(), env_keys=())
     b = StdioServerConfig(transport="stdio", name="dup", command="b", args=(), env_keys=())
-    with pytest.raises(ValidationError, match="mcp_servers names must be unique"):
+    with pytest.raises(ValidationError) as ei:
         _profile(mcp_servers=(a, b))
+    assert _err(ei.value) == ((), "value_error")
+    assert "mcp_servers names must be unique" in str(ei.value)
 
 
 def test_role_strict_tools_and_model() -> None:
@@ -163,8 +165,10 @@ def test_whitespace_keys_and_tuples() -> None:
 
 
 def test_unknown_role_and_missing_budget() -> None:
-    with pytest.raises(ValidationError, match="unknown roles"):
+    with pytest.raises(ValidationError) as ei:
         _profile(routes={"medical": _route(role="missing")})
+    assert _err(ei.value) == ((), "value_error")
+    assert "unknown roles" in str(ei.value)
     with pytest.raises(ValidationError) as ei:
         RouteConfig.model_validate({"role": "medical_agent"})
     assert _err(ei.value)[0] == ("budget",)

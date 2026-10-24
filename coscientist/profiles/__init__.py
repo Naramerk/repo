@@ -8,11 +8,8 @@ from coscientist.profiles.models import (
     RouteConfig,
 )
 
-Identifier = RoleName  # same Annotated alias; avoids profiles→mcp in __init__
-
 __all__ = [
     "AlembicMode",
-    "Identifier",
     "Profile",
     "RoleConfig",
     "RoleName",
