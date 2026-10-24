@@ -314,6 +314,131 @@ async def test_gzip_decompression_bomb_guard() -> None:
         await fetcher.fetch("https://cdn.example/bomb.gz", max_bytes=100, timeout_s=1.0)
 
 
+def _rss_kb() -> int:
+    with open("/proc/self/status", encoding="utf-8") as fh:
+        for line in fh:
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1])
+    raise RuntimeError("VmRSS not found")
+
+
+def _zlib_zeros_bomb(*, uncompressed_mib: int = 401) -> bytes:
+    """~400 KiB zlib that expands to ``uncompressed_mib`` MiB if flush()'d unbounded."""
+    import zlib as zlib_mod
+
+    compressor = zlib_mod.compressobj(9)
+    chunks: list[bytes] = []
+    block = b"\x00" * (1024 * 1024)
+    for _ in range(uncompressed_mib):
+        chunks.append(compressor.compress(block))
+    chunks.append(compressor.flush())
+    return b"".join(chunks)
+
+
+@pytest.mark.asyncio
+async def test_deflate_bomb_respects_max_bytes_without_rss_spike() -> None:
+    """Bounded decompress must not flush() unconsumed_tail (deflate bomb)."""
+    import zlib as zlib_mod
+
+    compressed = _zlib_zeros_bomb(uncompressed_mib=401)
+    assert 300_000 < len(compressed) < 500_000
+    # Same payload leaves a huge unconsumed_tail after a 1 KiB capped read.
+    probe = zlib_mod.decompressobj()
+    _ = probe.decompress(compressed, max_length=1024)
+    assert len(probe.unconsumed_tail) > 300_000
+    del probe
+
+    http = FakeHttp(
+        [
+            _BufStream(
+                200,
+                {
+                    "content-type": "application/octet-stream",
+                    "content-encoding": "deflate",
+                },
+                compressed,
+            )
+        ]
+    )
+    resolver = FakeResolver({"cdn.example": ("8.8.8.8",)})
+    fetcher = _fetcher(http, resolver=resolver, encodings=("deflate",))
+    before = _rss_kb()
+    with pytest.raises(McpResponseLimitError):
+        await fetcher.fetch("https://cdn.example/bomb.z", max_bytes=1024, timeout_s=5.0)
+    delta_kb = _rss_kb() - before
+    # Unbounded flush of this payload grows RSS by ~400 MiB; bounded path must stay tiny.
+    assert delta_kb < 64_000, f"deflate bomb leaked memory: +{delta_kb} KiB RSS"
+
+
+@pytest.mark.asyncio
+async def test_truncated_zlib_deflate_is_protocol_error() -> None:
+    import zlib as zlib_mod
+
+    wrapped = zlib_mod.compress(b"hello-pdf" * 20)
+    truncated = wrapped[:-6]
+    http = FakeHttp(
+        [
+            _BufStream(
+                200,
+                {
+                    "content-type": "application/octet-stream",
+                    "content-encoding": "deflate",
+                },
+                truncated,
+            )
+        ]
+    )
+    resolver = FakeResolver({"cdn.example": ("8.8.8.8",)})
+    fetcher = _fetcher(http, resolver=resolver, encodings=("deflate",))
+    with pytest.raises(McpProtocolError, match="truncated deflate"):
+        await fetcher.fetch("https://cdn.example/trunc.z", max_bytes=1000, timeout_s=1.0)
+
+
+@pytest.mark.asyncio
+async def test_trailing_garbage_after_deflate_is_protocol_error() -> None:
+    import zlib as zlib_mod
+
+    wrapped = zlib_mod.compress(b"hello-pdf") + b"GARBAGE"
+    http = FakeHttp(
+        [
+            _BufStream(
+                200,
+                {
+                    "content-type": "application/octet-stream",
+                    "content-encoding": "deflate",
+                },
+                wrapped,
+            )
+        ]
+    )
+    resolver = FakeResolver({"cdn.example": ("8.8.8.8",)})
+    fetcher = _fetcher(http, resolver=resolver, encodings=("deflate",))
+    with pytest.raises(McpProtocolError, match="trailing garbage"):
+        await fetcher.fetch("https://cdn.example/junk.z", max_bytes=1000, timeout_s=1.0)
+
+
+@pytest.mark.asyncio
+async def test_truncated_gzip_is_protocol_error() -> None:
+    compressed = gzip.compress(b"hello-gzip" * 20)
+    truncated = compressed[:-10]
+    http = FakeHttp(
+        [
+            _BufStream(
+                200,
+                {
+                    "content-type": "application/octet-stream",
+                    "content-encoding": "gzip",
+                },
+                truncated,
+            )
+        ]
+    )
+    resolver = FakeResolver({"cdn.example": ("8.8.8.8",)})
+    fetcher = _fetcher(http, resolver=resolver, encodings=("gzip",))
+    with pytest.raises(McpProtocolError, match="truncated gzip"):
+        await fetcher.fetch("https://cdn.example/trunc.gz", max_bytes=1000, timeout_s=1.0)
+
+
 @pytest.mark.asyncio
 async def test_multi_member_gzip_decompressed() -> None:
     part1 = gzip.compress(b"hello ")
@@ -594,19 +719,23 @@ async def test_e2e_fetcher_dns_rebinding_denied_over_real_socket() -> None:
 
 @pytest.mark.asyncio
 async def test_e2e_fetcher_mixed_answer_denied_over_real_socket() -> None:
+    """Hop1 connects on loopback; hop2 mixed public+private answer is denied."""
+    hits: list[str] = []
+
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
-            self.send_response(200)
-            self.send_header("Content-Type", "application/pdf")
+            hits.append(self.path)
+            self.send_response(302)
+            self.send_header("Location", "http://files.test/next")
             self.end_headers()
-            self.wfile.write(b"%PDF")
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A003
             return
 
     server, port, thread = _start_http_server(Handler)
     transport = HttpxTransport()
-    resolver = FakeResolver({"files.test": ("127.0.0.1", "10.0.0.1")})
+    # First resolve: only loopback → real socket. Second: mixed → deny before connect.
+    resolver = FakeResolver([("127.0.0.1",), ("127.0.0.1", "10.0.0.1")])
     fetcher = _fetcher(
         transport,
         resolver=resolver,
@@ -615,6 +744,7 @@ async def test_e2e_fetcher_mixed_answer_denied_over_real_socket() -> None:
     try:
         with pytest.raises(McpSsrfError):
             await fetcher.fetch(f"http://files.test:{port}/a", max_bytes=1000, timeout_s=2.0)
+        assert hits == ["/a"], f"expected real-socket hop1 hit, got {hits!r}"
     finally:
         await transport.aclose()
         server.shutdown()
@@ -624,12 +754,22 @@ async def test_e2e_fetcher_mixed_answer_denied_over_real_socket() -> None:
 
 @pytest.mark.asyncio
 async def test_e2e_slow_drip_honors_overall_fetch_deadline() -> None:
-    """1 byte / 0.3s must not outlive timeout_s=1.0 (overall wait_for deadline)."""
+    """Redirect + 1 byte/0.3s must not outlive timeout_s=1.0 (overall wait_for)."""
+
+    port_box: dict[str, int] = {}
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
             import time
 
+            if self.path == "/start":
+                self.send_response(302)
+                self.send_header(
+                    "Location",
+                    f"http://files.test:{port_box['port']}/drip",
+                )
+                self.end_headers()
+                return
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Length", "40")
@@ -643,8 +783,9 @@ async def test_e2e_slow_drip_honors_overall_fetch_deadline() -> None:
             return
 
     server, port, thread = _start_http_server(Handler)
+    port_box["port"] = port
     transport = HttpxTransport()
-    resolver = FakeResolver({"files.test": ("127.0.0.1",)})
+    resolver = FakeResolver([("127.0.0.1",), ("127.0.0.1",)])
     fetcher = _fetcher(
         transport,
         resolver=resolver,
@@ -655,9 +796,9 @@ async def test_e2e_slow_drip_honors_overall_fetch_deadline() -> None:
     started = time.monotonic()
     try:
         with pytest.raises(McpTimeoutError):
-            await fetcher.fetch(f"http://files.test:{port}/drip", max_bytes=1000, timeout_s=1.0)
+            await fetcher.fetch(f"http://files.test:{port}/start", max_bytes=1000, timeout_s=1.0)
         elapsed = time.monotonic() - started
-        assert elapsed < 3.0, f"overall deadline not enforced: {elapsed:.2f}s"
+        assert elapsed < 2.0, f"overall deadline not enforced: {elapsed:.2f}s"
     finally:
         await transport.aclose()
         server.shutdown()

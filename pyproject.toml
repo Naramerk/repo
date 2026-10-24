@@ -129,6 +129,8 @@ source_modules = [
   "coscientist.tools",
   "coscientist.agents",
   "coscientist.api",
+  "coscientist.schema",
+  "web",
 ]
 forbidden_modules = ["httpx"]
 

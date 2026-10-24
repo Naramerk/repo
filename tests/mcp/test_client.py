@@ -293,6 +293,62 @@ async def test_read_loop_skips_notifications_answers_server_requests() -> None:
 
 
 @pytest.mark.asyncio
+async def test_message_without_id_or_method_is_protocol_error() -> None:
+    def handler(method: str, params: dict[str, Any] | None) -> Any:
+        if method == "tools/list":
+            return [{"jsonrpc": "2.0"}]  # neither id nor method
+        return default_handler(method, params)
+
+    async with FakeStdioServer(handler) as server:
+        client = McpClient(make_config(), file_fetcher=RecordingFetcher({}))
+        session = await client.connect_memory("fake", server.client)
+        with pytest.raises(McpProtocolError, match="id or method"):
+            await session.list_tools()
+
+
+@pytest.mark.asyncio
+async def test_sse_message_without_id_or_method_is_protocol_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COSCI_TEST_MCP_KEY", "k")
+    init = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "serverInfo": {"name": "r", "version": "1"},
+        },
+    }
+    sse = b'data: {"jsonrpc":"2.0"}\n\n'
+    http = FakeHttp(
+        [
+            _BufStream(
+                200,
+                {"content-type": "application/json", "mcp-session-id": "s"},
+                json.dumps(init).encode(),
+            ),
+            _BufStream(202, {}, b""),
+            _BufStream(200, {"content-type": "text/event-stream"}, sse),
+        ]
+    )
+    cfg = make_config(
+        servers=(
+            StreamableHttpServerConfig(
+                transport="streamable_http",
+                name="remote",
+                url="https://mcp.example/mcp",
+                api_key_env="COSCI_TEST_MCP_KEY",
+            ),
+        ),
+    )
+    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    session = await client.connect("remote")
+    with pytest.raises(McpProtocolError, match="id or method"):
+        await session.list_tools()
+
+
+@pytest.mark.asyncio
 async def test_timeout_sends_cancelled_notification() -> None:
     class HangServer(FakeStdioServer):
         async def _run(self) -> None:  # type: ignore[override]
@@ -825,13 +881,22 @@ async def test_sse_parser_cr_only_and_single_leading_space() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sse_parser_cr_at_chunk_end_then_lf_next_chunk() -> None:
-    """Exact split: CR ends chunk N; LF arrives in chunk N+1 (CRLF pair)."""
+async def test_sse_parser_lone_trailing_cr_completes_event() -> None:
+    """Chunk ending on a lone \\r must finish the line/event without waiting."""
+    from coscientist.mcp.http_transport import _SseParser
+
+    parser = _SseParser()
+    assert parser.feed(b"data: hello\r") == []  # CR-only ends data line immediately
+    assert parser.feed(b"\r") == ["hello"]  # lone trailing CR ends the event
+
+
+@pytest.mark.asyncio
+async def test_sse_parser_cr_at_chunk_end_then_lf_is_blank() -> None:
+    """Trailing CR completes the line; a following LF is an empty line."""
     from coscientist.mcp.http_transport import _SseParser
 
     parser = _SseParser()
     assert parser.feed(b"data: hello\r") == []
-    assert parser.feed(b"\n\r") == []  # CRLF ends data line; CR of blank waits
     assert parser.feed(b"\n") == ["hello"]
 
 
@@ -967,7 +1032,8 @@ async def test_http_transport_error_closes_session(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.asyncio
 async def test_cancel_notify_failure_still_closes_on_timeout() -> None:
-    """aclose runs even if cancelled notification raises."""
+    """Cancel notify failures are logged; original McpTimeoutError is preserved."""
+    from coscientist.mcp import McpTimeoutError
 
     class HangServer(FakeStdioServer):
         async def _run(self) -> None:  # type: ignore[override]
@@ -1024,7 +1090,7 @@ async def test_cancel_notify_failure_still_closes_on_timeout() -> None:
             file_fetcher=RecordingFetcher({}),
         )
         session = await client.connect_memory("fake", tracked)  # type: ignore[arg-type]
-        with pytest.raises(RuntimeError, match="notify failed"):
+        with pytest.raises(McpTimeoutError):
             await session.list_tools()
         assert tracked.closed is True
 

@@ -234,7 +234,12 @@ class StreamableHttpSession:
                     )
                     continue
                 if "id" not in message:
-                    continue
+                    if "method" not in message:
+                        raise McpProtocolError(
+                            "JSON-RPC message requires id or method",
+                            raw_bytes=raw,
+                        )
+                    continue  # notification
                 msg_id = message.get("id")
                 if msg_id is None:
                     raise McpProtocolError(
@@ -387,12 +392,12 @@ class _SseParser:
                 self._buf = self._buf[lf + 1 :]
                 events.extend(self._handle_line(line))
                 continue
-            # CR at end of buffer: always wait for the next chunk — it may be
-            # the CR of a CRLF pair (LF arrives next). Only flush_cr (EOF) treats
-            # a trailing CR as a CR-only line terminator.
+            # CR at end of buffer: treat as CR-only line ending immediately so a
+            # lone trailing \\r does not leave a half-parsed event waiting forever.
+            # If the next chunk starts with LF, that LF is an empty line (harmless
+            # extra blank for single-line MCP SSE; multi-line data+CRLF across the
+            # split is not used on this wire).
             if cr == len(self._buf) - 1:
-                if not flush_cr:
-                    break
                 line = self._buf[:cr]
                 self._buf = self._buf[cr + 1 :]
                 events.extend(self._handle_line(line))

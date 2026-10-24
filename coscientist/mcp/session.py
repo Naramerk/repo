@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from typing import Any
 
@@ -23,6 +24,7 @@ from coscientist.mcp.types import CallToolReply, ListToolsReply, McpTool
 from coscientist.mcp.urls import uris_from_call_result
 
 _METHOD_NOT_FOUND = -32601
+_LOG = logging.getLogger(__name__)
 
 
 class McpSession:
@@ -211,12 +213,18 @@ class McpSession:
         await self._drain_outbound()
 
     async def _cancel_and_close(self, req_id: int) -> None:
-        """Send cancelled notification, always aclose; preserve the caller's error."""
+        """Best-effort cancelled notification, then always aclose.
+
+        Failures while sending cancel are logged and swallowed so the original
+        ``McpTimeoutError`` from the caller is preserved.
+        """
         try:
             await self._notify(
                 "notifications/cancelled",
                 {"requestId": req_id, "reason": "timeout"},
             )
+        except Exception:
+            _LOG.exception("failed to send notifications/cancelled for request %s", req_id)
         finally:
             await self.aclose()
 
@@ -326,7 +334,13 @@ class McpSession:
                 await self._fail_close()
                 raise McpProtocolError("JSON-RPC message must be an object", raw_bytes=raw)
             if "id" not in message:
-                continue
+                if "method" not in message:
+                    await self._fail_close()
+                    raise McpProtocolError(
+                        "JSON-RPC message requires id or method",
+                        raw_bytes=raw,
+                    )
+                continue  # notification
             if "method" in message:
                 await self._write(
                     {

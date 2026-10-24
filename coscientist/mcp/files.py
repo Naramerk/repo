@@ -197,6 +197,55 @@ async def _read_limited(
     return b"".join(chunks)
 
 
+def _decompress_obj_limited(
+    dec: zlib.decompressobj,
+    data: bytes,
+    *,
+    max_bytes: int,
+    out: bytearray,
+) -> None:
+    """Feed ``data`` into ``dec`` under ``max_bytes``; never call unbounded flush()."""
+    remaining = data
+    while remaining:
+        room = max_bytes - len(out) + 1
+        if room <= 0:
+            raise McpResponseLimitError(
+                "decompressed file exceeds max_file_bytes",
+                limit=max_bytes,
+            )
+        piece = dec.decompress(remaining, max_length=room)
+        out.extend(piece)
+        if len(out) > max_bytes:
+            raise McpResponseLimitError(
+                "decompressed file exceeds max_file_bytes",
+                limit=max_bytes,
+            )
+        remaining = dec.unconsumed_tail
+        if not piece and remaining:
+            # No progress at the size cap → over limit.
+            raise McpResponseLimitError(
+                "decompressed file exceeds max_file_bytes",
+                limit=max_bytes,
+            )
+    # Drain any buffered output without flush() (flush ignores max_length → bomb).
+    while not dec.eof:
+        room = max_bytes - len(out) + 1
+        if room <= 0:
+            raise McpResponseLimitError(
+                "decompressed file exceeds max_file_bytes",
+                limit=max_bytes,
+            )
+        piece = dec.decompress(b"", max_length=room)
+        if not piece:
+            break
+        out.extend(piece)
+        if len(out) > max_bytes:
+            raise McpResponseLimitError(
+                "decompressed file exceeds max_file_bytes",
+                limit=max_bytes,
+            )
+
+
 def _gunzip_limited(data: bytes, *, max_bytes: int) -> bytes:
     """Decompress gzip, including multi-member streams, under ``max_bytes``."""
     out = bytearray()
@@ -204,29 +253,11 @@ def _gunzip_limited(data: bytes, *, max_bytes: int) -> bytes:
     try:
         while remaining:
             dec = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
-            room = max_bytes - len(out) + 1
-            piece = dec.decompress(remaining, max_length=room)
-            out.extend(piece)
-            if len(out) > max_bytes:
-                raise McpResponseLimitError(
-                    "decompressed file exceeds max_file_bytes",
-                    limit=max_bytes,
-                )
-            if dec.unconsumed_tail and len(out) >= max_bytes:
-                raise McpResponseLimitError(
-                    "decompressed file exceeds max_file_bytes",
-                    limit=max_bytes,
-                )
-            out.extend(dec.flush())
-            if len(out) > max_bytes:
-                raise McpResponseLimitError(
-                    "decompressed file exceeds max_file_bytes",
-                    limit=max_bytes,
-                )
-            remaining = dec.unused_data
-            if not remaining:
-                break
+            _decompress_obj_limited(dec, remaining, max_bytes=max_bytes, out=out)
             if not dec.eof:
+                raise McpProtocolError("truncated gzip member")
+            remaining = dec.unused_data
+            if remaining and not dec.eof:
                 raise McpProtocolError("truncated gzip member")
     except zlib.error as exc:
         raise McpProtocolError("gzip decompression failed") from exc
@@ -235,18 +266,17 @@ def _gunzip_limited(data: bytes, *, max_bytes: int) -> bytes:
 
 def _inflate_limited(data: bytes, *, max_bytes: int) -> bytes:
     """Decompress zlib-wrapped deflate only (no silent raw-deflate fallback)."""
+    out = bytearray()
     try:
         dec = zlib.decompressobj()  # zlib wrapper (RFC 1950) — exactly one decoder
-        out = dec.decompress(data, max_length=max_bytes + 1)
-        out += dec.flush()
+        _decompress_obj_limited(dec, data, max_bytes=max_bytes, out=out)
     except zlib.error as exc:
         raise McpProtocolError("deflate decompression failed") from exc
-    if len(out) > max_bytes:
-        raise McpResponseLimitError(
-            "decompressed file exceeds max_file_bytes",
-            limit=max_bytes,
-        )
-    return out
+    if not dec.eof:
+        raise McpProtocolError("truncated deflate stream")
+    if dec.unused_data:
+        raise McpProtocolError("trailing garbage after deflate stream")
+    return bytes(out)
 
 
 def _header(headers: Mapping[str, str], name: str) -> str | None:
