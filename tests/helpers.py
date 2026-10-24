@@ -11,6 +11,7 @@ from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_r
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
+    Need,
     RequirementRef,
     TaskSpec,
 )
@@ -18,6 +19,21 @@ from coscientist.core.execution.executor import Executor
 from coscientist.core.execution.runtime_factory import close_runtime as close_runtime
 from coscientist.core.execution.runtime_factory import open_runtime as _open_runtime_core
 from tests.checks.minimal_test_catalog import minimal_test_catalog
+
+_TEST_NEED = Need(needed=False, reason="test_omit_need")
+
+
+def _with_test_plan_needs(rt: Any) -> Any:
+    """Fill omitted Need kwargs only; explicit None still refuses (prod path)."""
+    orig = rt.accept_plan
+
+    async def accept_plan(tasks: Any, *args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("hypotheses", _TEST_NEED)
+        kwargs.setdefault("literature", _TEST_NEED)
+        return await orig(tasks, *args, **kwargs)
+
+    rt.accept_plan = accept_plan  # type: ignore[method-assign]
+    return rt
 
 
 async def open_runtime(
@@ -36,12 +52,13 @@ async def open_runtime(
     # ``runtime_cls=None`` must not bypass the API runtime (setdefault skips None).
     if kwargs.get("runtime_cls") is None:
         kwargs["runtime_cls"] = ApiStudyRuntime
-    return await _open_runtime_core(
+    rt = await _open_runtime_core(
         data_root,
         study_id,
         catalog=catalog if catalog is not None else minimal_test_catalog(),
         **kwargs,
     )
+    return _with_test_plan_needs(rt)
 
 
 async def open_runtime_experimental(
@@ -56,12 +73,13 @@ async def open_runtime_experimental(
         open_runtime as _open_exp,
     )
 
-    return await _open_exp(
+    rt = await _open_exp(
         data_root,
         study_id,
         catalog=catalog if catalog is not None else minimal_test_catalog(),
         **kwargs,
     )
+    return _with_test_plan_needs(rt)
 
 
 class RuntimeLike(Protocol):

@@ -23,6 +23,7 @@ from coscientist.core.events.ports import EventStore
 from coscientist.core.execution.domain import (
     Budget,
     HitlPolicy,
+    Need,
     Plan,
     QuestionSpec,
     Study,
@@ -403,8 +404,8 @@ class LifecycleMixin:
         spec_output: dict[str, Any] | None = None,
         expand_after: list[str] | None = None,
         loops: list[Any] | None = None,
-        hypotheses: Any | None = None,
-        literature: Any | None = None,
+        hypotheses: Need | dict[str, Any] | None = None,
+        literature: Need | dict[str, Any] | None = None,
     ) -> str:
         """Accept a plan revision.
 

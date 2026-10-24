@@ -509,14 +509,16 @@ def _plan_accepted_v10_to_v11_pr15_kinds(payload: dict[str, Any]) -> dict[str, A
 
 
 def _plan_accepted_v11_to_v12_need(payload: dict[str, Any]) -> dict[str, Any]:
-    """G4: Plan.hypotheses / Plan.literature Need; absent → legacy_absent."""
-    from coscientist.core.plan.need import legacy_absent_need
+    """G4: Plan.hypotheses / Plan.literature Need; missing key → legacy_absent.
 
+    Events must not import ``core.plan.need``. Explicit ``None`` is left alone
+    (fail-closed at Plan validate); only a missing key is filled.
+    """
     out = dict(payload)
-    absent = legacy_absent_need().model_dump(mode="json")
-    if "hypotheses" not in out or out["hypotheses"] is None:
+    absent = {"needed": False, "reason": "legacy_absent"}
+    if "hypotheses" not in out:
         out["hypotheses"] = dict(absent)
-    if "literature" not in out or out["literature"] is None:
+    if "literature" not in out:
         out["literature"] = dict(absent)
     return out
 
@@ -697,9 +699,9 @@ def _study_created_v12_to_v13_catalog_version(payload: dict[str, Any]) -> dict[s
 
 
 def _study_created_v13_to_v14_require_hypotheses(payload: dict[str, Any]) -> dict[str, Any]:
-    """G4: Study.require_hypotheses; absent on legacy journals → False (profile default)."""
+    """G4: Study.require_hypotheses; missing key on legacy journals → False."""
     out = dict(payload)
-    if "require_hypotheses" not in out or out["require_hypotheses"] is None:
+    if "require_hypotheses" not in out:
         out["require_hypotheses"] = False
     return out
 

@@ -9,9 +9,6 @@ from coscientist.core.execution.domain import Need
 
 NeedKind = Literal["hypotheses", "literature"]
 
-# Upcaster-only reason when PlanAccepted predates Need fields.
-LEGACY_ABSENT_REASON = "legacy_absent"
-
 
 class PlanNeedRefuse(ValueError):
     """Typed refuse for Need / profile contradictions (not a silent fix)."""
@@ -24,40 +21,18 @@ def validate_need(need: Need | dict[str, Any]) -> Need:
     return Need.model_validate(need)
 
 
-def legacy_absent_need() -> Need:
-    """Need for PlanAccepted upcast when hypotheses/literature were absent."""
-    return Need(needed=False, reason=LEGACY_ABSENT_REASON)
+def need_from_plan_blob(prev: Mapping[str, Any] | None, field: NeedKind) -> Need:
+    """Carry Need from active plan blob. Missing after upcast = corruption → refuse.
 
-
-def need_from_plan_blob(
-    prev: Mapping[str, Any] | None,
-    field: NeedKind,
-) -> Need:
-    """Carry Need from the active plan blob; absent → legacy_absent_need."""
-    if prev is None:
-        return legacy_absent_need()
-    raw = prev.get(field)
-    if raw is None:
-        return legacy_absent_need()
-    return validate_need(raw)
-
-
-def profile_default_need(*, kind: NeedKind, require_hypotheses: bool) -> Need:
-    """Default Need when accept_plan omits the field — from frozen Study flag only.
-
-    ``literature`` is never forced by ``require_hypotheses`` (hypotheses-only).
+    ``legacy_absent`` is upcaster-only (events layer); never synthesized here.
     """
-    if kind == "hypotheses" and require_hypotheses:
-        return Need(needed=True, reason="profile_requires_hypotheses")
-    if kind == "hypotheses":
-        return Need(needed=False, reason="profile_optional_hypotheses")
-    return Need(needed=False, reason="profile_optional_literature")
+    if prev is None or field not in prev or prev[field] is None:
+        raise PlanNeedRefuse(f"plan_need_corrupt:missing_{field}")
+    return validate_need(prev[field])
 
 
 def assert_profile_hypotheses_satisfied(
-    hypotheses: Need,
-    *,
-    require_hypotheses: bool,
+    hypotheses: Need, *, require_hypotheses: bool
 ) -> None:
     """Refuse explicit ``needed=False`` when the study profile requires hypotheses."""
     if require_hypotheses and not hypotheses.needed:
@@ -72,22 +47,12 @@ def resolve_plan_needs(
     literature: Need | dict[str, Any] | None,
     require_hypotheses: bool,
 ) -> tuple[Need, Need]:
-    """Resolve Plan.hypotheses / Plan.literature for accept_plan.
-
-    Explicit values are validated. Omitted values come from
-    ``profile_default_need`` (Study.require_hypotheses), never from key shape.
-    """
+    """Resolve Plan Needs for accept_plan. Omitted → PlanNeedRefuse (planner decides)."""
     if hypotheses is None:
-        hyp = profile_default_need(
-            kind="hypotheses", require_hypotheses=require_hypotheses
-        )
-    else:
-        hyp = validate_need(hypotheses)
+        raise PlanNeedRefuse("plan_need_required:hypotheses")
     if literature is None:
-        lit = profile_default_need(
-            kind="literature", require_hypotheses=require_hypotheses
-        )
-    else:
-        lit = validate_need(literature)
+        raise PlanNeedRefuse("plan_need_required:literature")
+    hyp = validate_need(hypotheses)
+    lit = validate_need(literature)
     assert_profile_hypotheses_satisfied(hyp, require_hypotheses=require_hypotheses)
     return hyp, lit
