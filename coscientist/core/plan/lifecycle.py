@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -49,6 +49,7 @@ from coscientist.core.execution.domain import (
     TaskState,
     validate_budget_for_create,
 )
+from coscientist.core.execution.input_limits import UserInput
 from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
 from coscientist.core.plan.intake import IntakeAccept, IntakeRefuse, SafetyPort, intake
 from coscientist.core.plan.need import resolve_plan_needs
@@ -319,7 +320,7 @@ class LifecycleMixin:
         max_task_budget_share: float = 1.0,
         max_proposals: int = 3,
         require_hypotheses: bool,
-        inputs: Sequence[object] = (),
+        inputs: Sequence[UserInput | Mapping[str, object] | bytes | str] | None = None,
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,
         as_of: datetime | None = None,
@@ -404,7 +405,10 @@ class LifecycleMixin:
                     decision = IntakeRefuse(refuse_kind, str(refuse_reason)[:200])
                 else:
                     limits = merged
-                    intake_inputs: list[object] = list(inputs)
+                    if inputs is None:
+                        intake_inputs: list[UserInput | Mapping[str, object] | bytes | str] = []
+                    else:
+                        intake_inputs = list(inputs)
                     decision = await intake(
                         request,
                         intake_inputs,
@@ -587,12 +591,12 @@ class LifecycleMixin:
         tasks: list[TaskSpec],
         *,
         questions: list[QuestionSpec] | None = None,
-        subquestions: Sequence[QuestionSpec] = (),
+        subquestions: Sequence[QuestionSpec] | None = None,
         rollup: str = "all",
         revision: int = 1,
         spec_output: dict[str, object] | None = None,
-        expand_after: Sequence[str] = (),
-        loops: Sequence[LoopSpec | dict[str, object]] = (),
+        expand_after: Sequence[str] | None = None,
+        loops: Sequence[LoopSpec | dict[str, object]] | None = None,
         hypotheses: Need | None = None,
         literature: Need | None = None,
     ) -> str:
@@ -628,7 +632,10 @@ class LifecycleMixin:
         # All plan validation → PlanRefused (never raw ValueError to callers).
         raw_loops = loops
         loop_specs: list[LoopSpec] = []
-        expand_after_keys: list[str] = list(expand_after)
+        if expand_after is None:
+            expand_after_keys: list[str] = []
+        else:
+            expand_after_keys = list(expand_after)
         plan_refuse = None
         try:
             parsed_tasks: list[TaskSpec] = []
@@ -644,11 +651,12 @@ class LifecycleMixin:
                 raise ValueError("questions required (pass [] if empty; or pass spec_output)")
             questions = list(questions)
             parsed_subs: list[QuestionSpec] = []
-            for s in subquestions:
-                if isinstance(s, QuestionSpec):
-                    parsed_subs.append(s)
-                else:
-                    parsed_subs.append(QuestionSpec.model_validate(s))
+            if subquestions is not None:
+                for s in subquestions:
+                    if isinstance(s, QuestionSpec):
+                        parsed_subs.append(s)
+                    else:
+                        parsed_subs.append(QuestionSpec.model_validate(s))
             questions, named_subs = merge_plan_questions(questions, parsed_subs)
             from coscientist.core.plan.decomposes import stamp_question_origins
 
@@ -939,10 +947,10 @@ class LifecycleMixin:
 
     async def _known_question_texts(self) -> dict[str, str]:
         texts: dict[str, str] = {}
-        plans: Sequence[object] = list(self.plans.values())
-        if not plans:
-            plans = await self.store.get_projection("plans")
-        for plan in plans:
+        plan_rows: list[Mapping[str, object]] = list(self.plans.values())
+        if not plan_rows:
+            plan_rows = list(await self.store.get_projection("plans"))
+        for plan in plan_rows:
             if not isinstance(plan, dict):
                 raise ValueError(f"plan projection must be a mapping, got {type(plan).__name__}")
             raw_qs = plan.get("questions")
@@ -950,8 +958,7 @@ class LifecycleMixin:
                 raise ValueError("plan questions required (got None)")
             if not isinstance(raw_qs, list):
                 raise ValueError(f"plan questions must be a list, got {type(raw_qs).__name__}")
-            plan_questions: list[object] = list(raw_qs)
-            for q in plan_questions:
+            for q in raw_qs:
                 if not isinstance(q, dict):
                     continue
                 qid = str(q.get("id", ""))
