@@ -16,6 +16,29 @@
 - Parity: [DESIGN §7.1](docs/DESIGN.md#71-роли-тонкие-агенты-typed-io) /
   [§5.1](docs/DESIGN.md#51-типы); [CAP #5](docs/CAPABILITIES.md) / [#27](docs/CAPABILITIES.md#cap-27).
 
+### Benchmark harness — runner/Usage + usage.jsonl/result.json (plan item 4) [M1]
+- Runner/suite models: `UsageRecorded` (DESIGN §10 payload; harness accounting
+  shape — journal event owned by scheduler S1 / #129), `QualityObservation`,
+  `RunnerSuccess`/`RunnerRefuse`, `TimedRunOk`/`TimedRunRefused`,
+  `TaskComparison`, `BenchSuiteResult`. Tokens via `coscientist.llm.types.Usage`;
+  LLM calls = `len(usage_recorded)` (`llm_call_count` / `token_total`) — **no**
+  harness `CallCounts`.
+- `bench/write_artifacts.py`: per-run `usage.jsonl` + `result.json` (HER fields:
+  status, dur_s, llm_calls, tokens, exp_tasks, evidence, record_result).
+  [plan item 4](docs/plan/benchmark-harness.md); [DESIGN §10](docs/DESIGN.md#10-наблюдаемость)
+  / [§12](docs/DESIGN.md#12-паритет-с-эталоном).
+- Review fix: `TaskComparison` requires matching task ids; writers cover
+  parent-not-dir; `assert_never` on unknown run (no unreachable-branch test);
+  `ruff format` clean.
+- Alligator fix: shared `QualityBase` → `QualityExpectation` /
+  `QualityObservation(+record_result)` (correct class in unique-evidence errors);
+  drop unused `RunnerRawResult`; tests via `model_validate`/`setattr` (no
+  `# type: ignore`); reject cases parametrized with `ids` + exact `match=`
+  (no `if "unique" in match` heuristics).
+- Crocodile fix: drop tautological `hasattr`/`"estimated" not in` asserts;
+  usage.jsonl objects compared to independent expected dicts; split empty
+  `token_total` / `llm_call_count` cases into separate tests.
+
 ### Benchmark harness — task + quality models (plan item 3) [M1]
 - Add `bench/models.py`: `EvidenceOutcomeCount`, `QualityExpectation` (status,
   exp_tasks, evidence tallies — exact-compare fields only), `BenchTask`,
