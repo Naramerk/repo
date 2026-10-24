@@ -197,6 +197,39 @@ async def test_router_open_refuses_server_missing_from_client() -> None:
         await router.open(client)
 
 
+@pytest.mark.asyncio
+async def test_router_aclose_oserror_becomes_tool_router_error() -> None:
+    cfg = _router_cfg(_route(MCP_SERVER_PAPERS_SEARCH))
+    router = ToolRouter(cfg)
+    client = make_client(
+        make_config(
+            servers=(
+                StdioServerConfig(
+                    transport="stdio",
+                    name=MCP_SERVER_PAPERS_SEARCH,
+                    command=sys.executable,
+                    args=("-c", "pass"),
+                    env_keys=(),
+                ),
+            )
+        ),
+        file_fetcher=_NoFetch(),
+    )
+    async with FakeStdioServer(default_handler) as server:
+        session = await client.connect_memory(MCP_SERVER_PAPERS_SEARCH, server.client)
+        await router.attach_session(session, server_name=MCP_SERVER_PAPERS_SEARCH)
+
+        async def _boom() -> None:
+            raise OSError("boom-close")
+
+        session.aclose = _boom  # type: ignore[method-assign]
+        with pytest.raises(ToolRouterError, match="session close failed") as ei:
+            await router.aclose()
+        assert isinstance(ei.value.__cause__, OSError)
+        with pytest.raises(ToolRouterError, match="not open"):
+            router.require_tool(MCP_SERVER_PAPERS_SEARCH, "echo")
+
+
 _STDIO_ECHO = textwrap.dedent(
     """
     import json, sys

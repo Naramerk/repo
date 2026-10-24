@@ -11,11 +11,12 @@ no discovery, no silent defaults.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from coscientist.mcp.errors import McpConfigError
+from coscientist.mcp.errors import McpError
 from coscientist.tools.contract import CallCtx, ToolOutput
 from coscientist.tools.mcp_adapter import (
     McpAdapterError,
@@ -42,6 +43,15 @@ def _require_id(value: str, *, label: str) -> str:
     if any(ch.isspace() for ch in value):
         raise ValueError(f"{label} must not contain whitespace: {value!r}")
     return value
+
+
+async def _aclose_sessions(sessions: list[Any]) -> None:
+    """Close sessions; first ``McpError``/``OSError`` → typed ``ToolRouterError``."""
+    for session in sessions:
+        try:
+            await session.aclose()
+        except (McpError, OSError) as exc:
+            raise ToolRouterError(f"session close failed: {exc}") from exc
 
 
 class McpServerRoute(BaseModel):
@@ -120,16 +130,18 @@ class ToolRouter:
                         route.server_name,
                         bindings=dict(route.tools),
                     )
-                except (McpAdapterError, McpConfigError) as exc:
+                except (McpAdapterError, McpError) as exc:
                     raise ToolRouterError(f"failed to bind server {route.server_name!r}: {exc}") from exc
                 opened.append(session)
                 for key, tool in tools.items():
                     if key in bound:
                         raise ToolRouterError(f"duplicate MCP tool key {key!r}")
                     bound[key] = tool
-        except BaseException:  # audit-ok[broad_except]: open() must aclose partial binds on CancelledError too
-            for session in opened:
-                await session.aclose()
+        except ToolRouterError:
+            await _aclose_sessions(opened)
+            raise
+        except asyncio.CancelledError:
+            await _aclose_sessions(opened)
             raise
         self._sessions = opened
         self._tools = bound
@@ -144,7 +156,7 @@ class ToolRouter:
                 server_name=server_name,
                 bindings=dict(route.tools),
             )
-        except McpAdapterError as exc:
+        except (McpAdapterError, McpError) as exc:
             raise ToolRouterError(str(exc)) from exc
         for key, tool in tools.items():
             if key in self._tools:
@@ -154,17 +166,11 @@ class ToolRouter:
         self._sync_opened()
 
     async def aclose(self) -> None:
-        errors: list[BaseException] = []
-        for session in self._sessions:
-            try:
-                await session.aclose()
-            except BaseException as exc:  # audit-ok[broad_except]: aclose collects CancelledError then re-raises first
-                errors.append(exc)
+        sessions = self._sessions
         self._sessions = []
         self._tools = {}
         self._opened = False
-        if errors:
-            raise ToolRouterError(f"session close failed: {errors[0]}") from errors[0]
+        await _aclose_sessions(sessions)
 
     def require_tool(self, server_name: str, tool_name: str) -> McpBoundTool:
         """Fail-closed lookup of a bound tool."""
