@@ -33,6 +33,11 @@ from coscientist.core.execution.quorum import bind_input_groups
 # the next attempt; not a domain default guessed from data.
 RETRY_BACKOFF_S = 0.05
 
+# Writer schema pins (events.py EventEnvelope default left to #38).
+VERDICT_SNAPSHOTS_RECORDED_SCHEMA_VERSION = 1
+ATTEMPT_CLOSED_SCHEMA_VERSION = 2
+TASK_DONE_SCHEMA_VERSION = 2
+
 # TaskReason → CloseReason for cancel_task AttemptClosed (explicit; no silent CANCELLED).
 _CANCEL_CLOSE_REASON: dict[str, CloseReason] = {
     CloseReason.RESULT.value: CloseReason.RESULT,
@@ -88,9 +93,8 @@ def _attempt_closed(att: dict[str, Any], *, ctx: str) -> bool:
 
 
 def _attempt_charged(att: dict[str, Any], *, ctx: str) -> bool:
-    """True if attempt is charged (absent on legacy journals ⇒ not charged)."""
-    del ctx
-    return bool(att.get("charged"))
+    """True if attempt is charged — ``charged`` is required on journal rows."""
+    return bool(require_journal_field(att, "charged", ctx=ctx))
 
 
 def _attempt_role_from_reviews(runtime: Any, task_id: str) -> str:
@@ -153,15 +157,26 @@ class AttemptsMixin:
                 "runtime._foreach_children required",
                 field="_foreach_children",
             )
-        for d in task.spec.depends_on:
-            # PR11: loop:<id> barrier — ready after until-met or LoopCapped.
-            # Unknown / dropped loop never becomes ready; ``refuse_orphaned_loop_barriers``
-            # SKIPPED-refuses dependents (fail-closed, no hang).
-            if str(d).startswith("loop:"):
-                from coscientist.core.plan.loop import loop_is_complete, parse_loop_dep
+        # PR11: exact loop:<id> barriers (LOOP_DEP_PREFIX) vs known LoopSpecs.
+        # Unknown / dropped loop never becomes ready; ``refuse_orphaned_loop_barriers``
+        # SKIPPED-refuses dependents (fail-closed, no hang).
+        from coscientist.core.plan.loop import (
+            _loop_state,
+            _loops_from_plans,
+            is_loop_dep,
+            loop_is_complete,
+            parse_loop_dep,
+        )
 
+        known_loops = {ls.loop_id for ls in _loops_from_plans(self)} | set(  # type: ignore[arg-type]
+            _loop_state(self)  # type: ignore[arg-type]
+        )
+        for d in task.spec.depends_on:
+            if is_loop_dep(str(d)):
                 lid = parse_loop_dep(d)
-                if lid is None or not loop_is_complete(self, lid):  # type: ignore[arg-type]
+                if lid is None or lid not in known_loops:
+                    return False
+                if not loop_is_complete(self, lid):  # type: ignore[arg-type]
                     return False
                 continue
             # PR10: depends_on a foreach template → wait for all concrete children.
@@ -315,38 +330,35 @@ class AttemptsMixin:
         verdict_snapshots: dict[str, dict] = {r: stored[r] for r in verdict_refs if r in stored}
         need = [r for r in verdict_refs if r not in verdict_snapshots]
         if need and graph is not None and self.study is not None:
-            try:
-                # Scope any_exp to covering tasks for these question refs when possible.
-                cover_keys: set[str] = set()
-                for plan in (getattr(self, "plans", None) or {}).values():
-                    for spec in plan.get("tasks") or []:
-                        addrs = set(spec.get("addresses") or [])
-                        if addrs & set(need):
-                            cover_keys.add(str(spec.get("task_key") or ""))
-                cover_tasks = [t for t in self.tasks.values() if t.spec.task_key in cover_keys] or list(
-                    self.tasks.values()
+            # Scope any_exp to covering tasks for these question refs when possible.
+            cover_keys: set[str] = set()
+            for plan in (getattr(self, "plans", None) or {}).values():
+                for spec in plan.get("tasks") or []:
+                    addrs = set(spec.get("addresses") or [])
+                    if addrs & set(need):
+                        cover_keys.add(str(spec.get("task_key") or ""))
+            cover_tasks = [t for t in self.tasks.values() if t.spec.task_key in cover_keys] or list(
+                self.tasks.values()
+            )
+            any_exp = any(
+                t.state == TaskState.DONE
+                and t.outcome
+                in (
+                    TaskOutcome.SUCCESS,
+                    TaskOutcome.PARTIAL,
+                    TaskOutcome.FAILED,
                 )
-                any_exp = any(
-                    t.state == TaskState.DONE
-                    and t.outcome
-                    in (
-                        TaskOutcome.SUCCESS,
-                        TaskOutcome.PARTIAL,
-                        TaskOutcome.FAILED,
-                    )
-                    for t in cover_tasks
-                )
-                computed = compute_verdict_snapshots(
-                    graph,
-                    study_id=self.study.study_id,
-                    study=self.study,
-                    results=results,
-                    any_experiment_done=any_exp,
-                    refs=need,
-                )
-                verdict_snapshots.update(computed)
-            except Exception:  # noqa: BLE001 — start_attempt must not crash
-                verdict_snapshots = {**verdict_snapshots}
+                for t in cover_tasks
+            )
+            computed = compute_verdict_snapshots(
+                graph,
+                study_id=self.study.study_id,
+                study=self.study,
+                results=results,
+                any_experiment_done=any_exp,
+                refs=need,
+            )
+            verdict_snapshots.update(computed)
         from coscientist.core.plan.foreach import expand_input_groups
 
         # PR10: foreach children expand; static quorum inputs share one pool.
@@ -535,7 +547,7 @@ class AttemptsMixin:
                         "snapshots": bound_verdicts,
                     },
                     ts=now,
-                    schema_version=1,
+                    schema_version=VERDICT_SNAPSHOTS_RECORDED_SCHEMA_VERSION,
                 )
             )
         # PR7: uses_claim edges for kind=claim inputs (DESIGN_M1 §3).
@@ -585,7 +597,7 @@ class AttemptsMixin:
                     "charged": closing_charged,
                 },
                 ts=now,
-                schema_version=2,
+                schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
             )
         ]
         # Budget uses charged attempts (required on each closed attempt row).
@@ -614,7 +626,7 @@ class AttemptsMixin:
                         "reason": TaskReason.FAILED.value,
                     },
                     ts=now,
-                    schema_version=2,
+                    schema_version=TASK_DONE_SCHEMA_VERSION,
                 )
             )
         else:
@@ -678,7 +690,7 @@ class AttemptsMixin:
                             "charged": True,
                         },
                         ts=now,
-                        schema_version=2,
+                        schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
                     )
                 )
                 t = self._attempt_tasks.pop(aid, None)
@@ -699,7 +711,7 @@ class AttemptsMixin:
                 idem_key=make_idem("TaskDone", task.task_id),
                 payload=done_payload,
                 ts=now,
-                schema_version=2,
+                schema_version=TASK_DONE_SCHEMA_VERSION,
             )
         )
         await self._append(events)

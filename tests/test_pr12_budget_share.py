@@ -251,7 +251,7 @@ async def test_reserve_untouchable(tmp_path, clock):
         deadline=clock.now() + timedelta(seconds=130),
         finalize_reserve_s=30,
         replan_reserve=0.5,
-        budget=Budget(max_cost_rub=Decimal("100")),
+        budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, max_cost_rub=Decimal("100")),
     )
     # Explicit shares ≤ (1−reserve)=0.5; sole task still takes the full pool.
     await rt.accept_plan(
@@ -283,7 +283,7 @@ async def test_share_split_and_enforcement(tmp_path, clock):
         clock,
         "share-enforce",
         replan_reserve=0.0,
-        budget=Budget(max_cost_rub=Decimal("100")),
+        budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, max_cost_rub=Decimal("100")),
     )
     await rt.accept_plan(
         [
@@ -315,7 +315,7 @@ async def test_exhaustion_closure(tmp_path, clock):
         tmp_path,
         clock,
         "share-exhaust",
-        budget=Budget(max_cost_rub=Decimal("10")),
+        budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, max_cost_rub=Decimal("10")),
         replan_reserve=0.0,
     )
     await rt.accept_plan(
@@ -345,7 +345,7 @@ async def test_replay_equals_live(tmp_path, clock):
         deadline=clock.now() + timedelta(seconds=200),
         finalize_reserve_s=20,
         replan_reserve=0.0,
-        budget=Budget(max_cost_rub=Decimal("100")),
+        budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, max_cost_rub=Decimal("100")),
     )
     await rt.accept_plan(
         [
@@ -381,7 +381,7 @@ async def test_foreach_children_share_parent_budget(tmp_path, clock):
         tmp_path,
         clock,
         "share-foreach",
-        budget=Budget(max_cost_rub=Decimal("100")),
+        budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, max_cost_rub=Decimal("100")),
         replan_reserve=0.0,
         max_expansions=0,
     )
@@ -580,7 +580,7 @@ async def test_concurrent_starts_reserve_outstanding(tmp_path, clock):
         clock,
         "share-concurrent",
         replan_reserve=0.2,
-        budget=Budget(max_cost_rub=Decimal("100")),
+        budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, max_cost_rub=Decimal("100")),
     )
     await rt.accept_plan(
         [
@@ -619,7 +619,7 @@ async def test_zero_pool_refuses_start(tmp_path, clock):
         clock,
         "share-zeropool",
         replan_reserve=0.0,
-        budget=Budget(max_cost_rub=Decimal("100")),
+        budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, max_cost_rub=Decimal("100")),
     )
     await rt.accept_plan(
         [_exp("E0", budget_share=0.0, criteria=False)],
@@ -654,7 +654,7 @@ async def test_retry_keeps_fixed_task_cap(tmp_path, clock):
         clock,
         "share-retry",
         replan_reserve=0.0,
-        budget=Budget(max_cost_rub=Decimal("100")),
+        budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, max_cost_rub=Decimal("100")),
     )
     await rt.accept_plan(
         [_exp("E0", budget_share=0.4, criteria=False)],
@@ -679,7 +679,7 @@ async def test_task_budget_report_line(tmp_path, clock):
         clock,
         "share-taskline",
         replan_reserve=0.0,
-        budget=Budget(max_cost_rub=Decimal("100")),
+        budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, max_cost_rub=Decimal("100")),
     )
     await rt.accept_plan(
         [_exp("E0", budget_share=0.1, criteria=False)],
@@ -705,7 +705,7 @@ async def test_executor_debits_cost_rub(tmp_path, clock):
         clock,
         "share-exec",
         replan_reserve=0.0,
-        budget=Budget(max_cost_rub=Decimal("100")),
+        budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, max_cost_rub=Decimal("100")),
     )
     _, arts = attach_executor(rt, tmp_path)
     await rt.accept_plan(
@@ -838,7 +838,7 @@ async def test_debit_cost_rub_on_every_result_path(tmp_path, clock, monkeypatch,
         clock,
         f"share-debit-{path}",
         replan_reserve=0.0,
-        budget=Budget(max_cost_rub=Decimal("100")),
+        budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, max_cost_rub=Decimal("100")),
     )
     ex, arts = attach_executor(rt, tmp_path)
     await _plan_one(rt)
@@ -960,7 +960,7 @@ async def test_budget_debit_atomic_crash_between_recover(tmp_path, clock):
         clock,
         sid,
         replan_reserve=0.0,
-        budget=Budget(max_cost_rub=Decimal("100")),
+        budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, max_cost_rub=Decimal("100")),
     )
     attach_executor(rt, tmp_path)
     await _plan_one(rt)
@@ -1013,7 +1013,7 @@ async def test_budget_debit_atomic_crash_between_recover(tmp_path, clock):
         clock,
         sid3,
         replan_reserve=0.0,
-        budget=Budget(max_cost_rub=Decimal("100")),
+        budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, max_cost_rub=Decimal("100")),
     )
     ex, arts = attach_executor(rt3, root3)
     await _plan_one(rt3)
@@ -1049,7 +1049,7 @@ async def test_single_attempt_budget_overrun(tmp_path, clock):
         clock,
         "share-overrun",
         replan_reserve=0.0,
-        budget=Budget(max_cost_rub=Decimal("100")),
+        budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, max_cost_rub=Decimal("100")),
     )
     ex, arts = attach_executor(rt, tmp_path)
     # Tiny share → small remaining limit.
@@ -1122,7 +1122,7 @@ async def test_start_attempt_none_not_recordable(tmp_path, clock):
         clock,
         "share-none-aid",
         replan_reserve=0.0,
-        budget=Budget(max_cost_rub=Decimal("100")),
+        budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, max_cost_rub=Decimal("100")),
     )
     _, arts = attach_executor(rt, tmp_path)
     await rt.accept_plan(
@@ -1144,7 +1144,7 @@ async def test_zero_share_retry_fire_does_not_crash(tmp_path, clock):
         clock,
         "share-retry-zero",
         replan_reserve=0.0,
-        budget=Budget(max_cost_rub=Decimal("100")),
+        budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, max_cost_rub=Decimal("100")),
     )
     await rt.accept_plan(
         [

@@ -51,7 +51,7 @@ def store_log(
     call = f"{attempt_id or 'noattempt'}:sandbox:{check_id}"
     art = artifacts.put_sandbox(
         body,
-        make_tool_ref(call, tool="sandbox"),
+        make_tool_ref(call, tool="sandbox", attempt_id=attempt_id),
         name=name,
         media_type="text/plain",
         role="log",
@@ -202,6 +202,8 @@ def sandbox_effect(
         "produced_by_call_id": call,
         "artifact_id": art_id,
     }
+    if attempt_id:
+        effect["attempt_id"] = str(attempt_id)
     if observation_only or timeout_kind:
         effect["observation_only"] = True
     if timeout_kind:
@@ -215,6 +217,7 @@ def sandbox_effect(
         blocked = {
             "countable",
             "produced_by_call_id",
+            "attempt_id",
             "artifact_id",
             "trusted",
             "producer",
@@ -316,6 +319,7 @@ def merge_numeric_extra(
         if k in (
             "countable",
             "produced_by_call_id",
+            "attempt_id",
             "artifact_id",
             "trusted",
             "producer",

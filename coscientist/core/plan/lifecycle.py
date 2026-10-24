@@ -68,10 +68,50 @@ class LifecycleMixin:
     clock: Clock
     study: Study | None
     tasks: dict[str, Task]
+    catalog: Any
     _intake_refusal: IntakeRefuse | None
 
     async def _append(self, events: list[EventEnvelope]) -> None:
         raise NotImplementedError
+
+    async def refuse_intake_parse(
+        self,
+        *,
+        kind: Any,
+        reason: str,
+        sid: str | None = None,
+        classifier_error: bool = False,
+    ) -> str:
+        """Journal StudyRefused + StudyFinalized without StudyCreated.
+
+        Used when POST /studies body parse fails — never invent CreateStudyBody caps.
+        """
+        from coscientist.core.claims.reasons import RefusalKind
+
+        sid = sid or self.store.study_id or study_id()
+        now = self.clock.now()
+        rk = kind if isinstance(kind, RefusalKind) else RefusalKind(kind)
+        refusal = IntakeRefuse(rk, str(reason)[:200], classifier_error=classifier_error)
+        self._intake_refusal = refusal
+        events = [
+            EventEnvelope(
+                study_id=sid,
+                type="StudyRefused",
+                entity_key=sid,
+                idem_key=make_idem("StudyRefused", sid),
+                payload={
+                    "kind": refusal.kind.value,
+                    "reason": refusal.reason,
+                    "classifier_error": refusal.classifier_error,
+                },
+                ts=now,
+                schema_version=STUDY_REFUSED_SCHEMA_VERSION,
+            )
+        ]
+        await self._append(events)
+        self.store.study_id = sid
+        await finalize_mod.finalize(self, trigger="intake")  # type: ignore[arg-type]
+        return sid
 
     async def create_study(
         self,
@@ -331,7 +371,7 @@ class LifecycleMixin:
             # Via module attr so tests can monkeypatch finalize.finalize.
             await finalize_mod.finalize(self, trigger="intake")  # type: ignore[arg-type]
             return sid
-        plan_deadline = min(now + timedelta(seconds=600), effective)
+        plan_deadline = min(now + timedelta(seconds=int(study.plan_timeout_s)), effective)
         for key, kind in STAGE_KEYS:
             if kind == TaskKind.REPORT:
                 deps = ["PLAN"]
@@ -478,9 +518,12 @@ class LifecycleMixin:
             share_err = critic_plan_shares(tasks, study=self.study)
             if share_err is not None:
                 raise ValueError(share_err)
-            catalog = getattr(self, "catalog", None) or getattr(
-                getattr(self, "executor", None), "catalog", None
-            )
+            if not hasattr(self, "catalog") or self.catalog is None:
+                raise JournalFormatError(
+                    "runtime.catalog required for plan criteria (no executor.catalog alias)",
+                    field="catalog",
+                )
+            catalog = self.catalog
             validate_plan_criteria(tasks, catalog)
             tasks, questions = freeze_plan_rubrics(
                 tasks,

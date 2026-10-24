@@ -158,15 +158,14 @@ def _required_validity_failed(checks: list[Any]) -> bool:
     return False
 
 
-_NO_EFFECT_DETAIL_ALIASES = {
-    "foreign_artifact": "foreign_artifact",
-    "output_not_submitted": "output_not_submitted",
-    "artifact_missing": "artifact_missing",
-    "pointer_empty": "pointer_empty",
-    # Pre-normalization detail strings (compat).
-    "output missing": "output_not_submitted",
-    "artifact missing": "artifact_missing",
-}
+_NO_EFFECT_DETAILS = frozenset(
+    {
+        "foreign_artifact",
+        "output_not_submitted",
+        "artifact_missing",
+        "pointer_empty",
+    }
+)
 
 
 def _timeout_commit_detail(kinds: list[str]) -> str:
@@ -199,9 +198,8 @@ def _no_effect_reason_from_checks(checks: list[Any]) -> str | None:
         if isinstance(_check_field(c, "effect"), dict):
             continue
         detail = str(_check_field(c, "detail") or "")
-        mapped = _NO_EFFECT_DETAIL_ALIASES.get(detail)
-        if mapped is not None:
-            return mapped
+        if detail in _NO_EFFECT_DETAILS:
+            return detail
     return None
 
 
@@ -312,6 +310,11 @@ def _effect_from_checks(
             pb = data.get("produced_by_call_id")
             if pb is not None and str(pb) != "":
                 effect["produced_by_call_id"] = str(pb)
+            # Structural attempt binding (authority); call_id remains for logging.
+            # Never invent from the executor attempt_id — only copy a stamped field.
+            stamped_aid = data.get("attempt_id")
+            if stamped_aid is not None and str(stamped_aid) != "":
+                effect["attempt_id"] = str(stamped_aid)
             aid = data.get("artifact_id")
             if aid is not None and str(aid) != "":
                 effect["artifact_id"] = str(aid)
@@ -450,9 +453,12 @@ def _derive_claim_core_attrs(
         if _check_role(c) == "prediction":
             has_prediction_check = True
             st = getattr(getattr(c, "status", None), "value", getattr(c, "status", None))
-            pred_statuses.append(str(st or ""))
-    if not pred_statuses and status in ("met", "not_met", "unassessed"):
-        pred_statuses = ["PASSED" if status == "met" else ("FAILED" if status == "not_met" else "")]
+            if st is None or str(st) == "":
+                raise JournalFormatError(
+                    "prediction check missing required status",
+                    field="status",
+                )
+            pred_statuses.append(str(st))
     # Effect from CheckResult.effect only — never agent detail / claim attrs.
     effect, used_sesoi = _effect_from_checks(list(checks or []), attempt_id=attempt_id)
     from coscientist.checks.kinds._util import check_is_guest_timeout
@@ -1336,17 +1342,16 @@ class Executor:
         if out is None:
             raise KeyError(f"no pending agent output for attempt {attempt_id}")
         output_digest = self._ensure_output_digest(attempt_id, out)
-        parent_check = check_id
-        item = item_id
-        if item is None and ":" in check_id and "|" not in check_id:
-            # Legacy ``check_id:item_id`` argument form.
-            parent_check, _, item = check_id.partition(":")
-        item = item or ""
+        if item_id is None:
+            raise JournalFormatError(
+                "record_review requires item_id (no check_id:item alias)",
+                field="item_id",
+            )
         key = review_key(
             task_id=str(task_id),
             attempt_id=attempt_id,
-            check_id=parent_check,
-            item_id=item,
+            check_id=check_id,
+            item_id=str(item_id),
             output_digest=output_digest,
         )
         prior = int(self.judge_retry.get(key, 0))
@@ -1524,7 +1529,7 @@ class Executor:
         """How many charged attempts the task will have after closing ``attempt_id``."""
         results = self.get_results() if self.get_results is not None else {}
         n = 1 if charge_attempt else 0
-        for aid in list(getattr(task, "attempts", []) or []):
+        for aid in list(task.attempts):
             if aid == attempt_id:
                 continue
             row = results.get(aid) if isinstance(results, dict) else None
@@ -1649,8 +1654,8 @@ class Executor:
         )
 
         charged_after = self._charged_count_after(task, attempt_id, charge_attempt=charge_attempt)
-        deadline = getattr(task, "deadline", None)
-        within_deadline = deadline is None or now < deadline
+        # Task.deadline is required (datetime); missing field → AttributeError.
+        within_deadline = now < task.deadline
         schedule_retry = allow_retry and charged_after < self.max_attempts and within_deadline
 
         close_payload: dict[str, Any] = {

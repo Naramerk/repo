@@ -20,8 +20,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 from coscientist.core.events.digest import canonical_json, sha256_hex
-from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.events.errors import ArtifactRejected, JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
+
+# Writer schema pins (events.py EventEnvelope default left to #38).
+ATTEMPT_TAINTED_SCHEMA_VERSION = 1
+SIDE_EFFECT_DENIED_SCHEMA_VERSION = 1
+EFFECT_INTENDED_SCHEMA_VERSION = 1
+EFFECT_DONE_SCHEMA_VERSION = 1
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.source_fetch import (
@@ -285,12 +291,22 @@ def load_effect_index(events: list[EventEnvelope] | list[Any]) -> EffectIndex:
         p = getattr(ev, "payload", None) or (ev.get("payload") if isinstance(ev, dict) else {})
         if not isinstance(p, dict):
             continue
-        key = str(p.get("key") or getattr(ev, "entity_key", "") or "")
-        if not key:
+        if t not in ("EffectIntended", "EffectDone"):
             continue
+        if "key" not in p:
+            raise JournalFormatError(
+                f"{t} missing required payload key (no entity_key alias)",
+                field="key",
+            )
+        key = str(p["key"])
+        if not key:
+            raise JournalFormatError(
+                f"{t} payload key must be non-empty",
+                field="key",
+            )
         if t == "EffectIntended":
             idx.note_intended(key, p)
-        elif t == "EffectDone":
+        else:
             idx.note_done(key, p)
     return idx
 
@@ -306,12 +322,22 @@ def _apply_events(idx: EffectIndex, events: list[Any]) -> int:
         p = getattr(ev, "payload", None) or {}
         if not isinstance(p, dict):
             continue
-        key = str(p.get("key") or getattr(ev, "entity_key", "") or "")
-        if not key:
+        if t not in ("EffectIntended", "EffectDone"):
             continue
+        if "key" not in p:
+            raise JournalFormatError(
+                f"{t} missing required payload key (no entity_key alias)",
+                field="key",
+            )
+        key = str(p["key"])
+        if not key:
+            raise JournalFormatError(
+                f"{t} payload key must be non-empty",
+                field="key",
+            )
         if t == "EffectIntended":
             idx.note_intended(key, p)
-        elif t == "EffectDone":
+        else:
             idx.note_done(key, p)
     return max_seq
 
@@ -356,13 +382,23 @@ def _note_attempt_taint(cache: dict[str, bool], ev: Any) -> None:
     p = getattr(ev, "payload", None) or {}
     if not isinstance(p, dict):
         return
-    aid = str(p.get("attempt_id") or getattr(ev, "entity_key", "") or "")
-    if not aid:
+    if t not in ("AttemptStarted", "AttemptTainted"):
         return
+    if "attempt_id" not in p:
+        raise JournalFormatError(
+            f"{t} missing required attempt_id (no entity_key alias)",
+            field="attempt_id",
+        )
+    aid = str(p["attempt_id"])
+    if not aid:
+        raise JournalFormatError(
+            f"{t} attempt_id must be non-empty",
+            field="attempt_id",
+        )
     if t == "AttemptStarted":
         # Sticky OR: later AttemptTainted must not be cleared by replay order.
         cache[aid] = bool(cache.get(aid)) or bool(p.get("tainted_context"))
-    elif t == "AttemptTainted":
+    else:
         cache[aid] = True
 
 
@@ -436,7 +472,7 @@ async def _journal_attempt_tainted(
             "is_fetch": True,
         },
         ts=datetime.now(UTC),
-        schema_version=1,
+        schema_version=ATTEMPT_TAINTED_SCHEMA_VERSION,
     )
     stored = await writer.append(ev)
     cache: dict[str, bool] | None = getattr(writer, "_pr18_taint_by_attempt", None)
@@ -458,7 +494,12 @@ def _restore_output(
     done: dict[str, Any],
 ) -> ToolOutput:
     """Return the stored result or raise — never a stub ``{restored: True}``."""
-    status = str(done.get("status") or "ok")
+    if "status" not in done:
+        raise JournalFormatError(
+            "EffectDone missing required status",
+            field="status",
+        )
+    status = str(done["status"])
     if status == "failed":
         kind = str(done.get("error_kind") or "opaque")
         detail = str(done.get("detail") or "EffectDone(failed)")
@@ -521,7 +562,7 @@ async def _deny(
                 "reason": reason,
             },
             ts=datetime.now(UTC),
-            schema_version=1,
+            schema_version=SIDE_EFFECT_DENIED_SCHEMA_VERSION,
         ),
         on_event,
     )
@@ -734,7 +775,7 @@ async def invoke_tool(
                 ),
             },
             ts=now,
-            schema_version=1,
+            schema_version=EFFECT_INTENDED_SCHEMA_VERSION,
         ),
         on_event,
     )
@@ -774,7 +815,7 @@ async def invoke_tool(
                         "detail": err.detail,
                     },
                     ts=datetime.now(UTC),
-                    schema_version=1,
+                    schema_version=EFFECT_DONE_SCHEMA_VERSION,
                 ),
                 on_event,
             )
@@ -795,6 +836,7 @@ async def invoke_tool(
         f"{ctx.attempt_id}:{ctx.call_seq}",
         tool=name,
         args=digest,
+        attempt_id=ctx.attempt_id,
     )
     art = artifacts.put_tool(
         blob,
@@ -822,7 +864,7 @@ async def invoke_tool(
             idem_key=make_idem("EffectDone", key),
             payload=done_payload,
             ts=datetime.now(UTC),
-            schema_version=1,
+            schema_version=EFFECT_DONE_SCHEMA_VERSION,
         ),
         on_event,
     )

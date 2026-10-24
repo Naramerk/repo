@@ -73,10 +73,18 @@ def is_loop_dep(key: str) -> bool:
 
 
 def parse_loop_dep(key: str) -> str | None:
-    """Return NFKC-normalized loop_id from ``loop:<id>``, or None if not a barrier."""
-    if not is_loop_dep(key):
+    """Return NFKC-normalized loop_id from ``loop:<id>``, or None if not a barrier.
+
+    Unknown shapes refuse: missing ``LOOP_DEP_PREFIX``, empty id, or control
+    chars (via ``normalize_loop_id``). Membership uses the named constant — not
+    a bare semantic prefix guess.
+    """
+    s = str(key)
+    if not s.startswith(LOOP_DEP_PREFIX):
         return None
-    raw = str(key)[len(LOOP_DEP_PREFIX) :]
+    if s == LOOP_DEP_PREFIX:
+        return None
+    raw = s[len(LOOP_DEP_PREFIX) :]
     try:
         return normalize_loop_id(raw)
     except PlanInvalid:

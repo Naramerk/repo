@@ -201,8 +201,9 @@ def _is_rubric_check(cr: dict[str, Any], digests: set[str]) -> str | None:
             continue
         if tid == f"rubric:{d}":
             return d
-        # Structured check_id forms: ``rubric:<digest>#out`` / ``rubric:<digest>#0``.
-        if cid == f"rubric:{d}#out" or cid.startswith(f"rubric:{d}#"):
+        # Structured check_id: ``rubric:<digest>#<suffix>`` (exact head, non-empty tail).
+        head, sep, tail = cid.partition("#")
+        if sep == "#" and head == f"rubric:{d}" and bool(tail):
             return d
     if effect.get("rubric_kind") == "rubric" and dig and dig in digests:
         return dig

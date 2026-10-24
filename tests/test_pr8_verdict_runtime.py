@@ -72,13 +72,14 @@ _DERIVED_OK = {
 
 
 def _derived_for(attempt_id: str, **extra: object) -> dict:
-    """``_DERIVED_OK`` with ``produced_by_call_id`` bound to ``attempt_id``."""
+    """``_DERIVED_OK`` with structural ``attempt_id`` + call_id for logging."""
     base: dict = {**_DERIVED_OK, **extra}
     eff = dict(base.get("effect") or {})
     extra_eff = extra.get("effect")
     if isinstance(extra_eff, dict):
         eff = {**eff, **extra_eff}
     eff["produced_by_call_id"] = f"{attempt_id}:1"
+    eff["attempt_id"] = attempt_id
     base["effect"] = eff
     return base
 

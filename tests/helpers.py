@@ -156,7 +156,7 @@ async def record_success(
     content = json.dumps({"count": count}).encode()
     art = arts.put(
         content,
-        make_tool_ref(f"{aid}:1"),
+        make_tool_ref(f"{aid}:1", attempt_id=aid),
         name="main",
         media_type="application/json",
         role="data",

@@ -314,13 +314,20 @@ class LocalArtifactStore:
         return json.loads(self.read(artifact_id))
 
 
-def make_tool_ref(call_id: str, tool: str = "local", args: str = "") -> ToolCallRef:
+def make_tool_ref(
+    call_id: str,
+    tool: str = "local",
+    args: str = "",
+    *,
+    attempt_id: str | None = None,
+) -> ToolCallRef:
     return ToolCallRef(
         call_id=call_id,
         tool=tool,
         args_digest=sha256_hex(args),
         started_at=datetime.now(UTC),
         ended_at=datetime.now(UTC),
+        attempt_id=attempt_id,
     )
 
 

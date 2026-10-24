@@ -12,6 +12,7 @@ from coscientist.core.events.digest import canonical_json
 from coscientist.core.events.errors import (
     CASUnavailable,
     Conflict,
+    JournalFormatError,
     LeaseLost,
     StudyClosedError,
 )
@@ -311,7 +312,12 @@ def _append_loop_capped_report_line(seen: list[str], p: dict[str, Any]) -> None:
         m = int(raw_m) if raw_m is not None else 0  # type: ignore[arg-type]
     except (TypeError, ValueError):
         m = 0
-    reason = str(p.get("reason") or "iteration_cap")
+    if "reason" not in p:
+        raise JournalFormatError(
+            "LoopCapped missing required reason",
+            field="reason",
+        )
+    reason = str(p["reason"])
     detail = str(p.get("detail") or p.get("refuse_detail") or "")
     report_kind = str(p.get("report_kind") or "")
     # Typed only: reason enum / payload report_kind (never detail.startswith).
@@ -326,8 +332,8 @@ def _append_loop_capped_report_line(seen: list[str], p: dict[str, Any]) -> None:
     line = f"цикл остановлен лимитом после {i} итераций, осталось {m}"
     if line not in seen:
         seen.append(line)
-    if "iteration_cap" not in seen:
-        seen.append("iteration_cap")
+    if reason not in seen:
+        seen.append(reason)
 
 
 def _append_loop_refused_report_line(seen: list[str], p: dict[str, Any]) -> None:
@@ -336,7 +342,12 @@ def _append_loop_refused_report_line(seen: list[str], p: dict[str, Any]) -> None
         i = int(p.get("iter") or 0)
     except (TypeError, ValueError):
         i = 0
-    reason = str(p.get("reason") or "error")
+    if "reason" not in p:
+        raise JournalFormatError(
+            "LoopRefused missing required reason",
+            field="reason",
+        )
+    reason = str(p["reason"])
     detail = str(p.get("detail") or "")
     line = f"цикл остановлен ошибкой после {i} итераций: {detail or reason}"
     if line not in seen:
@@ -446,7 +457,29 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     failed, or a peer finalized first). Otherwise the error is re-raised —
     never mark finalized without the event.
     """
-    if runtime.study is None or is_finalized(runtime):
+    if is_finalized(runtime):
+        return
+    # Parse-refuse path: StudyRefused without StudyCreated — finalize via last-resort.
+    if runtime.study is None:
+        if trigger != "intake" or getattr(runtime, "_intake_refusal", None) is None:
+            return
+        sid = getattr(runtime.store, "study_id", None)
+        if not sid:
+            return
+        refusal = _refusal_payload(runtime, trigger)
+        payload = last_resort_payload(
+            study_id=str(sid),
+            trigger=trigger,
+            fallback_reason="intake_parse_refuse",
+            refusal=refusal,
+        )
+        try:
+            await _append_finalized(runtime, sid=str(sid), payload=payload)
+        except LeaseLost:
+            raise
+        except (Conflict, StudyClosedError) as err:
+            await _sync_finalized_from_store(runtime, sid=str(sid), err=err)
+        runtime._finalized = True  # noqa: SLF001
         return
     sid = runtime.study.study_id
     refusal = _refusal_payload(runtime, trigger)

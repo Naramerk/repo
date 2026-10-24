@@ -74,6 +74,7 @@ def _c(**kw) -> RuntimeClaim:
             "core_evaluated": True,
             "countable": True,
             "produced_by_call_id": "A1#1:1",
+            "attempt_id": "A1#1",
         },
         refute_capable=True,
     )
@@ -1187,6 +1188,7 @@ class VerdictPropertyMachine(RuleBasedStateMachine):
                 "core_evaluated": True,
                 "countable": True,
                 "produced_by_call_id": f"{exp}#1:1",
+                "attempt_id": f"{exp}#1",
             }
             if (with_threshold and not legacy) or outcome == "inconsistent"
             else None

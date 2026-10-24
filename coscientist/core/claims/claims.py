@@ -280,6 +280,40 @@ def _task_key_from_attempt_id(attempt_id: str) -> str | None:
     return left.rsplit("/", 1)[-1]
 
 
+def parse_graph_node_id(node_id: str) -> tuple[str, str, str]:
+    """Parse ``{study_id}:{kind}:{ref}`` — exactly two separators (DESIGN).
+
+    ``ref`` may itself contain colons (e.g. claim keys). Malformed ids raise
+    ``ValueError`` (refuse garbage — no prefix heuristic).
+    """
+    parts = str(node_id).split(":", 2)
+    if len(parts) != 3 or not parts[0] or not parts[1] or not parts[2]:
+        raise ValueError(f"malformed graph node_id: {node_id!r}")
+    return parts[0], parts[1], parts[2]
+
+
+def _node_ref(node_id: str, kind: str, *, study_id: str) -> str | None:
+    """Return ``ref`` when ``node_id`` is ``{study_id}:{kind}:{ref}``, else None."""
+    try:
+        sid, k, ref = parse_graph_node_id(node_id)
+    except ValueError:
+        return None
+    if sid != study_id or k != kind:
+        return None
+    return ref
+
+
+def _as_kind_node_id(study_id: str, target: str, kind: str) -> str:
+    """Resolve ``target`` to a full node id; prefer structural parse over invent."""
+    if _node_ref(target, kind, study_id=study_id) is not None:
+        return target
+    if kind == "hypothesis":
+        return hypothesis_node_id(study_id, target)
+    if kind == "question":
+        return question_node_id(study_id, target)
+    raise ValueError(f"unknown node kind: {kind!r}")
+
+
 def intent_from_producing_experiment(
     graph: GraphStore | None,
     *,
@@ -302,7 +336,7 @@ def intent_from_producing_experiment(
     hid = (
         target_logical
         if target_kind == "hypothesis"
-        and target_logical.startswith(f"{study_id}:hypothesis:")
+        and _node_ref(target_logical, "hypothesis", study_id=study_id) is not None
         else hypothesis_node_id(study_id, target_logical)
     )
     for e in graph.edges_from(exp_id):
@@ -336,7 +370,7 @@ def intent_from_tests_edge(
         return DEFAULT_TESTS_INTENT
     hid = (
         target_logical
-        if target_logical.startswith(f"{study_id}:hypothesis:")
+        if _node_ref(target_logical, "hypothesis", study_id=study_id) is not None
         else hypothesis_node_id(study_id, target_logical)
     )
     for e in graph.all_edges():
@@ -359,20 +393,12 @@ def resolve_existing_target(
     if not target or graph is None:
         return None
     if target_kind == "question":
-        nid = (
-            target
-            if target.startswith(f"{study_id}:question:")
-            else question_node_id(study_id, target)
-        )
+        nid = _as_kind_node_id(study_id, target, "question")
         if graph.get_node(nid) is not None:
             return nid, "question"
         return None
     if target_kind == "hypothesis":
-        nid = (
-            target
-            if target.startswith(f"{study_id}:hypothesis:")
-            else hypothesis_node_id(study_id, target)
-        )
+        nid = _as_kind_node_id(study_id, target, "hypothesis")
         if graph.get_node(nid) is not None:
             return nid, "hypothesis"
         return None
@@ -401,8 +427,9 @@ def runtime_claim_from_node(
     graph: GraphStore | None = None,
     artifact_lookup: Any | None = None,
 ) -> tuple[RuntimeClaim | None, str | None]:
-    """Build a RuntimeClaim; on garbage attrs return ``(None, reason)`` — never raise.
+    """Build a RuntimeClaim; on garbage attrs return ``(None, reason)``.
 
+    Lookup / coerce errors propagate (no broad ``except Exception`` swallow).
     When ``artifact_lookup`` is provided, effect ``trusted``/``countable`` are
     recomputed from live artifact metadata. Journal-only replay falls back to
     effect-stamped provenance facts written at eval from that same meta.
@@ -526,10 +553,7 @@ def runtime_claim_from_node(
             meta = None
             art_id = effect_raw.get("artifact_id") or attrs.get("artifact_id")
             if artifact_lookup is not None and art_id:
-                try:
-                    meta = artifact_lookup(str(art_id))
-                except Exception:  # noqa: BLE001 — totality
-                    meta = None
+                meta = artifact_lookup(str(art_id))
             stamped = dict(effect_raw)
             # Never invent produced_by_call_id from the attempt id alone — a bare
             # aid is not a call_id; missing call_id stays missing (not countable).
@@ -707,14 +731,14 @@ def runtime_claim_from_node(
         probe.severe = severe_coerced
         probe.refute_capable = refute_capable
         return probe, None
-    except Exception:  # noqa: BLE001 — totality: never raise into finalize/view
-        return None, "coerce_error"
+    except Exception:
+        raise
 
 
 def _logical_id_from_node(node_id: str, study_id: str, kind: str) -> str:
-    prefix = f"{study_id}:{kind}:"
-    if node_id.startswith(prefix):
-        return node_id[len(prefix) :]
+    ref = _node_ref(node_id, kind, study_id=study_id)
+    if ref is not None:
+        return ref
     return node_id
 
 
@@ -976,7 +1000,7 @@ def hypothesis_verdicts(
             continue
         hid = (
             ref
-            if ref.startswith(f"{study_id}:hypothesis:")
+            if _node_ref(ref, "hypothesis", study_id=study_id) is not None
             else hypothesis_node_id(study_id, ref)
         )
         if graph.get_node(hid) is not None:

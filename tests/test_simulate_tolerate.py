@@ -184,7 +184,7 @@ async def test_hc_skipped_when_budget_exceeded(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
-        budget=Budget(max_cost_rub=Decimal("25")),
+        budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, max_cost_rub=Decimal("25")),
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)

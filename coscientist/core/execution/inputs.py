@@ -28,6 +28,10 @@ from coscientist.core.execution.domain import (
     worst_provenance,
 )
 
+# Writer schema pins (events.py EventEnvelope default left to #38).
+GRAPH_NODE_UPSERTED_SCHEMA_VERSION = 1
+GRAPH_EDGE_ADDED_SCHEMA_VERSION = 1
+
 # Re-export for callers/tests that imported from inputs.
 __all__ = [
     "InputMode",
@@ -363,15 +367,11 @@ def claim_nodes_from_attempt(
                 if old in VALID_PROVENANCE:
                     new_prov = worst_provenance(old, provenance)  # type: ignore[arg-type]
 
-        # Core-derived counting fields; derive_attrs must never raise into caller.
-        try:
-            if derive_attrs is not None:
-                core = dict(derive_attrs(raw, structurally_ok) or {})
-            else:
-                core = dict(derived or {})
-        except Exception:  # noqa: BLE001 — totality
-            drops.append({"key": agent_key, "reason": "derive_attrs_error"})
-            continue
+        # Core-derived counting fields; derive_attrs errors propagate (no swallow).
+        if derive_attrs is not None:
+            core = dict(derive_attrs(raw, structurally_ok) or {})
+        else:
+            core = dict(derived or {})
         attrs["provenance"] = new_prov
         attrs["attempt_id"] = attempt_id
         attrs["attempt_outcome"] = attempt_outcome
@@ -523,7 +523,7 @@ def claim_nodes_from_attempt(
                 idem_key=make_idem("GraphNodeUpserted", cid, attempt_id),
                 payload=node.model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
+                schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
             )
         )
         have_about = False
@@ -555,7 +555,7 @@ def claim_nodes_from_attempt(
                     idem_key=make_idem("GraphEdgeAdded", eid),
                     payload=edge.model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
+                    schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
                 )
             )
     return events, drops
@@ -596,7 +596,7 @@ def uses_claim_graph_events(
                 idem_key=make_idem("GraphNodeUpserted", exp_id),
                 payload=node.model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
+                schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
             )
         )
     for b in claim_bindings:
@@ -621,7 +621,7 @@ def uses_claim_graph_events(
                 idem_key=make_idem("GraphEdgeAdded", eid),
                 payload=edge.model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
+                schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
             )
         )
     return events

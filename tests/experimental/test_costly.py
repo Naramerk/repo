@@ -58,7 +58,7 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
             )
         },
     )
-    budget = Budget(
+    budget = Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, 
         delegated_costly=Decimal("1000"), deadline=clock.now() + timedelta(hours=1)
     )
 
@@ -160,7 +160,7 @@ async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
             )
         },
     )
-    budget = Budget(
+    budget = Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, 
         delegated_costly=Decimal("1000"), deadline=clock.now() + timedelta(hours=1)
     )
     rt = await open_runtime(
@@ -217,7 +217,7 @@ async def test_study_budget_exceeded_from_costly_spend(tmp_path, clock, runtime_
     from coscientist.core.execution.domain import Budget
     from tests.helpers import close_runtime, create_study, open_runtime
 
-    budget = Budget(
+    budget = Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, 
         max_cost_rub=Decimal("100"),
         delegated_costly=Decimal("100"),
         deadline=clock.now() + timedelta(hours=1),
@@ -266,7 +266,7 @@ async def test_settle_delegated_spend_emits_study_budget(tmp_path, clock):
             )
         },
     )
-    budget = Budget(
+    budget = Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, 
         max_cost_rub=Decimal("100"),
         delegated_costly=Decimal("100"),
         deadline=clock.now() + timedelta(hours=1),

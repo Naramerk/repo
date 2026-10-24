@@ -452,6 +452,7 @@ def evaluate_tests_pass(
                 "countable": False,
                 "observation_only": True,
                 "produced_by_call_id": f"{attempt_id or 'noattempt'}:core:{check_id}",
+                **({"attempt_id": str(attempt_id)} if attempt_id else {}),
                 "note": _TESTS_PASS_NOTE,
             },
         )
@@ -701,6 +702,7 @@ def evaluate_metric_on_holdout(
                 "core_evaluated": True,
                 "countable": bool(attempt_id),
                 "produced_by_call_id": f"{attempt_id or 'noattempt'}:core:{check_id}",
+                **({"attempt_id": str(attempt_id)} if attempt_id else {}),
                 "note": "metric_on_holdout requires catalog scorer; "
                 "agent metrics not trusted",
             },

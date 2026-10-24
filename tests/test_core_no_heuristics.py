@@ -451,6 +451,7 @@ def test_claim_is_severe_requires_predicted_direction():
     claim = SimpleNamespace(
         criterion_status="met",
         validity_ok=True,
+        validity="valid",
         claim_outcome="consistent",
         severe=None,
         effect={
@@ -532,6 +533,7 @@ def test_exclusion_reason_requires_evidence_kind():
         exclusion_reason=None,
         check_role="prediction",
         validity_ok=True,
+        validity="valid",
         provenance="real",
         claim_outcome="consistent",
         # no evidence_kind / is_lit
@@ -619,7 +621,11 @@ def test_gate_config_timeout_s_required():
 
     with pytest.raises(ValidationError):
         GateConfig()
-    cfg = GateConfig(timeout_s=GATE_TIMEOUTS_S["spec_approval"])
+    cfg = GateConfig(
+        enabled=True,
+        timeout_s=GATE_TIMEOUTS_S["spec_approval"],
+        on_timeout="delegate",
+    )
     assert cfg.timeout_s == 120
 
 
@@ -1173,19 +1179,86 @@ def test_producer_index_propagates_errors():
     """Fail-closed: corrupt artifacts must not be swallowed."""
     from coscientist.core.claims.verdict import _producer_index
 
-    with pytest.raises(TypeError):
+    with pytest.raises(JournalFormatError, match="artifacts") as ei:
         _producer_index({"r1": {"artifacts": 123}})
+    assert ei.value.field == "artifacts"
 
 
-def test_call_id_belongs_structured_parse():
-    from coscientist.core.claims.verdict import call_id_belongs_to_attempt
+def test_call_belonging_uses_effect_attempt_id_not_startswith():
+    """Belonging authority is structural attempt_id — never call_id startswith."""
+    from coscientist.core.claims.verdict import (
+        call_id_belongs_to_attempt,
+        recompute_effect_provenance,
+    )
 
-    assert call_id_belongs_to_attempt("st/E1#1", "st/E1#1")
-    assert call_id_belongs_to_attempt("st/E1#1:sandbox:c", "st/E1#1")
-    # Prefix collision / unknown shapes refuse.
+    aid = "st/E1#1"
+    # Suffix call_id alone is not authority.
+    assert not call_id_belongs_to_attempt(f"{aid}:sandbox:c", aid)
+    assert call_id_belongs_to_attempt(aid, aid)
+    # Mapping / produced_by with stamped attempt_id.
+    assert call_id_belongs_to_attempt(
+        {"attempt_id": aid, "produced_by_call_id": f"{aid}:sandbox:c"},
+        aid,
+    )
+    assert not call_id_belongs_to_attempt(
+        {"attempt_id": "other", "produced_by_call_id": f"{aid}:1"},
+        aid,
+    )
+    # Prefix collision shapes refuse under string-only path.
     assert not call_id_belongs_to_attempt("st/E1#10:1", "st/E1#1")
     assert not call_id_belongs_to_attempt("st/E1#1:", "st/E1#1")
-    assert not call_id_belongs_to_attempt("other:1", "st/E1#1")
+
+    effect = {
+        "est": 1.0,
+        "kind": "point",
+        "producer": "core",
+        "core_evaluated": True,
+        "produced_by_call_id": f"{aid}:1",
+        "attempt_id": aid,
+    }
+    out = recompute_effect_provenance(effect, attempt_id=aid)
+    assert out is not None and out["countable"] is True
+    # Same call_id suffix without stamped attempt_id → not countable.
+    bare = {k: v for k, v in effect.items() if k != "attempt_id"}
+    out2 = recompute_effect_provenance(bare, attempt_id=aid)
+    assert out2 is not None and out2["countable"] is False
+
+
+def test_safe_get_meta_propagates_errors():
+    from coscientist.core.claims.verdict import _safe_get_meta
+
+    def boom(_aid: str) -> None:
+        raise RuntimeError("store down")
+
+    with pytest.raises(RuntimeError, match="store down"):
+        _safe_get_meta("art1", artifact_lookup=boom, notes=[])
+
+
+def test_loop_dep_parse_refuses_unknown_shape():
+    from coscientist.core.plan.loop import LOOP_DEP_PREFIX, parse_loop_dep
+
+    assert parse_loop_dep(f"{LOOP_DEP_PREFIX}L1") == "L1"
+    assert parse_loop_dep("loop:") is None
+    assert parse_loop_dep("loop") is None
+    assert parse_loop_dep("loops:L1") is None
+    assert parse_loop_dep("") is None
+    assert parse_loop_dep("L1") is None
+
+
+def test_claims_node_id_parse_refuses_garbage():
+    from coscientist.core.claims.claims import _node_ref, parse_graph_node_id
+
+    assert parse_graph_node_id("st:hypothesis:H1") == ("st", "hypothesis", "H1")
+    assert parse_graph_node_id("st:claim:a#1:k") == ("st", "claim", "a#1:k")
+    with pytest.raises(ValueError, match="malformed"):
+        parse_graph_node_id("no-colons")
+    with pytest.raises(ValueError, match="malformed"):
+        parse_graph_node_id("only:two")
+    with pytest.raises(ValueError, match="malformed"):
+        parse_graph_node_id("st:hypothesis:")
+    assert _node_ref("st:hypothesis:H1", "hypothesis", study_id="st") == "H1"
+    assert _node_ref("st:hypothesis:H1", "question", study_id="st") is None
+    assert _node_ref("garbage", "hypothesis", study_id="st") is None
 
 
 def test_report_hypothesis_verdicts_propagates_journal_format_error(monkeypatch):

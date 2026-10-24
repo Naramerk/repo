@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Mapping, Sequence
 
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.execution.domain import Study, Task, TaskSpec, TaskState
 
 ShareField = Literal["budget_share", "deadline_share"]
@@ -276,7 +277,15 @@ def _plan_specs_for_shares(runtime: Any) -> list[TaskSpec]:
     """Active-revision TaskSpecs (prefer latest plan blob; else live tasks)."""
     plans = getattr(runtime, "plans", None) or {}
     if plans:
-        latest = max(plans.values(), key=lambda p: int(p.get("revision") or 0))
+        def _revision(p: Any) -> int:
+            if "revision" not in p:
+                raise JournalFormatError(
+                    "plan missing required revision",
+                    field="revision",
+                )
+            return int(p["revision"])
+
+        latest = max(plans.values(), key=_revision)
         raw = latest.get("tasks") or []
         specs: list[TaskSpec] = []
         for t in raw:

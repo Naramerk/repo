@@ -9,7 +9,7 @@ from typing import Any
 
 
 class DelegatedBudget:
-    """Budget(delegated_costly), ₽: stateful counter; actual spend is debited after each attempt."""
+    """Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, delegated_costly), ₽: stateful counter; actual spend is debited after each attempt."""
 
     def __init__(self, limit_rub: float) -> None:
         self.limit_rub, self.spent_rub, self.blocked = float(limit_rub), 0.0, False

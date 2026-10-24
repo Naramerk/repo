@@ -11,6 +11,7 @@ from coscientist.core.events.errors import (
     ArtifactCorrupt,
     CatalogError,
     CoreBugError,
+    JournalFormatError,
     SandboxInfraError,
 )
 from coscientist.core.execution.artifacts import (
@@ -31,6 +32,18 @@ from coscientist.core.execution.domain import (
     RequirementTemplate,
     ReviewCheck,
     TaskSpec,
+)
+
+
+# Exact PLAN-n critic template ids (DESIGN_M1); membership, not prefix match.
+_PLAN_N_CRITIC_TEMPLATE_IDS: frozenset[str] = frozenset(
+    {
+        "plan_expansion_schema",
+        "plan_expansion_depth_quota_reserve",
+        "plan_expansion_no_refutation_escape",
+        "plan_expansion_acceptance_criteria",
+        "plan_expansion_no_duplicates",
+    }
 )
 
 
@@ -89,14 +102,19 @@ def _cmp(op: str, left: Any, right: Any, tolerance: float | None) -> bool:
 
 
 def artifact_belongs_to_attempt(meta: Any | None, attempt_id: str | None) -> bool:
-    """True when ``Artifact.produced_by.call_id`` is bound to ``attempt_id``."""
+    """True when artifact is bound to ``attempt_id`` via structural fields.
+
+    Authority is ``produced_by.attempt_id`` (or call_id exact equality when no
+    stamp). Never ``startswith`` / partition on call_id.
+    """
     if meta is None or not attempt_id:
         return False
+    from coscientist.core.claims.verdict import call_id_belongs_to_attempt
+
     produced = getattr(meta, "produced_by", None)
-    call_id = str(getattr(produced, "call_id", "") or "")
-    if not call_id:
+    if produced is None:
         return False
-    return call_id == attempt_id or call_id.startswith(f"{attempt_id}:")
+    return call_id_belongs_to_attempt(produced, attempt_id)
 
 
 # Stable reasons for checks with no numeric effect (indeterminate — never refute).
@@ -146,7 +164,17 @@ def _effect_provenance_fields(
     ``countable`` = core catalog evaluation on an artifact bound to this attempt.
     """
     meta = artifacts.get_meta(artifact_id) if artifact_id else None
-    producer = getattr(meta, "producer", "agent") if meta is not None else "agent"
+    if meta is None:
+        raise JournalFormatError(
+            "artifact meta required for producer stamp",
+            field="producer",
+        )
+    if not hasattr(meta, "producer") or meta.producer is None or str(meta.producer) == "":
+        raise JournalFormatError(
+            "artifact meta missing required producer",
+            field="producer",
+        )
+    producer = str(meta.producer)
     # Fail-closed: unknown / future producers collapse to agent (untrusted).
     # ``user`` is explicit — never trusted, never countable via this helper alone.
     if producer == "user":
@@ -165,6 +193,12 @@ def _effect_provenance_fields(
         # Countable only when the artifact was produced for this attempt.
         "countable": bool(belongs),
     }
+    # Structural attempt binding stamped alongside call_id (logging).
+    pb_aid = getattr(produced, "attempt_id", None) if produced is not None else None
+    if pb_aid is not None and str(pb_aid) != "":
+        out["attempt_id"] = str(pb_aid)
+    elif attempt_id and belongs:
+        out["attempt_id"] = str(attempt_id)
     if meta is not None and producer == "sandbox":
         ni = getattr(meta, "net_isolation", None)
         fs = getattr(meta, "fs_isolation", None)
@@ -223,7 +257,12 @@ def evaluate_code_check(
 ) -> CheckResult:
     try:
         if check.kind == "artifact_exists":
-            handle = out.outputs.get(check.output or "")
+            if check.output is None or str(check.output) == "":
+                raise JournalFormatError(
+                    "artifact_exists missing required output",
+                    field="output",
+                )
+            handle = out.outputs.get(str(check.output))
             if handle is None:
                 return _no_effect_result(
                     check_id=check_id,
@@ -263,7 +302,12 @@ def evaluate_code_check(
             )
 
         if check.kind in ("value_matches", "metric_threshold", "json_pointer"):
-            handle = out.outputs.get(check.output or "main")
+            if check.output is None or str(check.output) == "":
+                raise JournalFormatError(
+                    f"{check.kind} missing required output",
+                    field="output",
+                )
+            handle = out.outputs.get(str(check.output))
             if handle is None:
                 return _no_effect_result(
                     check_id=check_id,
@@ -339,7 +383,12 @@ def evaluate_code_check(
                     effect = {"est": est, "kind": "point", **prov}
             else:
                 # metric_threshold — point-estimate exceedance or TOST with real CI.
-                op = check.op or "=="
+                if check.op is None or str(check.op) == "":
+                    raise JournalFormatError(
+                        "metric_threshold missing required op",
+                        field="op",
+                    )
+                op = check.op
                 ci = _extract_ci(doc, left)
                 if uses_sesoi and sesoi is not None and predicts_null:
                     # TOST: require a real interval from the metric artifact.
@@ -394,7 +443,12 @@ def evaluate_code_check(
             )
 
         if check.kind == "schema_valid":
-            handle = out.outputs.get(check.output or "main")
+            if check.output is None or str(check.output) == "":
+                raise JournalFormatError(
+                    "schema_valid missing required output",
+                    field="output",
+                )
+            handle = out.outputs.get(str(check.output))
             if handle is None:
                 return _no_effect_result(
                     check_id=check_id,
@@ -754,8 +808,18 @@ def _evaluate_proposed_check(
 
     # Approved: evaluate using the preregistered body (never mutate after propose).
     # Bound approval: one task_id + target only (no multi-claim k_sup reuse).
-    bound_task = str(row.get("bound_task_id") or row.get("task_id") or "")
-    if task_id and bound_task and str(task_id) != bound_task:
+    if "bound_task_id" not in row:
+        raise JournalFormatError(
+            "approved proposed_check missing required bound_task_id",
+            field="bound_task_id",
+        )
+    bound_task = str(row["bound_task_id"])
+    if not bound_task:
+        raise JournalFormatError(
+            "approved proposed_check bound_task_id must be non-empty",
+            field="bound_task_id",
+        )
+    if task_id and str(task_id) != bound_task:
         return CheckResult(
             check_id=check_id,
             template_id=PROPOSED_CHECK_TEMPLATE_ID,
@@ -946,7 +1010,8 @@ def evaluate_task_checks(
                 )
             )
             continue
-        if str(ref.template_id or "").startswith("plan_expansion_"):
+        # Exact PLAN-n critic template ids (not plan_expansion_* prefix).
+        if str(ref.template_id or "") in _PLAN_N_CRITIC_TEMPLATE_IDS:
             if is_core_plan_n:
                 results.append(
                     CheckResult(
@@ -1023,9 +1088,14 @@ def evaluate_task_checks(
             from coscientist.core.claims.rubric import freeze_rubric
 
             # Prefer OutputSpec.rubric for the named output (plan-frozen).
+            if check.output is None or str(check.output) == "":
+                raise JournalFormatError(
+                    "rubric check missing required output",
+                    field="output",
+                )
             out_rubric = None
             for o in spec.expected_outputs or []:
-                if o.name == (check.output or "main") and o.rubric is not None:
+                if o.name == str(check.output) and o.rubric is not None:
                     out_rubric = freeze_rubric(o.rubric)
                     break
             cr = evaluate_rubric(

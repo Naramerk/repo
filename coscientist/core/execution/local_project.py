@@ -444,10 +444,16 @@ class LocalProjectMixin:
                 raw_caps[str(p["task_id"])] = Decimal(str(bud_alloc))
             self._retry_at.pop(p["task_id"], None)
         elif ev.type == "AttemptClosed":
-            att = self.attempts.get(p["attempt_id"], {})
+            aid = str(require_journal_field(p, "attempt_id", ctx="AttemptClosed"))
+            if aid not in self.attempts:
+                raise JournalFormatError(
+                    f"AttemptClosed for unknown attempt_id {aid!r}",
+                    field="attempt_id",
+                )
+            att = dict(self.attempts[aid])
             att.update(p)
             att["closed"] = True
-            self.attempts[p["attempt_id"]] = att
+            self.attempts[aid] = att
             tid = p.get("task_id") or att.get("task_id")
             if tid and p.get("retry_at"):
                 t = self.tasks[tid]
@@ -651,14 +657,24 @@ class LocalProjectMixin:
             try:
                 self.graph.add_edge(edge)
             except KeyError as e:
-                # Sparse StudyFinalized payloads may omit study/question nodes;
-                # never invent endpoints — skip the edge and keep a taint note.
-                notes = getattr(self, "_sparse_finalized_edge_skips", None)
-                if not isinstance(notes, list):
-                    self._sparse_finalized_edge_skips: list[str] = []
-                    notes = self._sparse_finalized_edge_skips
-                notes.append(str(e))
+                raise JournalFormatError(
+                    f"StudyFinalized edge endpoints missing: {e}",
+                    field="edges",
+                ) from e
         # Keep hypothesis_verdicts separate from bind's verdict_snapshots cache.
         hv = payload.get("hypothesis_verdicts")
-        if isinstance(hv, dict):
-            self.hypothesis_verdicts.update({str(k): dict(v) for k, v in hv.items() if isinstance(v, dict)})
+        if hv is None:
+            pass
+        elif not isinstance(hv, dict):
+            raise JournalFormatError(
+                "StudyFinalized hypothesis_verdicts must be a mapping",
+                field="hypothesis_verdicts",
+            )
+        else:
+            for k, v in hv.items():
+                if not isinstance(v, dict):
+                    raise JournalFormatError(
+                        f"hypothesis_verdicts[{k!r}] must be a mapping",
+                        field="hypothesis_verdicts",
+                    )
+                self.hypothesis_verdicts[str(k)] = dict(v)

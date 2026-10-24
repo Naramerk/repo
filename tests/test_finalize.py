@@ -555,7 +555,7 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
     from coscientist.core.execution.domain import Budget
 
     sid = "st_bg_debit_crash"
-    budget = Budget(
+    budget = Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, 
         max_cost_rub=Decimal("50"),
         deadline=clock.now() + timedelta(seconds=60),
     )
@@ -606,7 +606,7 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
             catalog_version="0.1.0",
             deadline=clock.now() + timedelta(seconds=60),
             sid=sid,
-            budget=Budget(
+            budget=Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, 
                 max_cost_rub=Decimal("100"),
                 delegated_costly=Decimal("101"),
             ),

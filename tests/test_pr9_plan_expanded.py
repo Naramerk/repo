@@ -2041,7 +2041,9 @@ async def test_infra_failed_does_not_expand(tmp_path, clock, runtime_cls):
 def test_core_evaluated_only_from_effect_not_meta():
     class Meta:
         producer = "core"
-        produced_by = type("P", (), {"call_id": "st/E0#1:1"})()
+        produced_by = type(
+            "P", (), {"call_id": "st/E0#1:1", "attempt_id": "st/E0#1"}
+        )()
         artifact_id = "art1"
         core_evaluated = False
 
@@ -2050,6 +2052,7 @@ def test_core_evaluated_only_from_effect_not_meta():
     assert out is not None
     assert out["core_evaluated"] is True
     assert out["producer"] == "core"
+    assert out.get("attempt_id") == "st/E0#1"
     effect2 = {"producer": "agent"}
     out2 = recompute_effect_provenance(effect2, attempt_id="st/E0#1", artifact_meta=Meta())
     assert out2 is not None

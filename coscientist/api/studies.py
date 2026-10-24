@@ -368,38 +368,22 @@ async def post_studies(
     parsed = parse_create_study_body(body, profile_limits=profile_limits)
     refuse_kind: RefusalKind | None = None
     refuse_reason: str | None = None
+    body_ok: CreateStudyBody | None = None
     if parsed[0] is None:
         refuse_kind, refuse_reason = parsed[1]
-        # Minimal body so idempotency digest + create_study still run.
-        # All study caps required — explicit refuse-path values (not wire invent).
-        body = CreateStudyBody(
-            profile="research",
-            request="invalid",
-            catalog_version="test",
-            inputs=[],
-            deadline=datetime(1970, 1, 1, tzinfo=UTC),
-            finalize_reserve_s=0,
-            confirmations_needed=1,
-            refutations_needed=1,
-            refutation_priority=False,
-            supported_needed=2,
-            aggregate="count",
-            evalue_alpha=0.05,
-            max_expansions=0,
-            max_human_expansions=0,
-            replan_reserve=0.0,
-            max_tasks=1,
-            max_depth=1,
-            plan_timeout_s=1,
-            max_foreach_children=1,
-            max_loop_iter=1,
-            max_task_budget_share=1.0,
-            max_proposals=0,
+        # Digest refuse only — never invent CreateStudyBody caps.
+        req_digest = sha256_hex(
+            canonical_json(
+                {
+                    "refuse_kind": refuse_kind.value,
+                    "refuse_reason": str(refuse_reason),
+                }
+            )
         )
     else:
-        body, _effective = parsed
+        body_ok, _effective = parsed
         _ = _effective  # validated; create_study re-merges client vs profile
-    req_digest = _request_digest(body)
+        req_digest = _request_digest(body_ok)
 
     if idempotency_key:
         sid = study_id_from_idempotency_key(idempotency_key)
@@ -442,62 +426,67 @@ async def post_studies(
     created_id: str | None = None
     try:
         try:
-            from coscientist.core.plan.intake import IntakeRefuse
-
-            force_refuse = (
-                IntakeRefuse(refuse_kind, str(refuse_reason or "invalid")[:200])
-                if refuse_kind is not None
-                else None
-            )
-            from coscientist.core.execution._ingest_gate import (
-                mint_user_put_capability,
-                release_user_put_capability,
-            )
-
-            use_inputs = [] if force_refuse is not None else list(body.inputs or [])
-            user_cap = mint_user_put_capability() if use_inputs else None
-            try:
-                created_id = await rt.create_study(
-                    profile=body.profile,
-                    request=(body.request or "invalid").strip() or "invalid",
-                    catalog_version=body.catalog_version,
-                    hitl_policy=body.hitl_policy,
-                    deadline=body.deadline,
-                    budget=body.budget,
-                    finalize_reserve_s=body.finalize_reserve_s,
-                    confirmations_needed=body.confirmations_needed,
-                    refutations_needed=body.refutations_needed,
-                    refutation_priority=body.refutation_priority,
-                    supported_needed=body.supported_needed,
-                    aggregate=body.aggregate,
-                    evalue_alpha=body.evalue_alpha,
-                    max_expansions=body.max_expansions,
-                    max_human_expansions=body.max_human_expansions,
-                    replan_reserve=body.replan_reserve,
-                    max_tasks=body.max_tasks,
-                    max_depth=body.max_depth,
-                    plan_timeout_s=body.plan_timeout_s,
-                    max_foreach_children=body.max_foreach_children,
-                    max_loop_iter=body.max_loop_iter,
-                    max_task_budget_share=body.max_task_budget_share,
-                    max_proposals=body.max_proposals,
+            if refuse_kind is not None:
+                # StudyRefused + StudyFinalized without StudyCreated / fake caps.
+                if refuse_reason is None or str(refuse_reason).strip() == "":
+                    raise ValueError("refuse_reason required for parse refuse")
+                created_id = await rt.refuse_intake_parse(
+                    kind=refuse_kind,
+                    reason=str(refuse_reason)[:200],
                     sid=sid,
-                    inputs=use_inputs,
-                    as_of=body.as_of,
-                    input_limits=profile_limits,
-                    client_input_limits=(
-                        None if force_refuse is not None else body.input_limits
-                    ),
-                    intake_refuse=force_refuse,
-                    user_put_capability=user_cap,
-                    **create_kwargs,
                 )
-            finally:
-                release_user_put_capability(user_cap)
+            else:
+                assert body_ok is not None
+                body = body_ok
+                req = str(body.request).strip()
+                if not req:
+                    raise ValueError("request must be non-empty")
+                from coscientist.core.execution._ingest_gate import (
+                    mint_user_put_capability,
+                    release_user_put_capability,
+                )
+
+                use_inputs = list(body.inputs or [])
+                user_cap = mint_user_put_capability() if use_inputs else None
+                try:
+                    created_id = await rt.create_study(
+                        profile=body.profile,
+                        request=req,
+                        catalog_version=body.catalog_version,
+                        hitl_policy=body.hitl_policy,
+                        deadline=body.deadline,
+                        budget=body.budget,
+                        finalize_reserve_s=body.finalize_reserve_s,
+                        confirmations_needed=body.confirmations_needed,
+                        refutations_needed=body.refutations_needed,
+                        refutation_priority=body.refutation_priority,
+                        supported_needed=body.supported_needed,
+                        aggregate=body.aggregate,
+                        evalue_alpha=body.evalue_alpha,
+                        max_expansions=body.max_expansions,
+                        max_human_expansions=body.max_human_expansions,
+                        replan_reserve=body.replan_reserve,
+                        max_tasks=body.max_tasks,
+                        max_depth=body.max_depth,
+                        plan_timeout_s=body.plan_timeout_s,
+                        max_foreach_children=body.max_foreach_children,
+                        max_loop_iter=body.max_loop_iter,
+                        max_task_budget_share=body.max_task_budget_share,
+                        max_proposals=body.max_proposals,
+                        sid=sid,
+                        inputs=use_inputs,
+                        as_of=body.as_of,
+                        input_limits=profile_limits,
+                        client_input_limits=body.input_limits,
+                        user_put_capability=user_cap,
+                        **create_kwargs,
+                    )
+                finally:
+                    release_user_put_capability(user_cap)
         except Conflict:
-            # Peer wrote StudyCreated (payload clock differs) — treat as success.
+            # Peer wrote StudyCreated/StudyRefused — treat as success.
             events = await rt.store.read_all()
-            if any(e.type == "StudyCreated" for e in events):
+            if any(e.type in ("StudyCreated", "StudyRefused") for e in events):
                 created_id = sid
             else:
                 raise

@@ -247,13 +247,11 @@ def _safe_get_meta(
     artifact_lookup: Callable[[str], Any] | None,
     notes: list[str],
 ) -> Any | None:
+    """Resolve artifact meta; lookup errors propagate (callers catch specifically)."""
+    del notes  # retained for API compat; soft-fail notes are caller-owned
     if not artifact_id or artifact_lookup is None:
         return None
-    try:
-        return artifact_lookup(artifact_id)
-    except Exception as exc:  # noqa: BLE001 — never crash StudyFinalized path
-        notes.append(f"get_meta:{artifact_id}:{type(exc).__name__}")
-        return None
+    return artifact_lookup(artifact_id)
 
 
 def _content_digest(
@@ -268,9 +266,21 @@ def _content_digest(
         artifact_id, artifact_lookup=artifact_lookup, notes=note_buf
     )
     if meta is not None:
-        d = getattr(meta, "sha256", None) or getattr(meta, "digest", None)
-        if d:
-            return str(d)
+        if hasattr(meta, "sha256"):
+            d = meta.sha256
+            if d:
+                return str(d)
+        elif hasattr(meta, "digest"):
+            # Typed digest-only meta (no sha256 field) — refuse silent aliasing.
+            raise JournalFormatError(
+                "artifact meta missing sha256 (digest-only not accepted)",
+                field="sha256",
+            )
+        else:
+            raise JournalFormatError(
+                "artifact meta missing required sha256",
+                field="sha256",
+            )
     return str(fallback) if fallback else None
 
 
@@ -289,19 +299,37 @@ def _producer_index(
     if not results:
         return idx
     seen_payloads: set[int] = set()
-    for _key, payload in results.items():
+    for key, payload in results.items():
         if not isinstance(payload, Mapping):
-            continue
+            raise JournalFormatError(
+                f"result payload for {key!r} is not a mapping",
+                field="results",
+            )
         pid = id(payload)
         if pid in seen_payloads:
             continue
         seen_payloads.add(pid)
-        arts = payload.get("artifacts")
+        if "artifacts" not in payload:
+            raise JournalFormatError(
+                f"result {key!r} missing required artifacts",
+                field="artifacts",
+            )
+        arts = payload["artifacts"]
         if arts is None:
             arts = ()
+        if not isinstance(arts, (list, tuple)):
+            raise JournalFormatError(
+                f"result {key!r} artifacts must be a sequence",
+                field="artifacts",
+            )
         for aid in arts:
             idx.setdefault(str(aid), payload)
         omap = payload.get("output_map")
+        if omap is not None and not isinstance(omap, Mapping):
+            raise JournalFormatError(
+                f"result {key!r} output_map must be a mapping",
+                field="output_map",
+            )
         if isinstance(omap, Mapping):
             for aid in omap.values():
                 if aid:
@@ -548,13 +576,16 @@ def source_id_for_claim(claim: Any) -> str:
     keyed = getattr(claim, "independence_key", None)
     if keyed is not None and str(keyed) != "":
         return str(keyed)
-    exp = getattr(claim, "experiment_id", None)
-    if exp is None or str(exp) == "":
-        exp = getattr(claim, "attempt_id", None)
+    if isinstance(claim, Mapping):
+        exp = claim.get("experiment_id")
+    elif hasattr(claim, "experiment_id"):
+        exp = claim.experiment_id
+    else:
+        exp = None
     if exp is None or str(exp) == "":
         raise JournalFormatError(
-            "claim missing independence_key/experiment_id/attempt_id",
-            field="independence_key",
+            "claim missing independence_key/experiment_id",
+            field="experiment_id",
         )
     return str(independence_key_for(experiment_id=str(exp)))
 
@@ -632,10 +663,23 @@ def _claim_validity_ok(claim: Any) -> bool:
 
 
 def effective_outcome(claim: Any) -> ClaimOutcome | None:
-    """Read stored outcome, else derive from criterion_status / validity."""
-    stored = getattr(claim, "claim_outcome", None) or getattr(claim, "outcome", None)
+    """Read stored claim_outcome, else derive from criterion_status / validity."""
+    if isinstance(claim, Mapping):
+        if "claim_outcome" in claim:
+            stored = claim["claim_outcome"]
+        else:
+            stored = None
+    elif hasattr(claim, "claim_outcome"):
+        stored = claim.claim_outcome
+    else:
+        stored = None
     if stored in ("consistent", "inconsistent", "indeterminate"):
         return stored  # type: ignore[return-value]
+    if stored is not None and stored != "":
+        raise JournalFormatError(
+            f"invalid claim_outcome: {stored!r}",
+            field="claim_outcome",
+        )
     if _claim_validity_ok(claim) is False:
         return None
     return status_to_outcome(str(claim.criterion_status))
@@ -644,10 +688,26 @@ def effective_outcome(claim: Any) -> ClaimOutcome | None:
 def effective_validity(claim: Any) -> ClaimValidity:
     if _claim_validity_ok(claim) is False:
         return "invalid"
-    stored = getattr(claim, "validity", None)
+    if isinstance(claim, Mapping):
+        if "validity" not in claim:
+            raise JournalFormatError(
+                "claim missing required validity after validity_ok",
+                field="validity",
+            )
+        stored = claim["validity"]
+    elif hasattr(claim, "validity"):
+        stored = claim.validity
+    else:
+        raise JournalFormatError(
+            "claim missing required validity after validity_ok",
+            field="validity",
+        )
     if stored in ("valid", "invalid"):
         return stored  # type: ignore[return-value]
-    return "valid"
+    raise JournalFormatError(
+        f"invalid claim validity: {stored!r}",
+        field="validity",
+    )
 
 
 def effect_has_interval(effect: Mapping[str, Any] | None) -> bool:
@@ -662,22 +722,49 @@ def effect_has_interval(effect: Mapping[str, Any] | None) -> bool:
     return lo < hi
 
 
-def call_id_belongs_to_attempt(call_id: str | None, attempt_id: str | None) -> bool:
-    """True when ``call_id`` is the attempt or a writer ``{attempt_id}:{suffix}`` id.
+def _stamped_attempt_id(obj: Any | None) -> str | None:
+    """Return non-empty structural ``attempt_id`` from a mapping or attribute object."""
+    if obj is None:
+        return None
+    if isinstance(obj, Mapping):
+        raw = obj.get("attempt_id")
+    else:
+        raw = getattr(obj, "attempt_id", None)
+    if raw is None or str(raw) == "":
+        return None
+    return str(raw)
 
-    Exact equality or a single ``:`` split with non-empty suffix; unknown shapes
-    refuse (no bare ``startswith`` prefix heuristic).
+
+def call_id_belongs_to_attempt(
+    call_or_produced: str | Mapping[str, Any] | Any | None,
+    attempt_id: str | None,
+) -> bool:
+    """True when structured ``attempt_id`` matches (never call_id prefix parse).
+
+    Preferred: mapping/object with field ``attempt_id`` — compare equality.
+    Fallback when only a call_id string is available: require exact equality
+    with the parallel ``attempt_id`` argument (``{attempt}:{suffix}`` is not
+    authority; keep call_id for logging only).
     """
-    if call_id is None or attempt_id is None:
+    if attempt_id is None or str(attempt_id) == "":
         return False
-    cid = str(call_id)
     aid = str(attempt_id)
-    if not cid or not aid:
+    if call_or_produced is None:
         return False
-    if cid == aid:
-        return True
-    head, sep, tail = cid.partition(":")
-    return sep == ":" and head == aid and bool(tail)
+    if not isinstance(call_or_produced, str):
+        stamped = _stamped_attempt_id(call_or_produced)
+        if stamped is not None:
+            return stamped == aid
+        # Object/mapping without attempt_id: equality on call_id if present.
+        if isinstance(call_or_produced, Mapping):
+            cid = call_or_produced.get("produced_by_call_id") or call_or_produced.get(
+                "call_id"
+            )
+        else:
+            cid = getattr(call_or_produced, "call_id", None)
+        return cid is not None and str(cid) != "" and str(cid) == aid
+    cid = str(call_or_produced)
+    return bool(cid) and cid == aid
 
 
 def recompute_effect_provenance(
@@ -689,11 +776,13 @@ def recompute_effect_provenance(
     """Recompute ``trusted`` / ``countable`` from provenance facts (not journal bits).
 
     Prefer live ``artifact_meta`` for ``producer`` / ``produced_by.call_id`` /
-    ``artifact_id`` when the store is available. Isolation (net/fs) for replay
-    comes from the core journal effect only — never from artifact meta (B2).
+    ``produced_by.attempt_id`` / ``artifact_id`` when the store is available.
+    Isolation (net/fs) for replay comes from the core journal effect only —
+    never from artifact meta (B2).
 
     ``trusted`` = producer core, or sandbox with both isolations hard.
-    ``countable`` requires core_evaluated and attempt binding of call_id.
+    ``countable`` requires core_evaluated and structural attempt binding
+    (``effect.attempt_id`` / ``produced_by.attempt_id``), not call_id prefixes.
     ``observation_only`` (effect-stamped, e.g. tests_pass) ⇒ never countable.
     ``core_evaluated`` always from the effect — never from artifact meta.
     """
@@ -711,6 +800,7 @@ def recompute_effect_provenance(
         )
     else:
         call_id = str(raw_call)
+    produced_by: Any | None = None
     # Isolation + core_evaluated: journal effect only (never artifact meta).
     net_isolation = out.get("net_isolation")
     fs_isolation = out.get("fs_isolation")
@@ -719,10 +809,10 @@ def recompute_effect_provenance(
         meta_prod = getattr(artifact_meta, "producer", None)
         if meta_prod is not None:
             producer = meta_prod
-        produced = getattr(artifact_meta, "produced_by", None)
-        if produced is not None:
+        produced_by = getattr(artifact_meta, "produced_by", None)
+        if produced_by is not None:
             try:
-                meta_call = produced.call_id
+                meta_call = produced_by.call_id
             except AttributeError as e:
                 raise JournalFormatError(
                     "artifact produced_by missing call_id",
@@ -735,6 +825,9 @@ def recompute_effect_provenance(
                 )
             call_id = str(meta_call)
             out["produced_by_call_id"] = call_id
+            pb_aid = _stamped_attempt_id(produced_by)
+            if pb_aid is not None:
+                out["attempt_id"] = pb_aid
         aid = getattr(artifact_meta, "artifact_id", None)
         if aid is not None and str(aid) != "":
             out["artifact_id"] = str(aid)
@@ -769,18 +862,22 @@ def recompute_effect_provenance(
         out["trusted"] = False
     core_eval = bool(out.get("core_evaluated"))
     # Countable requires attempt binding when attempt_id is known.
-    # Never fall back to core_eval alone with a missing call_id (that was the
-    # legacy path that let unbound evidence count). Without attempt context
-    # (unit derive), honor an explicitly stamped countable ∧ core_eval.
+    # Structural effect/produced_by.attempt_id is authority; call_id is logging.
+    # Without attempt context (unit derive), honor stamped countable ∧ core_eval.
     # Observation-only / guest timeout never count toward k_ref/k_sup.
     if observation_only or out.get("timeout_kind"):
         out["countable"] = False
     elif attempt_id:
-        out["countable"] = bool(
-            core_eval
-            and call_id
-            and call_id_belongs_to_attempt(call_id, attempt_id)
-        )
+        belongs = False
+        eff_aid = _stamped_attempt_id(out)
+        pb_aid = _stamped_attempt_id(produced_by)
+        if eff_aid is not None:
+            belongs = eff_aid == str(attempt_id)
+        elif pb_aid is not None:
+            belongs = pb_aid == str(attempt_id)
+        elif call_id:
+            belongs = call_id_belongs_to_attempt(call_id, attempt_id)
+        out["countable"] = bool(core_eval and call_id and belongs)
     else:
         out["countable"] = bool(out.get("countable")) and core_eval
     return out
@@ -940,14 +1037,24 @@ def claim_is_severe(claim: Any) -> bool:
     if frozen_at is not None and first_ev is not None and not (frozen_at < first_ev):
         return False
     # Never honor severe=True from the journal — recompute below.
-    sesoi = getattr(claim, "sesoi", None)
     if uses is False:
         return False
+    if isinstance(claim, Mapping):
+        sesoi = require_journal_field(claim, "sesoi", ctx="claim")
+        used = require_journal_field(claim, "used_sesoi", ctx="claim")
+    else:
+        if not hasattr(claim, "sesoi"):
+            raise JournalFormatError("claim missing required sesoi", field="sesoi")
+        if not hasattr(claim, "used_sesoi"):
+            raise JournalFormatError(
+                "claim missing required used_sesoi", field="used_sesoi"
+            )
+        sesoi = claim.sesoi
+        used = claim.used_sesoi
     if uses is not True and sesoi is None:
         return False
     if sesoi is None:
         return False
-    used = getattr(claim, "used_sesoi", None)
     if used is not True:
         return False
     if not effect_is_countable(effect):
@@ -994,9 +1101,21 @@ def refute_intent_counts(claim: Any) -> bool:
         return False
     if uses is not True:
         return False
-    if getattr(claim, "sesoi", None) is None:
+    if isinstance(claim, Mapping):
+        sesoi = require_journal_field(claim, "sesoi", ctx="claim")
+        used_sesoi = require_journal_field(claim, "used_sesoi", ctx="claim")
+    else:
+        if not hasattr(claim, "sesoi"):
+            raise JournalFormatError("claim missing required sesoi", field="sesoi")
+        if not hasattr(claim, "used_sesoi"):
+            raise JournalFormatError(
+                "claim missing required used_sesoi", field="used_sesoi"
+            )
+        sesoi = claim.sesoi
+        used_sesoi = claim.used_sesoi
+    if sesoi is None:
         return False
-    if getattr(claim, "used_sesoi", None) is not True:
+    if used_sesoi is not True:
         return False
     effect = getattr(claim, "effect", None)
     if predicts_null:
@@ -1070,25 +1189,19 @@ def exclusion_reason(claim: Any) -> ExclusionReason | None:
     if prov == "partial":
         return "partial"
     if isinstance(claim, Mapping):
-        ek = claim.get("evidence_kind")
-        is_lit = claim.get("is_lit")
+        ek = require_journal_field(claim, "evidence_kind", ctx="claim")
+        is_lit = require_journal_field(claim, "is_lit", ctx="claim")
     else:
-        # Typed claims (RuntimeClaim): direct access; AttributeError → treat missing.
-        try:
-            ek = claim.evidence_kind
-        except AttributeError:
-            ek = None
-        try:
-            is_lit = claim.is_lit
-        except AttributeError:
-            is_lit = None
+        if not hasattr(claim, "evidence_kind"):
+            raise JournalFormatError(
+                "claim missing required evidence_kind", field="evidence_kind"
+            )
+        if not hasattr(claim, "is_lit"):
+            raise JournalFormatError("claim missing required is_lit", field="is_lit")
+        ek = claim.evidence_kind
+        is_lit = claim.is_lit
     if is_lit is True or ek == "literature":
         return "lit"
-    if is_lit is None and ek is None:
-        raise JournalFormatError(
-            "claim missing required evidence_kind/is_lit for exclusion",
-            field="evidence_kind",
-        )
     oc = effective_outcome(claim)
     if oc == "indeterminate" or oc is None:
         return "indeterminate"
@@ -1152,15 +1265,16 @@ def hypothesis_verdict(
     claims: Sequence[Any],
     any_experiment_done: bool = False,
     *,
-    refutations_needed: int = 1,
-    refutation_priority: bool = True,
-    supported_needed: int = 2,
-    confirmations_needed: int = 1,
+    refutations_needed: int,
+    refutation_priority: bool,
+    supported_needed: int,
+    confirmations_needed: int,
 ) -> tuple[str, bool, bool, str | None]:
     """Hypothesis/question verdict (SPEC §5).
 
     ``supported_needed`` (≥2) is the severe-support threshold. ``confirmations_needed``
     is retained for PR8 snapshot ``k`` compat and is not the support gate.
+    Caps are required kwargs (pass from ``study.*`` — no silent defaults).
     Returns ``(verdict, by_literature, by_theory, rule)``.
 
     PR15 derivation: review-only derivation never feeds k_sup/k_ref; any
@@ -1305,16 +1419,17 @@ def hypothesis_verdict(
 def verdict(
     claims: Sequence[Any],
     any_experiment_done: bool,
-    k: int = 1,
+    k: int,
     *,
-    refutations_needed: int = 1,
-    refutation_priority: bool = False,
-    supported_needed: int = 2,
+    refutations_needed: int,
+    refutation_priority: bool,
+    supported_needed: int,
 ) -> tuple[str, bool]:
     """Compat wrapper matching ``rules.verdict`` return shape.
 
     ``k`` is PR8 ``confirmations_needed`` (snapshot field); support gate uses
-    ``supported_needed``. ``by_theory`` is available via ``hypothesis_verdict``.
+    ``supported_needed``. Caps are required (pass from ``study.*``).
+    ``by_theory`` is available via ``hypothesis_verdict``.
     """
     v, by_lit, _by_theory, _rule = hypothesis_verdict(
         claims,

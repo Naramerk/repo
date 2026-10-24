@@ -117,16 +117,17 @@ _GATE_FAIL_ON_TIMEOUT: frozenset[str] = frozenset(
 class GateConfig(Frozen):
     """Per-gate HITL config (DESIGN §7.3 / RESEARCH_MODEL §5.2)."""
 
-    enabled: bool = True
+    enabled: bool
     timeout_s: int  # required; derive from GATE_TIMEOUTS_S (DESIGN §7.3)
     # costly_or_nonreal defaults to fail; others to delegate (via HitlPolicy.gate).
-    on_timeout: OnTimeout = "delegate"
+    on_timeout: OnTimeout
 
 
 def _default_gates() -> dict[str, GateConfig]:
     # Canonical gate keys only (no plan ↔ plan_approval alias).
     return {
         kind: GateConfig(
+            enabled=True,
             timeout_s=timeout_s,
             on_timeout="fail" if kind in _GATE_FAIL_ON_TIMEOUT else "delegate",
         )
@@ -138,6 +139,7 @@ class HitlPolicy(Frozen):
     mode: Literal["interactive", "auto", "headless"] = "headless"
     gates: dict[str, GateConfig] = Field(default_factory=_default_gates)
     # Legacy flat map kept for callers/tests; gate() prefers gates then these.
+    # Explicit factory values (DESIGN §7.3) — not silent invent at read time.
     timeout_s: dict[str, int] = Field(
         default_factory=lambda: {
             "spec_approval": GATE_TIMEOUTS_S["spec_approval"],
@@ -368,11 +370,11 @@ class LoopSpec(Frozen):
     depends_on: list[str] = Field(default_factory=list)
 
 
-class Budget(Frozen):
-    max_llm_calls: int = 100
-    max_tokens: int = 1_000_000
+class Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, Frozen):
+    max_llm_calls: int
+    max_tokens: int
     max_cost_rub: Decimal | None = None
-    max_tool_calls: int = 500
+    max_tool_calls: int
     deadline: datetime | None = None
     # RUB cap for critic decisions on costly_or_nonreal (delegate_capped).
     delegated_costly: Decimal | None = None
@@ -497,6 +499,8 @@ class ToolCallRef(Frozen):
     args_digest: str
     started_at: datetime
     ended_at: datetime | None = None
+    # Structural attempt binding (authority for belonging); call_id is for logging.
+    attempt_id: str | None = None
 
 
 class Attempt(Frozen):

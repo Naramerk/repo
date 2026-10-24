@@ -35,6 +35,11 @@ from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.cancel import cancel_study as _cancel_study
 from coscientist.core.plan.intake import IntakeRefuse
 
+# Writer schema pins (events.py EventEnvelope default left to #38).
+BUDGET_EXCEEDED_SCHEMA_VERSION = 1
+ATTEMPT_CLOSED_SCHEMA_VERSION = 2
+TASK_DONE_SCHEMA_VERSION = 2
+
 
 class StudyRuntime(LocalProjectMixin, AttemptsMixin):
     """In-process owner of one study: store, writer, tasks, timers.
@@ -378,7 +383,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                     idem_key=make_idem("BudgetExceeded", sid, "study"),
                     payload={"scope": "study"},
                     ts=self.clock.now(),
-                    schema_version=1,
+                    schema_version=BUDGET_EXCEEDED_SCHEMA_VERSION,
                 )
             ]
         )
@@ -543,7 +548,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                                 "task_id": task.task_id,
                             },
                             ts=now,
-                            schema_version=2,
+                            schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
                         )
                     )
                     t = self._attempt_tasks.pop(aid, None)
@@ -561,7 +566,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                         "reason": TaskReason.DEADLINE.value,
                     },
                     ts=now,
-                    schema_version=2,
+                    schema_version=TASK_DONE_SCHEMA_VERSION,
                 )
             )
             await self._append(events)

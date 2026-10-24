@@ -499,13 +499,8 @@ async def maybe_foreach_after_task_done(
                 done.append(pid)
         except LeaseLost:
             raise
-        except JournalFormatError as e:
-            await _refuse_and_skip_foreach(
-                runtime,
-                tmpl,
-                after=after,
-                detail=f"foreach_journal:{e.field or type(e).__name__}",
-            )
+        except JournalFormatError:
+            raise
     return done
 
 async def materialize_ready_foreach(runtime: StudyRuntime) -> list[str]:
@@ -525,13 +520,8 @@ async def materialize_ready_foreach(runtime: StudyRuntime) -> list[str]:
                 done.append(pid)
         except LeaseLost:
             raise
-        except JournalFormatError as e:
-            await _refuse_and_skip_foreach(
-                runtime,
-                tmpl,
-                after=after,
-                detail=f"foreach_journal:{e.field or type(e).__name__}",
-            )
+        except JournalFormatError:
+            raise
     return done
 
 async def resume_pending_foreach(runtime: StudyRuntime) -> int:

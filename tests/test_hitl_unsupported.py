@@ -121,7 +121,7 @@ async def test_core_rejects_wait_keep_open_hitl_gate(tmp_path, clock):
         },
     )
     root, rt = await _boot_exp(tmp_path, clock, hitl_policy=policy)
-    # No Budget(delegated_costly) → «реши сам» yields WAIT / keep_open.
+    # No Budget(max_llm_calls=100, max_tokens=1_000_000, max_tool_calls=500, delegated_costly) → «реши сам» yields WAIT / keep_open.
     rid = await rt.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=100)
     await rt.answer_hitl(rid, "delegate")
     assert rt.hitl[rid].open is True
