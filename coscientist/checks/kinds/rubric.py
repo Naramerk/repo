@@ -189,6 +189,10 @@ def _evaluate(
             values=out.values,
             role="validity",
             attempt_id=attempt_id,
+        
+            uses_sesoi=False,
+            predicts_null=False,
+            predicted_direction="two_sided",
         )
         item_statuses[item.id] = cr.status
         details.append(f"{item.id}:code:{cr.status.value}:{cr.detail or ''}")

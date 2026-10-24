@@ -170,6 +170,10 @@ def _eval(arts, paper, quote: str, *, fetched=None, call="q1", **extra):
         role="validity",
         attempt_id=call,
         fetched_digests=digests,
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
 
 
@@ -411,6 +415,10 @@ def test_multi_quote_effect_aggregates(tmp_path: Path):
         role="validity",
         attempt_id="mq",
         fetched_digests={paper.sha256},
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     assert cr.status is ReqStatus.MET, cr.detail
     assert cr.effect is not None
@@ -568,6 +576,10 @@ def test_source_sha256_required(tmp_path: Path):
         role="validity",
         attempt_id="q",
         fetched_digests={paper.sha256},
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     assert cr.status is ReqStatus.FAILED
     assert cr.detail == "quote_payload_invalid"
@@ -591,6 +603,10 @@ def test_values_source_quote_path_removed(tmp_path: Path):
         values=out.values,
         role="validity",
         fetched_digests={paper.sha256},
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     assert cr.status is ReqStatus.FAILED
     assert cr.detail == "output_not_submitted"
@@ -616,6 +632,10 @@ def test_missing_normalization_version_unassessed(tmp_path: Path):
         role="validity",
         attempt_id="q",
         fetched_digests={paper.sha256},
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     assert cr.status is ReqStatus.UNASSESSED
     assert cr.detail == "normalization_version_mismatch"

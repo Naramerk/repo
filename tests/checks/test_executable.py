@@ -162,6 +162,10 @@ def test_sandbox_fail_closed_when_bwrap_probe_fails(monkeypatch, caplog, tmp_pat
             values={},
             role="validity",
             attempt_id="st/E1#1",
+        
+            uses_sesoi=False,
+            predicts_null=False,
+            predicted_direction="two_sided",
         )
 
 
@@ -186,6 +190,10 @@ def test_sandbox_no_bwrap_fail_closed(monkeypatch, tmp_path):
             values={},
             role="validity",
             attempt_id="st/E1#1",
+        
+            uses_sesoi=False,
+            predicts_null=False,
+            predicted_direction="two_sided",
         )
 
 
@@ -210,6 +218,10 @@ def test_sandbox_allow_network_runs_but_not_trusted(tmp_path):
         values={},
         role="validity",
         attempt_id="st/E1#1",
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     assert cr.status is ReqStatus.MET
     assert cr.effect is not None
@@ -411,6 +423,10 @@ def test_exec_runs_exit_code(tmp_path):
         values={},
         role="validity",
         attempt_id="st/E1#1",
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     assert cr.status is ReqStatus.MET
     assert cr.effect is not None
@@ -475,6 +491,10 @@ def test_tests_pass_runs_catalog_tests_not_agent(tmp_path):
         values={},
         role="validity",
         attempt_id="st/E1#1",
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     assert cr.status is ReqStatus.MET, cr.detail
     assert cr.effect and cr.effect.get("producer") == "sandbox"
@@ -534,6 +554,10 @@ def test_holdout_from_catalog_ignores_agent_slot_and_claimed_score(tmp_path):
         values={},
         role="prediction",
         attempt_id="st/E1#1",
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     assert cr.status is ReqStatus.MET, cr.detail
     assert cr.effect is not None
@@ -563,6 +587,10 @@ def test_holdout_from_catalog_ignores_agent_slot_and_claimed_score(tmp_path):
         values={},
         role="prediction",
         attempt_id="st/E1#1",
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     assert cr_hi.status is ReqStatus.FAILED
     assert cr_hi.effect is not None
@@ -602,6 +630,10 @@ def test_reproducible_rerun_compares_result_digests(tmp_path):
         values={},
         role="prediction",
         attempt_id="st/E1#1",
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     assert cr.status is ReqStatus.MET
     assert cr.effect is not None
@@ -624,6 +656,10 @@ def test_countable_requires_attempt_binding(tmp_path):
         values={},
         role="validity",
         attempt_id=None,
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     assert cr.effect is not None
     assert cr.effect.get("countable") is False
@@ -649,6 +685,10 @@ def test_exec_runs_timeout_is_noncountable_refute_unresolved(tmp_path):
         values={},
         role="prediction",
         attempt_id="st/E1#1",
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     assert cr.status is ReqStatus.FAILED
     assert cr.effect is not None
@@ -897,6 +937,10 @@ def test_y_hat_equals_catalog_labels_still_uses_catalog_holdout(tmp_path):
         values={},
         role="prediction",
         attempt_id="st/E1#1",
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     assert cr.status is ReqStatus.MET
     assert cr.effect and cr.effect.get("est") == 1.0
@@ -950,6 +994,10 @@ def test_sitecustomize_slot_rejected_from_inputs(tmp_path):
         values={},
         role="validity",
         attempt_id="st/E1#1",
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     assert cr.effect is not None
     assert cr.effect.get("trusted") is False
@@ -999,6 +1047,10 @@ def test_forged_junit_os_exit_still_untrusted(tmp_path):
         values={},
         role="validity",
         attempt_id="st/E1#1",
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     # May MET if forged junit wins, or FAILED — never trusted/countable.
     assert cr.effect is not None
@@ -1056,6 +1108,10 @@ def test_pth_file_not_mounted_even_if_named_in_outputs(tmp_path):
         values={},
         role="validity",
         attempt_id="st/E1#1",
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     assert cr.status is ReqStatus.MET, cr.detail
     assert cr.effect and cr.effect.get("countable") is False
@@ -1099,6 +1155,10 @@ def test_holdout_digest_mismatch_is_catalog_error(tmp_path):
             values={},
             role="prediction",
             attempt_id="st/E1#1",
+        
+            uses_sesoi=False,
+            predicts_null=False,
+            predicted_direction="two_sided",
         )
 
 
@@ -1162,6 +1222,10 @@ sys.exit(0)
         values={},
         role="prediction",
         attempt_id="st/E1#1",
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     assert cr.status is ReqStatus.MET
     assert cr.effect and cr.effect.get("est") == 1.0

@@ -2066,6 +2066,10 @@ def test_schema_valid_missing_artifact(tmp_path):
         artifacts=arts,
         role="validity",
         attempt_id="st/E0#1",
+    
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
     )
     assert cr.status == ReqStatus.FAILED
     assert cr.detail == "artifact_missing"

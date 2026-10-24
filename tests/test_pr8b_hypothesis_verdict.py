@@ -916,6 +916,8 @@ def test_value_matches_never_used_sesoi():
             uses_sesoi=True,
             sesoi=0.5,
             predicts_null=False,
+        
+            predicted_direction="two_sided",
         )
         assert cr.used_sesoi is False
 

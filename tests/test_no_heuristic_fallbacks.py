@@ -1963,6 +1963,10 @@ def test_r4_evaluate_metric_threshold_requires_op(tmp_path):
             values={},
             role="prediction",
             attempt_id="a#1",
+        
+            uses_sesoi=False,
+            predicts_null=False,
+            predicted_direction="two_sided",
         )
 
 
@@ -1983,6 +1987,10 @@ def test_r4_evaluate_requires_output_no_main_default(tmp_path):
             artifacts=store,
             values={},
             role="validity",
+        
+            uses_sesoi=False,
+            predicts_null=False,
+            predicted_direction="two_sided",
         )
 
 
@@ -2029,6 +2037,10 @@ def test_r4_evaluate_unexpected_exception_raises_core_bug(monkeypatch, tmp_path)
             values={},
             role="prediction",
             attempt_id="a#1",
+        
+            uses_sesoi=False,
+            predicts_null=False,
+            predicted_direction="two_sided",
         )
 
 
