@@ -7,7 +7,7 @@
 - `require_study_id` uses core predicate; path resolve kept in `study_events_db`.
 
 ### M5 API — study_id path traversal gate
-- Shared `require_study_id` (`st_[A-Za-z0-9_]+`); `study_events_db` resolve-inside-root.
+- `require_study_id` + `study_events_db` resolve-inside-root (format from core).
 - `DataRootStudyService` refuses `../x`, `/abs`, `a/b`; no mkdir for missing journals.
 
 ### M5 API — GET study view + events contract

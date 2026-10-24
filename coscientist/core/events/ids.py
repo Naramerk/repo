@@ -24,22 +24,29 @@ def _ulid_like() -> str:
     return f"{ms:011x}{rand}"
 
 
+def is_study_id(value: str) -> bool:
+    """True iff ``value`` matches ``study_id()`` / ``study_id_from_idempotency_key``."""
+    return STUDY_ID_RE.fullmatch(value) is not None
+
+
 def study_id() -> str:
+    """``st_`` + 27 hex (11 ms + 16 rand). Must satisfy ``is_study_id``."""
     body = _ulid_like()
     if len(body) != _STUDY_ULID_HEX_LEN:
         raise RuntimeError(f"study_id body length {len(body)} != {_STUDY_ULID_HEX_LEN}")
-    return f"st_{body}"
+    sid = f"st_{body}"
+    if not is_study_id(sid):
+        raise RuntimeError("study_id() drifted from STUDY_ID_RE")
+    return sid
 
 
 def study_id_from_idempotency_key(key: str) -> str:
     """Deterministic ``st_idem_<24 hex>`` from the client Idempotency-Key."""
     digest = sha256_hex(f"Idempotency-Key:{key}")
-    return f"st_idem_{digest[:_IDEM_STUDY_HEX_LEN]}"
-
-
-def is_study_id(value: str) -> bool:
-    """True iff ``value`` matches ``study_id()`` / ``study_id_from_idempotency_key``."""
-    return STUDY_ID_RE.fullmatch(value) is not None
+    sid = f"st_idem_{digest[:_IDEM_STUDY_HEX_LEN]}"
+    if not is_study_id(sid):
+        raise RuntimeError("study_id_from_idempotency_key drifted from STUDY_ID_RE")
+    return sid
 
 
 def task_id(study: str, task_key: str) -> str:
