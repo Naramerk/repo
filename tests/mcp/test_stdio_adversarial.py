@@ -11,7 +11,6 @@ from typing import Any
 import pytest
 
 from coscientist.mcp import (
-    McpClient,
     McpProtocolError,
     McpResponseLimitError,
     McpTimeoutError,
@@ -19,7 +18,16 @@ from coscientist.mcp import (
     StdioServerConfig,
 )
 from coscientist.mcp.stdio import StdioTransport
-from tests.mcp.conftest import make_config
+from tests.mcp.conftest import (
+    FakeClock,
+    SystemClock,
+    fake_sleep,
+    fake_wait_for,
+    make_client,
+    make_config,
+    system_sleep,
+    system_wait_for,
+)
 from tests.mcp.fake_server import FakeStdioServer, default_handler
 from tests.mcp.test_client import RecordingFetcher
 
@@ -66,10 +74,15 @@ async def test_stderr_flood_trips_max_stderr_bytes() -> None:
         kill_grace_s=0.5,
         process_group_poll_interval_s=0.05,
     )
-    client = McpClient(cfg, file_fetcher=RecordingFetcher({}))
+    client = make_client(cfg, file_fetcher=RecordingFetcher({}))
     session = await client.connect("flood")
-    await asyncio.sleep(0.4)  # let drain task observe overflow while still reading
-    with pytest.raises(McpResponseLimitError) as ei:
+    for _ in range(1000):
+        if session._stdio._stderr_overflow:  # noqa: SLF001
+            break
+        await asyncio.sleep(0)
+    else:
+        pytest.fail("stderr overflow not observed")
+    with pytest.raises(McpResponseLimitError, match="max_stderr_bytes") as ei:
         await session.list_tools()
     assert ei.value.limit == 4096
 
@@ -115,14 +128,26 @@ async def test_stdio_timeout_kills_process_group_including_grandchild() -> None:
         kill_grace_s=0.5,
         process_group_poll_interval_s=0.05,
     )
-    client = McpClient(cfg, file_fetcher=RecordingFetcher({}))
+    clock = FakeClock()
+    client = make_client(
+        cfg,
+        file_fetcher=RecordingFetcher({}),
+        clock=clock,
+        sleep=fake_sleep(clock),
+        wait_for=fake_wait_for(clock),
+    )
     session = await client.connect("hang")
     pgid = session._stdio._pgid  # noqa: SLF001
-    with pytest.raises(McpTimeoutError):
+    with pytest.raises(McpTimeoutError, match="stdio receive exceeded configured timeout"):
         await session.list_tools()
-    await asyncio.sleep(cfg.process_group_poll_interval_s * 2)
-    with pytest.raises(ProcessLookupError):
-        os.killpg(pgid, 0)
+    for _ in range(1000):
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0)
+    else:
+        pytest.fail("process group still alive after timeout reap")
 
 
 @pytest.mark.asyncio
@@ -149,8 +174,8 @@ async def test_partial_json_line_fail_closes_session() -> None:
             return None
 
     transport = BadLine()
-    client = McpClient(make_config(), file_fetcher=RecordingFetcher({}))
-    with pytest.raises(McpProtocolError):
+    client = make_client(make_config(), file_fetcher=RecordingFetcher({}))
+    with pytest.raises(McpProtocolError, match="not JSON"):
         await client.connect_memory("fake", transport)  # type: ignore[arg-type]
     assert transport.closed is True
 
@@ -197,9 +222,9 @@ async def test_real_process_mid_line_eof() -> None:
         kill_grace_s=0.5,
         process_group_poll_interval_s=0.05,
     )
-    client = McpClient(cfg, file_fetcher=RecordingFetcher({}))
+    client = make_client(cfg, file_fetcher=RecordingFetcher({}))
     session = await client.connect("midline")
-    with pytest.raises(McpTransportError) as ei:
+    with pytest.raises(McpTransportError, match="before complete message") as ei:
         await session.list_tools()
     assert "before complete message" in ei.value.detail
 
@@ -221,9 +246,12 @@ async def test_stdio_send_rejects_embedded_newline() -> None:
         process_group_poll_interval_s=0.05,
         read_chunk_bytes=1024,
         max_stderr_bytes=1024,
+        clock=SystemClock(),
+        sleep=system_sleep(),
+        wait_for=system_wait_for(),
     )
     try:
-        with pytest.raises(McpProtocolError):
+        with pytest.raises(McpProtocolError, match="embedded newlines"):
             await transport.send(b'{"jsonrpc":"2.0"}\n{"x":1}')
     finally:
         await transport.aclose()
@@ -246,10 +274,11 @@ async def test_response_over_limit_on_memory_transport() -> None:
         return default_handler(method, params)
 
     async with FakeStdioServer(handler) as server:
-        client = McpClient(
+        client = make_client(
             make_config(max_response_bytes=200),
             file_fetcher=RecordingFetcher({}),
         )
         session = await client.connect_memory("fake", server.client)
-        with pytest.raises(McpResponseLimitError):
+        with pytest.raises(McpResponseLimitError, match="max_response_bytes") as ei:
             await session.list_tools()
+        assert ei.value.limit == 200

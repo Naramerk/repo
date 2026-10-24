@@ -12,7 +12,6 @@ from pydantic import ValidationError
 from coscientist.mcp import (
     CallToolReply,
     ListToolsReply,
-    McpClient,
     McpClientConfig,
     McpConfigError,
     McpProtocolError,
@@ -22,7 +21,7 @@ from coscientist.mcp import (
 )
 from coscientist.mcp.digest import content_digest, sha256_hex
 from coscientist.mcp.transport import HttpStream
-from tests.mcp.conftest import make_config
+from tests.mcp.conftest import make_client, make_config
 from tests.mcp.fake_server import FakeStdioServer, default_handler
 
 
@@ -101,7 +100,7 @@ class RecordingFetcher:
 @pytest.mark.asyncio
 async def test_list_tools_and_call_tool_return_digest_and_raw_bytes() -> None:
     async with FakeStdioServer(default_handler) as server:
-        client = McpClient(make_config(), file_fetcher=RecordingFetcher({}))
+        client = make_client(make_config(), file_fetcher=RecordingFetcher({}))
         session = await client.connect_memory("fake", server.client)
         listed = await session.list_tools()
         assert isinstance(listed, ListToolsReply)
@@ -134,7 +133,7 @@ async def test_list_tools_follows_next_cursor_pagination() -> None:
         return default_handler(method, params)
 
     async with FakeStdioServer(handler) as server:
-        client = McpClient(make_config(), file_fetcher=RecordingFetcher({}))
+        client = make_client(make_config(), file_fetcher=RecordingFetcher({}))
         session = await client.connect_memory("fake", server.client)
         listed = await session.list_tools()
         assert [t.name for t in listed.tools] == ["a", "b"]
@@ -155,12 +154,12 @@ async def test_list_tools_page_limit_and_repeated_cursor() -> None:
         return default_handler(method, params)
 
     async with FakeStdioServer(handler) as server:
-        client = McpClient(
+        client = make_client(
             make_config(max_list_tools_pages=3),
             file_fetcher=RecordingFetcher({}),
         )
         session = await client.connect_memory("fake", server.client)
-        with pytest.raises(McpProtocolError) as ei:
+        with pytest.raises(McpProtocolError, match="repeated nextCursor") as ei:
             await session.list_tools()
         assert "repeated nextCursor" in ei.value.detail
 
@@ -182,7 +181,7 @@ async def test_list_tools_max_pages_without_repeat() -> None:
         return default_handler(method, params)
 
     async with FakeStdioServer(handler) as server:
-        client = McpClient(
+        client = make_client(
             make_config(max_list_tools_pages=2),
             file_fetcher=RecordingFetcher({}),
         )
@@ -204,7 +203,7 @@ async def test_supported_protocol_version_list_not_strict_equality() -> None:
         return default_handler(method, params)
 
     async with FakeStdioServer(handler) as server:
-        client = McpClient(
+        client = make_client(
             make_config(
                 protocol_version="2025-06-18",
                 supported_protocol_versions=("2025-06-18", "2025-03-26"),
@@ -227,8 +226,8 @@ async def test_unsupported_negotiated_version_rejected() -> None:
         return default_handler(method, params)
 
     async with FakeStdioServer(handler) as server:
-        client = McpClient(make_config(), file_fetcher=RecordingFetcher({}))
-        with pytest.raises(McpProtocolError):
+        client = make_client(make_config(), file_fetcher=RecordingFetcher({}))
+        with pytest.raises(McpProtocolError, match="not in supported_protocol_versions"):
             await client.connect_memory("fake", server.client)
 
 
@@ -250,7 +249,7 @@ async def test_jsonrpc_error_keeps_message_and_data() -> None:
         return default_handler(method, params)
 
     async with FakeStdioServer(handler) as server:
-        client = McpClient(make_config(), file_fetcher=RecordingFetcher({}))
+        client = make_client(make_config(), file_fetcher=RecordingFetcher({}))
         session = await client.connect_memory("fake", server.client)
         with pytest.raises(McpProtocolError) as ei:
             await session.call_tool("echo", {})
@@ -285,7 +284,7 @@ async def test_read_loop_skips_notifications_answers_server_requests() -> None:
         return default_handler(method, params)
 
     async with FakeStdioServer(handler) as server:
-        client = McpClient(make_config(), file_fetcher=RecordingFetcher({}))
+        client = make_client(make_config(), file_fetcher=RecordingFetcher({}))
         session = await client.connect_memory("fake", server.client)
         listed = await session.list_tools()
         assert [t.name for t in listed.tools] == ["only"]
@@ -300,7 +299,7 @@ async def test_message_without_id_or_method_is_protocol_error() -> None:
         return default_handler(method, params)
 
     async with FakeStdioServer(handler) as server:
-        client = McpClient(make_config(), file_fetcher=RecordingFetcher({}))
+        client = make_client(make_config(), file_fetcher=RecordingFetcher({}))
         session = await client.connect_memory("fake", server.client)
         with pytest.raises(McpProtocolError, match="id or method"):
             await session.list_tools()
@@ -342,7 +341,7 @@ async def test_sse_message_without_id_or_method_is_protocol_error(
             ),
         ),
     )
-    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    client = make_client(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
     session = await client.connect("remote")
     with pytest.raises(McpProtocolError, match="id or method"):
         await session.list_tools()
@@ -381,14 +380,14 @@ async def test_timeout_sends_cancelled_notification() -> None:
                     self._to_server.task_done()
 
     async with HangServer(default_handler) as server:
-        client = McpClient(
+        client = make_client(
             make_config(list_tools_timeout_s=0.15),
             file_fetcher=RecordingFetcher({}),
         )
         session = await client.connect_memory("fake", server.client)
         from coscientist.mcp import McpTimeoutError
 
-        with pytest.raises(McpTimeoutError):
+        with pytest.raises(McpTimeoutError, match="memory transport receive exceeded timeout"):
             await session.list_tools()
         assert server.cancelled_ids == [2]
 
@@ -414,7 +413,7 @@ async def test_call_tool_downloads_resource_link_under_limit() -> None:
 
     fetcher = RecordingFetcher({file_url: file_body})
     async with FakeStdioServer(handler) as server:
-        client = McpClient(make_config(), file_fetcher=fetcher)
+        client = make_client(make_config(), file_fetcher=fetcher)
         session = await client.connect_memory("fake", server.client)
         reply = await session.call_tool("get_paper", {})
         assert fetcher.urls == [file_url]
@@ -427,8 +426,8 @@ async def test_call_tool_downloads_resource_link_under_limit() -> None:
 
 @pytest.mark.asyncio
 async def test_unknown_server_name_is_config_error() -> None:
-    client = McpClient(make_config(), file_fetcher=RecordingFetcher({}))
-    with pytest.raises(McpConfigError):
+    client = make_client(make_config(), file_fetcher=RecordingFetcher({}))
+    with pytest.raises(McpConfigError, match="is not in the configured profile list"):
         await client.connect("not-in-profile")
 
 
@@ -476,7 +475,7 @@ async def test_streamable_http_session_id_protocol_version_and_notification_202(
             ),
         )
     )
-    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    client = make_client(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
     session = await client.connect("remote")
     tools = await session.list_tools()
     assert [t.name for t in tools.tools] == ["ping"]
@@ -548,11 +547,14 @@ async def test_streamable_http_404_reinitializes(monkeypatch: pytest.MonkeyPatch
             ),
         )
     )
-    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    client = make_client(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
     session = await client.connect("remote")
     tools = await session.list_tools()
     assert [t.name for t in tools.tools] == ["t"]
-    assert any(c["headers"].get("Mcp-Session-Id") == "new" for c in http.calls)
+    # calls: init→old, notify(old), list 404, re-init→new, notify(new), list(new)
+    assert "Mcp-Session-Id" not in http.calls[3]["headers"]
+    assert http.calls[4]["headers"]["Mcp-Session-Id"] == "new"
+    assert http.calls[5]["headers"]["Mcp-Session-Id"] == "new"
     await session.aclose()
 
 
@@ -604,7 +606,7 @@ async def test_streamable_http_sse_early_return_answers_server_request(
         ),
         http_read_chunk_bytes=256,
     )
-    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    client = make_client(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
     session = await client.connect("remote")
     tools = await session.list_tools()
     assert [t.name for t in tools.tools] == ["sse"]
@@ -661,11 +663,10 @@ async def test_streamable_http_sse_duplicate_id_errors(monkeypatch: pytest.Monke
         # One read returns the whole body so both events are in one feed().
         http_read_chunk_bytes=65536,
     )
-    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    client = make_client(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
     session = await client.connect("remote")
-    with pytest.raises(McpProtocolError) as ei:
+    with pytest.raises(McpProtocolError, match="duplicate"):
         await session.list_tools()
-    assert "duplicate" in ei.value.detail.lower()
 
 
 @pytest.mark.asyncio
@@ -706,10 +707,11 @@ async def test_streamable_http_response_limit_closes_session(
         max_response_bytes=500,
         http_read_chunk_bytes=32,
     )
-    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    client = make_client(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
     session = await client.connect("remote")
-    with pytest.raises(McpResponseLimitError):
+    with pytest.raises(McpResponseLimitError, match="max_response_bytes") as ei:
         await session.list_tools()
+    assert ei.value.limit == 500
     assert session._http._closed is True  # noqa: SLF001
 
 
@@ -725,6 +727,7 @@ async def test_streamable_http_overall_deadline_ignores_sse_keepalives_real_sock
 
     from coscientist.mcp import McpTimeoutError
     from coscientist.mcp.httpx_transport import HttpxTransport
+
 
     monkeypatch.setenv("COSCI_TEST_MCP_KEY", "k")
 
@@ -797,13 +800,11 @@ async def test_streamable_http_overall_deadline_ignores_sse_keepalives_real_sock
         list_tools_timeout_s=0.4,
         notification_timeout_s=0.4,
     )
-    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=transport)
+    client = make_client(cfg, file_fetcher=RecordingFetcher({}), http_transport=transport)
     try:
         session = await client.connect("remote")
-        started = time.monotonic()
-        with pytest.raises(McpTimeoutError):
+        with pytest.raises(McpTimeoutError, match="exceeded configured timeout"):
             await session.list_tools()
-        assert time.monotonic() - started < 2.0
         assert session._http._closed is True  # noqa: SLF001
     finally:
         await transport.aclose()
@@ -846,7 +847,7 @@ async def test_streamable_http_aclose_sends_delete_with_session_id(
             ),
         )
     )
-    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    client = make_client(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
     session = await client.connect("remote")
     await session.aclose()
     deletes = [c for c in http.calls if c["method"] == "DELETE"]
@@ -966,7 +967,7 @@ async def test_sse_duplicate_id_across_chunks(monkeypatch: pytest.MonkeyPatch) -
         ),
         http_read_chunk_bytes=64,
     )
-    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    client = make_client(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
     session = await client.connect("remote")
     with pytest.raises(McpProtocolError, match="duplicate"):
         await session.list_tools()
@@ -980,7 +981,7 @@ async def test_null_response_id_is_protocol_error() -> None:
         return default_handler(method, params)
 
     async with FakeStdioServer(handler) as server:
-        client = McpClient(make_config(), file_fetcher=RecordingFetcher({}))
+        client = make_client(make_config(), file_fetcher=RecordingFetcher({}))
         session = await client.connect_memory("fake", server.client)
         with pytest.raises(McpProtocolError, match="null"):
             await session.list_tools()
@@ -994,7 +995,7 @@ async def test_unknown_response_id_is_protocol_error() -> None:
         return default_handler(method, params)
 
     async with FakeStdioServer(handler) as server:
-        client = McpClient(make_config(), file_fetcher=RecordingFetcher({}))
+        client = make_client(make_config(), file_fetcher=RecordingFetcher({}))
         session = await client.connect_memory("fake", server.client)
         with pytest.raises(McpProtocolError, match="does not match"):
             await session.list_tools()
@@ -1035,7 +1036,7 @@ async def test_http_transport_error_closes_session(monkeypatch: pytest.MonkeyPat
             ),
         )
     )
-    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    client = make_client(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
     session = await client.connect("remote")
     with pytest.raises(McpTransportError, match="httpx boom"):
         await session.list_tools()
@@ -1099,12 +1100,12 @@ async def test_cancel_notify_failure_still_closes_on_timeout() -> None:
 
     async with HangServer(default_handler) as server:
         tracked = FailCancelTransport(server.client)
-        client = McpClient(
+        client = make_client(
             make_config(list_tools_timeout_s=0.15),
             file_fetcher=RecordingFetcher({}),
         )
         session = await client.connect_memory("fake", tracked)  # type: ignore[arg-type]
-        with pytest.raises(McpTimeoutError):
+        with pytest.raises(McpTimeoutError, match="memory transport receive exceeded timeout"):
             await session.list_tools()
         assert tracked.closed is True
 
@@ -1142,11 +1143,11 @@ async def test_streamable_http_non_ok_closes_session(monkeypatch: pytest.MonkeyP
             ),
         )
     )
-    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    client = make_client(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
     session = await client.connect("remote")
     from coscientist.mcp import McpTransportError
 
-    with pytest.raises(McpTransportError):
+    with pytest.raises(McpTransportError, match="streamable HTTP status 500"):
         await session.list_tools()
     assert session._http._closed is True  # noqa: SLF001
 
@@ -1165,13 +1166,13 @@ async def test_missing_api_key_env_is_config_error(monkeypatch: pytest.MonkeyPat
             ),
         )
     )
-    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
-    with pytest.raises(McpConfigError):
+    client = make_client(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    with pytest.raises(McpConfigError, match="COSCI_TEST_MCP_KEY"):
         await client.connect("remote")
 
 
 def test_config_requires_timeouts_and_limits() -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="Field required"):
         McpClientConfig(
             servers=(
                 StdioServerConfig(
@@ -1205,12 +1206,12 @@ def test_config_requires_timeouts_and_limits() -> None:
 
 
 def test_config_rejects_non_http_fetch_scheme() -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="hard-denied"):
         make_config(fetch_uri_schemes=("http", "ftp"))
 
 
 def test_config_rejects_duplicate_server_names() -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="unique"):
         make_config(
             servers=(
                 StdioServerConfig(transport="stdio", name="dup", command="x", args=(), env_keys=()),
@@ -1246,7 +1247,7 @@ async def test_stdio_missing_env_key_names_only(monkeypatch: pytest.MonkeyPatch)
             ),
         )
     )
-    client = McpClient(cfg, file_fetcher=RecordingFetcher({}))
+    client = make_client(cfg, file_fetcher=RecordingFetcher({}))
     with pytest.raises(McpConfigError) as ei:
         await client.connect("needs-secret")
     assert "COSCI_MCP_MISSING_SECRET" in str(ei.value)

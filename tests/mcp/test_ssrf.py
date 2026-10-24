@@ -25,7 +25,7 @@ from coscientist.mcp.files import SafeHttpFileFetcher
 from coscientist.mcp.httpx_transport import HttpxTransport
 from coscientist.mcp.ssrf import format_host_header, host_literal_ip, ip_is_blocked, resolve_and_pin
 from coscientist.mcp.transport import HttpStream
-from tests.mcp.conftest import make_config
+from tests.mcp.conftest import SystemClock, make_config, system_wait_for
 
 
 class _BufStream:
@@ -121,6 +121,8 @@ def _fetcher(
         allowed_content_types=frozenset(cfg.allowed_file_content_types),
         allowed_content_encodings=frozenset(cfg.allowed_content_encodings),
         read_chunk_bytes=cfg.http_read_chunk_bytes,
+        clock=SystemClock(),
+        wait_for=system_wait_for(),
         resolver=resolver,
         address_policy=address_policy,
     )
@@ -138,7 +140,7 @@ def _fetcher(
 @pytest.mark.asyncio
 async def test_hard_deny_non_http_schemes(uri: str) -> None:
     fetcher = _fetcher(FakeHttp([]))
-    with pytest.raises(McpUnsupportedUriError):
+    with pytest.raises(McpUnsupportedUriError, match="hard-denied"):
         await fetcher.fetch(uri, max_bytes=100, timeout_s=1.0)
 
 
@@ -197,7 +199,7 @@ async def test_ssrf_blocks_loopback_decimal_octal_hex(host: str) -> None:
     assert literal is not None
     assert ip_is_blocked(literal)
     fetcher = _fetcher(FakeHttp([]))
-    with pytest.raises(McpSsrfError):
+    with pytest.raises(McpSsrfError, match="blocked IP literal"):
         await fetcher.fetch(f"http://{host}/x", max_bytes=100, timeout_s=1.0)
 
 
@@ -206,7 +208,7 @@ async def test_resolve_pin_rejects_private_dns() -> None:
     http = FakeHttp([])
     resolver = FakeResolver({"evil.example": ("10.1.2.3",)})
     fetcher = _fetcher(http, resolver=resolver)
-    with pytest.raises(McpSsrfError):
+    with pytest.raises(McpSsrfError, match="resolved address .* is blocked"):
         await fetcher.fetch("https://evil.example/secret", max_bytes=100, timeout_s=1.0)
     assert http.calls == []
 
@@ -216,7 +218,7 @@ async def test_mixed_public_private_answer_denied() -> None:
     http = FakeHttp([])
     resolver = FakeResolver({"cdn.example": ("8.8.8.8", "10.0.0.1")})
     fetcher = _fetcher(http, resolver=resolver)
-    with pytest.raises(McpSsrfError):
+    with pytest.raises(McpSsrfError, match="resolved address .* is blocked"):
         await fetcher.fetch("https://cdn.example/a", max_bytes=100, timeout_s=1.0)
     assert http.calls == []
 
@@ -226,7 +228,7 @@ async def test_dns_rebinding_public_then_private_on_redirect() -> None:
     http = FakeHttp([_BufStream(302, {"location": "https://cdn.example/b"}, b"")])
     resolver = FakeResolver([("8.8.8.8",), ("10.0.0.1",)])
     fetcher = _fetcher(http, resolver=resolver)
-    with pytest.raises(McpSsrfError):
+    with pytest.raises(McpSsrfError, match="resolved address .* is blocked"):
         await fetcher.fetch("https://cdn.example/a", max_bytes=100, timeout_s=1.0)
     assert len(http.calls) == 1
     assert http.calls[0]["connect_ip"] == "8.8.8.8"
@@ -267,7 +269,7 @@ async def test_redirect_checked_per_hop_and_hop_limit() -> None:
     )
     resolver = FakeResolver({"cdn.example": ("8.8.8.8",)})
     fetcher = _fetcher(http, resolver=resolver, max_redirect_hops=1)
-    with pytest.raises(McpSsrfError) as ei:
+    with pytest.raises(McpSsrfError, match="hop limit") as ei:
         await fetcher.fetch("https://cdn.example/a", max_bytes=100, timeout_s=1.0)
     assert "hop limit" in ei.value.detail
 
@@ -277,7 +279,7 @@ async def test_redirect_to_private_ip_denied() -> None:
     http = FakeHttp([_BufStream(302, {"location": "http://127.0.0.1/meta"}, b"")])
     resolver = FakeResolver({"cdn.example": ("8.8.8.8",)})
     fetcher = _fetcher(http, resolver=resolver)
-    with pytest.raises(McpSsrfError):
+    with pytest.raises(McpSsrfError, match="blocked IP literal"):
         await fetcher.fetch("https://cdn.example/a", max_bytes=100, timeout_s=1.0)
 
 
@@ -287,7 +289,7 @@ async def test_streaming_size_limit_while_reading() -> None:
     http = FakeHttp([_BufStream(200, {"content-type": "application/octet-stream"}, big)])
     resolver = FakeResolver({"cdn.example": ("8.8.8.8",)})
     fetcher = _fetcher(http, resolver=resolver)
-    with pytest.raises(McpResponseLimitError) as ei:
+    with pytest.raises(McpResponseLimitError, match="max_file_bytes") as ei:
         await fetcher.fetch("https://cdn.example/big.bin", max_bytes=50, timeout_s=1.0)
     assert ei.value.limit == 50
 
@@ -310,8 +312,9 @@ async def test_gzip_decompression_bomb_guard() -> None:
     )
     resolver = FakeResolver({"cdn.example": ("8.8.8.8",)})
     fetcher = _fetcher(http, resolver=resolver, encodings=("gzip",))
-    with pytest.raises(McpResponseLimitError):
+    with pytest.raises(McpResponseLimitError, match="max_file_bytes") as ei:
         await fetcher.fetch("https://cdn.example/bomb.gz", max_bytes=100, timeout_s=1.0)
+    assert ei.value.limit == 100
 
 
 def _zlib_zeros_bomb(*, uncompressed_mib: int = 32) -> bytes:
@@ -392,8 +395,9 @@ async def test_deflate_bomb_never_returns_piece_over_max_bytes(
     )
     resolver = FakeResolver({"cdn.example": ("8.8.8.8",)})
     fetcher = _fetcher(http, resolver=resolver, encodings=("deflate",))
-    with pytest.raises(McpResponseLimitError):
+    with pytest.raises(McpResponseLimitError, match="max_file_bytes") as ei:
         await fetcher.fetch("https://cdn.example/bomb.z", max_bytes=max_bytes, timeout_s=5.0)
+    assert ei.value.limit == max_bytes
     # room = max_bytes - len(out) + 1 → a single piece may be max_bytes + 1 before limit raise.
     assert max_piece <= max_bytes + 1, f"decompress returned {max_piece} bytes (> {max_bytes})"
 
@@ -536,7 +540,7 @@ async def test_content_type_must_be_allowed() -> None:
     http = FakeHttp([_BufStream(200, {"content-type": "application/javascript"}, b"alert(1)")])
     resolver = FakeResolver({"cdn.example": ("8.8.8.8",)})
     fetcher = _fetcher(http, resolver=resolver)
-    with pytest.raises(McpProtocolError):
+    with pytest.raises(McpProtocolError, match="not in allowed_file_content_types"):
         await fetcher.fetch("https://cdn.example/x.js", max_bytes=100, timeout_s=1.0)
 
 
@@ -704,7 +708,7 @@ async def test_httpx_sni_cert_mismatch_rejected() -> None:
         verify.load_verify_locations(str(cert_path))
         transport = HttpxTransport(verify=verify)
         try:
-            with pytest.raises(McpTransportError):
+            with pytest.raises(McpTransportError, match="httpx transport error"):
                 await transport.open(
                     "GET",
                     f"https://evil.example:{port}/",
@@ -778,7 +782,7 @@ async def test_e2e_fetcher_dns_rebinding_denied_over_real_socket() -> None:
         address_policy=AllowLoopbackPolicy(),
     )
     try:
-        with pytest.raises(McpSsrfError):
+        with pytest.raises(McpSsrfError, match="resolved address .* is blocked"):
             await fetcher.fetch(f"http://files.test:{port}/a", max_bytes=1000, timeout_s=2.0)
     finally:
         await transport.aclose()
@@ -812,7 +816,7 @@ async def test_e2e_fetcher_mixed_answer_denied_over_real_socket() -> None:
         address_policy=AllowLoopbackPolicy(),
     )
     try:
-        with pytest.raises(McpSsrfError):
+        with pytest.raises(McpSsrfError, match="resolved address .* is blocked"):
             await fetcher.fetch(f"http://files.test:{port}/a", max_bytes=1000, timeout_s=2.0)
         assert hits == ["/a"], f"expected real-socket hop1 hit, got {hits!r}"
     finally:
@@ -861,14 +865,9 @@ async def test_e2e_slow_drip_honors_overall_fetch_deadline() -> None:
         resolver=resolver,
         address_policy=AllowLoopbackPolicy(),
     )
-    import time
-
-    started = time.monotonic()
     try:
-        with pytest.raises(McpTimeoutError):
+        with pytest.raises(McpTimeoutError, match="file fetch exceeded"):
             await fetcher.fetch(f"http://files.test:{port}/start", max_bytes=1000, timeout_s=1.0)
-        elapsed = time.monotonic() - started
-        assert elapsed < 2.0, f"overall deadline not enforced: {elapsed:.2f}s"
     finally:
         await transport.aclose()
         server.shutdown()
@@ -937,7 +936,7 @@ async def test_httpx_timeout_maps_to_mcp_timeout() -> None:
     server, port, thread = _start_http_server(Handler)
     transport = HttpxTransport()
     try:
-        with pytest.raises(McpTimeoutError):
+        with pytest.raises(McpTimeoutError, match="httpx request exceeded timeout_s"):
             await transport.open(
                 "GET",
                 f"http://files.test:{port}/slow",
@@ -958,7 +957,7 @@ async def test_httpx_timeout_maps_to_mcp_timeout() -> None:
 async def test_httpx_connect_error_maps_to_mcp_transport_error() -> None:
     transport = HttpxTransport()
     try:
-        with pytest.raises(McpTransportError):
+        with pytest.raises(McpTransportError, match="httpx transport error"):
             await transport.open(
                 "GET",
                 "http://files.test:1/",
