@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import unicodedata
-from typing import TYPE_CHECKING, Any, Literal
+from typing import cast, TYPE_CHECKING, Any, Literal
 
 from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 from coscientist.core.claims.reasons import CloseReason, TaskReason
@@ -53,9 +53,9 @@ if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
 LOOP_DEP_PREFIX = "loop:"
-LOOP_REASON_ITERATION_CAP: Literal["iteration_cap"] = "iteration_cap"
-LOOP_REASON_ERROR: Literal["error"] = "error"
-LOOP_REASON_REFUSED: Literal["refused"] = "refused"
+LOOP_REASON_ITERATION_CAP = "iteration_cap"
+LOOP_REASON_ERROR = "error"
+LOOP_REASON_REFUSED = "refused"
 
 # LoopRefused / LoopCapped.reason: loop-status codes or PlanNeedRefuseReason.
 LoopJournalRefuseReason = Literal["error", "refused"] | PlanNeedRefuseReason
@@ -797,7 +797,7 @@ async def finalize_loop_internal_error(
                     loop,
                     iter_n=current_iter(runtime, loop.loop_id) or 0,
                     detail=detail,
-                    reason=LOOP_REASON_ERROR,
+                    reason=cast(LoopJournalRefuseReason, LOOP_REASON_ERROR),
                     expansion_reason="invalid",
                 )
             else:
@@ -930,7 +930,7 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
                     runtime,
                     loop,
                     detail=f"loop_predicate:{type(e).__name__}:{e}"[:200],
-                    reason=LOOP_REASON_ERROR,
+                    reason=cast(LoopJournalRefuseReason, LOOP_REASON_ERROR),
                     expansion_reason="invalid",
                 )
             except LeaseLost:
