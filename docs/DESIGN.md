@@ -54,8 +54,8 @@ class Study(BaseModel):
     # missing the key → typed refuse `refutation_priority_required` (do not invent False;
     # domain/lifecycle False is construct-time only). Same for other threshold keys.
     # Sole expansion quota field: max_expansions (replaces profile max_replans; see
-    # DESIGN_M1 / domain.py). graph_schema.yaml still notes legacy max_replans default 2 —
-    # not a second Study contract. RC3t drops the construction default (=2 on main).
+    # DESIGN_M1 / domain.py). graph_schema.yaml study field = max_expansions (default 2
+    # until RC3t). RC3t drops the construction default (=2 on main).
     # Refuse names: study_required | confirmations_needed_required |
     # refutations_needed_required | refutation_priority_required | supported_needed_required |
     # max_attempts_required | max_expansions_required | require_hypotheses_required.

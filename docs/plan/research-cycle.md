@@ -59,6 +59,8 @@ HITL **caller** that opens the reject gate remains **#52** (consumed; not an own
 | `verdict.py` `verdict()` compat wrapper; call site `rules.py` (`from … import verdict as hyp_verdict`) | 2-tuple shim used by `rules.verdict` | **#98** |
 | `verdict.py` `hypothesis_verdict` tail (`counted` / only-invalid / else) | three `inconclusive` returns with distinct rules — keep distinct in RC8 tests; do not merge | **#104** |
 | RM §4.1 gap (defaults still on main) | moved out of #76; removal owned by RC3t | **#98** |
+| `verdict.py` ~995 vs ~1137 | diverging kw defaults `refutation_priority` / `supported_needed` (cayman follow-up from #76) | **#98** |
+| `tests/conftest.py` ~24, ~32 | dead `refmodel` branch (cayman follow-up from #76) | **#98** |
 
 ## RC8 — matrix = `hypothesis_verdict` only (same rows as #76 / RM §4.1)
 
