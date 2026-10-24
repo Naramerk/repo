@@ -46,7 +46,7 @@ Closed #59 sketched duplicate ports (`StudyCreatePort`, `JournalStreamPort`, `Mo
 
 Suggested budget:
 
-1. `coscientist/integrations/errors.py`, `config.py` (`ExternalMasConfig`, `A2AAgentCardConfig`, `A2AFacadeConfig` only).
+1. `coscientist/integrations/errors.py`, `coscientist/integrations/config.py` (`ExternalMasConfig`, `A2AAgentCardConfig`, `A2AFacadeConfig` only).
 2. `coscientist/integrations/a2a_facade.py` — gate `a2a`; `agent_card`; `create_task` → call injected study-create that is **`post_studies` (or StudyService once create is on that Protocol)**; `stream_events` → `EventStore.read_after`.
 3. Facade may own a small **view DTO** for wire events; it must not redefine store read semantics.
 4. `tests/integrations/test_a2a_facade.py`, `CHANGELOG.md`, import-linter entries for new modules only.
