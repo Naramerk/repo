@@ -383,6 +383,10 @@ async def materialize_foreach(
         ]
     else:
         prev_loops = []  # audit-ok: structural empty = no prior loops
+    if "expand_after" in prev and prev["expand_after"] is not None:
+        prev_expand_after = list(prev["expand_after"])
+    else:
+        prev_expand_after = []  # audit-ok: structural empty = no expand_after
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -390,11 +394,7 @@ async def materialize_foreach(
         hypothesis_id=None,
         tasks=merged,
         questions=list(prev_questions),
-        expand_after=(
-            list(prev["expand_after"])
-            if "expand_after" in prev and prev["expand_after"] is not None
-            else []  # audit-ok: structural empty = no expand_after
-        ),
+        expand_after=prev_expand_after,
         loops=prev_loops,
     )
     ed = study.effective_deadline()

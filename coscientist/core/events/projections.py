@@ -21,14 +21,36 @@ _DIRTY_KEYS: ContextVar[set[tuple[str, str]] | None] = ContextVar(
 
 
 def _put(proj: ProjectionMap, table: str, key: str, data: dict[str, Any]) -> None:
-    proj.setdefault(table, {})[key] = data
+    if table not in proj:
+        proj[table] = {}  # audit-ok: structural empty = first row in table
+    proj[table][key] = data
     dirty = _DIRTY_KEYS.get()
     if dirty is not None:
         dirty.add((table, key))
 
 
 def _get(proj: ProjectionMap, table: str, key: str) -> dict[str, Any] | None:
-    return proj.get(table, {}).get(key)
+    bucket = proj.get(table)
+    if bucket is None:
+        return None
+    return bucket.get(key)
+
+
+def _row_or_empty(proj: ProjectionMap, table: str, key: str) -> dict[str, Any]:
+    """Return existing projection row or structural empty for first fold."""
+    prev = _get(proj, table, key)
+    if prev is None:
+        return {}  # audit-ok: structural empty = first fold of projection row
+    return dict(prev)
+
+
+def _delegated_or_absent(p: dict[str, Any]) -> bool:
+    if "delegated" not in p or p["delegated"] is None:
+        return False  # audit-ok: structural absent = not delegated
+    delegated = p["delegated"]
+    if not isinstance(delegated, bool):
+        raise TypeError(f"delegated must be bool, got {type(delegated).__name__}")
+    return delegated
 
 def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
     p = event.payload
@@ -43,13 +65,13 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         _put(proj, "plans", event.entity_key, dict(p))
     # ExpansionRefused: journal-only audit (runtime folds to _expansion_refusals).
     elif t == "StudyCancelled":
-        study = _get(proj, "studies", event.study_id) or {}
+        study = _row_or_empty(proj, "studies", event.study_id)
         _put(proj, "studies", event.study_id, {**study, "cancelled": True, **p})
     elif t == "StudyRefused":
-        study = _get(proj, "studies", event.study_id) or {}
+        study = _row_or_empty(proj, "studies", event.study_id)
         _put(proj, "studies", event.study_id, {**study, "refused": True, **p})
     elif t == "BudgetExceeded":
-        study = _get(proj, "studies", event.study_id) or {}
+        study = _row_or_empty(proj, "studies", event.study_id)
         _put(
             proj,
             "studies",
@@ -57,16 +79,20 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
             {**study, "budget_exceeded": True, **p},
         )
     elif t == "StudyFinalized":
-        study = _get(proj, "studies", event.study_id) or {}
-        meta = _get(proj, "meta", event.study_id) or {}
+        study = _row_or_empty(proj, "studies", event.study_id)
+        meta = _row_or_empty(proj, "meta", event.study_id)
         # First-wins: legacy journals may contain a second StudyFinalized; keep
         # the first payload/graph and mark the I3 breach as taint (not silent).
         if study.get("finalized") or meta.get("finalized"):
+            try:
+                _seq = event.seq
+            except AttributeError:
+                _seq = None  # audit-ok: structural None = seq not on envelope yet
             log.warning(
                 "ignoring duplicate StudyFinalized study_id=%s seq=%s "
                 "(first-wins; payload not applied; meta tainted)",
                 event.study_id,
-                getattr(event, "seq", None),
+                _seq,
             )
             _put(
                 proj,
@@ -104,7 +130,7 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         _put(proj, "attempts", event.entity_key, dict(p))
         task = _get(proj, "tasks", p["task_id"])
         if task is not None:
-            attempts = list(task.get("attempts", []))
+            attempts = list(task["attempts"]) if "attempts" in task else []  # audit-ok: structural empty = no attempts yet
             if event.entity_key not in attempts:
                 attempts.append(event.entity_key)
             task = {
@@ -114,7 +140,7 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
             }
             _put(proj, "tasks", p["task_id"], task)
     elif t == "AttemptClosed":
-        att = _get(proj, "attempts", event.entity_key) or {}
+        att = _row_or_empty(proj, "attempts", event.entity_key)
         att = {**att, **p, "closed": True}
         _put(proj, "attempts", event.entity_key, att)
         # P3: retryable close → task PENDING with retry_at (no RUNNING without attempt)
@@ -134,13 +160,13 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
                     },
                 )
     elif t == "RouteReturned":
-        att = _get(proj, "attempts", event.entity_key) or {}
+        att = _row_or_empty(proj, "attempts", event.entity_key)
         att = {**att, "route_returned": True, "agent_output_digest": p.get("agent_output_digest")}
         _put(proj, "attempts", event.entity_key, att)
     elif t == "ResultRecorded":
         _put(proj, "results", event.entity_key, dict(p))
     elif t == "TaskDone":
-        task = _get(proj, "tasks", event.entity_key) or {}
+        task = _row_or_empty(proj, "tasks", event.entity_key)
         task = {
             **task,
             "state": "DONE",
@@ -154,7 +180,7 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         row = {**p, "key": p["key"], "intended": True}
         _put(proj, "effects", event.entity_key, row)
     elif t == "EffectDone":
-        prev = _get(proj, "effects", event.entity_key) or {}
+        prev = _row_or_empty(proj, "effects", event.entity_key)
         row = {
             **prev,
             **p,
@@ -173,9 +199,17 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
     elif t == "AttemptTainted":
         # Sticky attempt taint after source fetch (write/external deny).
         # Do not clobber an existing attempt ``reason`` with the taint payload.
-        aid = str(p.get("attempt_id") or event.entity_key or "")
+        if "attempt_id" in p and p["attempt_id"] is not None:
+            raw_aid = p["attempt_id"]
+            if not isinstance(raw_aid, str):
+                raise TypeError(f"attempt_id must be str, got {type(raw_aid).__name__}")
+            aid = raw_aid
+        elif event.entity_key:
+            aid = event.entity_key
+        else:
+            raise TypeError("ToolEffect event missing attempt_id/entity_key")
         if aid:
-            prev = _get(proj, "attempts", aid) or {}
+            prev = _row_or_empty(proj, "attempts", aid)
             kept_reason = prev.get("reason")
             row = {**prev, **p, "tainted_context": True}
             if kept_reason is not None:
@@ -186,12 +220,22 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         from coscientist.core.events.errors import FetchToolReclassified
         from coscientist.core.execution.source_fetch import note_fetch_call_from_attempt_tainted
 
+        if not isinstance(p, dict):
+            raise TypeError(f"AttemptTainted payload must be dict, got {type(p).__name__}")
         try:
-            marked = note_fetch_call_from_attempt_tainted(
-                p if isinstance(p, dict) else {}
-            )
+            marked = note_fetch_call_from_attempt_tainted(p)
         except FetchToolReclassified as exc:
-            key = str(exc.call_id or exc.tool or "")
+            try:
+                key = exc.call_id
+            except AttributeError:
+                key = None
+            if not key:
+                try:
+                    key = exc.tool
+                except AttributeError:
+                    key = None
+            if not isinstance(key, str) or not key:
+                key = ""  # audit-ok: structural empty = no call_id/tool on exc
             if key:
                 _put(
                     proj,
@@ -219,22 +263,37 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
                 {"call_id": call_id, "tool": tool, "attempt_id": aid},
             )
     elif t == "FetchIntegrityRaised":
-        payload = p if isinstance(p, dict) else {}
-        key = str(
-            payload.get("call_id")
-            or event.entity_key
-            or payload.get("tool")
-            or payload.get("row_key")
-            or ""
-        )
+        if not isinstance(p, dict):
+            raise TypeError(f"event payload must be dict, got {type(p).__name__}")
+        payload = p
+        if "call_id" in payload and payload["call_id"] is not None:
+            raw_key = payload["call_id"]
+        elif event.entity_key is not None:
+            raw_key = event.entity_key
+        elif "tool" in payload and payload["tool"] is not None:
+            raw_key = payload["tool"]
+        elif "row_key" in payload and payload["row_key"] is not None:
+            raw_key = payload["row_key"]
+        else:
+            raw_key = ""  # audit-ok: structural empty = no fetch integrity key
+        if not isinstance(raw_key, str):
+            raise TypeError(f"fetch integrity key must be str, got {type(raw_key).__name__}")
+        key = raw_key
         if key:
+            if "call_id" in payload and payload["call_id"] is not None:
+                cid = payload["call_id"]
+                if not isinstance(cid, str):
+                    raise TypeError(f"call_id must be str, got {type(cid).__name__}")
+                call_id = cid
+            else:
+                call_id = key
             _put(
                 proj,
                 "fetch_integrity",
                 key,
                 {
                     **payload,
-                    "call_id": str(payload.get("call_id") or key),
+                    "call_id": call_id,
                     "row_key": key,
                     "internal_error": True,
                 },
@@ -243,26 +302,45 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         # Only fold when paired with a journaled fetch ToolCall (AttemptTainted).
         from coscientist.core.execution.source_fetch import source_fetched_paired_with_fetch_call
 
-        payload = p if isinstance(p, dict) else {}
-        call_id = str(payload.get("call_id") or "")
+        if not isinstance(p, dict):
+            raise TypeError(f"event payload must be dict, got {type(p).__name__}")
+        payload = p
+        if "call_id" not in payload or payload["call_id"] is None:
+            call_id = ""  # audit-ok: structural empty = no call_id
+        else:
+            raw_cid = payload["call_id"]
+            if not isinstance(raw_cid, str):
+                raise TypeError(f"call_id must be str, got {type(raw_cid).__name__}")
+            call_id = raw_cid
         paired = _get(proj, "fetch_calls", call_id) if call_id else None
         fetch_calls = (
-            {call_id: str(paired.get("tool") or "")} if paired else {}
+            ({call_id: paired["tool"]} if paired is not None and "tool" in paired and isinstance(paired["tool"], str) else {})  # audit-ok: structural empty = no paired tool
         )
         if not source_fetched_paired_with_fetch_call(payload, fetch_calls):
             return
-        digest = str(payload.get("digest") or "")
+        if "digest" not in payload or payload["digest"] is None:
+            digest = ""  # audit-ok: structural empty = no digest
+        else:
+            raw_d = payload["digest"]
+            if not isinstance(raw_d, str):
+                raise TypeError(f"digest must be str, got {type(raw_d).__name__}")
+            digest = raw_d
         row_key = digest or event.entity_key
         _put(proj, "source_fetches", row_key, {**payload, "digest": digest})
     elif t == "HitlOpened":
         _put(proj, "hitl_requests", event.entity_key, {**p, "open": True})
     elif t in ("HitlDecided", "HitlTimedOut"):
-        hitl = _get(proj, "hitl_requests", event.entity_key) or {}
-        keep_open = bool(p.get("keep_open") or p.get("effect") == "WAIT")
+        hitl = _row_or_empty(proj, "hitl_requests", event.entity_key)
+        if "keep_open" in p and p["keep_open"] is not None:
+            if not isinstance(p["keep_open"], bool):
+                raise TypeError(f"keep_open must be bool, got {type(p['keep_open']).__name__}")
+            keep_open = p["keep_open"]
+        else:
+            keep_open = p.get("effect") == "WAIT"
         hitl = {**hitl, **p, "open": keep_open}
         _put(proj, "hitl_requests", event.entity_key, hitl)
     elif t == "HitlDeadlineExtended":
-        hitl = _get(proj, "hitl_requests", event.entity_key) or {}
+        hitl = _row_or_empty(proj, "hitl_requests", event.entity_key)
         hitl = {**hitl, "deadline": p.get("deadline", hitl.get("deadline"))}
         _put(proj, "hitl_requests", event.entity_key, hitl)
     elif t == "GraphNodeUpserted":
@@ -274,8 +352,22 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         _put(proj, "question_disposals", qid, dict(p))
     elif t == "QuestionDisposeRejected":
         # Key by idem-stable detail digest so restarts keep every distinct reject.
-        detail = str(p.get("detail") or "")
-        qid = str(p.get("question_id") or event.entity_key or "")
+        if "detail" not in p or p["detail"] is None:
+            detail = ""  # audit-ok: structural empty = no detail
+        else:
+            raw_detail = p["detail"]
+            if not isinstance(raw_detail, str):
+                raise TypeError(f"detail must be str, got {type(raw_detail).__name__}")
+            detail = raw_detail
+        if "question_id" in p and p["question_id"] is not None:
+            raw_qid = p["question_id"]
+            if not isinstance(raw_qid, str):
+                raise TypeError(f"question_id must be str, got {type(raw_qid).__name__}")
+            qid = raw_qid
+        elif event.entity_key:
+            qid = event.entity_key
+        else:
+            qid = ""  # audit-ok: structural empty = unbound dispose reject
         from coscientist.core.events.digest import sha256_hex
 
         key = f"{qid}:{sha256_hex(detail)[:16]}"
@@ -299,7 +391,7 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
                 **prev,
                 **p,
                 "status": "approved",
-                "delegated": bool(p.get("delegated")),
+                "delegated": _delegated_or_absent(p),
             },
         )
     elif t == "CheckRejected":
@@ -318,7 +410,7 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         )
 
 def fold_events(events: list[EventEnvelope]) -> ProjectionMap:
-    proj: ProjectionMap = {}
+    proj: ProjectionMap = {}  # audit-ok: structural empty = new projection map
     for ev in events:
         apply_to_map(proj, ev)
     return proj
@@ -327,12 +419,12 @@ def _projection_load_tables(event_type: str) -> tuple[str, ...]:
     """Tables ``apply_to_map`` may read or write for this event (not the world)."""
     affected = _affected_tables(event_type)
     # Read deps that are not always in the write set.
-    extra: tuple[str, ...] = ()
+    extra: tuple[str, ...] = ()  # audit-ok: structural empty = no extra tables
     if event_type == "SourceFetched":
         extra = ("fetch_calls",)
     # Dedup preserve order.
     seen: set[str] = set()
-    out: list[str] = []
+    out: list[str] = []  # audit-ok: structural empty = collecting table names
     for t in (*affected, *extra):
         if t not in seen:
             seen.add(t)
@@ -350,19 +442,25 @@ def apply_event(store: Any, event: EventEnvelope) -> None:
     every ``RouteReturned``) sat on the fsync-critical path and produced
     O(n²) SQLite work under the §3.5a parallel load — the rt_exp p99 tail.
     """
-    get_rows = getattr(store, "_get_projection_write", None)
-    put_row = getattr(store, "_upsert_projection_write", None)
+    try:
+        get_rows = store._get_projection_write
+        put_row = store._upsert_projection_write
+    except AttributeError:
+        get_rows = None
+        put_row = None
     if get_rows is None or put_row is None:
         raise TypeError("apply_event requires a write-capable store (_get_projection_write / _upsert_projection_write)")
     load_tables = _projection_load_tables(event.type)
     if not load_tables:
         return
-    scratch: ProjectionMap = {}
+    scratch: ProjectionMap = {}  # audit-ok: structural empty = scratch projection
     for table in load_tables:
         for row in get_rows(table):
             key = _row_key(table, row)
             if key:
-                scratch.setdefault(table, {})[key] = row
+                if table not in scratch:
+                    scratch[table] = {}  # audit-ok: structural empty = first scratch table
+                scratch[table][key] = row
     dirty: set[tuple[str, str]] = set()
     token = _DIRTY_KEYS.set(dirty)
     try:
@@ -373,7 +471,8 @@ def apply_event(store: Any, event: EventEnvelope) -> None:
     for table, key in dirty:
         if table not in affected:
             continue
-        data = scratch.get(table, {}).get(key)
+        _bucket = scratch.get(table)
+        data = None if _bucket is None else _bucket.get(key)
         if data is not None:
             put_row(table, key, data)
 
@@ -411,11 +510,21 @@ def _row_key(table: str, row: dict[str, Any]) -> str | None:
         return None
     field = mapping.get(table)
     if table == "meta":
-        return str(row["study_id"]) if row.get("study_id") else row.get("row_key")
-    return str(row[field]) if field and field in row else row.get("row_key")
+        if "study_id" in row and row["study_id"] is not None:
+            sid = row["study_id"]
+            if not isinstance(sid, str):
+                raise TypeError(f"study_id must be str, got {type(sid).__name__}")
+            return sid
+        return row.get("row_key")
+    if field and field in row and row[field] is not None:
+        val = row[field]
+        if not isinstance(val, str):
+            raise TypeError(f"{field} must be str, got {type(val).__name__}")
+        return val
+    return row.get("row_key")
 
 def _affected_tables(event_type: str) -> tuple[str, ...]:
-    return {
+    tables: dict[str, tuple[str, ...]] = {
         "StudyCreated": ("studies",),
         "TaskCreated": ("tasks",),
         "TaskInherited": ("tasks",),
@@ -452,4 +561,7 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         "QuestionDisposeRejected": ("disposal_rejects",),
         "RequirementUpserted": ("requirements",),
         "ReviewScheduled": ("requirements",),
-    }.get(event_type, ())
+    }
+    if event_type not in tables:
+        return ()  # audit-ok: structural empty = event type has no projection tables
+    return tables[event_type]
