@@ -1,6 +1,7 @@
 """M1 PR10: foreach materialization + quorum fan-in (DESIGN_M1 §4 / S9)."""
 
 from __future__ import annotations
+from coscientist.core.events.upcasters import writer_schema_version
 
 from datetime import timedelta
 

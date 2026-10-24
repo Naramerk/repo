@@ -1,6 +1,7 @@
 """M1 PR13: rubric + final_type + PlanValidator (DESIGN_M1 §6)."""
 
 from __future__ import annotations
+from coscientist.core.events.upcasters import writer_schema_version
 
 from datetime import timedelta
 

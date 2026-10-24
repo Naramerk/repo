@@ -1,6 +1,7 @@
 """Load: 20 parallel attempts in one study, fsync on (DESIGN §3.5a)."""
 
 from __future__ import annotations
+from coscientist.core.events.upcasters import writer_schema_version
 
 import asyncio
 import json

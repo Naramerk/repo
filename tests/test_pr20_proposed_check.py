@@ -1,6 +1,7 @@
 """M1 PR20: proposed_check catalog meta-template (DESIGN_M1 §16)."""
 
 from __future__ import annotations
+from coscientist.core.events.upcasters import writer_schema_version
 
 import asyncio
 import json

@@ -181,7 +181,11 @@ def iter_keys(runtime: StudyRuntime, loop_id: str, iter_n: int) -> list[str]:
     return [str(k) for k in keys]
 
 def current_iter(runtime: StudyRuntime, loop_id: str) -> int:
-    row = _loop_state(runtime).get(loop_id) or {}
+    row = _loop_state(runtime).get(loop_id)
+    if row is None:
+        return 0
+    if not isinstance(row, dict):
+        raise JournalFormatError(f"loop state must be dict, got {type(row).__name__}")
     if "iter" not in row:
         return 0
     return require_exact_int(row["iter"], what="loop.iter")
@@ -987,7 +991,10 @@ def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
     keys = [k for k in keys if k]
     st = _loop_state(runtime)
     row = dict(st[lid]) if lid in st else {}
-    iters = dict(row.get("iters") or {})
+    raw_iters = row["iters"] if "iters" in row else {}
+    if not isinstance(raw_iters, dict):
+        raise JournalFormatError("PlanExpanded(loop): iters must be dict")
+    iters = dict(raw_iters)
     iters[str(iter_n)] = keys
     row["iters"] = iters
     # Missing iter = first PlanExpanded for this loop (no prior tip).
@@ -1002,9 +1009,9 @@ def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
     st[lid] = row
 
 def fold_loop_capped(runtime: Any, payload: dict[str, Any]) -> None:
-    lid = str(payload.get("loop_id") or "")
-    if not lid:
-        return
+    if "loop_id" not in payload or not isinstance(payload["loop_id"], str) or not payload["loop_id"]:
+        raise JournalFormatError("LoopCapped: missing loop_id")
+    lid = payload["loop_id"]
     reason = _require_loop_reason(
         payload, key="reason", allowed=LOOP_CAPPED_REASONS, what="LoopCapped"
     )
@@ -1026,9 +1033,9 @@ def fold_loop_capped(runtime: Any, payload: dict[str, Any]) -> None:
 
 def fold_loop_refused(runtime: Any, payload: dict[str, Any]) -> None:
     """Rebuild refused status from LoopRefused (before LoopCapped on the same path)."""
-    lid = str(payload.get("loop_id") or "")
-    if not lid:
-        return
+    if "loop_id" not in payload or not isinstance(payload["loop_id"], str) or not payload["loop_id"]:
+        raise JournalFormatError("LoopRefused: missing loop_id")
+    lid = payload["loop_id"]
     st = _loop_state(runtime)
     row = dict(st[lid]) if lid in st else {}
     if row.get("status") in ("done", "capped", "refused"):
@@ -1046,9 +1053,9 @@ def fold_loop_refused(runtime: Any, payload: dict[str, Any]) -> None:
 
 def fold_loop_completed(runtime: Any, payload: dict[str, Any]) -> None:
     """Rebuild until-met completion from journal (live ≡ replay)."""
-    lid = str(payload.get("loop_id") or "")
-    if not lid:
-        return
+    if "loop_id" not in payload or not isinstance(payload["loop_id"], str) or not payload["loop_id"]:
+        raise JournalFormatError("LoopCompleted: missing loop_id")
+    lid = payload["loop_id"]
     reason = _require_loop_reason(
         payload, key="reason", allowed=LOOP_COMPLETED_REASONS, what="LoopCompleted"
     )

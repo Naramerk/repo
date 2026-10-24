@@ -1,6 +1,7 @@
 """M1 PR8b: hypothesis verdict model (DESIGN_HYP_DELTA) — review fixes."""
 
 from __future__ import annotations
+from coscientist.core.events.upcasters import writer_schema_version
 
 from datetime import timedelta
 

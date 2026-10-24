@@ -41,7 +41,10 @@ PLAN_N_CRITIC_CRITERIA: list[RequirementRef] = [
 
 def task_is_plan_n(task: Any) -> bool:
     """True when ``Task.plan_role == PLAN_N`` (sole wire signal)."""
-    return getattr(task, "plan_role", PlanRole.NONE) == PlanRole.PLAN_N
+    role = task.plan_role
+    if not isinstance(role, PlanRole):
+        role = PlanRole(str(role))
+    return role == PlanRole.PLAN_N
 
 
 # Back-compat name used by older call sites.

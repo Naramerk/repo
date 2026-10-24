@@ -96,23 +96,23 @@ def _criterion_key_for_claim(raw: dict[str, Any], checks: list[Any], criteria: l
 
 def _criterion_status_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any] | None = None) -> str:
     """Map claim.checked_against → ReqStatus of that criterion's check."""
-    crit = list(criteria or [])
+    crit = list(criteria) if criteria is not None else []
     key = _criterion_key_for_claim(raw, checks, crit)
-    if key:
-        for c in checks:
-            tid = _check_field(c, "template_id")
-            cid = _check_field(c, "check_id")
-            st = _check_field(c, "status")
-            # Exact match only (no endswith — avoids C11 matching ``1``).
-            if (tid is not None and str(tid) == key) or (cid is not None and str(cid) == key):
-                if isinstance(st, ReqStatus):
-                    return _req_to_criterion_status(st)
-                try:
-                    return _req_to_criterion_status(ReqStatus(str(st)))
-                except ValueError as e:
-                    raise JournalFormatError(f"bad criterion status: {st!r}") from e
-        return "unassessed"
-    return "unassessed"
+    if key is None:
+        raise JournalFormatError("claim missing checked_against / criterion key")
+    for c in checks:
+        tid = _check_field(c, "template_id")
+        cid = _check_field(c, "check_id")
+        st = _check_field(c, "status")
+        # Exact match only (no endswith — avoids C11 matching ``1``).
+        if (tid is not None and str(tid) == key) or (cid is not None and str(cid) == key):
+            if isinstance(st, ReqStatus):
+                return _req_to_criterion_status(st)
+            try:
+                return _req_to_criterion_status(ReqStatus(str(st)))
+            except ValueError as e:
+                raise JournalFormatError(f"bad criterion status: {st!r}") from e
+    raise JournalFormatError(f"claim criterion not in checks: {key!r}")
 
 def _check_role(c: Any) -> str:
     role = _check_field(c, "role")
@@ -1400,23 +1400,31 @@ class Executor:
         invents True when the field is absent.
         """
         n = 1 if charge_attempt else 0
-        for aid in list(getattr(task, "attempts", []) or []):
+        attempts = task.attempts
+        if not isinstance(attempts, list):
+            raise JournalFormatError("charged_count: task.attempts must be list")
+        for aid in list(attempts):
             if aid == attempt_id:
                 continue
-            att = self.get_attempt(aid) if self.get_attempt is not None else None
+            if self.get_attempt is None:
+                raise JournalFormatError("charged_count: get_attempt required")
+            att = self.get_attempt(aid)
             if att is None:
                 raise JournalFormatError(
                     f"charged_count: missing attempt row for {aid!r}"
                 )
-            charged = (
-                att.get("charged")
-                if isinstance(att, dict)
-                else getattr(att, "charged", None)
-            )
-            if charged is None:
-                raise JournalFormatError(
-                    f"charged_count: attempt {aid!r} missing 'charged'"
-                )
+            if isinstance(att, dict):
+                if "charged" not in att:
+                    raise JournalFormatError(
+                        f"charged_count: attempt {aid!r} missing 'charged'"
+                    )
+                charged = att["charged"]
+            else:
+                if not hasattr(att, "charged"):
+                    raise JournalFormatError(
+                        f"charged_count: attempt {aid!r} missing 'charged'"
+                    )
+                charged = att.charged
             if charged:
                 n += 1
         return n

@@ -1,6 +1,7 @@
 """compute_outcome + B1/B2 / article_small tests (DESIGN §4.2)."""
 
 from __future__ import annotations
+from coscientist.core.events.upcasters import writer_schema_version
 
 import json
 from datetime import UTC, datetime, timedelta

@@ -572,7 +572,7 @@ class Attempt(Frozen):
     route_returned: bool = False
     closed: bool = False
     close_reason: CloseReason | None = None
-    provenance: Provenance = "real"
+    provenance: Provenance
     agent_output_digest: str | None = None
     deadline: datetime
     task_id: str
@@ -640,7 +640,7 @@ class Result(Frozen):
     attempt_id: str
     outcome: Outcome
     inputs: list[InputBinding] = Field(default_factory=list)
-    provenance: Provenance = "real"
+    provenance: Provenance
     agent_claim: Outcome | None = None
     downgrade: Downgrade | None = None
     computed_outcome: Outcome

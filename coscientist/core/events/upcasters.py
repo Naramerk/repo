@@ -69,7 +69,11 @@ def assert_upcaster_chain_continuous(event_type: str, writer_version: int) -> No
     """Require upcasters for every v in 1..writer_version-1 (no gaps)."""
     if writer_version < 1:
         raise ValueError(f"{event_type}: writer_version must be >= 1")
-    bucket = UPCASTERS.get(event_type) or {}
+    # Refuse unknown types (same gate as writer_schema_version); empty bucket = v1.
+    writer_schema_version(event_type)
+    bucket = UPCASTERS.get(event_type)
+    if bucket is None:
+        bucket = {}
     missing = [v for v in range(1, writer_version) if v not in bucket]
     if missing:
         raise AssertionError(

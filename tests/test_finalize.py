@@ -1,6 +1,7 @@
 """PR 2: study finalizer, dispositions, minimal_report."""
 
 from __future__ import annotations
+from coscientist.core.events.upcasters import writer_schema_version
 
 import json
 from datetime import datetime, timedelta

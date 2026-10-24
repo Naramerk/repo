@@ -1,6 +1,7 @@
 """M1 PR8: verdict() runtime wiring, kind=verdict, claim carry-overs + review fixes."""
 
 from __future__ import annotations
+from coscientist.core.events.upcasters import writer_schema_version
 
 from datetime import UTC, datetime, timedelta
 

@@ -28,6 +28,8 @@ def test_unknown_kind_errors():
                         "method_sources": ["m"],
                         "applies_to": ["experiment"],
                         "check": {"kind": "not_a_real_kind"},
+                        "role": "validity",
+                        "kind": "catalog",
                     }
                 ],
                 "defaults": {"experiment": ["x"]},
@@ -49,6 +51,8 @@ def test_unknown_node_kind_with_registry():
                         "method_sources": ["m"],
                         "applies_to": ["not_in_schema"],
                         "check": {"kind": "artifact_exists", "output": "main"},
+                        "role": "validity",
+                        "kind": "catalog",
                     }
                 ],
                 "defaults": {"not_in_schema": ["x"]},

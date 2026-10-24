@@ -139,7 +139,9 @@ def load_catalog(
             raise CatalogError(
                 f"template {t.get('id')!r}: predicts_null requires uses_sesoi"
             )
-        kind_raw = t.get("kind", TemplateKind.CATALOG.value)
+        if "kind" not in t:
+            raise CatalogError(f"template {t.get('id')!r}: missing kind")
+        kind_raw = t["kind"]
         try:
             tmpl_kind = TemplateKind(kind_raw)
         except ValueError as e:
@@ -226,6 +228,7 @@ def minimal_test_catalog() -> Catalog:
                     "applies_to": ["experiment"],
                     "check": {"kind": "schema_valid", "output": "main"},
                     "role": "validity",
+                    "kind": "catalog",
                     "required": True,
                 },
                 {
@@ -237,6 +240,7 @@ def minimal_test_catalog() -> Catalog:
                     "applies_to": ["experiment"],
                     "check": {"kind": "artifact_exists", "output": "main"},
                     "role": "validity",
+                    "kind": "catalog",
                     "required": True,
                 },
                 {
@@ -253,6 +257,7 @@ def minimal_test_catalog() -> Catalog:
                         "target": 225,
                     },
                     "role": "prediction",
+                    "kind": "catalog",
                     "required": True,
                 },
                 {
@@ -271,6 +276,7 @@ def minimal_test_catalog() -> Catalog:
                         "target": 0,
                     },
                     "role": "prediction",
+                    "kind": "catalog",
                     "required": True,
                     "uses_sesoi": True,
                     "sesoi": 0.5,
@@ -295,6 +301,7 @@ def minimal_test_catalog() -> Catalog:
                         "target": 0,
                     },
                     "role": "prediction",
+                    "kind": "catalog",
                     "required": True,
                     "uses_sesoi": True,
                     "sesoi": 0.5,
@@ -315,6 +322,7 @@ def minimal_test_catalog() -> Catalog:
                         "question": "Is the result adequate?",
                     },
                     "role": "validity",
+                    "kind": "catalog",
                     "required": True,
                 },
                 {
@@ -342,6 +350,7 @@ def minimal_test_catalog() -> Catalog:
                     },
                     # validity only — never feeds claim stance (PR13 invariant)
                     "role": "validity",
+                    "kind": "catalog",
                     "required": True,
                 },
                 {

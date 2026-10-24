@@ -184,15 +184,19 @@ class HitlForkMixin(CostlyHitlMixin):
         from coscientist.core.plan.expand import expand_plan
         from coscientist.core.plan.expand_trigger import refuse_expansion
 
-        after = str(
-            expansion.get("after_task")
-            or getattr(h, "expand_after_task", None)
-            or ""
-        )
-        if not after and h.task_id:
-            task = self.tasks.get(h.task_id)
-            after = task.spec.task_key if task is not None else h.task_id
-        after = after or "HITL"
+        # Sole bind: expansion.after_task or HitlOpened.expand_after_task (no task_id/"HITL").
+        raw_after = expansion.get("after_task")
+        if raw_after is None:
+            raw_after = h.expand_after_task
+        if not isinstance(raw_after, str) or not raw_after:
+            await refuse_expansion(
+                self,  # type: ignore[arg-type]
+                h.task_id or "HITL",
+                reason="invalid_hitl",
+                detail="hitl_unbound",
+            )
+            return
+        after = raw_after
         # Plan edits only via plan / plan_approval / plan_expansion (+ expand_after_task).
         # hypotheses / report / … → ExpansionRefused(invalid_hitl), never silent drop.
         if h.kind not in ("plan", "plan_approval", "plan_expansion"):
@@ -200,38 +204,81 @@ class HitlForkMixin(CostlyHitlMixin):
                 self,  # type: ignore[arg-type]
                 after,
                 reason="invalid_hitl",
-                detail=f"hitl_wrong_kind:{h.kind or 'unknown'}",
+                detail=f"hitl_wrong_kind:{h.kind}",
             )
             return
-        if not getattr(h, "expand_after_task", None) and not expansion.get("after_task"):
+        if "added_tasks" not in expansion:
             await refuse_expansion(
                 self,  # type: ignore[arg-type]
                 after,
                 reason="invalid_hitl",
-                detail="hitl_unbound",
+                detail="hitl_missing_added_tasks",
+            )
+            return
+        raw_tasks = expansion["added_tasks"]
+        if not isinstance(raw_tasks, list):
+            await refuse_expansion(
+                self,  # type: ignore[arg-type]
+                after,
+                reason="invalid_hitl",
+                detail="hitl_bad_added_tasks",
             )
             return
         added_tasks = [
-            TaskSpec.model_validate(t) if isinstance(t, dict) else t
-            for t in (expansion.get("added_tasks") or [])
+            TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in raw_tasks
         ]
+        raw_qs = expansion["added_questions"] if "added_questions" in expansion else []
+        if not isinstance(raw_qs, list):
+            await refuse_expansion(
+                self,  # type: ignore[arg-type]
+                after,
+                reason="invalid_hitl",
+                detail="hitl_bad_added_questions",
+            )
+            return
         added_questions = [
-            QuestionSpec.model_validate(q) if isinstance(q, dict) else q
-            for q in (expansion.get("added_questions") or [])
+            QuestionSpec.model_validate(q) if isinstance(q, dict) else q for q in raw_qs
         ]
+        raw_sq = (
+            expansion["superseded_questions"]
+            if "superseded_questions" in expansion
+            else []
+        )
+        if not isinstance(raw_sq, list):
+            await refuse_expansion(
+                self,  # type: ignore[arg-type]
+                after,
+                reason="invalid_hitl",
+                detail="hitl_bad_superseded_questions",
+            )
+            return
         superseded_questions = [
             QuestionSupersede.model_validate(s) if isinstance(s, dict) else s
-            for s in (expansion.get("superseded_questions") or [])
+            for s in raw_sq
         ]
+        raw_st = (
+            expansion["superseded_tasks"] if "superseded_tasks" in expansion else []
+        )
+        if not isinstance(raw_st, list):
+            await refuse_expansion(
+                self,  # type: ignore[arg-type]
+                after,
+                reason="invalid_hitl",
+                detail="hitl_bad_superseded_tasks",
+            )
+            return
+        reason = expansion["reason"] if "reason" in expansion else "hitl_plan_edit"
+        if not isinstance(reason, str) or not reason:
+            reason = "hitl_plan_edit"
         await expand_plan(
             self,  # type: ignore[arg-type]
             after_task=after,
             added_tasks=added_tasks,
             added_questions=added_questions,
-            superseded_tasks=list(expansion.get("superseded_tasks") or []),
+            superseded_tasks=[str(x) for x in raw_st],
             superseded_questions=superseded_questions,
             origin="plan",
-            reason=str(expansion.get("reason") or "hitl_plan_edit"),
+            reason=reason,
             hitl_request_id=request_id,
             assign_keys=bool(expansion.get("assign_keys", False)),
         )

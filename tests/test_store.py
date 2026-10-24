@@ -1,6 +1,7 @@
 """EventStore: idempotency, lease fencing, replay == projection."""
 
 from __future__ import annotations
+from coscientist.core.events.upcasters import writer_schema_version
 
 import asyncio
 from datetime import UTC, datetime, timedelta

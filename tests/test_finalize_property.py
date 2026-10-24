@@ -1,6 +1,7 @@
 """PR 3: Hypothesis stateful finalize property + future xfail stubs."""
 
 from __future__ import annotations
+from coscientist.core.events.upcasters import writer_schema_version
 
 import asyncio
 import shutil

@@ -442,18 +442,24 @@ class LocalProjectMixin:
             dep_outputs = getattr(self, "dep_outputs", None)
             dep_provenance = getattr(self, "dep_provenance", None)
             aid = p.get("attempt_id")
-            att = self.attempts.get(aid or "", {})
-            tid = att.get("task_id") or p.get("task_id")
+            if not isinstance(aid, str) or not aid:
+                raise JournalFormatError("ResultRecorded: missing attempt_id")
+            att = self.attempts.get(aid)
+            if att is None:
+                raise JournalFormatError(f"ResultRecorded: unknown attempt {aid!r}")
+            if "task_id" not in att and "task_id" not in p:
+                raise JournalFormatError("ResultRecorded: missing task_id")
+            tid = att["task_id"] if "task_id" in att else p["task_id"]
             if isinstance(dep_outputs, dict) and tid and tid in self.tasks:
                 tkey = self.tasks[tid].spec.task_key
                 omap = p.get("output_map")
                 if isinstance(omap, dict) and omap:
                     dep_outputs[tkey] = {str(k): str(v) for k, v in omap.items() if v}
-                elif p.get("artifacts"):
-                    arts = list(p.get("artifacts") or [])
-                    if arts:
-                        dep_outputs.setdefault(tkey, {})
-                        dep_outputs[tkey].setdefault("main", str(arts[0]))
+                elif "artifacts" in p and p["artifacts"]:
+                    # No silent main←artifacts[0] invent (rule 12); require output_map.
+                    raise JournalFormatError(
+                        "ResultRecorded: artifacts without output_map"
+                    )
                 if "provenance" not in p:
                     raise JournalFormatError("ResultRecorded: missing provenance")
                 prov = p["provenance"]

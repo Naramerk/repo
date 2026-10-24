@@ -117,6 +117,7 @@ def _catalog_quote() -> object:
                     "applies_to": ["experiment"],
                     "check": {"kind": "quote_in_source", "output": "quote"},
                     "role": "validity",
+                    "kind": "catalog",
                     "required": True,
                 }
             ],

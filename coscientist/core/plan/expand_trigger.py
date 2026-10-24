@@ -69,10 +69,11 @@ def _final_attempt_id(runtime: StudyRuntime, tid: str) -> str | None:
     return task.attempts[-1]
 
 def _result_row_for_attempt(runtime: StudyRuntime, aid: str) -> dict[str, Any]:
+    """Sole result key is ``attempt_id`` — no ``result:`` alias dual-lookup."""
     row = runtime.results.get(aid)
     if row is None:
-        row = runtime.results.get(f"result:{aid}")
-    if row is None:
+        return {}
+    if not isinstance(row, dict):
         return {}
     return dict(row)
 

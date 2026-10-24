@@ -1,6 +1,7 @@
 """M1 PR9: PlanExpanded review (MJ-a–d + minors)."""
 
 from __future__ import annotations
+from coscientist.core.events.upcasters import writer_schema_version
 
 from datetime import UTC, datetime, timedelta
 
@@ -1130,8 +1131,8 @@ async def test_expand_after_malformed_planner_output(tmp_path, clock, runtime_cl
 
 
 @pytest.mark.asyncio
-async def test_plan_n_attempt_result_mismatch_refused(tmp_path, clock, runtime_cls):
-    """_resolve_plan_n_request: aid vs result:aid mismatch → ExpansionRefused(invalid)."""
+async def test_plan_n_ignores_result_alias_key(tmp_path, clock, runtime_cls):
+    """Sole result key is attempt_id — ``result:{aid}`` alias is not read."""
     sid = "st_aid_mm"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
@@ -1152,27 +1153,23 @@ async def test_plan_n_attempt_result_mismatch_refused(tmp_path, clock, runtime_c
     )
     aid = await rt.start_attempt("E0")
     await rt.executor.record(aid, AgentTaskOutput(summary="ok"))
-    plan_n = next(t for t in rt.tasks.values() if t.spec.task_key.startswith("PLAN-"))
+    plan_n = next(t for t in rt.tasks.values() if t.plan_role.value == "plan_n")
     paid = await rt.start_attempt(plan_n.spec.task_key)
-    good = ExpansionRequest(
-        tasks=[_task(key="E1", addresses=["Q1"], depends_on=["E0"])],
-        reason="ok",
-    ).model_dump(mode="json")
-    rt.results[paid] = {
-        "attempt_id": paid,
-        "task_id": plan_n.task_id,
-        "expansion_request": good,
-    }
+    # Only the alias key has expansion_request — must refuse missing_planner_output.
+    rt.results.pop(paid, None)
     rt.results[f"result:{paid}"] = {
         "attempt_id": paid,
         "task_id": plan_n.task_id,
-        "expansion_request": {"tasks": [], "reason": "other"},
+        "expansion_request": ExpansionRequest(
+            tasks=[_task(key="E1", addresses=["Q1"], depends_on=["E0"])],
+            reason="ok",
+        ).model_dump(mode="json"),
     }
     await apply_pending_expansion(rt, plan_n.spec.task_key)
     assert any(
         e.type == "ExpansionRefused"
         and e.payload.get("reason") == "invalid"
-        and "attempt_result_mismatch" in str(e.payload.get("detail") or "")
+        and "missing_planner_output" in str(e.payload.get("detail") or "")
         for e in await rt.store.read_all()
     )
     await close_runtime(rt)

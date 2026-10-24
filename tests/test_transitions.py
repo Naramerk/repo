@@ -1,6 +1,7 @@
 """State transitions §3.3 / crash recovery §3.7."""
 
 from __future__ import annotations
+from coscientist.core.events.upcasters import writer_schema_version
 
 import asyncio
 from datetime import timedelta

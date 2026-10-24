@@ -1,6 +1,7 @@
 """Core must refuse journals that still have open HITL gates."""
 
 from __future__ import annotations
+from coscientist.core.events.upcasters import writer_schema_version
 
 from datetime import timedelta
 from pathlib import Path

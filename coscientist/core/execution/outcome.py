@@ -22,7 +22,7 @@ def compute_outcome(
     reqs: Sequence[NodeRequirement | CheckResult],
     claim: Outcome | None,
     reason: str | None,
-    provenance: Provenance = "real",
+    provenance: Provenance,
 ) -> tuple[Outcome | None, Downgrade | None]:
     """None = still waiting on CodeCheck/ReviewCheck; task stays RUNNING."""
     req = [r for r in reqs if r.required]

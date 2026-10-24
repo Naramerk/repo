@@ -75,6 +75,7 @@ def _catalog_with(*templates: dict) -> object:
                     "method_sources": ["test"],
                     "applies_to": ["experiment"],
                     "role": t.get("role", "validity"),
+                    "kind": t.get("kind", "catalog"),
                     "required": True,
                 }
                 for t in templates

@@ -1,6 +1,7 @@
 """M1 PR12: budget_share / deadline_share (DESIGN_M1 §5 / S4)."""
 
 from __future__ import annotations
+from coscientist.core.events.upcasters import writer_schema_version
 
 from datetime import timedelta
 from decimal import Decimal

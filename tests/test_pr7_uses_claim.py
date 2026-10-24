@@ -1,6 +1,7 @@
 """M1 PR7: InputSpec.kind + uses_claim edge; AttemptStarted bindings."""
 
 from __future__ import annotations
+from coscientist.core.events.upcasters import writer_schema_version
 
 from datetime import timedelta
 
