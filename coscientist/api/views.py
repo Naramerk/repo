@@ -6,7 +6,6 @@ Handlers take injected ``StudyService`` / ``EventStore``
 
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -19,11 +18,9 @@ from coscientist.api.errors import (
     StudyStoreMismatch,
 )
 from coscientist.core.events.events import EventType, StoredEvent
+from coscientist.core.events.ids import is_study_id
 from coscientist.core.events.ports import EventStore, StudyService
 from coscientist.core.execution.domain import Frozen, StudyView
-
-# Same shape as core ``study_id()`` / ``st_idem_*`` (post_studies); single path segment.
-_STUDY_ID_RE = re.compile(r"^st_[A-Za-z0-9_]+$")
 
 
 class EventWire(Frozen):
@@ -42,21 +39,15 @@ class EventWire(Frozen):
 
 
 def require_study_id(study_id: object) -> str:
-    """Fail-closed study_id gate (format + no path traversal).
-
-    Accepts only ``st_[A-Za-z0-9_]+`` (core ``study_id`` / Idempotency ``st_idem_*``).
-    Rejects empty/whitespace, separators, ``..``, absolute paths.
-    """
+    """Fail-closed study_id gate via core ``is_study_id`` (no path escape)."""
     if not isinstance(study_id, str):
         raise StudyIdRefuse(
             f"study_id must be str, got {type(study_id).__name__}"
         )
     if not study_id or study_id != study_id.strip():
         raise StudyIdRefuse("study_id_empty_or_whitespace")
-    if "/" in study_id or "\\" in study_id or ".." in study_id:
-        raise StudyIdRefuse("study_id_path_separator_or_dotdot")
-    if not _STUDY_ID_RE.fullmatch(study_id):
-        raise StudyIdRefuse("study_id_format_st_prefix_alnum_underscore")
+    if not is_study_id(study_id):
+        raise StudyIdRefuse("study_id_format")
     return study_id
 
 

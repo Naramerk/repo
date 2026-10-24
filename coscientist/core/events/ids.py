@@ -2,8 +2,19 @@
 
 from __future__ import annotations
 
+import re
 import secrets
 import time
+
+from coscientist.core.events.digest import sha256_hex
+
+# study_id() body: 11 hex ms + token_hex(8); idem: st_idem_ + 24 hex of key digest.
+_STUDY_ULID_HEX_LEN = 11 + 16
+_IDEM_STUDY_HEX_LEN = 24
+STUDY_ID_RE = re.compile(
+    rf"^st_(?:[0-9a-f]{{{_STUDY_ULID_HEX_LEN}}}"
+    rf"|idem_[0-9a-f]{{{_IDEM_STUDY_HEX_LEN}}})$"
+)
 
 
 def _ulid_like() -> str:
@@ -14,7 +25,21 @@ def _ulid_like() -> str:
 
 
 def study_id() -> str:
-    return f"st_{_ulid_like()}"
+    body = _ulid_like()
+    if len(body) != _STUDY_ULID_HEX_LEN:
+        raise RuntimeError(f"study_id body length {len(body)} != {_STUDY_ULID_HEX_LEN}")
+    return f"st_{body}"
+
+
+def study_id_from_idempotency_key(key: str) -> str:
+    """Deterministic ``st_idem_<24 hex>`` from the client Idempotency-Key."""
+    digest = sha256_hex(f"Idempotency-Key:{key}")
+    return f"st_idem_{digest[:_IDEM_STUDY_HEX_LEN]}"
+
+
+def is_study_id(value: str) -> bool:
+    """True iff ``value`` matches ``study_id()`` / ``study_id_from_idempotency_key``."""
+    return STUDY_ID_RE.fullmatch(value) is not None
 
 
 def task_id(study: str, task_key: str) -> str:

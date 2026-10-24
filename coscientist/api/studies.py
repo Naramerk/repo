@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, StrictInt, ValidationError
 from coscientist.core.claims.reasons import RefusalKind
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import Conflict, LeaseLost
+from coscientist.core.events.ids import study_id_from_idempotency_key
 from coscientist.core.execution.domain import Budget, HitlPolicy
 from coscientist.core.execution.input_limits import (
     InputLimits,
@@ -98,12 +99,6 @@ def parse_create_study_body(
     if isinstance(merged, tuple):
         return None, merged
     return body, merged
-
-
-def study_id_from_idempotency_key(key: str) -> str:
-    """Deterministic study_id derived from the client Idempotency-Key."""
-    digest = sha256_hex(f"Idempotency-Key:{key}")
-    return f"st_idem_{digest[:24]}"
 
 
 def _idem_path(data_root: Path, key: str) -> Path:

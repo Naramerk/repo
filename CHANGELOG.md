@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### M5 API — study_id format owned by core/events/ids
+- `STUDY_ID_RE` / `is_study_id` / `study_id_from_idempotency_key` next to `study_id()`.
+- `require_study_id` uses core predicate; path resolve kept in `study_events_db`.
+
 ### M5 API — study_id path traversal gate
 - Shared `require_study_id` (`st_[A-Za-z0-9_]+`); `study_events_db` resolve-inside-root.
 - `DataRootStudyService` refuses `../x`, `/abs`, `a/b`; no mkdir for missing journals.

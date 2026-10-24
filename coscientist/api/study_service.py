@@ -22,8 +22,6 @@ def study_events_db(data_root: Path, study_id: object) -> Path:
         db_path.relative_to(root)
     except ValueError:
         raise StudyIdRefuse("study_id_escapes_data_root") from None
-    if db_path.name != "events.db" or db_path.parent.name != sid:
-        raise StudyIdRefuse("study_id_escapes_data_root")
     return db_path
 
 

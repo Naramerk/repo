@@ -28,9 +28,16 @@ from coscientist.api.views import (
 )
 from coscientist.core.events.errors import StudyNotFound
 from coscientist.core.events.events import EventType, StoredEvent
+from coscientist.core.events.ids import is_study_id, study_id, study_id_from_idempotency_key
 from coscientist.core.events.ports import StudyService
 from coscientist.core.execution.domain import StudyView
 from tests.checks.minimal_test_catalog import minimal_test_catalog
+
+# Well-formed fakes (same shape as core generators; not path-like).
+_SID = "st_" + "a" * 27
+_SID_OTHER = "st_" + "b" * 27
+_SID_FOREIGN = "st_" + "c" * 27
+_SID_MISSING = "st_" + "d" * 27
 
 
 class _FakeStudyService:
@@ -68,7 +75,7 @@ def _stored(
     *,
     seq: int,
     typ: EventType = "StudyCreated",
-    study_id: str = "st_fake",
+    study_id: str = _SID,
     payload: dict[str, Any] | None = None,
 ) -> StoredEvent:
     return StoredEvent.model_validate(
@@ -87,8 +94,13 @@ def _stored(
     )
 
 
-def test_require_study_id_accepts_plain() -> None:
-    assert require_study_id("st_abc") == "st_abc"
+def test_require_study_id_accepts_core_generators() -> None:
+    sid = study_id()
+    idem = study_id_from_idempotency_key("contract-key")
+    assert is_study_id(sid)
+    assert is_study_id(idem)
+    assert require_study_id(sid) == sid
+    assert require_study_id(idem) == idem
 
 
 @pytest.mark.parametrize(
@@ -108,6 +120,9 @@ def test_require_study_id_accepts_plain() -> None:
         "st_foo/bar",
         "st_foo\\bar",
         "not_st_prefix",
+        "st_abc",
+        "st_" + "a" * 26,
+        "st_idem_" + "a" * 23,
     ],
 )
 def test_require_study_id_refuses(bad: object) -> None:
@@ -131,8 +146,8 @@ def test_require_after_seq_refuses(bad: object) -> None:
 
 def test_get_study_returns_view() -> None:
     view = StudyView(phase="running", progress=0.25, awaiting_human=False)
-    svc: StudyService = _FakeStudyService({"st_1": view})
-    got = get_study(svc, "st_1")
+    svc: StudyService = _FakeStudyService({_SID: view})
+    got = get_study(svc, _SID)
     assert got == view
     assert got.phase == "running"
     assert got.progress == 0.25
@@ -141,8 +156,8 @@ def test_get_study_returns_view() -> None:
 def test_get_study_not_found() -> None:
     svc: StudyService = _FakeStudyService({})
     with pytest.raises(StudyNotFound) as ei:
-        get_study(svc, "st_missing")
-    assert ei.value.study_id == "st_missing"
+        get_study(svc, _SID_MISSING)
+    assert ei.value.study_id == _SID_MISSING
 
 
 def test_get_study_refuses_bad_id_before_service() -> None:
@@ -175,8 +190,8 @@ def test_data_root_study_service_not_found_and_view(tmp_path: Path) -> None:
     view = svc.study_view(sid)
     assert view.phase == "running"
     with pytest.raises(StudyNotFound) as ei:
-        svc.study_view("st_missing")
-    assert ei.value.study_id == "st_missing"
+        svc.study_view(_SID_MISSING)
+    assert ei.value.study_id == _SID_MISSING
     assert get_study(svc, sid) == view
 
 
@@ -187,60 +202,59 @@ def test_data_root_study_service_path_traversal_and_no_mkdir(tmp_path: Path) -> 
     for bad in ("../x", "/abs", "a/b"):
         with pytest.raises(StudyIdRefuse):
             svc.study_view(bad)
-    missing = "st_missing_no_mkdir_00000000"
     with pytest.raises(StudyNotFound):
-        svc.study_view(missing)
+        svc.study_view(_SID_MISSING)
     after = set(tmp_path.rglob("*"))
     assert before == after
-    assert not (tmp_path / missing).exists()
+    assert not (tmp_path / _SID_MISSING).exists()
 
 
 @pytest.mark.asyncio
 async def test_list_study_events_after_filters() -> None:
     store = _FakeEventStore(
-        "st_fake",
+        _SID,
         [_stored(seq=1), _stored(seq=2, typ="TaskCreated"), _stored(seq=3)],
     )
-    all_rows = await list_study_events(store, study_id="st_fake", after=0)
+    all_rows = await list_study_events(store, study_id=_SID, after=0)
     assert [e.seq for e in all_rows] == [1, 2, 3]
-    mid = await list_study_events(store, study_id="st_fake", after=1)
+    mid = await list_study_events(store, study_id=_SID, after=1)
     assert [e.seq for e in mid] == [2, 3]
-    empty = await list_study_events(store, study_id="st_fake", after=3)
+    empty = await list_study_events(store, study_id=_SID, after=3)
     assert empty == []
 
 
 @pytest.mark.asyncio
 async def test_list_study_events_refuses_bad_after() -> None:
-    store = _FakeEventStore("st_fake", [])
+    store = _FakeEventStore(_SID, [])
     with pytest.raises(AfterSeqRefuse):
-        await list_study_events(store, study_id="st_fake", after=True)
+        await list_study_events(store, study_id=_SID, after=True)
     with pytest.raises(AfterSeqRefuse):
-        await list_study_events(store, study_id="st_fake", after=-1)
+        await list_study_events(store, study_id=_SID, after=-1)
 
 
 @pytest.mark.asyncio
 async def test_list_study_events_refuses_foreign_store() -> None:
-    store = _FakeEventStore("st_other", [_stored(seq=1, study_id="st_other")])
+    store = _FakeEventStore(_SID_OTHER, [_stored(seq=1, study_id=_SID_OTHER)])
     with pytest.raises(StudyStoreMismatch):
-        await list_study_events(store, study_id="st_fake", after=0)
+        await list_study_events(store, study_id=_SID, after=0)
 
 
 @pytest.mark.asyncio
 async def test_list_study_events_refuses_event_study_id_mismatch() -> None:
-    store = _FakeEventStore("st_fake", [_stored(seq=1, study_id="st_foreign")])
+    store = _FakeEventStore(_SID, [_stored(seq=1, study_id=_SID_FOREIGN)])
     with pytest.raises(StudyStoreMismatch):
-        await list_study_events(store, study_id="st_fake", after=0)
+        await list_study_events(store, study_id=_SID, after=0)
 
 
 def test_event_to_wire_round_trip_fields() -> None:
     row = _stored(
-        seq=7, typ="StudyCancelled", payload={"study_id": "st_fake", "by": "user"}
+        seq=7, typ="StudyCancelled", payload={"study_id": _SID, "by": "user"}
     )
     wire = event_to_wire(row)
     assert isinstance(wire, EventWire)
     assert wire.seq == 7
     assert wire.type == "StudyCancelled"
-    assert wire.payload == {"study_id": "st_fake", "by": "user"}
+    assert wire.payload == {"study_id": _SID, "by": "user"}
     assert wire.payload_digest == "a" * 64
     dumped = wire.model_dump(mode="json")
     assert dumped["seq"] == 7
@@ -248,7 +262,7 @@ def test_event_to_wire_round_trip_fields() -> None:
 
 
 def test_event_to_wire_payload_is_copy() -> None:
-    payload = {"study_id": "st_fake", "n": 1}
+    payload = {"study_id": _SID, "n": 1}
     row = _stored(seq=1, payload=payload)
     wire = event_to_wire(row)
     wire.payload["n"] = 99
