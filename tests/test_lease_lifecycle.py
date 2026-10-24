@@ -108,6 +108,7 @@ async def test_same_owner_name_different_nonce_cannot_steal(tmp_path, clock):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 async def test_migrated_live_lease_empty_nonce_waits_for_ttl(tmp_path, clock):
     """Old schema rows get owner_nonce=''; same owner cannot steal until TTL."""
     db = tmp_path / "st_mig.db"

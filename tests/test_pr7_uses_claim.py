@@ -504,6 +504,7 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
     """Old AttemptStarted schema_version=2 (no inputs) upcasts to [] on reopen."""
     sid = "st_as_v2"

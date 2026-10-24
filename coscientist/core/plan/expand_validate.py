@@ -200,6 +200,19 @@ def _validate(
             QuestionSpec(id=qid, text=text, final_type=ft)  # type: ignore[arg-type]
         )
         seen_q.add(qid)
+    # Decomposes limits from study + prior plan rollup (no invented all/8/64).
+    max_depth = int(study.max_depth)
+    max_tasks = int(study.max_tasks)
+    rollup = "all"
+    if plan_rows:
+        last = plan_rows[-1] if isinstance(plan_rows[-1], dict) else None
+        if isinstance(last, dict) and last.get("rollup") in (
+            "all",
+            "any",
+            "majority",
+            "rubric",
+        ):
+            rollup = str(last["rollup"])
     ft_err = validate_plan_final_types_or_err(
         merged,
         q_for_validate,
@@ -207,14 +220,15 @@ def _validate(
         prev_tasks=prev_tasks,
         superseded_tasks=set(superseded_tasks),
         catalog=catalog,
+        rollup=rollup,
+        max_depth=max_depth,
+        max_tasks=max_tasks,
     )
     if ft_err is not None:
         return ft_err
     # max_depth + acyclicity: decomposes via parent_id ∪ graph (DESIGN_M1 §10).
     from coscientist.core.plan.decomposes import assert_decomposes_acyclic, max_decomposes_depth
     from coscientist.core.plan.plan_validate import validate_decomposes
-
-    max_depth = int(getattr(study, "max_depth", 8) or 8)
     parent_of: dict[str, str | None] = {
         q.id: getattr(q, "parent_id", None) for q in added_questions
     }
@@ -268,17 +282,12 @@ def _validate(
                         final_type=prev_final.get(qid, "verdict"),  # type: ignore[arg-type]
                     )
                 )
-        rollup = "all"
-        if plan_rows:
-            last = plan_rows[-1] if isinstance(plan_rows[-1], dict) else None
-            if isinstance(last, dict) and last.get("rollup") in ("all", "any", "majority", "rubric"):
-                rollup = str(last["rollup"])
         validate_decomposes(
             merged,
             q_all,
             rollup=rollup,
             max_depth=max_depth,
-            max_tasks=int(getattr(study, "max_tasks", 64) or 64),
+            max_tasks=max_tasks,
         )
     except ValueError as e:
         return str(e) or "invalid_decomposes"

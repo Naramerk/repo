@@ -188,6 +188,7 @@ async def _record_hitl_expand(rt, **kwargs):
                     "approved_by": "human",
                     "reason": "answered",
                     "spent_rub": 0.0,
+                    "delegated_by": "human",
                 },
                 ts=rt.clock.now(),
             )
@@ -431,6 +432,9 @@ async def test_rubric_frozen_digest_runtime(tmp_path, clock):
     tasks, qs = freeze_plan_rubrics(
         [_exp("E0", addresses=["Q1"], rubric=rub.model_copy(update={"digest": ""}))],
         [QuestionSpec(id="Q1", text="q", final_type="artifact")],
+        rollup="all",
+        max_depth=8,
+        max_tasks=64,
     )
     assert tasks[0].expected_outputs[0].rubric is not None
     assert tasks[0].expected_outputs[0].rubric.digest == expected
@@ -1586,6 +1590,7 @@ async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             claims=[
                 {
+                    "id": "c1",
                     "text": "c1",
                     "polarity": "supports",
                     "target": "Q1",

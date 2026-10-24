@@ -619,6 +619,7 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runtime_cls):
     """Old StudyCreated with delegated_costly > max_cost_rub still reopens + finalizes.
 

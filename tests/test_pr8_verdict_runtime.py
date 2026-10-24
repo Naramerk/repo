@@ -18,11 +18,9 @@ from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import claim_node_id, question_node_id
 from coscientist.core.execution.domain import (
-    HitlPolicy,
     InputSpec,
     QuestionSpec,
     RequirementRef,
-    Study,
     Task,
     TaskKind,
     TaskOutcome,
@@ -36,7 +34,7 @@ from coscientist.core.execution.inputs import (
     collect_bindable_claims,
     verdict_binding_digest,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import attach_executor, close_runtime, make_test_study, open_runtime
 from tests.test_inputs import _task
 
 _DERIVED_OK = {
@@ -73,6 +71,15 @@ _DERIVED_OK = {
 def _derived_for(attempt_id: str, **extra: object) -> dict:
     """``_DERIVED_OK`` with ``produced_by_call_id`` bound to ``attempt_id``."""
     base: dict = {**_DERIVED_OK, **extra}
+    # Keep claim_outcome aligned when callers only override criterion_status.
+    if "criterion_status" in extra and "claim_outcome" not in extra:
+        st = extra["criterion_status"]
+        if st == "not_met":
+            base["claim_outcome"] = "inconsistent"
+        elif st == "met":
+            base["claim_outcome"] = "consistent"
+        elif st == "unassessed":
+            base["claim_outcome"] = "indeterminate"
     eff = dict(base.get("effect") or {})
     extra_eff = extra.get("effect")
     if isinstance(extra_eff, dict):
@@ -255,12 +262,11 @@ def test_garbage_attrs_dropped_not_raised():
     )
     assert rc is None
     assert reason == "bad_confirming_evidence_ids"
-    study = Study(
+    study = make_test_study(
         study_id=sid,
         profile="research",
         request="q",
         catalog_version="0.1.0",
-        hitl_policy=HitlPolicy(),
         deadline=datetime(2026, 1, 2, tzinfo=UTC),
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
@@ -710,12 +716,11 @@ def test_dispositions_from_verdict_counting_claims():
         outcome=TaskOutcome.SUCCESS,
         deadline=now,
     )
-    study = Study(
+    study = make_test_study(
         study_id=sid,
         profile="research",
         request="q",
         catalog_version="0.1.0",
-        hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
         confirmations_needed=1,
@@ -946,7 +951,14 @@ def test_frozen_normalizes_check_id_to_template_id():
             kind="criterion",
             study_id=sid,
             ref_id="value_match",
-            attrs={"frozen": True, "frozen_at_seq": 3, "template_id": "value_match"},
+            attrs={
+                "frozen": True,
+                "frozen_at_seq": 3,
+                "template_id": "value_match",
+                "uses_sesoi": False,
+                "predicts_null": False,
+                "predicted_direction": "two_sided",
+            },
         )
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -1386,7 +1398,6 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
         excluded_claims_report,
     )
     from coscientist.core.claims.rules import verdict
-    from coscientist.core.execution.domain import Study
 
     valid = [
         RuntimeClaim(
@@ -1477,12 +1488,11 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
     )
     assert drops_b == []
     _apply_events(g, evs_b)
-    study = Study(
+    study = make_test_study(
         study_id=sid,
         profile="research",
         request="q",
         catalog_version="0.1.0",
-        hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
         confirmations_needed=3,
@@ -1506,7 +1516,6 @@ def test_unknown_role_exclusion_never_forces_verdict():
         compute_verdict_snapshots,
         excluded_claims_report,
     )
-    from coscientist.core.execution.domain import Study
 
     bad = RuntimeClaim(
         criterion_status="unassessed",
@@ -1550,12 +1559,11 @@ def test_unknown_role_exclusion_never_forces_verdict():
     )
     assert drops == []
     _apply_events(g, evs)
-    study = Study(
+    study = make_test_study(
         study_id=sid,
         profile="research",
         request="q",
         catalog_version="0.1.0",
-        hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
         confirmations_needed=1,
@@ -1576,7 +1584,6 @@ def test_unknown_role_exclusion_never_forces_verdict():
 def test_validity_only_evidence_inconclusive():
     """A validity failure as the only evidence → inconclusive (validity_failed)."""
     from coscientist.core.claims.claims import RuntimeClaim, compute_verdict_snapshots
-    from coscientist.core.execution.domain import Study
 
     g = GraphStore(default_execution_registry())
     sid = "st_val_only"
@@ -1601,12 +1608,11 @@ def test_validity_only_evidence_inconclusive():
     )
     assert drops == []
     _apply_events(g, evs)
-    study = Study(
+    study = make_test_study(
         study_id=sid,
         profile="research",
         request="q",
         catalog_version="0.1.0",
-        hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
         confirmations_needed=1,
@@ -1745,12 +1751,11 @@ def test_priority_refuted_stub_support_note_in_report_payload():
     )
     assert drops_ref == []
     _apply_events(g, evs_ref)
-    study = Study(
+    study = make_test_study(
         study_id=sid,
         profile="research",
         request="q",
         catalog_version="0.1.0",
-        hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
         confirmations_needed=1,

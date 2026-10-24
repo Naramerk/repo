@@ -11,14 +11,13 @@ from datetime import UTC, datetime
 import pytest
 
 from coscientist.core.execution.domain import (
-    HitlPolicy,
-    Study,
     Task,
     TaskKind,
     TaskOutcome,
     TaskSpec,
     TaskState,
 )
+from tests.helpers import make_test_study
 
 
 @pytest.mark.xfail(
@@ -77,6 +76,7 @@ def test_question_disposition_computed_from_verdict():
             "frozen": True,
             "lit_own_criterion": False,
             "accepted": True,
+            "validity_ok": True,
             "artifact_id": "A1",
             "sesoi": 0.5,
             "uses_sesoi": True,
@@ -120,12 +120,11 @@ def test_question_disposition_computed_from_verdict():
         outcome=TaskOutcome.SUCCESS,
         deadline=now,
     )
-    study = Study(
+    study = make_test_study(
         study_id=sid,
         profile="research",
         request="q",
         catalog_version="0.1.0",
-        hitl_policy=HitlPolicy(),
         deadline=now,
         created_at=now,
     )

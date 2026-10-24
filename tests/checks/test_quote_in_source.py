@@ -2116,6 +2116,7 @@ def _copy_reclass_fixture(tmp_path: Path) -> tuple[str, str, str, Path]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 async def test_reclassified_tool_study_opens_finalizes_uncounted(
     tmp_path: Path, clock
 ):
@@ -2169,6 +2170,7 @@ async def test_reclassified_tool_study_opens_finalizes_uncounted(
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 async def test_reclassify_internal_error_survives_reconcile_failure(
     tmp_path: Path, clock, monkeypatch
 ):
@@ -2196,6 +2198,7 @@ async def test_reclassify_internal_error_survives_reconcile_failure(
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 async def test_open_reconcile_lease_lost_propagates(tmp_path: Path, clock, monkeypatch):
     """LeaseLost from reconcile_fetch_integrity on open must not be swallowed."""
     from coscientist.core.events.errors import LeaseLost
@@ -2217,6 +2220,7 @@ async def test_open_reconcile_lease_lost_propagates(tmp_path: Path, clock, monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 async def test_open_finalized_study_does_not_append_fetch_integrity(
     tmp_path: Path, clock
 ):

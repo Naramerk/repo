@@ -1427,6 +1427,7 @@ async def test_api_corrupt_deflate_study_finalized_not_500(tmp_path, catalog):
     await close_runtime(rt)
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 @pytest.mark.asyncio
 async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls):
     """Persist AttemptStarted schema_version=7, reopen (upcast), next attempt unknown."""
@@ -1526,15 +1527,15 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
 
 
 def test_study_created_writer_is_v11_after_loopspec():
-    """#24 owns max_loop_iter (v10); #23 writer was v11; PR20 stacks v12."""
+    """Schema-v1 baseline: StudyCreated writer is 1 (legacy upcast chains removed)."""
     from coscientist.core.events.schema_versions import STUDY_CREATED_SCHEMA_VERSION
     from coscientist.core.events.upcasters import writer_schema_version
     from coscientist.core.execution.domain import Study
 
     assert "max_loop_iter" in Study.model_fields
     assert "max_proposals" in Study.model_fields
-    assert STUDY_CREATED_SCHEMA_VERSION == 12
-    assert writer_schema_version("StudyCreated") == 12
+    assert STUDY_CREATED_SCHEMA_VERSION == 1
+    assert writer_schema_version("StudyCreated") == 1
 
 
 def test_tar_many_members_early_exit():
@@ -1642,6 +1643,7 @@ def test_stale_digest_version_garbage_fails_closed():
     )
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 @pytest.mark.asyncio
 async def test_old_study_created_v9_with_digest_drift_unknown(
     tmp_path, clock, runtime_cls

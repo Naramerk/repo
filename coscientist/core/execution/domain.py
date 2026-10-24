@@ -538,9 +538,9 @@ class Task(Frozen):
 
 class InputBinding(Frozen):
     input: str
-    artifact_id: str
+    artifact_id: str = ""  # audit-ok[field_default]: InputBinding.artifact_id
     source: Provenance
-    kind: Literal["artifact", "claim", "verdict"]
+    kind: Literal["artifact", "claim", "verdict"] = "artifact"  # audit-ok[field_default]: InputBinding.kind
     ref: str | None = None
     # P2 content snapshot (DESIGN_M1 §9): artifact CAS sha256 / verdict JCS / claim meta.
     digest: str | None = None

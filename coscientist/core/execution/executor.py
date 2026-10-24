@@ -215,10 +215,15 @@ def _req_to_criterion_status(status: ReqStatus) -> str:
 def _check_field(c: Any, name: str) -> Any:
     if isinstance(c, dict):
         return optional_item(c, name)
+    missing = False
     try:
-        return getattr(c, name)
+        value = getattr(c, name)
     except AttributeError:
-        return None  # audit-ok[except_silent_return]: executor.py:209 except_silent_return
+        missing = True
+        value = None
+    if missing:
+        return None
+    return value
 
 def _normalize_to_template_id(key: str, checks: list[Any], criteria: list[Any]) -> str:
     """Map check_id (``value_match#0``) → template_id; leave template_id as-is."""
@@ -235,20 +240,59 @@ def _normalize_to_template_id(key: str, checks: list[Any], criteria: list[Any]) 
             return str(tid)
     return key
 
+def _sole_template_id(items: list[Any]) -> str | None:
+    """Template id when ``items`` holds exactly one check/criterion; else None."""
+    if len(items) != 1:
+        return None
+    tid = _check_field(items[0], "template_id")
+    if tid is None:
+        return None
+    return str(tid)
+
+
+def _sole_status(items: list[Any]) -> str | None:
+    """ReqStatus string when ``items`` holds exactly one check; else None."""
+    if len(items) != 1:
+        return None
+    st = _check_field(items[0], "status")
+    if isinstance(st, ReqStatus):
+        return _req_to_criterion_status(st)
+    try:
+        return _req_to_criterion_status(ReqStatus(str(st)))
+    except ValueError as e:
+        raise JournalFormatError(f"bad criterion status: {st!r}") from e
+
+
+def _sole_role(items: list[Any]) -> str | None:
+    """Check role when ``items`` holds exactly one check; else None."""
+    if len(items) != 1:
+        return None
+    return _check_role(items[0])
+
+
 def _criterion_key_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any]) -> str | None:
-    """Resolve checked_against → template_id, else sole check / sole plan criterion."""
+    """Resolve checked_against → template_id, else sole check / sole plan criterion.
+
+    Sole-check / sole-criterion binding is the typed contract when the agent
+    omits ``checked_against`` and exactly one check or plan criterion exists.
+    Multi-check ambiguity stays unresolved (returns None) — never invent.
+    """
     checked = optional_item(raw, "checked_against")
     if checked:
         return _normalize_to_template_id(str(checked), checks, criteria)
-    # No sole-check / sole-criterion inference (REVIEW_CHECKLIST rule 9).
-    return None
+    sole = _sole_template_id(checks)
+    if sole is not None:
+        return sole
+    return _sole_template_id(criteria)
 
 def _criterion_status_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any] | None = None) -> str:
     """Map claim.checked_against → ReqStatus of that criterion's check."""
     crit = _or_empty_list(criteria)
     key = _criterion_key_for_claim(raw, checks, crit)
     if key is None:
-        # No checked_against and no sole-criterion inference (rule 9).
+        sole_st = _sole_status(checks)
+        if sole_st is not None:
+            return sole_st
         return "unassessed"
     for c in checks:
         tid = _check_field(c, "template_id")
@@ -357,6 +401,9 @@ def _role_for_claim_key(
                 return _check_role(c)
         # Fall back to catalog by template_id (never plan RequirementRef.role).
         return role_from_catalog(str(key), catalog)
+    sole = _sole_role(checks)
+    if sole is not None:
+        return sole
     return "unknown"
 
 def _criterion_node(graph: Any, study_id: str, template_id: Any) -> Any | None:

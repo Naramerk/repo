@@ -267,7 +267,7 @@ async def test_accept_plan_writes_decomposes_edge(tmp_path, clock):
     assert len(decomp) == 1
     assert decomp[0].payload["attrs"]["origin"] == "explicit"
     accepted = next(e for e in await rt.store.read_all() if e.type == "PlanAccepted")
-    assert accepted.schema_version == PLAN_ACCEPTED_SCHEMA_VERSION == 11
+    assert accepted.schema_version == PLAN_ACCEPTED_SCHEMA_VERSION == 1
     await close_runtime(rt)
 
 
@@ -1491,6 +1491,7 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
                     "approved_by": "human",
                     "reason": "answered",
                     "spent_rub": 0.0,
+                    "delegated_by": "human",
                 },
                 ts=rt.clock.now(),
             ),
@@ -1534,7 +1535,7 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
     assert "~~`E1`~~" in md
     expanded = [e for e in await rt.store.read_all() if e.type == "PlanExpanded"]
     assert expanded
-    assert expanded[-1].schema_version == PLAN_EXPANDED_SCHEMA_VERSION == 5
+    assert expanded[-1].schema_version == PLAN_EXPANDED_SCHEMA_VERSION == 1
     await close_runtime(rt)
 
 
@@ -1573,6 +1574,8 @@ def test_validate_decomposes_pure_cycle():
                 QuestionSpec(id="B", text="b", parent_id="A"),
             ],
             rollup="all",
+            max_depth=8,
+            max_tasks=64,
         )
 
 
@@ -1636,7 +1639,7 @@ def test_expand_graph_rejects_cycle_via_existing_edges():
             now=now,
         )
     # Closing the existing chain (A→C while C→B→A) via full parent map.
-    parent_of = _decomposes_parent_map(rt, sid)  # type: ignore[arg-type]
+    parent_of = _decomposes_parent_map(rt)  # type: ignore[arg-type]
     assert parent_of["B"] == "A"
     assert parent_of["C"] == "B"
     parent_of["A"] = "C"

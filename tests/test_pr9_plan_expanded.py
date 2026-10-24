@@ -77,6 +77,8 @@ async def _record_hitl_opened(
 
 
 async def _record_hitl_decided(rt, rid: str, *, delegated_by: str | None = None) -> None:
+    # expand_plan requires HitlDecided.delegated_by ∈ {human, timeout} (no aliases).
+    db = "human" if delegated_by is None else delegated_by
     payload = {
         "request_id": rid,
         "decision": "accept",
@@ -85,9 +87,8 @@ async def _record_hitl_decided(rt, rid: str, *, delegated_by: str | None = None)
         "approved_by": "human" if delegated_by is None else "critic",
         "reason": "answered" if delegated_by is None else f"delegate→agent ({delegated_by})",
         "spent_rub": 0.0,
+        "delegated_by": db,
     }
-    if delegated_by:
-        payload["delegated_by"] = delegated_by
     await rt._append(
         [
             EventEnvelope(
@@ -1130,7 +1131,11 @@ async def test_expand_after_malformed_planner_output(tmp_path, clock, runtime_cl
 
 @pytest.mark.asyncio
 async def test_plan_n_attempt_result_mismatch_refused(tmp_path, clock, runtime_cls):
-    """_resolve_plan_n_request: aid vs result:aid mismatch → ExpansionRefused(invalid)."""
+    """Schema-v1: sole result key is attempt_id — ``result:`` alias is ignored.
+
+    A conflicting ``result:{aid}`` row must not trigger mismatch refuse; the
+    attempt_id row is the only input to PLAN-n expansion.
+    """
     sid = "st_aid_mm"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
@@ -1168,12 +1173,13 @@ async def test_plan_n_attempt_result_mismatch_refused(tmp_path, clock, runtime_c
         "expansion_request": {"tasks": [], "reason": "other"},
     }
     await apply_pending_expansion(rt, plan_n.spec.task_key)
-    assert any(
+    events = await rt.store.read_all()
+    assert not any(
         e.type == "ExpansionRefused"
-        and e.payload.get("reason") == "invalid"
         and "attempt_result_mismatch" in str(e.payload.get("detail") or "")
-        for e in await rt.store.read_all()
+        for e in events
     )
+    assert any(e.type == "PlanExpanded" for e in events)
     await close_runtime(rt)
 
 

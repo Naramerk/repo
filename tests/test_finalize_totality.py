@@ -466,6 +466,7 @@ async def test_tick_ensure_lease_after_finalized(tmp_path, clock):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
     """Old journal PlanAccepted v1 + TaskCreated v2 upcast and finalize."""
     sid = "st_leg"

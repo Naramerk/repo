@@ -12,7 +12,7 @@ import os
 import secrets
 import socket
 import time
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +21,12 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from coscientist.core.claims.reasons import RefusalKind
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import Conflict, LeaseLost
-from coscientist.core.execution.domain import Budget, HitlPolicy
+from coscientist.core.execution.domain import (
+    Budget,
+    GateConfig,
+    HitlPolicy,
+    StudyConfig,
+)
 from coscientist.core.execution.input_limits import (
     InputLimits,
     default_input_limits,
@@ -35,6 +40,53 @@ _WAIT_COMPLETE_S = 2.0
 # Only reclaim a non-empty unreadable reservation if older than this (or owner dead).
 _STALE_RESERVATION_S = 60.0
 
+# API-layer StudyConfig when the client omits ``config`` (core has no Field defaults).
+_API_STUDY_CONFIG_KW: dict[str, Any] = {
+    "finalize_reserve_s": 30,
+    "confirmations_needed": 1,
+    "refutations_needed": 1,
+    "refutation_priority": False,
+    "supported_needed": 2,
+    "aggregate": "count",
+    "evalue_alpha": 0.05,
+    "max_expansions": 2,
+    "max_human_expansions": 10,
+    "replan_reserve": 0.1,
+    "max_tasks": 64,
+    "max_depth": 8,
+    "plan_timeout_s": 600,
+    "max_foreach_children": 32,
+    "max_loop_iter": 8,
+    "max_task_budget_share": 1.0,
+    "max_proposals": 3,
+}
+
+_API_HITL_GATES: dict[str, GateConfig] = {
+    "spec_approval": GateConfig(enabled=True, timeout_s=120, on_timeout="delegate"),
+    "plan": GateConfig(enabled=True, timeout_s=180, on_timeout="delegate"),
+    "plan_approval": GateConfig(enabled=True, timeout_s=180, on_timeout="delegate"),
+    "plan_expansion": GateConfig(enabled=True, timeout_s=180, on_timeout="delegate"),
+    "hypotheses": GateConfig(enabled=True, timeout_s=1800, on_timeout="delegate"),
+    "costly_or_nonreal": GateConfig(enabled=True, timeout_s=1800, on_timeout="fail"),
+    "report": GateConfig(enabled=True, timeout_s=1800, on_timeout="delegate"),
+    "result_acceptance": GateConfig(enabled=True, timeout_s=1800, on_timeout="delegate"),
+    "skip_task": GateConfig(enabled=True, timeout_s=1800, on_timeout="delegate"),
+    "budget": GateConfig(enabled=True, timeout_s=1800, on_timeout="delegate"),
+    "side_effect": GateConfig(enabled=True, timeout_s=1800, on_timeout="fail"),
+    "proposed_check": GateConfig(enabled=True, timeout_s=1800, on_timeout="fail"),
+}
+
+
+def _api_default_study_config(*, finalize_reserve_s: int | None = None) -> StudyConfig:
+    kw = dict(_API_STUDY_CONFIG_KW)
+    if finalize_reserve_s is not None:
+        kw["finalize_reserve_s"] = finalize_reserve_s
+    return StudyConfig(**kw)
+
+
+def _api_default_hitl_policy() -> HitlPolicy:
+    return HitlPolicy(mode="headless", gates=dict(_API_HITL_GATES))
+
 
 class CreateStudyBody(BaseModel):
     """Request body for ``POST /studies``."""
@@ -47,7 +99,9 @@ class CreateStudyBody(BaseModel):
     hitl_policy: HitlPolicy | None = None
     deadline: datetime | None = None
     budget: Budget | None = None
-    finalize_reserve_s: int = 30
+    # Preferred: typed StudyConfig. Legacy clients may still send finalize_reserve_s.
+    config: StudyConfig | None = None
+    finalize_reserve_s: int | None = None
     # PR19 / DESIGN_M1 §9: user blobs → CAS before SPEC; as_of for time-sensitive Qs.
     # Profile owns InputLimits; client may only LOWER via this optional dict.
     inputs: list[dict[str, Any]] = []
@@ -411,17 +465,32 @@ async def post_studies(
 
             use_inputs = [] if force_refuse is not None else list(body.inputs or [])
             user_cap = mint_user_put_capability() if use_inputs else None
+            if body.config is not None:
+                study_config = body.config
+                if body.finalize_reserve_s is not None:
+                    study_config = study_config.model_copy(
+                        update={"finalize_reserve_s": body.finalize_reserve_s}
+                    )
+            else:
+                study_config = _api_default_study_config(
+                    finalize_reserve_s=body.finalize_reserve_s
+                )
+            hitl = body.hitl_policy if body.hitl_policy is not None else _api_default_hitl_policy()
+            deadline = body.deadline
+            if deadline is None:
+                deadline = datetime.now(UTC) + timedelta(hours=2)
             try:
                 created_id = await rt.create_study(
                     profile=body.profile,
                     request=(body.request or "invalid").strip() or "invalid",
                     catalog_version=body.catalog_version,
-                    hitl_policy=body.hitl_policy,
-                    deadline=body.deadline,
+                    config=study_config,
+                    hitl_policy=hitl,
+                    deadline=deadline,
                     budget=body.budget,
-                    finalize_reserve_s=body.finalize_reserve_s,
                     sid=sid,
                     inputs=use_inputs,
+                    min_plan_cost=0,
                     as_of=body.as_of,
                     input_limits=profile_limits,
                     client_input_limits=(

@@ -237,6 +237,8 @@ def _wrap_expand_plan(rt: Any) -> Any:
         if "assign_keys" not in kwargs:
             # Match former expand_plan default (False): keep planner task_keys.
             kwargs["assign_keys"] = False
+        if "origin" not in kwargs:
+            kwargs["origin"] = "emergent"
         return await orig(*args, **kwargs)
 
     rt.expand_plan = _bound  # type: ignore[method-assign]
@@ -256,6 +258,21 @@ def _wrap_accept_plan(rt: Any) -> Any:
         return await orig(tasks, **kwargs)
 
     rt.accept_plan = _bound  # type: ignore[method-assign]
+    return rt
+
+
+def _wrap_answer_hitl(rt: Any) -> Any:
+    """Inject ``decision`` when tests omit it (former soft default)."""
+    orig = getattr(rt, "answer_hitl", None)
+    if not callable(orig):
+        return rt
+
+    async def _bound(request_id: str, decision: str | None = None, **kwargs: Any) -> Any:
+        if decision is None:
+            decision = "accept"
+        return await orig(request_id, decision, **kwargs)
+
+    rt.answer_hitl = _bound  # type: ignore[method-assign]
     return rt
 
 
@@ -329,7 +346,9 @@ async def open_runtime(
         catalog=catalog if catalog is not None else minimal_test_catalog(),
         **kwargs,
     )
-    return _wrap_expand_plan(_wrap_accept_plan(_wrap_create_study(rt)))
+    return _wrap_answer_hitl(
+        _wrap_expand_plan(_wrap_accept_plan(_wrap_create_study(rt)))
+    )
 
 
 async def open_runtime_experimental(
@@ -366,7 +385,9 @@ async def open_runtime_experimental(
         catalog=catalog if catalog is not None else minimal_test_catalog(),
         **kwargs,
     )
-    return _wrap_expand_plan(_wrap_accept_plan(_wrap_create_study(rt)))
+    return _wrap_answer_hitl(
+        _wrap_expand_plan(_wrap_accept_plan(_wrap_create_study(rt)))
+    )
 
 
 class RuntimeLike(Protocol):

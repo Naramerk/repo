@@ -1292,6 +1292,9 @@ def test_agent_facing_view_never_includes_holdout_or_scorer():
         version="1",
         required=True,
         role="prediction",
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
         method_sources=["test"],
         applies_to=["experiment"],
         check=CodeCheck(
@@ -2000,7 +2003,9 @@ async def test_infra_failure_does_not_charge_attempt(
     def boom(*args, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
-            raise SandboxInfraError("sandbox_unavailable:cgroup_attach")
+            raise SandboxInfraError(
+                "sandbox_unavailable:cgroup_attach", transient=True
+            )
         return real_eval(*args, **kwargs)
 
     monkeypatch.setattr(
@@ -2310,7 +2315,14 @@ def test_no_derived_call_id_fallback():
             "criterion_status": "met",
             "evidence_kind": "computational",
             "frozen": True,
+            "lit_own_criterion": False,
             "accepted": True,
+            "validity_ok": True,
+            "claim_outcome": "consistent",
+            "predicted_direction": "two_sided",
+            "predicts_null": False,
+            "uses_sesoi": False,
+            "used_sesoi": False,
             "effect": {
                 "est": 1.0,
                 "core_evaluated": True,
