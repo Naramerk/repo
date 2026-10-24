@@ -63,6 +63,12 @@ def test_stance_computed_from_criterion(impl):
         "refutes",
         "inconclusive",
     ]
+    # Role criterion model mirrors KindSpec: code without metric/op/target refuses.
+    criterion_in = g.models()["criterion"]
+    with pytest.raises(pydantic.ValidationError, match="metric"):
+        criterion_in(check="code")
+    ok = criterion_in(check="code", metric="n", op=">=", target="1")
+    assert ok.metric == "n"
 
 
 def test_supported_needs_distinct_independence_keys(impl):
