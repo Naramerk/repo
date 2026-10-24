@@ -4,11 +4,12 @@
 
 ### M2 prep (A7): thin MCP client (`coscientist/mcp/`)
 - Standalone MCP client (no `coscientist.core`). **Own JSON-RPC client** — DESIGN §6.0 vs official `mcp` SDK **2.x** (server-stack deps; SDK has custom httpx client factory; consider `mcp-types` later).
-- Optional extra `mcp` (`httpx`); CI installs `.[mcp]`. import-linter: `llm` ↛ `httpx`; **httpx only allowed in `coscientist.mcp`**.
+- Optional extra `mcp` (`httpx`); CI installs `.[mcp]`. import-linter: `llm` ↛ `httpx`; **httpx only allowed in `coscientist.mcp`** (forbidden from `core`/`checks`/`experimental`/`llm`/`tools`/`agents`/`api`/`schema`/`web`).
 - Profile `stdio` + `streamable_http`; all timeouts/limits/statuses/encodings required. Pagination page/cursor limits; HTTP per-request `wait_for` deadline (SSE keepalives cannot extend); DELETE session on aclose.
 - `HttpxTransport` (shared `AsyncClient`, `ssl.SSLContext` verify): TCP pin + Host/SNI/cert on original host. SSRF: `not is_global` after unwrap mapped/6to4/NAT64/`::/96`; multi-member gzip.
+- File decode: limited zlib/gzip (`decompress(..., max_length)` loop, no unbounded `flush`); truncated / trailing-garbage streams → `McpProtocolError`. Cancel-notify failures logged; original `McpTimeoutError` preserved. SSE lone trailing `\r` completes the line; JSON-RPC requires `id` or `method`.
 - Stdio: stderr keep-drain; public pipe close only (no `proc._transport`); mid-line EOF → transport error.
-- Tests: in-process fake + adversarial SSRF/stdio + real-socket pin/redirect/rebinding/SNI mismatch.
+- Tests: in-process fake + adversarial SSRF/stdio + real-socket pin/redirect/rebinding/SNI mismatch + deflate-bomb RSS + overall deadline across redirect.
 
 ### M2 PR A1 — thin LLM client
 - New package `coscientist/llm/`: typed `LlmRequest`/`LlmResponse`/`Usage`, `ProviderAdapter` + OpenAI-compatible provider, `LlmClient` with timeout/retry/limits from required `LlmConfig` fields (no guessed defaults), typed errors, API key only from env named in config; no logging/printing of secrets or bodies.
