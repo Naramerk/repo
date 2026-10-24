@@ -555,6 +555,58 @@ def test_assemble_refuses_hypothesis_id_mismatch_and_missing():
             **base,
             hypotheses={"H1": {"hypothesis_id": "H2", "verdict": "untested"}},
         )
+    with pytest.raises(MinimalReportRefuse, match="expected mapping row"):
+        assemble_minimal_report(
+            **base,
+            hypotheses={"H1": "not-a-mapping"},
+        )
+
+
+def test_assemble_refuses_minimal_report_validation_error():
+    """ValidationError from model_validate → MinimalReportRefuse(match=MinimalReport:)."""
+    with pytest.raises(MinimalReportRefuse, match="MinimalReport:"):
+        assemble_minimal_report(
+            study_id="st",
+            terminal_reason="completed",
+            trigger="all_done",
+            contributing_reasons=[],
+            verdict="partial",
+            tasks={},
+            attempts={},
+            question_dispositions={},
+            fallback_reason=None,
+            # int is not StrictStr | dict → pydantic ValidationError
+            observations=[42],
+        )
+
+
+@pytest.mark.parametrize(
+    ("snap", "match"),
+    [
+        ({}, "provenance required"),
+        ({"provenance": None}, "provenance required"),
+        ({"provenance": "bogus"}, "unknown provenance"),
+        ({"provenance": 1}, "unknown provenance"),
+    ],
+    ids=["absent", "null", "unknown-str", "non-str"],
+)
+def test_snap_provenance_fail_closed(snap, match):
+    """dispositions: never invent real — absent/null/unknown → ValueError."""
+    from coscientist.core.claims.dispositions import _snap_provenance
+
+    with pytest.raises(ValueError, match=match):
+        _snap_provenance(snap, "H1")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["real", "partial", "stub"],
+    ids=["real", "partial", "stub"],
+)
+def test_snap_provenance_accepts_valid(raw):
+    from coscientist.core.claims.dispositions import _snap_provenance
+
+    assert _snap_provenance({"provenance": raw}, "H1") == raw
 
 
 def test_assemble_refuses_done_task_without_outcome():

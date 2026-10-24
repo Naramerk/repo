@@ -21,8 +21,29 @@ from coscientist.core.claims.rubric import (
 )
 from coscientist.core.claims.rules import priority_refuted_support_note
 from coscientist.core.claims.verdict import NO_EFFECT_EXCLUSION_REASONS
-from coscientist.core.execution.domain import Study, Task, TaskOutcome, TaskState
+from coscientist.core.execution.domain import (
+    VALID_PROVENANCE,
+    Provenance,
+    Study,
+    Task,
+    TaskOutcome,
+    TaskState,
+)
 from coscientist.core.plan.question_tasks import known_questions, question_tasks
+
+
+def _snap_provenance(snap: Mapping[str, Any], hid: str) -> Provenance:
+    """Require snap provenance — never invent ``real`` (DESIGN_M1 §6.7)."""
+    if "provenance" not in snap or snap["provenance"] is None:
+        raise ValueError(f"hypothesis {hid!r}: provenance required")
+    raw = snap["provenance"]
+    if not isinstance(raw, str) or raw not in VALID_PROVENANCE:
+        raise ValueError(f"hypothesis {hid!r}: unknown provenance {raw!r}")
+    if raw == "real":
+        return "real"
+    if raw == "partial":
+        return "partial"
+    return "stub"
 
 
 def _task_by_key(tasks: Mapping[str, Task]) -> dict[str, Task]:
@@ -666,7 +687,7 @@ def report_hypothesis_verdicts(
                     "target_kind": "hypothesis",
                     "by_literature": snap.get("by_literature", False),
                     "by_theory": snap.get("by_theory", False),
-                    "provenance": snap.get("provenance", "real"),
+                    "provenance": _snap_provenance(snap, hid),
                     "k": snap.get("k", study.confirmations_needed),
                     "supported_needed": study.supported_needed,
                     "refutations_needed": study.refutations_needed,
