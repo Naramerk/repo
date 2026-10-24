@@ -20,20 +20,9 @@ from coscientist.core.execution.runtime_factory import close_runtime as close_ru
 from coscientist.core.execution.runtime_factory import open_runtime as _open_runtime_core
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 
-_TEST_NEED = Need(needed=False, reason="test_omit_need")
-
-
-def _with_test_plan_needs(rt: Any) -> Any:
-    """Fill omitted Need kwargs only; explicit None still refuses (prod path)."""
-    orig = rt.accept_plan
-
-    async def accept_plan(tasks: Any, *args: Any, **kwargs: Any) -> Any:
-        kwargs.setdefault("hypotheses", _TEST_NEED)
-        kwargs.setdefault("literature", _TEST_NEED)
-        return await orig(tasks, *args, **kwargs)
-
-    rt.accept_plan = accept_plan  # type: ignore[method-assign]
-    return rt
+# Explicit Need for tests that call accept_plan (production refuses omit).
+TEST_NEED = Need(needed=False, reason="test")
+TEST_NEED_KW = {"hypotheses": TEST_NEED, "literature": TEST_NEED}
 
 
 async def open_runtime(
@@ -48,17 +37,16 @@ async def open_runtime(
     Production ``coscientist.core.execution.runtime_factory.open_runtime`` requires
     ``catalog=`` explicitly and never imports this helper. Defaults to the
     API StudyRuntime (lifecycle mixin) so ``create_study`` is available.
+    Does **not** patch ``accept_plan`` — callers pass Need explicitly.
     """
-    # ``runtime_cls=None`` must not bypass the API runtime (setdefault skips None).
     if kwargs.get("runtime_cls") is None:
         kwargs["runtime_cls"] = ApiStudyRuntime
-    rt = await _open_runtime_core(
+    return await _open_runtime_core(
         data_root,
         study_id,
         catalog=catalog if catalog is not None else minimal_test_catalog(),
         **kwargs,
     )
-    return _with_test_plan_needs(rt)
 
 
 async def open_runtime_experimental(
@@ -73,13 +61,12 @@ async def open_runtime_experimental(
         open_runtime as _open_exp,
     )
 
-    rt = await _open_exp(
+    return await _open_exp(
         data_root,
         study_id,
         catalog=catalog if catalog is not None else minimal_test_catalog(),
         **kwargs,
     )
-    return _with_test_plan_needs(rt)
 
 
 class RuntimeLike(Protocol):
