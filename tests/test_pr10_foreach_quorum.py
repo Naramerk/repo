@@ -25,7 +25,7 @@ from coscientist.core.execution.domain import (
 )
 from coscientist.core.execution.inputs import InputUnavailable
 from coscientist.core.execution.recover import recover
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import attach_executor, close_runtime, open_runtime, create_study
 
 
 def _exp(key: str, *, depends_on: list[str], **kw) -> TaskSpec:
@@ -213,7 +213,7 @@ async def _finalize_study(rt):
 async def test_foreach_10_hypotheses(tmp_path, clock, runtime_cls):
     sid = "st_fe10"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -258,7 +258,7 @@ async def test_foreach_when_source_already_done_live_eq_replay(tmp_path, clock, 
     """B1: of_task=HYP already DONE at accept_plan — expand live; reopen == live."""
     sid = "st_fe_hyp0"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -330,7 +330,7 @@ async def test_foreach_when_source_already_done_live_eq_replay(tmp_path, clock, 
 async def test_foreach_natural_sort_and_source_task_required(tmp_path, clock, runtime_cls):
     sid = "st_fe_nat"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -387,7 +387,7 @@ async def test_foreach_natural_sort_and_source_task_required(tmp_path, clock, ru
 async def test_foreach_zero_items_report(tmp_path, clock, runtime_cls):
     sid = "st_fe0"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -422,7 +422,7 @@ async def test_foreach_cap_limitation(tmp_path, clock, runtime_cls):
     """N2: cap keeps best ranks; journals total/dropped; report names ids."""
     sid = "st_fe_cap"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -473,7 +473,7 @@ async def test_foreach_cap_limitation(tmp_path, clock, runtime_cls):
 async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
     sid = "st_fe_rr"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -575,7 +575,7 @@ async def test_fanin_quorum(tmp_path, clock, runtime_cls):
     """R1: static A,B,C share one pool — quorum=2 of 3 starts (DESIGN_M1:245)."""
     sid = "st_q"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -631,7 +631,7 @@ async def test_fanin_quorum(tmp_path, clock, runtime_cls):
 async def test_quorum_all_fail(tmp_path, clock, runtime_cls):
     sid = "st_q_all"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -679,7 +679,7 @@ async def test_quorum_required_not_softened(tmp_path, clock, runtime_cls):
     """M2: required (no quorum) input stays required even if sibling has quorum."""
     sid = "st_q_req"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -725,7 +725,7 @@ async def test_quorum_tie_exact(tmp_path, clock, runtime_cls):
     """Static pool: exactly quorum=2 of A,B,C."""
     sid = "st_q_tie"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -768,7 +768,7 @@ async def test_quorum_partial_infra_failures(tmp_path, clock, runtime_cls):
     """Static pool quorum=1: one infra-fail → start with limitations."""
     sid = "st_q_infra"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -817,7 +817,7 @@ async def test_quorum_xy_not_pooled_by_value(tmp_path, clock, runtime_cls):
     """M2: foreach X q=2 and Y q=2 stay separate — X children never satisfy Y."""
     sid = "st_q_xy"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -891,7 +891,7 @@ async def test_quorum_xy_not_pooled_by_value(tmp_path, clock, runtime_cls):
 async def test_foreach_plus_quorum_fanin(tmp_path, clock, runtime_cls):
     sid = "st_fe_q"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -951,7 +951,7 @@ async def test_quorum_zero_inputs_edge(tmp_path, clock, runtime_cls):
     """Empty foreach + fan-in → SKIPPED; never starts with silent drop / fake real."""
     sid = "st_q0"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1002,7 +1002,7 @@ async def test_foreach_refuse_skips_template(tmp_path, clock, runtime_cls, monke
 
     sid = "st_fe_ref"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1047,7 +1047,7 @@ async def test_foreach_template_cannot_be_started(tmp_path, clock, runtime_cls):
     """Direct start_attempt on a foreach template raises."""
     sid = "st_fe_nostart"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1084,7 +1084,7 @@ async def test_driver_loop_skips_pending_foreach_template(
 
     sid = "st_fe_drv"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1140,7 +1140,7 @@ async def test_foreach_refused_in_expand_after_queues_plan_n(
 
     sid = "st_fe_ea"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1189,7 +1189,7 @@ async def test_foreach_missing_and_non_numeric_rank(tmp_path, clock, runtime_cls
     """Missing/non-numeric rank sort LAST (cap drops them); note; no SKIP."""
     sid = "st_fe_rank"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1260,7 +1260,7 @@ async def test_foreach_when_source_done_via_expand_plan(tmp_path, clock, runtime
     """B1: foreach added via expand_plan expands when of_task already DONE."""
     sid = "st_fe_exp"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1364,7 +1364,7 @@ async def test_foreach_quorum_gt_children_misses(tmp_path, clock, runtime_cls):
     """Foreach pool: quorum > children → SKIPPED + explicit report line."""
     sid = "st_q_gt"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1419,7 +1419,7 @@ async def test_foreach_empty_superseded_expand_after_queues_plan_n(
     """Empty foreach SUPERSEDED counts as done for expand_after (like REFUSED)."""
     sid = "st_fe_ea_empty"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",

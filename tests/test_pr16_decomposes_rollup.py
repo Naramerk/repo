@@ -45,7 +45,7 @@ from coscientist.core.plan.decomposes import (
 )
 from coscientist.core.plan.loop import capped_scope_questions, loop_status
 from coscientist.core.plan.plan_validate import validate_decomposes
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import attach_executor, close_runtime, open_runtime, create_study
 
 # --- helpers -----------------------------------------------------------------
 
@@ -107,7 +107,7 @@ def _q(qid: str, text: str, *, parent: str | None = None, origin: str | None = N
 
 async def _boot(tmp_path, clock, sid: str):
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
-    await rt.create_study(
+    await create_study(rt,
         profile="t",
         request="decompose Q into subquestions",
         catalog_version="1",
@@ -1177,7 +1177,7 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
 
     sid = "pr16-fe-cover"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="foreach cover",
         catalog_version="0.1.0",
@@ -1284,7 +1284,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
 
     sid = "pr16-loop-cover"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="loop cover",
         catalog_version="0.1.0",

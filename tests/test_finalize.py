@@ -36,7 +36,7 @@ from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
 from coscientist.core.finalize.minimal_report import MAX_BYTES, build_minimal_report
 from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.question_tasks import question_tasks, questions_from_spec_output
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
+from tests.helpers import attach_executor, close_runtime, open_runtime, record_success, create_study
 
 _TS = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
 
@@ -53,7 +53,7 @@ async def _boot(
     rt = await open_runtime(
         tmp, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research", request="q", catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=seconds), sid=sid,
         finalize_reserve_s=reserve,
@@ -525,7 +525,7 @@ async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -562,7 +562,7 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -600,7 +600,7 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
     with pytest.raises(ValueError, match="delegated_costly"):
-        await rt.create_study(
+        await create_study(rt,
             profile="research",
             request="q",
             catalog_version="0.1.0",

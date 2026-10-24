@@ -568,16 +568,59 @@ def test_hypothesis_report_row_requires_typed_rule():
     assert ei.value.field == "rule"
 
 
-def test_create_study_caps_come_from_study_model():
-    """create_study None overrides resolve via Study.model_fields (no magic literals)."""
-    from coscientist.core.execution.domain import Study
+@pytest.mark.asyncio
+async def test_create_study_caps_come_from_study_model(tmp_path, clock):
+    """create_study requires explicit caps + deadline (no Study / magic defaults)."""
+    from datetime import timedelta
 
-    assert Study.model_fields["evalue_alpha"].default == 0.05
-    assert Study.model_fields["finalize_reserve_s"].default == 30
-    assert Study.model_fields["max_expansions"].default == 2
-    assert Study.model_fields["max_human_expansions"].default == 10
-    assert Study.model_fields["replan_reserve"].default == 0.1
-    assert Study.model_fields["max_tasks"].default == 64
+    from pydantic_core import PydanticUndefined
+
+    from coscientist.core.execution.domain import Study
+    from tests.helpers import REQUIRED_STUDY_CAPS, close_runtime, create_study, open_runtime
+
+    for name in REQUIRED_STUDY_CAPS:
+        assert Study.model_fields[name].default is PydanticUndefined
+
+    rt = await open_runtime(tmp_path, "st_caps", clock=clock)
+    try:
+        base = {
+            "profile": "research",
+            "request": "q",
+            "catalog_version": "0.1.0",
+            "deadline": clock.now() + timedelta(hours=1),
+            "sid": "st_caps",
+            **REQUIRED_STUDY_CAPS,
+        }
+        omit_alpha = {k: v for k, v in base.items() if k != "evalue_alpha"}
+        with pytest.raises(ValueError, match="evalue_alpha"):
+            await rt.create_study(**omit_alpha)
+
+        with pytest.raises(ValueError, match="deadline"):
+            await rt.create_study(**{**base, "deadline": None})
+
+        await create_study(
+            rt,
+            profile="research",
+            request="q",
+            catalog_version="0.1.0",
+            deadline=clock.now() + timedelta(hours=1),
+            sid="st_caps",
+            evalue_alpha=0.07,
+        )
+        assert rt.study is not None
+        assert rt.study.evalue_alpha == 0.07
+    finally:
+        await close_runtime(rt)
+
+
+def test_gate_config_timeout_s_required():
+    """GateConfig.timeout_s has no default; use GATE_TIMEOUTS_S (DESIGN §7.3)."""
+    from coscientist.core.execution.domain import GATE_TIMEOUTS_S, GateConfig
+
+    with pytest.raises(ValidationError):
+        GateConfig()
+    cfg = GateConfig(timeout_s=GATE_TIMEOUTS_S["spec_approval"])
+    assert cfg.timeout_s == 120
 
 
 def test_dispositions_missing_final_type_raises():

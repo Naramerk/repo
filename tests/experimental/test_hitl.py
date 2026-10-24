@@ -10,7 +10,7 @@ import pytest
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.execution.domain import HitlPolicy
 from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
+from tests.helpers import attach_executor, close_runtime, open_runtime, record_success, create_study
 
 
 async def _boot(tmp_path: Path, clock: FakeClock, seconds: int = 60, **kw):
@@ -18,7 +18,7 @@ async def _boot(tmp_path: Path, clock: FakeClock, seconds: int = 60, **kw):
         tmp_path, "st_tr", clock=clock, runtime_cls=ExpStudyRuntime
     )
     kw.setdefault("finalize_reserve_s", 5 if seconds > 5 else 1)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",

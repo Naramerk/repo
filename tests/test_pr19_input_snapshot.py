@@ -38,7 +38,7 @@ from coscientist.core.execution.input_limits import (
     merge_input_limits,
     snapshot_bindings_at_p2,
 )
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import close_runtime, open_runtime, create_study
 
 
 def _with_user_put(fn):
@@ -55,7 +55,7 @@ async def _create_with_inputs(rt, *, inputs, **kwargs):
     """create_study with inputs under a minted UserPutCapability."""
     cap = mint_user_put_capability()
     try:
-        return await rt.create_study(inputs=inputs, user_put_capability=cap, **kwargs)
+        return await create_study(rt,inputs=inputs, user_put_capability=cap, **kwargs)
     finally:
         release_user_put_capability(cap)
 
@@ -746,7 +746,7 @@ async def test_client_raising_limits_refuses_input_invalid(
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="raise limits",
         catalog_version="0.1.0",
@@ -857,7 +857,7 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -907,7 +907,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
     _ex, arts = attach_executor(rt, tmp_path)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -984,7 +984,7 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1090,7 +1090,7 @@ async def test_as_of_appears_in_report(tmp_path, clock, runtime_cls):
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
     as_of = datetime(2019, 6, 15, tzinfo=UTC)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="time sensitive",
         catalog_version="0.1.0",
@@ -1145,7 +1145,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1437,7 +1437,7 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1661,7 +1661,7 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",

@@ -60,7 +60,7 @@ from coscientist.core.execution.domain import (
     TaskSpec,
 )
 from coscientist.core.plan.plan_validate import validate_evidence_kinds, validate_output_kinds
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import attach_executor, close_runtime, open_runtime, create_study
 
 
 def _assert_terminated(events: list[Any]) -> Any:
@@ -104,7 +104,7 @@ def _exp_design(key: str, *, addresses: list[str]) -> TaskSpec:
 
 async def _boot(tmp_path, clock, sid: str):
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
-    await rt.create_study(
+    await create_study(rt,
         profile="t",
         request="what dose works?",
         catalog_version="1",

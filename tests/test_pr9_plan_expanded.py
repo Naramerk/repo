@@ -29,7 +29,7 @@ from coscientist.core.execution.domain import (
 from coscientist.core.plan.expand import apply_pending_expansion
 from coscientist.core.plan.expand_trigger import maybe_expand_after_task_done, refuse_expansion
 from coscientist.core.plan.supersede import question_is_superseded
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import attach_executor, close_runtime, open_runtime, create_study
 
 
 async def _boot_plan(rt, *, tasks, questions, expand_after=None):
@@ -128,7 +128,7 @@ async def test_expand_after_exp(tmp_path, clock, runtime_cls):
     """expansion_request → PLAN-n → critic → PlanExpanded (MJ-a)."""
     sid = "st_exp_after"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -182,7 +182,7 @@ async def test_expand_after_exp(tmp_path, clock, runtime_cls):
 async def test_garbage_expansion_request_refused_study_finalizes(tmp_path, clock, runtime_cls):
     sid = "st_garbage"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -226,7 +226,7 @@ async def test_garbage_expansion_request_refused_study_finalizes(tmp_path, clock
 async def test_expansion_limit_reported(tmp_path, clock, runtime_cls):
     sid = "st_exp_lim"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -273,7 +273,7 @@ async def test_expansion_limit_reported(tmp_path, clock, runtime_cls):
 async def test_human_expand_does_not_consume_agent_quota(tmp_path, clock, runtime_cls):
     sid = "st_hum"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -316,7 +316,7 @@ async def test_forged_hitl_id_refused(tmp_path, clock, runtime_cls):
     """MJ-d: unknown hitl_request_id → ExpansionRefused(invalid_hitl)."""
     sid = "st_forge"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -352,7 +352,7 @@ async def test_forged_hitl_id_refused(tmp_path, clock, runtime_cls):
 async def test_emergent_question_added(tmp_path, clock, runtime_cls):
     sid = "st_eq"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -382,7 +382,7 @@ async def test_emergent_question_added(tmp_path, clock, runtime_cls):
 async def test_hitl_question_edit_skips_old_tasks(tmp_path, clock, runtime_cls):
     sid = "st_qedit"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -421,7 +421,7 @@ async def test_hitl_question_edit_skips_old_tasks(tmp_path, clock, runtime_cls):
 async def test_shared_descendant_not_skipped(tmp_path, clock, runtime_cls):
     sid = "st_share"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -459,7 +459,7 @@ async def test_agent_refutation_blocks_supersede_k_ref_2(tmp_path, clock, runtim
 
     sid = "st_ref1"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -516,7 +516,7 @@ async def test_open_refute_task_blocks_agent_supersede(tmp_path, clock, runtime_
     """MJ-b: in-flight refute task blocks agent supersede."""
     sid = "st_oref"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -572,7 +572,7 @@ async def test_agent_cannot_skip_refuted_question_tasks(tmp_path, clock, runtime
     """MJ-b SKIPPED path: agent cannot SKIP tasks of a blocked question."""
     sid = "st_skipb"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -625,7 +625,7 @@ async def test_hitl_supersede_still_reports_refuted(tmp_path, clock, runtime_cls
 
     sid = "st_hitlref"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -689,7 +689,7 @@ async def test_plan_n_non_success_refused(tmp_path, clock, runtime_cls):
     """MJ-c: PLAN-n ending non-SUCCESS → ExpansionRefused in report."""
     sid = "st_plannf"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -755,7 +755,7 @@ async def test_swallowed_exception_writes_refusal(tmp_path, clock, runtime_cls):
     """MJ-c: exception in expand path → ExpansionRefused, not silent."""
     sid = "st_swex"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -801,7 +801,7 @@ async def test_restart_after_apply_no_duplicate_events(tmp_path, clock, runtime_
 
     sid = "st_re_apply"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -858,7 +858,7 @@ async def test_restart_after_refusal_no_duplicate_events(tmp_path, clock, runtim
 
     sid = "st_re_refuse"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -935,7 +935,7 @@ async def test_hitl_id_single_use(tmp_path, clock, runtime_cls):
     """HitlDecided is single-use for expansion; reuse → invalid_hitl."""
     sid = "st_hitl1"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -984,7 +984,7 @@ async def test_pending_refute_without_experiment_node(tmp_path, clock, runtime_c
     """Honest refute without prediction role / tests edge still protects (MJ-b)."""
     sid = "st_pendref"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1032,7 +1032,7 @@ async def test_expand_after_e2e_plan_expanded(tmp_path, clock, runtime_cls):
     """expand_after → PLAN-n SUCCESS with planner output → PlanExpanded + tasks."""
     sid = "st_ea_e2e"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1083,7 +1083,7 @@ async def test_expand_after_malformed_planner_output(tmp_path, clock, runtime_cl
     """Malformed PLAN-n planner expansion_request → ExpansionRefused(invalid)."""
     sid = "st_ea_bad"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1133,7 +1133,7 @@ async def test_plan_n_attempt_result_mismatch_refused(tmp_path, clock, runtime_c
     """_resolve_plan_n_request: aid vs result:aid mismatch → ExpansionRefused(invalid)."""
     sid = "st_aid_mm"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1182,7 +1182,7 @@ async def test_empty_address_refute_not_skippable(tmp_path, clock, runtime_cls):
     """Refute task with empty addresses must not be SKIPpable on agent path."""
     sid = "st_emptyref"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1228,7 +1228,7 @@ async def test_timeout_counts_toward_agent_quota(tmp_path, clock, runtime_cls):
     """delegated_by=timeout uses agent quota and runs MJ-b refutation check."""
     sid = "st_tmo"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1293,7 +1293,7 @@ async def test_hitl_wrong_kind_refused(tmp_path, clock, runtime_cls):
     """Non-plan HitlOpened (hypotheses/report) refused; plan_approval+bound allowed."""
     sid = "st_wrongk"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1363,7 +1363,7 @@ async def test_hitl_open_plan_approval_keeps_kind_and_binds(tmp_path, clock):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1404,7 +1404,7 @@ async def test_hitl_human_edit_applied_via_open_decide(tmp_path, clock):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1452,7 +1452,7 @@ async def test_hitl_wrong_kind_edit_refused_and_reported(tmp_path, clock):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1506,7 +1506,7 @@ async def test_hitl_decide_yourself_delegation_marked(tmp_path, clock):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1568,7 +1568,7 @@ async def test_hitl_plan_approval_timeout_fail_no_auto_accept(tmp_path, clock):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1620,7 +1620,7 @@ async def test_plan_expansion_marker_not_met_on_exp(tmp_path, clock, runtime_cls
 
     sid = "st_mark"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1673,7 +1673,7 @@ async def test_critic_rejects_plan_expansion_marker_on_added(tmp_path, clock, ru
 
     sid = "st_critmark"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1729,7 +1729,7 @@ async def test_false_confirm_cannot_unprotect_prediction_task(tmp_path, clock, r
     """MAJOR-2: planner confirm cannot strip structure-based protection."""
     sid = "st_fconf"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1775,7 +1775,7 @@ async def test_critic_rejects_missing_criteria(tmp_path, clock, runtime_cls):
     """MJ-a: critic rejects expansion tasks without acceptance criteria."""
     sid = "st_crit"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1828,7 +1828,7 @@ async def test_superseded_question_claims_not_counted(tmp_path, clock, runtime_c
 
     sid = "st_c10"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1891,7 +1891,7 @@ async def test_superseded_question_claims_not_counted(tmp_path, clock, runtime_c
 async def test_replan_reserve_refuses_when_exhausted(tmp_path, clock, runtime_cls):
     sid = "st_rr"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1930,7 +1930,7 @@ async def test_replan_reserve_refuses_when_exhausted(tmp_path, clock, runtime_cl
 async def test_replan_used_survives_restart(tmp_path, clock, runtime_cls):
     sid = "st_restart"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1975,7 +1975,7 @@ async def test_core_assigns_lit_keys(tmp_path, clock, runtime_cls):
     """Minor: core assigns keys for all expansion kinds (LIT-n)."""
     sid = "st_litk"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -2004,7 +2004,7 @@ async def test_core_assigns_lit_keys(tmp_path, clock, runtime_cls):
 async def test_infra_failed_does_not_expand(tmp_path, clock, runtime_cls):
     sid = "st_infra"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",

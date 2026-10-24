@@ -14,7 +14,7 @@ from coscientist.core.events.errors import Conflict, Idempotent, LeaseLost
 from coscientist.core.events.events import EventEnvelope
 from coscientist.core.events.projections import fold_events
 from coscientist.core.events.store import SqliteEventStore
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import close_runtime, open_runtime, create_study
 
 
 @pytest.fixture
@@ -175,7 +175,7 @@ async def test_replay_equals_projection(
     rt = await open_runtime(
         tmp_path, "st_replay", owner="o", clock=clock, runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -265,7 +265,7 @@ async def test_attempt_closed_tasks_projection_is_strict_json(
     rt = await open_runtime(
         tmp_path, "st_json_p3", clock=clock, runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -308,7 +308,7 @@ async def test_event_loop_progresses_during_slow_write(
     monkeypatch.setattr(rf, "SqliteEventStore", SlowWriteStore)
     rt = await open_runtime(tmp_path, "st_slow", clock=clock)
     assert isinstance(rt.store, SlowWriteStore)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -369,7 +369,7 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(
     monkeypatch.setattr(rf, "SqliteEventStore", SlowWriteStore)
     rt = await open_runtime(tmp_path, "st_rd", clock=clock)
     assert isinstance(rt.store, SlowWriteStore)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -462,7 +462,7 @@ async def test_read_connection_rejects_writes(tmp_path: Path, clock: FakeClock):
 async def test_concurrent_reads_under_read_lock(tmp_path: Path, clock: FakeClock):
     """Many concurrent read_all/get_projection calls succeed under the read lock."""
     rt = await open_runtime(tmp_path, "st_cread", clock=clock)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",

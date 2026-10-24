@@ -66,6 +66,7 @@ from tests.helpers import (
     close_runtime,
     open_runtime,
     open_runtime_experimental,
+    create_study,
 )
 
 
@@ -127,7 +128,7 @@ def _exp_spec(**kwargs) -> TaskSpec:
 
 
 async def _create(rt, request: str = "pr20", **kwargs):
-    await rt.create_study(
+    await create_study(rt,
         profile="t",
         request=request,
         catalog_version="0.1.0",

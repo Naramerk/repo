@@ -50,7 +50,7 @@ from coscientist.tools.effects import (
     _mint_fetch_capability_for_tests,
     invoke_tool,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
+from tests.helpers import attach_executor, close_runtime, open_runtime, record_success, create_study
 
 
 def _cap(
@@ -714,7 +714,7 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
     catalog = _catalog_quote()
     sid = "st_fetch_invoke"
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="quote",
         catalog_version="0.1.0-pr14",
@@ -808,7 +808,7 @@ async def test_invoke_tool_non_fetch_read_rejected(
     catalog = _catalog_quote()
     sid = "st_nonfetch"
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="quote",
         catalog_version="0.1.0-pr14",
@@ -844,7 +844,7 @@ async def test_store_fetched_source_journals_and_matches(
     catalog = _catalog_quote()
     sid = "st_fetch_ok"
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="quote",
         catalog_version="0.1.0-pr14",
@@ -933,7 +933,7 @@ async def test_source_fetched_survives_crash_reopen(
     sid = "st_fetch_reopen"
     arts_root = tmp_path / "arts"
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog, owner="t1")
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="quote",
         catalog_version="0.1.0-pr14",
@@ -1033,7 +1033,7 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
     catalog = _catalog_quote()
     sid = "st_quote_met"
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="quote",
         catalog_version="0.1.0-pr14",
@@ -1175,7 +1175,7 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
     catalog = _catalog_quote()
     sid = "st_fetch_taint"
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="quote",
         catalog_version="0.1.0-pr14",
@@ -1316,7 +1316,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
     sid = "st_taint_replay"
     arts_root = tmp_path / "arts"
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog, owner="t1")
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0-pr14",
@@ -1403,7 +1403,7 @@ async def test_direct_writer_append_source_fetched_rejected(tmp_path: Path, cloc
     from coscientist.core.execution.source_fetch import FetchCapability
 
     rt = await open_runtime(tmp_path, "st_sf_deny", clock=clock)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0-pr14",
@@ -1499,7 +1499,7 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
     catalog = _catalog_quote()
     sid = "st_fetch_fail_taint"
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0-pr14",
@@ -1649,7 +1649,7 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
     catalog = _catalog_quote()
     sid = "st_data_only"
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0-pr14",
@@ -1742,7 +1742,7 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
     catalog = _catalog_quote()
     sid = "st_remint"
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0-pr14",
@@ -1806,7 +1806,7 @@ def test_core_cannot_bypass_source_fetched_with_bool_flag(tmp_path: Path, clock)
 
     async def _run() -> None:
         rt = await open_runtime(tmp_path, "st_core_bypass", clock=clock)
-        await rt.create_study(
+        await create_study(rt,
             profile="research",
             request="q",
             catalog_version="0.1.0-pr14",
@@ -1853,7 +1853,7 @@ async def test_append_failure_on_second_digest_clears_permits(
     catalog = _catalog_quote()
     sid = "st_append_fail"
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0-pr14",

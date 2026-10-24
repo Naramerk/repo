@@ -37,7 +37,11 @@ _STALE_RESERVATION_S = 60.0
 
 
 class CreateStudyBody(BaseModel):
-    """Request body for ``POST /studies``."""
+    """Request body for ``POST /studies``.
+
+    Study caps and ``deadline`` are required by ``create_study`` (no Study defaults).
+    Wire defaults below are explicit caller values, not silent Study.model_fields.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -45,9 +49,25 @@ class CreateStudyBody(BaseModel):
     request: str
     catalog_version: str = "test"
     hitl_policy: HitlPolicy | None = None
-    deadline: datetime | None = None
+    deadline: datetime
     budget: Budget | None = None
     finalize_reserve_s: int = 30
+    confirmations_needed: int = 1
+    refutations_needed: int = 1
+    refutation_priority: bool = False
+    supported_needed: int = 2
+    aggregate: str = "count"
+    evalue_alpha: float = 0.05
+    max_expansions: int = 2
+    max_human_expansions: int = 10
+    replan_reserve: float = 0.1
+    max_tasks: int = 64
+    max_depth: int = 8
+    plan_timeout_s: int = 600
+    max_foreach_children: int = 32
+    max_loop_iter: int = 8
+    max_task_budget_share: float = 1.0
+    max_proposals: int = 3
     # PR19 / DESIGN_M1 §9: user blobs → CAS before SPEC; as_of for time-sensitive Qs.
     # Profile owns InputLimits; client may only LOWER via this optional dict.
     inputs: list[dict[str, Any]] = []
@@ -420,6 +440,22 @@ async def post_studies(
                     deadline=body.deadline,
                     budget=body.budget,
                     finalize_reserve_s=body.finalize_reserve_s,
+                    confirmations_needed=body.confirmations_needed,
+                    refutations_needed=body.refutations_needed,
+                    refutation_priority=body.refutation_priority,
+                    supported_needed=body.supported_needed,
+                    aggregate=body.aggregate,
+                    evalue_alpha=body.evalue_alpha,
+                    max_expansions=body.max_expansions,
+                    max_human_expansions=body.max_human_expansions,
+                    replan_reserve=body.replan_reserve,
+                    max_tasks=body.max_tasks,
+                    max_depth=body.max_depth,
+                    plan_timeout_s=body.plan_timeout_s,
+                    max_foreach_children=body.max_foreach_children,
+                    max_loop_iter=body.max_loop_iter,
+                    max_task_budget_share=body.max_task_budget_share,
+                    max_proposals=body.max_proposals,
                     sid=sid,
                     inputs=use_inputs,
                     as_of=body.as_of,

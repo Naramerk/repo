@@ -25,7 +25,7 @@ from coscientist.core.execution.domain import (
     TaskState,
 )
 from coscientist.core.finalize.study_view import study_view
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import close_runtime, open_runtime, create_study
 
 # Legacy reason strings from §0.1 that map to TaskReason / CloseReason.
 _TASK_REASON_STRINGS = [
@@ -117,7 +117,7 @@ def test_upcast_unknown_reason_raises():
 @pytest.mark.asyncio
 async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
     rt = await open_runtime(tmp_path, "st_v2", clock=clock, runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -248,7 +248,7 @@ def test_task_is_stub_uses_last_closed_attempt():
 async def test_create_study_rejects_duration_le_reserve(tmp_path: Path, clock, runtime_cls):
     """duration ≤ reserve → intake Refuse (StudyRefused), not ValueError."""
     rt = await open_runtime(tmp_path, "st_rej", clock=clock, runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -267,7 +267,7 @@ async def test_create_study_rejects_duration_le_reserve(tmp_path: Path, clock, r
 async def test_create_study_rejects_negative_reserve(tmp_path: Path, clock, runtime_cls):
     rt = await open_runtime(tmp_path, "st_neg", clock=clock, runtime_cls=runtime_cls)
     with pytest.raises(ValueError, match="finalize_reserve_s must be >= 0"):
-        await rt.create_study(
+        await create_study(rt,
             profile="research",
             request="q",
             catalog_version="0.1.0",
@@ -281,7 +281,7 @@ async def test_create_study_rejects_negative_reserve(tmp_path: Path, clock, runt
 @pytest.mark.asyncio
 async def test_all_deadlines_le_effective(tmp_path: Path, clock, runtime_cls):
     rt = await open_runtime(tmp_path, "st_eff", clock=clock, runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -302,7 +302,7 @@ async def test_all_deadlines_le_effective(tmp_path: Path, clock, runtime_cls):
 async def test_plan_deadline_clipped_by_reserve(tmp_path: Path, clock, runtime_cls):
     rt = await open_runtime(tmp_path, "st_plan", clock=clock, runtime_cls=runtime_cls)
     # Study shorter than 600s plan window → plan clipped to effective_deadline
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",

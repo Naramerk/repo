@@ -40,7 +40,7 @@ from coscientist.core.plan.loop_predicates import (
     scope_fingerprint,
     validate_loop_predicate,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import attach_executor, close_runtime, open_runtime, create_study, REQUIRED_STUDY_CAPS
 
 
 def _body(key: str = "BODY", *, depends_on: list[str] | None = None) -> list[TaskSpec]:
@@ -143,7 +143,7 @@ async def _open_study(
     if runtime_cls is not None:
         kw["runtime_cls"] = runtime_cls
     rt = await open_runtime(tmp_path, sid, **kw)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -963,6 +963,7 @@ def test_survivors_le_real_graph_scope_filter():
                 hitl_policy=HitlPolicy(),
                 deadline=now,
                 created_at=now,
+                **REQUIRED_STUDY_CAPS,
                 refutations_needed=1,
                 refutation_priority=True,
                 confirmations_needed=1,

@@ -6,8 +6,6 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from pydantic_core import PydanticUndefined
-
 import coscientist.core.finalize.finalize as finalize_mod
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.events.clock import Clock
@@ -105,45 +103,44 @@ class LifecycleMixin:
         intake_refuse: IntakeRefuse | None = None,
         user_put_capability: Any | None = None,
     ) -> str:
-        # Caps come from Study model config (single source) — not magic literals here.
-        def _study_cfg(name: str, override: Any) -> Any:
-            if override is not None:
-                return override
-            field = Study.model_fields[name]
-            if field.default is not PydanticUndefined:
-                return field.default
-            raise ValueError(f"{name} required for create_study (no Study default)")
+        # Caps are required — no Study.model_fields / magic defaults.
+        def _require(name: str, value: Any) -> Any:
+            if value is None:
+                raise ValueError(f"{name} required for create_study")
+            return value
 
-        finalize_reserve_s = int(_study_cfg("finalize_reserve_s", finalize_reserve_s))
+        finalize_reserve_s = int(_require("finalize_reserve_s", finalize_reserve_s))
         confirmations_needed = int(
-            _study_cfg("confirmations_needed", confirmations_needed)
+            _require("confirmations_needed", confirmations_needed)
         )
-        refutations_needed = int(_study_cfg("refutations_needed", refutations_needed))
+        refutations_needed = int(_require("refutations_needed", refutations_needed))
         refutation_priority = bool(
-            _study_cfg("refutation_priority", refutation_priority)
+            _require("refutation_priority", refutation_priority)
         )
-        supported_needed = int(_study_cfg("supported_needed", supported_needed))
-        aggregate = str(_study_cfg("aggregate", aggregate))
-        evalue_alpha = float(_study_cfg("evalue_alpha", evalue_alpha))
-        max_expansions = int(_study_cfg("max_expansions", max_expansions))
+        supported_needed = int(_require("supported_needed", supported_needed))
+        aggregate = str(_require("aggregate", aggregate))
+        evalue_alpha = float(_require("evalue_alpha", evalue_alpha))
+        max_expansions = int(_require("max_expansions", max_expansions))
         max_human_expansions = int(
-            _study_cfg("max_human_expansions", max_human_expansions)
+            _require("max_human_expansions", max_human_expansions)
         )
-        replan_reserve = float(_study_cfg("replan_reserve", replan_reserve))
-        max_tasks = int(_study_cfg("max_tasks", max_tasks))
-        max_depth = int(_study_cfg("max_depth", max_depth))
-        plan_timeout_s = int(_study_cfg("plan_timeout_s", plan_timeout_s))
+        replan_reserve = float(_require("replan_reserve", replan_reserve))
+        max_tasks = int(_require("max_tasks", max_tasks))
+        max_depth = int(_require("max_depth", max_depth))
+        plan_timeout_s = int(_require("plan_timeout_s", plan_timeout_s))
         max_foreach_children = int(
-            _study_cfg("max_foreach_children", max_foreach_children)
+            _require("max_foreach_children", max_foreach_children)
         )
-        max_loop_iter = int(_study_cfg("max_loop_iter", max_loop_iter))
+        max_loop_iter = int(_require("max_loop_iter", max_loop_iter))
         max_task_budget_share = float(
-            _study_cfg("max_task_budget_share", max_task_budget_share)
+            _require("max_task_budget_share", max_task_budget_share)
         )
-        max_proposals = int(_study_cfg("max_proposals", max_proposals))
+        max_proposals = int(_require("max_proposals", max_proposals))
+        if deadline is None:
+            raise ValueError("deadline required for create_study")
         sid = sid or self.store.study_id or study_id()
         now = self.clock.now()
-        dl = deadline or (now + timedelta(hours=2))
+        dl = deadline
         if finalize_reserve_s < 0:
             raise ValueError(f"finalize_reserve_s must be >= 0, got {finalize_reserve_s}")
         if confirmations_needed < 1:

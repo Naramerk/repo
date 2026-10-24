@@ -20,13 +20,13 @@ from coscientist.core.execution.domain import (
     TaskState,
 )
 from coscientist.core.execution.recover import recover
-from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success
+from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success, create_study
 
 
 async def _boot(tmp_path: Path, clock: FakeClock, runtime_cls: type, seconds: int = 60, **kw):
     rt = await open_runtime(tmp_path, "st_tr", clock=clock, runtime_cls=runtime_cls)
     kw.setdefault("finalize_reserve_s", 5 if seconds > 5 else 1)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",

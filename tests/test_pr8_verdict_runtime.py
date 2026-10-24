@@ -37,7 +37,7 @@ from coscientist.core.execution.inputs import (
     collect_bindable_claims,
     verdict_binding_digest,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import attach_executor, close_runtime, open_runtime, create_study, REQUIRED_STUDY_CAPS
 from tests.test_inputs import _task
 
 _DERIVED_OK = {
@@ -274,6 +274,7 @@ def test_garbage_attrs_dropped_not_raised():
         hitl_policy=HitlPolicy(),
         deadline=datetime(2026, 1, 2, tzinfo=UTC),
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        **REQUIRED_STUDY_CAPS,
     )
     t = Task(
         task_id=f"{sid}/E1",
@@ -356,7 +357,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -418,7 +419,7 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
 
     sid = "st_fail_cl"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -474,7 +475,7 @@ async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -589,7 +590,7 @@ async def test_accept_plan_allows_verdict_kind(tmp_path, clock, runtime_cls):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -626,7 +627,7 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -732,6 +733,7 @@ def test_dispositions_from_verdict_counting_claims():
         hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
+        **REQUIRED_STUDY_CAPS,
         confirmations_needed=1,
         refutations_needed=1,
         refutation_priority=False,
@@ -765,7 +767,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1087,7 +1089,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
     )
     assert rt.executor is not None and rt.executor.get_graph is not None
     arts = rt.artifacts
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1174,7 +1176,7 @@ async def test_validity_failed_claim_invalid_inconclusive(
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1245,7 +1247,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
     """Plan claiming validity for a prediction template is rejected."""
     sid = "st_role_rej"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1285,7 +1287,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
 
     sid2 = "st_role_rej2"
     rt2 = await open_runtime(tmp_path, sid2, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt2.create_study(
+    await create_study(rt2,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1339,7 +1341,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
     arts = rt.artifacts
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1535,6 +1537,7 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
         hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
+        **REQUIRED_STUDY_CAPS,
         confirmations_needed=3,
     )
     snaps = compute_verdict_snapshots(
@@ -1609,6 +1612,7 @@ def test_unknown_role_exclusion_never_forces_verdict():
         hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
+        **REQUIRED_STUDY_CAPS,
         confirmations_needed=1,
     )
     snaps = compute_verdict_snapshots(
@@ -1660,6 +1664,7 @@ def test_validity_only_evidence_inconclusive():
         hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
+        **REQUIRED_STUDY_CAPS,
         confirmations_needed=1,
     )
     snaps = compute_verdict_snapshots(
@@ -1705,7 +1710,7 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
         assert rt.executor.get_graph is not None
         assert rt.executor.get_graph() is rt.graph
         assert rt.artifacts is not None
-        await rt.create_study(
+        await create_study(rt,
             profile="research",
             request="q",
             catalog_version="0.1.0",
@@ -1806,6 +1811,7 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
+        **REQUIRED_STUDY_CAPS,
         confirmations_needed=1,
         refutations_needed=1,
         refutation_priority=True,
@@ -1933,7 +1939,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -2046,7 +2052,7 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",

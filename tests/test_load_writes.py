@@ -21,7 +21,7 @@ from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.projections import _row_key, fold_events
 from coscientist.core.execution.source_fetch import verify_fetch_capability
 from coscientist.tools.effects import _mint_fetch_capability_for_tests
-from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success
+from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success, create_study
 
 # DESIGN §3.5a absolute SLO defaults. Override via env in either direction;
 # loosening (weaker than defaults) always warns + prints PERF GATE WEAKENED.
@@ -280,7 +280,7 @@ async def _run_load(
     """
     clock = SystemClock()
     rt = await open_runtime(tmp_path, "st_load", clock=clock, runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="load",
         catalog_version="0.1.0",
@@ -692,7 +692,7 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
         sid = f"st_delay_{r}"
         # helpers.open_runtime defaults to api.StudyRuntime (create_study mixin).
         rt = await open_runtime(round_dir, sid, clock=clock)
-        await rt.create_study(
+        await create_study(rt,
             profile="research",
             request="delay-gate",
             catalog_version="0.1.0",

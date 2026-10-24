@@ -16,7 +16,7 @@ from coscientist.core.execution.domain import Budget
 from coscientist.core.finalize.finalize_nodes import conclusion_id_for_study
 from coscientist.core.finalize.study_view import study_phase, study_view
 from coscientist.core.plan.intake import REASON_MAX, IntakeAccept, IntakeRefuse, intake
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import attach_executor, close_runtime, open_runtime, create_study
 
 
 @pytest.mark.asyncio
@@ -163,7 +163,7 @@ async def test_intake_refuses_before_spec(tmp_path, clock):
     rt = await open_runtime(tmp_path, "st_in", clock=clock, owner="t1")
     _, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="",
         catalog_version="0.1.0",
@@ -207,7 +207,7 @@ async def test_intake_refuses_before_spec(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_budget_zero_refused(tmp_path, clock):
     rt = await open_runtime(tmp_path, "st_b0", clock=clock, owner="t1")
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -227,7 +227,7 @@ async def test_budget_zero_refused(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_duration_le_reserve_refused(tmp_path, clock):
     rt = await open_runtime(tmp_path, "st_dur", clock=clock, owner="t1")
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -258,7 +258,7 @@ async def test_intake_refuse_survives_crash(tmp_path, clock, runtime_cls, monkey
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
     with pytest.raises(RuntimeError, match="inject:finalize_crash"):
-        await rt.create_study(
+        await create_study(rt,
             profile="research",
             request="",
             catalog_version="0.1.0",

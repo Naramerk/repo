@@ -14,7 +14,7 @@ from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.machine import StudyRuntime
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import close_runtime, open_runtime, create_study
 
 
 async def _lease_owner(db: Path, study_id: str, clock: FakeClock) -> str | None:
@@ -281,7 +281,7 @@ async def test_open_runtime_cancelled_error_stops_writer_before_release(
     sid = "st_cancel"
     db = tmp_path / sid / "events.db"
     seed = await open_runtime(tmp_path, sid, clock=clock, owner="seeder")
-    await seed.create_study(
+    await create_study(seed,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -351,7 +351,7 @@ async def test_open_runtime_releases_lease_on_post_acquire_failure(
 
     # Seed a journal so _project_local has work (and reopen paths are realistic).
     seed = await open_runtime(tmp_path, sid, clock=clock, owner="seeder")
-    await seed.create_study(
+    await create_study(seed,
         profile="research",
         request="q",
         catalog_version="0.1.0",

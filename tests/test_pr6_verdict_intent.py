@@ -15,7 +15,7 @@ from coscientist.core.claims.r17 import (
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.domain import TaskSpec
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import close_runtime, open_runtime, create_study
 
 
 def test_refute_intent_met_is_survived(impl):
@@ -280,7 +280,7 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -311,7 +311,7 @@ async def test_study_refutations_needed_to_verdict(tmp_path, clock, runtime_cls,
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -360,7 +360,7 @@ async def test_cancel_study_tick_closes_remaining(
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -418,7 +418,7 @@ async def test_cancel_study_then_tick_plain(tmp_path, clock, runtime_cls):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",

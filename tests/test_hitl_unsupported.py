@@ -13,7 +13,7 @@ from coscientist.core.execution.domain import GateConfig, HitlPolicy
 from coscientist.core.execution.machine import StudyRuntime as CoreStudyRuntime
 from coscientist.core.execution.recover import recover
 from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
+from tests.helpers import attach_executor, close_runtime, open_runtime, record_success, create_study
 
 
 async def _boot_exp(tmp_path: Path, clock, sid: str = "st_hitl", **study_kw):
@@ -21,7 +21,7 @@ async def _boot_exp(tmp_path: Path, clock, sid: str = "st_hitl", **study_kw):
     rt = await open_runtime(
         root, sid, clock=clock, runtime_cls=ExpStudyRuntime, owner="owner-hitl"
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",

@@ -186,3 +186,30 @@ def exp_spec(key: str, deps: list[str] | None = None) -> TaskSpec:
         depends_on=deps or ["PLAN"],
         criteria=[RequirementRef(template_id="value_match")],
     )
+
+
+REQUIRED_STUDY_CAPS: dict[str, Any] = {
+    "finalize_reserve_s": 30,
+    "confirmations_needed": 1,
+    "refutations_needed": 1,
+    "refutation_priority": False,
+    "supported_needed": 2,
+    "aggregate": "count",
+    "evalue_alpha": 0.05,
+    "max_expansions": 2,
+    "max_human_expansions": 10,
+    "replan_reserve": 0.1,
+    "max_tasks": 64,
+    "max_depth": 8,
+    "plan_timeout_s": 600,
+    "max_foreach_children": 32,
+    "max_loop_iter": 8,
+    "max_task_budget_share": 1.0,
+    "max_proposals": 3,
+}
+
+
+async def create_study(rt: Any, **kwargs: Any) -> str:
+    """Test helper: merge explicit REQUIRED_STUDY_CAPS (tests must not rely on Study defaults)."""
+    merged = {**REQUIRED_STUDY_CAPS, **kwargs}
+    return await rt.create_study(**merged)

@@ -43,7 +43,7 @@ from coscientist.core.plan.shares import (
     validate_deadline_shares,
     validate_plan_shares,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime, open_runtime_experimental
+from tests.helpers import attach_executor, close_runtime, open_runtime, open_runtime_experimental, create_study
 
 
 def _exp(key: str, *, depends_on: list[str] | None = None, **kw) -> TaskSpec:
@@ -95,7 +95,7 @@ async def _boot(tmp_path, clock, sid: str, **create_kw):
         "sid": sid,
     }
     kw.update(create_kw)
-    await rt.create_study(**kw)
+    await create_study(rt,**kw)
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
@@ -419,7 +419,7 @@ async def test_foreach_children_share_parent_budget(tmp_path, clock):
 
 async def _boot_hitl_budget(tmp_path, clock, sid: str):
     rt = await open_runtime_experimental(tmp_path, sid, clock=clock, owner="t1")
-    await rt.create_study(
+    await create_study(rt,
         profile="t",
         request="research question",
         catalog_version="1",

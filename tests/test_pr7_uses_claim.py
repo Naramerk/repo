@@ -16,7 +16,7 @@ from coscientist.core.execution.inputs import (
     bind_inputs,
     input_binding_digest,
 )
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import close_runtime, open_runtime, create_study
 from tests.test_inputs import _task
 
 
@@ -148,7 +148,7 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
     """PR8: kind=verdict is accepted; missing ref still rejected."""
     sid = "st_verdict_ref"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -184,7 +184,7 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
 async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_cls):
     sid = "st_inp_val"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -216,7 +216,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
 
     sid2 = "st_inp_val2"
     rt2 = await open_runtime(tmp_path, sid2, clock=clock, owner="t1", runtime_cls=runtime_cls)
-    await rt2.create_study(
+    await create_study(rt2,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -254,7 +254,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -336,7 +336,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -408,7 +408,7 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -449,7 +449,7 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -509,7 +509,7 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",

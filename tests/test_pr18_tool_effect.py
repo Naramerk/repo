@@ -57,7 +57,7 @@ from coscientist.tools.effects import (
 )
 from coscientist.tools.gate import side_effect_allowed, side_effect_decision
 from coscientist.tools.taint import context_is_tainted, filter_tools_for_context
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import close_runtime, open_runtime, create_study
 
 
 @pytest.fixture(autouse=True)
@@ -154,7 +154,7 @@ def _allow_side_effect() -> HitlPolicy:
 
 async def _runtime_with_writer(tmp_path: Path, sid: str = "st_pr18"):
     rt = await open_runtime(tmp_path, sid)
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="tool effect study",
         catalog_version="test",

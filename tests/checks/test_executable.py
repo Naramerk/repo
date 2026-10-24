@@ -35,7 +35,7 @@ from coscientist.core.execution.domain import (
     RequirementRef,
     TaskSpec,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
+from tests.helpers import attach_executor, close_runtime, open_runtime, record_success, create_study
 
 
 def _REWARD_JSON(v: float) -> bytes:
@@ -682,7 +682,7 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0-pr17",
@@ -759,7 +759,7 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0-pr17",
@@ -1635,7 +1635,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
         catalog=cat,
     )
     rt.max_attempts = 2
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0-pr17",
@@ -1783,7 +1783,7 @@ async def test_timeout_with_stuck_drain_charges_attempt(
         catalog=cat,
     )
     rt.max_attempts = 2
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version=cat.catalog_version,
@@ -1983,7 +1983,7 @@ async def test_infra_failure_does_not_charge_attempt(
         catalog=cat,
     )
     rt.max_attempts = 2
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0-pr17",
@@ -2073,7 +2073,7 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
         catalog=cat,
     )
     rt.max_attempts = 3
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0-pr17",
@@ -2137,7 +2137,7 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0-pr17",
@@ -2427,7 +2427,7 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat
     )
     rt.max_attempts = 3
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0-pr17",
@@ -2549,7 +2549,7 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat
     )
     rt.max_attempts = 1
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0-pr17",

@@ -31,7 +31,7 @@ from coscientist.core.plan.plan_validate import (
     validate_final_types,
     validate_rubric_immutable,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
+from tests.helpers import attach_executor, close_runtime, open_runtime, record_success, create_study
 
 _SCOPE = dict(task_id="t1", attempt_id="a1", output_digest="deadbeef")
 
@@ -123,7 +123,7 @@ async def _boot(tmp_path, clock, sid: str, *, cancel_stages: bool = True):
     Use ``cancel_stages=False`` + ``record_success`` for e2e fulfilled paths.
     """
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
-    await rt.create_study(
+    await create_study(rt,
         profile="t",
         request="write a literature review of topic X",
         catalog_version="1",

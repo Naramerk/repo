@@ -38,7 +38,7 @@ from coscientist.core.execution.domain import (
     RequirementRef,
     TaskSpec,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import attach_executor, close_runtime, open_runtime, create_study
 
 
 def _c(**kw) -> RuntimeClaim:
@@ -732,7 +732,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1316,7 +1316,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1382,7 +1382,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1620,7 +1620,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1684,7 +1684,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1758,7 +1758,7 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -1832,7 +1832,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -2013,7 +2013,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -2176,7 +2176,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
     rt2 = await open_runtime(
         tmp_path / "ref", sid2, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt2.create_study(
+    await create_study(rt2,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -2247,7 +2247,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -2325,7 +2325,7 @@ async def test_aggregate_evalue_rejected_at_create(tmp_path, clock, runtime_cls)
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
     with pytest.raises(ValueError, match="evalue"):
-        await rt.create_study(
+        await create_study(rt,
             profile="research",
             request="q",
             catalog_version="0.1.0",
@@ -2350,7 +2350,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
@@ -2470,7 +2470,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
-    await rt.create_study(
+    await create_study(rt,
         profile="research",
         request="q",
         catalog_version="0.1.0",
