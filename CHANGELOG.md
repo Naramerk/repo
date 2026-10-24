@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Benchmark harness — task + quality models (plan item 3) [M1]
+- Add `bench/models.py`: `EvidenceOutcomeCount`, `QualityExpectation` (status,
+  exp_tasks, evidence tallies — exact-compare fields only), `BenchTask`,
+  `TaskSetManifest`. Required fields only; frozen; `extra=forbid`; no scores /
+  weights / CallCounts. [plan item 3](docs/plan/benchmark-harness.md);
+  parity: [DESIGN §12](docs/DESIGN.md#12-паритет-с-эталоном),
+  [CAPABILITIES](docs/CAPABILITIES.md) (B1/B2/R1–R5 / §12).
+- Review fix: `TaskSetManifest.tasks` refuse absolute paths and ``..`` segments;
+  `ruff format` clean under `ruff.toml`.
+- Alligator fix: tests use `model_validate` / `setattr` (no `# type: ignore`);
+  reject cases parametrized with `ids` + `match=`.
+- Alligator fix: drop unused `_quality()`; `field_name` before `with` in freeze test.
+
 ### Graph schema parse (G7 split 1/2) [M1] — AttrType; `GRAPH_SCHEMA_VERSION`; required attrs; explicit `null_ok`. [DESIGN §2](docs/DESIGN.md#2-доменная-модель), [CAP #14](docs/CAPABILITIES.md?plain=1#L23).
 
 ### G4 Need
