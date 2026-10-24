@@ -209,6 +209,7 @@ def test_questions_from_spec_output_wired():
     assert out == [{"id": "Q1", "text": "one"}, {"id": "Q2", "text": "two"}, {"id": "Q3", "text": "three"}]
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_taskcreated_addresses_default():
     v, p = upcast("TaskCreated", 2, {"task_id": "t", "spec": {"task_key": "E1"}})
 # …→v10 rubric → v11 loop → v12 kind → v13 evidence_kind.
@@ -219,6 +220,7 @@ def test_upcast_taskcreated_addresses_default():
     assert p["spec"]["loop_id"] is None
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_taskcreated_input_mode_old_default():
     v, p = upcast(
         "TaskCreated",
@@ -241,6 +243,7 @@ def test_upcast_taskcreated_input_mode_old_default():
     assert p["spec"]["loop_iter"] is None
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_planaccepted_questions_default():
     v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
     assert v == 11 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
@@ -276,6 +279,7 @@ def test_upcast_planaccepted_questions_default():
     assert p["tasks"][0]["loop_id"] is None
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_taskcreated_strips_plan_criterion_role():
     """v5→v6 drops plan-side role; catalog is the authority at evaluate time."""
     v, p = upcast(
@@ -306,6 +310,7 @@ def test_upcast_taskcreated_strips_plan_criterion_role():
     assert p["spec"]["loop_template_key"] is None
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_study_finalized_v1_adds_counts_and_refusal():
     v, p = upcast(
         "StudyFinalized",

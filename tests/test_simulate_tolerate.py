@@ -55,6 +55,7 @@ def test_default_forbid_no_stubs():
         )
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_input_mode_keeps_old_default():
     """TaskCreated v3 without mode → use_partial (pre-PR5 default), not forbid."""
     v, p = upcast(

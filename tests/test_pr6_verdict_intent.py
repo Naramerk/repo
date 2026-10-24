@@ -228,6 +228,7 @@ def test_tests_edge_declares_intent_attr():
     assert attrs["intent"].get("default") == "confirm"
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_study_created_k_ref_defaults():
     v, p = upcast(
         "StudyCreated",
@@ -252,6 +253,7 @@ def test_upcast_study_created_k_ref_defaults():
     assert p["max_proposals"] == 3
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_study_created_confirmations_needed_v3_to_v4():
     v, p = upcast(
         "StudyCreated",

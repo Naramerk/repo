@@ -849,6 +849,7 @@ def test_executable_check_met_excludes_presence_and_waived():
     assert executable_check_met([real], bound_key="x") is True
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_chains_continuous_and_no_overwrite():
     """Checklist: chains 1..N-1 continuous vs writer versions; no registry mutate."""
     for et in (

@@ -1165,6 +1165,7 @@ def test_dispositions_preserve_infeasible_and_outside_answers_under_cap():
     assert err["Q2"]["disposition"] == Disposition.NOT_ATTEMPTED.value
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_study_created_max_loop_iter():
     v, p = upcast(
         "StudyCreated",
@@ -1190,6 +1191,7 @@ def test_upcast_study_created_max_loop_iter():
     assert _study_created_v9_to_v10({})["max_loop_iter"] == 8
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_plan_accepted_loops_default():
     v, p = upcast(
         "PlanAccepted",
@@ -1207,6 +1209,7 @@ def test_upcast_plan_accepted_loops_default():
     assert p.get("rollup") == "all"
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_task_created_loop_fields():
     v, p = upcast(
         "TaskCreated",
@@ -1230,14 +1233,21 @@ def test_upcast_task_created_loop_fields():
 
 
 def test_upcaster_duplicate_and_continuous_chains():
+    """Schema v1: production types have empty buckets; duplicate guard uses a dummy."""
     from coscientist.core.events.schema_versions import (
         PLAN_ACCEPTED_SCHEMA_VERSION,
         STUDY_CREATED_SCHEMA_VERSION,
         TASK_CREATED_SCHEMA_VERSION,
     )
 
-    with pytest.raises(ValueError, match="duplicate upcaster"):
-        register_upcaster("TaskCreated", 1, lambda p: p)
+    name = "_Pr11DupGuard"
+    UPCASTERS.pop(name, None)
+    register_upcaster(name, 1, lambda p: p)
+    try:
+        with pytest.raises(ValueError, match="duplicate upcaster"):
+            register_upcaster(name, 1, lambda p: p)
+    finally:
+        UPCASTERS.pop(name, None)
     for etype, writer in (
         ("StudyCreated", STUDY_CREATED_SCHEMA_VERSION),
         ("PlanAccepted", PLAN_ACCEPTED_SCHEMA_VERSION),
@@ -1246,14 +1256,17 @@ def test_upcaster_duplicate_and_continuous_chains():
         ("ResultRecorded", writer_schema_version("ResultRecorded")),
         ("StudyFinalized", writer_schema_version("StudyFinalized")),
     ):
+        assert writer == 1
         assert_upcaster_chain_continuous(etype, writer)
         assert writer_schema_version(etype) == writer
-    # Writer constants must match the end of each upcaster chain.
-    assert writer_schema_version("StudyCreated") == STUDY_CREATED_SCHEMA_VERSION
-    assert writer_schema_version("PlanAccepted") == PLAN_ACCEPTED_SCHEMA_VERSION
-    assert writer_schema_version("TaskCreated") == TASK_CREATED_SCHEMA_VERSION
-    # Every registered chain is continuous 1..N-1 for its max.
-    for etype, bucket in UPCASTERS.items():
+    # Writer constants must match schema-v1 baseline (no production chains).
+    assert writer_schema_version("StudyCreated") == STUDY_CREATED_SCHEMA_VERSION == 1
+    assert writer_schema_version("PlanAccepted") == PLAN_ACCEPTED_SCHEMA_VERSION == 1
+    assert writer_schema_version("TaskCreated") == TASK_CREATED_SCHEMA_VERSION == 1
+    # Registered chains (if any) stay continuous 1..N-1 for their max.
+    for etype, bucket in list(UPCASTERS.items()):
+        if not bucket:
+            continue
         n = writer_schema_version(etype)
         assert_upcaster_chain_continuous(etype, n)
         assert max(bucket) == n - 1
@@ -2114,6 +2127,7 @@ async def test_plan_invalid_from_predicate_body_finalizes(
         lp._REGISTRY.pop(name, None)
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_plan_expanded_v2_loop_field_defaults():
     """Old PlanExpanded v2 without loop fields → TaskSpec defaults on replay."""
     v, p = upcast(

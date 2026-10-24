@@ -36,7 +36,6 @@ def register_upcaster(event_type: str, from_version: int, fn: Upcaster) -> None:
     bucket = optional_item(UPCASTERS, event_type)
     if bucket is None:
         bucket = {}
-        UPCASTERS[event_type] = bucket
     if from_version in bucket:
         raise ValueError(
             f"duplicate upcaster for {event_type!r} from_version={from_version}"
@@ -46,6 +45,9 @@ def register_upcaster(event_type: str, from_version: int, fn: Upcaster) -> None:
             f"register_upcaster {event_type!r}: gap — missing from_version="
             f"{from_version - 1} before {from_version}"
         )
+    # Only publish the bucket after validation so failed registers leave no residue.
+    if event_type not in UPCASTERS:
+        UPCASTERS[event_type] = bucket
     bucket[from_version] = fn
 
 

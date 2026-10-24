@@ -1492,6 +1492,7 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
         await close_runtime(rt)
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
     """Main v10 → #23 v11 (as_of/user_input_ids) → PR20 v12 (max_proposals)."""
     v, payload = upcast("StudyCreated", 10, {"study_id": "s", "max_loop_iter": 8})
@@ -1508,6 +1509,7 @@ def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
     assert 10 in UPCASTERS["StudyCreated"] and 11 in UPCASTERS["StudyCreated"]
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_studycreated_v10_preserves_max_loop_iter() -> None:
     """v10→v11 bridge must not pop max_loop_iter (real cap on main / identical to #23)."""
     mid = UPCASTERS["StudyCreated"][10]({"study_id": "s", "max_loop_iter": 2})
@@ -1521,6 +1523,7 @@ def test_upcaster_studycreated_v10_preserves_max_loop_iter() -> None:
     assert payload.get("max_proposals") == 3
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
     """11→12: existing max_proposals=5 stays 5; missing → default 3."""
     v, p = upcast(
@@ -1595,9 +1598,16 @@ def test_upcaster_studyfinalized_v3_to_v4_custom_checks() -> None:
 
 
 def test_register_upcaster_refuses_overwrite() -> None:
-    with pytest.raises(ValueError, match="duplicate upcaster"):
-        register_upcaster("StudyCreated", 9, lambda p: p)
-    assert 9 in UPCASTERS["StudyCreated"]
+    """Duplicate guard on a dummy type (production StudyCreated has no chain)."""
+    name = "_Pr20DupGuard"
+    UPCASTERS.pop(name, None)
+    register_upcaster(name, 1, lambda p: p)
+    try:
+        with pytest.raises(ValueError, match="duplicate upcaster"):
+            register_upcaster(name, 1, lambda p: p)
+        assert 1 in UPCASTERS[name]
+    finally:
+        UPCASTERS.pop(name, None)
 
 
 def test_evaluate_proposed_missing_id_fail_closed(tmp_path: Path) -> None:

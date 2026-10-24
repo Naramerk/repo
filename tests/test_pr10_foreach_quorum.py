@@ -1447,6 +1447,7 @@ async def test_foreach_empty_superseded_expand_after_queues_plan_n(
     await close_runtime(rt)
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_task_created_foreach_quorum():
     v, p = upcast(
         "TaskCreated",
@@ -1473,6 +1474,7 @@ def test_upcast_task_created_foreach_quorum():
     assert p["spec"]["budget_share"] is None
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_attempt_limitations():
     v, p = upcast("AttemptStarted", 3, {"attempt_id": "a", "inputs": []})
     # …v7 tainted (PR18) → v8 inputs_digest (#23) → v9 attempt_role (PR20).
@@ -1485,6 +1487,7 @@ def test_upcast_attempt_limitations():
     assert p["attempt_role"] == "agent"
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_study_foreach_cap():
     v, p = upcast("StudyCreated", 7, {"study_id": "s"})
     assert v == 12

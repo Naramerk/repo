@@ -913,6 +913,7 @@ def test_rubric_digest_stable_canonical():
     assert rubric_digest(items, "all_required", 99) == d1
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_taskcreated_v10_and_plan_expanded_v2():
     from coscientist.core.events.upcasters import upcast
 

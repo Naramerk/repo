@@ -92,6 +92,7 @@ def test_claim_unknown_provenance_defaults_to_stub():
     assert prov == "stub"
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_task_created_input_kind_defaults():
     v, p = upcast(
         "TaskCreated",
@@ -119,6 +120,7 @@ def test_upcast_task_created_input_kind_defaults():
     assert p["spec"]["budget_share"] is None
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_attempt_started_inputs_default():
     v, p = upcast(
         "AttemptStarted",

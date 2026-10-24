@@ -252,6 +252,7 @@ def test_refuted_with_confirmations_reports_conflict_note():
     assert note == "refuted; 1 supporting results were stub/partial"
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_studycreated_v5_to_v6_supported_needed():
     v, out = upcast("StudyCreated", 5, {"study_id": "s"})
     assert v == 12
@@ -262,6 +263,7 @@ def test_upcaster_studycreated_v5_to_v6_supported_needed():
     assert out["max_proposals"] == 3
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_studycreated_v4_to_v5_defaults():
     v, out = upcast("StudyCreated", 4, {"study_id": "s", "confirmations_needed": 1})
     assert v == 12

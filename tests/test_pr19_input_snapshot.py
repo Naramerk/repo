@@ -978,6 +978,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cls):
     """Upcasted v7 AttemptStarted (digest=None) → drift unknown, not partial."""
     sid = "st_v7_drift"
@@ -1111,6 +1112,7 @@ async def test_as_of_appears_in_report(tmp_path, clock, runtime_cls):
     await close_runtime(rt)
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_study_created_v9_to_v11():
     """#24 v10 setdefault max_loop_iter; #23 v11 as_of/ids; PR20 v12 max_proposals."""
     v, p = upcast("StudyCreated", 9, {"study_id": "s", "request": "q"})
@@ -1121,6 +1123,7 @@ def test_upcast_study_created_v9_to_v11():
     assert p.get("max_proposals") == 3
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_study_created_v10_to_v11_keeps_max_loop_iter():
     """Custom max_loop_iter (≠ default 8) must survive v10→v11→v12."""
     v, p = upcast(
@@ -1167,6 +1170,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
     await close_runtime(rt2)
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_attempt_started_v7_to_v8():
     """#23 v7→v8 inputs_digest; PR20 continues to v9 attempt_role."""
     v, p = upcast(

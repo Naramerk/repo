@@ -1538,6 +1538,7 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
     await close_runtime(rt)
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_planaccepted_v9_to_v10_decomposes():
     v, p = upcast(
         "PlanAccepted",
@@ -1551,6 +1552,7 @@ def test_upcaster_planaccepted_v9_to_v10_decomposes():
     assert p["questions"][0].get("parent_id") is None
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_planexpanded_v3_to_v4_decomposes():
     v, p = upcast(
         "PlanExpanded",
