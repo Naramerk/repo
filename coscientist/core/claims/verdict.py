@@ -747,8 +747,6 @@ def recompute_effect_provenance(
                 field="artifact_id",
             )
     if producer not in ("agent", "core", "sandbox"):
-        from coscientist.core.events.errors import JournalFormatError
-
         raise JournalFormatError(
             f"effect missing/unknown producer: {producer!r}",
             field="producer",
