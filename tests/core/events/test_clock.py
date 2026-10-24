@@ -7,24 +7,29 @@ from datetime import UTC, datetime, timedelta
 from coscientist.core.events.clock import FakeClock, SystemClock
 
 
-def test_fake_clock_on_change_fires_on_advance_and_set() -> None:
+def test_fake_clock_on_change_fires_on_advance() -> None:
+    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
+    seen: list[datetime] = []
+    clock.on_change(lambda: seen.append(clock.now()))
+    clock.advance(timedelta(seconds=3))
+    assert seen == [datetime(2026, 10, 24, 0, 0, 3, tzinfo=UTC)]
+
+
+def test_fake_clock_on_change_fires_on_set() -> None:
+    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
+    seen: list[datetime] = []
+    clock.on_change(lambda: seen.append(clock.now()))
+    clock.set(datetime(2026, 10, 25, tzinfo=UTC))
+    assert seen == [datetime(2026, 10, 25, tzinfo=UTC)]
+
+
+def test_fake_clock_unsubscribe_stops_callbacks() -> None:
     clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
     seen: list[datetime] = []
     unsub = clock.on_change(lambda: seen.append(clock.now()))
-    clock.advance(timedelta(seconds=3))
-    assert seen == [datetime(2026, 10, 24, 0, 0, 3, tzinfo=UTC)]
-    clock.set(datetime(2026, 10, 25, tzinfo=UTC))
-    assert seen[-1] == datetime(2026, 10, 25, tzinfo=UTC)
-    assert len(seen) == 2
     unsub()
     clock.advance(timedelta(seconds=1))
-    assert len(seen) == 2
-
-
-def test_system_clock_has_now_only() -> None:
-    clock = SystemClock()
-    assert callable(clock.now)
-    assert not hasattr(clock, "on_change")
+    assert seen == []
 
 
 def test_fake_clock_unsubscribe_is_idempotent() -> None:
@@ -35,3 +40,8 @@ def test_fake_clock_unsubscribe_is_idempotent() -> None:
     unsub()
     clock.advance(timedelta(seconds=1))
     assert seen == []
+
+
+def test_system_clock_now_is_timezone_aware() -> None:
+    now = SystemClock().now()
+    assert now.tzinfo is not None

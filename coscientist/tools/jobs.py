@@ -100,13 +100,6 @@ def _job_id(attempt_id: str, digest: str) -> str:
     return "job_" + sha256_hex(f"{attempt_id}:{digest}")[:JOB_ID_DIGEST_HEX_LEN]
 
 
-def require_spec_dict(spec: object) -> dict[str, Any]:
-    """Runtime gate for untyped inputs. Public ``submit`` keeps ``dict[str, Any]``."""
-    if not isinstance(spec, dict):
-        raise ToolError("local", f"spec must be dict, got {type(spec).__name__}")
-    return spec
-
-
 class InMemoryJobStore:
     """Journaled fake JobStore for §6.4 contract tests."""
 
@@ -127,8 +120,9 @@ class InMemoryJobStore:
         self._cancel_done: set[str] = set()
         self._waiters: dict[str, asyncio.Event] = {}
         # Explicit subscribe (e.g. FakeClock.on_change); pass None for SystemClock.
+        self._unsub_clock: Callable[[], None] | None
         if on_clock_change is not None:
-            self._unsub_clock: Callable[[], None] | None = on_clock_change(self.tick)
+            self._unsub_clock = on_clock_change(self.tick)
         else:
             self._unsub_clock = None
 
@@ -148,14 +142,13 @@ class InMemoryJobStore:
     ) -> str:
         _tool_aware(deadline, field="deadline")
         attempt_id = _tool_nonblank(attempt_id, field="attempt_id")
-        spec_dict = require_spec_dict(spec)
-        digest = spec_digest(spec_dict)
+        digest = spec_digest(spec)
         jid = _job_id(attempt_id, digest)
         existing_id = self._by_attempt.get(attempt_id)
         if existing_id is not None:
             existing = self._jobs[existing_id]
-            same = existing_id == jid and self._digests[existing_id] == digest
-            if same:
+            # jid is derived from digest — equality implies same digest.
+            if existing_id == jid:
                 return existing_id
             if job_is_live(existing.status):
                 raise ToolError(
