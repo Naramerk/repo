@@ -1,4 +1,4 @@
-# Plan: profiles (CAP #12 / CAP #13)
+# Plan: profiles (CAP #12 and CAP #13)
 
 **G2** = medicine/microfluidics profiles track (cloud agent for this area).  
 **P2** owner: `Profile`/`RoleConfig`/`RouteConfig` (G2). ≤1 open PR, ≤400 lines, stack ≤2, no shims.
@@ -7,7 +7,7 @@
 
 | Dep | Owner | Note |
 |---|---|---|
-| Budget strict/no defaults | **N1** — [§ N1](#n1-budget-strict-owner-ruslan-and) | No RouteConfig wrapper. P3 depends on N1. |
+| Budget strict, no field defaults | **N1** — [§ N1](#n1-budget-strict-owner-ruslan-and) | No RouteConfig wrapper. P3 depends on N1. |
 | PromptRef | [#50](https://github.com/Naramerk/repo/pull/50) | waits |
 | AgentPort | G1 ([agents plan](agents.md)) | role keys: `Identifier` from `mcp.config` (not `str`) |
 | Tool catalog | G3 ([#65](https://github.com/Naramerk/repo/pull/65)) | replaces closed #46 |
@@ -43,12 +43,14 @@ Cassettes required; fakes alone do not close.
 **Owner:** Ruslan And.  
 **Scope:** core `Budget` with no guessed field defaults (strict); scheduler-adjacent, not G2.  
 **Why here:** no open issue whose title matches N1 Budget strict (closed #70; [#129](https://github.com/Naramerk/repo/issues/129) is S1+S2 `UsageRecorded` only).  
-**P3 waits on this section** (not on #129).
+**P3 depends on this section** (not on #129).
 
 ## P7c microfluidics HITL (owner: Ruslan And)
 
 **Owner:** Ruslan And.  
-**Scope:** microfluidics HITL acceptance after quality-hitl **HE5a** ([plan](quality-hitl.md#hitl-18--engine-this-agent), CAP #18).  
+**Deliverable:** `tests/profiles/test_p7c_microfluidics_hitl.py` plus cassettes `tests/profiles/cassettes/p7c_*`.  
+**Gate:** microfluidics profile HITL human and timeout paths through `experimental/hitl.py` (quality-hitl **HE5a** surface: [plan](quality-hitl.md#hitl-18--engine-this-agent), CAP #18).  
+**DoD:** cassette replay green; fakes alone do not close.  
 **Why here:** no open issue whose title matches HE5a or P7c ([#93](https://github.com/Naramerk/repo/issues/93) is G8b graph writes only).  
 **Not G2.**
 
