@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Docs — scheduler / usage / budgets plan (#70)
+- `docs/plan/scheduler.md` + `docs/handoff/planner.md`: S0–S16 + **N1** Budget strict
+  (planner-agent owner; Depends: merged #62). P3→N1 in Edges only. CAPABILITIES
+  #4/#5/#23/#24/#26; DESIGN §7 / §7.4.
+
 ### Benchmark harness — typed errors (plan item 2)
 - Add `bench/errors.py`: `BenchError` / `BenchConfigError` (typed refuse; no
   silent fallbacks). import-linter root includes `bench`; forbid
