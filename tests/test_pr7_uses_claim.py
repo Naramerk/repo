@@ -379,7 +379,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
     assert aid0 == aid0_expected
     content = b'{"count": 225}'
     art = arts.put(
-        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json",
+        content, make_tool_ref(f"{aid0}:1", attempt_id=aid0), name="main", media_type="application/json",
         role="data",
     )
     await rt.executor.record(

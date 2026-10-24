@@ -319,7 +319,7 @@ def test_sandbox_cannot_rewrite_artifact_meta(tmp_path):
     arts = LocalArtifactStore(tmp_path)
     art = arts.put(
         b"secret",
-        make_tool_ref("st/E1#1:data"),
+        make_tool_ref("st/E1#1:data", attempt_id="st/E1#1"),
         name="data.bin",
         media_type="application/octet-stream",
         role="data",
@@ -421,14 +421,14 @@ def test_tests_pass_runs_catalog_tests_not_agent(tmp_path):
     # Agent ships malicious conftest + fake junit content as "code".
     agent_code = arts.put(
         b"def add(a, b):\n    return a + b\n",
-        make_tool_ref("st/E1#1:code"),
+        make_tool_ref("st/E1#1:code", attempt_id="st/E1#1"),
         name="solution.py",
         media_type="text/x-python",
         role="code",
     )
     fake_junit = arts.put(
         b'<testsuite tests="99" failures="0"/>',
-        make_tool_ref("st/E1#1:junit"),
+        make_tool_ref("st/E1#1:junit", attempt_id="st/E1#1"),
         name="junit.xml",
         media_type="application/xml",
         role="data",
@@ -489,14 +489,14 @@ def test_holdout_from_catalog_ignores_agent_slot_and_claimed_score(tmp_path):
     # Agent tries to supply matching labels + claimed 0.9 — must not win.
     agent_holdout = arts.put(
         json.dumps({"y": [0, 1, 0, 0]}).encode(),  # would make accuracy 1.0 if used
-        make_tool_ref("st/E1#1:holdout"),
+        make_tool_ref("st/E1#1:holdout", attempt_id="st/E1#1"),
         name="holdout.json",
         media_type="application/json",
         role="data",
     )
     predictions = arts.put(
         json.dumps({"y_hat": [0, 1, 0, 0], "score": 0.9}).encode(),
-        make_tool_ref("st/E1#1:pred"),
+        make_tool_ref("st/E1#1:pred", attempt_id="st/E1#1"),
         name="predictions.json",
         media_type="application/json",
         role="data",
@@ -855,14 +855,14 @@ def test_y_hat_equals_catalog_labels_still_uses_catalog_holdout(tmp_path):
     # Perfect y_hat (= catalog y) → 1.0; agent also ships fake holdout with other y.
     predictions = arts.put(
         json.dumps({"y_hat": [1, 0, 1, 0], "score": 0.0}).encode(),
-        make_tool_ref("st/E1#1:pred"),
+        make_tool_ref("st/E1#1:pred", attempt_id="st/E1#1"),
         name="predictions.json",
         media_type="application/json",
         role="data",
     )
     fake_hold = arts.put(
         json.dumps({"y": [0, 0, 0, 0]}).encode(),
-        make_tool_ref("st/E1#1:holdout"),
+        make_tool_ref("st/E1#1:holdout", attempt_id="st/E1#1"),
         name="holdout.json",
         media_type="application/json",
         role="data",
@@ -906,14 +906,14 @@ def test_sitecustomize_slot_rejected_from_inputs(tmp_path):
     arts = LocalArtifactStore(tmp_path)
     evil = arts.put(
         b"open('/results/pwned','w').write('x')\n",
-        make_tool_ref("st/E1#1:evil"),
+        make_tool_ref("st/E1#1:evil", attempt_id="st/E1#1"),
         name="sitecustomize.py",
         media_type="text/x-python",
         role="code",
     )
     good = arts.put(
         b"def add(a,b): return a+b\n",
-        make_tool_ref("st/E1#1:code"),
+        make_tool_ref("st/E1#1:code", attempt_id="st/E1#1"),
         name="solution.py",
         media_type="text/x-python",
         role="code",
@@ -972,7 +972,7 @@ def test_forged_junit_os_exit_still_untrusted(tmp_path):
         b"pathlib.Path('/results/junit.xml').write_text("
         b"'<testsuite tests=\"9\" failures=\"0\" errors=\"0\"/>')\n"
         b"os._exit(0)\n",
-        make_tool_ref("st/E1#1:evil"),
+        make_tool_ref("st/E1#1:evil", attempt_id="st/E1#1"),
         name="solution.py",
         media_type="text/x-python",
         role="code",
@@ -1016,14 +1016,14 @@ def test_pth_file_not_mounted_even_if_named_in_outputs(tmp_path):
     arts = LocalArtifactStore(tmp_path)
     pth = arts.put(
         b"import os; open('/results/pth_pwned','w').write('x')\n",
-        make_tool_ref("st/E1#1:pth"),
+        make_tool_ref("st/E1#1:pth", attempt_id="st/E1#1"),
         name="evil.pth",
         media_type="text/plain",
         role="data",
     )
     good = arts.put(
         b"def add(a,b): return a+b\n",
-        make_tool_ref("st/E1#1:code"),
+        make_tool_ref("st/E1#1:code", attempt_id="st/E1#1"),
         name="solution.py",
         media_type="text/x-python",
         role="code",
@@ -1070,7 +1070,7 @@ def test_holdout_digest_mismatch_is_catalog_error(tmp_path):
     arts = LocalArtifactStore(tmp_path)
     predictions = arts.put(
         json.dumps({"y_hat": [0, 1]}).encode(),
-        make_tool_ref("st/E1#1:pred"),
+        make_tool_ref("st/E1#1:pred", attempt_id="st/E1#1"),
         name="predictions.json",
         media_type="application/json",
         role="data",
@@ -1138,7 +1138,7 @@ sys.exit(0)
     digest = sha256_hex(canonical_json(secret))
     predictions = arts.put(
         json.dumps({"y_hat": [1, 0, 1, 0]}).encode(),
-        make_tool_ref("st/E1#1:pred"),
+        make_tool_ref("st/E1#1:pred", attempt_id="st/E1#1"),
         name="predictions.json",
         media_type="application/json",
         role="data",

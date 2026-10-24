@@ -127,7 +127,7 @@ async def _complete_report_and_finalize(rt, tmp_path) -> None:
     ex, arts = attach_executor(rt, tmp_path)
     art = arts.put(
         b"# report\n",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
         role="report",
@@ -592,7 +592,7 @@ async def test_disposal_unknown_question_fail_closed_empty_graph(tmp_path, clock
     assert aid is not None
     art = arts.put(
         b"r",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
         role="report",
@@ -925,7 +925,7 @@ async def test_stamp_kind_not_applied_before_commit_failure(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"# design\n",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
         role="report",
@@ -968,7 +968,7 @@ async def test_stamp_kind_e2e_replay_and_missing_meta_marks_internal_error(tmp_p
     assert aid is not None
     art = arts.put(
         b"# design\n",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
         role="report",

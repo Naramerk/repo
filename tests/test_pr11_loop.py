@@ -90,7 +90,7 @@ async def _ok(rt, arts, aid: str, *, count: int = 1) -> None:
     """Record experiment output. ``count=225`` matches catalog ``value_match`` target."""
     content = f'{{"count": {int(count)}}}'.encode()
     art = arts.put(
-        content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json",
+        content, make_tool_ref(f"{aid}:out", attempt_id=aid), name="main", media_type="application/json",
         role="data",
     )
     await rt.executor.record(

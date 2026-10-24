@@ -1857,7 +1857,7 @@ async def test_superseded_question_claims_not_counted(tmp_path, clock, runtime_c
     aid = await rt.start_attempt("E0")
     art = arts.put(
         b'{"count": 999}',
-        make_tool_ref(f"{aid}:1"),
+        make_tool_ref(f"{aid}:1", attempt_id=aid),
         name="main",
         media_type="application/json",
         role="data",

@@ -50,7 +50,7 @@ def _exp(key: str, *, depends_on: list[str], **kw) -> TaskSpec:
 
 async def _ok(rt, arts, aid: str) -> None:
     content = b'{"count": 1}'
-    art = arts.put(content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json", role="data")
+    art = arts.put(content, make_tool_ref(f"{aid}:out", attempt_id=aid), name="main", media_type="application/json", role="data")
     await rt.executor.record(
         aid,
         AgentTaskOutput(

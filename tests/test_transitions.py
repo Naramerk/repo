@@ -229,7 +229,7 @@ async def test_recover_records_from_cas_route_returned(tmp_path, clock, runtime_
     aid = await rt.start_attempt("SPEC")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid}:1"),
+        make_tool_ref(f"{aid}:1", attempt_id=aid),
         name="main",
         media_type="application/json",
         role="data",
@@ -284,7 +284,7 @@ async def test_recover_corrupt_cas_crashes_retryable(tmp_path, clock, runtime_cl
     aid = await rt.start_attempt("SPEC")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid}:1"),
+        make_tool_ref(f"{aid}:1", attempt_id=aid),
         name="main",
         media_type="application/json",
         role="data",
@@ -310,7 +310,7 @@ async def test_record_vs_deadline_race(tmp_path, clock, runtime_cls):
     aid = await rt.start_attempt("SPEC")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid}:1"),
+        make_tool_ref(f"{aid}:1", attempt_id=aid),
         name="main",
         media_type="application/json",
         role="data",
@@ -368,7 +368,7 @@ async def test_mark_route_returned_vs_deadline_race(tmp_path, clock, runtime_cls
     aid = await rt.start_attempt("SPEC")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid}:1"),
+        make_tool_ref(f"{aid}:1", attempt_id=aid),
         name="main",
         media_type="application/json",
         role="data",

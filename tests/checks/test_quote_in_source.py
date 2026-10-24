@@ -79,7 +79,7 @@ def _put_paper(
     try:
         return arts.put_fetched(
             content,
-            make_tool_ref(call, tool=tool),
+            make_tool_ref(call, tool=tool, attempt_id=attempt_id),
             name="paper.txt",
             media_type="text/plain",
             role="paper",
@@ -126,9 +126,10 @@ def _catalog_quote() -> object:
 
 
 def _put_quote_json(arts: LocalArtifactStore, payload: dict, *, call: str):
+    attempt_id = call.rsplit(":", 1)[0] if ":" in call else call
     return arts.put(
         json.dumps(payload).encode("utf-8"),
-        make_tool_ref(call, tool="test"),
+        make_tool_ref(call, tool="test", attempt_id=attempt_id),
         name="quote.json",
         media_type="application/json",
         role="data",
@@ -667,7 +668,7 @@ class _FetchTool:
         call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
         art = self.arts.put_fetched(
             self.body,
-            make_tool_ref(call_id, tool=self.spec.name),
+            make_tool_ref(call_id, tool=self.spec.name, attempt_id=ctx.attempt_id),
             name="paper.txt",
             media_type="text/plain",
             role="paper",
@@ -695,7 +696,7 @@ class _ReadNonFetchTool:
         with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
             self.arts.put_fetched(
                 self.body,
-                make_tool_ref(call_id, tool=self.spec.name),
+                make_tool_ref(call_id, tool=self.spec.name, attempt_id=ctx.attempt_id),
                 name="x.txt",
                 media_type="text/plain",
                 role="paper",
@@ -1723,7 +1724,7 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
                 arts_out.append(
                     self.arts.put_fetched(
                         body,
-                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name),
+                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name, attempt_id=ctx.attempt_id),
                         name=f"p{i}.txt",
                         media_type="text/plain",
                         role="paper",
@@ -1898,7 +1899,7 @@ async def test_append_failure_on_second_digest_clears_permits(
                 arts_out.append(
                     self.arts.put_fetched(
                         body,
-                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name),
+                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name, attempt_id=ctx.attempt_id),
                         name=f"p{i}.txt",
                         media_type="text/plain",
                         role="paper",
