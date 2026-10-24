@@ -1395,7 +1395,7 @@ async def test_finalize_study_closed_with_event_is_success(
     async def boom_closed(_events):
         raise StudyClosedError(sid, "StudyFinalized")
 
-    monkeypatch.setattr(rt, "_append", boom_closed)
+    monkeypatch.setattr(rt, "append_events", boom_closed)
     await rt.finalize(trigger="cancel")
     assert rt.view().phase == "closed"
     _fin(await rt.store.read_all())
@@ -1414,7 +1414,7 @@ async def test_finalize_study_closed_without_event_reraises(
     async def boom_closed(_events):
         raise StudyClosedError(sid, "StudyFinalized")
 
-    monkeypatch.setattr(rt, "_append", boom_closed)
+    monkeypatch.setattr(rt, "append_events", boom_closed)
     with pytest.raises(StudyClosedError):
         await rt.finalize(trigger="all_done")
     assert not any(e.type == "StudyFinalized" for e in await rt.store.read_all())

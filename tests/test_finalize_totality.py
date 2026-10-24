@@ -225,7 +225,7 @@ async def test_crash_between_cas_put_and_append(tmp_path, clock, monkeypatch):
             raise OSError("append_after_cas")
         return await real_append(events)
 
-    monkeypatch.setattr(rt, "_append", boom_then_ok)
+    monkeypatch.setattr(rt, "append_events", boom_then_ok)
     await rt.finalize(trigger="all_done")
     await close_runtime(rt)
     rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
@@ -271,7 +271,7 @@ async def test_finalize_conflict_without_event_reraises(tmp_path, clock, monkeyp
     async def boom_conflict(_events):
         raise Conflict("idem mismatch without prior commit")
 
-    monkeypatch.setattr(rt, "_append", boom_conflict)
+    monkeypatch.setattr(rt, "append_events", boom_conflict)
     with pytest.raises(Conflict):
         await rt.finalize(trigger="all_done")
     assert not rt._finalized
