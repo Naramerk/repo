@@ -6,7 +6,7 @@ import math
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -499,6 +499,33 @@ class Study(Frozen):
         return max(0.0, float(self.replan_reserve) * span)
 
 
+class Need(Frozen):
+    """Planner Need (DESIGN §2): reason required; strict bool/str (no coerce)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    # No default: dict without kind must fail; construct with kind="need" or parse_plan_need.
+    kind: Literal["need"]
+    needed: bool
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _nonempty_reason(self) -> Need:
+        if not self.reason.strip():
+            raise ValueError("Need.reason must be non-empty")
+        return self
+
+
+class NeedUnrecorded(Frozen):
+    """Legacy PlanAccepted had no Need field — not a planner decision."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    # No default: dict without kind must fail; construct with kind="unrecorded" or parse_plan_need.
+    kind: Literal["unrecorded"]
+    source_schema_version: StrictInt
+
+
 class Plan(Frozen):
     plan_id: str
     study_id: str
@@ -513,6 +540,9 @@ class Plan(Frozen):
     # M1 PR16 / PlanOut: named subquestions (parent_id required) + rollup rule.
     subquestions: list[QuestionSpec] = Field(default_factory=list)
     rollup: RollupRule = "all"
+    # G4: planner Need, or NeedUnrecorded when legacy journal omitted the field.
+    hypotheses: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")]
+    literature: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")]
 
 
 class Task(Frozen):

@@ -125,7 +125,7 @@ async def refuse_expansion(
     else:
         idem_key = make_idem("ExpansionRefused", sid, after_task, reason, detail)
         entity_key = f"{sid}:{after_task}:{reason}:{detail}"
-    await runtime._append(  # noqa: SLF001
+    await runtime.append_events(
         [
             EventEnvelope(
                 study_id=sid,
@@ -224,7 +224,7 @@ async def ensure_plan_n_task(
     payload["expand_after_task"] = after_task
     if pending is not None:
         payload["pending_expansion"] = pending.model_dump(mode="json")
-    await runtime._append(  # noqa: SLF001
+    await runtime.append_events(
         [
             EventEnvelope(
                 study_id=sid,

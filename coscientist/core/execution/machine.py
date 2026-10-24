@@ -79,7 +79,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self._retry_at: dict[str, datetime] = {}
         self._finalized = False
         # True while finalize_loop_internal_error closes open work —
-        # nested _append(TaskDone) must not re-enter expand/foreach/loop hooks.
+        # nested append_events(TaskDone) must not re-enter expand/foreach/loop hooks.
         self._finalizing = False
         self.question_disposals: dict[str, dict] = {}
         # PR15: ArtifactRegistered(stamped) → artifact_id → kind (journal authority).
@@ -184,7 +184,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         if callable(flush):
             flush()
         self.bind_executor(ex)
-        # Executor writes via writer (not StudyRuntime._append); wrap to run H-g.
+        # Executor writes via writer (not StudyRuntime.append_events); wrap to run H-g.
         orig_append = ex._append
 
         async def _append_with_expand(
@@ -219,7 +219,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         ex._append = _append_with_expand  # type: ignore[method-assign]
         return ex
 
-    async def _append(self, events: list[EventEnvelope]) -> None:
+    async def append_events(self, events: list[EventEnvelope]) -> None:
+        """Sole durable append + project path (lease, fold, TaskDone hooks)."""
         if self._lease_lost:
             raise LeaseLost("writer stopped after lease loss")
         try:
@@ -341,7 +342,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         if self.study is None or self._budget_exceeded or self._finalized:
             return
         sid = self.study.study_id
-        await self._append(
+        await self.append_events(
             [
                 EventEnvelope(
                     study_id=sid,
@@ -374,7 +375,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         }
         if task_id:
             payload["task_id"] = task_id
-        await self._append(
+        await self.append_events(
             [
                 EventEnvelope(
                     study_id=self.study.study_id,
@@ -489,7 +490,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
 
         events = _close_open_work(self, reason=reason, close=close)
         if events:
-            await self._append(events)
+            await self.append_events(events)
 
     async def _apply_p5(self, now: datetime, ed: datetime) -> None:
         assert self.study is not None
@@ -536,7 +537,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                     schema_version=2,
                 )
             )
-            await self._append(events)
+            await self.append_events(events)
 
     async def _fire_due_retries(self, now: datetime) -> None:
         if self._lease_lost or self._finalized:

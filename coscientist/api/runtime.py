@@ -13,7 +13,7 @@ from coscientist.core.plan.lifecycle import LifecycleMixin
 class StudyRuntime(MachineRuntime, LifecycleMixin):  # type: ignore[misc]
     """Intake create_study / accept_plan / expand_plan + core state machine.
 
-    MachineRuntime is listed first so ``_append`` / ``cancel_task`` resolve to
+    MachineRuntime is listed first so ``append_events`` / ``cancel_task`` resolve to
     the real implementations rather than LifecycleMixin's ``NotImplementedError``
     stubs. ``type: ignore[misc]``: LifecycleMixin attribute stubs vs concrete store.
     """

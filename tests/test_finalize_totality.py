@@ -16,7 +16,7 @@ from coscientist.core.finalize.finalize_nodes import (
     conclusion_id_for_study,
     conclusion_ids_for,
 )
-from tests.helpers import close_runtime, open_runtime, seed_legacy_journal
+from tests.helpers import NEED_OFF, close_runtime, open_runtime, seed_legacy_journal
 from tests.test_finalize import _boot, _fin, _skip_all, _spec
 
 
@@ -145,7 +145,9 @@ async def test_i2_conclusions_after_restart(tmp_path, clock):
     sid = "st_i2"
     rt = await _boot(tmp_path, clock, sid)
     qs = [QuestionSpec(id="Q1", text="one"), QuestionSpec(id="Q2", text="two")]
-    await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs)
+    await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs,
+        hypotheses=NEED_OFF, literature=NEED_OFF,
+    )
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     ev = _fin(await rt.store.read_all())
@@ -215,7 +217,7 @@ async def test_crash_between_cas_put_and_append(tmp_path, clock, monkeypatch):
     rt.artifacts = LocalArtifactStore(tmp_path / "arts")
     await _skip_all(rt)
     calls = {"n": 0}
-    real_append = rt._append
+    real_append = rt.append_events
 
     async def boom_then_ok(events):
         calls["n"] += 1
@@ -223,7 +225,7 @@ async def test_crash_between_cas_put_and_append(tmp_path, clock, monkeypatch):
             raise OSError("append_after_cas")
         return await real_append(events)
 
-    monkeypatch.setattr(rt, "_append", boom_then_ok)
+    monkeypatch.setattr(rt, "append_events", boom_then_ok)
     await rt.finalize(trigger="all_done")
     await close_runtime(rt)
     rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
@@ -269,7 +271,7 @@ async def test_finalize_conflict_without_event_reraises(tmp_path, clock, monkeyp
     async def boom_conflict(_events):
         raise Conflict("idem mismatch without prior commit")
 
-    monkeypatch.setattr(rt, "_append", boom_conflict)
+    monkeypatch.setattr(rt, "append_events", boom_conflict)
     with pytest.raises(Conflict):
         await rt.finalize(trigger="all_done")
     assert not rt._finalized
@@ -513,7 +515,7 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
                             "depends_on": ["PLAN"],
                         }
                     ],
-                    # no questions / addresses → upcast v1→v2
+                    # no questions / addresses / Need → upcast fills NeedUnrecorded
                 },
                 ts=now,
                 schema_version=1,

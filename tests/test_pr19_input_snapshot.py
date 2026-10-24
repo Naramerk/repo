@@ -38,7 +38,7 @@ from coscientist.core.execution.input_limits import (
     merge_input_limits,
     snapshot_bindings_at_p2,
 )
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import NEED_OFF, close_runtime, open_runtime
 
 
 def _with_user_put(fn):
@@ -879,7 +879,7 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid = await rt.start_attempt("E1")
     started = next(
         e
@@ -940,7 +940,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid_p = await rt.start_attempt("P1")
     await record_success(rt, aid_p, arts)
     assert rt.tasks[f"{sid}/P1"].outcome == TaskOutcome.SUCCESS
@@ -1006,7 +1006,7 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
             )
         ],
         questions=[],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     # Seed a synthetic prior CLOSED attempt as if replayed from v7 (null digests).
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
@@ -1715,7 +1715,7 @@ async def test_prior_attempt_missing_digest_version_drift_unknown(tmp_path, cloc
             )
         ],
         questions=[],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
     # Write a raw v7 journal row (pre-PR19) then close it.
@@ -1949,7 +1949,7 @@ async def test_prior_attempt_legacy_digest_drift_unknown(
             )
         ],
         questions=[],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
     old_digest = "a" * 64  # non-empty legacy formula digest, no digest_version

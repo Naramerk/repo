@@ -32,6 +32,11 @@ from coscientist.core.plan.expand_graph import (
 )
 from coscientist.core.plan.expand_trigger import refuse_expansion
 from coscientist.core.plan.expand_validate import active_plan_blob, assign_core_keys
+from coscientist.core.plan.need import (
+    PlanNeedRefuse,
+    PlanNeedRefuseReason,
+    recorded_plan_needs,
+)
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
@@ -192,10 +197,11 @@ async def _refuse_and_skip_foreach(
     *,
     after: str,
     detail: str,
+    reason: PlanNeedRefuseReason,
 ) -> None:
     """ExpansionRefused + TaskDone SKIPPED so the template is never dispatched."""
     await refuse_expansion(
-        runtime, after, reason="invalid", detail=detail[:200]
+        runtime, after, reason=reason, detail=detail[:200]
     )
     if template.state != TaskState.DONE:
         await runtime.cancel_task(  # type: ignore[attr-defined]
@@ -247,6 +253,7 @@ async def materialize_foreach(
                 template,
                 after=after,
                 detail=f"foreach_assign_keys:{keyed}",
+                reason="invalid",
             )
             return None
         from coscientist.core.plan.shares import apply_foreach_parent_shares
@@ -279,7 +286,11 @@ async def materialize_foreach(
     share_err = critic_plan_shares(merged, study=study)
     if share_err is not None:
         await _refuse_and_skip_foreach(
-            runtime, template, after=after, detail=f"foreach_shares:{share_err}"
+            runtime,
+            template,
+            after=after,
+            detail=f"foreach_shares:{share_err}",
+            reason="invalid",
         )
         return None
     pid = foreach_plan_id(sid, tkey, new_rev)
@@ -289,6 +300,17 @@ async def materialize_foreach(
         LoopSpec.model_validate(x) if isinstance(x, dict) else x
         for x in (prev.get("loops") or [])
     ]
+    try:
+        hyp_need, lit_need = recorded_plan_needs(prev)
+    except PlanNeedRefuse as e:
+        await _refuse_and_skip_foreach(
+            runtime,
+            template,
+            after=after,
+            detail=str(e),
+            reason=e.reason,
+        )
+        return None  # audit-ok[except_silent_return]: PlanNeedRefuse → ExpansionRefused
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -298,6 +320,8 @@ async def materialize_foreach(
         questions=list(prev_questions),
         expand_after=list(prev.get("expand_after") or []),
         loops=prev_loops,
+        hypotheses=hyp_need,
+        literature=lit_need,
     )
     ed = study.effective_deadline()
     events: list[EventEnvelope] = []
@@ -405,7 +429,7 @@ async def materialize_foreach(
             schema_version=PLAN_EXPANDED_SCHEMA_VERSION,
         )
     )
-    await runtime._append(events)  # noqa: SLF001
+    await runtime.append_events(events)
     children = getattr(runtime, "_foreach_children", None)
     if not isinstance(children, dict):
         runtime._foreach_children = {}  # noqa: SLF001
@@ -464,6 +488,7 @@ async def maybe_foreach_after_task_done(
                 tmpl,
                 after=after,
                 detail=f"foreach_exception:{type(e).__name__}",
+                reason="invalid",
             )
     return done
 
@@ -495,6 +520,7 @@ async def materialize_ready_foreach(runtime: StudyRuntime) -> list[str]:
                 tmpl,
                 after=after,
                 detail=f"foreach_exception:{type(e).__name__}",
+                reason="invalid",
             )
     return done
 

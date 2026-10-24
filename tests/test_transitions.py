@@ -21,7 +21,7 @@ from coscientist.core.execution.domain import (
     TaskState,
 )
 from coscientist.core.execution.recover import recover
-from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success
+from tests.helpers import NEED_OFF, attach_executor, close_runtime, exp_spec, open_runtime, record_success
 
 
 async def _boot(tmp_path: Path, clock: FakeClock, runtime_cls: type, seconds: int = 60, **kw):
@@ -256,7 +256,7 @@ async def test_recover_missing_cas_crashes_retryable(tmp_path, clock, runtime_cl
     rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
     attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id="st_tr",
@@ -446,7 +446,7 @@ async def test_accept_plan_creates_experiments(tmp_path, clock, runtime_cls):
     for key in ("SPEC", "HYP", "LIT"):
         aid = await rt.start_attempt(key)
         await record_success(rt, aid, arts)
-    await rt.accept_plan([exp_spec("EXP-1"), exp_spec("EXP-2", ["EXP-1"])])
+    await rt.accept_plan([exp_spec("EXP-1"), exp_spec("EXP-2", ["EXP-1"])], hypotheses=NEED_OFF, literature=NEED_OFF)
     assert "st_tr/EXP-1" in rt.tasks
     assert rt.tasks["st_tr/PLAN"].state == TaskState.DONE
     await close_runtime(rt)

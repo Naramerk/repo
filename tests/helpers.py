@@ -3,23 +3,35 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
-from coscientist.core.events.events import UnstampedEvent
+from coscientist.core.events.events import (
+    PLAN_ACCEPTED_NEED_SINCE,
+    EventEnvelope,
+    UnstampedEvent,
+    make_idem,
+)
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
+    Need,
     RequirementRef,
     TaskSpec,
 )
 from coscientist.core.execution.executor import Executor
+from coscientist.core.execution.machine import StudyRuntime
 from coscientist.core.execution.runtime_factory import close_runtime as close_runtime
 from coscientist.core.execution.runtime_factory import open_runtime as _open_runtime_core
 from tests.checks.minimal_test_catalog import minimal_test_catalog
+
+# Test Need (needed=False). Pass hypotheses=/literature= explicitly.
+NEED_OFF = Need(kind="need", needed=False, reason="test")
+NEED_UNRECORDED = {"kind": "unrecorded", "source_schema_version": PLAN_ACCEPTED_NEED_SINCE}
 
 
 async def seed_legacy_journal(
@@ -27,6 +39,49 @@ async def seed_legacy_journal(
 ) -> None:
     """Behind-writer fixture seed via ``store.append_fixtures`` (writer gates)."""
     await store.append_fixtures(events)
+
+
+def plan_revision(blob: Mapping[str, Any]) -> int:
+    """Exact int revision from a plan blob (no ``or 0`` coercion)."""
+    rev = blob["revision"]
+    if type(rev) is not int:
+        raise TypeError(f"plan.revision must be exact int, got {type(rev).__name__}")
+    return rev
+
+
+def active_plan_blob_for_tests(runtime: StudyRuntime) -> dict[str, Any]:
+    """Active plan = max typed revision (test helper; fails if plans empty)."""
+    if not runtime.plans:
+        raise RuntimeError("active_plan_blob_for_tests: no plans")
+    return max(runtime.plans.values(), key=plan_revision)
+
+
+async def append_plan_accepted(
+    runtime: StudyRuntime,
+    payload: Mapping[str, Any],
+    *,
+    schema_version: int,
+) -> None:
+    """Test seam: PlanAccepted via public ``StudyRuntime.append_events``.
+
+    ``schema_version`` is required (no default). ``plan_id`` must be ``str``.
+    """
+    if runtime.study is None:
+        raise RuntimeError("append_plan_accepted requires an open study")
+    blob = dict(payload)
+    plan_id = blob["plan_id"]
+    if type(plan_id) is not str:
+        raise TypeError(f"plan_id must be str, got {type(plan_id).__name__}")
+    ev = EventEnvelope(
+        study_id=runtime.study.study_id,
+        type="PlanAccepted",
+        entity_key=plan_id,
+        idem_key=make_idem("PlanAccepted", plan_id),
+        payload=blob,
+        ts=runtime.clock.now(),
+        schema_version=schema_version,
+    )
+    await runtime.append_events([ev])
 
 
 async def open_runtime(

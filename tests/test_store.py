@@ -14,7 +14,7 @@ from coscientist.core.events.events import EventEnvelope
 from coscientist.core.events.projections import fold_events
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.upcasters import writer_schema_version
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import NEED_OFF, close_runtime, open_runtime
 
 
 @pytest.fixture
@@ -181,7 +181,7 @@ async def test_replay_equals_projection(
     for key in ("SPEC", "HYP", "LIT"):
         aid = await rt.start_attempt(key)
         await record_success(rt, aid, arts)
-    await rt.accept_plan([exp_spec("EXP-1")])
+    await rt.accept_plan([exp_spec("EXP-1")], hypotheses=NEED_OFF, literature=NEED_OFF)
     aid = await rt.start_attempt("EXP-1")
     await record_success(rt, aid, arts)
     await rt.cancel_task("REPORT", reason="budget")
@@ -325,7 +325,7 @@ async def test_event_loop_progresses_during_slow_write(
         await rt.tick()
 
     write_task = asyncio.create_task(
-        rt._append(  # noqa: SLF001
+        rt.append_events(
             [
                 EventEnvelope(
                     study_id="st_slow",
@@ -389,7 +389,7 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(
         read_finished_during_write = True
 
     write_task = asyncio.create_task(
-        rt._append(  # noqa: SLF001
+        rt.append_events(
             [
                 EventEnvelope(
                     study_id="st_rd",

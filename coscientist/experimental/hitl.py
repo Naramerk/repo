@@ -73,7 +73,7 @@ class HitlForkMixin(CostlyHitlMixin):
             cost_rub=float(cost_rub),
             expand_after_task=after,
         )
-        await self._append(
+        await self.append_events(
             [
                 EventEnvelope(
                     study_id=self.study.study_id,
@@ -130,7 +130,7 @@ class HitlForkMixin(CostlyHitlMixin):
                 await self._maybe_hitl_expand(h, request_id, expansion)
             return
         now = self.clock.now()
-        await self._append(
+        await self.append_events(
             [
                 EventEnvelope(
                     study_id=h.study_id,
@@ -319,7 +319,7 @@ class HitlForkMixin(CostlyHitlMixin):
                 }
 
             try:
-                await self._append(
+                await self.append_events(
                     [
                         EventEnvelope(
                             study_id=h.study_id,
@@ -375,7 +375,7 @@ class HitlForkMixin(CostlyHitlMixin):
             return
         # PR20: HITL timeout on proposed_check ≡ reject (StudyFinalized still runs).
         # Must take the same per-proposal lock as answer_hitl — otherwise timeout can
-        # write CheckRejected while a human accept is still inside _append.
+        # write CheckRejected while a human accept is still inside append_events.
         if h.kind == "proposed_check":
             from coscientist.core.plan.proposed_check import reject_check
 
@@ -418,7 +418,7 @@ class HitlForkMixin(CostlyHitlMixin):
                 )
             return
         now = self.clock.now()
-        await self._append(
+        await self.append_events(
             [
                 EventEnvelope(
                     study_id=h.study_id,
@@ -469,7 +469,7 @@ class HitlForkMixin(CostlyHitlMixin):
             if delegated_by == "timeout"
             else f"delegate→agent ({delegated_by})"
         )
-        await self._append(
+        await self.append_events(
             [
                 EventEnvelope(
                     study_id=h.study_id,
@@ -523,7 +523,7 @@ class HitlForkMixin(CostlyHitlMixin):
             attrs=attrs,
             created_at=getattr(existing, "created_at", None) or now,
         )
-        await self._append(
+        await self.append_events(
             [
                 EventEnvelope(
                     study_id=sid,
@@ -556,7 +556,7 @@ class HitlForkMixin(CostlyHitlMixin):
             node_id=nid, kind="hitl", study_id=sid, ref_id=h.request_id, attrs=attrs,
             created_at=getattr(existing, "created_at", None) or now,
         )
-        await self._append([EventEnvelope(
+        await self.append_events([EventEnvelope(
             study_id=sid, type="GraphNodeUpserted", entity_key=nid,
             idem_key=make_idem(
                 "GraphNodeUpserted", nid, "hitl_decision", approved_by, delegated_by or "-"
@@ -588,7 +588,7 @@ class HitlForkMixin(CostlyHitlMixin):
             deadline_shares=dict(dmap) if dmap else None, request_id=request_id,
         )
         if err is not None or payload is None:
-            await self._append(
+            await self.append_events(
                 [
                     EventEnvelope(
                         study_id=h.study_id,
@@ -608,7 +608,7 @@ class HitlForkMixin(CostlyHitlMixin):
             )
             return
         payload["approved_by"] = approved_by
-        await self._append([EventEnvelope(
+        await self.append_events([EventEnvelope(
             study_id=h.study_id, type="BudgetSharesAdjusted", entity_key=request_id,
             idem_key=make_idem("BudgetSharesAdjusted", request_id),
             payload=payload, ts=self.clock.now(), schema_version=1,
@@ -649,7 +649,7 @@ class HitlForkMixin(CostlyHitlMixin):
             )
             if new_dl == h.deadline:
                 continue
-            await self._append(
+            await self.append_events(
                 [
                     EventEnvelope(
                         study_id=h.study_id,

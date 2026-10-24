@@ -40,6 +40,7 @@ from coscientist.core.plan.expand_validate import (
     task_produced_countable_claims,
     validate_expansion,
 )
+from coscientist.core.plan.need import PlanNeedRefuse, recorded_plan_needs
 from coscientist.core.plan.supersede import (
     should_skip_for_question_supersede,
     target_blocks_agent_supersede,
@@ -368,6 +369,13 @@ async def _expand_plan(
         LoopSpec.model_validate(x) if isinstance(x, dict) else x
         for x in ((prev.get("loops") if prev else None) or [])
     ]
+    try:
+        hyp_need, lit_need = recorded_plan_needs(prev)
+    except PlanNeedRefuse as e:
+        await refuse_expansion(
+            runtime, after_task, reason=e.reason, detail=str(e)[:200]
+        )
+        return None  # audit-ok[except_silent_return]: PlanNeedRefuse → ExpansionRefused
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -379,6 +387,8 @@ async def _expand_plan(
         loops=prev_loops,
         subquestions=named_subs,
         rollup=rollup,  # type: ignore[arg-type]
+        hypotheses=hyp_need,
+        literature=lit_need,
     )
     events: list[EventEnvelope] = []
     events.extend(
@@ -469,7 +479,7 @@ async def _expand_plan(
             schema_version=PLAN_EXPANDED_SCHEMA_VERSION,
         )
     )
-    await runtime._append(events)  # noqa: SLF001
+    await runtime.append_events(events)
     # B1: newly added foreach templates whose of_task is already DONE.
     from coscientist.core.plan.foreach import materialize_ready_foreach
 

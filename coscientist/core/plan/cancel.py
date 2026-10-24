@@ -35,7 +35,7 @@ async def cancel_study(runtime: StudyRuntime, by: str = "user") -> None:
             runtime, reason=TaskReason.CANCELLED, close=CloseReason.CANCELLED
         )
     )
-    await runtime._append(events)  # noqa: SLF001
+    await runtime.append_events(events)
     runtime._study_cancelled = True  # noqa: SLF001
     # Module attribute — tests patch ``finalize_mod.finalize`` reliably.
     await finalize_mod.finalize(runtime, trigger="cancel")

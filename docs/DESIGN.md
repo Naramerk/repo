@@ -79,12 +79,15 @@ class Hypothesis(BaseModel):
 
 class Need(BaseModel):
     # Planner decision (CAPABILITIES #2). reason required non-empty (incl. needed=False).
-    # Strict bool/str — no coerce. Upcasters must not invent Need; legacy missing → typed refuse (one state).
-    needed: bool; reason: str
+    # Strict bool/str — no coerce; kind discriminator; missing → NeedUnrecorded (require_need at use).
+    kind: Literal["need"] = "need"; needed: bool; reason: str
+
+class NeedUnrecorded(BaseModel):  # legacy omit; not Need(needed=False)
+    kind: Literal["unrecorded"] = "unrecorded"; source_schema_version: int
 
 class Plan(BaseModel):
     plan_id: str; study_id: str; revision: int        # новая ревизия = новая запись
-    hypotheses: Need; literature: Need                 # решения planner; Study.require_hypotheses may force hypotheses.needed
+    hypotheses: Need | NeedUnrecorded; literature: Need | NeedUnrecorded  # NeedUnrecorded → refuse at use
     critic_decision: Literal["accept","revise","reject"] | None = None
     supersedes: str | None = None                      # предыдущая ревизия (PLAN-n или правка HITL)
     approved_by: Literal["human","critic"] | None = None; delegated_by: Literal["human","timeout"] | None = None

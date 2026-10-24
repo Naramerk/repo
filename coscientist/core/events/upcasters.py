@@ -6,6 +6,8 @@ from collections.abc import Callable
 from typing import Any
 
 from coscientist.core.claims.reasons import CloseReason, TaskReason
+from coscientist.core.events.errors import JournalFormatError
+from coscientist.core.events.events import PLAN_ACCEPTED_NEED_SINCE
 
 Upcaster = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -943,6 +945,36 @@ register_upcaster("TaskCreated", 10, _task_created_v10_to_v11_loop)
 register_upcaster("TaskCreated", 11, _task_created_v11_to_v12_output_kind)
 register_upcaster("TaskCreated", 12, _task_created_v12_to_v13_evidence_kind)
 register_upcaster("TaskCreated", 13, _task_created_v13_to_v14_sandbox_freeze)
+def _plan_accepted_v11_to_v12_need(payload: dict[str, Any]) -> dict[str, Any]:
+    """G4: absent Need → NeedUnrecorded; present → strict discriminated union."""
+    from pydantic import ValidationError
+
+    from coscientist.core.plan.need import (
+        PLAN_NEED_KINDS,
+        parse_plan_need,
+    )
+
+    out = dict(payload)
+    pad = {"kind": "unrecorded", "source_schema_version": PLAN_ACCEPTED_NEED_SINCE}
+    for field in ("hypotheses", "literature"):
+        if field not in out:
+            out[field] = dict(pad)
+            continue
+        blob = out[field]
+        if not isinstance(blob, dict):
+            raise JournalFormatError(f"PlanAccepted.v12:need_not_mapping:{field}")
+        if "kind" not in blob:
+            raise JournalFormatError(f"PlanAccepted.v12:need_kind_missing:{field}")
+        if blob["kind"] is None:
+            raise JournalFormatError(f"PlanAccepted.v12:need_kind_null:{field}")
+        if blob["kind"] not in PLAN_NEED_KINDS:
+            raise JournalFormatError(f"PlanAccepted.v12:need_kind_unknown:{field}")
+        try:
+            out[field] = parse_plan_need(blob).model_dump(mode="json")
+        except ValidationError as e:
+            raise JournalFormatError(f"PlanAccepted.v12:need_invalid:{field}") from e
+    return out
+
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)
 register_upcaster("PlanAccepted", 2, _plan_accepted_v2_to_v3_check_role)
 register_upcaster("PlanAccepted", 3, _plan_accepted_v3_to_v4_expand_after)
@@ -953,6 +985,7 @@ register_upcaster("PlanAccepted", 7, _plan_accepted_v7_to_v8_rubric)
 register_upcaster("PlanAccepted", 8, _plan_accepted_v8_to_v9_loops)
 register_upcaster("PlanAccepted", 9, _plan_accepted_v9_to_v10_decomposes)
 register_upcaster("PlanAccepted", 10, _plan_accepted_v10_to_v11_pr15_kinds)
+register_upcaster("PlanAccepted", PLAN_ACCEPTED_NEED_SINCE, _plan_accepted_v11_to_v12_need)
 register_upcaster("PlanExpanded", 1, _plan_expanded_v1_to_v2_rubric)
 register_upcaster("PlanExpanded", 2, _plan_expanded_v2_to_v3_loop)
 register_upcaster("PlanExpanded", 3, _plan_expanded_v3_to_v4_decomposes)

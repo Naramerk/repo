@@ -29,14 +29,16 @@ from coscientist.core.execution.domain import (
 from coscientist.core.plan.expand import apply_pending_expansion
 from coscientist.core.plan.expand_trigger import maybe_expand_after_task_done, refuse_expansion
 from coscientist.core.plan.supersede import question_is_superseded
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import NEED_OFF, NEED_UNRECORDED, attach_executor, close_runtime, open_runtime
 
 
 async def _boot_plan(rt, *, tasks, questions, expand_after=None):
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
-    await rt.accept_plan(tasks, questions=questions, expand_after=expand_after or [])
+    await rt.accept_plan(tasks, questions=questions, expand_after=expand_after or [],
+        hypotheses=NEED_OFF, literature=NEED_OFF,
+    )
 
 
 async def _record_hitl_opened(
@@ -52,7 +54,7 @@ async def _record_hitl_opened(
     if after is None:
         t = rt.tasks.get(tid)
         after = t.spec.task_key if t is not None else "E0"
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=rt.study.study_id,
@@ -88,7 +90,7 @@ async def _record_hitl_decided(rt, rid: str, *, delegated_by: str | None = None)
     }
     if delegated_by:
         payload["delegated_by"] = delegated_by
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=rt.study.study_id,
@@ -718,7 +720,7 @@ async def test_plan_n_non_success_refused(tmp_path, clock, runtime_cls):
     )
     plan_n = next(t for t in rt.tasks.values() if t.spec.task_key.startswith("PLAN-"))
     # Mark PLAN-n FAILED without apply.
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=sid,
@@ -886,7 +888,7 @@ async def test_restart_after_refusal_no_duplicate_events(tmp_path, clock, runtim
         ),
     )
     plan_n = next(t for t in rt.tasks.values() if t.spec.task_key.startswith("PLAN-"))
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=sid,
@@ -2067,6 +2069,8 @@ def test_upcaster_planaccepted_v3_to_v4_expand_after():
     v, p = upcast("PlanAccepted", 3, {"plan_id": "p", "tasks": [], "questions": []})
     assert v >= 4
     assert p["expand_after"] == []
+    assert p["hypotheses"] == NEED_UNRECORDED
+    assert p["literature"] == NEED_UNRECORDED
 
 
 def test_schema_valid_missing_artifact(tmp_path):

@@ -283,7 +283,7 @@ async def dispose_question(
         disposal=disposal,
         now=now,
     )
-    append = getattr(runtime, "_append", None)
+    append = getattr(runtime, "append_events", None)
     if append is None:
         return None
     try:
@@ -316,7 +316,7 @@ async def _journal_reject(
     )
     if getattr(runtime, "_finalized", False):
         return
-    append = getattr(runtime, "_append", None)
+    append = getattr(runtime, "append_events", None)
     if append is None:
         return
     try:

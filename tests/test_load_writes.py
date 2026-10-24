@@ -22,7 +22,7 @@ from coscientist.core.events.projections import _row_key, fold_events
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.source_fetch import verify_fetch_capability
 from coscientist.tools.effects import _mint_fetch_capability_for_tests
-from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success
+from tests.helpers import NEED_OFF, attach_executor, close_runtime, exp_spec, open_runtime, record_success
 
 # DESIGN §3.5a absolute SLO defaults. Override via env in either direction;
 # loosening (weaker than defaults) always warns + prints PERF GATE WEAKENED.
@@ -293,7 +293,7 @@ async def _run_load(
         aid = await rt.start_attempt(key)
         await record_success(rt, aid, arts)
 
-    await rt.accept_plan([exp_spec(f"EXP-{i}") for i in range(1, 21)])
+    await rt.accept_plan([exp_spec(f"EXP-{i}") for i in range(1, 21)], hypotheses=NEED_OFF, literature=NEED_OFF)
 
     async def one(i: int) -> None:
         await asyncio.sleep(random.uniform(0, 0.05))

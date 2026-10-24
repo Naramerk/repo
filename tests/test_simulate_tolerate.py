@@ -19,7 +19,7 @@ from coscientist.core.execution.domain import (
     TaskState,
 )
 from coscientist.core.execution.inputs import InputUnavailable, bind_inputs
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
+from tests.helpers import NEED_OFF, attach_executor, close_runtime, open_runtime, record_success
 
 
 def _task(key: str, outcome: TaskOutcome | None, *, inputs=None, **spec_kw):
@@ -129,7 +129,7 @@ async def test_depends_on_failed_parent_skipped(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
     await rt.tick()
     child = rt.tasks[f"{sid}/C"]
@@ -167,7 +167,7 @@ async def test_cancel_task_cascades_via_hc(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     await rt.start_attempt("P")
     await rt.cancel_task("P", reason="cancelled")
     assert rt.tasks[f"{sid}/C"].state != TaskState.DONE
@@ -212,7 +212,7 @@ async def test_hc_skipped_when_budget_exceeded(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
     await rt.record_budget_debit(spent_rub=Decimal("25"), request_id="debit-hc")
     await rt.tick()
@@ -254,9 +254,9 @@ async def test_hc_skipped_when_study_cancelled(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=sid,
@@ -310,7 +310,7 @@ async def test_tolerate_failed_dep(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
     await rt.tick()
     child = rt.tasks[f"{sid}/C"]
@@ -393,7 +393,7 @@ async def test_method_simulation_real_provenance(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid = await rt.start_attempt("E1")
     assert rt.attempts[aid]["provenance"] == "real"
     await close_runtime(rt)
@@ -444,7 +444,7 @@ async def test_method_simulation_keeps_stub_input_provenance(
             ),
         ],
         questions=[],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
     aid = await rt.start_attempt("S")
     assert rt.attempts[aid]["provenance"] == "stub"

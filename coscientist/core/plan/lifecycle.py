@@ -24,6 +24,7 @@ from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     Budget,
     HitlPolicy,
+    Need,
     Plan,
     QuestionSpec,
     Study,
@@ -36,6 +37,7 @@ from coscientist.core.execution.domain import (
 )
 from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
 from coscientist.core.plan.intake import IntakeAccept, IntakeRefuse, SafetyPort, intake
+from coscientist.core.plan.need import resolve_plan_needs
 from coscientist.core.plan.question_tasks import questions_from_spec_output
 
 # Infra / fencing — must not be swallowed by intake fail-closed refuse.
@@ -59,7 +61,7 @@ class LifecycleMixin:
     tasks: dict[str, Task]
     _intake_refusal: IntakeRefuse | None
 
-    async def _append(self, events: list[EventEnvelope]) -> None:
+    async def append_events(self, events: list[EventEnvelope]) -> None:
         raise NotImplementedError
 
     async def refuse_study_without_catalog(
@@ -99,7 +101,7 @@ class LifecycleMixin:
                 schema_version=STUDY_REFUSED_SCHEMA_VERSION,
             )
         ]
-        await self._append(events)
+        await self.append_events(events)
         self.store.study_id = sid
         self._intake_refusal = decision
         await finalize_mod.finalize(self, trigger="intake")  # type: ignore[arg-type]
@@ -343,7 +345,7 @@ class LifecycleMixin:
                     schema_version=STUDY_REFUSED_SCHEMA_VERSION,
                 )
             )
-            await self._append(events)
+            await self.append_events(events)
             self.store.study_id = sid
             # Via module attr so tests can monkeypatch finalize.finalize.
             await finalize_mod.finalize(self, trigger="intake")  # type: ignore[arg-type]
@@ -387,7 +389,7 @@ class LifecycleMixin:
             # Graph nodes for stages: only schema kinds. SPEC/HYP/LIT are DAG
             # tasks; experiment/plan/report nodes are added when those stages
             # produce research entities (GraphBuilder in later milestones).
-        await self._append(events)
+        await self.append_events(events)
         self.store.study_id = sid
         return sid
 
@@ -402,6 +404,8 @@ class LifecycleMixin:
         spec_output: dict[str, Any] | None = None,
         expand_after: list[str] | None = None,
         loops: list[Any] | None = None,
+        hypotheses: Need | None = None,
+        literature: Need | None = None,
     ) -> str:
         """Accept a plan revision.
 
@@ -536,6 +540,11 @@ class LifecycleMixin:
             from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 
             tasks = [freeze_task_sandbox_limits(spec, catalog) for spec in tasks]
+            # G4: omit → PlanNeedRefuse (PlanNeedRefuse ⊂ ValueError → PlanRefused).
+            hyp_need, lit_need = resolve_plan_needs(
+                hypotheses=hypotheses,
+                literature=literature,
+            )
         except PlanInvalid as e:
             return await apply_plan_refused(
                 self,
@@ -572,6 +581,8 @@ class LifecycleMixin:
             loops=loop_specs,
             subquestions=named_subs,
             rollup=rollup,  # type: ignore[arg-type]
+            hypotheses=hyp_need,
+            literature=lit_need,
         )
         events: list[EventEnvelope] = [
             EventEnvelope(
@@ -770,7 +781,7 @@ class LifecycleMixin:
                     schema_version=TASK_CREATED_SCHEMA_VERSION,
                 )
             )
-        await self._append(events)
+        await self.append_events(events)
         # B1: foreach templates whose of_task is already DONE (e.g. HYP-0).
         from coscientist.core.plan.foreach import materialize_ready_foreach
         from coscientist.core.plan.loop import maybe_advance_loops

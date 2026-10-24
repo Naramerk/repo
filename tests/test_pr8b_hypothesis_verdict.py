@@ -38,7 +38,7 @@ from coscientist.core.execution.domain import (
     RequirementRef,
     TaskSpec,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import NEED_OFF, attach_executor, close_runtime, open_runtime
 
 
 def _c(**kw) -> RuntimeClaim:
@@ -772,7 +772,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid_p = await rt.start_attempt("P0")
     # Spoof: agent labels bytes as python; planner role=code — catalog still data.
     raw = arts.put(
@@ -1345,7 +1345,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"count": 225}',
@@ -1510,7 +1510,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid_p = await rt.start_attempt("P_RAW")
     da = arts.put(
         b'{"count": 1}',
@@ -1646,7 +1646,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid0 = await rt.start_attempt("E0", provenance="real")
     art = arts.put(
         b'{"count": 999}',
@@ -1709,7 +1709,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid = await rt.start_attempt("E0")
     foreign = arts.put(
         b'{"count": 225}',
@@ -1782,7 +1782,7 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid = await rt.start_attempt("E0")
     await rt.executor.record(
         aid,
@@ -1894,7 +1894,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     now = datetime.now(UTC)
     hid = hypothesis_node_id(sid, "H1")
     rt.graph.upsert_node(
@@ -2076,7 +2076,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     # Hypothesis + tests.intent=refute so capable refute counts toward supported.
     now = datetime(2026, 1, 1, tzinfo=UTC)
     hid = hypothesis_node_id(sid, "H1")
@@ -2190,7 +2190,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid_f = await rt2.start_attempt("E0", provenance="real")
     art_f = arts2.put_sandbox(
         b'{"count": 999}',
@@ -2272,7 +2272,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"effect": 2.0}',
@@ -2361,11 +2361,11 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     cid = claim_node_id(sid, "forged")
     qid = question_node_id(sid, "Q1")
     aid = f"{sid}/E0#1"
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=sid,
@@ -2479,7 +2479,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF)
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"effect": {"est": 0.0, "ci_low": -0.1, "ci_high": 0.1}}',

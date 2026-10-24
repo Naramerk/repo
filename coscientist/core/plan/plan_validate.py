@@ -268,7 +268,7 @@ async def apply_plan_refused(
                 schema_version=2,
             )
         )
-    await runtime._append(events)  # noqa: SLF001
+    await runtime.append_events(events)
     await finalize_mod.finalize(runtime, trigger="intake")
     return ""
 

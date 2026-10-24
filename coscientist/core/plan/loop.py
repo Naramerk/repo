@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import unicodedata
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 from coscientist.core.claims.reasons import CloseReason, TaskReason
@@ -40,6 +40,11 @@ from coscientist.core.plan.loop_predicates import (
     eval_loop_predicate,
     validate_loop_predicate,
 )
+from coscientist.core.plan.need import (
+    PlanNeedRefuse,
+    PlanNeedRefuseReason,
+    recorded_plan_needs,
+)
 from coscientist.core.plan.shares import critic_plan_shares
 
 log = logging.getLogger(__name__)
@@ -49,8 +54,11 @@ if TYPE_CHECKING:
 
 LOOP_DEP_PREFIX = "loop:"
 LOOP_REASON_ITERATION_CAP = "iteration_cap"
-LOOP_REASON_ERROR = "error"
+LOOP_REASON_ERROR: Final[Literal["error"]] = "error"  # audit-ok[field_default]: Literal loop refuse reason
 LOOP_REASON_REFUSED = "refused"
+
+# LoopRefused / LoopCapped.reason: loop-status codes or PlanNeedRefuseReason.
+LoopJournalRefuseReason = Literal["error", "refused"] | PlanNeedRefuseReason
 
 
 def normalize_loop_id(raw: str) -> str:
@@ -352,7 +360,13 @@ async def materialize_loop_iter(
     tmpl_keys = [t.task_key for t in loop.body]
     keyed = assign_core_keys(runtime, prototypes)
     if isinstance(keyed, str):
-        await _refuse_loop(runtime, loop, detail=f"loop_assign_keys:{keyed}")
+        await _refuse_loop(
+            runtime,
+            loop,
+            detail=f"loop_assign_keys:{keyed}",
+            reason="refused",
+            expansion_reason="invalid",
+        )
         return None
     key_map = {tmpl_keys[i]: keyed[i].task_key for i in range(len(tmpl_keys))}
     added = _concrete_body(
@@ -371,6 +385,8 @@ async def materialize_loop_iter(
             runtime,
             loop,
             detail=f"loop_max_tasks:{existing_n + len(added)}>{max_tasks}",
+            reason="refused",
+            expansion_reason="invalid",
         )
         return None
 
@@ -390,10 +406,27 @@ async def materialize_loop_iter(
     merged = list(prev_tasks) + added
     share_err = critic_plan_shares(merged, study=study)
     if share_err is not None:
-        await _refuse_loop(runtime, loop, detail=f"loop_shares:{share_err}")
+        await _refuse_loop(
+            runtime,
+            loop,
+            detail=f"loop_shares:{share_err}",
+            reason="refused",
+            expansion_reason="invalid",
+        )
         return None
 
     pid = loop_plan_id(sid, loop.loop_id, iter_n, new_rev)
+    try:
+        hyp_need, lit_need = recorded_plan_needs(prev)
+    except PlanNeedRefuse as e:
+        await _refuse_loop(
+            runtime,
+            loop,
+            detail=str(e),
+            reason=e.reason,
+            expansion_reason=e.reason,
+        )
+        return None  # audit-ok[except_silent_return]: PlanNeedRefuse → LoopRefused
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -406,6 +439,8 @@ async def materialize_loop_iter(
             LoopSpec.model_validate(x) if isinstance(x, dict) else x for x in prev_loops
         ]
         or [loop],
+        hypotheses=hyp_need,
+        literature=lit_need,
     )
     ed = study.effective_deadline()
     events: list[EventEnvelope] = []
@@ -503,7 +538,7 @@ async def materialize_loop_iter(
             schema_version=PLAN_EXPANDED_SCHEMA_VERSION,
         )
     )
-    await runtime._append(events)  # noqa: SLF001
+    await runtime.append_events(events)
     return pid
 
 
@@ -554,7 +589,7 @@ async def _emit_loop_capped(
         ts=now,
         schema_version=1,
     )
-    await runtime._append([ev])  # noqa: SLF001
+    await runtime.append_events([ev])
 
 
 async def _emit_loop_refused(
@@ -563,12 +598,14 @@ async def _emit_loop_refused(
     *,
     iter_n: int,
     detail: str,
-    reason: str = LOOP_REASON_ERROR,
+    reason: LoopJournalRefuseReason,
+    expansion_reason: PlanNeedRefuseReason,
 ) -> None:
     """Journal LoopRefused + LoopCapped + ExpansionRefused in one append batch.
 
     Single batch avoids mid-emit ``status=refused`` early-outs that would skip
     LoopCapped (live ≡ replay needs ``_loop_capped`` populated).
+    ``expansion_reason`` is written as ExpansionRefused.reason (explicit; no derivation).
     """
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return
@@ -633,7 +670,7 @@ async def _emit_loop_refused(
             ),
             payload={
                 "after_task": after,
-                "reason": "invalid",
+                "reason": expansion_reason,
                 "detail": detail_s,
                 "plan_key": None,
                 "loop_id": loop.loop_id,
@@ -644,7 +681,7 @@ async def _emit_loop_refused(
             schema_version=1,
         ),
     ]
-    await runtime._append(events)  # noqa: SLF001
+    await runtime.append_events(events)
 
 
 async def _emit_loop_completed(
@@ -680,7 +717,7 @@ async def _emit_loop_completed(
         ts=now,
         schema_version=1,
     )
-    await runtime._append([ev])  # noqa: SLF001
+    await runtime.append_events([ev])
 
 
 async def _refuse_loop(
@@ -688,12 +725,18 @@ async def _refuse_loop(
     loop: LoopSpec,
     *,
     detail: str,
-    reason: str = LOOP_REASON_REFUSED,
+    reason: LoopJournalRefuseReason,
+    expansion_reason: PlanNeedRefuseReason,
 ) -> None:
     """Journal LoopRefused + LoopCapped(reason≠iteration_cap) for live ≡ replay."""
     cur = current_iter(runtime, loop.loop_id) or 0
     await _emit_loop_refused(
-        runtime, loop, iter_n=cur, detail=detail, reason=reason
+        runtime,
+        loop,
+        iter_n=cur,
+        detail=detail,
+        reason=reason,
+        expansion_reason=expansion_reason,
     )
 
 
@@ -706,7 +749,7 @@ async def _emit_loop_advance_failed(
     sid = runtime.study.study_id
     now = runtime.clock.now()
     detail_s = detail[:200]
-    await runtime._append(  # noqa: SLF001
+    await runtime.append_events(
         [
             EventEnvelope(
                 study_id=sid,
@@ -744,7 +787,7 @@ async def finalize_loop_internal_error(
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return
     detail = f"loop_advance:{type(exc).__name__}:{exc}"[:200]
-    # Suppress expand/foreach/loop hooks on nested _append(TaskDone) while closing.
+    # Suppress expand/foreach/loop hooks on nested append_events(TaskDone) while closing.
     runtime._finalizing = True  # noqa: SLF001
     try:
         try:
@@ -755,6 +798,7 @@ async def finalize_loop_internal_error(
                     iter_n=current_iter(runtime, loop.loop_id) or 0,
                     detail=detail,
                     reason=LOOP_REASON_ERROR,
+                    expansion_reason="invalid",
                 )
             else:
                 await _emit_loop_advance_failed(runtime, detail=detail)
@@ -774,7 +818,7 @@ async def finalize_loop_internal_error(
                 runtime, reason=TaskReason.CORE_BUG, close=CloseReason.CRASHED
             )
             if close_events:
-                await runtime._append(close_events)  # noqa: SLF001
+                await runtime.append_events(close_events)
         except LeaseLost:
             raise
         except Exception as close_exc:  # noqa: BLE001 — still must finalize
@@ -887,6 +931,7 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
                     loop,
                     detail=f"loop_predicate:{type(e).__name__}:{e}"[:200],
                     reason=LOOP_REASON_ERROR,
+                    expansion_reason="invalid",
                 )
             except LeaseLost:
                 raise
@@ -964,7 +1009,10 @@ def fold_loop_capped(runtime: Any, payload: dict[str, Any]) -> None:
     reason = str(payload.get("reason") or LOOP_REASON_ITERATION_CAP)
     st = _loop_state(runtime)
     row = dict(st.get(lid) or {})
-    row["status"] = "refused" if reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED) else "capped"
+    # Only true iteration_cap is "capped"; error / refused / plan-need reasons → refused.
+    row["status"] = (
+        "capped" if reason == LOOP_REASON_ITERATION_CAP else "refused"
+    )
     try:
         row["iter"] = int(payload.get("iter") or row.get("iter") or 0)
     except (TypeError, ValueError):
@@ -1040,9 +1088,7 @@ def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
         return
     loop_reason = str(payload.get("loop_reason") or LOOP_REASON_REFUSED)
     row["status"] = (
-        "refused"
-        if loop_reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED)
-        else "capped"
+        "capped" if loop_reason == LOOP_REASON_ITERATION_CAP else "refused"
     )
     row["reason"] = loop_reason
     row["refuse_detail"] = str(payload.get("detail") or "")[:200]
