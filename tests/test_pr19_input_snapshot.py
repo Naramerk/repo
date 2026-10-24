@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from coscientist.core.events.upcasters import writer_schema_version
+
 import gzip
 import io
 import json
@@ -1444,7 +1446,7 @@ async def test_journal_replay_null_digest_version_drift_unknown(
                 "attempt_role": "agent",
             },
             ts=clock.now(),
-            schema_version=1,
+            schema_version=writer_schema_version("AttemptStarted"),
         )
     )
     await rt.store.append(
@@ -1674,7 +1676,7 @@ async def test_stale_digest_formula_without_version_drift_unknown(
                 "attempt_role": "agent",
             },
             ts=clock.now(),
-            schema_version=1,
+            schema_version=writer_schema_version("AttemptStarted"),
         )
     )
     await rt.store.append(

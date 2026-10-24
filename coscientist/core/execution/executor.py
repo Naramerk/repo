@@ -364,9 +364,13 @@ def _derive_claim_core_attrs(
         status = "unassessed"
         exclusion_reason = "validity_failed"
     elif role == "unknown":
+        # Missing/unresolved checked_against: prefer a concrete prediction
+        # no-effect reason (foreign_artifact / output_not_submitted / …) over
+        # a blanket unknown_role — never invent a criterion via len==1 (rule 9).
         validity_ok = False
         status = "unassessed"
-        exclusion_reason = "unknown_role"
+        specific = _no_effect_reason_from_checks(list(checks or ()))
+        exclusion_reason = specific if specific is not None else "unknown_role"
     elif role == "validity" and status == "not_met" and not any(_is_rubric_check(c) for c in (checks or ())):
         validity_ok = False
         status = "unassessed"

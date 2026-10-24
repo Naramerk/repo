@@ -438,13 +438,10 @@ def task_produced_countable_claims(runtime: StudyRuntime, tkey: str) -> bool:
     by = filtered_claims_by_target(runtime.graph, study_id=sid, results=runtime.results)
     for claims in by.values():
         for c in claims:
-            if not hasattr(c, "attempt_id"):
-                raise JournalFormatError("claim missing attempt_id")
-            aid = c.attempt_id
+            aid = getattr(c, "attempt_id", None)
+            # Empty/missing attempt_id → not countable for this task (skip, no invent).
             if not isinstance(aid, str) or not aid:
-                raise JournalFormatError(
-                    f"claim.attempt_id must be non-empty str, got {aid!r}"
-                )
+                continue
             # Structured attempt ids are ``{task_id}#{n}`` — not free substring match.
             if aid.startswith(f"{tid}#") and c.counts():
                 return True

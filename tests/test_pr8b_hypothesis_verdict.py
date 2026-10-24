@@ -788,7 +788,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1333,7 +1333,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1559,7 +1559,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 summary="ok",
                 outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"count": 225},
-                claims=[{"id": f"c_{tk}", "target": "Q1"}],
+                claims=[{"id": f"c_{tk}", "target": "Q1", "checked_against": "value_match"}],
             ),
         )
         by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1699,7 +1699,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
                 "main": ArtifactHandle(artifact_id=foreign.artifact_id, name="main")
             },
             values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1764,7 +1764,7 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
             summary="no artifact",
             outputs={},
             values={},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1939,7 +1939,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
                 summary="ok",
                 outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"effect": est},
-                claims=[{"id": f"c_{tk}", "target": "H1"}],
+                claims=[{"id": f"c_{tk}", "target": "H1", "checked_against": "value_match_sesoi"}],
             ),
         )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -2120,7 +2120,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 summary="ok",
                 outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"effect": est},
-                claims=[{"id": f"c_{tk}", "target": "H1"}],
+                claims=[{"id": f"c_{tk}", "target": "H1", "checked_against": "value_match_sesoi"}],
             ),
         )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -2260,7 +2260,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"effect": 2.0},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match_sesoi"}],
         ),
     )
     # Bind E1 → records VerdictSnapshotsRecorded for Q1.
@@ -2469,7 +2469,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "checked_against": "tost_equivalence"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)

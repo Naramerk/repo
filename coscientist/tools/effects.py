@@ -21,6 +21,7 @@ from typing import Any
 
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
@@ -436,7 +437,7 @@ async def _journal_attempt_tainted(
             "is_fetch": True,
         },
         ts=datetime.now(UTC),
-        schema_version=1,
+        schema_version=writer_schema_version("AttemptTainted"),
     )
     stored = await writer.append(ev)
     cache: dict[str, bool] | None = getattr(writer, "_pr18_taint_by_attempt", None)
@@ -521,7 +522,7 @@ async def _deny(
                 "reason": reason,
             },
             ts=datetime.now(UTC),
-            schema_version=1,
+            schema_version=writer_schema_version("SideEffectDenied"),
         ),
         on_event,
     )
@@ -821,7 +822,7 @@ async def invoke_tool(
             idem_key=make_idem("EffectDone", key),
             payload=done_payload,
             ts=datetime.now(UTC),
-            schema_version=1,
+            schema_version=writer_schema_version("EffectDone"),
         ),
         on_event,
     )

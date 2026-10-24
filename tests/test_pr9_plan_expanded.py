@@ -77,18 +77,20 @@ async def _record_hitl_opened(
     )
 
 
-async def _record_hitl_decided(rt, rid: str, *, delegated_by: str | None = None) -> None:
+async def _record_hitl_decided(rt, rid: str, *, delegated_by: str = "human") -> None:
+    # Sole decision signal is HitlDecided.delegated_by (no approved_by/decided_by).
     payload = {
         "request_id": rid,
         "decision": "accept",
-        "by": "human" if delegated_by is None else "policy",
-        "decided_by": "human" if delegated_by is None else "critic",
-        "approved_by": "human" if delegated_by is None else "critic",
-        "reason": "answered" if delegated_by is None else f"delegate→agent ({delegated_by})",
+        "by": "human" if delegated_by == "human" else "policy",
+        "delegated_by": delegated_by,
+        "reason": (
+            "answered"
+            if delegated_by == "human"
+            else f"delegate→agent ({delegated_by})"
+        ),
         "spent_rub": 0.0,
     }
-    if delegated_by:
-        payload["delegated_by"] = delegated_by
     await rt._append(
         [
             EventEnvelope(
@@ -108,8 +110,9 @@ async def _human_expand(rt, **kwargs):
     rid = kwargs.pop("hitl_request_id", None) or f"hitl_{rt.study.study_id}_{len(rt._hitl_decisions)}"
     kind = kwargs.pop("hitl_kind", "plan_expansion")
     after = kwargs.get("after_task") or "E0"
+    delegated = kwargs.pop("delegated_by_event", "human")
     await _record_hitl_opened(rt, rid, kind=kind, expand_after_task=str(after))
-    await _record_hitl_decided(rt, rid, delegated_by=kwargs.pop("delegated_by_event", None))
+    await _record_hitl_decided(rt, rid, delegated_by=delegated)
     return await rt.expand_plan(**kwargs, hitl_request_id=rid)
 
 
@@ -1722,7 +1725,7 @@ async def test_critic_rejects_plan_expansion_marker_on_added(tmp_path, clock, ru
         reason="forge",
     )
     detail2 = critic_gate(rt, req2, after_task="E0")
-    assert detail2 is not None and "missing_catalog_criteria" in detail2
+    assert detail2 is not None and "unknown_template_id" in detail2
     await close_runtime(rt)
 
 
@@ -1869,7 +1872,7 @@ async def test_superseded_question_claims_not_counted(tmp_path, clock, runtime_c
             summary="x",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 999},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
         ),
     )
     await _human_expand(

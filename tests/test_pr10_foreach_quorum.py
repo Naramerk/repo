@@ -520,6 +520,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                     "inputs": [],
                     "limitations": [],
                     "attempt_role": "agent",
+                    "charged": True,
                 },
                 ts=now,
                 schema_version=1,

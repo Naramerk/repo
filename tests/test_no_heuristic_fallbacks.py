@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from coscientist.core.events.upcasters import writer_schema_version
+
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -566,9 +568,11 @@ def test_attempt_started_cap_initializes_spent_zero():
             "allocated_budget_rub": "10",
             "inputs": [],
             "tainted_context": False,
+            "charged": True,
+            "provenance": "real",
         },
         ts=datetime(2024, 1, 1, tzinfo=UTC),
-        schema_version=1,
+        schema_version=writer_schema_version("AttemptStarted"),
     )
     rt._project_local(ev)  # noqa: SLF001
     assert rt._task_budget_alloc["t1"] == Decimal("10")

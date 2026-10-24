@@ -208,7 +208,9 @@
         "share_renorm": false,
         "budget_limit_rub": null,
         "inputs_digest": null,
-        "attempt_role": "agent"
+        "attempt_role": "agent",
+        "charged": true,
+        "provenance": "real"
       }
     },
     {

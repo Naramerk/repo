@@ -492,6 +492,18 @@ class LocalProjectMixin:
                 }
             )
             self._retry_at.pop(p["task_id"], None)
+            # fail_attempt / infra paths may close without ResultRecorded — stamp
+            # dep provenance so simulate/partial bind_inputs stays fail-closed
+            # without inventing "real".
+            dep_provenance = getattr(self, "dep_provenance", None)
+            if isinstance(dep_provenance, dict):
+                tkey = t.spec.task_key
+                if tkey not in dep_provenance:
+                    oc = str(p.get("outcome") or "")
+                    if oc in (TaskOutcome.FAILED.value, "FAILED"):
+                        dep_provenance[tkey] = "stub"
+                    elif oc in (TaskOutcome.PARTIAL.value, "PARTIAL"):
+                        dep_provenance[tkey] = "partial"
             # TaskDone(reason=budget) is task-level only; study budget is
             # BudgetExceeded (folded above).
         elif ev.type == "GraphNodeUpserted":
