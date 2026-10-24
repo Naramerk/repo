@@ -60,10 +60,10 @@
 - Tests: list `args` refused; Identifier empty vs whitespace messages split;
   Executable empty / leading / trailing; inner spaces OK; `api_key_env` int /
   empty / `"MY KEY"`; URL whitespace.
-- **Follow-up:** YAML profile loader (P3) must use `model_validate_json` (no
-  list→tuple shim); opens after [#62](https://github.com/Naramerk/repo/pull/62)
-  + N1 [#70](https://github.com/Naramerk/repo/pull/70) (loader PR number TBD
-  when filed).
+- **Follow-up:** YAML profile loader (**P3**, owner **G2**):
+  `model_validate_json` (no list→tuple shim). Plan:
+  [P3 — YAML loader](docs/plan/profiles-medicine-microfluidics.md#p3--yaml-loader-owner-g2)
+  (depends [#62](https://github.com/Naramerk/repo/pull/62), N1 [#70](https://github.com/Naramerk/repo/pull/70)).
 
 
 ### Docs — capability #21 A2A/MCP handoff
