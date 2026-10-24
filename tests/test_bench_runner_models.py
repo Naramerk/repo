@@ -10,6 +10,7 @@ from bench.models import (
     QualityObservation,
     RunnerRefuse,
     RunnerSuccess,
+    TaskComparison,
     TimedRunOk,
     TimedRunRefused,
     UsageRecorded,
@@ -146,3 +147,66 @@ def test_quality_observation_rejects_duplicate_evidence() -> None:
             ),
             record_result=0,
         )
+
+
+def test_task_comparison_requires_matching_task_ids() -> None:
+    old = TimedRunRefused(
+        kind="refused",
+        system_id="old",
+        task_id="two_tasks",
+        dur_s=1.0,
+        reason_code="r",
+        detail="d",
+    )
+    new = TimedRunOk(
+        kind="ok",
+        system_id="new",
+        task_id="two_tasks",
+        dur_s=2.0,
+        usage_recorded=(),
+        quality=_quality(),
+    )
+    cmp_ = TaskComparison(task_id="two_tasks", old=old, new=new)
+    assert cmp_.task_id == "two_tasks"
+
+
+def test_task_comparison_rejects_mismatched_old_task_id() -> None:
+    old = TimedRunRefused(
+        kind="refused",
+        system_id="old",
+        task_id="other",
+        dur_s=1.0,
+        reason_code="r",
+        detail="d",
+    )
+    new = TimedRunOk(
+        kind="ok",
+        system_id="new",
+        task_id="two_tasks",
+        dur_s=2.0,
+        usage_recorded=(),
+        quality=_quality(),
+    )
+    with pytest.raises(ValidationError, match="task_id"):
+        TaskComparison(task_id="two_tasks", old=old, new=new)
+
+
+def test_task_comparison_rejects_mismatched_new_task_id() -> None:
+    old = TimedRunRefused(
+        kind="refused",
+        system_id="old",
+        task_id="two_tasks",
+        dur_s=1.0,
+        reason_code="r",
+        detail="d",
+    )
+    new = TimedRunOk(
+        kind="ok",
+        system_id="new",
+        task_id="other",
+        dur_s=2.0,
+        usage_recorded=(),
+        quality=_quality(),
+    )
+    with pytest.raises(ValidationError, match="task_id"):
+        TaskComparison(task_id="two_tasks", old=old, new=new)

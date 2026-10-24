@@ -174,6 +174,16 @@ class TaskComparison(BaseModel):
     old: TimedRunResult
     new: TimedRunResult
 
+    @model_validator(mode="after")
+    def _task_ids_match(self) -> TaskComparison:
+        if self.old.task_id != self.task_id or self.new.task_id != self.task_id:
+            raise ValueError(
+                "TaskComparison.task_id must equal old.task_id and new.task_id "
+                f"(got task_id={self.task_id!r}, old={self.old.task_id!r}, "
+                f"new={self.new.task_id!r})"
+            )
+        return self
+
 
 class BenchSuiteResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)

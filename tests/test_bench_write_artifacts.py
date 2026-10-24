@@ -71,6 +71,19 @@ def test_write_usage_jsonl_refuses_missing_parent(tmp_path: Path) -> None:
         write_usage_jsonl(path, _records())
 
 
+def test_write_usage_jsonl_refuses_parent_that_is_not_directory(tmp_path: Path) -> None:
+    parent_as_file = tmp_path / "not_a_dir"
+    parent_as_file.write_text("x", encoding="utf-8")
+    path = parent_as_file / "usage.jsonl"
+    with pytest.raises(BenchConfigError, match="parent is not a directory"):
+        write_usage_jsonl(path, _records())
+
+
+def test_timed_run_to_result_obj_assert_never_on_unknown_type() -> None:
+    with pytest.raises(AssertionError):
+        timed_run_to_result_obj(object())  # type: ignore[arg-type]
+
+
 def test_write_result_json_ok_her_shape(tmp_path: Path) -> None:
     run = TimedRunOk(
         kind="ok",
@@ -122,11 +135,14 @@ def test_write_result_json_refused(tmp_path: Path) -> None:
 
 def test_write_result_json_refuses_directory_path(tmp_path: Path) -> None:
     with pytest.raises(BenchConfigError, match="directory"):
-        write_result_json(tmp_path, TimedRunRefused(
-            kind="refused",
-            system_id="x",
-            task_id="y",
-            dur_s=0.0,
-            reason_code="r",
-            detail="d",
-        ))
+        write_result_json(
+            tmp_path,
+            TimedRunRefused(
+                kind="refused",
+                system_id="x",
+                task_id="y",
+                dur_s=0.0,
+                reason_code="r",
+                detail="d",
+            ),
+        )

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, assert_never
 
 from bench.errors import BenchConfigError
 from bench.models import (
@@ -47,8 +47,7 @@ def write_usage_jsonl(path: Path, records: tuple[UsageRecorded, ...]) -> None:
     """Write one JSON object per LLM call (provider tokens only)."""
     _require_writable_file_path(path)
     lines = [
-        json.dumps(usage_recorded_to_jsonl_obj(record), separators=(",", ":"), sort_keys=True)
-        for record in records
+        json.dumps(usage_recorded_to_jsonl_obj(record), separators=(",", ":"), sort_keys=True) for record in records
     ]
     text = "\n".join(lines)
     if lines:
@@ -67,22 +66,20 @@ def timed_run_to_result_obj(run: TimedRunResult) -> dict[str, Any]:
             "reason_code": run.reason_code,
             "detail": run.detail,
         }
-    if not isinstance(run, TimedRunOk):
-        raise TypeError(f"unexpected TimedRunResult type: {type(run).__name__}")
-    return {
-        "kind": "ok",
-        "system_id": run.system_id,
-        "task_id": run.task_id,
-        "status": run.quality.status,
-        "dur_s": run.dur_s,
-        "llm_calls": llm_call_count(run.usage_recorded),
-        "tokens": token_total(run.usage_recorded),
-        "exp_tasks": run.quality.exp_tasks,
-        "evidence": [
-            {"outcome": row.outcome, "count": row.count} for row in run.quality.evidence
-        ],
-        "record_result": run.quality.record_result,
-    }
+    if isinstance(run, TimedRunOk):
+        return {
+            "kind": "ok",
+            "system_id": run.system_id,
+            "task_id": run.task_id,
+            "status": run.quality.status,
+            "dur_s": run.dur_s,
+            "llm_calls": llm_call_count(run.usage_recorded),
+            "tokens": token_total(run.usage_recorded),
+            "exp_tasks": run.quality.exp_tasks,
+            "evidence": [{"outcome": row.outcome, "count": row.count} for row in run.quality.evidence],
+            "record_result": run.quality.record_result,
+        }
+    assert_never(run)
 
 
 def write_result_json(path: Path, run: TimedRunResult) -> None:
