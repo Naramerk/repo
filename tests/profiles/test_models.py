@@ -44,7 +44,9 @@ def _profile(**o: object) -> Profile:
 
 
 def _err(exc: ValidationError) -> tuple[tuple[object, ...], str]:
-    e = exc.errors()[0]
+    errs = exc.errors()
+    assert len(errs) == 1
+    e = errs[0]
     return (tuple(e["loc"]), e["type"])
 
 
@@ -52,7 +54,7 @@ def test_role_name_exported() -> None:
     assert RoleName is Identifier
     with pytest.raises(ValidationError) as ei:
         _profile(roles={" medical_agent": _role()})
-    assert _err(ei.value)[1] == "value_error"
+    assert _err(ei.value) == (("roles", " medical_agent", "[key]"), "value_error")
 
 
 def test_json_round_trip() -> None:
@@ -93,8 +95,7 @@ def test_mcp_in_profile_dict_tuple_ok_list_fails() -> None:
     bad = {**ok, "args": ["-m", "x"]}
     with pytest.raises(ValidationError) as ei:
         _profile(mcp_servers=(bad,))
-    loc, typ = _err(ei.value)
-    assert typ == "tuple_type" and "args" in loc
+    assert _err(ei.value) == (("mcp_servers", 0, "stdio", "args"), "tuple_type")
 
 
 def test_mcp_http_api_key_env_int_refused() -> None:
@@ -120,7 +121,7 @@ def test_mcp_http_url_whitespace_refused() -> None:
                 "api_key_env": None,
             }
         )
-    assert _err(ei.value)[0] == ("url",)
+    assert _err(ei.value) == (("url",), "value_error")
 
 
 def test_mcp_duplicate_names_refused() -> None:
@@ -139,8 +140,10 @@ def test_role_strict_tools_and_model() -> None:
     with pytest.raises(ValidationError) as ei:
         RoleConfig.model_validate({"model": 1, "tools": ()})
     assert _err(ei.value) == (("model",), "string_type")
-    with pytest.raises(ValidationError, match="tools names must be unique"):
+    with pytest.raises(ValidationError) as ei:
         _role(tools=("search_pubmed", "search_pubmed"))
+    assert _err(ei.value) == ((), "value_error")
+    assert "tools names must be unique" in str(ei.value)
 
 
 def test_empty_roles_and_routes() -> None:
@@ -155,13 +158,13 @@ def test_empty_roles_and_routes() -> None:
 def test_whitespace_keys_and_tuples() -> None:
     with pytest.raises(ValidationError) as ei:
         _profile(routes={" medical": _route()})
-    assert _err(ei.value)[1] == "value_error"
+    assert _err(ei.value) == (("routes", " medical", "[key]"), "value_error")
     with pytest.raises(ValidationError) as ei:
         _profile(integrations=(" ok",))
-    assert _err(ei.value)[1] == "value_error"
+    assert _err(ei.value) == (("integrations", 0), "value_error")
     with pytest.raises(ValidationError) as ei:
         _profile(plugins=("p", " bad"))
-    assert _err(ei.value)[1] == "value_error"
+    assert _err(ei.value) == (("plugins", 1), "value_error")
 
 
 def test_unknown_role_and_missing_budget() -> None:
@@ -171,20 +174,22 @@ def test_unknown_role_and_missing_budget() -> None:
     assert "unknown roles" in str(ei.value)
     with pytest.raises(ValidationError) as ei:
         RouteConfig.model_validate({"role": "medical_agent"})
-    assert _err(ei.value)[0] == ("budget",)
+    assert _err(ei.value) == (("budget",), "missing")
 
 
 def test_extra_forbid_and_frozen() -> None:
     with pytest.raises(ValidationError) as ei:
         Profile.model_validate({**_pdata(), "extra": 1})
-    assert _err(ei.value)[1] == "extra_forbidden"
+    assert _err(ei.value) == (("extra",), "extra_forbidden")
     with pytest.raises(ValidationError) as ei:
         RouteConfig.model_validate({"role": "r", "budget": _budget(), "x": 1})
-    assert _err(ei.value)[1] == "extra_forbidden"
-    with pytest.raises(ValidationError):
+    assert _err(ei.value) == (("x",), "extra_forbidden")
+    with pytest.raises(ValidationError) as ei:
         _profile().name = "x"  # type: ignore[misc]
+    assert _err(ei.value) == (("name",), "frozen_instance")
 
 
 def test_rejects_bad_alembic() -> None:
-    with pytest.raises(ValidationError, match="alembic"):
+    with pytest.raises(ValidationError) as ei:
         _profile(alembic="maybe")
+    assert _err(ei.value) == (("alembic",), "literal_error")
