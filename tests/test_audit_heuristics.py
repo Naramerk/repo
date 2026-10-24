@@ -15,18 +15,13 @@ def _write(tmp: Path, name: str, src: str) -> Path:
 
 def test_repeated_reason_rejected(tmp_path: Path) -> None:
     # Four identical reasons → repeated_reason (max 3).
-    body = "\n".join(
-        f"try:\n    pass\nexcept Exception:\n    return None  # audit-ok[except_silent_return]: same reason text"
-        for _ in range(4)
-    )
-    # Need four separate except_silent_return hits with same reason.
     src = "def f():\n" + "\n".join(
-        f"    try:\n        x={i}\n    except Exception:\n        return None  # audit-ok[except_silent_return]: same reason text"
+        f"    try:\n        x={i}\n    except Exception:\n"
+        f"        return None  # audit-ok[except_silent_return]: same reason text"
         for i in range(4)
     )
     p = _write(tmp_path, "rep.py", src)
-    code = audit.main([str(p)])
-    assert code == 1
+    assert audit.main([str(p)]) == 1
 
 
 def test_duplicate_marker_on_line_rejected(tmp_path: Path) -> None:

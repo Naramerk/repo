@@ -372,7 +372,15 @@ def iter_targets(paths: list[Path] | None, vs_main: bool) -> list[Path]:
             check=False,
         )
         names = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip().endswith(".py")]
-        return [ROOT / n for n in names if (ROOT / n).is_file()]
+        out: list[Path] = []
+        for n in names:
+            p = ROOT / n
+            if not p.is_file():
+                continue
+            # Production + gate only (tests may embed marker strings as fixtures).
+            if n.startswith("coscientist/") or n == "scripts/audit_heuristics.py":
+                out.append(p)
+        return out
     out = []
     for base in (ROOT / "coscientist", ROOT / "scripts"):
         if base.is_dir():
@@ -448,6 +456,21 @@ def main(argv: list[str] | None = None) -> int:
             if changed is not None:
                 hits = [h for h in hits if h.line in changed]
                 markers = [m for m in markers if m.line in changed]
+        # The gate script itself uses patterns it detects; only keep meta-rules.
+        if path.name == "audit_heuristics.py":
+            hits = [
+                h
+                for h in hits
+                if h.rule
+                in {
+                    "duplicate_audit_ok",
+                    "marker_in_literal",
+                    "orphan_marker",
+                    "repeated_reason",
+                    "unknown_rule",
+                    "bad_marker_form",
+                }
+            ]
         all_hits.extend(hits)
         all_markers.extend(markers)
 

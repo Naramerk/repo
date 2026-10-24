@@ -27,4 +27,6 @@ python scripts/audit_heuristics.py --list-rules
 python scripts/audit_heuristics.py --list-ok
 ```
 
-`--vs-main` scans only Python files touched vs `origin/main` (ACMR).
+`--vs-main` scans only Python files touched vs `origin/main` (ACMR), and
+only **changed lines** in those files (pre-existing heuristics on untouched
+lines are left for follow-up issues).
