@@ -12,15 +12,12 @@ from pydantic import Field
 
 from coscientist.agents.strict import NONBLANK, AgentModel
 
-# Alias kept for SPEC call sites / docs that say SpecModel.
-SpecModel = AgentModel
-
 ConstraintSubtype = Literal["resource", "data", "norm", "ethics", "domain", "profile"]
 MetricOp = Literal["<", "<=", "==", ">=", ">", "in"]
 MetricCheck = Literal["code", "review", "rubric"]
 
 
-class Goal(SpecModel):
+class Goal(AgentModel):
     """Study goal (RESEARCH_MODEL ``study.goal`` / graph_schema Goal)."""
 
     statement: str = Field(pattern=NONBLANK)
@@ -28,7 +25,7 @@ class Goal(SpecModel):
     trl: int | None = None  # audit-ok[field_default]: graph_schema Goal.trl optional
 
 
-class Constraint(SpecModel):
+class Constraint(AgentModel):
     """Study constraint; node only when measured_by points at it."""
 
     subtype: ConstraintSubtype
@@ -36,7 +33,7 @@ class Constraint(SpecModel):
     limit: str | None = None  # audit-ok[field_default]: graph_schema constraint.limit optional
 
 
-class SuccessMetric(SpecModel):
+class SuccessMetric(AgentModel):
     """Study-level success criterion (maps to criterion nodes from SPEC)."""
 
     metric: str = Field(pattern=NONBLANK)
@@ -46,7 +43,7 @@ class SuccessMetric(SpecModel):
     tolerance: Annotated[float | None, Field(ge=0, allow_inf_nan=False)] = None  # audit-ok[field_default]: tol
 
 
-class ResearchSpec(SpecModel):
+class ResearchSpec(AgentModel):
     """SPEC role output (CAPABILITIES #1; DESIGN §7.5).
 
     Fields: object, goal, scope, constraints, success_metrics.

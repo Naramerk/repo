@@ -1,7 +1,7 @@
 """Shared frozen/strict base for agent typed outs (DESIGN §7.1).
 
 One base + non-blank pattern for ResearchSpec / CriticVerdict / ReviewVerdict —
-no per-role copies of SpecModel / CriticModel / ReviewerModel.
+no per-role CriticModel / ReviewerModel bases.
 """
 
 from __future__ import annotations
