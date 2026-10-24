@@ -415,10 +415,15 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(
 
 @pytest.mark.asyncio
 async def test_append_rejects_datetime_in_payload(tmp_path: Path, clock: FakeClock):
-    """Append with datetime in payload raises (JCS digest or JSON encode; no coerce)."""
+    """Append with datetime in payload raises at stamp digest (JCS; no coerce)."""
+    from rfc8785._impl import CanonicalizationError
+
     store = SqliteEventStore("st_json2", tmp_path / "json2.db", clock=clock)
     await store.acquire_lease("o1")
-    with pytest.raises(TypeError, match="not JSON serializable|datetime|type"):
+    with pytest.raises(
+        (TypeError, CanonicalizationError),
+        match="not JSON serializable|datetime|type|unsupported type",
+    ):
         await store.append(
             EventEnvelope(
                 study_id="st_json2",

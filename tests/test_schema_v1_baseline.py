@@ -96,12 +96,18 @@ def test_envelope_type_must_be_event_type(clock: FakeClock) -> None:
 
 
 def test_stamp_envelope_sets_epoch_and_digest(clock: FakeClock) -> None:
-    u = _unstamped(clock)
+    u = _unstamped(clock, schema_version=writer_schema_version("StudyCreated"))
     stored = stamp_envelope(u, epoch=3)
     assert isinstance(stored, StoredEvent)
     assert stored.epoch == 3
     assert stored.payload_digest == payload_digest(u.payload)
-    assert stored.schema_version == writer_schema_version("StudyCreated")
+    assert stored.schema_version == u.schema_version
+
+
+def test_stamp_envelope_preserves_writer_schema_version(clock: FakeClock) -> None:
+    u = _unstamped(clock, schema_version=1)
+    stored = stamp_envelope(u, epoch=1)
+    assert stored.schema_version == 1
 
 
 @pytest.mark.asyncio
@@ -110,9 +116,21 @@ async def test_store_stamps_digest_writers_cannot_supply(
 ) -> None:
     store = SqliteEventStore("st1", tmp_path / "s.db", clock=clock)
     await store.acquire_lease("o1")
-    out = await store.append(_unstamped(clock))
+    # Current writer version + fields required by the live StudyCreated chain.
+    payload = {
+        "study_id": "st1",
+        "catalog_version": 1,
+        "max_loop_iter": 8,
+        "max_proposals": 3,
+    }
+    ev = _unstamped(
+        clock,
+        payload=payload,
+        schema_version=writer_schema_version("StudyCreated"),
+    )
+    out = await store.append(ev)
     assert out.epoch == store.epoch
-    assert out.payload_digest == payload_digest({"study_id": "st1"})
+    assert out.payload_digest == payload_digest(payload)
     assert len(out.payload_digest) >= 1
     rows = await store.read_all()
     assert rows[0].payload_digest == out.payload_digest

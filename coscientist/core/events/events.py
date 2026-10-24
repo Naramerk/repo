@@ -111,9 +111,9 @@ EventEnvelope = UnstampedEvent
 def stamp_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
     """Stamp lease epoch + digest of ``unstamped.payload`` (single compute site).
 
-    ``schema_version`` is taken from ``writer_schema_version(type)`` so writers
-    cannot embed a mismatched literal; reads still refuse foreign versions via
-    ``upcast``.
+    Preserves the writer's ``schema_version`` (needed for legacy-journal fixtures
+    and intentional old-version seeds). Refuses versions ahead of the current
+    writer line; reads still chain through ``upcast_strict``.
     """
     from coscientist.core.events.schema_gate import require_writer_schema_version
 
@@ -126,7 +126,14 @@ def stamp_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
             expected_store_format=None,
             found_store_format=None,
         )
-    version = require_writer_schema_version(unstamped.type)
+    writer_v = require_writer_schema_version(unstamped.type)
+    version = int(unstamped.schema_version)
+    if version > writer_v:
+        raise JournalFormatError(
+            f"{unstamped.type}: schema_version {version} ahead of writer v{writer_v}",
+            expected_store_format=None,
+            found_store_format=None,
+        )
     return StoredEvent(
         seq=unstamped.seq,
         study_id=unstamped.study_id,
