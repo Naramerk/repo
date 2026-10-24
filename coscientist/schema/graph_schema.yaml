@@ -23,7 +23,7 @@ nodes:
       - {name: profile, type: str, required: true}
       - {name: catalog_version, type: str, required: true}
       - {name: confirmations_needed, type: int, required: false, note: "профиль, по умолч. 1"}
-      - {name: max_replans, type: int, required: false, note: "профиль, по умолч. 2"}
+      - {name: max_expansions, type: int, required: false, note: "replaces max_replans; профиль, по умолч. 2 until RC3t"}
       - {name: parent_study_id, type: str, required: false}
   - kind: constraint
     prefix: C
@@ -76,7 +76,7 @@ nodes:
       - {name: verdict, type: enum(supported|survived|refuted|inconclusive|untested), required: false, computed: true, note: "PR8b projection; also persisted via VerdictSnapshotsRecorded"}
   - kind: plan
     prefix: PL
-    created_by: задача PLAN-0 и перепланирования PLAN-1..n (n ≤ max_replans)
+    created_by: задача PLAN-0 и перепланирования PLAN-1..n (n ≤ max_expansions)
     from_output: PlanOut + CriticVerdict + HitlDecision
     text_ru: Ревизия плана (маршрута); правка = новая ревизия + supersedes
     fields:

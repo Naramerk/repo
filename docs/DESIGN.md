@@ -47,8 +47,26 @@ class Study(BaseModel):
     parent_study_id: str | None = None   # «продолжить сессию» (§3.6)
     goal: Goal                 # statement, research_form, trl (заполняет spec)
     constraints: list[Constraint] = []   # узел constraint — только для проверяемых
-    confirmations_needed: int = 1        # профиль; k для вердикта (RESEARCH_MODEL §4.1)
-    max_replans: int = 2                 # профиль; перепланирования PLAN-1..n
+    # --- RC3t / D17 TARGET CONTRACT (not main yet) ---
+    # main still has construction defaults on Study / claims bind / hypothesis_verdict /
+    # rules.verdict / lifecycle.create_study. RC3t removes them.
+    # Canon: refutation_priority only from Study (no fn kw default). Legacy StudyCreated
+    # missing the key → typed refuse `refutation_priority_required` (do not invent False;
+    # domain/lifecycle False is construct-time only). Same for other threshold keys.
+    # Sole expansion quota field: max_expansions (replaces profile max_replans; see
+    # DESIGN_M1 / domain.py). graph_schema.yaml study field = max_expansions (default 2
+    # until RC3t). RC3t drops the construction default (=2 on main).
+    # Refuse names: study_required | confirmations_needed_required |
+    # refutations_needed_required | refutation_priority_required | supported_needed_required |
+    # max_attempts_required | max_expansions_required | require_hypotheses_required.
+    confirmations_needed: int            # PR8 snapshot k (compat); not the support gate
+    refutations_needed: int              # k_ref
+    refutation_priority: bool            # only from Study at call sites
+    supported_needed: int                # severe-support gate (HYP_DELTA); no clamp in docs
+    max_attempts: int                    # profile.max_attempts → Study (D17 / RC17a)
+    max_expansions: int                  # agent expansion quota; RC3t: required (no default)
+    # CAPABILITIES #2 / D3: required; upcasters must not invent False / Need.
+    require_hypotheses: bool
     # статуса нет: study_view() выводится из задач (§3.2)
 
 class Hypothesis(BaseModel):
@@ -60,11 +78,13 @@ class Hypothesis(BaseModel):
     verdict: Literal["supported","survived","refuted","inconclusive","untested","untestable_by_agent"] | None = None
 
 class Need(BaseModel):
+    # Planner decision (CAPABILITIES #2). reason required non-empty (incl. needed=False).
+    # Strict bool/str — no coerce. Upcasters must not invent Need; legacy missing → typed refuse (one state).
     needed: bool; reason: str
 
 class Plan(BaseModel):
     plan_id: str; study_id: str; revision: int        # новая ревизия = новая запись
-    hypotheses: Need; literature: Need                 # решения planner (профиль может обязать)
+    hypotheses: Need; literature: Need                 # решения planner; Study.require_hypotheses may force hypotheses.needed
     critic_decision: Literal["accept","revise","reject"] | None = None
     supersedes: str | None = None                      # предыдущая ревизия (PLAN-n или правка HITL)
     approved_by: Literal["human","critic"] | None = None; delegated_by: Literal["human","timeout"] | None = None
@@ -734,7 +754,7 @@ class HitlDecision(BaseModel):
 - interactive, «реши сам»: человек делегирует → решает critic; `approved_by="critic"`, `delegated_by="human"`.
 - interactive, таймаут: `on_timeout=delegate` (по умолчанию) → решает critic, событие `HitlTimedOut`, `delegated_by="timeout"` (в веб и отчёте «timeout→agent»). `on_timeout=fail` → задача DONE(FAILED, human_timeout); потомки → DONE(SKIPPED, input_unavailable) без заглушек (§3.4 п.5); study verdict failed, возобновление через fork. result_acceptance по таймауту → принимается вычисленный outcome; skip_task → не пропускать.
 - Шлюз costly_or_nonreal: `fail` (по умолчанию) — таймаут → FAILED(human_timeout), потомки SKIPPED, продолжение fork; явное «реши сам» — только при заданном `Budget(delegated_costly)` и оценке ≤ остатка, иначе delegation_disabled с причиной человеку сразу (RESEARCH_MODEL §5.2); `delegate_capped` — решает critic, траты из `Budget(delegated_costly)` (счётчик: списывается факт, факт > оценки блокирует делегирование), при отказе DONE(SKIPPED, budget); `delegate` — critic без лимита. Всегда событие `HitlDecided`/`HitlTimedOut` с reason и `spent_rub`; отчёт и веб показывают, что решил critic, и сумму.
-- Ключи задач: `PLAN-0..n`, `HYP-n`, `LIT-n`, `EXP-n` (нумерация с 0 в каждой серии). Перепланирование: каждая задача PLAN-n, n = 1..`max_replans`, имеет deadline ≤ study.deadline и долю бюджета study (`Budget.replan_share`); исчерпание max_replans → planner работает с текущей ревизией.
+- Ключи задач: `PLAN-0..n`, `HYP-n`, `LIT-n`, `EXP-n` (нумерация с 0 в каждой серии). Перепланирование: каждая задача PLAN-n, n = 1..`max_expansions`, имеет deadline ≤ study.deadline и долю бюджета study (`Budget.replan_share`); исчерпание max_expansions → planner работает с текущей ревизией.
 - Шлюз plan показывает plan.literature/plan.hypotheses с причинами и список LIT/HYP/EXP; правка маршрута (добавить/удалить задачу) = новая ревизия plan + `supersedes`, ключи уже выданных задач не меняются (R5).
 - Бюджет 10 мин ТЗ до плана: deadline задачи plan = study.created_at + 600 с; HITL-таймауты spec и plan вычитаются из него и обрезаются его остатком.
 - После простоя deadline не срабатывает мгновенно: при recover `hitl_deadline = min(max(исходный, now + grace_s=60), task.deadline, study.deadline)` и пишется `HitlDeadlineExtended`. Продление никогда не выходит за deadline задачи и study; если они уже истекли — срабатывает P5.
@@ -906,7 +926,7 @@ web/           отдельно (M6)
 2. Граф исполнения / аудит записей (record_audit, D01–D13): нужен ли продукту.
 3. Проверки для problem, model, application, R05, R28, R30 — согласовать с владельцами методики; PDF Тома Б не найдены.
 4. Семантика evaluator_kind (python / llm / expert) в старом коде — не проверена.
-5. max_plan_revisions, max_attempts, deadline маршрутов, HITL timeout по умолчанию — значения?
+5. max_plan_revisions, deadline маршрутов, HITL timeout по умолчанию — значения? (`Study.max_attempts` — D17 / §2; no default.)
 6. ~~Хранилище, ТЗ п.8~~ Решено: SQLite WAL, БД на study, порт EventStore; ≥10 параллельных задач внутри одного study (§3.5a).
 7. Цены AITunnel по моделям для pricing.yaml; отдаёт ли AITunnel стоимость в ответе.
 8. Литература: один MCP-сервис вместо paper_analysis + papers_processing_refactoring — подтвердить.
@@ -986,7 +1006,7 @@ web/           отдельно (M6)
 |---|---|---|
 | 1 | §7 по реальным rule_id | сделано (RESEARCH_MODEL §7, из reviewed-rules.json dev_1) |
 | 2 | единый источник истины | `coscientist/schema/graph_schema.yaml` + `scripts/gen_model_tables.py` + `tests/test_graph_schema.py` |
-| 3 | правило вердикта | RESEARCH_MODEL §4.1 / `hypothesis_verdict` (`supported_needed`, `independence_key`) |
+| 3 | правило вердикта | RESEARCH_MODEL §4.1 / `hypothesis_verdict` (HYP_DELTA; `supported_needed`, `independence_key`) |
 | 4 | упрощение | goal/constraint → поля study (constraint-узел только с проверкой); run → attempts[]; claim к критериям убран |
 | 5 | отрицательный вывод | based_on → experiment; experiment.limitations[] |
 | 6 | рёбра и валидность | produced от experiment; addresses без умолчания; informs удалён; SourceQuote; Attempt.provenance |
@@ -1000,7 +1020,7 @@ web/           отдельно (M6)
 |---|---|---|
 | 1 | stance вычисляется; distinct по `independence_key`; потолок по q; lit вне countable path не tipping; claim не создаётся задачей report | сделано (RESEARCH_MODEL §4.1, `hypothesis_verdict`) |
 | 2 | PlanValidator: каждый question покрыт LIT/EXP; fulfilled ⇔ нет untested (PR13: `final_type=artifact` ⇔ рубрика MET) | сделано (§3.2, RESEARCH_MODEL §5, DESIGN_M1 §6) |
-| 3 | max_replans, задачи PLAN-n с deadline и долей бюджета | сделано (§2, §7.3) |
+| 3 | max_expansions (← max_replans), задачи PLAN-n с deadline и долей бюджета | сделано (§2, §7.3) |
 | 4 | HITL по умолчанию; строка 8 §15 | решено пользователем; строка 8 обновлена |
 | 5 | CI, вендоринг с sha256, пары рёбер, структурированные поля | сделано (.github/workflows/ci.yml, vendor/ai4research, schema) |
 | 6 | синхронизация §2, CodeCheck.kind, §7.1 | сделано |
