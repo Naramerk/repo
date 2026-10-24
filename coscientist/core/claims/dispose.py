@@ -401,6 +401,10 @@ async def dispose_question(
             rejected = False
         if rejected:
             return None
+    if not isinstance(disposal, QuestionDisposal):
+        raise TypeError(
+            f"dispose_question expects QuestionDisposal, got {type(disposal).__name__}"
+        )
     qid_hint = disposal.question_id
     disp_hint = disposal.disposition
     try:

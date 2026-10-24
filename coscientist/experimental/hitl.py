@@ -230,8 +230,28 @@ class HitlForkMixin(CostlyHitlMixin):
         raw_after = optional_item(expansion, "after_task")
         if raw_after is None:
             raw_after = h.expand_after_task
-        if any((not isinstance(raw_after, str), not raw_after)):
-            if any((not isinstance(h.task_id, str), not h.task_id)):
+        if not isinstance(raw_after, str):
+            if not isinstance(h.task_id, str):
+                raise JournalFormatError(
+                    f"HITL {request_id!r} unbound and missing task_id"
+                )
+            if not h.task_id:
+                raise JournalFormatError(
+                    f"HITL {request_id!r} unbound and missing task_id"
+                )
+            await refuse_expansion(
+                self,  # type: ignore[arg-type]
+                h.task_id,
+                reason="invalid_hitl",
+                detail="hitl_unbound",
+            )
+            return
+        if not raw_after:
+            if not isinstance(h.task_id, str):
+                raise JournalFormatError(
+                    f"HITL {request_id!r} unbound and missing task_id"
+                )
+            if not h.task_id:
                 raise JournalFormatError(
                     f"HITL {request_id!r} unbound and missing task_id"
                 )
@@ -811,11 +831,8 @@ class HitlForkMixin(CostlyHitlMixin):
             self, budget_shares=dict(bmap),
             deadline_shares=_dict_if(dmap), request_id=request_id,
         )
-        if any((err is not None, payload is None)):
-            if err is not None:
-                detail = err
-            else:
-                detail = "invalid"
+        if err is not None:
+            detail = err
             await self._append(
                 [
                     UnstampedEvent(
@@ -827,6 +844,26 @@ class HitlForkMixin(CostlyHitlMixin):
                             "request_id": request_id,
                             "reason": "critic_rejected",
                             "detail": detail,
+                            "approved_by": approved_by,
+                        },
+                        ts=self.clock.now(),
+                        schema_version=_BUDGET_SHARES_REFUSED_SV,
+                    )
+                ]
+            )
+            return
+        if payload is None:
+            await self._append(
+                [
+                    UnstampedEvent(
+                        study_id=h.study_id,
+                        type="BudgetSharesRefused",
+                        entity_key=request_id,
+                        idem_key=make_idem("BudgetSharesRefused", request_id),
+                        payload={
+                            "request_id": request_id,
+                            "reason": "critic_rejected",
+                            "detail": "invalid",
                             "approved_by": approved_by,
                         },
                         ts=self.clock.now(),

@@ -71,9 +71,11 @@ def _require_str(value: object, *, what: str) -> str:
 
 
 def _coerce_float(value: object, *, what: str) -> float:
-    if any((type(value) is bool, not isinstance(value, (int, float)))):
+    if type(value) is bool:
         raise JournalFormatError(f"{what} must be numeric, got {type(value).__name__}")
-    return (value + 0.0)
+    if not isinstance(value, (int, float)):
+        raise JournalFormatError(f"{what} must be numeric, got {type(value).__name__}")
+    return value + 0.0
 
 
 class InputUnavailable(Exception):
@@ -299,11 +301,21 @@ def _claim_structurally_ok(
     about_retarget: bool,
 ) -> bool:
     """True when claim id/target/about are structurally sound for ``accepted``."""
-    if any((not claim_id, ':claim:' not in claim_id)):
+    if claim_id is None:
         return False
-    if any((not target, not target_id)):
+    if not claim_id:
         return False
-    if any((id_collides, target_changed, about_retarget)):
+    if ":claim:" not in claim_id:
+        return False
+    if not target:
+        return False
+    if not target_id:
+        return False
+    if id_collides:
+        return False
+    if target_changed:
+        return False
+    if about_retarget:
         return False
     if graph is None:
         return False

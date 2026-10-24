@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from coscientist.core.claims.dispositions import dispositions, report_hypothesis_verdicts
 from coscientist.core.claims.reasons import TaskReason, TerminalReason
@@ -326,9 +326,9 @@ def contributing_reasons_ordered(
     intended_meta = {}
     for ev in sorted(events, key=lambda e: _or_zero_int(e.seq)):
         if ev.type == "EffectIntended":
-            _tmp = optional_item(ev.payload, "key")
-            if _tmp is not None:
-                k = str(_tmp)
+            key_raw = optional_item(ev.payload, "key")
+            if key_raw is not None:
+                k = str(key_raw)
             else:
                 k = f"{ev.entity_key}"
             intended_keys.add(k)
@@ -520,9 +520,12 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     failed, or a peer finalized first). Otherwise the error is re-raised —
     never mark finalized without the event.
     """
-    if any((runtime.study is None, is_finalized(runtime))):
+    study = runtime.study
+    if study is None:
         return
-    sid = runtime.study.study_id
+    if is_finalized(runtime):
+        return
+    sid = study.study_id
     refusal = _refusal_payload(runtime, trigger)
     try:
         payload = await _build_rich_payload(runtime, sid=sid, trigger=trigger)
@@ -710,7 +713,7 @@ async def _build_rich_payload(
     contrib = contributing_reasons_ordered(events)
     # If journaling failed/skipped, fold still surfaces fetch_integrity → reason.
     if "internal_error" not in contrib:
-        folded = fold_events(events)
+        folded = fold_events(cast(list[UnstampedEvent], events))
         if optional_item(folded, "fetch_integrity"):
             contrib.append("internal_error")
     # PR15: stamped ArtifactRegistered with missing meta on replay → tainted mark.
@@ -979,7 +982,7 @@ async def _primary_report_path(
 
     art = arts.put(
         md.encode("utf-8"),
-        make_tool_ref(f"finalize:{sid}", attempt_id=f"finalize:{sid}"),
+        make_tool_ref(f"finalize:{sid}"),
         name="report.md",
         media_type="text/markdown",
     )

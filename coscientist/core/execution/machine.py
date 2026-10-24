@@ -399,9 +399,14 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
 
     async def note_budget_exceeded(self) -> None:
         """Persist study-level ``BudgetExceeded`` (folded → budget finalize trigger)."""
-        if any((self.study is None, self._budget_exceeded, self._finalized)):
+        study = self.study
+        if study is None:
             return
-        sid = self.study.study_id
+        if self._budget_exceeded:
+            return
+        if self._finalized:
+            return
+        sid = study.study_id
         await self._append(
             [
                 UnstampedEvent(
@@ -468,9 +473,12 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
 
         Reaching the cap (``>=``) counts as exhausted — aligned with DESIGN §7.4.
         """
-        if any((self.study is None, self.study.budget is None)):
+        study = self.study
+        if study is None:
             return False
-        bud = self.study.budget
+        bud = study.budget
+        if bud is None:
+            return False
         return bud.max_cost_rub is not None and self._study_spent_rub >= bud.max_cost_rub
 
     async def _emit_study_budget_if_exhausted(self) -> None:
@@ -498,7 +506,10 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         raise LeaseLost. P5 (task.deadline < effective_deadline) runs before
         study-deadline close (б) on the same tick.
         """
-        if any((self.study is None, self._lease_lost)):
+        study = self.study
+        if study is None:
+            return
+        if self._lease_lost:
             return
         await self.ensure_lease()
         if self._finalized:
@@ -510,7 +521,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         if self._finalized:
             return
         now = self.clock.now()
-        ed = self.study.effective_deadline()
+        ed = study.effective_deadline()
 
         # P5 first: tasks with deadline < ed and now > deadline → FAILED(deadline)
         await self._apply_p5(now, ed)

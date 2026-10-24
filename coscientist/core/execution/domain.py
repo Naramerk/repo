@@ -84,7 +84,9 @@ _ROUTE_TASK_KIND: dict[Route, TaskKind] = {
 
 def parse_route(raw: object) -> Route:
     """Parse a wire/API route string; unknown → ``UnknownRouteError``."""
-    if any((not isinstance(raw, str), not raw)):
+    if not isinstance(raw, str):
+        raise UnknownRouteError(f"invalid_route:{raw!r}")
+    if not raw:
         raise UnknownRouteError(f"invalid_route:{raw!r}")
     try:
         return Route(raw)
@@ -760,12 +762,18 @@ class CodeCheck(Frozen):
         if v is None:
             return None
         # bool is a subclass of int — reject before numeric coercion.
-        if any((isinstance(v, bool), not isinstance(v, (int, float)))):
+        if isinstance(v, bool):
+            raise ValueError(
+                f"host budget must be a real number, got {type(v).__name__}"
+            )
+        if not isinstance(v, (int, float)):
             raise ValueError(
                 f"host budget must be a real number, got {type(v).__name__}"
             )
         fv = v + 0.0
-        if any((not math.isfinite(fv), fv <= 0.0)):
+        if not math.isfinite(fv):
+            raise ValueError(f"host budget must be finite and > 0, got {v!r}")
+        if fv <= 0.0:
             raise ValueError(f"host budget must be finite and > 0, got {v!r}")
         return fv
 

@@ -538,7 +538,9 @@ class SqliteEventStore:
             batch_finalized = self._study_is_finalized()
             if require_open_attempt is not None:
                 row = self._get_row_write("attempts", require_open_attempt)
-                if any((row is None, optional_item(row, 'closed'))):
+                if row is None:
+                    raise AttemptClosedError(require_open_attempt)
+                if optional_item(row, "closed"):
                     raise AttemptClosedError(require_open_attempt)
             for ev in events:
                 stamped = stamp_envelope(ev, epoch=write_epoch)

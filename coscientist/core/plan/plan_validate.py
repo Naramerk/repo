@@ -323,7 +323,9 @@ def validate_rubric_immutable(
             continue
         new_d = _rubric_digest_of(t)
         old_d = optional_item(prev_digests, t.task_key)
-        if any((old_d is None, new_d is None)):
+        if old_d is None:
+            continue
+        if new_d is None:
             continue
         if new_d != old_d:
             raise ValueError(

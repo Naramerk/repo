@@ -140,7 +140,9 @@ def _decomposes_parent_map(runtime: StudyRuntime) -> dict[str, str | None]:
         _ensure_root(parent)
     for n in runtime.graph.nodes_by_kind("question"):
         qid = n.ref_id
-        if any((not isinstance(qid, str), not qid)):
+        if not isinstance(qid, str):
+            raise ValueError(f"question node {n.node_id!r} missing required ref_id str")
+        if not qid:
             raise ValueError(f"question node {n.node_id!r} missing required ref_id str")
         _ensure_root(qid)
     return parent_of

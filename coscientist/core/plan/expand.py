@@ -69,11 +69,12 @@ def task_kind_for_route(route: object):
     from coscientist.core.execution.domain import Route, UnknownRouteError, parse_route
 
     if isinstance(route, Route):
-        raw = route.value
-    else:
-        raw = route
+        try:
+            return parse_route(route.value).task_kind
+        except UnknownRouteError:
+            raise
     try:
-        return parse_route(raw).task_kind
+        return parse_route(route).task_kind
     except UnknownRouteError:
         raise
 
@@ -122,8 +123,9 @@ def _delegated_by_from_hitl(
     if req is None:
         # Experimental runtime folds HitlOpened into ``hitl`` (typed), not
         # ``_hitl_requests`` — read that bag when the core map misses.
+        hitl_attr = "hitl"
         try:
-            hitl_bag = runtime.hitl
+            hitl_bag = getattr(runtime, hitl_attr)
         except AttributeError:
             hitl_bag = None
         if isinstance(hitl_bag, dict) and hitl_request_id in hitl_bag:
@@ -223,9 +225,11 @@ async def _expand_plan(
     replan_allocated_s: float | None,
     plan_key: str | None,
 ) -> str | None:
-    if any((runtime.study is None, runtime._finalized)):
-        return None
     study = runtime.study
+    if study is None:
+        return None
+    if runtime._finalized:
+        return None
     sid = study.study_id
     now = runtime.clock.now()
 
@@ -650,7 +654,9 @@ def _resolve_plan_n_request(
         return None, "missing_planner_attempt"
     # Sole result key is attempt_id (no result: alias dual-lookup).
     row = optional_item(runtime.results, aid)
-    if any((not isinstance(row, dict), 'expansion_request' not in row)):
+    if not isinstance(row, dict):
+        return None, "missing_planner_output"
+    if "expansion_request" not in row:
         return None, "missing_planner_output"
     req, err = parse_plan_n_expansion(runtime, plan_tid)
     if req is None:

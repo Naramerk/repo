@@ -26,9 +26,12 @@ async def cancel_study(runtime: StudyRuntime, by: str | None = None) -> None:
         by = "user"
     if any((not isinstance(by, str), not by)):
         raise ValueError("cancel_study requires non-empty by=")
-    if any((runtime.study is None, finalize_mod.is_finalized(runtime))):
+    study = runtime.study
+    if study is None:
         return
-    sid = runtime.study.study_id
+    if finalize_mod.is_finalized(runtime):
+        return
+    sid = study.study_id
     now = runtime.clock.now()
     events: list[UnstampedEvent] = [
         UnstampedEvent(

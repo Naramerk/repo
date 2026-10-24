@@ -93,7 +93,7 @@ RULES: dict[str, str] = {
 }
 
 _DOMAIN_NUMBERS = frozenset(
-    {0, 0.0, 1, 1.0, 2, 3, 8, 10, 30, 32, 64, 0.05, 0.1, 100, 120, 180, 500, 600, 1800, 1_000_000, 1000000}
+    {0, 1, 2, 3, 8, 10, 30, 32, 64, 0.05, 0.1, 100, 120, 180, 500, 600, 1800, 1_000_000}
 )
 
 MAX_REASON_REPEATS = 3
@@ -435,17 +435,13 @@ class HeuristicVisitor(ast.NodeVisitor):
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
         t = node.type
-        broad = False
         if t is None:
-            broad = True
             self._add(node, "broad_except", "except:", except_line_only=True)
         elif isinstance(t, ast.Name) and t.id in ("Exception", "BaseException"):
-            broad = True
             self._add(node, "broad_except", f"except {t.id}", except_line_only=True)
         elif isinstance(t, ast.Tuple):
             names = [elt.id for elt in t.elts if isinstance(elt, ast.Name)]
             if any(n in ("Exception", "BaseException") for n in names):
-                broad = True
                 self._add(
                     node,
                     "broad_except",
@@ -490,9 +486,9 @@ class HeuristicVisitor(ast.NodeVisitor):
         args = node.args
         defaults = list(args.defaults)
         if defaults:
-            for arg, default in zip(args.args[-len(defaults) :], defaults):
+            for arg, default in zip(args.args[-len(defaults) :], defaults, strict=True):
                 self._flag_default(arg.arg, default, kind="param_default")
-        for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+        for arg, default in zip(args.kwonlyargs, args.kw_defaults, strict=True):
             if default is not None:
                 self._flag_default(arg.arg, default, kind="param_default")
 

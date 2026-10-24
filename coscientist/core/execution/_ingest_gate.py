@@ -211,7 +211,6 @@ def register_user_input_artifacts(
             call_id=f"user-input:{study_id}:{i}:{inp.name}",
             tool="user_input",
             args=inp.name,
-            attempt_id=f"user-input:{study_id}",
         )
         try:
             art = put_user(

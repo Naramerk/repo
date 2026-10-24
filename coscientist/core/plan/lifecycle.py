@@ -724,8 +724,8 @@ class LifecycleMixin:
             else:
                 raise
         else:
-            refuse_detail_s = None
-            refuse_line = None
+            refuse_detail_s = None  # type: ignore[assignment]
+            refuse_line = None  # type: ignore[assignment]
         if refuse_detail_s is not None:
             return await apply_plan_refused(
                 self, detail=refuse_detail_s, report_line=refuse_line

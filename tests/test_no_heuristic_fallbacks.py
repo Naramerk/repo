@@ -226,6 +226,7 @@ def test_blocker_default_no_default_star_in_domain():
 
 @pytest.mark.asyncio
 async def test_c4_create_study_requires_config_hitl_deadline_typeerror():
+    """Typed path still refuses wrong types; ``config=None`` is the API wire path."""
     from coscientist.core.plan.lifecycle import LifecycleMixin
 
     class _LC(LifecycleMixin):
@@ -238,7 +239,7 @@ async def test_c4_create_study_requires_config_hitl_deadline_typeerror():
             profile="p",
             request="r",
             catalog_version="1",
-            config=None,  # type: ignore[arg-type]
+            config="not-a-config",  # type: ignore[arg-type]
             hitl_policy=default_test_hitl_policy(),
             deadline=datetime.now(UTC) + timedelta(hours=1),
             min_plan_cost=0,
@@ -251,6 +252,16 @@ async def test_c4_create_study_requires_config_hitl_deadline_typeerror():
             config=default_test_study_config(),
             hitl_policy=None,  # type: ignore[arg-type]
             deadline=datetime.now(UTC) + timedelta(hours=1),
+            min_plan_cost=0,
+        )
+    with pytest.raises(TypeError, match="deadline"):
+        await _LC().create_study(
+            profile="p",
+            request="r",
+            catalog_version="1",
+            config=default_test_study_config(),
+            hitl_policy=default_test_hitl_policy(),
+            deadline="not-a-datetime",  # type: ignore[arg-type]
             min_plan_cost=0,
         )
 

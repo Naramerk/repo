@@ -204,7 +204,9 @@ def contradicts_events_for_new_claims(
         claim_ids |= {n.node_id for n in graph.nodes_by_kind("claim") if n.study_id == study_id}
     for cid in claim_ids:
         attrs = _attrs(cid)
-        if any((attrs is None, not _accepted(attrs))):
+        if attrs is None:
+            continue
+        if not _accepted(attrs):
             continue
         st = _stance_of(attrs)
         if st not in ("supports", "refutes"):

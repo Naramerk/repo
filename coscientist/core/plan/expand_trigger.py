@@ -151,7 +151,10 @@ def parse_plan_n_expansion(
     try:
         req = ExpansionRequest.model_validate(raw)
     except Exception as e:  # audit-ok[broad_except]: expand_trigger.py:121 broad_except
-        malformed = (None, f"malformed_planner_output:{type(e).__name__}")
+        malformed: tuple[None, str] | None = (
+            None,
+            f"malformed_planner_output:{type(e).__name__}",
+        )
     else:
         malformed = None
     if malformed is not None:
@@ -192,9 +195,12 @@ async def refuse_expansion(
     detail: str,
     plan_key: str | None = None,
 ) -> None:
-    if any((runtime.study is None, runtime._finalized)):
+    study = runtime.study
+    if study is None:
         return
-    sid = runtime.study.study_id
+    if runtime._finalized:
+        return
+    sid = study.study_id
     now = runtime.clock.now()
     # Deterministic idem per PLAN-n (same key on live path and recover).
     if plan_key:
@@ -375,7 +381,16 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
             return await apply_pending_expansion(runtime, plan_key)
         # MJ-c: non-SUCCESS PLAN-n must not vanish.
         meta = optional_item(runtime._expand_requests, plan_key)
-        if any((not isinstance(meta, dict), 'after_task' not in meta)):
+        if not isinstance(meta, dict):
+            await refuse_expansion(
+                runtime,
+                plan_key,
+                reason="invalid",
+                detail="missing_expand_after_task",
+                plan_key=plan_key,
+            )
+            return None
+        if "after_task" not in meta:
             await refuse_expansion(
                 runtime,
                 plan_key,
@@ -385,7 +400,16 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
             )
             return None
         raw_after = meta["after_task"]
-        if any((not isinstance(raw_after, str), not raw_after)):
+        if not isinstance(raw_after, str):
+            await refuse_expansion(
+                runtime,
+                plan_key,
+                reason="invalid",
+                detail="invalid_expand_after_task",
+                plan_key=plan_key,
+            )
+            return None
+        if not raw_after:
             await refuse_expansion(
                 runtime,
                 plan_key,
@@ -508,7 +532,16 @@ async def resume_pending_expansions(runtime: StudyRuntime) -> int:
             if plan_n_already_closed(runtime, plan_key):
                 continue
             meta = optional_item(runtime._expand_requests, plan_key)
-            if any((not isinstance(meta, dict), 'after_task' not in meta)):
+            if not isinstance(meta, dict):
+                await refuse_expansion(
+                    runtime,
+                    plan_key,
+                    reason="invalid",
+                    detail="missing_expand_after_task",
+                    plan_key=plan_key,
+                )
+                continue
+            if "after_task" not in meta:
                 await refuse_expansion(
                     runtime,
                     plan_key,
@@ -518,7 +551,16 @@ async def resume_pending_expansions(runtime: StudyRuntime) -> int:
                 )
                 continue
             raw_after = meta["after_task"]
-            if any((not isinstance(raw_after, str), not raw_after)):
+            if not isinstance(raw_after, str):
+                await refuse_expansion(
+                    runtime,
+                    plan_key,
+                    reason="invalid",
+                    detail="invalid_expand_after_task",
+                    plan_key=plan_key,
+                )
+                continue
+            if not raw_after:
                 await refuse_expansion(
                     runtime,
                     plan_key,

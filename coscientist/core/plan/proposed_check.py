@@ -1397,7 +1397,9 @@ async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
         if _payload_str(rev, "status") != "pending":
             continue
         row = get_proposal(runtime, pid)
-        if any((row is None, optional_item(row, 'status') != 'proposed')):
+        if row is None:
+            continue
+        if optional_item(row, "status") != "proposed":
             continue
         dl_raw = optional_item(rev, "deadline")
         if not dl_raw:
@@ -1419,7 +1421,9 @@ async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
             if _payload_str(rev_live, "status") != "pending":
                 continue
             row_live = get_proposal(runtime, pid)
-            if any((row_live is None, optional_item(row_live, 'status') != 'proposed')):
+            if row_live is None:
+                continue
+            if optional_item(row_live, "status") != "proposed":
                 continue
             dl_raw2 = optional_item(rev_live, "deadline")
             if not dl_raw2:
@@ -1465,7 +1469,7 @@ def assert_proposal_preregistered_for_eval(
             missing = _or_empty_str(e.args[0])
         else:
             missing = _MISSING_BOUND
-        missing_err = f"unapproved_check:missing_{missing}"
+        missing_err: str | None = f"unapproved_check:missing_{missing}"
     else:
         missing_err = None
     if missing_err is not None:

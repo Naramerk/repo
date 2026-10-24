@@ -475,7 +475,9 @@ async def materialize_loop_iter(
     tmpl_keys = [t.task_key for t in loop.body]
     keyed = assign_core_keys(runtime, prototypes)
     if isinstance(keyed, str):
-        await _refuse_loop(runtime, loop, detail=f"loop_assign_keys:{keyed}")
+        await _refuse_loop(
+            runtime, loop, detail=f"loop_assign_keys:{keyed}", reason=LOOP_REASON_REFUSED
+        )
         return None
     key_map = {tmpl_keys[i]: keyed[i].task_key for i in range(len(tmpl_keys))}
     added = _concrete_body(
@@ -494,6 +496,7 @@ async def materialize_loop_iter(
             runtime,
             loop,
             detail=f"loop_max_tasks:{existing_n + len(added)}>{max_tasks}",
+            reason=LOOP_REASON_REFUSED,
         )
         return None
 
@@ -501,12 +504,21 @@ async def materialize_loop_iter(
 
     prev = active_plan_blob(runtime)
     if prev is None:
-        await _refuse_loop(runtime, loop, detail="missing_plan_rollup")
+        await _refuse_loop(
+            runtime, loop, detail="missing_plan_rollup", reason=LOOP_REASON_REFUSED
+        )
         return None
     prev_rev = require_exact_int(prev["revision"], what="plan.revision")
     prev_pid = prev["plan_id"]
-    if any((not isinstance(prev_pid, str), not prev_pid)):
-        await _refuse_loop(runtime, loop, detail="missing_plan_id")
+    if not isinstance(prev_pid, str):
+        await _refuse_loop(
+            runtime, loop, detail="missing_plan_id", reason=LOOP_REASON_REFUSED
+        )
+        return None
+    if not prev_pid:
+        await _refuse_loop(
+            runtime, loop, detail="missing_plan_id", reason=LOOP_REASON_REFUSED
+        )
         return None
     new_rev = prev_rev + 1
     prev_tasks = [
@@ -523,7 +535,9 @@ async def materialize_loop_iter(
     merged = list(prev_tasks) + added
     share_err = critic_plan_shares(merged, study=study)
     if share_err is not None:
-        await _refuse_loop(runtime, loop, detail=f"loop_shares:{share_err}")
+        await _refuse_loop(
+            runtime, loop, detail=f"loop_shares:{share_err}", reason=LOOP_REASON_REFUSED
+        )
         return None
 
     pid = loop_plan_id(sid, loop.loop_id, iter_n, new_rev)
@@ -583,7 +597,9 @@ async def materialize_loop_iter(
         try:
             kind = task_kind_for_route(frozen_spec.route)
         except ValueError as e:
-            await _refuse_loop(runtime, loop, detail=str(e))
+            await _refuse_loop(
+                runtime, loop, detail=str(e), reason=LOOP_REASON_ERROR
+            )
             return None  # audit-ok[except_silent_return]: loop.py:585 except_silent_return
         from coscientist.core.execution.domain import PlanRole
 
