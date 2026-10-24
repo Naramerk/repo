@@ -15,16 +15,19 @@ from coscientist.api.stream import require_poll_interval_s
 from coscientist.core.events.events import StoredEvent
 from coscientist.core.execution.domain import StudyView
 
+_SID = "st_" + "a" * 27
+_SID_MISSING = "st_" + "b" * 27
+
 
 class _Studies:
     def study_view(self, study_id: str) -> StudyView:
-        if study_id != "st_1":
+        if study_id != _SID:
             raise StudyNotFound(study_id)
         return StudyView(phase="running")
 
 
 class _Store:
-    study_id = "st_1"
+    study_id = _SID
     owner = None
     epoch = 0
     owner_nonce = None
@@ -39,11 +42,11 @@ class _Store:
 def _ev(seq: int) -> StoredEvent:
     return StoredEvent(
         seq=seq,
-        study_id="st_1",
+        study_id=_SID,
         type="StudyCreated",
-        entity_key="st_1",
-        idem_key=f"StudyCreated:st_1:{seq}",
-        payload={"study_id": "st_1"},
+        entity_key=_SID,
+        idem_key=f"StudyCreated:{_SID}:{seq}",
+        payload={"study_id": _SID},
         ts=datetime(2026, 10, 24, 12, 0, 0, tzinfo=UTC),
         schema_version=1,
         epoch=1,
@@ -62,7 +65,7 @@ def _make_app(
         return {"study_id": sid}
 
     def _store_for(sid: str) -> _Store:
-        if sid != "st_1":
+        if sid != _SID:
             raise StudyNotFound(sid)
         return store
 
@@ -88,15 +91,17 @@ def test_poll_interval_refuse() -> None:
 def test_http_and_ws() -> None:
     calls: list[tuple[str, str]] = []
     client = _make_app([_ev(1), _ev(2)], calls)
-    assert client.get("/studies/st_1").json()["phase"] == "running"
-    assert client.get("/studies/st_no").status_code == 404
-    ev = client.get("/studies/st_1/events", params={"after": 0})
+    assert client.get(f"/studies/{_SID}").json()["phase"] == "running"
+    assert client.get(f"/studies/{_SID_MISSING}").status_code == 404
+    # malformed path id → 400 via StudyIdRefuse
+    assert client.get("/studies/st_no").status_code == 400
+    ev = client.get(f"/studies/{_SID}/events", params={"after": 0})
     assert ev.status_code == 200
     assert [row["seq"] for row in ev.json()] == [1, 2]
-    assert client.post("/studies/st_1/cancel", json={"by": "ops"}).json() == {
-        "study_id": "st_1"
+    assert client.post(f"/studies/{_SID}/cancel", json={"by": "ops"}).json() == {
+        "study_id": _SID
     }
-    assert calls == [("st_1", "ops")]
-    with client.websocket_connect("/studies/st_1/stream?after=0") as ws:
+    assert calls == [(_SID, "ops")]
+    with client.websocket_connect(f"/studies/{_SID}/stream?after=0") as ws:
         assert ws.receive_json()["seq"] == 1
         assert ws.receive_json()["seq"] == 2
