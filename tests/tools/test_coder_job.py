@@ -58,9 +58,7 @@ def _fake_ok(*, stdout: bytes = b"hello\n") -> SandboxResult:
 
 
 @pytest.mark.asyncio
-async def test_coder_success_registers_sha256_artifact(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_coder_success_registers_sha256_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
     journal = _Journal()
     jobs = _jobs(clock, journal)
@@ -79,11 +77,7 @@ async def test_coder_success_registers_sha256_artifact(
             env={},
             limits=sandbox_limits(timeout_s=5.0, memory_mb=64, max_output_bytes=4096),
             deadline=clock.now() + timedelta(seconds=30),
-            outputs=(
-                CoderOutputSpec(
-                    name="out.txt", source="stdout", media_type="text/plain"
-                ),
-            ),
+            outputs=(CoderOutputSpec(name="out.txt", source="stdout", media_type="text/plain"),),
             attempt_closed=False,
         ),
         jobs=jobs,
@@ -102,9 +96,7 @@ async def test_coder_success_registers_sha256_artifact(
 
 
 @pytest.mark.asyncio
-async def test_coder_timeout_r4_fake_clock(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_coder_timeout_r4_fake_clock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Job past deadline → JobTimedOut + failure(retryable) without waiting forever."""
     clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
     journal = _Journal()
@@ -207,9 +199,7 @@ async def test_coder_timeout_r4_wall_clock(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_coder_refuses_artifacts_when_attempt_closed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_coder_refuses_artifacts_when_attempt_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coscientist.core.events.errors import ArtifactRejected
 
     clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
@@ -228,15 +218,9 @@ async def test_coder_refuses_artifacts_when_attempt_closed(
                 argv=("/bin/true",),
                 inputs={},
                 env={},
-                limits=sandbox_limits(
-                    timeout_s=5.0, memory_mb=64, max_output_bytes=4096
-                ),
+                limits=sandbox_limits(timeout_s=5.0, memory_mb=64, max_output_bytes=4096),
                 deadline=clock.now() + timedelta(seconds=30),
-                outputs=(
-                    CoderOutputSpec(
-                        name="x", source="stdout", media_type="text/plain"
-                    ),
-                ),
+                outputs=(CoderOutputSpec(name="x", source="stdout", media_type="text/plain"),),
                 attempt_closed=True,
             ),
             jobs=jobs,

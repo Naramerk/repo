@@ -112,10 +112,7 @@ def _request_spec(request: CoderRequest) -> dict[str, Any]:
         "argv": list(request.argv),
         "inputs": {k: sha256_hex(v) for k, v in sorted(request.inputs.items())},
         "env": dict(sorted(request.env.items())),
-        "outputs": [
-            {"name": o.name, "source": o.source, "media_type": o.media_type}
-            for o in request.outputs
-        ],
+        "outputs": [{"name": o.name, "source": o.source, "media_type": o.media_type} for o in request.outputs],
         "limits": _limits_to_spec(request.limits),
         "call_id": request.call_id,
     }
