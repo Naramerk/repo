@@ -23,7 +23,13 @@ from coscientist.llm.openai_compat import OpenAICompatibleProvider
 from coscientist.llm.provider import ProviderAdapter
 from coscientist.llm.runtime import AsyncSleep, AsyncWaitFor, Clock
 from coscientist.llm.transport import Transport, TransportResponse
-from coscientist.llm.types import ChatMessage, LlmRequest, LlmResponse, Usage
+from coscientist.llm.types import (
+    ChatMessage,
+    LlmRequest,
+    LlmResponse,
+    StructuredLlmRequest,
+    Usage,
+)
 
 __all__ = [
     "AsyncSleep",
@@ -40,6 +46,7 @@ __all__ = [
     "LlmRequest",
     "LlmResponse",
     "LlmResponseError",
+    "StructuredLlmRequest",
     "LlmRetryAfterError",
     "LlmTimeoutError",
     "LlmTransportError",
