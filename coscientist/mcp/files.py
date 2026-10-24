@@ -1,41 +1,111 @@
-"""Download files referenced by typed MCP URIs under an explicit size limit."""
+"""Download files referenced by typed MCP URIs under streaming size + SSRF limits."""
 
 from __future__ import annotations
 
+import zlib
+from typing import Mapping
+
 from coscientist.mcp.digest import sha256_hex
-from coscientist.mcp.errors import McpResponseLimitError, McpTimeoutError, McpTransportError
-from coscientist.mcp.transport import FileFetcher, HttpTransport
+from coscientist.mcp.errors import (
+    McpProtocolError,
+    McpResponseLimitError,
+    McpSsrfError,
+    McpTimeoutError,
+    McpTransportError,
+)
+from coscientist.mcp.ssrf import (
+    AsyncDnsResolver,
+    HostnameResolver,
+    assert_fetch_scheme,
+    redirect_url,
+    resolve_and_pin,
+    rewrite_url_for_connect,
+)
+from coscientist.mcp.transport import FileFetcher, HttpStream, HttpTransport
 from coscientist.mcp.types import FetchedFile
 
 
-class HttpFileFetcher:
-    """FileFetcher over an injected HttpTransport (GET, no redirects guessed)."""
+class SafeHttpFileFetcher:
+    """SSRF-safe file fetcher: resolve+pin, manual redirects, streaming byte limit."""
 
-    def __init__(self, http: HttpTransport) -> None:
+    def __init__(
+        self,
+        http: HttpTransport,
+        *,
+        allowed_schemes: frozenset[str],
+        max_redirect_hops: int,
+        allowed_content_types: frozenset[str],
+        allowed_content_encodings: frozenset[str],
+        read_chunk_bytes: int,
+        resolver: HostnameResolver | None = None,
+    ) -> None:
         self._http = http
+        self._allowed_schemes = allowed_schemes
+        self._max_redirect_hops = max_redirect_hops
+        self._allowed_content_types = allowed_content_types
+        self._allowed_content_encodings = allowed_content_encodings
+        self._read_chunk_bytes = read_chunk_bytes
+        self._resolver: HostnameResolver = resolver if resolver is not None else AsyncDnsResolver()
 
     async def fetch(self, url: str, *, max_bytes: int, timeout_s: float) -> bytes:
-        try:
-            response = await self._http.request(
-                "GET",
-                url,
-                headers={},
-                body=None,
-                timeout_s=timeout_s,
+        assert_fetch_scheme(url, allowed_schemes=self._allowed_schemes)
+        current = url
+        for hop in range(self._max_redirect_hops + 1):
+            _uri, connect_ip, host_header = await resolve_and_pin(
+                current,
+                resolver=self._resolver,
+                allowed_schemes=self._allowed_schemes,
             )
-        except TimeoutError as exc:
-            raise McpTimeoutError("file fetch exceeded file_fetch_timeout_s") from exc
-        if response.status_code != 200:
-            raise McpTransportError(
-                f"file fetch status {response.status_code}",
-                retryable=False,
-            )
-        if len(response.body) > max_bytes:
-            raise McpResponseLimitError(
-                "downloaded file exceeds max_file_bytes",
-                limit=max_bytes,
-            )
-        return response.body
+            connect_url = rewrite_url_for_connect(current, connect_ip)
+            headers = {"Host": host_header, "Accept-Encoding": "identity"}
+            try:
+                stream = await self._http.open(
+                    "GET",
+                    connect_url,
+                    headers=headers,
+                    body=None,
+                    timeout_s=timeout_s,
+                    connect_ip=connect_ip,
+                )
+            except TimeoutError as exc:
+                raise McpTimeoutError("file fetch exceeded file_fetch_timeout_s") from exc
+            try:
+                if stream.status_code in (301, 302, 303, 307, 308):
+                    location = _header(stream.headers, "location")
+                    if location is None:
+                        raise McpSsrfError("redirect without Location", uri=current)
+                    await stream.aclose()
+                    if hop >= self._max_redirect_hops:
+                        raise McpSsrfError(
+                            f"redirect hop limit {self._max_redirect_hops} exceeded",
+                            uri=current,
+                        )
+                    current = redirect_url(current, location)
+                    continue
+                if stream.status_code != 200:
+                    raise McpTransportError(
+                        f"file fetch status {stream.status_code}",
+                        retryable=False,
+                    )
+                _check_content_type(stream.headers, self._allowed_content_types, uri=current)
+                encoding = _content_encoding(stream.headers)
+                if encoding is not None and encoding not in self._allowed_content_encodings:
+                    raise McpProtocolError(f"Content-Encoding {encoding!r} not in allowed_content_encodings")
+                raw = await _read_limited(
+                    stream,
+                    max_bytes=max_bytes,
+                    chunk_bytes=self._read_chunk_bytes,
+                )
+                if encoding in ("gzip", "x-gzip"):
+                    return _gunzip_limited(raw, max_bytes=max_bytes)
+                if encoding in ("deflate",):
+                    return _inflate_limited(raw, max_bytes=max_bytes)
+                if encoding is not None and encoding not in ("identity",):
+                    raise McpProtocolError(f"unsupported Content-Encoding {encoding!r}")
+                return raw
+            finally:
+                await stream.aclose()
+        raise McpSsrfError("redirect hop limit exceeded", uri=url)
 
 
 async def fetch_files(
@@ -58,3 +128,101 @@ async def fetch_files(
             )
         )
     return tuple(files)
+
+
+async def _read_limited(
+    stream: HttpStream,
+    *,
+    max_bytes: int,
+    chunk_bytes: int,
+) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        piece = await stream.read(min(chunk_bytes, max_bytes - total + 1))
+        if not piece:
+            break
+        total += len(piece)
+        if total > max_bytes:
+            raise McpResponseLimitError(
+                "downloaded file exceeds max_file_bytes while streaming",
+                limit=max_bytes,
+            )
+        chunks.append(piece)
+    return b"".join(chunks)
+
+
+def _gunzip_limited(data: bytes, *, max_bytes: int) -> bytes:
+    dec = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
+    out = dec.decompress(data, max_length=max_bytes + 1)
+    if len(out) > max_bytes or dec.unconsumed_tail or not dec.eof:
+        # unconsumed / not eof with max_length hit → bomb or truncated
+        if len(out) > max_bytes:
+            raise McpResponseLimitError(
+                "decompressed file exceeds max_file_bytes",
+                limit=max_bytes,
+            )
+        # Try to detect bomb: more input remaining after hitting max
+        if dec.unconsumed_tail or (data and not dec.eof):
+            raise McpResponseLimitError(
+                "decompressed file exceeds max_file_bytes",
+                limit=max_bytes,
+            )
+    rest = dec.flush()
+    out += rest
+    if len(out) > max_bytes:
+        raise McpResponseLimitError(
+            "decompressed file exceeds max_file_bytes",
+            limit=max_bytes,
+        )
+    return out
+
+
+def _inflate_limited(data: bytes, *, max_bytes: int) -> bytes:
+    try:
+        dec = zlib.decompressobj()
+        out = dec.decompress(data, max_length=max_bytes + 1)
+    except zlib.error:
+        dec = zlib.decompressobj(wbits=-zlib.MAX_WBITS)
+        out = dec.decompress(data, max_length=max_bytes + 1)
+    if len(out) > max_bytes:
+        raise McpResponseLimitError(
+            "decompressed file exceeds max_file_bytes",
+            limit=max_bytes,
+        )
+    out += dec.flush()
+    if len(out) > max_bytes:
+        raise McpResponseLimitError(
+            "decompressed file exceeds max_file_bytes",
+            limit=max_bytes,
+        )
+    return out
+
+
+def _header(headers: Mapping[str, str], name: str) -> str | None:
+    target = name.lower()
+    for key, value in headers.items():
+        if str(key).lower() == target:
+            return str(value)
+    return None
+
+
+def _content_encoding(headers: Mapping[str, str]) -> str | None:
+    raw = _header(headers, "content-encoding")
+    if raw is None or raw.strip() == "":
+        return None
+    return raw.split(",", 1)[0].strip().lower()
+
+
+def _check_content_type(
+    headers: Mapping[str, str],
+    allowed: frozenset[str],
+    *,
+    uri: str,
+) -> None:
+    raw = _header(headers, "content-type")
+    if raw is None:
+        raise McpProtocolError(f"file response missing Content-Type for {uri!r}")
+    media = raw.split(";", 1)[0].strip().lower()
+    if media not in allowed:
+        raise McpProtocolError(f"Content-Type {media!r} not in allowed_file_content_types")

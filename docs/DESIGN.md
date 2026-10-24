@@ -485,6 +485,26 @@ class ReviewVerdict(BaseModel):
 
 ### 6.0 Тонкий MCP-клиент (`coscientist/mcp/`, M2 prep / A7)
 
+#### Решение: свой thin client, не официальный `mcp` SDK
+
+Сверка с `mcp` 1.12.4 (PyPI Requires-Dist):
+
+| | Official SDK | Наш thin client |
+|---|---|---|
+| **Deps (client path)** | `anyio`, `httpx`, `httpx-sse`, `jsonschema`, `pydantic-settings`, плюс **server stack** `starlette` / `sse-starlette` / `uvicorn` / `python-multipart` тянется всегда | stdlib + уже есть `pydantic` / `rfc8785`; HTTP — inject `HttpTransport` (без hard dep на httpx) |
+| **Sessions** | `ClientSession` / v2 `Client` | `McpSession` + явный profile list |
+| **Notifications** | да | read-loop: skip notifications; server requests → `-32601` |
+| **Cancel** | `CancelledNotification` | `notifications/cancelled` на timeout |
+| **Pagination** | `list_tools(cursor=)` | `nextCursor` loop в `list_tools` |
+| **Streamable HTTP 2025-06-18** | `Mcp-Session-Id`, protocol header, SSE | то же: session id, `MCP-Protocol-Version`, full SSE consume, 404 → re-initialize; notification = configured 202 + empty body |
+| **Stdio lifecycle** | close stdin / wait / kill; **нет** own process group + config grace | `start_new_session`, `killpg` TERM→KILL, always signal group even if leader exited, stderr drain |
+| **Timeouts / limits** | hardcoded httpx 30s/300s read | все из `McpClientConfig` |
+| **SSRF on file URLs** | нет (не задача SDK) | hard-deny non-http(s); block private/loopback/link-local/metadata (IPv4/IPv6 + decimal/octal); resolve+pin; manual redirects + hop limit |
+| **Streaming size / zip-bomb** | буфер httpx | byte limit while reading; Content-Encoding allowlist + decompress cap |
+| **Artifact digest** | нет | JCS `content_digest` + `raw_bytes` на каждый reply |
+
+**Вердикт:** SDK покрывает sessions/notifications/cancel/pagination/Streamable HTTP, но (1) тянет server-deps и anyio/httpx в agent path, (2) не отдаёт process-group kill и конфиг-таймауты, (3) не даёт SSRF/streaming guards для протухающих file URL. Оборачивать SDK «behind thin interface» = всё равно свой transport+SSRF+stdio lifecycle → оставляем свой JSON-RPC client.
+
 ```
 core/     — не импортирует coscientist.mcp, httpx (import-linter)
 mcp/      — не импортирует coscientist.core (import-linter)
@@ -493,24 +513,28 @@ tools/    — поверх mcp (адаптер A7); invoke_tool остаётся
 
 ```python
 class McpClientConfig(BaseModel):  # frozen; все поля обязательны — без defaults в коде
-    servers: tuple[StdioServerConfig | StreamableHttpServerConfig, ...]  # явный профиль
-    protocol_version: str; client_name: str; client_version: str
+    servers: tuple[StdioServerConfig | StreamableHttpServerConfig, ...]
+    protocol_version: str; supported_protocol_versions: tuple[str, ...]
+    client_name: str; client_version: str
     connect_timeout_s: float; list_tools_timeout_s: float; call_tool_timeout_s: float
     terminate_grace_s: float; kill_grace_s: float
     max_response_bytes: int; max_file_bytes: int; file_fetch_timeout_s: float
-    fetch_uri_schemes: tuple[str, ...]
+    fetch_uri_schemes: tuple[str, ...]          # ⊂ {http, https} (hard-deny иначе)
+    max_redirect_hops: int; stdio_read_chunk_bytes: int; max_stderr_bytes: int
+    http_request_ok_statuses: tuple[int, ...]
+    http_notification_ok_statuses: tuple[int, ...]  # spec: 202
+    allowed_file_content_types: tuple[str, ...]
+    allowed_content_encodings: tuple[str, ...]
 
 class McpReply(BaseModel):
     content_digest: str   # sha256(JCS(result))
-    raw_bytes: bytes      # сырой JSON-RPC ответ (артефакт)
+    raw_bytes: bytes
     result: dict; files: tuple[FetchedFile, ...]  # key=sha256 содержимого URL
 ```
 
-- Серверы только из `servers` профиля — без discovery/угадывания.
-- Stdio: дочерний процесс в своей process group; по таймауту SIGTERM → `terminate_grace_s` → SIGKILL → reap; иначе `McpTimeoutError`.
-- URL из типизированных MCP-полей (`resource_link` / `resource` без inline) скачиваются сразу в `call_tool` (ссылки протухают), под `max_file_bytes`.
-- Секреты только из env (`env_keys` / `api_key_env`); тела и ключи не логируются.
-- Тонкий JSON-RPC клиент (не официальный `mcp` SDK — у SDK свои таймауты/lifecycle).
+- Серверы только из `servers` профиля — без discovery.
+- Stdio: process group; SIGTERM → grace → SIGKILL → reap group; stderr drained (cap `max_stderr_bytes`); embedded `\n` forbidden.
+- File URLs: SSRF policy + streaming limit; secrets only from env; never logged.
 
 ### 6.1 Контракт
 

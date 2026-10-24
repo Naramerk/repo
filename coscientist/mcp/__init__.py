@@ -18,17 +18,17 @@ from coscientist.mcp.errors import (
     McpError,
     McpProtocolError,
     McpResponseLimitError,
+    McpSsrfError,
     McpTimeoutError,
     McpTransportError,
     McpUnsupportedUriError,
 )
-from coscientist.mcp.files import HttpFileFetcher
+from coscientist.mcp.files import SafeHttpFileFetcher
 from coscientist.mcp.types import CallToolReply, FetchedFile, ListToolsReply, McpReply, McpTool
 
 __all__ = [
     "CallToolReply",
     "FetchedFile",
-    "HttpFileFetcher",
     "ListToolsReply",
     "McpClient",
     "McpClientConfig",
@@ -37,10 +37,12 @@ __all__ = [
     "McpProtocolError",
     "McpReply",
     "McpResponseLimitError",
+    "McpSsrfError",
     "McpTimeoutError",
     "McpTool",
     "McpTransportError",
     "McpUnsupportedUriError",
+    "SafeHttpFileFetcher",
     "StdioServerConfig",
     "StreamableHttpServerConfig",
 ]

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urlparse
 
-from coscientist.mcp.errors import McpProtocolError, McpUnsupportedUriError
+from coscientist.mcp.errors import McpProtocolError
+from coscientist.mcp.ssrf import assert_fetch_scheme
 
 
 def uris_from_call_result(
@@ -15,9 +15,8 @@ def uris_from_call_result(
 ) -> tuple[str, ...]:
     """Return URIs from ``content[]`` resource / resource_link entries.
 
-    Raises :class:`McpUnsupportedUriError` when a typed URI field uses a scheme
-    outside ``allowed_schemes``. Raises :class:`McpProtocolError` when required
-    typed fields are missing or wrong type.
+    Schemes outside http/https are hard-denied in code; profile schemes may only
+    narrow further. Raises :class:`McpProtocolError` when typed fields are wrong.
     """
     content = result.get("content")
     if content is None:
@@ -32,16 +31,15 @@ def uris_from_call_result(
         if not isinstance(item_type, str):
             raise McpProtocolError(f"content[{index}].type must be a string")
         if item_type == "resource_link":
-            found.append(_require_fetchable_uri(item, path=f"content[{index}]", allowed_schemes=allowed_schemes))
+            found.append(_require_uri(item, path=f"content[{index}]", allowed_schemes=allowed_schemes))
         elif item_type == "resource":
             resource = item.get("resource")
             if not isinstance(resource, dict):
                 raise McpProtocolError(f"content[{index}].resource must be an object")
-            # Inline payload already present — no fetch (typed shape, not a guess).
             if "text" in resource or "blob" in resource:
                 continue
             found.append(
-                _require_fetchable_uri(
+                _require_uri(
                     resource,
                     path=f"content[{index}].resource",
                     allowed_schemes=allowed_schemes,
@@ -50,7 +48,7 @@ def uris_from_call_result(
     return tuple(found)
 
 
-def _require_fetchable_uri(
+def _require_uri(
     obj: dict[str, Any],
     *,
     path: str,
@@ -59,10 +57,5 @@ def _require_fetchable_uri(
     uri = obj.get("uri")
     if not isinstance(uri, str) or uri == "":
         raise McpProtocolError(f"{path}.uri must be a non-empty string")
-    scheme = urlparse(uri).scheme.lower()
-    if scheme not in allowed_schemes:
-        raise McpUnsupportedUriError(
-            f"{path}.uri scheme {scheme!r} is not in fetch_uri_schemes",
-            uri=uri,
-        )
+    assert_fetch_scheme(uri, allowed_schemes=allowed_schemes)
     return uri

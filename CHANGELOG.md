@@ -3,11 +3,12 @@
 ## Unreleased
 
 ### M2 prep (A7): thin MCP client (`coscientist/mcp/`)
-- Standalone MCP client package (no `coscientist.core` imports). Thin JSON-RPC client — official `mcp` SDK not used (embeds transport timeouts / stdio lifecycle we must own from config).
-- Typed profile config: `stdio` + `streamable_http` servers from an explicit list only (no discovery). All timeouts/limits/schemes required; no guessed defaults in code.
-- `connect` / `list_tools` / `call_tool`; every reply returns JCS `content_digest` + `raw_bytes`. Typed URI `resource_link` / bare `resource` files downloaded immediately under `max_file_bytes`, returned as content-addressed `FetchedFile.key`.
-- Stdio children start in their own process group; SIGTERM → grace → SIGKILL → reap; overrun → `McpTimeoutError`. Secrets only from env names in config; never logged.
-- import-linter: `mcp` ↛ `core`; core/checks/experimental ↛ `mcp`. Unit tests use an in-process fake stdio server (no network).
+- Standalone MCP client (no `coscientist.core`). **Own JSON-RPC client** — DESIGN §6.0 documents why official `mcp` SDK is not used (server-stack deps, no SSRF/process-group/streaming limits).
+- Profile `stdio` + `streamable_http`; all timeouts/limits/statuses/encodings required. `supported_protocol_versions`; `tools/list` `nextCursor` pagination; timeout → `notifications/cancelled`.
+- Streamable HTTP 2025-06-18: `Mcp-Session-Id`, `MCP-Protocol-Version`, full SSE consume, 404 → re-initialize; notifications = configured 202 + empty body.
+- File URLs: hard-deny non-http(s); SSRF (private/loopback/link-local/metadata, decimal/octal IPv4, resolve+pin, manual redirects + hop limit); streaming size limit; Content-Type + Content-Encoding allowlist; gzip bomb cap.
+- Stdio: stderr drained (`max_stderr_bytes`); always `killpg` even if leader exited; embedded `\n` rejected; buffer reset + session close on protocol/limit errors.
+- import-linter: `mcp` ↛ `core`. Tests: in-process fake + adversarial SSRF/stdio (no network).
 
 ### M2 PR A1 — thin LLM client
 - New package `coscientist/llm/`: typed `LlmRequest`/`LlmResponse`/`Usage`, `ProviderAdapter` + OpenAI-compatible provider, `LlmClient` with timeout/retry/limits from required `LlmConfig` fields (no guessed defaults), typed errors, API key only from env named in config; no logging/printing of secrets or bodies.

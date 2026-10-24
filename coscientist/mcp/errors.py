@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class McpError(Exception):
     """Base class for MCP client failures."""
@@ -27,9 +29,20 @@ class McpTransportError(McpError):
 class McpProtocolError(McpError):
     """JSON-RPC / MCP protocol failure (parse error, RPC error, bad shape)."""
 
-    def __init__(self, detail: str, *, raw_bytes: bytes | None = None) -> None:
+    def __init__(
+        self,
+        detail: str,
+        *,
+        raw_bytes: bytes | None = None,
+        rpc_code: int | None = None,
+        rpc_message: str | None = None,
+        rpc_data: Any = None,
+    ) -> None:
         self.detail = detail
         self.raw_bytes = raw_bytes
+        self.rpc_code = rpc_code
+        self.rpc_message = rpc_message
+        self.rpc_data = rpc_data
         super().__init__(detail)
 
 
@@ -44,6 +57,15 @@ class McpResponseLimitError(McpError):
 
 class McpUnsupportedUriError(McpError):
     """MCP reply referenced a URI scheme this client will not fetch."""
+
+    def __init__(self, detail: str, *, uri: str) -> None:
+        self.detail = detail
+        self.uri = uri
+        super().__init__(detail)
+
+
+class McpSsrfError(McpError):
+    """URL failed SSRF policy (scheme, private IP, DNS rebinding, redirect)."""
 
     def __init__(self, detail: str, *, uri: str) -> None:
         self.detail = detail

@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
-Handler = Callable[[str, dict[str, Any] | None], dict[str, Any] | None]
+Handler = Callable[[str, dict[str, Any] | None], dict[str, Any] | list[dict[str, Any]] | None]
 
 
 class FakeStdioServer:
-    """Paired client/server memory transports speaking newline-delimited JSON-RPC."""
+    """Paired client/server memory transports speaking newline-delimited JSON-RPC.
+
+    Handler may return a result dict, or a list of outbound messages to inject
+    before the result (notifications / server requests).
+    """
 
     def __init__(self, handler: Handler) -> None:
         self._handler = handler
@@ -18,6 +23,7 @@ class FakeStdioServer:
         self._to_client: asyncio.Queue[bytes] = asyncio.Queue()
         self._task: asyncio.Task[None] | None = None
         self.client = _QueueTransport(self._to_server, self._to_client)
+        self.cancelled_ids: list[Any] = []
 
     async def __aenter__(self) -> FakeStdioServer:
         self._task = asyncio.create_task(self._run())
@@ -39,13 +45,27 @@ class FakeStdioServer:
             if not isinstance(method, str):
                 continue
             params = message.get("params")
+            if method == "notifications/cancelled":
+                if isinstance(params, dict):
+                    self.cancelled_ids.append(params.get("requestId"))
+                continue
             if "id" not in message:
-                # notification
                 self._handler(method, params if isinstance(params, dict) else None)
                 continue
-            result = self._handler(method, params if isinstance(params, dict) else None)
-            if result is None:
-                result = {}
+            out = self._handler(method, params if isinstance(params, dict) else None)
+            if isinstance(out, list):
+                for item in out[:-1]:
+                    await self._to_client.put(
+                        json.dumps(item, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+                    )
+                result = out[-1] if out else {}
+                if isinstance(result, dict) and "jsonrpc" in result:
+                    await self._to_client.put(
+                        json.dumps(result, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+                    )
+                    continue
+            else:
+                result = out if out is not None else {}
             reply = {
                 "jsonrpc": "2.0",
                 "id": message["id"],
@@ -63,6 +83,7 @@ class _QueueTransport:
         self._outbound = outbound
         self._inbound = inbound
         self._closed = False
+        self._buf = bytearray()
 
     async def send(self, message: bytes) -> None:
         if self._closed:
@@ -74,11 +95,19 @@ class _QueueTransport:
             raise RuntimeError("closed")
         raw = await asyncio.wait_for(self._inbound.get(), timeout=timeout_s)
         if len(raw) > max_bytes:
-            raise ValueError("max_bytes exceeded")
+            from coscientist.mcp.errors import McpResponseLimitError
+
+            raise McpResponseLimitError(
+                "memory response exceeds max_response_bytes",
+                limit=max_bytes,
+            )
         return raw
 
     async def aclose(self) -> None:
         self._closed = True
+
+    def reset_receive_buffer(self) -> None:
+        self._buf.clear()
 
 
 def default_handler(method: str, params: dict[str, Any] | None) -> dict[str, Any] | None:

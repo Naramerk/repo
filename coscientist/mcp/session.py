@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from typing import Any
 
 from coscientist.mcp.config import McpClientConfig
@@ -14,6 +16,8 @@ from coscientist.mcp.stdio import StdioTransport
 from coscientist.mcp.transport import FileFetcher, MessageTransport
 from coscientist.mcp.types import CallToolReply, ListToolsReply, McpTool
 from coscientist.mcp.urls import uris_from_call_result
+
+_METHOD_NOT_FOUND = -32601
 
 
 class McpSession:
@@ -40,6 +44,7 @@ class McpSession:
         self._memory = memory
         self._next_id = 1
         self._initialized = False
+        self._negotiated_version: str | None = None
 
     @property
     def server_name(self) -> str:
@@ -57,28 +62,58 @@ class McpSession:
                 },
             },
             timeout_s=self._config.connect_timeout_s,
+            allow_session_reset=False,
         )
         negotiated = result.get("protocolVersion")
-        if negotiated != self._config.protocol_version:
-            raise McpProtocolError("server protocolVersion does not match configured protocol_version")
+        if not isinstance(negotiated, str) or negotiated == "":
+            raise McpProtocolError("initialize result.protocolVersion must be a non-empty string")
+        if negotiated not in self._config.supported_protocol_versions:
+            raise McpProtocolError(f"server protocolVersion {negotiated!r} not in supported_protocol_versions")
+        self._negotiated_version = negotiated
+        if self._http is not None:
+            self._http.set_negotiated_version(negotiated)
         await self._notify("notifications/initialized")
         self._initialized = True
 
     async def list_tools(self) -> ListToolsReply:
         self._require_initialized()
-        result, raw = await self._rpc(
-            "tools/list",
-            {},
-            timeout_s=self._config.list_tools_timeout_s,
-        )
-        tools = _parse_tools(result)
-        digest = content_digest(result)
+        tools_acc: list[dict[str, Any]] = []
+        cursor: str | None = None
+        last_raw = b""
+        while True:
+            params: dict[str, Any] = {}
+            if cursor is not None:
+                params["cursor"] = cursor
+            result, raw = await self._rpc(
+                "tools/list",
+                params,
+                timeout_s=self._config.list_tools_timeout_s,
+            )
+            last_raw = raw
+            page_tools = result.get("tools")
+            if not isinstance(page_tools, list):
+                await self._fail_close()
+                raise McpProtocolError("tools/list result.tools must be a list", raw_bytes=raw)
+            tools_acc.extend(page_tools)
+            next_cursor = result.get("nextCursor")
+            if next_cursor is None:
+                break
+            if not isinstance(next_cursor, str) or next_cursor == "":
+                await self._fail_close()
+                raise McpProtocolError(
+                    "tools/list nextCursor must be a non-empty string when present",
+                    raw_bytes=raw,
+                )
+            cursor = next_cursor
+        aggregate: dict[str, Any] = {"tools": tools_acc}
+        parsed = _parse_tools(aggregate)
+        digest = content_digest(aggregate)
         return ListToolsReply(
             content_digest=digest,
-            raw_bytes=raw,
-            result=result,
+            raw_bytes=last_raw,
+            result=aggregate,
             files=(),
-            tools=tools,
+            tools=parsed,
         )
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> CallToolReply:
@@ -90,7 +125,8 @@ class McpSession:
         )
         is_error = result.get("isError")
         if type(is_error) is not bool:
-            raise McpProtocolError("tools/call result isError must be a bool")
+            await self._fail_close()
+            raise McpProtocolError("tools/call result isError must be a bool", raw_bytes=raw)
         uris = uris_from_call_result(
             result,
             allowed_schemes=frozenset(self._config.fetch_uri_schemes),
@@ -128,10 +164,18 @@ class McpSession:
         if not self._initialized:
             raise McpTransportError("session is not initialized", retryable=False)
 
-    async def _notify(self, method: str) -> None:
+    async def _fail_close(self) -> None:
+        if self._stdio is not None:
+            self._stdio.reset_receive_buffer()
+        if self._memory is not None:
+            self._memory.reset_receive_buffer()
+        await self.aclose()
+
+    async def _notify(self, method: str, params: dict[str, Any] | None = None) -> None:
         message: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            message["params"] = params
         if self._http is not None:
-            # Streamable HTTP: notifications are POSTed; response body is ignored.
             await self._http.request(message, timeout_s=self._config.connect_timeout_s)
             return
         await self._write(message)
@@ -142,6 +186,7 @@ class McpSession:
         params: dict[str, Any],
         *,
         timeout_s: float,
+        allow_session_reset: bool = True,
     ) -> tuple[dict[str, Any], bytes]:
         req_id = self._next_id
         self._next_id += 1
@@ -152,20 +197,115 @@ class McpSession:
             "params": params,
         }
         if self._http is not None:
-            message, raw = await self._http.request(request, timeout_s=timeout_s)
-            return _extract_result(message, req_id=req_id, raw=raw), raw
+            return await self._rpc_http(
+                request,
+                req_id=req_id,
+                timeout_s=timeout_s,
+                allow_session_reset=allow_session_reset,
+            )
         await self._write(request)
-        raw = await self._read(timeout_s=timeout_s)
         try:
-            message = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise McpProtocolError("response is not JSON", raw_bytes=raw) from exc
-        if not isinstance(message, dict):
-            raise McpProtocolError("JSON-RPC message must be an object", raw_bytes=raw)
+            return await self._read_until_response(req_id=req_id, timeout_s=timeout_s)
+        except McpTimeoutError:
+            await self._notify(
+                "notifications/cancelled",
+                {"requestId": req_id, "reason": "timeout"},
+            )
+            await asyncio.sleep(0)  # let peer drain the cancel notification
+            await self.aclose()
+            raise
+
+    async def _rpc_http(
+        self,
+        request: dict[str, Any],
+        *,
+        req_id: int,
+        timeout_s: float,
+        allow_session_reset: bool,
+    ) -> tuple[dict[str, Any], bytes]:
+        assert self._http is not None
+        try:
+            message, raw, status = await self._http.request(request, timeout_s=timeout_s)
+        except McpTimeoutError:
+            await self._notify(
+                "notifications/cancelled",
+                {"requestId": req_id, "reason": "timeout"},
+            )
+            await self.aclose()
+            raise
+        if status == 404 and allow_session_reset and self._http.session_id is not None:
+            # Spec 2025-06-18: session expired → re-initialize without session id.
+            self._http.clear_session()
+            self._initialized = False
+            await self.initialize()
+            return await self._rpc(
+                str(request["method"]),
+                dict(request["params"]),
+                timeout_s=timeout_s,
+                allow_session_reset=False,
+            )
+        if message is None:
+            raise McpTransportError(
+                f"streamable HTTP status {status}",
+                retryable=False,
+            )
         return _extract_result(message, req_id=req_id, raw=raw), raw
+
+    async def _read_until_response(
+        self,
+        *,
+        req_id: int,
+        timeout_s: float,
+    ) -> tuple[dict[str, Any], bytes]:
+        deadline = time.monotonic() + timeout_s
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise McpTimeoutError("stdio/memory receive exceeded configured timeout")
+            try:
+                raw = await self._read(timeout_s=remaining)
+            except McpTimeoutError:
+                raise
+            except (McpProtocolError, McpTransportError):
+                await self._fail_close()
+                raise
+            try:
+                message = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                await self._fail_close()
+                raise McpProtocolError("response is not JSON", raw_bytes=raw) from exc
+            if not isinstance(message, dict):
+                await self._fail_close()
+                raise McpProtocolError("JSON-RPC message must be an object", raw_bytes=raw)
+            # Notification: no id
+            if "id" not in message:
+                continue
+            # Server request: method + id → Method not found
+            if "method" in message:
+                await self._write(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": message["id"],
+                        "error": {
+                            "code": _METHOD_NOT_FOUND,
+                            "message": "Method not found",
+                        },
+                    }
+                )
+                continue
+            if message.get("id") != req_id:
+                # Response for a different id — skip (should not happen for single-flight).
+                continue
+            try:
+                return _extract_result(message, req_id=req_id, raw=raw), raw
+            except McpProtocolError:
+                await self._fail_close()
+                raise
 
     async def _write(self, message: dict[str, Any]) -> None:
         raw = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        if b"\n" in raw:
+            raise McpProtocolError("JSON-RPC message must not contain embedded newlines")
         if self._stdio is not None:
             await self._stdio.send(raw)
             return
@@ -196,8 +336,18 @@ def _extract_result(message: dict[str, Any], *, req_id: int, raw: bytes) -> dict
         if not isinstance(err, dict):
             raise McpProtocolError("JSON-RPC error must be an object", raw_bytes=raw)
         code = err.get("code")
-        # Message text may contain server detail — do not echo into our str beyond code.
-        raise McpProtocolError(f"JSON-RPC error code {code!r}", raw_bytes=raw)
+        rpc_message = err.get("message")
+        rpc_data = err.get("data")
+        detail = f"JSON-RPC error code {code!r}"
+        if isinstance(rpc_message, str) and rpc_message:
+            detail = f"{detail}: {rpc_message}"
+        raise McpProtocolError(
+            detail,
+            raw_bytes=raw,
+            rpc_code=code if isinstance(code, int) else None,
+            rpc_message=rpc_message if isinstance(rpc_message, str) else None,
+            rpc_data=rpc_data,
+        )
     result = message.get("result")
     if not isinstance(result, dict):
         raise McpProtocolError("JSON-RPC result must be an object", raw_bytes=raw)

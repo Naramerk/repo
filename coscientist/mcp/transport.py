@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class HttpResponse(BaseModel):
+    """Fully buffered HTTP response (tests / small MCP JSON bodies after streaming cap)."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     status_code: int = Field(ge=100, le=599)
@@ -15,10 +17,25 @@ class HttpResponse(BaseModel):
     body: bytes
 
 
-class HttpTransport(Protocol):
-    """Byte-level HTTP used by Streamable HTTP MCP and by file downloads in tests."""
+class HttpStream(Protocol):
+    """Incremental body reader; implementations enforce max bytes while reading."""
 
-    async def request(
+    @property
+    def status_code(self) -> int: ...
+
+    @property
+    def headers(self) -> Mapping[str, str]: ...
+
+    async def read(self, n: int) -> bytes:
+        """Read up to ``n`` bytes; empty bytes means EOF."""
+
+    async def aclose(self) -> None: ...
+
+
+class HttpTransport(Protocol):
+    """Byte-level HTTP. ``connect_ip`` pins the TCP peer (anti DNS rebinding)."""
+
+    async def open(
         self,
         method: str,
         url: str,
@@ -26,17 +43,20 @@ class HttpTransport(Protocol):
         headers: Mapping[str, str],
         body: bytes | None,
         timeout_s: float,
-    ) -> HttpResponse: ...
+        connect_ip: str | None,
+    ) -> HttpStream: ...
 
 
 class MessageTransport(Protocol):
-    """Framed JSON-RPC message transport (one request/response correlation layer above)."""
+    """Framed JSON-RPC message transport."""
 
     async def send(self, message: bytes) -> None: ...
 
     async def receive(self, *, max_bytes: int, timeout_s: float) -> bytes: ...
 
     async def aclose(self) -> None: ...
+
+    def reset_receive_buffer(self) -> None: ...
 
 
 class FileFetcher(Protocol):
