@@ -712,6 +712,8 @@ unmatched_ignore_imports_alerting = "error"
 [[tool.importlinter.contracts]]
 name = "profiles allow only mcp.config (+ core.domain Budget)"
 type = "forbidden"
+# Direct only: ignoring domain must not drop domain→claims/plan from the graph.
+allow_indirect_imports = true
 source_modules = ["coscientist.profiles"]
 forbidden_modules = [
   "coscientist.agents",
@@ -722,6 +724,7 @@ forbidden_modules = [
   "coscientist.api",
   "coscientist.experimental",
   "coscientist.mcp",
+  "coscientist.schema",
   "web",
   "fastapi",
   "google",

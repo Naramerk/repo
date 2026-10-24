@@ -778,19 +778,21 @@ class Budget(BaseModel):
 ## 8. Профили (R1)
 
 ```python
+RoleName = Identifier                       # Profile.roles key; agents import this (not str)
+
 class RoleConfig(BaseModel):  # frozen; strict; no guessed defaults
     model: Identifier
     tools: tuple[Identifier, ...]           # unique; MCP catalog names
     # prompt: PromptRef(prompt_id, version)  # waits on agent-layer prompt registry (#50)
 
 class RouteConfig(BaseModel):
-    role: Identifier
-    budget: Budget                          # core Budget (§7.4) — no parallel RouteBudget
+    role: RoleName
+    budget: Budget                          # core Budget (§7.4); strictness = scheduler C8
 
 class Profile(BaseModel):
     name: Identifier
     profile_version: StrictInt              # ≥ 1
-    roles: dict[Identifier, RoleConfig]
+    roles: dict[RoleName, RoleConfig]
     mcp_servers: tuple[McpServerConfig, ...]  # strict models in mcp/config.py; unique names
     routes: dict[Identifier, RouteConfig]   # route -> role + Budget
     catalog_extensions: tuple[Identifier, ...]
@@ -804,7 +806,8 @@ class ProfilePlugin(Protocol):
 - Профили: `research` (гипотезы + литература), `medicine` (маршрут medical + med_tools), `microfluidics`.
 - Плагин не меняет машину состояний и не вешает callbacks. Новый CodeCheck kind регистрируется с функцией и схемой параметров; неизвестный kind в каталоге — ошибка старта.
 - Study создаётся одной функцией для всех профилей: корень (REQUEST/STUDY) создаётся ядром до запуска любых агентов. Тест: `test_r1_every_profile_starts_and_has_root`.
-- `coscientist.profiles` import-linter: ↛ agents/llm/tools/checks/api; only `mcp.config` + `core.execution.domain` (Budget).
+- `coscientist.profiles` import-linter: ↛ agents/llm/tools/checks/api/schema; only `mcp.config` + `core.execution.domain` (Budget); `allow_indirect_imports` so domain ignore is direct-only.
+- YAML loader (P3): JSON mode or refuse lists — no list→tuple shim.
 
 ## 9. API для веба
 
