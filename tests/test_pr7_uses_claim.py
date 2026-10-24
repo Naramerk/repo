@@ -501,6 +501,7 @@ async def test_replay_attempt_started_inputs_empty(tmp_path, clock, runtime_cls)
                     "task_id": tid,
                     "study_id": sid,
                     "inputs": [],
+                    "attempt_role": "agent",
                 },
                 ts=clock.now(),
                 schema_version=1,
