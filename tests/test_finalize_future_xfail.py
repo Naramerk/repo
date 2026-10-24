@@ -77,10 +77,12 @@ def test_question_disposition_computed_from_verdict():
             "frozen": True,
             "lit_own_criterion": False,
             "accepted": True,
+            "validity_ok": True,
             "artifact_id": "A1",
             "sesoi": 0.5,
             "uses_sesoi": True,
             "used_sesoi": True,
+            "predicts_null": False,
             "predicted_direction": "positive",
             "effect": {
                 "est": 1.5,
@@ -131,7 +133,7 @@ def test_question_disposition_computed_from_verdict():
     )
     plan = {
         "plan_id": "pl",
-        "questions": [{"id": "Q1", "text": "why"}],
+        "questions": [{"id": "Q1", "text": "why", "final_type": "verdict"}],
         "tasks": [{"task_key": "E1", "addresses": ["Q1"]}],
     }
     d = dispositions(

@@ -1,4 +1,7 @@
-"""Missing / unknown domain values must raise (no silent defaults)."""
+"""Missing / unknown domain values must raise (no silent defaults).
+
+Maps review refusals → tests (see PR #39 description).
+"""
 
 from __future__ import annotations
 
@@ -6,7 +9,11 @@ import pytest
 from pydantic import ValidationError
 
 from coscientist.core.claims.claims import RuntimeClaim
-from coscientist.core.claims.verdict import recompute_effect_provenance
+from coscientist.core.claims.verdict import (
+    _binding_fields,
+    _claim_validity_ok,
+    recompute_effect_provenance,
+)
 from coscientist.core.events.errors import (
     ArtifactRejected,
     JournalFormatError,
@@ -23,6 +30,7 @@ from coscientist.core.execution.executor import (
     _check_role,
     _criterion_key_for_claim,
     _criterion_status_for_claim,
+    _effect_from_checks,
 )
 from coscientist.core.plan.foreach import _nat_key
 
@@ -80,6 +88,20 @@ def test_effect_missing_producer_raises():
     assert ei.value.field == "producer"
 
 
+def test_effect_from_checks_missing_producer_propagates():
+    """Fail-closed: JournalFormatError must not be swallowed by continue."""
+    checks = [
+        {
+            "role": "prediction",
+            "effect": {"est": 1.0, "kind": "point", "core_evaluated": True},
+            "used_sesoi": False,
+        }
+    ]
+    with pytest.raises(JournalFormatError, match="producer") as ei:
+        _effect_from_checks(checks)
+    assert ei.value.field == "producer"
+
+
 def test_output_kind_from_spec_requires_role():
     assert output_kind_from_spec(role="code") == "code"
     assert output_kind_from_spec(role="data") == "data"
@@ -127,6 +149,16 @@ def test_missing_attempt_role_raises_journal_format_error():
     assert ei.value.field == "attempt_role"
 
 
+def test_missing_closed_raises_journal_format_error():
+    with pytest.raises(JournalFormatError, match="closed") as ei:
+        require_journal_field(
+            {"provenance": "real", "charged": False, "attempt_role": "agent"},
+            "closed",
+            ctx="a1",
+        )
+    assert ei.value.field == "closed"
+
+
 def test_missing_target_kind_raises_type_error():
     with pytest.raises(TypeError):
         RuntimeClaim(criterion_status="met", check_role="prediction")  # type: ignore[call-arg]
@@ -137,53 +169,239 @@ def test_sandbox_infra_requires_transient():
         SandboxInfraError("oom")  # type: ignore[call-arg]
 
 
-def test_attempts_budget_count_missing_charged_raises():
-    """attempts.py charged path: bare KeyError must not escape (JournalFormatError)."""
-    from coscientist.core.execution.attempts import AttemptsMixin
-
-    class _RT(AttemptsMixin):
-        max_attempts = 3
-        attempts = {"a1": {"closed": True, "provenance": "real"}}  # no charged
-
-    with pytest.raises(JournalFormatError, match="charged") as ei:
-        # Mirror the budget-count loop body.
-        for aid, att in _RT.attempts.items():
-            require_journal_field(att, "charged", ctx=aid)
-    assert ei.value.field == "charged"
+def test_binding_missing_kind_raises():
+    with pytest.raises(JournalFormatError, match="kind") as ei:
+        _binding_fields({"ref": "x", "artifact_id": "a", "input": "main"})
+    assert ei.value.field == "kind"
 
 
-def test_machine_attempt_view_missing_charged_raises():
-    """machine.py _default_attempt: missing charged → JournalFormatError."""
+def test_binding_missing_input_raises():
+    with pytest.raises(JournalFormatError, match="input") as ei:
+        _binding_fields({"kind": "artifact", "artifact_id": "a"})
+    assert ei.value.field == "input"
+
+
+def test_claim_validity_ok_required():
+    with pytest.raises(JournalFormatError, match="validity_ok") as ei:
+        _claim_validity_ok({})
+    assert ei.value.field == "validity_ok"
+
+
+def test_cancel_close_reason_unmapped_raises():
+    from coscientist.core.execution.attempts import _close_reason_for_cancel
+
+    with pytest.raises(JournalFormatError, match="unmapped cancel") as ei:
+        _close_reason_for_cancel("not_a_reason")
+    assert ei.value.field == "close_reason"
+
+
+def test_hypothesis_snap_missing_ref_raises():
     from coscientist.core.events.errors import require_journal_field
 
-    d = {
-        "attempt_id": "a1",
-        "closed": False,
+    snap = {"verdict": "untested", "by_literature": False, "by_theory": False, "provenance": "real", "k": 1}
+    with pytest.raises(JournalFormatError, match="ref") as ei:
+        require_journal_field(snap, "ref", ctx="H1")
+    assert ei.value.field == "ref"
+
+
+def test_hypothesis_snap_missing_k_raises():
+    snap = {
+        "ref": "H1",
+        "verdict": "untested",
+        "by_literature": False,
+        "by_theory": False,
         "provenance": "real",
-        "task_id": "t1",
-        "study_id": "s1",
     }
-    with pytest.raises(JournalFormatError, match="charged") as ei:
-        require_journal_field(d, "charged", ctx="a1")
-    assert ei.value.field == "charged"
+    with pytest.raises(JournalFormatError, match="k") as ei:
+        require_journal_field(snap, "k", ctx="H1")
+    assert ei.value.field == "k"
 
 
-def test_machine_attempt_view_missing_provenance_raises():
-    d = {
-        "attempt_id": "a1",
-        "closed": False,
-        "charged": True,
-        "task_id": "t1",
-        "study_id": "s1",
+def test_study_refused_missing_classifier_error_raises():
+    with pytest.raises(JournalFormatError, match="classifier_error") as ei:
+        require_journal_field({"kind": "safety", "reason": "x"}, "classifier_error", ctx="StudyRefused")
+    assert ei.value.field == "classifier_error"
+
+
+def test_attempt_started_writer_is_v10():
+    from coscientist.core.events.schema_versions import ATTEMPT_STARTED_SCHEMA_VERSION
+    from coscientist.core.events.upcasters import writer_schema_version
+
+    assert ATTEMPT_STARTED_SCHEMA_VERSION == 10
+    assert writer_schema_version("AttemptStarted") == 10
+
+
+def test_attempt_started_v9_to_v10_is_identity():
+    """Identity upcaster must not invent closed/charged/provenance."""
+    from coscientist.core.events.upcasters import _attempt_started_v9_to_v10_required_fields
+
+    payload = {"attempt_id": "a1", "attempt_role": "agent"}
+    out = _attempt_started_v9_to_v10_required_fields(payload)
+    assert out == payload
+    assert "closed" not in out
+    assert "charged" not in out
+    assert "provenance" not in out
+
+
+def test_criterion_freeze_missing_predicts_null_raises():
+    from coscientist.core.claims.graph import GraphNode, GraphStore, default_execution_registry
+    from coscientist.core.events.ids import criterion_node_id
+    from coscientist.core.execution.executor import _criterion_freeze_attrs
+
+    sid = "st"
+    g = GraphStore(default_execution_registry())
+    g.upsert_node(
+        GraphNode(
+            node_id=criterion_node_id(sid, "T1"),
+            kind="criterion",
+            study_id=sid,
+            ref_id="T1",
+            attrs={
+                "frozen": True,
+                "uses_sesoi": False,
+                "predicted_direction": "two_sided",
+                # predicts_null absent
+            },
+        )
+    )
+    with pytest.raises(JournalFormatError, match="predicts_null") as ei:
+        _criterion_freeze_attrs(g, sid, "T1")
+    assert ei.value.field == "predicts_null"
+
+
+def test_derive_claim_missing_task_id_raises():
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.graph import GraphNode, GraphStore, default_execution_registry
+    from coscientist.core.events.ids import criterion_node_id
+    from coscientist.core.execution.domain import CheckResult, ReqStatus, TaskOutcome
+    from coscientist.core.execution.executor import _derive_claim_core_attrs
+
+    sid = "st"
+    g = GraphStore(default_execution_registry())
+    g.upsert_node(
+        GraphNode(
+            node_id=criterion_node_id(sid, "value_match"),
+            kind="criterion",
+            study_id=sid,
+            ref_id="value_match",
+            attrs={
+                "frozen": True,
+                "uses_sesoi": False,
+                "predicts_null": False,
+                "predicted_direction": "two_sided",
+            },
+        )
+    )
+    task = SimpleNamespace(
+        task_id=None,
+        spec=SimpleNamespace(method=None, criteria=[]),
+    )
+    checks = [
+        CheckResult(
+            check_id="value_match#0",
+            template_id="value_match",
+            status=ReqStatus.MET,
+            is_code=True,
+            required=True,
+            role="prediction",
+            effect={
+                "est": 1.0,
+                "kind": "point",
+                "producer": "agent",
+                "trusted": False,
+                "core_evaluated": True,
+                "countable": True,
+            },
+        )
+    ]
+    with pytest.raises(JournalFormatError, match="task_id") as ei:
+        _derive_claim_core_attrs(
+            task,
+            TaskOutcome.SUCCESS,
+            raw={"checked_against": "value_match", "target": "Q1", "target_kind": "question"},
+            checks=checks,
+            graph=g,
+            study_id=sid,
+            validated=True,
+        )
+    assert ei.value.field == "task_id"
+
+
+def test_runtime_claim_missing_predicts_null_dropped():
+    from coscientist.core.claims.claims import runtime_claim_from_node
+    from coscientist.core.claims.graph import GraphNode
+
+    node = GraphNode(
+        node_id="st:claim:C1",
+        kind="claim",
+        study_id="st",
+        ref_id="C1",
+        attrs={
+            "target": "Q1",
+            "target_kind": "question",
+            "checked_against": "value_match",
+            "criterion_status": "met",
+            "check_role": "prediction",
+            "frozen": True,
+            "accepted": True,
+            "validity_ok": True,
+            "evidence_kind": "computational",
+            "predicted_direction": "two_sided",
+            # predicts_null absent
+        },
+    )
+    claim, reason = runtime_claim_from_node(node, study_id="st")
+    assert claim is None
+    assert reason == "bad_predicts_null"
+
+
+def test_runtime_claim_missing_predicted_direction_dropped():
+    from coscientist.core.claims.claims import runtime_claim_from_node
+    from coscientist.core.claims.graph import GraphNode
+
+    node = GraphNode(
+        node_id="st:claim:C1",
+        kind="claim",
+        study_id="st",
+        ref_id="C1",
+        attrs={
+            "target": "Q1",
+            "target_kind": "question",
+            "checked_against": "value_match",
+            "criterion_status": "met",
+            "check_role": "prediction",
+            "frozen": True,
+            "accepted": True,
+            "validity_ok": True,
+            "evidence_kind": "computational",
+            "predicts_null": False,
+            # predicted_direction absent
+        },
+    )
+    claim, reason = runtime_claim_from_node(node, study_id="st")
+    assert claim is None
+    assert reason == "bad_predicted_direction"
+
+
+def test_machine_open_attempts_missing_closed_raises():
+    from types import SimpleNamespace
+
+    from coscientist.core.execution.machine import StudyRuntime
+
+    rt = object.__new__(StudyRuntime)
+    rt.tasks = {
+        "t1": SimpleNamespace(attempts=["a1"]),
     }
-    with pytest.raises(JournalFormatError, match="provenance") as ei:
-        require_journal_field(d, "provenance", ctx="a1")
-    assert ei.value.field == "provenance"
+    rt.attempts = {"a1": {"provenance": "real", "charged": False}}  # no closed
+    with pytest.raises(JournalFormatError, match="closed") as ei:
+        rt.invariant_open_attempts()
+    assert ei.value.field == "closed"
 
 
-def test_binding_missing_kind_raises():
-    from coscientist.core.claims.verdict import _binding_fields
+def test_study_fulfilled_requires_final_types():
+    from coscientist.core.claims.rules import study_fulfilled
 
-    with pytest.raises(JournalFormatError, match="kind") as ei:
-        _binding_fields({"ref": "x", "artifact_id": "a"})
-    assert ei.value.field == "kind"
+    with pytest.raises(JournalFormatError, match="question_final_types") as ei:
+        study_fulfilled({"Q1": "refuted"}, all_required_success=True)
+    assert ei.value.field == "final_type"

@@ -106,15 +106,8 @@
         "attempt_id": "att_lit",
         "task_id": "st_reclass_old/E1",
         "task_key": "E1",
-        "study_id": "st_reclass_old",
-        "n": 1,
-        "dispatch_id": "dispatch:att_lit",
         "inputs": [],
-        "tainted_context": false,
-        "closed": false,
-        "charged": false,
-        "provenance": "real",
-        "attempt_role": "agent"
+        "tainted_context": false
       }
     },
     {

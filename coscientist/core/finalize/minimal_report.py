@@ -14,17 +14,28 @@ MAX_BYTES = 10_240
 
 
 def _task_provenance(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> str:
-    for aid in reversed(task.attempts):
-        att = attempts.get(aid)
-        if att is None or not att.get("closed"):
-            continue
-        # Closed attempts must stamp provenance (never defaulted).
-        return str(att["provenance"])
+    """Provenance of the latest closed attempt.
+
+    Zero-attempt tasks (cancelled/skipped before start) report ``stub`` because
+    no attempt row exists — not a missing-field default on a journaled attempt.
+    Closed attempts must stamp ``provenance`` (JournalFormatError if absent).
+    """
     if not task.attempts:
-        # Defined meaning for zero-attempt tasks (cancelled/skipped before start):
-        # no attempt evidence exists — report stub. Not a missing-field default.
         return "stub"
-    raise ValueError(f"no closed attempt provenance for task {task.spec.task_key!r}")
+    for aid in reversed(task.attempts):
+        if aid not in attempts:
+            raise JournalFormatError(
+                f"missing attempt row {aid!r} for task {task.spec.task_key!r}",
+                field="attempts",
+            )
+        att = attempts[aid]
+        if not require_journal_field(att, "closed", ctx=aid):
+            continue
+        return str(require_journal_field(att, "provenance", ctx=aid))
+    raise JournalFormatError(
+        f"no closed attempt provenance for task {task.spec.task_key!r}",
+        field="provenance",
+    )
 
 
 def _summary(

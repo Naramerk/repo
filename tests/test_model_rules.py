@@ -43,8 +43,13 @@ def test_h1_hypothesis_gets_verdict(impl):
     # PR8b: no claims about target → untested (even if experiments ran).
     assert impl.verdict([], any_experiment_done=True)[0] == "untested"
     assert impl.verdict([impl.Claim("met")], any_experiment_done=True)[0] == "survived"
-    assert not impl.study_fulfilled({"Q1": "untested"}, all_required_success=True)
-    assert impl.study_fulfilled({"Q1": "refuted"}, all_required_success=True)
+    ftypes = {"Q1": "verdict"}
+    assert not impl.study_fulfilled(
+        {"Q1": "untested"}, all_required_success=True, question_final_types=ftypes
+    )
+    assert impl.study_fulfilled(
+        {"Q1": "refuted"}, all_required_success=True, question_final_types=ftypes
+    )
 
 
 def test_stance_computed_from_criterion(impl):
@@ -179,5 +184,11 @@ def test_core_study_view_matches_refmodel(required_ok, verdicts):
     core = pytest.importorskip(
         "coscientist.core.claims.rules", reason="coscientist.core.claims.rules not present yet (M0)"
     )
-    got = core.study_view_verdict(required_ok, verdicts) == "fulfilled"
-    assert got == refmodel.study_fulfilled(verdicts, required_ok)
+    ftypes = {qid: "verdict" for qid in verdicts}
+    got = (
+        core.study_view_verdict(required_ok, verdicts, question_final_types=ftypes)
+        == "fulfilled"
+    )
+    assert got == refmodel.study_fulfilled(
+        verdicts, required_ok, question_final_types=ftypes
+    )

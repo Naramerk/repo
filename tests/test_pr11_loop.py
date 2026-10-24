@@ -899,6 +899,11 @@ def _seed_refute_claim_on_graph(rt, *, hid: str, exp_key: str, claim_suffix: str
                 "severe": True,
                 "refute_capable": True,
                 "independence_key": exp_key,
+                "uses_sesoi": True,
+                "used_sesoi": True,
+                "predicts_null": False,
+                "predicted_direction": "two_sided",
+                "sesoi": 0.5,
                 "effect": {
                     "est": 1.0,
                     "ci_low": 1.0,

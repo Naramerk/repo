@@ -8,7 +8,7 @@ from typing import Any
 
 from coscientist.core.claims.claims import compute_verdict_snapshots
 from coscientist.core.claims.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
-from coscientist.core.events.errors import require_journal_field
+from coscientist.core.events.errors import JournalFormatError, require_journal_field
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import attempt_id, task_id
 from coscientist.core.execution.domain import (
@@ -63,6 +63,17 @@ _CANCEL_CLOSE_REASON: dict[str, CloseReason] = {
     TaskReason.SAME_DIGEST_RETRY.value: CloseReason.CANCELLED,
     TaskReason.RETRY_SCHEDULED.value: CloseReason.CANCELLED,
 }
+
+
+def _close_reason_for_cancel(reason_s: str) -> str:
+    """Map cancel TaskReason → CloseReason.value or raise JournalFormatError."""
+    try:
+        return _CANCEL_CLOSE_REASON[reason_s].value
+    except KeyError as e:
+        raise JournalFormatError(
+            f"unmapped cancel TaskReason for AttemptClosed: {reason_s!r}",
+            field="close_reason",
+        ) from e
 
 
 def _attempt_role_from_reviews(runtime: Any, task_id: str) -> str:
@@ -622,8 +633,7 @@ class AttemptsMixin:
         tr = coerce_task_reason(reason)
         assert tr is not None
         reason_s = tr.value
-        # Attempt close uses CloseReason via full table (KeyError if unmapped).
-        cr_s = _CANCEL_CLOSE_REASON[reason_s].value
+        cr_s = _close_reason_for_cancel(reason_s)
         events: list[EventEnvelope] = []
         for aid in task.attempts:
             if not require_journal_field(self.attempts[aid], "closed", ctx=aid):

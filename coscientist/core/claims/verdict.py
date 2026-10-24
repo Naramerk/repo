@@ -203,18 +203,22 @@ def _binding_fields(b: Any) -> tuple[str, str, str | None, str | None]:
 
     if isinstance(b, Mapping):
         kind = require_journal_field(b, "kind", ctx="binding")
+        inp = require_journal_field(b, "input", ctx="binding")
         return (
             str(kind),
-            str(b.get("input") or ""),
+            str(inp),
             str(b.get("artifact_id") or "") or None,
             str(b.get("digest") or "") or None,
         )
     kind = getattr(b, "kind", None)
     if kind is None:
         raise JournalFormatError("binding missing required kind", field="kind")
+    inp = getattr(b, "input", None)
+    if inp is None:
+        raise JournalFormatError("binding missing required input", field="input")
     return (
         str(kind),
-        str(getattr(b, "input", "") or ""),
+        str(inp),
         str(getattr(b, "artifact_id", "") or "") or None,
         str(getattr(b, "digest", "") or "") or None,
     )
@@ -570,18 +574,31 @@ def distinct_by_key(claims: Sequence[Any]) -> list[Any]:
     return out
 
 
+def _claim_validity_ok(claim: Any) -> bool:
+    """Require ``validity_ok`` on the claim (never default True)."""
+    if isinstance(claim, Mapping):
+        from coscientist.core.events.errors import require_journal_field
+
+        return bool(require_journal_field(claim, "validity_ok", ctx="claim"))
+    if not hasattr(claim, "validity_ok"):
+        from coscientist.core.events.errors import JournalFormatError
+
+        raise JournalFormatError("claim missing required validity_ok", field="validity_ok")
+    return bool(claim.validity_ok)
+
+
 def effective_outcome(claim: Any) -> ClaimOutcome | None:
     """Read stored outcome, else derive from criterion_status / validity."""
     stored = getattr(claim, "claim_outcome", None) or getattr(claim, "outcome", None)
     if stored in ("consistent", "inconsistent", "indeterminate"):
         return stored  # type: ignore[return-value]
-    if getattr(claim, "validity_ok", True) is False:
+    if _claim_validity_ok(claim) is False:
         return None
     return status_to_outcome(str(claim.criterion_status))
 
 
 def effective_validity(claim: Any) -> ClaimValidity:
-    if getattr(claim, "validity_ok", True) is False:
+    if _claim_validity_ok(claim) is False:
         return "invalid"
     stored = getattr(claim, "validity", None)
     if stored in ("valid", "invalid"):
@@ -916,7 +933,7 @@ def exclusion_reason(claim: Any) -> ExclusionReason | None:
         "unapproved_check",
     ):
         return stored  # type: ignore[return-value]
-    if claim.check_role == "unknown" and not getattr(claim, "validity_ok", True):
+    if claim.check_role == "unknown" and not _claim_validity_ok(claim):
         return "unknown_role"
     if effective_validity(claim) == "invalid":
         return "validity_failed"
@@ -1200,7 +1217,7 @@ def hypothesis_report_row(
             elif oc == "inconsistent":
                 refuting.append(cid)
             role = getattr(c, "check_role", None)
-            if role == "validity" and getattr(c, "validity_ok", True):
+            if role == "validity" and _claim_validity_ok(c):
                 tid = getattr(c, "template_id", None) or "validity"
                 if tid not in aux:
                     aux.append(str(tid))

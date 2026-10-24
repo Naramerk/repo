@@ -281,11 +281,33 @@ _FULFILLMENT_BLOCKING = frozenset(
 )
 
 
-def study_fulfilled(question_verdicts, all_required_success):
-    """Oracle: same blocking set as coscientist.core.claims.rules.study_fulfilled."""
-    return all_required_success and all(
-        v not in _FULFILLMENT_BLOCKING for v in question_verdicts.values()
+def study_fulfilled(
+    question_verdicts, all_required_success, question_final_types=None
+):
+    """Oracle aligned with coscientist.core.claims.rules.study_fulfilled."""
+    if not all_required_success:
+        return False
+    if question_final_types is None:
+        raise TypeError("question_final_types required")
+    settled = frozenset(
+        {
+            "answered",
+            "refuted",
+            "survived",
+            "supported",
+            "partially_supported",
+            "inconclusive_after_tests",
+        }
     )
+    for qid, v in question_verdicts.items():
+        if v in _FULFILLMENT_BLOCKING:
+            return False
+        ft = question_final_types[qid]
+        if ft == "artifact" and v != "answered":
+            return False
+        if ft == "both" and v not in settled:
+            return False
+    return True
 
 
 # --- PR 2 finalize oracle (independent of coscientist.core) -----------------

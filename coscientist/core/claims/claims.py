@@ -504,15 +504,6 @@ def runtime_claim_from_node(
                 sesoi = None
         uses_sesoi = _coerce_bool(attrs.get("uses_sesoi"))
         used_sesoi = _coerce_bool(attrs.get("used_sesoi"))
-        predicts_null_b = _coerce_bool(attrs.get("predicts_null"))
-        predicts_null = False if predicts_null_b is None else predicts_null_b
-        pd_raw = attrs.get("predicted_direction")
-        if pd_raw is None:
-            predicted_direction = "two_sided"
-        elif pd_raw in ("positive", "negative", "two_sided"):
-            predicted_direction = str(pd_raw)
-        else:
-            return None, "bad_predicted_direction"
         raw_digests = attrs.get("data_digests")
         data_digests: list[str] | None
         if isinstance(raw_digests, list):
@@ -567,6 +558,14 @@ def runtime_claim_from_node(
         thr = _coerce_id_set(attrs.get("threshold_source_evidence_ids"))
         if thr is False:
             return None, "bad_threshold_source_evidence_ids"
+        predicts_null_b = _coerce_bool(attrs.get("predicts_null"))
+        if predicts_null_b is None:
+            return None, "bad_predicts_null"
+        predicts_null = predicts_null_b
+        pd_raw = attrs.get("predicted_direction")
+        if pd_raw not in ("positive", "negative", "two_sided"):
+            return None, "bad_predicted_direction"
+        predicted_direction = str(pd_raw)
         frozen_seq = _coerce_optional_int(attrs.get("criterion_frozen_at_seq"))
         if frozen_seq is False:
             return None, "bad_criterion_frozen_at_seq"

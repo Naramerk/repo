@@ -243,12 +243,19 @@ def _criterion_freeze_attrs(graph: Any, study_id: str, template_id: Any) -> dict
             out["alpha"] = float(attrs["alpha"])
         except (TypeError, ValueError):
             pass
-    if "predicts_null" in attrs:
-        out["predicts_null"] = bool(attrs.get("predicts_null"))
-    if "uses_sesoi" in attrs:
-        out["uses_sesoi"] = bool(attrs.get("uses_sesoi"))
-    if attrs.get("predicted_direction") in ("positive", "negative", "two_sided"):
-        out["predicted_direction"] = str(attrs["predicted_direction"])
+    from coscientist.core.events.errors import require_journal_field
+
+    if node is not None:
+        # Frozen criterion nodes must carry the catalog stamps (lifecycle accept).
+        out["predicts_null"] = bool(
+            require_journal_field(attrs, "predicts_null", ctx=str(template_id))
+        )
+        out["uses_sesoi"] = bool(
+            require_journal_field(attrs, "uses_sesoi", ctx=str(template_id))
+        )
+        out["predicted_direction"] = str(
+            require_journal_field(attrs, "predicted_direction", ctx=str(template_id))
+        )
     return out
 
 
@@ -314,7 +321,8 @@ def _effect_from_checks(
             recomputed = recompute_effect_provenance(effect, attempt_id=attempt_id)
             if recomputed is not None:
                 effect = recomputed
-        except (TypeError, ValueError, KeyError, JournalFormatError):
+        except (TypeError, ValueError, KeyError):
+            # Structural parse errors skip this check; JournalFormatError propagates.
             continue
         used = bool(_check_field(c, "used_sesoi"))
         return effect, used
@@ -395,14 +403,18 @@ def _derive_claim_core_attrs(
     frozen = _criterion_is_frozen(graph, study_id, key)
     crit = _criterion_freeze_attrs(graph, study_id, key)
     sesoi = crit.get("sesoi")
-    # Absent freeze stamp ⇒ criterion does not declare the flag (catalog default).
-    uses_sesoi = bool(crit["uses_sesoi"]) if "uses_sesoi" in crit else False
-    predicts_null = bool(crit["predicts_null"]) if "predicts_null" in crit else False
-    predicted_direction = (
-        str(crit["predicted_direction"])
-        if "predicted_direction" in crit
-        else "two_sided"
+    from coscientist.core.events.errors import JournalFormatError, require_journal_field
+
+    uses_sesoi = bool(require_journal_field(crit, "uses_sesoi", ctx=str(key)))
+    predicts_null = bool(require_journal_field(crit, "predicts_null", ctx=str(key)))
+    predicted_direction = str(
+        require_journal_field(crit, "predicted_direction", ctx=str(key))
     )
+    if predicted_direction not in ("positive", "negative", "two_sided"):
+        raise JournalFormatError(
+            f"invalid predicted_direction: {predicted_direction!r}",
+            field="predicted_direction",
+        )
     pred_statuses: list[str] = []
     has_prediction_check = False
     for c in checks or ():
@@ -462,7 +474,12 @@ def _derive_claim_core_attrs(
         claim_outcome,  # type: ignore[arg-type]
         validity="valid" if validity_ok else "invalid",
     )
-    exp_id = str(getattr(task, "task_id", None) or "")
+    tid_raw = getattr(task, "task_id", None)
+    if tid_raw is None or tid_raw == "":
+        from coscientist.core.events.errors import JournalFormatError
+
+        raise JournalFormatError("task missing required task_id", field="task_id")
+    exp_id = str(tid_raw)
     lookup = None
     arts = artifact_store
     if arts is not None and hasattr(arts, "get_meta"):

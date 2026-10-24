@@ -670,7 +670,7 @@ def report_hypothesis_verdicts(
 
             row.update(
                 {
-                    "ref": snap["ref"] if "ref" in snap else hid,
+                    "ref": require_journal_field(snap, "ref", ctx=hid),
                     "target_kind": "hypothesis",
                     "by_literature": bool(
                         require_journal_field(snap, "by_literature", ctx=hid)
@@ -679,7 +679,7 @@ def report_hypothesis_verdicts(
                         require_journal_field(snap, "by_theory", ctx=hid)
                     ),
                     "provenance": snap["provenance"],
-                    "k": snap["k"] if "k" in snap else study.confirmations_needed,
+                    "k": require_journal_field(snap, "k", ctx=hid),
                     "supported_needed": study.supported_needed,
                     "refutations_needed": study.refutations_needed,
                     "refutation_priority": study.refutation_priority,

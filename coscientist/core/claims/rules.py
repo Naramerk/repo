@@ -201,11 +201,25 @@ def study_fulfilled(
     """
     if not all_required_success:
         return False
-    ftypes = question_final_types or {}
+    if question_final_types is None:
+        from coscientist.core.events.errors import JournalFormatError
+
+        raise JournalFormatError(
+            "question_final_types required for study_fulfilled",
+            field="final_type",
+        )
     for qid, v in question_verdicts.items():
         if v in _FULFILLMENT_BLOCKING:
             return False
-        ft = ftypes[qid]
+        try:
+            ft = question_final_types[qid]
+        except KeyError as e:
+            from coscientist.core.events.errors import JournalFormatError
+
+            raise JournalFormatError(
+                f"missing final_type for question {qid!r}",
+                field="final_type",
+            ) from e
         if ft == "artifact":
             if v != "answered":
                 return False

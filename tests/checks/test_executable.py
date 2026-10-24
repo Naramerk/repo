@@ -2329,6 +2329,8 @@ def test_no_derived_call_id_fallback():
             "lit_own_criterion": False,
             "accepted": True,
             "validity_ok": True,
+            "predicts_null": False,
+            "predicted_direction": "two_sided",
             "effect": {
                 "est": 1.0,
                 "kind": "point",

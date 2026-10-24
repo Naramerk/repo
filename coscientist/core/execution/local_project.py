@@ -119,10 +119,14 @@ class LocalProjectMixin:
         if ev.type == "StudyCreated":
             self.study = Study.model_validate(p)
         elif ev.type == "StudyRefused":
+            from coscientist.core.events.errors import require_journal_field
+
             self._intake_refusal = IntakeRefuse(
                 kind=RefusalKind(p["kind"]),
                 reason=str(p.get("reason") or ""),
-                classifier_error=bool(p["classifier_error"]) if "classifier_error" in p else False,
+                classifier_error=bool(
+                    require_journal_field(p, "classifier_error", ctx="StudyRefused")
+                ),
             )
         elif ev.type == "BudgetDebited":
             spent = Decimal(str(p.get("spent_rub") or 0))

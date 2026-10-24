@@ -303,8 +303,14 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         )
 
     def invariant_open_attempts(self) -> bool:
+        from coscientist.core.events.errors import require_journal_field
+
         for t in self.tasks.values():
-            open_n = sum(1 for a in t.attempts if not self.attempts.get(a, {}).get("closed"))
+            open_n = sum(
+                1
+                for a in t.attempts
+                if not require_journal_field(self.attempts[a], "closed", ctx=a)
+            )
             if open_n > 1:
                 return False
         return True
@@ -556,14 +562,21 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             if now > task.deadline or (ed is not None and now >= ed):
                 self._retry_at.pop(tid, None)
                 continue
-            open_atts = [a for a in task.attempts if not self.attempts.get(a, {}).get("closed")]
+            from coscientist.core.events.errors import require_journal_field
+
+            open_atts = [
+                a
+                for a in task.attempts
+                if not require_journal_field(self.attempts[a], "closed", ctx=a)
+            ]
             if open_atts:
                 self._retry_at.pop(tid, None)
                 continue
             # Inherit provenance only from a prior closed attempt; first start
             # (or synthetic retry_at with no attempts) derives at bind.
             closed_with_prov = any(
-                self.attempts.get(a, {}).get("closed") for a in task.attempts
+                require_journal_field(self.attempts[a], "closed", ctx=a)
+                for a in task.attempts
             )
             prov = self._provenance_for_retry(tid) if closed_with_prov else None
             self._retry_at.pop(tid, None)

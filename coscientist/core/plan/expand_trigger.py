@@ -106,39 +106,6 @@ def expansion_already_handled(runtime: StudyRuntime, after_task: str) -> bool:
     return False
 
 
-_REASON_TO_REPORT_KIND: dict[str, str] = {
-    "invalid": "invalid",
-    "invalid_hitl": "invalid",
-    "has_refutation": "has_refutation",
-    "critic_rejected": "critic_rejected",
-    "expansion_limit": "expansion_limit",
-    "foreach_error": "foreach_error",
-}
-
-
-def expansion_report_kind(reason: str, *, report_kind: str | None = None) -> str:
-    """Typed report_kind for ExpansionRefused (no detail/prefix heuristics)."""
-    if report_kind is not None:
-        if report_kind not in _REASON_TO_REPORT_KIND.values():
-            from coscientist.core.events.errors import JournalFormatError
-
-            raise JournalFormatError(
-                f"unknown ExpansionRefused report_kind: {report_kind!r}",
-                field="report_kind",
-            )
-        return report_kind
-    r = str(reason)
-    try:
-        return _REASON_TO_REPORT_KIND[r]
-    except KeyError as e:
-        from coscientist.core.events.errors import JournalFormatError
-
-        raise JournalFormatError(
-            f"unknown ExpansionRefused reason: {r!r}",
-            field="reason",
-        ) from e
-
-
 async def refuse_expansion(
     runtime: StudyRuntime,
     after_task: str,
@@ -146,13 +113,11 @@ async def refuse_expansion(
     reason: str,
     detail: str,
     plan_key: str | None = None,
-    report_kind: str | None = None,
 ) -> None:
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
-    report_kind = expansion_report_kind(reason, report_kind=report_kind)
     # Deterministic idem per PLAN-n (same key on live path and recover).
     if plan_key:
         idem_key = make_idem("ExpansionRefused", sid, plan_key, reason)
@@ -172,7 +137,6 @@ async def refuse_expansion(
                     "reason": reason,
                     "detail": detail,
                     "plan_key": plan_key,
-                    "report_kind": report_kind,
                 },
                 ts=now,
                 schema_version=1,
@@ -220,7 +184,11 @@ async def ensure_plan_n_task(
         await refuse_expansion(runtime, after_task, reason="expansion_limit", detail="replan_reserve")
         return None
     sid = runtime.study.study_id
-    existing_plan_n = sum(1 for t in runtime.tasks.values() if t.kind == TaskKind.PLAN)
+    existing_plan_n = sum(
+        1
+        for t in runtime.tasks.values()
+        if t.kind == TaskKind.PLAN and str(t.spec.task_key).startswith("PLAN-")
+    )
     n = int(getattr(runtime, "_agent_expansions", 0)) + existing_plan_n + 1
     key = f"PLAN-{n}"
     tid = task_id(sid, key)
@@ -237,7 +205,7 @@ async def ensure_plan_n_task(
             task_key=key,
             title=f"Replan after {after_task}",
             goal="expand plan (M1 deterministic critic gate)",
-            route=TaskKind.PLAN.value,
+            route="planner",
             required=False,
             depends_on=[after_task],
             criteria=list(PLAN_N_CRITIC_CRITERIA),
@@ -313,8 +281,8 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
     task = runtime.tasks.get(task_id_full)
     if task is None or task.state != TaskState.DONE:
         return None
-    # PLAN task completion → M1 deterministic critic, then apply (or refuse).
-    if task.kind == TaskKind.PLAN:
+    # PLAN-n completion → M1 deterministic critic, then apply (or refuse).
+    if task.kind == TaskKind.PLAN and task.spec.task_key.startswith("PLAN-"):
         plan_key = task.spec.task_key
         if plan_n_already_closed(runtime, plan_key):
             return None
@@ -322,11 +290,9 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
             from coscientist.core.plan.expand import apply_pending_expansion
 
             return await apply_pending_expansion(runtime, plan_key)
-        # MJ-c: non-SUCCESS expansion PLAN must not vanish (stage PLAN has no request).
+        # MJ-c: non-SUCCESS PLAN-n must not vanish.
         meta = (getattr(runtime, "_expand_requests", None) or {}).get(plan_key)
-        if not isinstance(meta, dict):
-            return None
-        after = str(meta.get("after_task") or plan_key)
+        after = str((meta or {}).get("after_task") or plan_key)
         oc = getattr(task.outcome, "value", task.outcome) or "unknown"
         await refuse_expansion(
             runtime,
@@ -419,8 +385,8 @@ async def resume_pending_expansions(runtime: StudyRuntime) -> int:
     for tid, task in list(runtime.tasks.items()):
         if task.state != TaskState.DONE:
             continue
-        # PLAN task: resume critic/apply or refuse non-SUCCESS.
-        if task.kind == TaskKind.PLAN:
+        # PLAN-n: resume critic/apply or refuse non-SUCCESS.
+        if task.kind == TaskKind.PLAN and task.spec.task_key.startswith("PLAN-"):
             plan_key = task.spec.task_key
             if plan_n_already_closed(runtime, plan_key):
                 continue

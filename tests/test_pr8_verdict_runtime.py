@@ -51,6 +51,7 @@ _DERIVED_OK = {
     "sesoi": 0.5,
     "uses_sesoi": True,
     "used_sesoi": True,
+    "predicts_null": False,
     "predicted_direction": "positive",
     "effect": {
         "est": 1.5,
@@ -928,20 +929,40 @@ def test_criterion_status_not_met_from_failed_check():
             },
         )
     ]
+    from coscientist.core.events.ids import criterion_node_id
+
+    sid = "st"
+    g = GraphStore(default_execution_registry())
+    cnid = criterion_node_id(sid, "value_match")
+    g.upsert_node(
+        GraphNode(
+            node_id=cnid,
+            kind="criterion",
+            study_id=sid,
+            ref_id="value_match",
+            attrs={
+                "frozen": False,
+                "template_id": "value_match",
+                "uses_sesoi": False,
+                "predicts_null": False,
+                "predicted_direction": "two_sided",
+            },
+        )
+    )
     attrs = _derive_claim_core_attrs(
         task,
         TaskOutcome.SUCCESS,
         raw={"checked_against": "value_match", "target": "Q1", "target_kind": "question"},
         checks=checks,
-        graph=None,
-        study_id="st",
+        graph=g,
+        study_id=sid,
         validated=True,
     )
     assert attrs["criterion_status"] == "not_met"
     assert attrs["accepted"] is True  # optional failure → stance, not rejection
     assert attrs["validity_ok"] is True
     assert attrs["check_role"] == "prediction"
-    assert attrs["frozen"] is False  # no freeze node
+    assert attrs["frozen"] is False  # freeze node present but not frozen_at_seq
 
 
 def test_frozen_normalizes_check_id_to_template_id():
@@ -959,7 +980,14 @@ def test_frozen_normalizes_check_id_to_template_id():
             kind="criterion",
             study_id=sid,
             ref_id="value_match",
-            attrs={"frozen": True, "frozen_at_seq": 3, "template_id": "value_match"},
+            attrs={
+                "frozen": True,
+                "frozen_at_seq": 3,
+                "template_id": "value_match",
+                "uses_sesoi": False,
+                "predicts_null": False,
+                "predicted_direction": "two_sided",
+            },
         )
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)

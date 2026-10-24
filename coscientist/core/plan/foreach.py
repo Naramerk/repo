@@ -191,15 +191,10 @@ async def _refuse_and_skip_foreach(
     *,
     after: str,
     detail: str,
-    report_kind: str,
 ) -> None:
     """ExpansionRefused + TaskDone SKIPPED so the template is never dispatched."""
     await refuse_expansion(
-        runtime,
-        after,
-        reason="invalid",
-        detail=detail[:200],
-        report_kind=report_kind,
+        runtime, after, reason="invalid", detail=detail[:200]
     )
     if template.state != TaskState.DONE:
         await runtime.cancel_task(  # type: ignore[attr-defined]
@@ -251,7 +246,6 @@ async def materialize_foreach(
                 template,
                 after=after,
                 detail=f"foreach_assign_keys:{keyed}",
-                report_kind="foreach_error",
             )
             return None
         from coscientist.core.plan.shares import apply_foreach_parent_shares
@@ -284,11 +278,7 @@ async def materialize_foreach(
     share_err = critic_plan_shares(merged, study=study)
     if share_err is not None:
         await _refuse_and_skip_foreach(
-            runtime,
-            template,
-            after=after,
-            detail=f"foreach_shares:{share_err}",
-            report_kind="invalid",
+            runtime, template, after=after, detail=f"foreach_shares:{share_err}"
         )
         return None
     pid = foreach_plan_id(sid, tkey, new_rev)
@@ -458,7 +448,6 @@ async def maybe_foreach_after_task_done(
                 tmpl,
                 after=after,
                 detail=f"foreach_exception:{type(e).__name__}",
-                report_kind="foreach_error",
             )
     return done
 
@@ -485,7 +474,6 @@ async def materialize_ready_foreach(runtime: StudyRuntime) -> list[str]:
                 tmpl,
                 after=after,
                 detail=f"foreach_exception:{type(e).__name__}",
-                report_kind="foreach_error",
             )
     return done
 

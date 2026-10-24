@@ -845,6 +845,14 @@ def _attempt_started_v8_to_v9_role(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _attempt_started_v9_to_v10_required_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """v10 writer requires closed/charged/provenance/attempt_role.
+
+    Identity only — never invent missing fields (fold raises JournalFormatError).
+    """
+    return dict(payload)
+
+
 register_upcaster("TaskCreated", 1, _task_created_v1_to_v2)
 register_upcaster("TaskCreated", 2, _ensure_spec_addresses)
 register_upcaster("TaskCreated", 3, _task_created_v3_to_v4_input_mode)
@@ -892,6 +900,7 @@ register_upcaster("AttemptStarted", 5, _attempt_started_v5_to_v6_budget_limit)
 register_upcaster("AttemptStarted", 6, _attempt_started_v6_to_v7_tainted)
 register_upcaster("AttemptStarted", 7, _attempt_started_v7_to_v8_inputs_digest)
 register_upcaster("AttemptStarted", 8, _attempt_started_v8_to_v9_role)
+register_upcaster("AttemptStarted", 9, _attempt_started_v9_to_v10_required_fields)
 
 
 def _result_recorded_v2_to_v3_output_kinds(payload: dict[str, Any]) -> dict[str, Any]:

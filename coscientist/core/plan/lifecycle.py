@@ -640,19 +640,24 @@ class LifecycleMixin:
                     ):
                         continue
                 # SESOI / predicts_null from catalog template only — never params.
-                cattrs: dict[str, Any] = {"frozen": True, "template_id": key}
+                # Always stamp uses_sesoi/predicts_null/predicted_direction (required on read).
+                cattrs: dict[str, Any] = {
+                    "frozen": True,
+                    "template_id": key,
+                    "uses_sesoi": False,
+                    "predicts_null": False,
+                    "predicted_direction": "two_sided",
+                }
                 cattrs["alpha"] = 0.05
                 if catalog is not None:
                     by_id = {t.id: t for t in getattr(catalog, "templates", []) or []}
                     tmpl = by_id.get(key)
                     if tmpl is not None:
-                        if getattr(tmpl, "uses_sesoi", False) and tmpl.sesoi is not None:
+                        if bool(tmpl.uses_sesoi) and tmpl.sesoi is not None:
                             cattrs["uses_sesoi"] = True
                             cattrs["sesoi"] = float(tmpl.sesoi)
-                            cattrs["predicted_direction"] = str(getattr(tmpl, "predicted_direction", "two_sided"))
-                        else:
-                            cattrs["uses_sesoi"] = False
-                        cattrs["predicts_null"] = bool(getattr(tmpl, "predicts_null", False))
+                            cattrs["predicted_direction"] = str(tmpl.predicted_direction)
+                        cattrs["predicts_null"] = bool(tmpl.predicts_null)
                 events.append(
                     EventEnvelope(
                         study_id=sid,

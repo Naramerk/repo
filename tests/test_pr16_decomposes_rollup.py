@@ -331,7 +331,8 @@ def test_rollup_rule():
     }
     plans_maj["p1"] = {
         **plans_maj["p1"],
-        "questions": plans_maj["p1"]["questions"] + [{"id": "Q.c", "text": "c", "parent_id": "Q", "final_type": "verdict"}],
+        "questions": plans_maj["p1"]["questions"]
+        + [{"id": "Q.c", "text": "c", "parent_id": "Q", "final_type": "verdict"}],
     }
     rolled_maj = apply_rollup(leaves_maj, plans=plans_maj)
     assert rolled_maj["Q"]["disposition"] == Disposition.REFUTED.value
