@@ -81,7 +81,7 @@ def test_format_html_wraps_same_md():
     md, _ = render_report(inp, "md", _CFG)
     html_body, media = render_report(inp, "html", _CFG)
     assert media == "text/html; charset=utf-8"
-    assert f'<p id="artifact-art_deadbeef"><a href="artifact:art_deadbeef">' in html_body
+    assert '<p id="artifact-art_deadbeef"><a href="artifact:art_deadbeef">' in html_body
     assert f"<pre>{html.escape(md)}</pre>" in html_body
     assert "<title>st_16a1</title>" in html_body
 

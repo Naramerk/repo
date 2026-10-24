@@ -5,9 +5,9 @@ from coscientist.reporting.report import (
     ReportFormat,
     ReportFormatConfig,
     ReportFormatRefuse,
+    ReportingError,
     ReportRenderInput,
     ReportView,
-    ReportingError,
     get_study_report,
     render_report,
 )
