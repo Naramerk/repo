@@ -16,9 +16,25 @@ PlanNeedField = Annotated[
 ]
 _PLAN_NEED_ADAPTER: TypeAdapter[Need | NeedUnrecorded] = TypeAdapter(PlanNeedField)
 
+# Discriminator tags for Need | NeedUnrecorded (upcaster + adapter).
+PLAN_NEED_KIND_NEED: Literal["need"] = "need"
+PLAN_NEED_KIND_UNRECORDED: Literal["unrecorded"] = "unrecorded"
+PLAN_NEED_KINDS: frozenset[str] = frozenset({PLAN_NEED_KIND_NEED, PLAN_NEED_KIND_UNRECORDED})
+
+PlanNeedRefuseReason = Literal[
+    "plan_need_unrecorded",
+    "invalid",
+    "plan_need_required",
+]
+
 
 class PlanNeedRefuse(ValueError):
-    """Typed refuse for Need contradictions (not a silent fix)."""
+    """Typed refuse for Need / profile contradictions (not a silent fix)."""
+
+    def __init__(self, detail: str, *, reason: PlanNeedRefuseReason) -> None:
+        self.detail = detail
+        self.reason = reason
+        super().__init__(detail)
 
 
 def parse_plan_need(raw: Mapping[str, Any]) -> Need | NeedUnrecorded:
@@ -29,21 +45,24 @@ def parse_plan_need(raw: Mapping[str, Any]) -> Need | NeedUnrecorded:
 def require_need(value: Need | NeedUnrecorded) -> Need:
     """Fail-closed at use: ``NeedUnrecorded`` is not a planner decision."""
     if isinstance(value, NeedUnrecorded):
-        raise PlanNeedRefuse(f"plan_need_unrecorded:source_schema_version={value.source_schema_version}")
+        raise PlanNeedRefuse(
+            f"plan_need_unrecorded:source_schema_version={value.source_schema_version}",
+            reason="plan_need_unrecorded",
+        )
     return value
 
 
 def need_from_plan_blob(prev: Mapping[str, Any] | None, field: NeedKind) -> Need | NeedUnrecorded:
     """Carry Need from active plan blob. Missing after upcast = corruption → refuse."""
     if prev is None or field not in prev or prev[field] is None:
-        raise PlanNeedRefuse(f"plan_need_corrupt:missing_{field}")
+        raise PlanNeedRefuse(f"plan_need_corrupt:missing_{field}", reason="invalid")
     raw = prev[field]
     if not isinstance(raw, Mapping):
-        raise PlanNeedRefuse(f"plan_need_corrupt:bad_shape_{field}")
+        raise PlanNeedRefuse(f"plan_need_corrupt:bad_shape_{field}", reason="invalid")
     try:
         return parse_plan_need(raw)
     except ValidationError as e:
-        raise PlanNeedRefuse(f"plan_need_corrupt:bad_shape_{field}") from e
+        raise PlanNeedRefuse(f"plan_need_corrupt:bad_shape_{field}", reason="invalid") from e
 
 
 def recorded_plan_needs(prev: Mapping[str, Any] | None) -> tuple[Need, Need]:
@@ -61,7 +80,7 @@ def resolve_plan_needs(
 ) -> tuple[Need, Need]:
     """Resolve Plan Needs for accept_plan. Omitted → PlanNeedRefuse (planner decides)."""
     if hypotheses is None:
-        raise PlanNeedRefuse("plan_need_required:hypotheses")
+        raise PlanNeedRefuse("plan_need_required:hypotheses", reason="plan_need_required")
     if literature is None:
-        raise PlanNeedRefuse("plan_need_required:literature")
+        raise PlanNeedRefuse("plan_need_required:literature", reason="plan_need_required")
     return hypotheses, literature

@@ -949,7 +949,10 @@ def _plan_accepted_v11_to_v12_need(payload: dict[str, Any]) -> dict[str, Any]:
     """G4: absent Need → NeedUnrecorded; present → strict discriminated union."""
     from pydantic import ValidationError
 
-    from coscientist.core.plan.need import parse_plan_need
+    from coscientist.core.plan.need import (
+        PLAN_NEED_KINDS,
+        parse_plan_need,
+    )
 
     out = dict(payload)
     pad = {"kind": "unrecorded", "source_schema_version": PLAN_ACCEPTED_NEED_SINCE}
@@ -964,7 +967,7 @@ def _plan_accepted_v11_to_v12_need(payload: dict[str, Any]) -> dict[str, Any]:
             raise JournalFormatError(f"PlanAccepted.v12:need_kind_missing:{field}")
         if blob["kind"] is None:
             raise JournalFormatError(f"PlanAccepted.v12:need_kind_null:{field}")
-        if blob["kind"] not in ("need", "unrecorded"):
+        if blob["kind"] not in PLAN_NEED_KINDS:
             raise JournalFormatError(f"PlanAccepted.v12:need_kind_unknown:{field}")
         try:
             out[field] = parse_plan_need(blob).model_dump(mode="json")

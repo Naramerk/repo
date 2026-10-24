@@ -193,7 +193,7 @@ async def _refuse_and_skip_foreach(
     *,
     after: str,
     detail: str,
-    reason: str = "invalid",
+    reason: str,
 ) -> None:
     """ExpansionRefused + TaskDone SKIPPED so the template is never dispatched."""
     await refuse_expansion(
@@ -249,6 +249,7 @@ async def materialize_foreach(
                 template,
                 after=after,
                 detail=f"foreach_assign_keys:{keyed}",
+                reason="invalid",
             )
             return None
         from coscientist.core.plan.shares import apply_foreach_parent_shares
@@ -281,7 +282,11 @@ async def materialize_foreach(
     share_err = critic_plan_shares(merged, study=study)
     if share_err is not None:
         await _refuse_and_skip_foreach(
-            runtime, template, after=after, detail=f"foreach_shares:{share_err}"
+            runtime,
+            template,
+            after=after,
+            detail=f"foreach_shares:{share_err}",
+            reason="invalid",
         )
         return None
     pid = foreach_plan_id(sid, tkey, new_rev)
@@ -299,7 +304,7 @@ async def materialize_foreach(
             template,
             after=after,
             detail=str(e),
-            reason="plan_need_unrecorded",
+            reason=e.reason,
         )
         return None  # audit-ok[except_silent_return]: PlanNeedRefuse → ExpansionRefused
     plan = Plan(
@@ -479,6 +484,7 @@ async def maybe_foreach_after_task_done(
                 tmpl,
                 after=after,
                 detail=f"foreach_exception:{type(e).__name__}",
+                reason="invalid",
             )
     return done
 
@@ -510,6 +516,7 @@ async def materialize_ready_foreach(runtime: StudyRuntime) -> list[str]:
                 tmpl,
                 after=after,
                 detail=f"foreach_exception:{type(e).__name__}",
+                reason="invalid",
             )
     return done
 

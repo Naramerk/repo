@@ -398,7 +398,9 @@ async def materialize_loop_iter(
     try:
         hyp_need, lit_need = recorded_plan_needs(prev)
     except PlanNeedRefuse as e:
-        await _refuse_loop(runtime, loop, detail=str(e))
+        await _refuse_loop(
+            runtime, loop, detail=str(e), reason=e.reason
+        )
         return None  # audit-ok[except_silent_return]: PlanNeedRefuse → LoopRefused
     plan = Plan(
         plan_id=pid,
@@ -641,7 +643,17 @@ async def _emit_loop_refused(
             ),
             payload={
                 "after_task": after,
-                "reason": "invalid",
+                # Loop status codes stay "invalid"; PlanNeedRefuse codes pass through.
+                "reason": (
+                    "invalid"
+                    if reason
+                    in (
+                        LOOP_REASON_ERROR,
+                        LOOP_REASON_REFUSED,
+                        LOOP_REASON_ITERATION_CAP,
+                    )
+                    else reason
+                ),
                 "detail": detail_s,
                 "plan_key": None,
                 "loop_id": loop.loop_id,
@@ -972,7 +984,10 @@ def fold_loop_capped(runtime: Any, payload: dict[str, Any]) -> None:
     reason = str(payload.get("reason") or LOOP_REASON_ITERATION_CAP)
     st = _loop_state(runtime)
     row = dict(st.get(lid) or {})
-    row["status"] = "refused" if reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED) else "capped"
+    # Only true iteration_cap is "capped"; error / refused / plan-need reasons → refused.
+    row["status"] = (
+        "capped" if reason == LOOP_REASON_ITERATION_CAP else "refused"
+    )
     try:
         row["iter"] = int(payload.get("iter") or row.get("iter") or 0)
     except (TypeError, ValueError):
@@ -1048,9 +1063,7 @@ def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
         return
     loop_reason = str(payload.get("loop_reason") or LOOP_REASON_REFUSED)
     row["status"] = (
-        "refused"
-        if loop_reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED)
-        else "capped"
+        "capped" if loop_reason == LOOP_REASON_ITERATION_CAP else "refused"
     )
     row["reason"] = loop_reason
     row["refuse_detail"] = str(payload.get("detail") or "")[:200]
