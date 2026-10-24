@@ -9,6 +9,7 @@ from typing import Any, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from coscientist.agents.prompts.registry import PromptRef, PromptRegistry
+from coscientist.agents.research_spec import ResearchSpec
 from coscientist.agents.schemas import (
     AgentError,
     AgentRun,
@@ -29,11 +30,15 @@ _T = TypeVar("_T", bound=BaseModel)
 
 _ROLE_PLANNER = "planner"
 _ROLE_EXECUTOR = "executor-route"
+_ROLE_TZ_SPEC = "tz_spec"
+_REQUIRED_ROLES = (_ROLE_PLANNER, _ROLE_EXECUTOR, _ROLE_TZ_SPEC)
 
 _OUTPUT_MODELS: dict[str, type[BaseModel]] = {
     _ROLE_PLANNER: PlanOut,
     _ROLE_EXECUTOR: ExecutorRouteOut,
+    _ROLE_TZ_SPEC: ResearchSpec,
 }
+_CONTEXT_ROLES = frozenset({_ROLE_PLANNER, _ROLE_TZ_SPEC})
 
 
 def _json_schema_response_format(model: type[BaseModel], *, name: str) -> dict[str, Any]:
@@ -108,10 +113,16 @@ class LlmAgentAdapter:
         prompts: PromptRegistry,
         role_prompts: Mapping[str, PromptRef],
     ) -> None:
-        if _ROLE_PLANNER not in role_models or _ROLE_EXECUTOR not in role_models:
-            raise AgentError("role_models must include 'planner' and 'executor-route' (no defaults)")
-        if _ROLE_PLANNER not in role_prompts or _ROLE_EXECUTOR not in role_prompts:
-            raise AgentError("role_prompts must include 'planner' and 'executor-route' (no defaults)")
+        missing_models = [r for r in _REQUIRED_ROLES if r not in role_models]
+        if missing_models:
+            raise AgentError(
+                f"role_models must include {list(_REQUIRED_ROLES)} (no defaults); missing {missing_models}"
+            )
+        missing_prompts = [r for r in _REQUIRED_ROLES if r not in role_prompts]
+        if missing_prompts:
+            raise AgentError(
+                f"role_prompts must include {list(_REQUIRED_ROLES)} (no defaults); missing {missing_prompts}"
+            )
         for role, model in role_models.items():
             if type(model) is not str or not model.strip():
                 raise AgentError(f"role_models[{role!r}] must be a non-empty str")
@@ -138,7 +149,7 @@ class LlmAgentAdapter:
         out_cls = _OUTPUT_MODELS[role]
         tool_refs: list[ToolCallRef] = []
 
-        if role == _ROLE_PLANNER:
+        if role in _CONTEXT_ROLES:
             ctx = _parse_input(StudyContext, input)
             user_payload = ctx.model_dump()
         else:

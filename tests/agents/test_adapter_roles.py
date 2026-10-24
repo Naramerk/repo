@@ -14,6 +14,7 @@ from coscientist.agents.adapter import LlmAgentAdapter
 from coscientist.agents.prompts.roles import (
     ROLE_EXECUTOR_REF,
     ROLE_PLANNER_REF,
+    ROLE_TZ_SPEC_REF,
     role_prompt_registry,
 )
 from coscientist.agents.schemas import (
@@ -35,7 +36,7 @@ from coscientist.llm.transport import TransportResponse
 from coscientist.tools.resolve import Resolution, ToolNeed
 from tests.llm.test_client import FakeClock, _config, _ok_body
 
-_ROLE_PROMPTS = {"planner": ROLE_PLANNER_REF, "executor-route": ROLE_EXECUTOR_REF}
+_ROLE_PROMPTS = {"planner": ROLE_PLANNER_REF, "executor-route": ROLE_EXECUTOR_REF, "tz_spec": ROLE_TZ_SPEC_REF}
 
 
 def _budget(*, max_llm_calls: int = 10, max_tokens: int = 100_000, max_tool_calls: int = 50) -> Budget:
@@ -217,7 +218,9 @@ def _adapter(
 ) -> LlmAgentAdapter:
     return LlmAgentAdapter(
         client,
-        role_models=dict(role_models or {"planner": "test-model", "executor-route": "test-model"}),
+        role_models=dict(
+            role_models or {"planner": "test-model", "executor-route": "test-model", "tz_spec": "test-model"}
+        ),
         tool_router=router or FakeToolRouter(tools={}),
         prompts=role_prompt_registry(),
         role_prompts=_ROLE_PROMPTS,
@@ -310,7 +313,7 @@ def test_role_models_missing_planner_raises() -> None:
     with pytest.raises(AgentError, match="role_models must include"):
         LlmAgentAdapter(
             client=SimpleNamespace(),  # type: ignore[arg-type]
-            role_models={"executor-route": "m"},
+            role_models={"executor-route": "m", "tz_spec": "m"},
             tool_router=FakeToolRouter(tools={}),
             prompts=role_prompt_registry(),
             role_prompts=_ROLE_PROMPTS,
@@ -321,7 +324,7 @@ def test_role_models_empty_model_raises() -> None:
     with pytest.raises(AgentError, match="non-empty str"):
         LlmAgentAdapter(
             client=SimpleNamespace(),  # type: ignore[arg-type]
-            role_models={"planner": " ", "executor-route": "m"},
+            role_models={"planner": " ", "executor-route": "m", "tz_spec": "m"},
             tool_router=FakeToolRouter(tools={}),
             prompts=role_prompt_registry(),
             role_prompts=_ROLE_PROMPTS,
@@ -431,3 +434,26 @@ def test_agent_run_has_error_field() -> None:
         tool_calls=(),
     )
     assert run.error == "boom"
+
+
+@pytest.mark.asyncio
+async def test_tz_spec_returns_research_spec(monkeypatch: pytest.MonkeyPatch) -> None:
+    from coscientist.agents.research_spec import Constraint, Goal, ResearchSpec, SuccessMetric
+
+    spec = ResearchSpec(
+        object="catalyst X",
+        goal=Goal(statement="measure X under Y", research_form=None, trl=None),
+        scope="lab",
+        constraints=(Constraint(subtype="resource", content="max 10 LLM calls", limit=None),),
+        success_metrics=(SuccessMetric(metric="sources", op=">=", target="5", check="code", tolerance=None),),
+    )
+    adapter = _adapter(_client([_ok_body(content=spec.model_dump_json())], monkeypatch=monkeypatch))
+    run = await adapter.run(
+        "tz_spec",
+        StudyContext(study_id="s1", request="two tasks", profile="research"),
+        [],
+        _budget(),
+    )
+    assert isinstance(run.output, ResearchSpec)
+    assert run.output.object == "catalyst X"
+    assert run.error is None
