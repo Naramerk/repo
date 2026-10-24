@@ -98,6 +98,9 @@
   reject cases parametrized with `ids` + `match=`.
 - Alligator fix: drop unused `_quality()`; `field_name` before `with` in freeze test.
 
+### R16a — typed `MinimalReport` [M5]
+- Pydantic `MinimalReport` (+ task/question/sections rows, `extra=forbid`); build/truncate/assemble return the model; `render_markdown_report(MinimalReport)`; StudyFinalized via `model_dump(mode="json")`. Rows use SoT `Disposition` / `TaskOutcome` / `Provenance` (no duplicate Literals). Assemble refuses missing question fields, hypothesis key≠id, DONE without outcome, missing/unknown closed-attempt provenance (no invent `real`); DONE without closed attempt uses explicit `provenance=null`; MD Tasks only from `report.tasks`; question `note` preserved; verdict disposition `reason` = verdict; AttemptStarted upcaster materializes absent provenance; finalize `_observations` required. [CAP #16](docs/CAPABILITIES.md?plain=1#L25); [DESIGN §9–§11](docs/DESIGN.md); [handoff](docs/handoff/report-s3.md) `R16a` / [#117](https://github.com/Naramerk/repo/issues/117).
+
 ### Graph schema parse (G7 split 1/2) [M1] — AttrType; `GRAPH_SCHEMA_VERSION`; required attrs; explicit `null_ok`. [DESIGN §2](docs/DESIGN.md#2-доменная-модель), [CAP #14](docs/CAPABILITIES.md?plain=1#L23).
 
 ### G4 Need

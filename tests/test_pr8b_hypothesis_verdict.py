@@ -1111,7 +1111,7 @@ def test_minimal_report_hypotheses_truncation_le_10kb():
         fallback_reason=None,
         hypotheses=hyps,
     )
-    assert len(canonical_json(report)) <= MAX_BYTES
+    assert len(canonical_json(report.model_dump(mode="json"))) <= MAX_BYTES
 
 
 # --- Property: record_claim + invariants V1–V5 --------------------------------

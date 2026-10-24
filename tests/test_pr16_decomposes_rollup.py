@@ -1509,28 +1509,37 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
         hitl_request_id=rid,
     )
     assert new_pid, "expand_plan refused (check ExpansionRefused in journal)"
-    md = render_markdown_report(
+    from coscientist.core.finalize.minimal_report import assemble_minimal_report
+
+    qdisp = {
+        "Q": {
+            "disposition": "not_attempted",
+            "reason": "rollup_incomplete",
+            "formulation": "root",
+        },
+        "Q.a": {
+            "disposition": "not_attempted",
+            "reason": "no_counting_claims",
+            "formulation": "planned child",
+        },
+        "Q.b": {
+            "disposition": "not_attempted",
+            "reason": "no_task",
+            "formulation": "emergent child",
+        },
+    }
+    assembled = assemble_minimal_report(
         study_id=rt.study.study_id,
         terminal_reason="completed",
         trigger="all_done",
-        verdict="partial",
         contributing_reasons=[],
-        question_dispositions={
-            "Q": {"disposition": "not_attempted", "reason": "rollup_incomplete", "formulation": "root"},
-            "Q.a": {
-                "disposition": "not_attempted",
-                "reason": "no_counting_claims",
-                "formulation": "planned child",
-            },
-            "Q.b": {
-                "disposition": "not_attempted",
-                "reason": "no_task",
-                "formulation": "emergent child",
-            },
-        },
+        verdict="partial",
         tasks=rt.tasks,
-        plans=rt.plans,
+        attempts=rt.attempts,
+        question_dispositions=qdisp,
+        fallback_reason=None,
     )
+    md = render_markdown_report(assembled, tasks=rt.tasks, plans=rt.plans)
     assert "## Дерево подзадач" in md
     assert "origin=emergent" in md
     assert "`Q.b`" in md

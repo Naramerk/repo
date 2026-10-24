@@ -1,13 +1,23 @@
-"""Deterministic minimal_report builder (≤ 10 KiB after JCS)."""
+"""Deterministic minimal_report builder (≤ 10 KiB after JCS).
+
+R16a: typed ``MinimalReport`` is the public shape; MD takes that model.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from pydantic import ValidationError
+
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.digest import canonical_json
 from coscientist.core.execution.domain import Task, TaskOutcome, TaskState
+from coscientist.core.finalize.minimal_report_models import (
+    MinimalReport,
+    MinimalReportRefuse,
+    MinimalReportSections,
+)
 
 MAX_BYTES = 10_240
 
@@ -42,7 +52,7 @@ def _summary(
 
 def _sections(
     tasks: list[Task], attempts: Mapping[str, Mapping[str, Any]]
-) -> dict[str, list[str]]:
+) -> MinimalReportSections:
     real: list[str] = []
     stub: list[str] = []
     human: list[str] = []
@@ -55,7 +65,97 @@ def _sections(
             stub.append(key)
         if t.outcome in {TaskOutcome.FAILED, TaskOutcome.SKIPPED} and t.reason:
             human.append(key)
-    return {"real": real, "stub": stub, "human": human}
+    return MinimalReportSections(real=real, stub=stub, human=human)
+
+
+def assemble_minimal_report(
+    *,
+    study_id: str,
+    terminal_reason: str,
+    trigger: str,
+    contributing_reasons: list[str],
+    verdict: str,
+    tasks: Mapping[str, Task],
+    attempts: Mapping[str, Mapping[str, Any]],
+    question_dispositions: Mapping[str, Mapping[str, Any]],
+    fallback_reason: str | None,
+    refusal: str | None = None,
+    hypotheses: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None = None,
+    hypotheses_unavailable: str | None = None,
+    custom_checks: Sequence[Mapping[str, Any]] | None = None,
+    observations: Sequence[Mapping[str, Any] | str] | None = None,
+) -> MinimalReport:
+    """Full (non-truncated) typed minimal report."""
+    task_list = sorted(tasks.values(), key=lambda t: t.spec.task_key)
+    q_rows = [
+        {
+            "question_id": qid,
+            "formulation": str(d.get("formulation", ""))[:500],
+            "disposition": str(d.get("disposition", "not_attempted")),
+            "reason": str(d.get("reason", ""))[:200],
+        }
+        for qid, d in sorted(question_dispositions.items())
+    ]
+    if isinstance(hypotheses, Mapping):
+        h_rows: list[dict[str, Any]] = []
+        for hid, v in sorted(hypotheses.items()):
+            if not isinstance(v, Mapping):
+                raise MinimalReportRefuse(
+                    f"hypothesis {hid!r}: expected mapping row, got {type(v).__name__}"
+                )
+            h_rows.append(dict(v))
+            if "hypothesis_id" not in h_rows[-1]:
+                h_rows[-1]["hypothesis_id"] = str(hid)
+    else:
+        h_rows = [dict(h) for h in (hypotheses if hypotheses is not None else [])]
+    t_rows = [
+        {
+            "task_key": t.spec.task_key,
+            "kind": t.kind.value,
+            "outcome": t.outcome.value if t.outcome else TaskOutcome.SKIPPED.value,
+            "reason": (
+                t.reason.value
+                if isinstance(t.reason, TaskReason)
+                else (str(t.reason) if t.reason else None)
+            ),
+            "provenance": _task_provenance(t, attempts),
+        }
+        for t in task_list
+        if t.state == TaskState.DONE or t.outcome is not None
+    ]
+    q_n = len(q_rows)
+    na_n = sum(1 for q in q_rows if q.get("disposition") == "not_attempted")
+    checks = [dict(c) for c in (custom_checks if custom_checks is not None else [])]
+    obs_list: list[Any] = []
+    for obs in observations if observations is not None else []:
+        if isinstance(obs, Mapping):
+            obs_list.append(dict(obs))
+        else:
+            obs_list.append(obs)
+    raw: dict[str, Any] = {
+        "study_id": study_id,
+        "terminal_reason": terminal_reason,
+        "trigger": trigger,
+        "contributing_reasons": contributing_reasons[:20],
+        "summary": _summary(terminal_reason, task_list, q_rows),
+        "question_count": q_n,
+        "not_attempted_count": na_n,
+        "fallback_reason": fallback_reason,
+        "refusal": refusal,
+        "verdict": verdict,
+        "tasks": t_rows,
+        "questions": q_rows,
+        "hypotheses": h_rows,
+        "hypotheses_unavailable": hypotheses_unavailable,
+        "sections": _sections(task_list, attempts).model_dump(mode="json"),
+        "custom_checks": checks,
+        "observations": obs_list,
+        "truncated": False,
+    }
+    try:
+        return MinimalReport.model_validate(raw)
+    except ValidationError as e:
+        raise MinimalReportRefuse(f"MinimalReport: {e}") from e
 
 
 def build_minimal_report(
@@ -74,121 +174,98 @@ def build_minimal_report(
     hypotheses_unavailable: str | None = None,
     custom_checks: Sequence[Mapping[str, Any]] | None = None,
     observations: Sequence[Mapping[str, Any] | str] | None = None,
-) -> dict[str, Any]:
-    task_list = sorted(tasks.values(), key=lambda t: t.spec.task_key)
-    q_rows = [
-        {
-            "question_id": qid,
-            "formulation": str(d.get("formulation", ""))[:500],
-            "disposition": str(d.get("disposition", "not_attempted")),
-            "reason": str(d.get("reason", ""))[:200],
-        }
-        for qid, d in sorted(question_dispositions.items())
-    ]
-    if isinstance(hypotheses, Mapping):
-        h_rows: list[dict[str, Any]] = [
-            dict(v) if isinstance(v, Mapping) else {"hypothesis_id": hid, "verdict": v}
-            for hid, v in sorted(hypotheses.items())
-        ]
-    else:
-        h_rows = [dict(h) for h in (hypotheses or [])]
-    t_rows = [
-        {
-            "task_key": t.spec.task_key,
-            "kind": t.kind.value,
-            "outcome": t.outcome.value if t.outcome else TaskOutcome.SKIPPED.value,
-            "reason": (
-                t.reason.value
-                if isinstance(t.reason, TaskReason)
-                else (str(t.reason) if t.reason else None)
-            ),
-            "provenance": _task_provenance(t, attempts),
-        }
-        for t in task_list
-        if t.state == TaskState.DONE or t.outcome is not None
-    ]
-    q_n = len(q_rows)
-    na_n = sum(1 for q in q_rows if q.get("disposition") == "not_attempted")
-    report: dict[str, Any] = {
-        "study_id": study_id,
-        "terminal_reason": terminal_reason,
-        "trigger": trigger,
-        "contributing_reasons": contributing_reasons[:20],
-        "summary": _summary(terminal_reason, task_list, q_rows),
-        "question_count": q_n,
-        "not_attempted_count": na_n,
-        "fallback_reason": fallback_reason,
-        "refusal": refusal,
-        "verdict": verdict,
-        "tasks": t_rows,
-        "questions": q_rows,
-        "hypotheses": h_rows,
-        "hypotheses_unavailable": hypotheses_unavailable,
-        "sections": _sections(task_list, attempts),
-        # Apply custom_checks/observations BEFORE truncate so they respect 10KB.
-        "custom_checks": [dict(c) for c in (custom_checks or [])],
-        "observations": list(observations or []),
-        "truncated": False,
-    }
-    return truncate_minimal_report(report)
+) -> MinimalReport:
+    return truncate_minimal_report(
+        assemble_minimal_report(
+            study_id=study_id,
+            terminal_reason=terminal_reason,
+            trigger=trigger,
+            contributing_reasons=contributing_reasons,
+            verdict=verdict,
+            tasks=tasks,
+            attempts=attempts,
+            question_dispositions=question_dispositions,
+            fallback_reason=fallback_reason,
+            refusal=refusal,
+            hypotheses=hypotheses,
+            hypotheses_unavailable=hypotheses_unavailable,
+            custom_checks=custom_checks,
+            observations=observations,
+        )
+    )
 
 
-def truncate_minimal_report(report: dict[str, Any]) -> dict[str, Any]:
+def _jcs_size(report: MinimalReport) -> int:
+    return len(canonical_json(report.model_dump(mode="json")))
+
+
+def truncate_minimal_report(report: MinimalReport) -> MinimalReport:
     """Shrink lists until JCS size ≤ MAX_BYTES; summary counters stay intact."""
-    out = dict(report)
-    out["truncated"] = False
-    if len(canonical_json(out)) <= MAX_BYTES:
+    out = report.model_copy(update={"truncated": False})
+    if _jcs_size(out) <= MAX_BYTES:
         return out
-    out["truncated"] = True
-    qs = [dict(q) for q in out.get("questions", [])]
-    for q in qs:
-        q["formulation"] = str(q.get("formulation", ""))[:80]
-    out["questions"] = qs
-    if len(canonical_json(out)) <= MAX_BYTES:
+    out = out.model_copy(update={"truncated": True})
+    qs = [
+        q.model_copy(update={"formulation": q.formulation[:80]}) for q in out.questions
+    ]
+    out = out.model_copy(update={"questions": qs})
+    if _jcs_size(out) <= MAX_BYTES:
         return out
-    while len(canonical_json(out)) > MAX_BYTES and out.get("tasks"):
-        out["tasks"] = out["tasks"][:-1]
-    while len(canonical_json(out)) > MAX_BYTES and out.get("questions"):
-        out["questions"] = out["questions"][:-1]
-    # SPEC: truncate hypotheses after questions.
-    while len(canonical_json(out)) > MAX_BYTES and out.get("hypotheses"):
-        out["hypotheses"] = out["hypotheses"][:-1]
-    # PR20: custom_checks / observations participate in the 10KB budget.
-    while len(canonical_json(out)) > MAX_BYTES and out.get("observations"):
-        out["observations"] = out["observations"][:-1]
-    while len(canonical_json(out)) > MAX_BYTES and out.get("custom_checks"):
-        out["custom_checks"] = out["custom_checks"][:-1]
-    secs = dict(out.get("sections") or {})
+    while _jcs_size(out) > MAX_BYTES and out.tasks:
+        out = out.model_copy(update={"tasks": list(out.tasks[:-1])})
+    while _jcs_size(out) > MAX_BYTES and out.questions:
+        out = out.model_copy(update={"questions": list(out.questions[:-1])})
+    while _jcs_size(out) > MAX_BYTES and out.hypotheses:
+        out = out.model_copy(update={"hypotheses": list(out.hypotheses[:-1])})
+    while _jcs_size(out) > MAX_BYTES and out.observations:
+        out = out.model_copy(update={"observations": list(out.observations[:-1])})
+    while _jcs_size(out) > MAX_BYTES and out.custom_checks:
+        out = out.model_copy(update={"custom_checks": list(out.custom_checks[:-1])})
+    secs = out.sections
     for key in ("human", "stub", "real"):
-        while len(canonical_json(out)) > MAX_BYTES and secs.get(key):
-            secs[key] = secs[key][:-1]
-            out["sections"] = secs
+        while _jcs_size(out) > MAX_BYTES and getattr(secs, key):
+            cur = list(getattr(secs, key))
+            secs = secs.model_copy(update={key: cur[:-1]})
+            out = out.model_copy(update={"sections": secs})
     return out
 
 
 def render_markdown_report(
+    report: MinimalReport,
     *,
-    study_id: str,
-    terminal_reason: str,
-    trigger: str,
-    verdict: str,
-    contributing_reasons: list[str],
-    question_dispositions: Mapping[str, Mapping[str, Any]],
-    tasks: Mapping[str, Task],
-    refusal: str | None = None,
     as_of: str | None = None,
     plans: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None = None,
-    custom_checks: Sequence[Mapping[str, Any]] | None = None,
-    observations: Sequence[Mapping[str, Any] | str] | None = None,
+    tasks: Mapping[str, Task] | None = None,
 ) -> str:
-    """Deterministic MD report (no LLM)."""
+    """Deterministic MD report from typed ``MinimalReport`` (no LLM)."""
+    study_id = report.study_id
+    terminal_reason = report.terminal_reason
+    trigger = report.trigger
+    verdict = report.verdict
+    contributing_reasons = list(report.contributing_reasons)
+    refusal = report.refusal
+    question_dispositions = {
+        q.question_id: {
+            "disposition": q.disposition,
+            "reason": q.reason,
+            "formulation": q.formulation,
+        }
+        for q in report.questions
+    }
+    custom_checks = list(report.custom_checks)
+    observations: list[Any] = list(report.observations)
+    task_map: Mapping[str, Task] = {} if tasks is None else tasks
     lines = [
         f"# Study report `{study_id}`",
         "",
         f"- trigger: `{trigger}`",
         f"- terminal_reason: `{terminal_reason}`",
         f"- verdict: `{verdict}`",
-        f"- contributing_reasons: {', '.join(contributing_reasons) or '(none)'}",
+        (
+            f"- contributing_reasons: {', '.join(contributing_reasons)}"
+            if contributing_reasons
+            else "- contributing_reasons: (none)"
+        ),
     ]
     if as_of:
         lines.append(f"- as_of: `{as_of}`")
@@ -197,43 +274,43 @@ def render_markdown_report(
     not_done = [c for c in contributing_reasons if str(c).startswith("не выполнено:")]
     for line in not_done:
         lines.append(f"- {line}")
-    lines.extend(
-        [
-            "",
-            "## Questions",
-        ]
-    )
+    lines.extend(["", "## Questions"])
     if not question_dispositions:
         lines.append("_No questions._")
     for qid, d in sorted(question_dispositions.items()):
-        extra = f"; note={d['note']}" if d.get("note") else ""
         lines.append(
             f"- `{qid}`: {d.get('disposition')} ({d.get('reason')}) — "
-            f"{d.get('formulation', '')}{extra}"
+            f"{d.get('formulation', '')}"
         )
     lines.extend(["", "## Tasks"])
-    for t in sorted(tasks.values(), key=lambda x: x.spec.task_key):
-        lines.append(
-            f"- `{t.spec.task_key}` [{t.kind.value}] "
-            f"{t.state.value}/{t.outcome} reason={t.reason}"
-        )
+    if tasks is not None:
+        for t in sorted(tasks.values(), key=lambda x: x.spec.task_key):
+            lines.append(
+                f"- `{t.spec.task_key}` [{t.kind.value}] "
+                f"{t.state.value}/{t.outcome} reason={t.reason}"
+            )
+    else:
+        for t in report.tasks:
+            lines.append(
+                f"- `{t.task_key}` [{t.kind}] {t.outcome} "
+                f"reason={t.reason} provenance={t.provenance}"
+            )
     tree = render_subtask_tree(
         question_dispositions=question_dispositions,
-        tasks=tasks,
+        tasks=task_map,
         plans=plans,
     )
     if tree:
         lines.extend(["", "## Дерево подзадач", *tree])
-    # PR20: non-catalog proposed checks + unverified out-of-plan observations.
     lines.extend(["", "## Custom checks"])
     if not custom_checks:
         lines.append("_None._")
     else:
+        from coscientist.core.finalize.finalize import _escape_report_text
+
         for c in custom_checks:
             who = c.get("approved_by") or c.get("rejected_by") or "?"
             delg = "delegated" if c.get("delegated") else "human"
-            from coscientist.core.finalize.finalize import _escape_report_text
-
             measures = _escape_report_text(c.get("measures") or "")
             lines.append(
                 f"- `{c.get('proposal_id')}` status={c.get('status')} "

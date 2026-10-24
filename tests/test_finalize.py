@@ -33,7 +33,13 @@ from coscientist.core.finalize.finalize import (
     terminal_reason_for,
 )
 from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
-from coscientist.core.finalize.minimal_report import MAX_BYTES, build_minimal_report
+from coscientist.core.finalize.minimal_report import (
+    MAX_BYTES,
+    assemble_minimal_report,
+    build_minimal_report,
+    render_markdown_report,
+)
+from coscientist.core.finalize.minimal_report_models import MinimalReport
 from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.question_tasks import question_tasks, questions_from_spec_output
 from tests.helpers import (
@@ -422,8 +428,8 @@ def test_minimal_report_le_10kb():
         contributing_reasons=["cancelled"], verdict="failed", tasks=tasks, attempts={},
         question_dispositions=qdisp, fallback_reason="CASUnavailable",
     )
-    assert report["truncated"] is True
-    assert len(canonical_json(report)) <= MAX_BYTES
+    assert report.truncated is True
+    assert len(canonical_json(report.model_dump(mode="json"))) <= MAX_BYTES
 
 
 def test_minimal_report_schema_valid():
@@ -438,7 +444,28 @@ def test_minimal_report_schema_valid():
         / "coscientist/schema/minimal_report.schema.json"
     )
     schema = json.loads(schema_path.read_text())
-    jsonschema.validate(report, schema)
+    jsonschema.validate(report.model_dump(mode="json"), schema)
+    assert isinstance(report, MinimalReport)
+    md = render_markdown_report(
+        assemble_minimal_report(
+            study_id="st_md",
+            terminal_reason="completed",
+            trigger="all_done",
+            contributing_reasons=[],
+            verdict="partial",
+            tasks={"st/A": _task("A")},
+            attempts={},
+            question_dispositions={
+                "Q1": {
+                    "disposition": "not_attempted",
+                    "reason": "no_task",
+                    "formulation": "q",
+                }
+            },
+            fallback_reason=None,
+        )
+    )
+    assert md.startswith("# Study report `st_md`\n")
 
 
 def test_report_not_required_verdict():
