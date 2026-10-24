@@ -1536,24 +1536,39 @@ def test_task_plan_role_required_no_default():
         )
 
 
-def test_event_envelope_epoch_digest_required():
+@pytest.mark.asyncio
+async def test_event_envelope_epoch_digest_stamped_by_store(tmp_path):
+    """Writers omit epoch/digest; store stamps from lease + actual payload.
+
+    Passing both fields in a ValidationError assertion does not prove requiredness.
+    """
     from datetime import UTC, datetime
 
+    from coscientist.core.events.clock import FakeClock
+    from coscientist.core.events.digest import payload_digest as pd
     from coscientist.core.events.events import EventEnvelope
-    from pydantic import ValidationError
+    from coscientist.core.events.store import SqliteEventStore
+    from coscientist.core.events.upcasters import writer_schema_version
 
-    with pytest.raises(ValidationError):
-        EventEnvelope(
-            study_id="s",
-            type="StudyCreated",
-            entity_key="s",
-            idem_key="k",
-            payload={},
-            ts=datetime.now(UTC),
-            schema_version=1,
-                    epoch=0,
-                    payload_digest=payload_digest({}),
-                )
+    clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
+    store = SqliteEventStore("st_stamp", tmp_path / "stamp.db", clock=clock)
+    await store.acquire_lease("o1")
+    payload = {"study_id": "st_stamp", "x": 1}
+    ev = EventEnvelope(
+        study_id="st_stamp",
+        type="StudyCreated",
+        entity_key="st_stamp",
+        idem_key="StudyCreated:st_stamp",
+        payload=payload,
+        ts=clock.now(),
+        schema_version=writer_schema_version("StudyCreated"),
+    )
+    assert ev.epoch is None
+    assert ev.payload_digest is None
+    stored = await store.append(ev)
+    assert stored.epoch == 1
+    assert stored.payload_digest == pd(payload)
+    await store.close()
 
 
 def test_finalize_unknown_task_reason_refuses():

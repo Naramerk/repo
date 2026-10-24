@@ -35,10 +35,8 @@ async def test_idempotent_same_payload(tmp_path: Path, clock: FakeClock):
         idem_key="StudyCreated:st1",
         payload=payload,
         ts=clock.now(),
-        payload_digest=payload_digest(payload),
         schema_version=writer_schema_version('StudyCreated'),
-epoch=0,
-)
+    )
     first = await store.append(ev)
     assert first.seq == 1
     with pytest.raises(Idempotent) as ei:
@@ -86,10 +84,8 @@ async def test_writer_idempotent_append_returns_existing(
         idem_key="StudyCreated:st1",
         payload=payload,
         ts=clock.now(),
-        payload_digest=payload_digest(payload),
         schema_version=writer_schema_version('StudyCreated'),
-epoch=0,
-)
+    )
     a = await writer.append(ev)
     b = await writer.append(ev)
     assert a.seq == b.seq == 1
@@ -108,14 +104,10 @@ async def test_conflict_different_payload(tmp_path: Path, clock: FakeClock):
         idem_key="StudyCreated:st1",
         payload={"a": 1},
         ts=clock.now(),
-        payload_digest=payload_digest({"a": 1}),
         schema_version=writer_schema_version('StudyCreated'),
-epoch=0,
-)
-    await store.append(ev1)
-    ev2 = ev1.model_copy(
-        update={"payload": {"a": 2}, "payload_digest": payload_digest({"a": 2})}
     )
+    await store.append(ev1)
+    ev2 = ev1.model_copy(update={"payload": {"a": 2}})
     with pytest.raises(Conflict):
         await store.append(ev2)
     await store.close()
@@ -147,9 +139,7 @@ async def test_lease_epoch_fencing(tmp_path: Path, clock: FakeClock):
                 payload={},
                 ts=clock.now(),
                 schema_version=writer_schema_version('StudyCreated'),
-                    epoch=0,
-                    payload_digest=payload_digest({}),
-                )
+            )
         )
     await store.close()
 
@@ -172,9 +162,7 @@ async def test_seeded_owner_epoch_without_nonce_cannot_write(
                 payload={},
                 ts=clock.now(),
                 schema_version=writer_schema_version('StudyCreated'),
-                    epoch=0,
-                    payload_digest=payload_digest({}),
-                )
+            )
         )
     await store.close()
 
@@ -358,13 +346,7 @@ async def test_event_loop_progresses_during_slow_write(
                     },
                     ts=clock.now(),
                     schema_version=writer_schema_version('GraphNodeUpserted'),
-epoch=0, payload_digest=payload_digest({
-                        "node_id": "st_slow:probe",
-                        "kind": "study",
-                        "study_id": "st_slow",
-                        "ref_id": "st_slow",
-                    }),
-)
+                )
             ]
         )
     )
@@ -429,13 +411,7 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(
                     },
                     ts=clock.now(),
                     schema_version=writer_schema_version('GraphNodeUpserted'),
-epoch=0, payload_digest=payload_digest({
-                        "node_id": "st_rd:probe",
-                        "kind": "study",
-                        "study_id": "st_rd",
-                        "ref_id": "st_rd",
-                    }),
-)
+                )
             ]
         )
     )
@@ -448,13 +424,10 @@ epoch=0, payload_digest=payload_digest({
 
 @pytest.mark.asyncio
 async def test_append_rejects_datetime_in_payload(tmp_path: Path, clock: FakeClock):
-    """Append with datetime in payload raises at json.dumps (strict; no stringification).
-
-    Pre-sets payload_digest so the failure is the store's JSON encode, not JCS digest.
-    """
+    """Append with datetime in payload raises (strict; no stringification)."""
     store = SqliteEventStore("st_json2", tmp_path / "json2.db", clock=clock)
     await store.acquire_lease("o1")
-    with pytest.raises(TypeError, match="not JSON serializable|datetime"):
+    with pytest.raises(TypeError, match="not JSON serializable|datetime|JCS|canonical"):
         await store.append(
             EventEnvelope(
                 study_id="st_json2",
@@ -463,11 +436,8 @@ async def test_append_rejects_datetime_in_payload(tmp_path: Path, clock: FakeClo
                 idem_key="StudyCreated:st_json2",
                 payload={"study_id": "st_json2", "created_at": clock.now()},
                 ts=clock.now(),
-                # Skip digest so we exercise json.dumps in _insert_one.
-                payload_digest=payload_digest({"study_id": "st_json2", "created_at": clock.now()}) * 64,
                 schema_version=writer_schema_version('StudyCreated'),
-epoch=0,
-)
+            )
         )
     await store.close()
 
@@ -537,3 +507,149 @@ async def test_close_waits_for_in_flight_read(tmp_path: Path, clock: FakeClock):
     release_read.set()
     await asyncio.wait_for(asyncio.gather(read_task, close_task), timeout=3.0)
     assert store.closed
+
+
+@pytest.mark.asyncio
+async def test_row_to_event_refuses_tampered_payload_digest(
+    tmp_path: Path, clock: FakeClock
+):
+    """Stored digest must match raw payload — never recompute-as-trust on read."""
+    from coscientist.core.events.errors import JournalFormatError
+
+    store = SqliteEventStore("st_tamper", tmp_path / "tamper.db", clock=clock)
+    await store.acquire_lease("o1")
+    await store.append(
+        EventEnvelope(
+            study_id="st_tamper",
+            type="StudyCreated",
+            entity_key="st_tamper",
+            idem_key="StudyCreated:st_tamper",
+            payload={"study_id": "st_tamper", "ok": True},
+            ts=clock.now(),
+            schema_version=writer_schema_version("StudyCreated"),
+        )
+    )
+    # Tamper payload bytes while leaving the stored digest untouched.
+    store._conn.execute(  # noqa: SLF001
+        "UPDATE events SET payload=? WHERE idem_key=?",
+        ('{"ok": false, "study_id": "st_tamper"}', "StudyCreated:st_tamper"),
+    )
+    store._conn.commit()  # noqa: SLF001
+    with pytest.raises(JournalFormatError, match="payload_digest mismatch on read"):
+        await store.read_all()
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_row_to_event_refuses_empty_payload_digest(
+    tmp_path: Path, clock: FakeClock
+):
+    """Old / corrupt rows with empty digest are refused (no guessed digest)."""
+    from coscientist.core.events.errors import JournalFormatError
+
+    store = SqliteEventStore("st_empty", tmp_path / "empty_d.db", clock=clock)
+    await store.acquire_lease("o1")
+    await store.append(
+        EventEnvelope(
+            study_id="st_empty",
+            type="StudyCreated",
+            entity_key="st_empty",
+            idem_key="StudyCreated:st_empty",
+            payload={"study_id": "st_empty"},
+            ts=clock.now(),
+            schema_version=writer_schema_version("StudyCreated"),
+        )
+    )
+    store._conn.execute(  # noqa: SLF001
+        "UPDATE events SET payload_digest=? WHERE idem_key=?",
+        ("", "StudyCreated:st_empty"),
+    )
+    store._conn.commit()  # noqa: SLF001
+    with pytest.raises(JournalFormatError, match="missing payload_digest"):
+        await store.read_all()
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_append_stamps_epoch_from_lease_not_writer_literal(
+    tmp_path: Path, clock: FakeClock
+):
+    """Writers omit epoch; store stamps lease epoch (≠ 0 after acquire)."""
+    store = SqliteEventStore("st_ep", tmp_path / "ep.db", clock=clock)
+    epoch = await store.acquire_lease("o1")
+    assert epoch == 1
+    stored = await store.append(
+        EventEnvelope(
+            study_id="st_ep",
+            type="StudyCreated",
+            entity_key="st_ep",
+            idem_key="StudyCreated:st_ep",
+            payload={"study_id": "st_ep"},
+            ts=clock.now(),
+            schema_version=writer_schema_version("StudyCreated"),
+        )
+    )
+    assert stored.epoch == 1
+    assert stored.payload_digest == payload_digest({"study_id": "st_ep"})
+    rows = await store.read_all()
+    assert rows[0].epoch == 1
+    assert rows[0].payload_digest == stored.payload_digest
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_append_rejects_writer_epoch_mismatch(
+    tmp_path: Path, clock: FakeClock
+):
+    from coscientist.core.events.errors import JournalFormatError
+
+    store = SqliteEventStore("st_em", tmp_path / "em.db", clock=clock)
+    await store.acquire_lease("o1")
+    with pytest.raises(JournalFormatError, match="epoch mismatch"):
+        await store.append(
+            EventEnvelope(
+                study_id="st_em",
+                type="StudyCreated",
+                entity_key="st_em",
+                idem_key="StudyCreated:st_em",
+                payload={"study_id": "st_em"},
+                ts=clock.now(),
+                schema_version=writer_schema_version("StudyCreated"),
+                epoch=0,
+            )
+        )
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_old_journal_without_store_format_refused(
+    tmp_path: Path, clock: FakeClock
+):
+    """Pre-schema-v1 journals (events, no store_format marker) are refused on open."""
+    import sqlite3
+
+    from coscientist.core.events.errors import JournalFormatError
+    from coscientist.core.events.store_db import _SCHEMA
+
+    db = tmp_path / "old.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(_SCHEMA)
+    conn.execute(
+        "INSERT INTO events(study_id, type, entity_key, idem_key, payload, ts, "
+        "schema_version, epoch, payload_digest) VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            "st_old",
+            "StudyCreated",
+            "st_old",
+            "StudyCreated:st_old",
+            "{}",
+            clock.now().isoformat(),
+            1,
+            1,
+            "deadbeef",
+        ),
+    )
+    conn.commit()
+    conn.close()
+    with pytest.raises(JournalFormatError, match="store_format|pre-schema-v1"):
+        SqliteEventStore("st_old", db, clock=clock)

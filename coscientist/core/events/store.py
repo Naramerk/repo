@@ -378,11 +378,7 @@ class SqliteEventStore:
         finalized = batch_finalized or self._study_is_finalized()
         if not finalized:
             return
-        if not isinstance(event.payload_digest, str) or not event.payload_digest:
-            raise JournalFormatError(
-                f"{event.type}: payload_digest required non-empty"
-            )
-        digest = event.payload_digest
+        digest = payload_digest(event.payload)
         existing = self._conn.execute(
             "SELECT seq, payload_digest FROM events WHERE idem_key=?",
             (event.idem_key,),
@@ -538,16 +534,21 @@ class SqliteEventStore:
     def _insert_one(
         self, event: EventEnvelope
     ) -> tuple[EventEnvelope | None, Idempotent | None]:
-        if not isinstance(event.payload_digest, str) or not event.payload_digest:
-            raise JournalFormatError(
-                f"{event.type}: payload_digest required non-empty"
-            )
-        digest = event.payload_digest
-        expected_digest = payload_digest(event.payload)
-        if digest != expected_digest:
+        from coscientist.core.events.events import stamp_envelope
+
+        # Single compute site: digest from actual payload; epoch from lease.
+        stamped = stamp_envelope(event, epoch=self.epoch)
+        digest = stamped.payload_digest
+        assert digest is not None
+        if event.payload_digest is not None and event.payload_digest != digest:
             raise JournalFormatError(
                 f"{event.type}: payload_digest mismatch "
-                f"(got {digest}, expected {expected_digest})"
+                f"(got {event.payload_digest}, expected {digest})"
+            )
+        if event.epoch is not None and event.epoch != self.epoch:
+            raise JournalFormatError(
+                f"{event.type}: epoch mismatch "
+                f"(got {event.epoch}, store {self.epoch})"
             )
         version = require_exact_int(
             event.schema_version, what=f"{event.type}.schema_version"
@@ -574,11 +575,11 @@ class SqliteEventStore:
             "INSERT INTO events(study_id, type, entity_key, idem_key, payload, ts, "
             "schema_version, epoch, payload_digest) VALUES (?,?,?,?,?,?,?,?,?)",
             (
-                event.study_id,
-                event.type,
-                event.entity_key,
-                event.idem_key,
-                json.dumps(event.payload, sort_keys=True),
+                stamped.study_id,
+                stamped.type,
+                stamped.entity_key,
+                stamped.idem_key,
+                json.dumps(stamped.payload, sort_keys=True),
                 _iso(ts),
                 version,
                 self.epoch,
@@ -588,7 +589,7 @@ class SqliteEventStore:
         if cur.lastrowid is None:
             raise JournalUnavailableError("events insert returned no lastrowid")
         seq = int(cur.lastrowid)
-        stored = event.model_copy(
+        stored = stamped.model_copy(
             update={"seq": seq, "epoch": self.epoch, "payload_digest": digest, "ts": ts}
         )
         self._apply_projection(stored)
@@ -608,10 +609,22 @@ class SqliteEventStore:
         return await self._read_thread(_read)
 
     def _row_to_event(self, row: sqlite3.Row) -> EventEnvelope:
-        payload = json.loads(row["payload"])
+        raw_payload = json.loads(row["payload"])
+        stored_digest = row["payload_digest"]
+        # Old / tampered journals: refuse empty digest or mismatch (never recompute-as-trust).
+        if not isinstance(stored_digest, str) or not stored_digest:
+            raise JournalFormatError(
+                f"{row['type']}: journal row missing payload_digest"
+            )
+        computed = payload_digest(raw_payload)
+        if stored_digest != computed:
+            raise JournalFormatError(
+                f"{row['type']}: payload_digest mismatch on read "
+                f"(stored={stored_digest}, computed={computed})"
+            )
         raw_sv = row["schema_version"]
         # SQLite INT affinity may still surface non-ints; never coerce via int().
-        version, payload = upcast(row["type"], raw_sv, payload)
+        version, payload = upcast(row["type"], raw_sv, raw_payload)
         return EventEnvelope(
             seq=int(row["seq"]),
             study_id=row["study_id"],
@@ -622,7 +635,7 @@ class SqliteEventStore:
             ts=_parse_iso(row["ts"]),
             schema_version=version,
             epoch=int(row["epoch"]),
-            payload_digest=payload_digest(payload),
+            payload_digest=stored_digest,
         )
 
     def _get_projection_write(self, table: str) -> list[dict[str, Any]]:

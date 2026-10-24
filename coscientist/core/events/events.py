@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, StrictInt
 
+from coscientist.core.events.digest import payload_digest as _payload_digest
+
 
 class EventEnvelope(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -19,9 +21,22 @@ class EventEnvelope(BaseModel):
     payload: dict[str, Any]
     ts: datetime
     schema_version: StrictInt
-    # Required on the wire (no silent 0 / "" defaults).
-    epoch: StrictInt
-    payload_digest: str
+    # Writers omit these; SqliteEventStore stamps epoch from the lease and
+    # payload_digest from the actual payload before persist. After read/write
+    # both are always set (non-empty digest). Empty digest in an old journal
+    # row is refused — never guessed.
+    epoch: StrictInt | None = None
+    payload_digest: str | None = None
+
+
+def stamp_envelope(event: EventEnvelope, *, epoch: int) -> EventEnvelope:
+    """Stamp lease epoch + digest of ``event.payload`` (single compute site)."""
+    if not isinstance(epoch, int) or isinstance(epoch, bool):
+        raise TypeError(f"epoch must be exact int, got {epoch!r}")
+    digest = _payload_digest(event.payload)
+    if not digest:
+        raise ValueError(f"{event.type}: empty payload_digest")
+    return event.model_copy(update={"epoch": epoch, "payload_digest": digest})
 
 
 # Typed payload helpers used by the machine / executor.
