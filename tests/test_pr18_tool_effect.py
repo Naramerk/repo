@@ -22,10 +22,10 @@ from coscientist.api.studies import (
     _request_digest,
     _write_owner_sidecar,
     post_studies,
-    study_id_from_idempotency_key,
 )
 from coscientist.core.events.errors import Conflict
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.ids import study_id_from_idempotency_key
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import Artifact, HitlPolicy

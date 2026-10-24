@@ -8,6 +8,13 @@ from typing import Any, Protocol
 from coscientist.core.events.events import StoredEvent, UnstampedEvent
 from coscientist.core.execution.domain import Artifact, StudyView
 
+__all__ = [
+    "AgentPort",
+    "ArtifactStore",
+    "EventStore",
+    "StudyService",
+]
+
 
 class EventStore(Protocol):
     study_id: str
@@ -27,9 +34,7 @@ class EventStore(Protocol):
 
     async def get_row(self, table: str, key: str) -> dict[str, Any] | None: ...
 
-    async def upsert_projection(
-        self, table: str, key: str, data: dict[str, Any]
-    ) -> None: ...
+    async def upsert_projection(self, table: str, key: str, data: dict[str, Any]) -> None: ...
 
     async def acquire_lease(self, owner: str, ttl_s: float = 30.0) -> int: ...
 
@@ -56,9 +61,7 @@ class EventStore(Protocol):
 
 
 class ArtifactStore(Protocol):
-    def put(
-        self, content: bytes, produced_by_call_id: str, *, name: str, media_type: str
-    ) -> Artifact: ...
+    def put(self, content: bytes, produced_by_call_id: str, *, name: str, media_type: str) -> Artifact: ...
 
     def read(self, artifact_id: str) -> bytes: ...
 
@@ -70,4 +73,10 @@ class AgentPort(Protocol):
 
 
 class StudyService(Protocol):
-    def study_view(self, study_id: str) -> StudyView: ...
+    def study_view(self, study_id: str) -> StudyView:
+        """Return the study projection for ``study_id``.
+
+        Raises:
+            StudyNotFound: no journal / study exists for ``study_id``.
+        """
+        ...

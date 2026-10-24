@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### M5 API — DataRootStudyService loop gate + contract tests
+- `_has_running_loop()` then `asyncio.run` (no work inside except); `study_events_db` → `(sid, path)`.
+- Generators without unreachable self-checks; contract tests one scenario each + typed EventStore fake.
+
+### M5 API — cayman closeout (StudyNotFound path + loop gate)
+- `StudyNotFound` only from `core.events.errors` (no api/ports re-export); reason required.
+- Loop gate: public `get_running_loop` / `asyncio.run` in except; `STUDY_NOT_FOUND_REASON` constant.
+- Contract tests: `match=` + parametrize `ids`; idem key import from core.
+
+### M5 API — study_view under running loop → StudyViewLoopRefuse
+- Explicit loop presence gate before `asyncio.run`; typed refuse + test.
+
+### M5 API — study_id format owned by core/events/ids
+- `STUDY_ID_RE` / `is_study_id` / `study_id_from_idempotency_key` next to `study_id()`.
+- `require_study_id` uses core predicate; path resolve kept in `study_events_db`.
+
+### M5 API — study_id path traversal gate
+- `require_study_id` + `study_events_db` resolve-inside-root (format from core).
+- `DataRootStudyService` refuses `../x`, `/abs`, `a/b`; no mkdir for missing journals.
+
+### M5 API — GET study view + events contract
+- `get_study` / `list_study_events(study_id=)`; store/wire `study_id` match or
+  `StudyStoreMismatch`. `EventWire` via `model_validate` (`seq` ge=1).
+- Core `StudyNotFound` on `StudyService` port; `DataRootStudyService` real adapter.
+- Contract tests (fakes + data-root); payload copy locked.
+- [CAP #19](docs/CAPABILITIES.md?plain=1#L28) / [#21](docs/CAPABILITIES.md?plain=1#L30) prep.
+
 ### [M2] Critic + reviewer typed outs + builtin prompts
 - `CriticVerdict` / `CriticIssue` (`coscientist.agents.critic`) and `ReviewVerdict` /
   `ReviewEvidenceRef` (`coscientist.agents.reviewer`): frozen strict models; revise/reject
