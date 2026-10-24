@@ -160,6 +160,13 @@ def question_final_types(plans: Any) -> dict[str, FinalType]:
             qid = str(q.get("id", ""))
             if not qid or qid in found:
                 continue
+            if "final_type" not in q:
+                from coscientist.core.events.errors import JournalFormatError
+
+                raise JournalFormatError(
+                    f"question {qid!r} missing final_type",
+                    field="final_type",
+                )
             raw = q["final_type"]
             ft = str(raw)
             if ft not in VALID_FINAL_TYPES:

@@ -147,7 +147,12 @@ class AttemptsMixin:
         return dep
 
     def _deps_done(self, task: Task) -> bool:
-        children_map = getattr(self, "_foreach_children", None) or {}
+        children_map = getattr(self, "_foreach_children", None)
+        if children_map is None:
+            raise JournalFormatError(
+                "runtime._foreach_children required",
+                field="_foreach_children",
+            )
         for d in task.spec.depends_on:
             # PR11: loop:<id> barrier — ready after until-met or LoopCapped.
             # Unknown / dropped loop never becomes ready; ``refuse_orphaned_loop_barriers``
@@ -346,7 +351,12 @@ class AttemptsMixin:
 
         # PR10: foreach children expand; static quorum inputs share one pool.
         groups = expand_input_groups(self, list(task.spec.inputs))
-        children_map = getattr(self, "_foreach_children", None) or {}
+        children_map = getattr(self, "_foreach_children", None)
+        if children_map is None:
+            raise JournalFormatError(
+                "runtime._foreach_children required",
+                field="_foreach_children",
+            )
         fe_from = set(children_map)
         for t in self.tasks.values():
             if t.spec.foreach is not None:

@@ -93,21 +93,33 @@ def select_foreach_items(
     """
     graph = getattr(runtime, "graph", None)
     if graph is None:
-        return [], []
+        raise JournalFormatError(
+            "foreach select requires runtime.graph",
+            field="graph",
+        )
     nodes = list(graph.nodes_by_kind(fe.kind))
     scored: list[tuple[tuple, str]] = []
     notes: list[str] = []
     for node in nodes:
-        attrs = dict(node.attrs or {})
+        attrs = node.attrs
+        if attrs is None:
+            raise JournalFormatError(
+                f"foreach node {node.node_id!r} missing attrs",
+                field="attrs",
+            )
+        attrs = dict(attrs)
         src = attrs.get("source_task")
         if src is None or str(src) != fe.of_task:
             continue
-        logical = str(node.ref_id or attrs.get("id") or "")
-        if not logical:
-            nid = str(node.node_id)
-            logical = nid.rsplit(":", 1)[-1] if ":" in nid else nid
-        if not logical:
-            continue
+        logical = node.ref_id
+        if logical is None or str(logical) == "":
+            logical = attrs.get("id")
+        if logical is None or str(logical) == "":
+            raise JournalFormatError(
+                f"foreach node {node.node_id!r} missing ref_id/id",
+                field="ref_id",
+            )
+        logical = str(logical)
         if fe.selector == "selected" and not bool(attrs.get("selected")):
             continue
         key, note = _rank_key(logical, attrs)
@@ -146,7 +158,12 @@ def expand_input_groups(
     ``from_task`` naming a foreach template → one member per child (may be []).
     Other inputs → single-member group. Quorum stays on the **original** spec.
     """
-    children = getattr(runtime, "_foreach_children", None) or {}
+    children = getattr(runtime, "_foreach_children", None)
+    if children is None:
+        raise JournalFormatError(
+            "runtime._foreach_children required for expand_input_groups",
+            field="_foreach_children",
+        )
     groups: list[tuple[InputSpec, list[InputSpec]]] = []
     for inp in specs:
         if inp.from_task in children:

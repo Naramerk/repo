@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -292,7 +293,7 @@ def test_garbage_attrs_dropped_not_raised():
         tasks={t.task_id: t},
         plans={
             "pl": {
-                "questions": [{"id": "Q1", "text": "why"}],
+                "questions": [{"id": "Q1", "text": "why", "final_type": "verdict"}],
                 "tasks": [{"task_key": "E1", "addresses": ["Q1"]}],
             }
         },
@@ -949,6 +950,7 @@ def test_criterion_status_not_met_from_failed_check():
             },
         )
     )
+    catalog = SimpleNamespace(defaults={"experiment": ["value_match"]})
     attrs = _derive_claim_core_attrs(
         task,
         TaskOutcome.SUCCESS,
@@ -957,6 +959,7 @@ def test_criterion_status_not_met_from_failed_check():
         graph=g,
         study_id=sid,
         validated=True,
+        catalog=catalog,
     )
     assert attrs["criterion_status"] == "not_met"
     assert attrs["accepted"] is True  # optional failure → stance, not rejection
@@ -1015,6 +1018,7 @@ def test_frozen_normalizes_check_id_to_template_id():
             role="prediction",
         )
     ]
+    catalog = SimpleNamespace(defaults={"experiment": ["value_match"]})
     attrs = _derive_claim_core_attrs(
         task,
         TaskOutcome.SUCCESS,
@@ -1023,6 +1027,7 @@ def test_frozen_normalizes_check_id_to_template_id():
         graph=g,
         study_id=sid,
         validated=True,
+        catalog=catalog,
     )
     assert attrs["frozen"] is True
     assert attrs["criterion_status"] == "met"

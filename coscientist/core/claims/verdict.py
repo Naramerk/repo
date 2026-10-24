@@ -20,7 +20,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal, Protocol
 
 from coscientist.core.claims.r17 import claim_counts_under_r17
-from coscientist.core.claims.stance import DEFAULT_TESTS_INTENT, TestsIntent, claim_stance
+from coscientist.core.claims.stance import TestsIntent, claim_stance
 from coscientist.core.events.digest import canonical_json
 from coscientist.core.events.errors import JournalFormatError, require_journal_field
 
@@ -517,15 +517,19 @@ def _union_find_merge(parent: dict[str, str], a: str, b: str) -> None:
 
 
 def source_id_for_claim(claim: Any) -> str:
-    """Fallback singleton key (experiment_id-derived)."""
-    return str(
-        getattr(claim, "independence_key", None)
-        or independence_key_for(
-            experiment_id=getattr(claim, "experiment_id", None)
-            or getattr(claim, "attempt_id", "")
-            or "x"
+    """Independence source key from stamped claim fields (no invent)."""
+    keyed = getattr(claim, "independence_key", None)
+    if keyed is not None and str(keyed) != "":
+        return str(keyed)
+    exp = getattr(claim, "experiment_id", None)
+    if exp is None or str(exp) == "":
+        exp = getattr(claim, "attempt_id", None)
+    if exp is None or str(exp) == "":
+        raise JournalFormatError(
+            "claim missing independence_key/experiment_id/attempt_id",
+            field="independence_key",
         )
-    )
+    return str(independence_key_for(experiment_id=str(exp)))
 
 
 def distinct_by_key(claims: Sequence[Any]) -> list[Any]:
@@ -789,7 +793,7 @@ def effect_exceeds_sesoi(
     *,
     sesoi: float | None,
     effect: Mapping[str, Any] | None,
-    direction: PredictedDirection | str | None = "two_sided",
+    direction: PredictedDirection | str,
 ) -> bool:
     """Non-null: countable point-estimate exceeds sesoi (not TOST)."""
     if sesoi is None or not effect_is_countable(effect):
@@ -798,13 +802,11 @@ def effect_exceeds_sesoi(
     try:
         est = float(effect["est"])  # type: ignore[index]
         s = float(sesoi)
-    except (KeyError, TypeError, ValueError):
-        return False
-    if direction is None:
+    except (KeyError, TypeError, ValueError) as e:
         raise JournalFormatError(
-            "predicted_direction required for effect_exceeds_sesoi",
-            field="predicted_direction",
-        )
+            f"invalid sesoi/effect.est for effect_exceeds_sesoi: {e}",
+            field="sesoi",
+        ) from e
     d = str(direction)
     if d == "positive":
         return est > s
@@ -1006,18 +1008,49 @@ def exclusion_reason(claim: Any) -> ExclusionReason | None:
         return "stub"
     if prov == "partial":
         return "partial"
-    if getattr(claim, "is_lit", False) or getattr(claim, "evidence_kind", "") == "literature":
+    if isinstance(claim, Mapping):
+        ek = claim.get("evidence_kind")
+        is_lit = claim.get("is_lit")
+    else:
+        # Typed claim objects must expose these fields; no getattr invent.
+        if not hasattr(claim, "evidence_kind") and not hasattr(claim, "is_lit"):
+            raise JournalFormatError(
+                "claim missing required evidence_kind/is_lit for exclusion",
+                field="evidence_kind",
+            )
+        ek = claim.evidence_kind if hasattr(claim, "evidence_kind") else None
+        is_lit = claim.is_lit if hasattr(claim, "is_lit") else None
+    if is_lit is True or ek == "literature":
         return "lit"
+    if is_lit is None and ek is None:
+        raise JournalFormatError(
+            "claim missing required evidence_kind/is_lit for exclusion",
+            field="evidence_kind",
+        )
     oc = effective_outcome(claim)
     if oc == "indeterminate" or oc is None:
         return "indeterminate"
-    return "invalid"
+    raise JournalFormatError(
+        f"unclassified exclusion for claim outcome={oc!r}",
+        field="exclusion_reason",
+    )
 
 
 def _intent(claim: Any) -> TestsIntent:
-    intent = getattr(claim, "intent", None) or DEFAULT_TESTS_INTENT
+    if isinstance(claim, Mapping):
+        intent = require_journal_field(claim, "intent", ctx="claim")
+    else:
+        if not hasattr(claim, "intent") or claim.intent is None:
+            raise JournalFormatError(
+                "claim missing required intent",
+                field="intent",
+            )
+        intent = claim.intent
     if intent not in ("confirm", "refute"):
-        return DEFAULT_TESTS_INTENT
+        raise JournalFormatError(
+            f"invalid claim intent: {intent!r}",
+            field="intent",
+        )
     return intent  # type: ignore[return-value]
 
 
@@ -1129,7 +1162,8 @@ def hypothesis_verdict(
         return None
 
     def _refute_unresolved(c: Any) -> bool:
-        if getattr(c, "refute_unresolved", False):
+        # Optional stamp only: absent attribute means not stamped unresolved.
+        if hasattr(c, "refute_unresolved") and bool(c.refute_unresolved):
             return True
         eff = getattr(c, "effect", None)
         return bool(isinstance(eff, dict) and eff.get("refute_unresolved"))
@@ -1357,11 +1391,17 @@ def hypothesis_report_row(
             + ")"
         )
         severity_note = f"{severity_note}; {excl_txt}" if severity_note else excl_txt
+    if rule is None or str(rule) == "":
+        raise JournalFormatError(
+            "hypothesis_report_row requires typed rule",
+            field="rule",
+        )
+    rule_s = str(rule)
     out: dict[str, Any] = {
         "hypothesis_id": hypothesis_id,
         "question_id": question_id,
         "verdict": verdict_value,
-        "rule": rule or "no_counted",
+        "rule": rule_s,
         "counted": counted_rows,
         "excluded": excluded_rows,
         "conflict": conflict,
@@ -1372,7 +1412,7 @@ def hypothesis_report_row(
     # Refute-role timeout: verdict alone is inconclusive — surface explicit
     # not-tested so conclusions/report consumers do not treat it as a finished
     # inconclusive assessment.
-    if (rule or "") == "refute_unresolved":
+    if rule_s == "refute_unresolved":
         out["not_tested"] = True
     return out
 

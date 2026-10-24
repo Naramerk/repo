@@ -221,7 +221,12 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 rv = getattr(reason, "value", reason)
                 if rv == TaskReason.SUPERSEDED.value:
                     # Foreach template: expand_after only; always advance loops.
-                    kids = getattr(self, "_foreach_children", None) or {}
+                    kids = getattr(self, "_foreach_children", None)
+                    if kids is None:
+                        raise JournalFormatError(
+                            "runtime._foreach_children required",
+                            field="_foreach_children",
+                        )
                     if t is not None and t.spec.task_key in kids:
                         await maybe_expand_after_task_done(self, ev.entity_key)
                     await maybe_loop_after_task_done(self, ev.entity_key)
@@ -268,7 +273,12 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 reason = getattr(t, "reason", None) if t is not None else None
                 rv = getattr(reason, "value", reason)
                 if rv == TaskReason.SUPERSEDED.value:
-                    kids = getattr(self, "_foreach_children", None) or {}
+                    kids = getattr(self, "_foreach_children", None)
+                    if kids is None:
+                        raise JournalFormatError(
+                            "runtime._foreach_children required",
+                            field="_foreach_children",
+                        )
                     if t is not None and t.spec.task_key in kids:
                         await maybe_expand_after_task_done(self, tid)
                     await maybe_loop_after_task_done(self, tid)

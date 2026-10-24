@@ -2165,6 +2165,10 @@ async def test_reclassified_tool_study_opens_finalizes_uncounted(
     fin = _assert_single_study_finalized(events)
     assert fin.payload.get("trigger") == "deadline"
     assert "internal_error" in (fin.payload.get("contributing_reasons") or [])
+    # Report present: artifact XOR inline minimal_report (checklist §7).
+    assert bool(fin.payload.get("report_artifact_id")) ^ bool(
+        fin.payload.get("minimal_report")
+    )
     assert digest not in (fold_events(events).get("source_fetches") or {})
     await close_runtime(rt)
 

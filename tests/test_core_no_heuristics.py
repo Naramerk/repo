@@ -491,3 +491,223 @@ def test_study_refused_missing_reason_raises():
             ctx="StudyRefused",
         )
     assert ei.value.field == "reason"
+
+
+def test_effect_exceeds_sesoi_requires_direction_and_est():
+    from coscientist.core.claims.verdict import effect_exceeds_sesoi
+
+    with pytest.raises(TypeError):
+        effect_exceeds_sesoi(  # type: ignore[call-arg]
+            sesoi=0.5,
+            effect={"est": 1.0, "countable": True, "core_evaluated": True},
+        )
+    with pytest.raises(JournalFormatError, match="sesoi|est") as ei:
+        effect_exceeds_sesoi(
+            sesoi=0.5,
+            effect={"countable": True, "core_evaluated": True},
+            direction="two_sided",
+        )
+    assert ei.value.field == "sesoi"
+    with pytest.raises(JournalFormatError, match="predicted_direction") as ei2:
+        effect_exceeds_sesoi(
+            sesoi=0.5,
+            effect={
+                "est": 1.0,
+                "countable": True,
+                "core_evaluated": True,
+                "producer": "agent",
+            },
+            direction="sideways",
+        )
+    assert ei2.value.field == "predicted_direction"
+
+
+def test_exclusion_reason_requires_evidence_kind():
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.verdict import exclusion_reason
+
+    claim = SimpleNamespace(
+        counts=lambda: False,
+        exclusion_reason=None,
+        check_role="prediction",
+        validity_ok=True,
+        provenance="real",
+        claim_outcome="consistent",
+        # no evidence_kind / is_lit
+    )
+    with pytest.raises(JournalFormatError, match="evidence_kind") as ei:
+        exclusion_reason(claim)
+    assert ei.value.field == "evidence_kind"
+
+
+def test_intent_rejects_invalid_and_missing():
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.verdict import _intent
+
+    with pytest.raises(JournalFormatError, match="intent") as ei:
+        _intent({})
+    assert ei.value.field == "intent"
+    with pytest.raises(JournalFormatError, match="invalid claim intent") as ei2:
+        _intent(SimpleNamespace(intent="maybe"))
+    assert ei2.value.field == "intent"
+
+
+def test_hypothesis_report_row_requires_typed_rule():
+    from coscientist.core.claims.verdict import hypothesis_report_row
+
+    with pytest.raises(JournalFormatError, match="rule") as ei:
+        hypothesis_report_row(
+            hypothesis_id="H1",
+            question_id="Q1",
+            claims=[],
+            verdict_value="inconclusive",
+            rule=None,
+        )
+    assert ei.value.field == "rule"
+
+
+def test_create_study_caps_come_from_study_model():
+    """create_study None overrides resolve via Study.model_fields (no magic literals)."""
+    from coscientist.core.execution.domain import Study
+
+    assert Study.model_fields["evalue_alpha"].default == 0.05
+    assert Study.model_fields["finalize_reserve_s"].default == 30
+    assert Study.model_fields["max_expansions"].default == 2
+    assert Study.model_fields["max_human_expansions"].default == 10
+    assert Study.model_fields["replan_reserve"].default == 0.1
+    assert Study.model_fields["max_tasks"].default == 64
+
+
+def test_dispositions_missing_final_type_raises():
+    """Fail-closed: no except→not_attempted invent when plan lacks final_type."""
+    from coscientist.core.claims.dispositions import dispositions
+    from coscientist.core.claims.graph import GraphStore, default_execution_registry
+
+    with pytest.raises(JournalFormatError, match="final_type") as ei:
+        dispositions(
+            tasks={},
+            plans={"pl": {"questions": [{"id": "Q1", "text": "why"}], "tasks": []}},
+            graph=GraphStore(default_execution_registry()),
+            study=None,
+            results={},
+        )
+    assert ei.value.field == "final_type"
+
+
+def test_foreach_select_requires_graph():
+    from types import SimpleNamespace
+
+    from coscientist.core.execution.domain import ForEachSpec
+    from coscientist.core.plan.foreach import select_foreach_items
+
+    fe = ForEachSpec(kind="hypothesis", of_task="FE", selector="all")
+    with pytest.raises(JournalFormatError, match="graph") as ei:
+        select_foreach_items(SimpleNamespace(graph=None), fe)
+    assert ei.value.field == "graph"
+
+
+def test_foreach_node_missing_ref_id_raises():
+    from types import SimpleNamespace
+
+    from coscientist.core.execution.domain import ForEachSpec
+    from coscientist.core.plan.foreach import select_foreach_items
+
+    node = SimpleNamespace(
+        node_id="st:hypothesis:H1",
+        ref_id=None,
+        attrs={"source_task": "FE"},
+    )
+    graph = SimpleNamespace(nodes_by_kind=lambda _k: [node])
+    fe = ForEachSpec(kind="hypothesis", of_task="FE", selector="all")
+    with pytest.raises(JournalFormatError, match="ref_id") as ei:
+        select_foreach_items(SimpleNamespace(graph=graph), fe)
+    assert ei.value.field == "ref_id"
+
+
+def test_expand_input_groups_requires_foreach_children():
+    from types import SimpleNamespace
+
+    from coscientist.core.execution.domain import InputSpec
+    from coscientist.core.plan.foreach import expand_input_groups
+
+    with pytest.raises(JournalFormatError, match="_foreach_children") as ei:
+        expand_input_groups(
+            SimpleNamespace(_foreach_children=None),
+            [InputSpec(from_task="E0", output="main")],
+        )
+    assert ei.value.field == "_foreach_children"
+
+
+def test_derive_claim_catalog_defaults_required():
+    """Empty plan criteria without catalog.defaults['experiment'] fails closed."""
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.graph import GraphNode, GraphStore, default_execution_registry
+    from coscientist.core.events.ids import criterion_node_id
+    from coscientist.core.execution.domain import (
+        CheckResult,
+        ExperimentMethod,
+        ReqStatus,
+        TaskOutcome,
+    )
+    from coscientist.core.execution.executor import _derive_claim_core_attrs
+
+    sid = "st"
+    g = GraphStore(default_execution_registry())
+    g.upsert_node(
+        GraphNode(
+            node_id=criterion_node_id(sid, "value_match"),
+            kind="criterion",
+            study_id=sid,
+            ref_id="value_match",
+            attrs={
+                "frozen": True,
+                "uses_sesoi": False,
+                "predicts_null": False,
+                "predicted_direction": "two_sided",
+            },
+        )
+    )
+    task = SimpleNamespace(
+        task_id="st/E1",
+        spec=SimpleNamespace(method=ExperimentMethod.COMPUTATIONAL, criteria=[]),
+    )
+    checks = [
+        CheckResult(
+            check_id="value_match#0",
+            template_id="value_match",
+            status=ReqStatus.MET,
+            is_code=True,
+            required=True,
+            role="prediction",
+            effect={
+                "est": 1.0,
+                "kind": "point",
+                "producer": "agent",
+                "trusted": False,
+                "core_evaluated": True,
+                "countable": True,
+            },
+        )
+    ]
+    catalog = SimpleNamespace(defaults={})  # missing experiment key
+    with pytest.raises(JournalFormatError, match="defaults") as ei:
+        _derive_claim_core_attrs(
+            task,
+            TaskOutcome.SUCCESS,
+            raw={
+                "checked_against": "value_match",
+                "target": "Q1",
+                "target_kind": "question",
+            },
+            checks=checks,
+            graph=g,
+            study_id=sid,
+            validated=True,
+            catalog=catalog,
+            bindings=[],
+            attempt_id="st/E1#1",
+        )
+    assert ei.value.field == "defaults"

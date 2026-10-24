@@ -380,20 +380,24 @@ def _derive_claim_core_attrs(
             break
     # Required validity failure invalidates this experiment's claims only.
     # Rubric (even role=validity) never flips validity_ok — see _is_rubric_check.
-    if exclusion_reason == "unapproved_check":
-        pass
-    elif _required_validity_failed(checks):
-        validity_ok = False
-        status = "unassessed"
-        exclusion_reason = "validity_failed"
-    elif role == "unknown":
-        validity_ok = False
-        status = "unassessed"
-        exclusion_reason = "unknown_role"
-    elif role == "validity" and status == "not_met" and not any(_is_rubric_check(c) for c in (checks or ())):
-        validity_ok = False
-        status = "unassessed"
-        exclusion_reason = "validity_failed"
+    # unapproved_check already stamped above — do not overwrite.
+    if exclusion_reason != "unapproved_check":
+        if _required_validity_failed(checks):
+            validity_ok = False
+            status = "unassessed"
+            exclusion_reason = "validity_failed"
+        elif role == "unknown":
+            validity_ok = False
+            status = "unassessed"
+            exclusion_reason = "unknown_role"
+        elif (
+            role == "validity"
+            and status == "not_met"
+            and not any(_is_rubric_check(c) for c in (checks or ()))
+        ):
+            validity_ok = False
+            status = "unassessed"
+            exclusion_reason = "validity_failed"
     from coscientist.core.claims.verdict import (
         claim_is_severe,
         classify_outcome,
@@ -471,8 +475,9 @@ def _derive_claim_core_attrs(
         if exclusion_reason is None:
             exclusion_reason = "validity_failed"
     elif claim_outcome == "indeterminate" and exclusion_reason is None:
-        # Prefer specific no-effect reason over generic indeterminate.
-        exclusion_reason = _no_effect_reason_from_checks(list(checks or [])) or ("indeterminate")
+        # Prefer specific no-effect reason; else typed indeterminate (not guessed).
+        specific = _no_effect_reason_from_checks(list(checks or []))
+        exclusion_reason = specific if specific is not None else "indeterminate"
     status = outcome_to_status(
         claim_outcome,  # type: ignore[arg-type]
         validity="valid" if validity_ok else "invalid",
@@ -500,8 +505,25 @@ def _derive_claim_core_attrs(
         if tid and tid not in seen_tmpl:
             seen_tmpl.add(tid)
             criterion_template_ids.append(tid)
-    if not criterion_template_ids and catalog is not None:
-        for tid in getattr(catalog, "defaults", {}).get("experiment", []) or []:
+    if not criterion_template_ids:
+        if catalog is None:
+            raise JournalFormatError(
+                "catalog required when plan criteria are empty",
+                field="catalog",
+            )
+        if not hasattr(catalog, "defaults"):
+            raise JournalFormatError(
+                "catalog.defaults required when plan criteria are empty",
+                field="defaults",
+            )
+        defaults = catalog.defaults
+        if "experiment" not in defaults:
+            raise JournalFormatError(
+                "catalog.defaults['experiment'] required when plan criteria empty",
+                field="defaults",
+            )
+        exp_defaults = defaults["experiment"]
+        for tid in exp_defaults:
             stid = str(tid)
             if stid and stid not in seen_tmpl:
                 seen_tmpl.add(stid)

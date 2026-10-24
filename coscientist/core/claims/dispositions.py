@@ -147,7 +147,10 @@ def stamp_honest_terminal_verdict(row: dict[str, Any]) -> dict[str, Any]:
     readers treating them as claim supported/refuted). Clears a mistaken
     disposition-valued ``verdict`` if present. not_attempted fallbacks omit both.
     """
-    disp = str(row.get("disposition") or "")
+    disp_raw = row.get("disposition")
+    if disp_raw is None:
+        return row
+    disp = str(disp_raw)
     if disp not in _HONEST_TERMINAL_DISPOSITIONS:
         return row
     row["terminal"] = True
@@ -185,33 +188,20 @@ def dispositions(
     PR11: questions in ``loop_capped_questions`` keep a verdict disposition
     when available and set ``reason=iteration_cap`` (not study terminal_reason).
 
-    Totality: never raises — graph/claim coerce failures fall back to
-    not_attempted.
+    Fail-closed: journal/format errors propagate (no silent not_attempted invent).
     """
-    try:
-        return _dispositions_inner(
-            tasks=tasks,
-            plans=plans,
-            graph=graph,
-            study=study,
-            results=results,
-            k=k,
-            artifact_lookup=artifact_lookup,
-            loop_capped_questions=loop_capped_questions,
-            question_disposals=question_disposals,
-            journal_kinds=journal_kinds,
-        )
-    except Exception:  # noqa: BLE001 — finalize/view must never crash
-        qmap = known_questions(plans)
-        return {
-            qid: {
-                "disposition": Disposition.NOT_ATTEMPTED.value,
-                "reason": NotAttemptedReason.NO_COUNTING_CLAIMS.value,
-                "reason_detail": [],
-                "formulation": text,
-            }
-            for qid, text in qmap.items()
-        }
+    return _dispositions_inner(
+        tasks=tasks,
+        plans=plans,
+        graph=graph,
+        study=study,
+        results=results,
+        k=k,
+        artifact_lookup=artifact_lookup,
+        loop_capped_questions=loop_capped_questions,
+        question_disposals=question_disposals,
+        journal_kinds=journal_kinds,
+    )
 
 
 def _dispositions_inner(
@@ -299,9 +289,10 @@ def _dispositions_inner(
                 continue
             # PR15: needs_more_data is an honest artifact-path final (design report).
             explicit_art = (question_disposals or {}).get(qid)
-            if explicit_art and str(explicit_art.get("disposition") or "") == (
-                Disposition.NEEDS_MORE_DATA.value
-            ):
+            art_disp = (
+                None if explicit_art is None else explicit_art.get("disposition")
+            )
+            if explicit_art and art_disp == Disposition.NEEDS_MORE_DATA.value:
                 from coscientist.core.claims.experiment_design import (
                     MISSING_DESIGN_REASON,
                     design_artifact_ok,
@@ -469,11 +460,12 @@ def _dispositions_inner(
             continue
         # PR15 / §2: explicit QuestionDisposed when no counting claims.
         explicit = (question_disposals or {}).get(qid)
-        if explicit and str(explicit.get("disposition") or "") in (
+        exp_disp = None if explicit is None else explicit.get("disposition")
+        if explicit and exp_disp in (
             Disposition.NEEDS_MORE_DATA.value,
             Disposition.INFEASIBLE.value,
         ):
-            disp = str(explicit["disposition"])
+            disp = str(exp_disp)
             if disp == Disposition.NEEDS_MORE_DATA.value:
                 from coscientist.core.claims.experiment_design import (
                     MISSING_DESIGN_REASON,
@@ -591,7 +583,13 @@ def apply_loop_cap_dispositions(
             # iter < 1 means this row is not an active cap application (skip).
             if it < 1:
                 continue
-        disp = str(row.get("disposition") or "")
+        disp_raw = row.get("disposition")
+        if disp_raw is None:
+            raise JournalFormatError(
+                f"disposition row missing disposition for {qid!r}",
+                field="disposition",
+            )
+        disp = str(disp_raw)
         if disp in preserve:
             continue
         if disp in answered:
@@ -616,101 +614,102 @@ def report_hypothesis_verdicts(
 ) -> tuple[dict[str, dict[str, Any]], str | None]:
     """Hypothesis verdicts for StudyFinalized / minimal_report (PR8/PR8b).
 
-    Returns ``(rows, hypotheses_unavailable)``. On failure ``rows`` is empty and
-    ``hypotheses_unavailable`` is the exception class name — never a fake
-    hypothesis id.
+    Returns ``(rows, hypotheses_unavailable)``. Fail-closed on journal errors
+    (raises); ``hypotheses_unavailable`` is reserved for the None graph/study case.
     """
     if graph is None or study is None:
         return {}, None
+    from coscientist.core.claims.verdict import (
+        hypothesis_report_row,
+        hypothesis_verdict,
+    )
+
     any_exp = any(
-        t.state == TaskState.DONE and t.outcome in (TaskOutcome.SUCCESS, TaskOutcome.PARTIAL, TaskOutcome.FAILED)
+        t.state == TaskState.DONE
+        and t.outcome
+        in (TaskOutcome.SUCCESS, TaskOutcome.PARTIAL, TaskOutcome.FAILED)
         for t in tasks.values()
     )
-    try:
-        from coscientist.core.claims.verdict import (
-            hypothesis_report_row,
-            hypothesis_verdict,
+    snaps = hypothesis_verdicts(
+        graph,
+        study_id=study.study_id,
+        study=study,
+        results=results,
+        k=study.confirmations_needed,
+        any_experiment_done=any_exp,
+    )
+    by_target = filtered_claims_by_target(
+        graph,
+        study_id=study.study_id,
+        results=results,
+        artifact_lookup=artifact_lookup,
+    )
+    out: dict[str, dict[str, Any]] = {}
+    for hid, snap in snaps.items():
+        claims = claims_for_ref(by_target, hid, prefer="hypothesis")
+        v = str(require_journal_field(snap, "verdict", ctx=hid))
+        _v, _b, _by_th, rule = hypothesis_verdict(
+            claims,
+            any_exp,
+            refutations_needed=study.refutations_needed,
+            refutation_priority=study.refutation_priority,
+            supported_needed=study.supported_needed,
+            confirmations_needed=study.confirmations_needed,
         )
-
-        snaps = hypothesis_verdicts(
-            graph,
-            study_id=study.study_id,
-            study=study,
-            results=results,
-            k=study.confirmations_needed,
-            any_experiment_done=any_exp,
+        legacy = sum(
+            1
+            for c in claims
+            if getattr(c, "severe", None) is False and c.claim_outcome == "consistent"
         )
-        by_target = filtered_claims_by_target(
-            graph,
-            study_id=study.study_id,
-            results=results,
-            artifact_lookup=artifact_lookup,
+        qid = ""
+        hid_node = f"{study.study_id}:hypothesis:{hid}"
+        if graph.get_node(hid_node) is not None:
+            for e in graph.edges_from(hid_node):
+                if e.kind == "addresses":
+                    dst = graph.get_node(e.dst_id)
+                    if dst is not None and dst.kind == "question":
+                        if dst.ref_id is None or str(dst.ref_id) == "":
+                            raise JournalFormatError(
+                                f"question node {e.dst_id!r} missing ref_id",
+                                field="ref_id",
+                            )
+                        qid = str(dst.ref_id)
+                        break
+        # hypothesis_verdict always returns a typed rule (incl. algorithm
+        # result "no_counted"); never invent a rule when the return is empty.
+        if rule is None or str(rule) == "":
+            raise JournalFormatError(
+                f"hypothesis_verdict returned empty rule for {hid!r}",
+                field="rule",
+            )
+        row = hypothesis_report_row(
+            hypothesis_id=hid,
+            question_id=qid,
+            claims=claims,
+            verdict_value=v,
+            rule=str(rule),
+            legacy_claims=legacy,
         )
-        out: dict[str, dict[str, Any]] = {}
-        for hid, snap in snaps.items():
-            claims = claims_for_ref(by_target, hid, prefer="hypothesis")
-            if "verdict" not in snap:
-                from coscientist.core.events.errors import JournalFormatError
-
-                raise JournalFormatError(
-                    f"hypothesis snapshot missing verdict for {hid!r}",
-                    field="verdict",
-                )
-            v = str(snap["verdict"])
-            _v, _b, _by_th, rule = hypothesis_verdict(
-                claims,
-                any_exp,
-                refutations_needed=study.refutations_needed,
-                refutation_priority=study.refutation_priority,
-                supported_needed=study.supported_needed,
-                confirmations_needed=study.confirmations_needed,
-            )
-            legacy = sum(1 for c in claims if getattr(c, "severe", None) is False and c.claim_outcome == "consistent")
-            # question_id: first addresses edge from hypothesis, else ""
-            qid = ""
-            hid_node = f"{study.study_id}:hypothesis:{hid}"
-            if graph.get_node(hid_node) is not None:
-                for e in graph.edges_from(hid_node):
-                    if e.kind == "addresses":
-                        dst = graph.get_node(e.dst_id)
-                        if dst is not None and dst.kind == "question":
-                            qid = dst.ref_id or e.dst_id.split(":")[-1]
-                            break
-            row = hypothesis_report_row(
-                hypothesis_id=hid,
-                question_id=qid,
-                claims=claims,
-                verdict_value=v,
-                rule=rule or snap.get("rule"),
-                legacy_claims=legacy,
-            )
-            # Keep PR8 snapshot fields used by bind/digest consumers.
-            row.update(
-                {
-                    "ref": require_journal_field(snap, "ref", ctx=hid),
-                    "target_kind": "hypothesis",
-                    "by_literature": bool(
-                        require_journal_field(snap, "by_literature", ctx=hid)
-                    ),
-                    "by_theory": bool(
-                        require_journal_field(snap, "by_theory", ctx=hid)
-                    ),
-                    "provenance": require_journal_field(
-                        snap, "provenance", ctx=hid
-                    ),
-                    "k": require_journal_field(snap, "k", ctx=hid),
-                    "supported_needed": study.supported_needed,
-                    "refutations_needed": study.refutations_needed,
-                    "refutation_priority": study.refutation_priority,
-                }
-            )
-            if snap.get("note"):
-                row["note"] = snap["note"]
-            if snap.get("excluded_claims"):
-                row.setdefault("excluded_claims", snap["excluded_claims"])
-            out[hid] = row
-        return out, None
-    except JournalFormatError:
-        raise
-    except Exception as exc:  # noqa: BLE001 — dedicated field, not a fake hypothesis
-        return {}, type(exc).__name__
+        row.update(
+            {
+                "ref": require_journal_field(snap, "ref", ctx=hid),
+                "target_kind": "hypothesis",
+                "by_literature": bool(
+                    require_journal_field(snap, "by_literature", ctx=hid)
+                ),
+                "by_theory": bool(
+                    require_journal_field(snap, "by_theory", ctx=hid)
+                ),
+                "provenance": require_journal_field(snap, "provenance", ctx=hid),
+                "k": require_journal_field(snap, "k", ctx=hid),
+                "supported_needed": study.supported_needed,
+                "refutations_needed": study.refutations_needed,
+                "refutation_priority": study.refutation_priority,
+            }
+        )
+        if snap.get("note"):
+            row["note"] = snap["note"]
+        if "excluded_claims" in snap and "excluded_claims" not in row:
+            row["excluded_claims"] = snap["excluded_claims"]
+        out[hid] = row
+    return out, None

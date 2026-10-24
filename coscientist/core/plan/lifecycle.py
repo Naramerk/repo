@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+from pydantic_core import PydanticUndefined
+
 import coscientist.core.finalize.finalize as finalize_mod
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.events.clock import Clock
@@ -77,23 +79,23 @@ class LifecycleMixin:
         parent_study_id: str | None = None,
         sid: str | None = None,
         budget: Budget | None = None,
-        finalize_reserve_s: int = 30,
-        confirmations_needed: int = 1,
-        refutations_needed: int = 1,
-        refutation_priority: bool = False,
-        supported_needed: int = 2,
-        aggregate: str = "count",
-        evalue_alpha: float = 0.05,
-        max_expansions: int = 2,
-        max_human_expansions: int = 10,
-        replan_reserve: float = 0.1,
-        max_tasks: int = 64,
-        max_depth: int = 8,
-        plan_timeout_s: int = 600,
-        max_foreach_children: int = 32,
-        max_loop_iter: int = 8,
-        max_task_budget_share: float = 1.0,
-        max_proposals: int = 3,
+        finalize_reserve_s: int | None = None,
+        confirmations_needed: int | None = None,
+        refutations_needed: int | None = None,
+        refutation_priority: bool | None = None,
+        supported_needed: int | None = None,
+        aggregate: str | None = None,
+        evalue_alpha: float | None = None,
+        max_expansions: int | None = None,
+        max_human_expansions: int | None = None,
+        replan_reserve: float | None = None,
+        max_tasks: int | None = None,
+        max_depth: int | None = None,
+        plan_timeout_s: int | None = None,
+        max_foreach_children: int | None = None,
+        max_loop_iter: int | None = None,
+        max_task_budget_share: float | None = None,
+        max_proposals: int | None = None,
         inputs: list[Any] | None = None,
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,
@@ -103,6 +105,42 @@ class LifecycleMixin:
         intake_refuse: IntakeRefuse | None = None,
         user_put_capability: Any | None = None,
     ) -> str:
+        # Caps come from Study model config (single source) — not magic literals here.
+        def _study_cfg(name: str, override: Any) -> Any:
+            if override is not None:
+                return override
+            field = Study.model_fields[name]
+            if field.default is not PydanticUndefined:
+                return field.default
+            raise ValueError(f"{name} required for create_study (no Study default)")
+
+        finalize_reserve_s = int(_study_cfg("finalize_reserve_s", finalize_reserve_s))
+        confirmations_needed = int(
+            _study_cfg("confirmations_needed", confirmations_needed)
+        )
+        refutations_needed = int(_study_cfg("refutations_needed", refutations_needed))
+        refutation_priority = bool(
+            _study_cfg("refutation_priority", refutation_priority)
+        )
+        supported_needed = int(_study_cfg("supported_needed", supported_needed))
+        aggregate = str(_study_cfg("aggregate", aggregate))
+        evalue_alpha = float(_study_cfg("evalue_alpha", evalue_alpha))
+        max_expansions = int(_study_cfg("max_expansions", max_expansions))
+        max_human_expansions = int(
+            _study_cfg("max_human_expansions", max_human_expansions)
+        )
+        replan_reserve = float(_study_cfg("replan_reserve", replan_reserve))
+        max_tasks = int(_study_cfg("max_tasks", max_tasks))
+        max_depth = int(_study_cfg("max_depth", max_depth))
+        plan_timeout_s = int(_study_cfg("plan_timeout_s", plan_timeout_s))
+        max_foreach_children = int(
+            _study_cfg("max_foreach_children", max_foreach_children)
+        )
+        max_loop_iter = int(_study_cfg("max_loop_iter", max_loop_iter))
+        max_task_budget_share = float(
+            _study_cfg("max_task_budget_share", max_task_budget_share)
+        )
+        max_proposals = int(_study_cfg("max_proposals", max_proposals))
         sid = sid or self.store.study_id or study_id()
         now = self.clock.now()
         dl = deadline or (now + timedelta(hours=2))
@@ -234,7 +272,7 @@ class LifecycleMixin:
             refutations_needed=refutations_needed,
             refutation_priority=refutation_priority,
             supported_needed=supported_needed,
-            aggregate="count",
+            aggregate=aggregate,  # type: ignore[arg-type]
             evalue_alpha=float(evalue_alpha),
             max_expansions=max_expansions,
             max_human_expansions=max_human_expansions,

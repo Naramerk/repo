@@ -167,18 +167,17 @@ class LocalProjectMixin:
             # Foreach (PR10) / Loop (PR11) do not spend agent/human expansion quota.
             if not p.get("foreach") and not p.get("loop"):
                 # timeout → agent quota (DESIGN_M1 §4); only human skips agent quota.
+                # Counters are initialized on StudyRuntime.__init__ (never getattr default).
                 if p.get("delegated_by") == "human":
-                    self._human_expansions = int(getattr(self, "_human_expansions", 0)) + 1
+                    self._human_expansions = int(self._human_expansions) + 1
                 else:
-                    self._agent_expansions = int(getattr(self, "_agent_expansions", 0)) + 1
+                    self._agent_expansions = int(self._agent_expansions) + 1
             if "replan_allocated_s" in p:
                 alloc = float(
                     str(require_journal_field(p, "replan_allocated_s", ctx="PlanExpanded"))
                 )
                 if alloc:
-                    self._replan_used_s = float(
-                        getattr(self, "_replan_used_s", 0.0)
-                    ) + alloc
+                    self._replan_used_s = float(self._replan_used_s) + alloc
             after = p.get("after_task")
             pending = getattr(self, "_expand_pending", None)
             if after and isinstance(pending, set):
@@ -246,8 +245,14 @@ class LocalProjectMixin:
                 refusals.append(dict(p))
             else:
                 self._expansion_refusals = [dict(p)]
+            after_raw = p.get("after_task")
+            after_s = (
+                str(after_raw)
+                if after_raw is not None and str(after_raw) != ""
+                else None
+            )
             self._clear_expand_request(
-                after_task=str(p.get("after_task") or "") or None,
+                after_task=after_s,
                 plan_key=p.get("plan_key"),
             )
             # PR11: loop refuse must restore status on replay.
@@ -256,7 +261,15 @@ class LocalProjectMixin:
 
                 fold_loop_expansion_refused(self, p)
         elif ev.type == "HitlOpened":
-            rid = str(p.get("request_id") or ev.entity_key)
+            rid_raw = p.get("request_id")
+            if rid_raw is None or str(rid_raw) == "":
+                rid_raw = ev.entity_key
+            if rid_raw is None or str(rid_raw) == "":
+                raise JournalFormatError(
+                    "HitlOpened missing request_id/entity_key",
+                    field="request_id",
+                )
+            rid = str(rid_raw)
             opens = getattr(self, "_hitl_requests", None)
             if not isinstance(opens, dict):
                 self._hitl_requests = {}
@@ -289,9 +302,17 @@ class LocalProjectMixin:
         elif ev.type == "ArtifactRegistered":
             # PR15: core-stamped Artifact.kind (experiment_design / contradiction_map).
             # Journal is authority; meta mutation only here (after successful append).
-            art_id = str(p.get("artifact_id") or ev.entity_key or "")
+            art_raw = p.get("artifact_id")
+            if art_raw is None or str(art_raw) == "":
+                art_raw = ev.entity_key
+            if art_raw is None or str(art_raw) == "":
+                raise JournalFormatError(
+                    "ArtifactRegistered missing artifact_id/entity_key",
+                    field="artifact_id",
+                )
+            art_id = str(art_raw)
             kind = p.get("kind")
-            if art_id and kind and bool(p.get("stamped")):
+            if kind and bool(p.get("stamped")):
                 arts = getattr(self, "artifacts", None)
                 if arts is None:
                     # open_runtime folds before make_executor — defer stamp apply.
@@ -359,9 +380,7 @@ class LocalProjectMixin:
                     str(require_journal_field(p, "replan_allocated_s", ctx="TaskCreated"))
                 )
                 if alloc:
-                    self._replan_used_s = float(
-                        getattr(self, "_replan_used_s", 0.0)
-                    ) + alloc
+                    self._replan_used_s = float(self._replan_used_s) + alloc
             pending_exp = p.get("pending_expansion")
             after = p.get("expand_after_task")
             spec = clean.get("spec")
@@ -549,10 +568,12 @@ class LocalProjectMixin:
                 dst = self.graph.get_node(edge.dst_id)
                 logical = None
                 if dst is not None:
-                    prefix = f"{ev.study_id}:{dst.kind}:"
-                    logical = (
-                        edge.dst_id[len(prefix) :] if edge.dst_id.startswith(prefix) else (dst.ref_id or edge.dst_id)
-                    )
+                    if dst.ref_id is None or str(dst.ref_id) == "":
+                        raise JournalFormatError(
+                            f"about-edge dst {edge.dst_id!r} missing ref_id",
+                            field="ref_id",
+                        )
+                    logical = str(dst.ref_id)
                 self._invalidate_verdict_snapshots_for_target(logical)
         elif ev.type == "VerdictSnapshotsRecorded":
             snaps = p.get("snapshots") or {}
