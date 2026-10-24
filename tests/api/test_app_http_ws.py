@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+
+pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 from coscientist.api.app import AppDeps, create_app
