@@ -8,7 +8,7 @@
 - Gate @3c15ccd: drop non-test `# type: ignore[return-value]` — pass `SandboxResult` isolation Literals through to `put_sandbox`.
 - Gorilla @2d80a80: `killpg` guest group (not worker-only); narrow worker `except Exception` → typed `ToolError`; single `spawn` context (no fork/spawn fallback); real-guest kill test.
 - Gorilla @5640529313 / @5640572892: one ESRCH layer — `_signal_or_record_gone` journals `JobGuestProcessGroupGone` (like `record_cancel_failed`); no helper except→bool/record; `GuestPgidSlot` Protocol; coder spec `TypedDict` (no `dict[str, Any]`).
-- Gorilla @5640612760: restore multiline overdue comprehension from main; ESRCH/`ToolError` handlers only journal (`JobGuestProcessGroupGone` / `JobCancelFailed`), explicit `else`/result outside except (heuristics audit clean, no hand markers).
+- Gorilla @5640612760 / @5640642564: restore multiline overdue comprehension from main; ESRCH → `GuestProcessGroupGone(ToolError)` via `raise ... from`; callers journal `JobGuestProcessGroupGone` then re-raise; upper level converts via `_accept_journaled_guest_gone` (no return on except path; heuristics audit clean).
 - Stacks on G6. Parity: [DESIGN §6.4](docs/DESIGN.md#64-coder-и-alembic-как-асинхронные-задачи-r4), [CAP #11](docs/CAPABILITIES.md), §12.2 `coder_timeout`.
 
 ### G6 JobStore + Job* events [M3]

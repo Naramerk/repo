@@ -508,15 +508,12 @@ def _running_job() -> tuple[InMemoryJobStore, _Journal, str]:
     return jobs, journal, jid
 
 
-def test_signal_or_record_gone_ok(monkeypatch: pytest.MonkeyPatch) -> None:
-    jobs, journal, jid = _running_job()
+def test_signal_guest_pg_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(os, "killpg", lambda _pgid, _sig: None)
-    assert coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=signal.SIGTERM) == "ok"
-    assert "JobGuestProcessGroupGone" not in _types(journal)
-    jobs.close()
+    coder_run._signal_guest_pg(4242, signal.SIGTERM)
 
 
-def test_signal_or_record_gone_journals_killpg_esrch(
+def test_signal_journal_reraise_killpg_esrch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     jobs, journal, jid = _running_job()
@@ -525,7 +522,8 @@ def test_signal_or_record_gone_journals_killpg_esrch(
         raise ProcessLookupError()
 
     monkeypatch.setattr(os, "killpg", _gone)
-    assert coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=signal.SIGKILL) == "gone"
+    with pytest.raises(coder_run.GuestProcessGroupGone, match="pgid=4242.*SIGKILL"):
+        coder_run._signal_journal_reraise(jobs, jid, 4242, signal.SIGKILL)
     gone_events = [e for e in journal.events if e.type == "JobGuestProcessGroupGone"]
     assert len(gone_events) == 1
     assert gone_events[0].payload["pgid"] == 4242
@@ -534,7 +532,7 @@ def test_signal_or_record_gone_journals_killpg_esrch(
     jobs.close()
 
 
-def test_signal_or_record_gone_journals_probe_esrch(
+def test_signal_journal_reraise_probe_esrch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     jobs, journal, jid = _running_job()
@@ -543,7 +541,8 @@ def test_signal_or_record_gone_journals_probe_esrch(
         raise ProcessLookupError()
 
     monkeypatch.setattr(os, "killpg", _gone)
-    assert coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=0) == "gone"
+    with pytest.raises(coder_run.GuestProcessGroupGone, match="pgid=4242.*op=probe"):
+        coder_run._signal_journal_reraise(jobs, jid, 4242, 0)
     gone_events = [e for e in journal.events if e.type == "JobGuestProcessGroupGone"]
     assert len(gone_events) == 1
     assert gone_events[0].payload["op"] == "probe"
@@ -551,32 +550,26 @@ def test_signal_or_record_gone_journals_probe_esrch(
     jobs.close()
 
 
-def test_signal_or_record_gone_probe_oserror_is_tool_error(
+def test_signal_guest_pg_probe_oserror_is_tool_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    jobs, _journal, jid = _running_job()
-
     def _denied(_pgid: int, _sig: int) -> None:
         raise PermissionError("simulated_probe_denied")
 
     monkeypatch.setattr(os, "killpg", _denied)
     with pytest.raises(ToolError, match="probe failed"):
-        coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=0)
-    jobs.close()
+        coder_run._signal_guest_pg(4242, 0)
 
 
-def test_signal_or_record_gone_killpg_oserror_is_tool_error(
+def test_signal_guest_pg_killpg_oserror_is_tool_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    jobs, _journal, jid = _running_job()
-
     def _boom(_pgid: int, _sig: int) -> None:
         raise OSError("simulated_killpg_failure")
 
     monkeypatch.setattr(os, "killpg", _boom)
     with pytest.raises(ToolError, match="killpg\\(SIGTERM\\) failed"):
-        coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=signal.SIGTERM)
-    jobs.close()
+        coder_run._signal_guest_pg(4242, signal.SIGTERM)
 
 
 @pytest.mark.parametrize(
@@ -623,11 +616,11 @@ async def test_finally_probe_error_still_terminals_job(
     jobs = _jobs(clock, journal)
     arts = LocalArtifactStore(tmp_path / "cas")
 
-    def _boom(*_args: object, **_kwargs: object) -> object:
+    def _boom(_pgid: int, _sig: object) -> None:
         raise ToolError("local", "guest process group probe failed: simulated")
 
     monkeypatch.setattr(coder_run, "_sandbox_worker", _worker_publish_pgid_no_result)
-    monkeypatch.setattr(coder_run, "_signal_or_record_gone", _boom)
+    monkeypatch.setattr(coder_run, "_signal_guest_pg", _boom)
 
     with pytest.raises(ToolError, match="exited without result"):
         await run_coder_job(
