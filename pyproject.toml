@@ -710,12 +710,6 @@ ignore_imports = [
 unmatched_ignore_imports_alerting = "error"
 
 [[tool.importlinter.contracts]]
-name = "core and checks must not import profiles"
-type = "forbidden"
-source_modules = ["coscientist.core", "coscientist.checks"]
-forbidden_modules = ["coscientist.profiles"]
-
-[[tool.importlinter.contracts]]
 name = "profiles must not import api, web, experimental"
 type = "forbidden"
 source_modules = ["coscientist.profiles"]

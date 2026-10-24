@@ -2,19 +2,38 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictInt,
     field_validator,
     model_validator,
 )
 
-from coscientist.mcp.config import McpServerConfig
+from coscientist.mcp.config import StdioServerConfig, StreamableHttpServerConfig
 
 AlembicMode = Literal["enabled", "disabled"]
+
+
+class ProfileStdioServerConfig(StdioServerConfig):
+    """Strict stdio MCP server entry for profiles (no str→number / list→tuple coerce)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+
+class ProfileHttpServerConfig(StreamableHttpServerConfig):
+    """Strict streamable-HTTP MCP server entry for profiles."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+
+ProfileMcpServerConfig = Annotated[
+    ProfileStdioServerConfig | ProfileHttpServerConfig,
+    Field(discriminator="transport"),
+]
 
 
 class RoleConfig(BaseModel):
@@ -75,16 +94,16 @@ class Profile(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     name: str = Field(min_length=1)
-    profile_version: str = Field(min_length=1)
+    profile_version: StrictInt = Field(ge=1)
     roles: dict[str, RoleConfig]
     routes: dict[str, RouteConfig]
-    mcp_servers: tuple[McpServerConfig, ...]
+    mcp_servers: tuple[ProfileMcpServerConfig, ...]
     catalog_extensions: tuple[str, ...]
     alembic: AlembicMode
     integrations: tuple[str, ...]
     plugins: tuple[str, ...]
 
-    @field_validator("name", "profile_version")
+    @field_validator("name")
     @classmethod
     def _strip_ok(cls, v: str) -> str:
         if v != v.strip():

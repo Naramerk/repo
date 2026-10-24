@@ -3,6 +3,9 @@
 from coscientist.profiles.models import (
     AlembicMode,
     Profile,
+    ProfileHttpServerConfig,
+    ProfileMcpServerConfig,
+    ProfileStdioServerConfig,
     RoleConfig,
     RouteBudget,
     RouteConfig,
@@ -11,6 +14,9 @@ from coscientist.profiles.models import (
 __all__ = [
     "AlembicMode",
     "Profile",
+    "ProfileHttpServerConfig",
+    "ProfileMcpServerConfig",
+    "ProfileStdioServerConfig",
     "RoleConfig",
     "RouteBudget",
     "RouteConfig",
