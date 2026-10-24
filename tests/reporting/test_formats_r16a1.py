@@ -80,6 +80,36 @@ def test_config_requires_prefix_and_lang():
         ReportFormatConfig.model_validate({"artifact_link_prefix": "artifact:"})
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("html_lang", " en"),
+        ("html_lang", "en "),
+        ("html_lang", "en\n"),
+        ("html_lang", "en\r"),
+        ("artifact_link_prefix", " artifact:"),
+        ("artifact_link_prefix", "artifact: "),
+        ("artifact_link_prefix", "artifact:\n"),
+        ("artifact_link_prefix", "artifact:\r"),
+    ],
+    ids=[
+        "html_lang-leading-space",
+        "html_lang-trailing-space",
+        "html_lang-newline",
+        "html_lang-cr",
+        "prefix-leading-space",
+        "prefix-trailing-space",
+        "prefix-newline",
+        "prefix-cr",
+    ],
+)
+def test_config_stripped_no_newlines(field: str, value: str):
+    base = {"artifact_link_prefix": "artifact:", "html_lang": "en"}
+    base[field] = value
+    with pytest.raises(ValidationError, match=f"{field} must be stripped"):
+        ReportFormatConfig.model_validate(base)
+
+
 def test_format_md_appends_artifact_link():
     inp = _input()
     md, media = render_report(inp, "md", _CFG)

@@ -11,6 +11,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StrictStr,
+    ValidationInfo,
     field_validator,
 )
 
@@ -45,18 +46,11 @@ class ReportFormatConfig(BaseModel):
     artifact_link_prefix: StrictStr = Field(min_length=1)
     html_lang: StrictStr = Field(min_length=1)
 
-    @field_validator("artifact_link_prefix")
+    @field_validator("artifact_link_prefix", "html_lang")
     @classmethod
-    def _prefix(cls, v: str) -> str:
+    def _stripped_no_newlines(cls, v: str, info: ValidationInfo) -> str:
         if v != v.strip() or "\n" in v or "\r" in v:
-            raise ValueError("artifact_link_prefix must be stripped, no newlines")
-        return v
-
-    @field_validator("html_lang")
-    @classmethod
-    def _lang(cls, v: str) -> str:
-        if v != v.strip() or "\n" in v or "\r" in v:
-            raise ValueError("html_lang must be stripped, no newlines")
+            raise ValueError(f"{info.field_name} must be stripped, no newlines")
         return v
 
 
@@ -154,7 +148,8 @@ def render_report(inp: ReportRenderInput, fmt: ReportFormat, config: ReportForma
 
 
 def get_study_report(inp: ReportRenderInput, *, format: ReportFormat, config: ReportFormatConfig) -> ReportView:
-    body, _media = render_report(inp, format, config)
+    # Media type is derived from format via media_type_for; ReportView does not store it.
+    body = render_report(inp, format, config)[0]
     return ReportView(
         study_id=inp.report.study_id,
         format=format,
