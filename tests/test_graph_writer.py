@@ -55,20 +55,22 @@ def _st(*, study_id: str = "st1") -> GraphNode:
     )
 def _nkw(reg, **kw):
     return {"node": _q(), "ts": TS, "registry": reg, "idem_extra": (), **kw}
-def _ekw(reg, *, edge=None, src=None, dst=None, **kw):
-    src = src or _st()
-    dst = dst or _q()
-    edge = edge or GraphEdge(
+def _ekw(reg, *, edge, src, dst, **kw):
+    return {"edge": edge, "ts": TS, "src": src, "dst": dst, "registry": reg, "idem_extra": (), **kw}
+def _asks_kw(reg, **kw):
+    src, dst = _st(), _q()
+    edge = GraphEdge(
         edge_id="a1", kind="asks", study_id="st1", src_id=src.node_id, dst_id=dst.node_id, created_at=TS
     )
-    return {"edge": edge, "ts": TS, "src": src, "dst": dst, "registry": reg, "idem_extra": (), **kw}
+    return _ekw(reg, edge=edge, src=src, dst=dst, **kw)
 def test_node_schema_version(reg):
     assert graph_node_upserted(**_nkw(reg)).schema_version == writer_schema_version("GraphNodeUpserted")
 def test_node_digest_ignores_created_at(reg):
     ev = graph_node_upserted(**_nkw(reg))
     later = graph_node_upserted(**_nkw(reg, node=_q(at=TS + timedelta(seconds=9))))
     assert later.idem_key == ev.idem_key
-    assert "created_at" in ev.payload
+def test_node_payload_includes_created_at(reg):
+    assert "created_at" in graph_node_upserted(**_nkw(reg)).payload
 def test_node_digest_changes_with_attrs(reg):
     ev = graph_node_upserted(**_nkw(reg))
     assert graph_node_upserted(**_nkw(reg, node=_q("x"))).idem_key != ev.idem_key
@@ -157,12 +159,12 @@ def test_required_null_without_null_default_refused():
     with pytest.raises(GraphWriterError, match=r"v: expected type str, got NoneType"):
         graph_node_upserted(**_nkw(reg, node=node))
 def test_edge_digest_ignores_created_at(reg):
-    kw = _ekw(reg)
+    kw = _asks_kw(reg)
     ev = graph_edge_added(**kw)
     edge2 = kw["edge"].model_copy(update={"created_at": TS + timedelta(hours=1)})
     assert graph_edge_added(**{**kw, "edge": edge2}).idem_key == ev.idem_key
 def test_edge_idem_extra(reg):
-    kw = _ekw(reg)
+    kw = _asks_kw(reg)
     ev = graph_edge_added(**kw)
     assert graph_edge_added(**{**kw, "idem_extra": ("r",)}).idem_key == f"{ev.idem_key}:r"
 def test_edge_refuses_pair_not_allowed(reg):
