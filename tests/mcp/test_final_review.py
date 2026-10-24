@@ -14,7 +14,6 @@ from coscientist.mcp import (
     McpResponseLimitError,
     McpSsrfError,
     McpTimeoutError,
-    McpTransportError,
 )
 from coscientist.mcp.digest import content_digest
 from coscientist.mcp.jsonutil import dumps_strict, json_rpc_ids_equal, loads_strict
@@ -30,9 +29,8 @@ from tests.mcp.conftest import (
     system_wait_for,
 )
 from tests.mcp.fake_server import FakeStdioServer, default_handler
-from tests.mcp.test_client import RecordingFetcher, _BufStream, FakeHttp
-from tests.mcp.test_ssrf import AllowLoopbackPolicy, FakeResolver, _fetcher
-
+from tests.mcp.test_client import FakeHttp, RecordingFetcher
+from tests.mcp.test_ssrf import FakeResolver, _fetcher
 
 # --- 1) Strict JSON / JCS -------------------------------------------------
 
@@ -205,8 +203,9 @@ async def test_connect_cancelled_during_initialize_closes_stdio() -> None:
         "sys.stdin.readline()\n"
         "time.sleep(60)\n"
     )
-    from coscientist.mcp import StdioServerConfig
     import sys
+
+    from coscientist.mcp import StdioServerConfig
 
     cfg = make_config(
         servers=(
@@ -264,7 +263,7 @@ async def test_stdio_aclose_sets_closed_only_after_reap() -> None:
     import sys
 
     from coscientist.mcp.stdio import StdioTransport
-    from tests.mcp.conftest import SystemClock, system_sleep, system_wait_for
+    from tests.mcp.conftest import SystemClock, system_sleep
 
     transport = await StdioTransport.start(
         command=sys.executable,
@@ -293,7 +292,7 @@ async def test_stdio_aclose_retry_after_cancel_during_reap(
 
     import coscientist.mcp.stdio as stdio_mod
     from coscientist.mcp.stdio import StdioTransport
-    from tests.mcp.conftest import SystemClock, system_sleep, system_wait_for
+    from tests.mcp.conftest import SystemClock, system_sleep
 
     started = asyncio.Event()
 
