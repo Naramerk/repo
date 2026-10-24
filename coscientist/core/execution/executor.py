@@ -389,12 +389,22 @@ def _derive_claim_core_attrs(
     frozen = _criterion_is_frozen(graph, study_id, key)
     crit = _criterion_freeze_attrs(graph, study_id, key)
     sesoi = crit.get("sesoi")
-    uses_sesoi = bool(crit["uses_sesoi"]) if "uses_sesoi" in crit else False
-    predicts_null = bool(crit["predicts_null"]) if "predicts_null" in crit else False
-    if "predicted_direction" in crit:
+    if frozen:
+        for req_k in ("uses_sesoi", "predicts_null", "predicted_direction"):
+            if req_k not in crit:
+                raise JournalFormatError(
+                    f"frozen criterion missing required attr: {req_k}"
+                )
+        uses_sesoi = bool(crit["uses_sesoi"])
+        predicts_null = bool(crit["predicts_null"])
         predicted_direction = str(crit["predicted_direction"])
     else:
-        predicted_direction = "two_sided"
+        uses_sesoi = bool(crit["uses_sesoi"]) if "uses_sesoi" in crit else False
+        predicts_null = bool(crit["predicts_null"]) if "predicts_null" in crit else False
+        if "predicted_direction" in crit:
+            predicted_direction = str(crit["predicted_direction"])
+        else:
+            predicted_direction = "two_sided"
     if predicted_direction not in ("positive", "negative", "two_sided"):
         raise JournalFormatError(
             f"criterion predicted_direction invalid: {predicted_direction!r}"
@@ -409,9 +419,11 @@ def _derive_claim_core_attrs(
                 raise JournalFormatError("prediction check missing status")
             pred_statuses.append(str(st))
     if not pred_statuses and status in ("met", "not_met", "unassessed"):
-        pred_statuses = [
-            "PASSED" if status == "met" else ("FAILED" if status == "not_met" else "")
-        ]
+        # Never invent empty-string status for unassessed (filters to no preds).
+        if status == "unassessed":
+            pred_statuses = ["UNASSESSED"]
+        else:
+            pred_statuses = ["PASSED" if status == "met" else "FAILED"]
     # Effect from CheckResult.effect only — never agent detail / claim attrs.
     effect, used_sesoi = _effect_from_checks(list(checks or []), attempt_id=attempt_id)
     from coscientist.checks.kinds._util import check_is_guest_timeout

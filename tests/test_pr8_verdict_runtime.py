@@ -969,7 +969,14 @@ def test_frozen_normalizes_check_id_to_template_id():
             kind="criterion",
             study_id=sid,
             ref_id="value_match",
-            attrs={"frozen": True, "frozen_at_seq": 3, "template_id": "value_match"},
+            attrs={
+                "frozen": True,
+                "frozen_at_seq": 3,
+                "template_id": "value_match",
+                "uses_sesoi": False,
+                "predicts_null": False,
+                "predicted_direction": "two_sided",
+            },
         )
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)

@@ -44,19 +44,25 @@ def task_is_plan_n(task: Any) -> bool:
     """True when ``Task.plan_role == PLAN_N`` (sole wire signal).
 
     Missing / invalid ``plan_role`` raises (fail-closed) — never inferred from
-    criteria / key prefix / silent False.
+    criteria / key prefix / silent False. Only ``PlanRole`` or ``str`` accepted
+    (no ``str(role)`` coercion of arbitrary objects).
     """
-    if not hasattr(task, "plan_role"):
-        raise JournalFormatError("task missing required plan_role")
-    role = task.plan_role
+    try:
+        role = task.plan_role
+    except AttributeError as e:
+        raise JournalFormatError("task missing required plan_role") from e
     if role is None:
         raise JournalFormatError("task.plan_role must not be null")
     if isinstance(role, PlanRole):
         return role == PlanRole.PLAN_N
-    try:
-        return PlanRole(str(role)) == PlanRole.PLAN_N
-    except ValueError as e:
-        raise JournalFormatError(f"task.plan_role invalid: {role!r}") from e
+    if isinstance(role, str):
+        try:
+            return PlanRole(role) == PlanRole.PLAN_N
+        except ValueError as e:
+            raise JournalFormatError(f"task.plan_role invalid: {role!r}") from e
+    raise JournalFormatError(
+        f"task.plan_role must be PlanRole|str, got {type(role).__name__}"
+    )
 
 
 def critic_gate(
@@ -75,7 +81,9 @@ def critic_gate(
     if study is None:
         return "no_study"
     catalog = runtime.catalog
-    templates = list(catalog.templates) if catalog is not None else []
+    if catalog is None:
+        return "missing_catalog"
+    templates = list(catalog.templates)
     by_id = {t.id: t for t in templates}
     keyed = assign_core_keys(runtime, list(req.tasks))
     if isinstance(keyed, str):

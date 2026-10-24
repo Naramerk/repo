@@ -1760,3 +1760,546 @@ def test_inputs_rejects_outcome_alias_without_claim_outcome():
             infra_failure=False,
             derive_attrs=derive,
         )
+
+
+# --- R4 fail-closed: expand_critic / executor / evaluate ---
+
+
+def test_r4_task_is_plan_n_rejects_str_coercion_of_objects():
+    """PlanRole only accepts PlanRole|str — no str(obj) coercion."""
+    from coscientist.core.plan.expand_critic import task_is_plan_n
+
+    class _Weird:
+        def __str__(self) -> str:
+            return "plan_n"
+
+    with pytest.raises(JournalFormatError, match="PlanRole\\|str"):
+        task_is_plan_n(SimpleNamespace(plan_role=_Weird()))
+
+
+def test_r4_critic_gate_missing_catalog_returns_missing_catalog():
+    from coscientist.core.plan import expand_critic as ec
+
+    rt = _RT()
+    rt.study = SimpleNamespace(max_expansions=2)
+    rt.catalog = None
+    req = SimpleNamespace(
+        tasks=[],
+        questions=[],
+        superseded_tasks=[],
+        superseded_questions=[],
+    )
+    assert ec.critic_gate(rt, req, after_task="E0") == "missing_catalog"
+
+
+def test_r4_frozen_criterion_requires_sesoi_attrs():
+    """Frozen criterion missing uses_sesoi/predicts_null/predicted_direction raises."""
+    from datetime import UTC, datetime
+
+    from coscientist.core.claims.graph import GraphNode, GraphStore, default_execution_registry
+    from coscientist.core.events.ids import criterion_node_id
+    from coscientist.core.execution.domain import (
+        CheckResult,
+        PlanRole,
+        ReqStatus,
+        Task,
+        TaskKind,
+        TaskSpec,
+        TaskState,
+    )
+    from coscientist.core.execution.executor import _derive_claim_core_attrs
+
+    sid = "st_frz_req"
+    g = GraphStore(default_execution_registry())
+    cnid = criterion_node_id(sid, "value_match")
+    g.upsert_node(
+        GraphNode(
+            node_id=cnid,
+            kind="criterion",
+            study_id=sid,
+            ref_id="value_match",
+            # frozen but missing uses_sesoi / predicts_null / predicted_direction
+            attrs={"frozen": True, "frozen_at_seq": 1, "template_id": "value_match"},
+            created_at=datetime.now(UTC),
+        )
+    )
+    now = datetime.now(UTC)
+    task = Task(
+        task_id=f"{sid}/E0",
+        kind=TaskKind.EXPERIMENT,
+        spec=TaskSpec(
+            task_key="E0", title="e", goal="g", route="experiment", criteria=[]
+        ),
+        state=TaskState.DONE,
+        outcome=TaskOutcome.SUCCESS,
+        deadline=now,
+        plan_role=PlanRole.NONE,
+    )
+    checks = [
+        CheckResult(
+            check_id="value_match#0",
+            template_id="value_match",
+            status=ReqStatus.MET,
+            is_code=True,
+            required=True,
+            role="prediction",
+        )
+    ]
+    with pytest.raises(JournalFormatError, match="frozen criterion missing"):
+        _derive_claim_core_attrs(
+            task,
+            TaskOutcome.SUCCESS,
+            raw={"checked_against": "value_match", "target": "Q1"},
+            checks=checks,
+            graph=g,
+            study_id=sid,
+            validated=True,
+        )
+
+
+def test_r4_unassessed_pred_statuses_use_unassessed_token(monkeypatch):
+    """Synthesizing pred_statuses for unassessed must not invent \"\"."""
+    from datetime import UTC, datetime
+
+    from coscientist.core.execution.domain import (
+        PlanRole,
+        Task,
+        TaskKind,
+        TaskSpec,
+        TaskState,
+    )
+    from coscientist.core.execution.executor import _derive_claim_core_attrs
+    import coscientist.core.claims.verdict as verdict_mod
+
+    captured: dict = {}
+    real = verdict_mod.classify_outcome
+
+    def _capture(**kwargs):
+        captured["prediction_statuses"] = list(kwargs["prediction_statuses"])
+        return real(**kwargs)
+
+    monkeypatch.setattr(verdict_mod, "classify_outcome", _capture)
+
+    now = datetime.now(UTC)
+    task = Task(
+        task_id="st/E0",
+        kind=TaskKind.EXPERIMENT,
+        spec=TaskSpec(
+            task_key="E0", title="e", goal="g", route="experiment", criteria=[]
+        ),
+        state=TaskState.DONE,
+        outcome=TaskOutcome.SUCCESS,
+        deadline=now,
+        plan_role=PlanRole.NONE,
+    )
+    # No prediction checks + unknown role → criterion_status unassessed path
+    # with empty pred_statuses synthesis.
+    _derive_claim_core_attrs(
+        task,
+        TaskOutcome.SUCCESS,
+        raw={"checked_against": "missing_tmpl", "target": "Q1"},
+        checks=[],
+        graph=None,
+        study_id="st",
+        validated=True,
+    )
+    assert captured.get("prediction_statuses") == ["UNASSESSED"]
+    assert "" not in captured.get("prediction_statuses", [])
+
+
+def test_r4_evaluate_metric_threshold_requires_op(tmp_path):
+    from coscientist.checks.evaluate import evaluate_code_check
+    from coscientist.core.events.errors import JournalFormatError as JFE
+    from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+    from coscientist.core.execution.domain import (
+        AgentTaskOutput,
+        ArtifactHandle,
+        CodeCheck,
+    )
+
+    store = LocalArtifactStore(tmp_path / "cas")
+    art = store.put(
+        b'{"effect": 1.0}',
+        make_tool_ref("a#1:out"),
+        name="main.json",
+        media_type="application/json",
+    )
+    out = AgentTaskOutput(
+        outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")}
+    )
+    check = CodeCheck(
+        kind="metric_threshold",
+        output="main",
+        metric="effect",
+        pointer="/effect",
+        op=None,
+        target=0,
+    )
+    with pytest.raises(JFE, match="requires op"):
+        evaluate_code_check(
+            check,
+            template_id="t",
+            check_id="t#0",
+            out=out,
+            artifacts=store,
+            values={},
+            role="prediction",
+            attempt_id="a#1",
+        )
+
+
+def test_r4_evaluate_requires_output_no_main_default(tmp_path):
+    from coscientist.checks.evaluate import evaluate_code_check
+    from coscientist.core.events.errors import JournalFormatError as JFE
+    from coscientist.core.execution.artifacts import LocalArtifactStore
+    from coscientist.core.execution.domain import AgentTaskOutput, CodeCheck
+
+    store = LocalArtifactStore(tmp_path / "cas")
+    check = CodeCheck(kind="schema_valid", output=None)
+    with pytest.raises(JFE, match="requires non-empty output"):
+        evaluate_code_check(
+            check,
+            template_id="t",
+            check_id="t#0",
+            out=AgentTaskOutput(),
+            artifacts=store,
+            values={},
+            role="validity",
+        )
+
+
+def test_r4_evaluate_unexpected_exception_raises_core_bug(monkeypatch, tmp_path):
+    """Non-executable kinds must not convert unexpected Exception → FAILED."""
+    from coscientist.checks.evaluate import evaluate_code_check
+    from coscientist.core.events.errors import CoreBugError
+    from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+    from coscientist.core.execution.domain import (
+        AgentTaskOutput,
+        ArtifactHandle,
+        CodeCheck,
+    )
+    import coscientist.checks.evaluate as ev
+
+    store = LocalArtifactStore(tmp_path / "cas")
+    art = store.put(
+        b'{"count": 1}',
+        make_tool_ref("a#1:out"),
+        name="main.json",
+        media_type="application/json",
+    )
+    out = AgentTaskOutput(
+        outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")}
+    )
+    check = CodeCheck(
+        kind="value_matches",
+        output="main",
+        pointer="/count",
+        target=1,
+    )
+
+    def boom(*_a, **_k):
+        raise RuntimeError("unexpected_core_path")
+
+    monkeypatch.setattr(ev, "_pointer_get", boom)
+    with pytest.raises(CoreBugError, match="core_bug:RuntimeError"):
+        evaluate_code_check(
+            check,
+            template_id="t",
+            check_id="t#0",
+            out=out,
+            artifacts=store,
+            values={},
+            role="prediction",
+            attempt_id="a#1",
+        )
+
+
+def test_r4_evaluate_defaults_require_experiment_key(tmp_path):
+    from coscientist.checks.catalog import load_catalog
+    from coscientist.checks.evaluate import evaluate_task_checks
+    from coscientist.core.execution.artifacts import LocalArtifactStore
+    from coscientist.core.execution.domain import AgentTaskOutput, PlanRole, TaskSpec
+
+    cat = load_catalog(
+        {
+            "catalog_version": "0.1.0",
+            "edition": "t",
+            "sources_sha256": {},
+            "rules": [
+                {
+                    "rule_id": "R23",
+                    "source": "x",
+                    "excerpt": "e",
+                    "digest": "d",
+                }
+            ],
+            "templates": [
+                {
+                    "id": "artifact_present",
+                    "title": "a",
+                    "text_ru": "t",
+                    "rule_ids": ["R23"],
+                    "method_sources": ["m"],
+                    "applies_to": ["experiment"],
+                    "check": {"kind": "artifact_exists", "output": "main"},
+                    "role": "validity",
+                    "kind": "catalog",
+                    "required": True,
+                    "version": "1",
+                    "uses_sesoi": False,
+                    "predicts_null": False,
+                    "predicted_direction": "two_sided",
+                }
+            ],
+            # defaults present but missing experiment key
+            "defaults": {"hypothesis": ["artifact_present"]},
+        }
+    )
+    with pytest.raises(JournalFormatError, match="experiment"):
+        evaluate_task_checks(
+            cat,
+            TaskSpec(task_key="E0", title="t", goal="g", route="experiment"),
+            AgentTaskOutput(),
+            LocalArtifactStore(tmp_path / "cas"),
+            plan_role=PlanRole.NONE,
+        )
+
+
+def test_r4_evaluate_proposed_kind_id_mismatch_raises(tmp_path):
+    from coscientist.checks.catalog import load_catalog
+    from coscientist.checks.evaluate import evaluate_task_checks
+    from coscientist.core.execution.artifacts import LocalArtifactStore
+    from coscientist.core.execution.domain import (
+        AgentTaskOutput,
+        PlanRole,
+        RequirementRef,
+        TaskSpec,
+    )
+
+    cat = load_catalog(
+        {
+            "catalog_version": "0.1.0",
+            "edition": "t",
+            "sources_sha256": {},
+            "rules": [
+                {
+                    "rule_id": "R23",
+                    "source": "x",
+                    "excerpt": "e",
+                    "digest": "d",
+                }
+            ],
+            "templates": [
+                {
+                    "id": "proposed_check",
+                    "title": "p",
+                    "text_ru": "t",
+                    "rule_ids": ["R23"],
+                    "method_sources": ["m"],
+                    "applies_to": ["experiment"],
+                    "check": {"kind": "artifact_exists", "output": "main"},
+                    "role": "prediction",
+                    # kind catalog but id is proposed_check → mismatch
+                    "kind": "catalog",
+                    "required": True,
+                    "version": "1",
+                    "uses_sesoi": False,
+                    "predicts_null": False,
+                    "predicted_direction": "two_sided",
+                }
+            ],
+            "defaults": {"experiment": ["proposed_check"]},
+        }
+    )
+    with pytest.raises(JournalFormatError, match="kind/template_id mismatch"):
+        evaluate_task_checks(
+            cat,
+            TaskSpec(
+                task_key="E0",
+                title="t",
+                goal="g",
+                route="experiment",
+                criteria=[RequirementRef(template_id="proposed_check")],
+            ),
+            AgentTaskOutput(),
+            LocalArtifactStore(tmp_path / "cas"),
+            plan_role=PlanRole.NONE,
+        )
+
+
+def test_r4_evaluate_plan_role_rejects_str_coercion():
+    from coscientist.checks.catalog import minimal_test_catalog
+    from coscientist.checks.evaluate import evaluate_task_checks
+    from coscientist.core.execution.artifacts import LocalArtifactStore
+    from coscientist.core.execution.domain import AgentTaskOutput, TaskSpec
+    from pathlib import Path
+    import tempfile
+
+    class _Weird:
+        def __str__(self) -> str:
+            return "none"
+
+    with tempfile.TemporaryDirectory() as td:
+        with pytest.raises(JournalFormatError, match="PlanRole\\|str"):
+            evaluate_task_checks(
+                minimal_test_catalog(),
+                TaskSpec(task_key="E0", title="t", goal="g", route="experiment"),
+                AgentTaskOutput(),
+                LocalArtifactStore(Path(td)),
+                plan_role=_Weird(),  # type: ignore[arg-type]
+            )
+
+
+def test_r4_evaluate_optional_kwargs_non_dict_raises(tmp_path):
+    from coscientist.checks.catalog import minimal_test_catalog
+    from coscientist.checks.evaluate import evaluate_task_checks
+    from coscientist.core.execution.artifacts import LocalArtifactStore
+    from coscientist.core.execution.domain import AgentTaskOutput, PlanRole, TaskSpec
+
+    with pytest.raises(JournalFormatError, match="review_statuses must be dict"):
+        evaluate_task_checks(
+            minimal_test_catalog(),
+            TaskSpec(task_key="E0", title="t", goal="g", route="experiment"),
+            AgentTaskOutput(),
+            LocalArtifactStore(tmp_path / "cas"),
+            plan_role=PlanRole.NONE,
+            review_statuses=[],  # type: ignore[arg-type]
+        )
+
+
+def test_r4_evaluate_proposed_predicted_direction_required(monkeypatch, tmp_path):
+    """Approved proposed_check must not default predicted_direction to two_sided."""
+    from coscientist.checks import evaluate as ev
+    from coscientist.core.execution.artifacts import LocalArtifactStore
+    from coscientist.core.execution.domain import (
+        AgentTaskOutput,
+        CodeCheck,
+        RequirementRef,
+        TaskSpec,
+    )
+
+    monkeypatch.setattr(
+        "coscientist.core.plan.proposed_check.assert_proposal_preregistered_for_eval",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        "coscientist.core.plan.proposed_check.code_check_from_proposal",
+        lambda _row: CodeCheck(kind="artifact_exists", output="main"),
+    )
+    monkeypatch.setattr(
+        "coscientist.checks.sandbox_limits.apply_frozen_limits",
+        lambda check, *_a, **_k: check,
+    )
+
+    row = {
+        "status": "approved",
+        "role": "prediction",
+        "bound_task_id": "s/E0",
+        "bound_target": "Q1",
+        "check": {"kind": "artifact_exists", "output": "main"},
+        # predicted_direction deliberately absent
+    }
+    with pytest.raises(JournalFormatError, match="predicted_direction"):
+        ev._evaluate_proposed_check(
+            ref=RequirementRef(
+                template_id="proposed_check",
+                params={"proposal_id": "p1", "target": "Q1"},
+            ),
+            check_id="proposed_check#0",
+            out=AgentTaskOutput(),
+            artifacts=LocalArtifactStore(tmp_path / "cas"),
+            proposals={"p1": row},
+            attempt_id="a#1",
+            task_id="s/E0",
+            output_digest="d" * 64,
+            review_statuses={},
+            judge_retry={},
+            failure_kinds={},
+            fetched_digests=None,
+            spec=TaskSpec(task_key="E0", title="t", goal="g", route="experiment"),
+            attempts={"a#1": {"_seq": 2}},
+            results={},
+        )
+
+
+def test_r4_artifact_belongs_missing_produced_by_raises():
+    from coscientist.checks.evaluate import artifact_belongs_to_attempt
+
+    with pytest.raises(JournalFormatError, match="produced_by"):
+        artifact_belongs_to_attempt(SimpleNamespace(sha256="x"), "a#1")
+
+
+def test_r4_rubric_requires_output_no_main_default(tmp_path):
+    from coscientist.checks.catalog import load_catalog
+    from coscientist.checks.evaluate import evaluate_task_checks
+    from coscientist.core.execution.artifacts import LocalArtifactStore
+    from coscientist.core.execution.domain import (
+        AgentTaskOutput,
+        PlanRole,
+        RequirementRef,
+        TaskSpec,
+    )
+
+    cat = load_catalog(
+        {
+            "catalog_version": "0.1.0",
+            "edition": "t",
+            "sources_sha256": {},
+            "rules": [
+                {
+                    "rule_id": "R23",
+                    "source": "x",
+                    "excerpt": "e",
+                    "digest": "d",
+                }
+            ],
+            "templates": [
+                {
+                    "id": "rubric_bare",
+                    "title": "r",
+                    "text_ru": "t",
+                    "rule_ids": ["R23"],
+                    "method_sources": ["m"],
+                    "applies_to": ["experiment"],
+                    "check": {
+                        "kind": "rubric",
+                        "output": None,
+                        "rubric": {
+                            "items": [
+                                {
+                                    "id": "exists",
+                                    "text": "x",
+                                    "required": True,
+                                    "check": "code",
+                                    "code_kind": "artifact_exists",
+                                }
+                            ],
+                            "aggregate": "all_required",
+                        },
+                    },
+                    "role": "validity",
+                    "kind": "catalog",
+                    "required": True,
+                    "version": "1",
+                    "uses_sesoi": False,
+                    "predicts_null": False,
+                    "predicted_direction": "two_sided",
+                }
+            ],
+            "defaults": {"experiment": ["rubric_bare"]},
+        }
+    )
+    with pytest.raises(JournalFormatError, match="rubric requires non-empty output"):
+        evaluate_task_checks(
+            cat,
+            TaskSpec(
+                task_key="E0",
+                title="t",
+                goal="g",
+                route="experiment",
+                criteria=[RequirementRef(template_id="rubric_bare")],
+            ),
+            AgentTaskOutput(),
+            LocalArtifactStore(tmp_path / "cas"),
+            plan_role=PlanRole.NONE,
+        )
