@@ -483,6 +483,35 @@ class ReviewVerdict(BaseModel):
 
 ## 6. Слой инструментов
 
+### 6.0 Тонкий MCP-клиент (`coscientist/mcp/`, M2 prep / A7)
+
+```
+core/     — не импортирует coscientist.mcp, httpx (import-linter)
+mcp/      — не импортирует coscientist.core (import-linter)
+tools/    — поверх mcp (адаптер A7); invoke_tool остаётся единственным агентским входом
+```
+
+```python
+class McpClientConfig(BaseModel):  # frozen; все поля обязательны — без defaults в коде
+    servers: tuple[StdioServerConfig | StreamableHttpServerConfig, ...]  # явный профиль
+    protocol_version: str; client_name: str; client_version: str
+    connect_timeout_s: float; list_tools_timeout_s: float; call_tool_timeout_s: float
+    terminate_grace_s: float; kill_grace_s: float
+    max_response_bytes: int; max_file_bytes: int; file_fetch_timeout_s: float
+    fetch_uri_schemes: tuple[str, ...]
+
+class McpReply(BaseModel):
+    content_digest: str   # sha256(JCS(result))
+    raw_bytes: bytes      # сырой JSON-RPC ответ (артефакт)
+    result: dict; files: tuple[FetchedFile, ...]  # key=sha256 содержимого URL
+```
+
+- Серверы только из `servers` профиля — без discovery/угадывания.
+- Stdio: дочерний процесс в своей process group; по таймауту SIGTERM → `terminate_grace_s` → SIGKILL → reap; иначе `McpTimeoutError`.
+- URL из типизированных MCP-полей (`resource_link` / `resource` без inline) скачиваются сразу в `call_tool` (ссылки протухают), под `max_file_bytes`.
+- Секреты только из env (`env_keys` / `api_key_env`); тела и ключи не логируются.
+- Тонкий JSON-RPC клиент (не официальный `mcp` SDK — у SDK свои таймауты/lifecycle).
+
 ### 6.1 Контракт
 
 ```python
@@ -758,7 +787,8 @@ class ToolCalled(Event):      # на каждый вызов инструмен�
 coscientist/
   core/        domain.py events.py store.py machine.py recover.py executor.py scheduler.py   ≤ 3 000
   checks/      catalog.py evaluate.py kinds/*.py migrate.py                                   ≤ 1 500
-  tools/       contract.py router.py mcp.py local.py jobs.py coder/ alembic/                  ≤ 2 500 (+alembic pipeline ≤ 3 000)
+  mcp/         client.py config.py session.py stdio.py  (thin MCP; §6.0)                      ≤ 800
+  tools/       contract.py router.py local.py jobs.py coder/ alembic/                         ≤ 2 500 (+alembic pipeline ≤ 3 000)
   llm/         thin OpenAI-compatible client (no ADK; no core imports)                         ≤ 800
   agents/      adapter.py roles.py prompts/*.md schemas.py                                    ≤ 1 200
   profiles/    research/ medicine/ microfluidics/                                             ≤ 1 500 каждый
@@ -769,7 +799,7 @@ web/           отдельно (M6)
 ```
 - Файл ≤ 500 строк, функция ≤ 60. Превышение — ревью архитектуры, не исключение.
 - Оценка ядра без профилей и alembic ~10–12k; это бюджет, не измерение.
-- Зависимости: `core` ← `checks` ← `tools`; `llm` ↛ `core`; `agents` ← (`tools`, `llm`) ← `api`. import-linter в CI.
+- Зависимости: `core` ← `checks` ← `tools`; `mcp` ↛ `core`; `llm` ↛ `core`; `agents` ← (`tools`, `llm`) ← `api`. import-linter в CI.
 
 ## 12. Паритет с эталоном
 

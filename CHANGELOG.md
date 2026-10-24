@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### M2 prep (A7): thin MCP client (`coscientist/mcp/`)
+- Standalone MCP client package (no `coscientist.core` imports). Thin JSON-RPC client — official `mcp` SDK not used (embeds transport timeouts / stdio lifecycle we must own from config).
+- Typed profile config: `stdio` + `streamable_http` servers from an explicit list only (no discovery). All timeouts/limits/schemes required; no guessed defaults in code.
+- `connect` / `list_tools` / `call_tool`; every reply returns JCS `content_digest` + `raw_bytes`. Typed URI `resource_link` / bare `resource` files downloaded immediately under `max_file_bytes`, returned as content-addressed `FetchedFile.key`.
+- Stdio children start in their own process group; SIGTERM → grace → SIGKILL → reap; overrun → `McpTimeoutError`. Secrets only from env names in config; never logged.
+- import-linter: `mcp` ↛ `core`; core/checks/experimental ↛ `mcp`. Unit tests use an in-process fake stdio server (no network).
+
 ### M2 PR A1 — thin LLM client
 - New package `coscientist/llm/`: typed `LlmRequest`/`LlmResponse`/`Usage`, `ProviderAdapter` + OpenAI-compatible provider, `LlmClient` with timeout/retry/limits from required `LlmConfig` fields (no guessed defaults), typed errors, API key only from env named in config; no logging/printing of secrets or bodies.
 - Transport is injected (`Transport` protocol); unit tests use a fake transport (no network). Required injections: `clock`, `sleep`, `wait_for`, `rng` (no unseeded default).
