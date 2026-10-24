@@ -5,6 +5,7 @@
 ### C1 coder job + `run_sandbox` [M3]
 - `run_coder_job`: child process + `run_sandbox`; deadline kills guest (`terminate`/`kill`); `jobs.wait` (no `_POLL_S`); `attempt_is_closed()` at put-time; `finally` forces terminal job; `sandbox_status_to_coder` mapping tested.
 - Gorilla @75eb157: kill-after-timeout, no poll literal, no stuck `running`, live attempt-closed check, status mapping tests.
+- Gate @3c15ccd: drop non-test `# type: ignore[return-value]` — pass `SandboxResult` isolation Literals through to `put_sandbox`.
 - Stacks on G6. Parity: [DESIGN §6.4](docs/DESIGN.md#64-coder-и-alembic-как-асинхронные-задачи-r4), [CAP #11](docs/CAPABILITIES.md), §12.2 `coder_timeout`.
 
 ### G6 JobStore + Job* events [M3]

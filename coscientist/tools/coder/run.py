@@ -23,7 +23,7 @@ from coscientist.checks.sandbox import SandboxLimits, SandboxResult, SandboxStat
 from coscientist.core.events.digest import sha256_hex
 from coscientist.core.events.job_events import job_is_live, job_is_terminal
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
-from coscientist.core.execution.domain import Artifact, FsIsolation, NetIsolation
+from coscientist.core.execution.domain import Artifact
 from coscientist.tools.contract import ToolError
 from coscientist.tools.jobs import InMemoryJobStore
 
@@ -120,18 +120,6 @@ def _request_spec(request: CoderRequest) -> dict[str, Any]:
     }
 
 
-def _as_net(value: str) -> NetIsolation:
-    if value not in ("hard", "soft", "none"):
-        raise ToolError("local", f"unknown net isolation {value!r}")
-    return value  # type: ignore[return-value]
-
-
-def _as_fs(value: str) -> FsIsolation:
-    if value not in ("hard", "soft", "none"):
-        raise ToolError("local", f"unknown fs isolation {value!r}")
-    return value  # type: ignore[return-value]
-
-
 def sandbox_status_to_coder(
     result: SandboxResult,
     *,
@@ -217,8 +205,6 @@ def _register_outputs(
     if not isinstance(closed, bool):
         raise ToolError("local", "attempt_is_closed() must return bool")
     ref = make_tool_ref(request.call_id, tool="coder")
-    net = _as_net(str(result.net_isolation))
-    fs = _as_fs(str(result.fs_isolation))
     out: list[Artifact] = []
     for spec in request.outputs:
         if spec.source == "stdout":
@@ -231,8 +217,8 @@ def _register_outputs(
             name=spec.name,
             media_type=spec.media_type,
             attempt_closed=closed,
-            net_isolation=net,
-            fs_isolation=fs,
+            net_isolation=result.net_isolation,
+            fs_isolation=result.fs_isolation,
         )
         out.append(art)
     return out
