@@ -11,7 +11,6 @@ from coscientist.agents.critic import CRITIC_PROMPT_REF, CriticIssue, CriticVerd
 from coscientist.agents.prompts.builtin import (
     CRITIC_PROMPT_TEMPLATE,
     REVIEWER_PROMPT_TEMPLATE,
-    builtin_role_prompt_refs,
     builtin_role_prompt_registry,
 )
 from coscientist.agents.reviewer import (
@@ -139,21 +138,42 @@ def test_review_rejects_extra_field() -> None:
     _assert_err(ei.value, loc=("extra",), err_type="extra_forbidden")
 
 
-def test_builtin_prompts_cover_critic_and_reviewer() -> None:
-    refs = builtin_role_prompt_refs()
-    assert refs == frozenset({CRITIC_PROMPT_REF, REVIEWER_PROMPT_REF})
+def test_builtin_registry_refs_and_templates() -> None:
     reg = builtin_role_prompt_registry()
+    assert reg.refs() == frozenset({CRITIC_PROMPT_REF, REVIEWER_PROMPT_REF})
     assert reg.get(CRITIC_PROMPT_REF) == CRITIC_PROMPT_TEMPLATE
     assert reg.get(REVIEWER_PROMPT_REF) == REVIEWER_PROMPT_TEMPLATE
-    critic_text = reg.render(
+
+
+def test_builtin_render_critic_exact() -> None:
+    text = builtin_role_prompt_registry().render(
         CRITIC_PROMPT_REF,
         {"request": "measure X", "plan_json": "{}"},
     )
-    assert "CriticVerdict" in critic_text
-    assert "measure X" in critic_text
-    review_text = reg.render(
+    assert text == (
+        "You are the plan critic for CoScientist.\n"
+        "Study request:\nmeasure X\n\n"
+        "Plan JSON:\n{}\n\n"
+        "Return only a CriticVerdict JSON object with fields "
+        "decision (accept|revise|reject) and issues "
+        "(list of {path, message}). "
+        "For revise or reject, issues must be non-empty.\n"
+    )
+
+
+def test_builtin_render_reviewer_exact() -> None:
+    text = builtin_role_prompt_registry().render(
         REVIEWER_PROMPT_REF,
         {"question": "Is MET?", "evidence_json": "[]"},
     )
-    assert "ReviewVerdict" in review_text
-    assert "Is MET?" in review_text
+    assert text == (
+        "You are the quality reviewer for CoScientist.\n"
+        "Review question:\nIs MET?\n\n"
+        "Evidence refs JSON:\n[]\n\n"
+        "Return only a ReviewVerdict JSON object with fields "
+        "decision (pass|fail|unassessed), reasons, evidence "
+        "(list of {artifact_id, digest, json_pointer}), "
+        "reviewer, and model. "
+        "json_pointer is a required RFC 6901 string (\"\" = whole artifact). "
+        "For pass, evidence must be non-empty.\n"
+    )

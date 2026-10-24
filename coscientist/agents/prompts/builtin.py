@@ -10,11 +10,10 @@ can import ``PromptRef`` without a circular import through this package.
 from __future__ import annotations
 
 from coscientist.agents.critic import CRITIC_PROMPT_REF
-from coscientist.agents.prompts.registry import PromptRef, PromptRegistry, PromptTemplate
+from coscientist.agents.prompts.registry import PromptRegistry, PromptTemplate
 from coscientist.agents.reviewer import REVIEWER_PROMPT_REF
 
-# CRITIC_PROMPT_REF / REVIEWER_PROMPT_REF remain the single source for id/version
-# on the templates below; refs() is derived from _BUILTIN only.
+# CRITIC_PROMPT_REF / REVIEWER_PROMPT_REF are the single source for id/version.
 
 CRITIC_PROMPT_TEMPLATE = PromptTemplate(
     prompt_id=CRITIC_PROMPT_REF.prompt_id,
@@ -40,9 +39,9 @@ REVIEWER_PROMPT_TEMPLATE = PromptTemplate(
         "Evidence refs JSON:\n{{evidence_json}}\n\n"
         "Return only a ReviewVerdict JSON object with fields "
         "decision (pass|fail|unassessed), reasons, evidence "
-        "(list of {artifact_id, digest, json_pointer}); "
-        "json_pointer is a required RFC 6901 string (\"\" = whole artifact). "
+        "(list of {artifact_id, digest, json_pointer}), "
         "reviewer, and model. "
+        "json_pointer is a required RFC 6901 string (\"\" = whole artifact). "
         "For pass, evidence must be non-empty.\n"
     ),
     required_variables=("question", "evidence_json"),
@@ -57,13 +56,6 @@ _BUILTIN: tuple[PromptTemplate, ...] = (
 def builtin_role_prompt_templates() -> tuple[PromptTemplate, ...]:
     """Frozen snapshot of shipped role prompts (critic, reviewer)."""
     return _BUILTIN
-
-
-def builtin_role_prompt_refs() -> frozenset[PromptRef]:
-    """Refs derived from shipped templates (same id/version as *_PROMPT_REF)."""
-    return frozenset(
-        PromptRef(prompt_id=t.prompt_id, version=t.version) for t in _BUILTIN
-    )
 
 
 def builtin_role_prompt_registry() -> PromptRegistry:

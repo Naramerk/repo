@@ -9,8 +9,8 @@
 - Shared `AgentModel` + `NONBLANK` in `coscientist.agents.strict`; ResearchSpec /
   CriticVerdict / ReviewVerdict inherit it (no per-role base copies).
 - Built-in prompts via `prompts.builtin` (import directly; no `__getattr__` re-export);
-  template `prompt_id`/`version` from `*_PROMPT_REF`; `builtin_role_prompt_refs` from
-  `_BUILTIN` only.
+  template `prompt_id`/`version` from `*_PROMPT_REF`; refs via
+  `builtin_role_prompt_registry().refs()`.
 - `ReviewEvidenceRef.json_pointer`: required `str` (DESIGN §5.1; `""` = whole artifact);
   adapter passes through to domain `EvidenceRef` as-is.
 - Parity: [DESIGN §7.1](docs/DESIGN.md#71-роли-тонкие-агенты-typed-io) /
