@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Graph area plan (G0) [M1]
+- Add `docs/plan/graph.md`: G0–G24 ownership, event→G-PR→owner table, gates for unowned ToolCalled/Mcp*/HypothesisVerdictRecorded folds; CAP #19 UI deferred to M6. Contracts first (G0 / #72 before G7 / #64). DESIGN §16 counts = G14a before G14. G13 depends on #67 G4. Follow-ups list `graph.py` sites on `main` @ `aa8be32` with owner+issue per row. Parity: [DESIGN §2](docs/DESIGN.md#2-доменная-модель) / [§16](docs/DESIGN.md#16-научная-модель-граф); [CAP #19](docs/CAPABILITIES.md?plain=1#L28).
+
 ### Quality checks (#7) — CheckAttachment surface
 - Public `CheckAttachmentError` ([DESIGN §5.4](docs/DESIGN.md) / R23;
   [CAPABILITIES #7](docs/CAPABILITIES.md)). Agent view: `is_code` + `check_detail`
