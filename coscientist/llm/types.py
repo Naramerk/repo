@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,6 +21,12 @@ class LlmRequest(BaseModel):
 
     model: str = Field(min_length=1)
     messages: list[ChatMessage] = Field(min_length=1)
+
+
+class StructuredLlmRequest(LlmRequest):
+    """Chat request with required OpenAI-compatible ``response_format`` (JSON schema)."""
+
+    response_format: dict[str, Any]
 
 
 class Usage(BaseModel):

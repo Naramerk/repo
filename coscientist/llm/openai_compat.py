@@ -22,7 +22,7 @@ from coscientist.llm.errors import (
 from coscientist.llm.imf_fixdate import parse_imf_fixdate
 from coscientist.llm.runtime import Clock
 from coscientist.llm.transport import Transport, TransportResponse
-from coscientist.llm.types import LlmRequest, LlmResponse, Usage
+from coscientist.llm.types import LlmRequest, LlmResponse, StructuredLlmRequest, Usage
 
 
 class OpenAICompatibleProvider:
@@ -95,6 +95,8 @@ def _encode_request(
         "messages": [{"role": m.role, "content": m.content} for m in request.messages],
         max_tokens_field: max_completion_tokens,
     }
+    if isinstance(request, StructuredLlmRequest):
+        payload["response_format"] = request.response_format
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
