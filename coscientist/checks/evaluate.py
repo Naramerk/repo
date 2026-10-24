@@ -11,7 +11,6 @@ from coscientist.core.events.errors import (
     ArtifactCorrupt,
     CatalogError,
     CoreBugError,
-    JournalFormatError,
     SandboxInfraError,
 )
 from coscientist.core.execution.artifacts import (
@@ -27,32 +26,12 @@ from coscientist.core.execution.domain import (
     CodeCheck,
     EvidenceRef,
     NodeRequirement,
-    PlanRole,
     ReqStatus,
     RequirementRef,
     RequirementTemplate,
     ReviewCheck,
     TaskSpec,
-    TemplateKind,
 )
-
-
-def _as_float(value: object, *, what: str) -> float:
-    if type(value) is bool or not isinstance(value, (int, float)):
-        raise JournalFormatError(f"{what} must be numeric, got {type(value).__name__}")
-    return float(value)  # audit-ok[coerce_float]: coerce after explicit numeric type gate
-
-
-def _as_bool(value: object, *, what: str) -> bool:
-    if type(value) is not bool:
-        raise JournalFormatError(f"{what} must be bool, got {type(value).__name__}")
-    return value
-
-
-def _as_str(value: object, *, what: str) -> str:
-    if not isinstance(value, str):
-        raise JournalFormatError(f"{what} must be str, got {type(value).__name__}")
-    return value
 
 
 def role_from_template(tmpl: RequirementTemplate | None) -> CheckRole:
@@ -77,19 +56,17 @@ def role_from_catalog(template_id: str, catalog: Catalog | None) -> CheckRole:
 def _pointer_get(doc: Any, pointer: str | None) -> Any:
     if not pointer:
         return doc
-    if not pointer.startswith("/"):  # audit-ok[str_startswith]: RFC/allowlist layout prefix (not name heuristic)
+    if not pointer.startswith("/"):
         raise ValueError(f"invalid json pointer: {pointer}")
     cur = doc
     if pointer == "/":
         return cur
-    for part in pointer[1:].split("/"):  # audit-ok[str_split]: structural id/key parse after typed gate
+    for part in pointer[1:].split("/"):
         part = part.replace("~1", "/").replace("~0", "~")
         if isinstance(cur, dict):
             cur = cur[part]
         elif isinstance(cur, list):
-            if not part.isdigit():
-                raise KeyError(pointer)
-            cur = cur[int(part)]  # audit-ok[coerce_int]: coerce after explicit numeric type gate
+            cur = cur[int(part)]
         else:
             raise KeyError(pointer)
     return cur
@@ -100,7 +77,7 @@ def _cmp(op: str, left: Any, right: Any, tolerance: float | None) -> bool:
         return left in right
     if tolerance is not None and isinstance(left, (int, float)) and isinstance(right, (int, float)):
         if op in ("==",):
-            return abs(_as_float(left, what="cmp.left") - _as_float(right, what="cmp.right")) <= tolerance
+            return abs(float(left) - float(right)) <= tolerance
     ops = {
         "<": lambda a, b: a < b,
         "<=": lambda a, b: a <= b,
@@ -115,29 +92,11 @@ def artifact_belongs_to_attempt(meta: Any | None, attempt_id: str | None) -> boo
     """True when ``Artifact.produced_by.call_id`` is bound to ``attempt_id``."""
     if meta is None or not attempt_id:
         return False
-    try:
-        produced = meta.produced_by
-    except AttributeError as e:
-        raise JournalFormatError("artifact meta missing produced_by") from e
-    if produced is None:
-        return False
-    try:
-        raw_call = produced.call_id
-    except AttributeError as e:
-        raise JournalFormatError("artifact produced_by missing call_id") from e
-    if raw_call is None:
-        return False
-    call_id = _as_str(raw_call, what="produced_by.call_id")
+    produced = getattr(meta, "produced_by", None)
+    call_id = str(getattr(produced, "call_id", "") or "")
     if not call_id:
         return False
-    try:
-        raw_attempt = produced.attempt_id
-    except AttributeError as e:
-        raise JournalFormatError("artifact produced_by missing attempt_id") from e
-    produced_attempt = _as_str(raw_attempt, what="produced_by.attempt_id")
-    if not produced_attempt:
-        raise JournalFormatError("artifact produced_by.attempt_id must be non-empty")
-    return produced_attempt == attempt_id
+    return call_id == attempt_id or call_id.startswith(f"{attempt_id}:")
 
 
 # Stable reasons for checks with no numeric effect (indeterminate — never refute).
@@ -186,62 +145,29 @@ def _effect_provenance_fields(
     ``trusted`` = producer core, or sandbox with both net and fs isolation hard.
     ``countable`` = core catalog evaluation on an artifact bound to this attempt.
     """
-    meta = artifacts.get_meta(artifact_id) if artifact_id else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
-    if meta is None:
+    meta = artifacts.get_meta(artifact_id) if artifact_id else None
+    producer = getattr(meta, "producer", "agent") if meta is not None else "agent"
+    # Fail-closed: unknown / future producers collapse to agent (untrusted).
+    # ``user`` is explicit — never trusted, never countable via this helper alone.
+    if producer == "user":
+        pass
+    elif producer not in ("agent", "core", "sandbox", "tool"):
         producer = "agent"
-        call_id = ""
-    else:
-        try:
-            producer = meta.producer
-        except AttributeError as e:
-            raise JournalFormatError("artifact meta missing producer") from e
-        if producer is None:
-            raise JournalFormatError("artifact meta.producer must not be null")
-        producer = _as_str(producer, what="artifact.producer")
-        # Fail-closed: unknown / future producers collapse to agent (untrusted).
-        if producer == "user":
-            pass
-        elif producer not in ("agent", "core", "sandbox", "tool"):
-            producer = "agent"
-        try:
-            produced = meta.produced_by
-        except AttributeError as e:
-            raise JournalFormatError("artifact meta missing produced_by") from e
-        if produced is None:
-            call_id = ""
-        else:
-            try:
-                raw_call = produced.call_id
-            except AttributeError as e:
-                raise JournalFormatError(
-                    "artifact produced_by missing call_id"
-                ) from e
-            if raw_call is None:
-                call_id = ""
-            else:
-                call_id = _as_str(raw_call, what="produced_by.call_id")
+    produced = getattr(meta, "produced_by", None) if meta is not None else None
+    call_id = str(getattr(produced, "call_id", "") or "")
     belongs = artifact_belongs_to_attempt(meta, attempt_id)
-    if artifact_id is None:
-        art_id_s = ""
-    else:
-        art_id_s = _as_str(artifact_id, what="artifact_id")
     out: dict[str, Any] = {
         "producer": producer,
         "trusted": artifact_producer_trusted(meta),
         "core_evaluated": True,
         "produced_by_call_id": call_id,
-        "artifact_id": art_id_s,
-        "countable": belongs,
+        "artifact_id": str(artifact_id or ""),
+        # Countable only when the artifact was produced for this attempt.
+        "countable": bool(belongs),
     }
     if meta is not None and producer == "sandbox":
-        try:
-            ni = meta.net_isolation
-        except AttributeError:
-            ni = None
-        try:
-            fs = meta.fs_isolation
-        except AttributeError:
-            fs = None
+        ni = getattr(meta, "net_isolation", None)
+        fs = getattr(meta, "fs_isolation", None)
         if ni in ("hard", "soft", "none"):
             out["net_isolation"] = ni
         if fs in ("hard", "soft", "none"):
@@ -256,12 +182,12 @@ def _extract_ci(doc: Any, left: Any) -> dict[str, float] | None:
     or when ``left`` itself is that mapping. Point estimates (missing CI or
     ``ci_low >= ci_high``) return None — never invent CI from a point.
     """
-    candidates = []
+    candidates: list[Any] = []
     if isinstance(left, dict):
         candidates.append(left)
     if isinstance(doc, dict):
         candidates.append(doc)
-        if isinstance(doc.get("effect"), dict):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        if isinstance(doc.get("effect"), dict):
             candidates.append(doc["effect"])
     for raw in candidates:
         if not isinstance(raw, dict):
@@ -269,14 +195,11 @@ def _extract_ci(doc: Any, left: Any) -> dict[str, float] | None:
         if "ci_low" not in raw or "ci_high" not in raw:
             continue
         try:
-            lo = _as_float(raw["ci_low"], what="ci_low")
-            hi = _as_float(raw["ci_high"], what="ci_high")
-            if raw.get("est") is not None:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-                est = _as_float(raw["est"], what="est")
-            else:
-                est = (lo + hi) / 2.0
-        except (TypeError, ValueError, JournalFormatError):
-            continue  # audit-ok[except_silent_continue]: skip malformed row; fail-closed on required paths elsewhere
+            lo = float(raw["ci_low"])
+            hi = float(raw["ci_high"])
+            est = float(raw["est"]) if raw.get("est") is not None else (lo + hi) / 2.0
+        except (TypeError, ValueError):
+            continue
         if lo < hi:
             return {"est": est, "ci_low": lo, "ci_high": hi}
     return None
@@ -291,19 +214,16 @@ def evaluate_code_check(
     artifacts: LocalArtifactStore,
     values: dict[str, Any],
     role: CheckRole,
-    uses_sesoi: bool,
+    uses_sesoi: bool = False,
     sesoi: float | None = None,
-    predicts_null: bool,
-    predicted_direction: str,
+    predicts_null: bool = False,
+    predicted_direction: str = "two_sided",
     attempt_id: str | None = None,
     fetched_digests: frozenset[str] | Collection[str] | None = None,
 ) -> CheckResult:
     try:
         if check.kind == "artifact_exists":
-            out_name = check.output
-            if not out_name:
-                raise JournalFormatError("artifact_exists requires non-empty output")
-            handle = out.outputs.get(out_name)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            handle = out.outputs.get(check.output or "")
             if handle is None:
                 return _no_effect_result(
                     check_id=check_id,
@@ -319,8 +239,7 @@ def evaluate_code_check(
                     reason="artifact_missing",
                 )
             art = artifacts.get_meta(handle.artifact_id)
-            if art is None:
-                raise JournalFormatError("artifact_exists meta vanished after probe")
+            assert art is not None
             if attempt_id and not artifact_belongs_to_attempt(art, attempt_id):
                 return _no_effect_result(
                     check_id=check_id,
@@ -341,15 +260,10 @@ def evaluate_code_check(
                         digest=art.sha256,
                     )
                 ],
-        used_sesoi=False,
-    )
+            )
 
         if check.kind in ("value_matches", "metric_threshold", "json_pointer"):
-            if not check.output:
-                raise JournalFormatError(
-                    f"{check.kind} requires non-empty output"
-                )
-            handle = out.outputs.get(check.output)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            handle = out.outputs.get(check.output or "main")
             if handle is None:
                 return _no_effect_result(
                     check_id=check_id,
@@ -402,7 +316,7 @@ def evaluate_code_check(
                     template_id=template_id,
                     role=role,
                     reason="pointer_empty",
-                )  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
+                )
 
             effect: dict[str, Any] | None = None
             used_sesoi = False
@@ -421,13 +335,11 @@ def evaluate_code_check(
                 # Exact equality is a point check — never TOST, never used_sesoi.
                 ok = left == check.target
                 if isinstance(left, (int, float)):
-                    est = _as_float(left, what="value_matches.left")
+                    est = float(left)
                     effect = {"est": est, "kind": "point", **prov}
             else:
                 # metric_threshold — point-estimate exceedance or TOST with real CI.
-                if check.op is None:
-                    raise JournalFormatError("metric_threshold requires op")
-                op = check.op
+                op = check.op or "=="
                 ci = _extract_ci(doc, left)
                 if uses_sesoi and sesoi is not None and predicts_null:
                     # TOST: require a real interval from the metric artifact.
@@ -440,8 +352,7 @@ def evaluate_code_check(
                             **prov,
                         }
                         used_sesoi = True
-                        s = _as_float(sesoi, what="sesoi")
-                        ok = (-s) < ci["ci_low"] and ci["ci_high"] < s
+                        ok = (-float(sesoi)) < ci["ci_low"] and ci["ci_high"] < float(sesoi)
                     else:
                         # No CI → not a TOST result; equivalence not assessable.
                         used_sesoi = False
@@ -450,28 +361,23 @@ def evaluate_code_check(
                 elif uses_sesoi and sesoi is not None and isinstance(left, (int, float)):
                     # Honest point-estimate check (not TOST).
                     used_sesoi = True
-                    est = _as_float(left, what="metric.left")
+                    est = float(left)
                     effect = {"est": est, "kind": "point", **prov}
-                    s = _as_float(sesoi, what="sesoi")
                     if predicted_direction == "positive":
-                        ok = est > s
+                        ok = est > float(sesoi)
                     elif predicted_direction == "negative":
-                        ok = est < -s
+                        ok = est < -float(sesoi)
                     else:
-                        ok = abs(est) > s
+                        ok = abs(est) > float(sesoi)
                 else:
                     ok = _cmp(op, left, check.target, check.tolerance)
                     if isinstance(left, (int, float)):
-                        effect = {
-                            "est": _as_float(left, what="metric.left"),
-                            "kind": "point",
-                            **prov,
-                        }
+                        effect = {"est": float(left), "kind": "point", **prov}
 
             return CheckResult(
                 check_id=check_id,
                 template_id=template_id,
-                status=ReqStatus.MET if ok else ReqStatus.FAILED,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+                status=ReqStatus.MET if ok else ReqStatus.FAILED,
                 is_code=True,
                 required=True,
                 role=role,
@@ -488,9 +394,7 @@ def evaluate_code_check(
             )
 
         if check.kind == "schema_valid":
-            if not check.output:
-                raise JournalFormatError("schema_valid requires non-empty output")
-            handle = out.outputs.get(check.output)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            handle = out.outputs.get(check.output or "main")
             if handle is None:
                 return _no_effect_result(
                     check_id=check_id,
@@ -522,8 +426,7 @@ def evaluate_code_check(
                 required=True,
                 role=role,
                 evidence=[EvidenceRef(artifact_id=handle.artifact_id, digest=sha256_hex(b"ok"))],
-        used_sesoi=False,
-    )
+            )
 
         if check.kind == "source_link":
             return CheckResult(
@@ -533,8 +436,7 @@ def evaluate_code_check(
                 is_code=True,
                 required=True,
                 role=role,
-        used_sesoi=False,
-    )
+            )
 
         if check.kind == "quote_in_source":
             from coscientist.checks.kinds.quote import evaluate_quote_in_source
@@ -595,17 +497,13 @@ def evaluate_code_check(
             required=True,
             role=role,
             detail=str(e),
-        used_sesoi=False,
-    )
+        )
     except SandboxInfraError:
         raise
     except CoreBugError:
         raise
     except CatalogError:
         # Catalog integrity (e.g. holdout_digest mismatch) — not a core bug.
-        raise
-    except JournalFormatError:
-        # Fail-closed required-field errors — never wrap as CoreBug/FAILED.
         raise
     except OSError as e:
         # Host I/O outside Popen on executable kinds → infra (B3).
@@ -615,7 +513,7 @@ def evaluate_code_check(
             "metric_on_holdout",
             "reproducible_rerun",
         ):
-            raise SandboxInfraError(f"sandbox_unavailable:host_io:{e.__class__.__name__}", transient=False) from e
+            raise SandboxInfraError(f"sandbox_unavailable:host_io:{e.__class__.__name__}") from e
         return CheckResult(
             check_id=check_id,
             template_id=template_id,
@@ -624,12 +522,25 @@ def evaluate_code_check(
             required=True,
             role=role,
             detail=str(e),
-        used_sesoi=False,
-    )
+        )
     except Exception as e:
         # Unexpected core bugs: neither infra nor scientific (B3).
-        # Never convert unexpected exceptions into FAILED CheckResult.
-        raise CoreBugError(f"core_bug:{e.__class__.__name__}:{e}") from e  # audit-ok[broad_except]: cleanup then re-raise; does not swallow  # noqa: E501
+        if check.kind in (
+            "exec_runs",
+            "tests_pass",
+            "metric_on_holdout",
+            "reproducible_rerun",
+        ):
+            raise CoreBugError(f"core_bug:{e.__class__.__name__}:{e}") from e
+        return CheckResult(
+            check_id=check_id,
+            template_id=template_id,
+            status=ReqStatus.FAILED,
+            is_code=True,
+            required=True,
+            role=role,
+            detail=str(e),
+        )
 
     return CheckResult(
         check_id=check_id,
@@ -639,7 +550,6 @@ def evaluate_code_check(
         required=True,
         role=role,
         detail=f"unhandled kind {check.kind}",
-        used_sesoi=False,
     )
 
 
@@ -650,23 +560,14 @@ def agent_facing_template_view(tmpl: RequirementTemplate) -> dict[str, Any]:
     Prompt renderers (arriving later) must call this — never
     ``RequirementTemplate.model_dump`` / full ``CodeCheck``.
     """
-    check = tmpl.check
-    if isinstance(check, CodeCheck):
-        check_kind: str | None = check.kind
-    elif isinstance(check, ReviewCheck):
-        check_kind = check.reviewer_role
-    else:
-        raise JournalFormatError(
-            f"agent_facing_template_view: unknown check type {type(check).__name__}"
-        )
     return {
         "template_id": tmpl.id,
         "text_ru": tmpl.text_ru,
         "version": tmpl.version,
         "required": tmpl.required,
         "role": tmpl.role,
-        "is_code": isinstance(check, CodeCheck),
-        "check_kind": check_kind,
+        "is_code": isinstance(tmpl.check, CodeCheck),
+        "check_kind": getattr(tmpl.check, "kind", None) or getattr(tmpl.check, "reviewer_role", None),
     }
 
 
@@ -676,8 +577,8 @@ def agent_facing_catalog_view(catalog: Catalog) -> dict[str, Any]:
         "catalog_version": catalog.catalog_version,
         "edition": catalog.edition,
         "templates": [agent_facing_template_view(t) for t in catalog.templates],
-        "defaults": {k: list(v) for k, v in catalog.defaults.items()},
-        "code_output_names": list(catalog.code_output_names),
+        "defaults": {k: list(v) for k, v in (catalog.defaults or {}).items()},
+        "code_output_names": list(catalog.code_output_names or []),
     }
 
 
@@ -685,23 +586,20 @@ def template_to_requirement(
     tmpl: RequirementTemplate,
     node_id: str,
     *,
-    status: ReqStatus = ReqStatus.PENDING,  # audit-ok[named_default]: named constant / enum member default; not silent invent  # noqa: E501
+    status: ReqStatus = ReqStatus.PENDING,
     req_id: str | None = None,
 ) -> NodeRequirement:
     """Build a NodeRequirement from the agent-facing template view (no check body)."""
     view = agent_facing_template_view(tmpl)
-    text_ru = view["text_ru"]
-    if text_ru is None:
-        text_ru = ""
     return NodeRequirement(
         id=req_id or f"{node_id}:{view['template_id']}",
-        template_id=_as_str(view["template_id"], what="template_id"),
+        template_id=str(view["template_id"]),
         node_id=node_id,
-        text_ru=_as_str(text_ru, what="text_ru"),
-        required=_as_bool(view["required"], what="required"),
+        text_ru=str(view["text_ru"] or ""),
+        required=bool(view["required"]),
         status=status,
-        check_version=_as_str(view["version"], what="version"),
-        is_code=_as_bool(view["is_code"], what="is_code"),
+        check_version=str(view["version"]),
+        is_code=bool(view["is_code"]),
     )
 
 
@@ -734,14 +632,8 @@ def _evaluate_proposed_check(
         rubric_from_proposal,
     )
 
-    if not isinstance(ref.params, dict):
-        raise JournalFormatError("proposed_check RequirementRef.params must be dict")
-    params = ref.params
-    pid_raw = params.get("proposal_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-    if pid_raw is None:
-        pid = ""
-    else:
-        pid = _as_str(pid_raw, what="proposal_id")
+    params = ref.params if isinstance(ref.params, dict) else {}
+    pid = str(params.get("proposal_id") or "")
     base_effect: dict[str, Any] = {
         "proposed_check": True,
         "proposal_id": pid,
@@ -759,9 +651,8 @@ def _evaluate_proposed_check(
             role="unknown",
             detail="unapproved_check:missing_proposal_id",
             effect={**base_effect, "exclusion_reason": "unapproved_check"},
-        used_sesoi=False,
-    )
-    row = proposals.get(pid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        )
+    row = proposals.get(pid)
     if row is None:
         return CheckResult(
             check_id=check_id,
@@ -772,29 +663,20 @@ def _evaluate_proposed_check(
             role="unknown",
             detail="unapproved_check:unknown_proposal",
             effect={**base_effect, "exclusion_reason": "unapproved_check"},
-        used_sesoi=False,
-    )
-    if "status" not in row or not isinstance(row["status"], str) or not row["status"]:
-        raise CatalogError("proposed_check row missing status")
-    status = row["status"]
-    role_raw = row.get("role")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-    if role_raw not in ("prediction", "validity"):
-        raise CatalogError(f"proposed_check row bad role: {role_raw!r}")
-    role: CheckRole = role_raw  # type: ignore[assignment]
-    base_effect["proposal_digest"] = row.get("proposal_digest")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-    if "delegated" in row:
-        base_effect["delegated"] = _as_bool(row["delegated"], what="delegated")
-    else:
-        base_effect["delegated"] = False
-    base_effect["bound_task_id"] = row["bound_task_id"]
-    base_effect["bound_target"] = row["bound_target"]
+        )
+    status = str(row.get("status") or "proposed")
+    role: CheckRole = row.get("role") if row.get("role") in ("prediction", "validity") else "unknown"  # type: ignore[assignment]
+    base_effect["proposal_digest"] = row.get("proposal_digest")
+    base_effect["delegated"] = bool(row.get("delegated"))
+    base_effect["bound_task_id"] = row.get("bound_task_id") or row.get("task_id")
+    base_effect["bound_target"] = row.get("bound_target") or row.get("target")
     # Target must be on the RequirementRef (params); no fallback to bound_target.
-    eval_target = params.get("target")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+    eval_target = params.get("target")
     prereg_err = assert_proposal_preregistered_for_eval(
         row,
         attempt_id=attempt_id,
         task_id=task_id,
-        target=str(eval_target) if eval_target is not None else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        target=str(eval_target) if eval_target is not None else None,
         attempts=attempts,
         results=results,
     )
@@ -803,36 +685,30 @@ def _evaluate_proposed_check(
             check_id=check_id,
             template_id=PROPOSED_CHECK_TEMPLATE_ID,
             status=ReqStatus.FAILED,
-            is_code=row.get("check") is not None,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            is_code=row.get("check") is not None,
             required=ref.required,
             role=role,
             detail=prereg_err,
             effect={**base_effect, "exclusion_reason": "unapproved_check"},
-        used_sesoi=False,
-    )
+        )
     # Cheap bind: when the attempt recorded claims, params.target must name one.
-    claims = list(out.claims)
+    claims = list(getattr(out, "claims", None) or [])
     if claims and eval_target is not None and str(eval_target).strip():
         import unicodedata
 
-        want = unicodedata.normalize("NFKC", _as_str(eval_target, what="eval_target")).strip()
-        claim_targets = set()
-        for c in claims:
-            if not isinstance(c, dict):
-                continue
-            t = c.get("target")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-            if t is None:
-                continue
-            claim_targets.add(
-                unicodedata.normalize("NFKC", _as_str(t, what="claim.target")).strip()
-            )
+        want = unicodedata.normalize("NFKC", str(eval_target)).strip()
+        claim_targets = {
+            unicodedata.normalize("NFKC", str(c.get("target") or "")).strip()
+            for c in claims
+            if isinstance(c, dict)
+        }
         claim_targets.discard("")
         if claim_targets and want not in claim_targets:
             return CheckResult(
                 check_id=check_id,
                 template_id=PROPOSED_CHECK_TEMPLATE_ID,
                 status=ReqStatus.FAILED,
-                is_code=row.get("check") is not None,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                is_code=row.get("check") is not None,
                 required=ref.required,
                 role=role,
                 detail=(
@@ -840,64 +716,53 @@ def _evaluate_proposed_check(
                     f" not in {sorted(claim_targets)!r}"
                 ),
                 effect={**base_effect, "exclusion_reason": "unapproved_check"},
-        used_sesoi=False,
-    )
+            )
     if status == "rejected":
-        if "reject_reason" in row and row["reject_reason"] is not None:
-            reject_detail = _as_str(row["reject_reason"], what="reject_reason")
-        else:
-            reject_detail = "rejected"
         return CheckResult(
             check_id=check_id,
             template_id=PROPOSED_CHECK_TEMPLATE_ID,
             status=ReqStatus.FAILED,
-            is_code=row.get("check") is not None,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            is_code=row.get("check") is not None,
             required=ref.required,
             role=role,
-            detail=f"unapproved_check:rejected:{reject_detail}",
+            detail=f"unapproved_check:rejected:{row.get('reject_reason') or 'rejected'}",
             effect={**base_effect, "exclusion_reason": "unapproved_check"},
-        used_sesoi=False,
-    )
+        )
     if status != "approved":
         # Awaiting HITL / reviewer — required checks keep the attempt open.
         return CheckResult(
             check_id=check_id,
             template_id=PROPOSED_CHECK_TEMPLATE_ID,
             status=ReqStatus.PENDING,
-            is_code=row.get("check") is not None,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            is_code=row.get("check") is not None,
             required=ref.required,
             role=role,
             detail="unapproved_check:pending_approval",
             effect={**base_effect, "exclusion_reason": "unapproved_check"},
-        used_sesoi=False,
-    )
+        )
 
     # Approved: evaluate using the preregistered body (never mutate after propose).
     # Bound approval: one task_id + target only (no multi-claim k_sup reuse).
-    bound_task = _as_str(row["bound_task_id"], what="bound_task_id")
-    if task_id and bound_task and _as_str(task_id, what="task_id") != bound_task:
+    bound_task = str(row.get("bound_task_id") or row.get("task_id") or "")
+    if task_id and bound_task and str(task_id) != bound_task:
         return CheckResult(
             check_id=check_id,
             template_id=PROPOSED_CHECK_TEMPLATE_ID,
             status=ReqStatus.FAILED,
-            is_code=row.get("check") is not None,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            is_code=row.get("check") is not None,
             required=ref.required,
             role=role,
             detail=f"unapproved_check:task_mismatch:{bound_task}!={task_id}",
             effect={**base_effect, "exclusion_reason": "unapproved_check"},
-        used_sesoi=False,
-    )
-    if "delegated" in row:
-        delegated = _as_bool(row["delegated"], what="delegated")
-    else:
-        delegated = False
-    if row.get("rubric") is not None:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        )
+    delegated = bool(row.get("delegated"))
+    if row.get("rubric") is not None:
         from coscientist.checks.kinds.rubric import evaluate_rubric
         from coscientist.core.execution.domain import CodeCheck as CC
 
         rub = rubric_from_proposal(row)
         # Qualitative proposed rubric — never severe (DESIGN_M1 §16).
-        sentinel = CC(kind="rubric", output="main", rubric=rub, allow_network=False)
+        sentinel = CC(kind="rubric", output="main", rubric=rub)
         cr = evaluate_rubric(
             sentinel,
             template_id=PROPOSED_CHECK_TEMPLATE_ID,
@@ -914,15 +779,12 @@ def _evaluate_proposed_check(
             output_digest=output_digest,
             evaluate_code_check=evaluate_code_check,
         )
-        if cr.effect is None:
-            effect = {}
-        else:
-            effect = dict(cr.effect)
+        effect = dict(cr.effect or {})
         effect.update(
             {
                 "proposed_check": True,
                 "proposal_id": pid,
-                "proposal_digest": row.get("proposal_digest"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                "proposal_digest": row.get("proposal_digest"),
                 "delegated": delegated,
                 "qualitative": True,
                 "never_severe": True,
@@ -954,27 +816,10 @@ def _evaluate_proposed_check(
             role=role,
             detail="unapproved_check:empty_body",
             effect={**base_effect, "exclusion_reason": "unapproved_check"},
-        used_sesoi=False,
-    )
+        )
     from coscientist.checks.sandbox_limits import apply_frozen_limits
 
     check = apply_frozen_limits(check, spec, template_id=PROPOSED_CHECK_TEMPLATE_ID)
-    if "predicted_direction" not in row or row["predicted_direction"] is None:
-        raise JournalFormatError(
-            "proposed_check missing required predicted_direction"
-        )
-    if "uses_sesoi" in row:
-        uses_sesoi_v = _as_bool(row["uses_sesoi"], what="uses_sesoi")
-    else:
-        uses_sesoi_v = False
-    if "predicts_null" in row:
-        predicts_null_v = _as_bool(row["predicts_null"], what="predicts_null")
-    else:
-        predicts_null_v = False
-    if row.get("sesoi") is not None:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-        sesoi_v = row.get("sesoi")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-    else:
-        sesoi_v = row.get("threshold")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
     cr = evaluate_code_check(
         check,
         template_id=PROPOSED_CHECK_TEMPLATE_ID,
@@ -983,27 +828,24 @@ def _evaluate_proposed_check(
         artifacts=artifacts,
         values=out.values,
         role=role,
-        uses_sesoi=uses_sesoi_v,
-        sesoi=sesoi_v,
-        predicts_null=predicts_null_v,
-        predicted_direction=_as_str(row["predicted_direction"], what="predicted_direction"),
+        uses_sesoi=bool(row.get("uses_sesoi")),
+        sesoi=row.get("sesoi") if row.get("sesoi") is not None else row.get("threshold"),
+        predicts_null=bool(row.get("predicts_null")),
+        predicted_direction=str(row.get("predicted_direction") or "two_sided"),
         attempt_id=attempt_id,
         fetched_digests=fetched_digests,
     )
-    if cr.effect is None:
-        effect = {}
-    else:
-        effect = dict(cr.effect)
+    effect = dict(cr.effect or {})
     effect.update(
         {
             "proposed_check": True,
             "proposal_id": pid,
-            "proposal_digest": row.get("proposal_digest"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            "proposal_digest": row.get("proposal_digest"),
             "delegated": delegated,
         }
     )
     # Severe only when trusted (sandbox hard isolation) — DESIGN_M1 §16.
-    if not effect.get("trusted"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    if not effect.get("trusted"):
         effect["severe_eligible"] = False
     return CheckResult(
         check_id=cr.check_id,
@@ -1031,7 +873,8 @@ def evaluate_task_checks(
     attempt_id: str | None = None,
     task_id: str | None = None,
     output_digest: str | None = None,
-    plan_role: PlanRole | str | None = None,
+    task_kind: str | None = None,
+    task_key: str | None = None,
     fetched_digests: frozenset[str] | Collection[str] | None = None,
     proposals: dict[str, dict[str, Any]] | None = None,
     attempts: Mapping[str, Mapping[str, Any]] | None = None,
@@ -1047,77 +890,27 @@ def evaluate_task_checks(
     (CheckProposed.seq < AttemptStarted._seq and < ResultRecorded._seq).
     """
     by_id = {t.id: t for t in catalog.templates}
-
-    def _optional_dict(value: Any, *, name: str) -> dict[str, Any]:
-        if value is None:
-            return {}
-        if not isinstance(value, dict):
-            raise JournalFormatError(
-                f"evaluate_task_checks: {name} must be dict|None, "
-                f"got {type(value).__name__}"
-            )
-        return value
-
-    review_statuses = _optional_dict(review_statuses, name="review_statuses")
-    judge_retry = _optional_dict(judge_retry, name="judge_retry")
-    failure_kinds = _optional_dict(failure_kinds, name="failure_kinds")
-    proposals = _optional_dict(proposals, name="proposals")
-    results = []
+    review_statuses = review_statuses or {}
+    judge_retry = judge_retry or {}
+    failure_kinds = failure_kinds or {}
+    proposals = proposals or {}
+    results: list[CheckResult] = []
     refs = list(spec.criteria)
     if not refs:
         # apply defaults for experiment kind (schema NodeKind)
-        if "experiment" not in catalog.defaults:
-            raise JournalFormatError(
-                "catalog.defaults missing required key 'experiment'"
-            )
-        for tid in catalog.defaults["experiment"]:
-            refs.append(RequirementRef(template_id=tid, required=True))
+        for tid in catalog.defaults.get("experiment", []):
+            refs.append(RequirementRef(template_id=tid))
 
-    # Sole PLAN-n signal is Task.plan_role (passed as plan_role=...).
-    if plan_role is None:
-        raise JournalFormatError("evaluate_task_checks: plan_role required")
-    if isinstance(plan_role, PlanRole):
-        role_tok = plan_role
-    elif isinstance(plan_role, str):
-        try:
-            role_tok = PlanRole(plan_role)
-        except ValueError as e:
-            raise JournalFormatError(
-                f"evaluate_task_checks: invalid plan_role {plan_role!r}"
-            ) from e
-    else:
-        raise JournalFormatError(
-            "evaluate_task_checks: plan_role must be PlanRole|str, "
-            f"got {type(plan_role).__name__}"
-        )
-    is_core_plan_n = role_tok == PlanRole.PLAN_N
+    # plan_expansion_* markers are valid ONLY on core-created PLAN-n containers.
+    key = task_key if task_key is not None else spec.task_key
+    kind = str(task_kind or "")
+    is_core_plan_n = kind == "plan" and str(key).startswith("PLAN-")
 
     for i, ref in enumerate(refs):
-        tmpl = by_id.get(ref.template_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        tmpl = by_id.get(ref.template_id)
         cid = f"{ref.template_id}#{i}"
-        if tmpl is None:
-            results.append(
-                CheckResult(
-                    check_id=cid,
-                    template_id=ref.template_id,
-                    status=ReqStatus.FAILED,
-                    is_code=True,
-                    required=ref.required,
-                    role="unknown",
-                    detail="unknown template",
-        used_sesoi=False,
-    )
-            )
-            continue
         role = role_from_template(tmpl)
-        is_proposed_kind = tmpl.kind == TemplateKind.PROPOSED
-        is_proposed_id = ref.template_id == PROPOSED_CHECK_TEMPLATE_ID
-        if is_proposed_kind != is_proposed_id:
-            raise JournalFormatError(
-                "proposed_check kind/template_id mismatch: "
-                f"kind={tmpl.kind!r} template_id={ref.template_id!r}"
-            )
-        if is_proposed_kind and is_proposed_id:
+        if str(ref.template_id) == PROPOSED_CHECK_TEMPLATE_ID:
             results.append(
                 _evaluate_proposed_check(
                     ref=ref,
@@ -1138,7 +931,7 @@ def evaluate_task_checks(
                 )
             )
             continue
-        if tmpl.kind == TemplateKind.PLAN_N_CRITIC:
+        if str(ref.template_id or "").startswith("plan_expansion_"):
             if is_core_plan_n:
                 results.append(
                     CheckResult(
@@ -1149,8 +942,7 @@ def evaluate_task_checks(
                         required=ref.required,
                         role="validity",
                         detail="m1_deterministic_critic",
-        used_sesoi=False,
-    )
+                    )
                 )
             else:
                 results.append(
@@ -1162,9 +954,21 @@ def evaluate_task_checks(
                         required=ref.required,
                         role="unknown",
                         detail="invalid_plan_expansion_marker",
-        used_sesoi=False,
-    )
+                    )
                 )
+            continue
+        if tmpl is None:
+            results.append(
+                CheckResult(
+                    check_id=cid,
+                    template_id=ref.template_id,
+                    status=ReqStatus.FAILED,
+                    is_code=True,
+                    required=ref.required,
+                    role="unknown",
+                    detail="unknown template",
+                )
+            )
             continue
         check: CodeCheck | ReviewCheck
         if isinstance(tmpl.check, CodeCheck):
@@ -1187,10 +991,7 @@ def evaluate_task_checks(
                     item_id="",
                     output_digest=output_digest,
                 )
-                if rkey in review_statuses:
-                    st = review_statuses[rkey]
-                else:
-                    st = ReqStatus.UNASSESSED
+                st = review_statuses.get(rkey, ReqStatus.UNASSESSED)
             results.append(
                 CheckResult(
                     check_id=cid,
@@ -1200,19 +1001,16 @@ def evaluate_task_checks(
                     required=ref.required and tmpl.required,
                     role=role,
                     detail=check.question,
-        used_sesoi=False,
-    )
+                )
             )
         elif isinstance(check, CodeCheck) and check.kind == "rubric":
             from coscientist.checks.kinds.rubric import evaluate_rubric
             from coscientist.core.claims.rubric import freeze_rubric
 
             # Prefer OutputSpec.rubric for the named output (plan-frozen).
-            if not check.output:
-                raise JournalFormatError("rubric requires non-empty output")
             out_rubric = None
-            for o in spec.expected_outputs:
-                if o.name == check.output and o.rubric is not None:
+            for o in spec.expected_outputs or []:
+                if o.name == (check.output or "main") and o.rubric is not None:
                     out_rubric = freeze_rubric(o.rubric)
                     break
             cr = evaluate_rubric(
@@ -1254,10 +1052,10 @@ def evaluate_task_checks(
                 artifacts=artifacts,
                 values=out.values,
                 role=role,
-                uses_sesoi=tmpl.uses_sesoi,
+                uses_sesoi=bool(tmpl.uses_sesoi),
                 sesoi=tmpl.sesoi,
-                predicts_null=tmpl.predicts_null,
-                predicted_direction=tmpl.predicted_direction,
+                predicts_null=bool(tmpl.predicts_null),
+                predicted_direction=str(tmpl.predicted_direction),
                 attempt_id=attempt_id,
                 fetched_digests=fetched_digests,
             )
@@ -1283,11 +1081,8 @@ def evaluate_task_checks(
 
     already: set[str] = {r.template_id for r in results}
     for r in results:
-        if isinstance(r.effect, dict):
-            effect = r.effect
-        else:
-            effect = {}
-        dig = effect.get("rubric_digest")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        effect = r.effect if isinstance(r.effect, dict) else {}
+        dig = effect.get("rubric_digest")
         if dig:
             already.add(f"rubric:{dig}")
     results.extend(

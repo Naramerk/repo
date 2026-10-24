@@ -42,7 +42,7 @@ def _make_issued_registry() -> tuple[
         data.pop(nonce, None)
 
     def get(nonce: str) -> str | None:
-        return data.get(nonce)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        return data.get(nonce)
 
     return put, pop, get
 
@@ -122,7 +122,7 @@ class UserInputRegistrationError(Exception):
     """Fail-closed: user inputs present but CAS registration cannot complete."""
 
     def __init__(
-        self, reason: str, *, kind: RefusalKind = RefusalKind.INPUT_INVALID  # audit-ok[named_default]: named constant / enum member default; not silent invent  # noqa: E501
+        self, reason: str, *, kind: RefusalKind = RefusalKind.INPUT_INVALID
     ) -> None:
         self.reason = reason
         self.kind = kind

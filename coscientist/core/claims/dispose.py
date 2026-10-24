@@ -209,7 +209,7 @@ def question_dispose_rejected_event(
         raise TypeError(f"detail must be str, got {type(detail).__name__}")
     detail_s = detail[:DISPOSE_REJECT_DETAIL_MAX]
     digest = sha256_hex(detail_s)[:16]
-    entity = qid if qid else study_id  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+    entity = qid if qid else study_id
     if MISSING_DESIGN_REASON in detail_s:
         reason = MISSING_DESIGN_REASON
     else:
@@ -259,7 +259,7 @@ def fold_question_disposed(
         raise JournalFormatError("QuestionDisposed missing refs")
     refs = payload["refs"]
     if refs is None:
-        refs_list: list[Any] = []  # audit-ok[field_default]: structural empty = null refs ≡ absent
+        refs_list: list[Any] = []
     elif isinstance(refs, list):
         refs_list = list(refs)
     else:
@@ -271,7 +271,7 @@ def fold_question_disposed(
         "disposition": _require_payload_str(payload, "disposition", what="QuestionDisposed"),
         "reason": _require_payload_str(payload, "reason", what="QuestionDisposed"),
         "refs": refs_list,
-        "design_artifact_id": payload.get("design_artifact_id"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        "design_artifact_id": payload.get("design_artifact_id"),
     }
 
 
@@ -290,8 +290,8 @@ def fold_question_dispose_rejected(
     else:
         report_line = dispose_reject_report_line(detail)
     row = {
-        "question_id": payload.get("question_id"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-        "disposition": payload.get("disposition"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        "question_id": payload.get("question_id"),
+        "disposition": payload.get("disposition"),
         "detail": detail,
         "reason": _require_payload_str(payload, "reason", what="QuestionDisposeRejected"),
         "report_line": report_line,
@@ -305,7 +305,7 @@ def fold_question_dispose_rejected(
             raise JournalFormatError(
                 f"disposal reject detail must be str, got {type(ex_detail).__name__}"
             )
-        if sha256_hex(ex_detail)[:16] == dig and existing.get("question_id") == row[  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        if sha256_hex(ex_detail)[:16] == dig and existing.get("question_id") == row[
             "question_id"
         ]:
             return
@@ -337,14 +337,14 @@ async def dispose_question(
     disp_hint: str | None = None
 
     if isinstance(disposal, dict):
-        raw_qid = disposal.get("question_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        raw_qid = disposal.get("question_id")
         if raw_qid is None or raw_qid == "":
             qid_hint = None
         elif isinstance(raw_qid, str):
             qid_hint = raw_qid
         else:
             raise TypeError(f"question_id must be str, got {type(raw_qid).__name__}")
-        raw_disp = disposal.get("disposition")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        raw_disp = disposal.get("disposition")
         if raw_disp is None or raw_disp == "":
             disp_hint = None
         elif isinstance(raw_disp, str):
@@ -389,10 +389,10 @@ async def dispose_question(
         validate_disposal(
             disposal,
             known_question_ids=set(qmap),
-            journal_kinds=kinds if isinstance(kinds, dict) else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+            journal_kinds=kinds if isinstance(kinds, dict) else None,
             tasks=tasks,
             results=results,
-            covering_task_keys=set(cover.get(disposal.question_id, set())),  # audit-ok[dict_get_default]: explicit default only for structural absent key  # noqa: E501
+            covering_task_keys=set(cover.get(disposal.question_id, set())),
         )
     except DisposeRejected as e:
         await _journal_reject(
@@ -418,7 +418,7 @@ async def dispose_question(
     try:
         append = runtime._append
     except AttributeError:
-        return None  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
+        return None
     try:
         await append([ev])
     except LeaseLost:
@@ -456,7 +456,7 @@ async def _journal_reject(
     try:
         append = runtime._append
     except AttributeError:
-        return  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
+        return
     try:
         await append([ev])
     except LeaseLost:

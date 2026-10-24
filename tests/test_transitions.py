@@ -10,8 +10,7 @@ import pytest
 
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.errors import AttemptClosedError
-from coscientist.core.events.events import UnstampedEvent, make_idem
-from coscientist.core.events.upcasters import writer_schema_version
+from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -30,7 +29,7 @@ async def _boot(tmp_path: Path, clock: FakeClock, runtime_cls: type, seconds: in
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=seconds),
         sid="st_tr",
         **kw,
@@ -208,7 +207,7 @@ def _spec_with_value_match(rt, aid: str) -> None:
     rt.tasks[task.task_id] = task.model_copy(
         update={
             "spec": task.spec.model_copy(
-                update={"criteria": [RequirementRef(template_id="value_match", required=True)]}
+                update={"criteria": [RequirementRef(template_id="value_match")]}
             )
         }
     )
@@ -230,7 +229,7 @@ async def test_recover_records_from_cas_route_returned(tmp_path, clock, runtime_
     aid = await rt.start_attempt("SPEC")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid}:1", attempt_id=aid),
+        make_tool_ref(f"{aid}:1"),
         name="main",
         media_type="application/json",
     )
@@ -258,15 +257,14 @@ async def test_recover_missing_cas_crashes_retryable(tmp_path, clock, runtime_cl
     aid = await rt.start_attempt("SPEC")
     await rt._append(
         [
-            UnstampedEvent(
+            EventEnvelope(
                 study_id="st_tr",
                 type="RouteReturned",
                 entity_key=aid,
                 idem_key=make_idem("RouteReturned", aid),
                 payload={"attempt_id": aid, "agent_output_digest": "missing" * 8},
                 ts=clock.now(),
-                schema_version=writer_schema_version('RouteReturned'),
-)
+            )
         ]
     )
     result = await recover(rt)
@@ -285,7 +283,7 @@ async def test_recover_corrupt_cas_crashes_retryable(tmp_path, clock, runtime_cl
     aid = await rt.start_attempt("SPEC")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid}:1", attempt_id=aid),
+        make_tool_ref(f"{aid}:1"),
         name="main",
         media_type="application/json",
     )
@@ -310,7 +308,7 @@ async def test_record_vs_deadline_race(tmp_path, clock, runtime_cls):
     aid = await rt.start_attempt("SPEC")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid}:1", attempt_id=aid),
+        make_tool_ref(f"{aid}:1"),
         name="main",
         media_type="application/json",
     )
@@ -323,7 +321,7 @@ async def test_record_vs_deadline_race(tmp_path, clock, runtime_cls):
     now = clock.now()
     await rt.writer.append_many(
         [
-            UnstampedEvent(
+            EventEnvelope(
                 study_id="st_tr",
                 type="AttemptClosed",
                 entity_key=aid,
@@ -335,9 +333,8 @@ async def test_record_vs_deadline_race(tmp_path, clock, runtime_cls):
                     "task_id": task.task_id,
                 },
                 ts=now,
-                schema_version=writer_schema_version('AttemptClosed'),
-),
-            UnstampedEvent(
+            ),
+            EventEnvelope(
                 study_id="st_tr",
                 type="TaskDone",
                 entity_key=task.task_id,
@@ -348,8 +345,7 @@ async def test_record_vs_deadline_race(tmp_path, clock, runtime_cls):
                     "reason": "deadline",
                 },
                 ts=now,
-                schema_version=writer_schema_version('TaskDone'),
-),
+            ),
         ]
     )
     assert (await rt.store.get_row("attempts", aid))["closed"] is True
@@ -369,7 +365,7 @@ async def test_mark_route_returned_vs_deadline_race(tmp_path, clock, runtime_cls
     aid = await rt.start_attempt("SPEC")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid}:1", attempt_id=aid),
+        make_tool_ref(f"{aid}:1"),
         name="main",
         media_type="application/json",
     )
@@ -377,7 +373,7 @@ async def test_mark_route_returned_vs_deadline_race(tmp_path, clock, runtime_cls
     now = clock.now()
     await rt.writer.append_many(
         [
-            UnstampedEvent(
+            EventEnvelope(
                 study_id="st_tr",
                 type="AttemptClosed",
                 entity_key=aid,
@@ -389,8 +385,7 @@ async def test_mark_route_returned_vs_deadline_race(tmp_path, clock, runtime_cls
                     "task_id": task.task_id,
                 },
                 ts=now,
-                schema_version=writer_schema_version('AttemptClosed'),
-),
+            ),
         ]
     )
     assert rt.attempts[aid].get("closed") is not True  # stale memory

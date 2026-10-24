@@ -28,9 +28,8 @@ from coscientist.core.events.errors import (
     LeaseLost,
     StudyClosedError,
 )
-from coscientist.core.events.events import UnstampedEvent, make_idem
+from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.projections import fold_events
-from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     QuestionSpec,
     QuestionSupersede,
@@ -126,7 +125,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
             self.rt.create_study(
                 profile="research",
                 request="prop",
-                catalog_version="1.0.0",
+                catalog_version="0.1.0",
                 deadline=self.study_deadline,
                 sid=self.sid,
                 finalize_reserve_s=5,
@@ -157,7 +156,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         n = data.draw(st.integers(min_value=1, max_value=12))
         fan = data.draw(st.integers(min_value=1, max_value=min(10, n)))
         n_q = data.draw(st.integers(min_value=1, max_value=3))
-        qs = [QuestionSpec(id=f"Q{rev}_{i}", text=f"q{rev}_{i}", final_type="verdict") for i in range(n_q)]
+        qs = [QuestionSpec(id=f"Q{rev}_{i}", text=f"q{rev}_{i}") for i in range(n_q)]
         specs = []
         for i in range(n):
             key = f"EXP-r{rev}-{i + 1}"
@@ -170,7 +169,8 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                     goal="g",
                     route="experiment",
                     depends_on=deps,
-                    addresses=addr, required=True, tolerate_failed_dep=False)
+                    addresses=addr,
+                )
             )
         self._call(self.rt.accept_plan(specs, questions=qs, revision=rev))
         return f"EXP-r{rev}-1"
@@ -258,15 +258,17 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                 goal="g",
                 route="experiment",
                 depends_on=[parent.spec.task_key],
-                addresses=list(base_addrs), required=True, tolerate_failed_dep=False)
+                addresses=list(base_addrs),
+            )
             for i in range(n)
         ]
         self._call(
-            self.rt.expand_plan(after_task=parent.spec.task_key,
+            self.rt.expand_plan(
+                after_task=parent.spec.task_key,
                 added_tasks=rebuilt,
                 origin="emergent",
                 reason="prop_expand",
-        assign_keys=False)
+            )
         )
 
     @rule(data=st.data())
@@ -281,16 +283,17 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         self._plan_rev += 1
         rev = self._plan_rev
         new_id = f"Qsup_{rev}"
-        new_q = QuestionSpec(id=new_id, text=f"supersede {old_id}", final_type="verdict")
+        new_q = QuestionSpec(id=new_id, text=f"supersede {old_id}")
         new_task = TaskSpec(
             task_key=f"EXP-sup{rev}",
             title="sup",
             goal="g",
             route="experiment",
             depends_on=["PLAN"],
-            addresses=[new_id], required=True, tolerate_failed_dep=False)
+            addresses=[new_id],
+        )
         # MJ-d: human quota only via HitlDecided matching hitl_request_id.
-        from coscientist.core.events.events import UnstampedEvent, make_idem
+        from coscientist.core.events.events import EventEnvelope, make_idem
 
         rid = f"hitl_prop_{rev}"
         now = self.rt.clock.now()
@@ -298,7 +301,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         self._call(
             self.rt._append(
                 [
-                    UnstampedEvent(
+                    EventEnvelope(
                         study_id=self.rt.study.study_id,
                         type="HitlOpened",
                         entity_key=rid,
@@ -315,9 +318,8 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                             "cost_rub": 0.0,
                         },
                         ts=now,
-                        schema_version=writer_schema_version('HitlOpened'),
-),
-                    UnstampedEvent(
+                    ),
+                    EventEnvelope(
                         study_id=self.rt.study.study_id,
                         type="HitlDecided",
                         entity_key=rid,
@@ -326,25 +328,26 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                             "request_id": rid,
                             "decision": "accept",
                             "by": "human",
-                            "delegated_by": "human",
+                            "decided_by": "human",
+                            "approved_by": "human",
                             "reason": "answered",
                             "spent_rub": 0.0,
                         },
                         ts=now,
-                        schema_version=writer_schema_version('HitlDecided'),
-),
+                    ),
                 ]
             )
         )
         self._call(
-            self.rt.expand_plan(after_task="PLAN",
+            self.rt.expand_plan(
+                after_task="PLAN",
                 added_tasks=[new_task],
                 added_questions=[new_q],
                 superseded_questions=[QuestionSupersede(new_id=new_id, old_id=old_id)],
                 origin="plan",
                 hitl_request_id=rid,
                 reason="prop_question_supersede",
-        assign_keys=False)
+            )
         )
 
     @rule()
@@ -397,7 +400,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         with pytest.raises(StudyClosedError):
             self._run(
                 self.rt.store.append(
-                    UnstampedEvent(
+                    EventEnvelope(
                         study_id=self.sid,
                         type="TaskDone",
                         entity_key="late",
@@ -408,8 +411,8 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                             "reason": "failed",
                         },
                         ts=self.clock.now(),
-                        schema_version=1,
-)
+                        schema_version=2,
+                    )
                 )
             )
         assert len(self._run(self.rt.store.read_all())) == n

@@ -14,7 +14,7 @@ import pytest
 ])
 def test_costly_gate_modes(impl, mode, answer, cost, limit, effect, by, msg):
     budget = None if limit is None else impl.DelegatedBudget(limit)
-    eff, ev = impl.costly_gate(mode, answer, cost, budget, critic_accepts=True)
+    eff, ev = impl.costly_gate(mode, answer, cost, budget)
     assert eff == effect and ev["decided_by"] == by and ev["reason"]
     assert ev.get("human_message") == msg
     if eff == "RUN" and by == "critic":
@@ -25,18 +25,18 @@ def test_costly_gate_modes(impl, mode, answer, cost, limit, effect, by, msg):
 
 def test_delegated_budget_counter(impl):
     b = impl.DelegatedBudget(1000)
-    eff, ev = impl.costly_gate("fail", "delegate", 400, b, critic_accepts=True)
+    eff, ev = impl.costly_gate("fail", "delegate", 400, b)
     assert eff == "RUN" and ev["delegated_by"] == "human"
     impl.settle(ev, b, 300)                                          # actual debited, not estimate
     assert (b.spent_rub, b.remaining_rub, ev["spent_rub"]) == (300, 700, 300)
-    eff, ev = impl.costly_gate("fail", "delegate", 800, b, critic_accepts=True)
+    eff, ev = impl.costly_gate("fail", "delegate", 800, b)
     assert eff == "WAIT" and ev["human_message"] == "превышает остаток"
-    eff, ev = impl.costly_gate("fail", "delegate", 200, b, critic_accepts=True)
+    eff, ev = impl.costly_gate("fail", "delegate", 200, b)
     impl.settle(ev, b, 350)                                          # overspend: actual > estimate
     assert b.blocked and b.remaining_rub == 350
-    eff, ev = impl.costly_gate("fail", "delegate", 10, b, critic_accepts=True)
+    eff, ev = impl.costly_gate("fail", "delegate", 10, b)
     assert eff == "WAIT" and ev["reason"] == "delegation_disabled" and "перерасход" in ev["human_message"]
-    assert impl.costly_gate("fail", None, 10, b, critic_accepts=True)[0] == "FAILED(human_timeout)"
+    assert impl.costly_gate("fail", None, 10, b)[0] == "FAILED(human_timeout)"
 
 
 @pytest.mark.asyncio
@@ -56,9 +56,11 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
             "costly_or_nonreal": GateConfig(
                 enabled=True, timeout_s=30, on_timeout="fail"
             )
-        }, timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"})  # noqa: E501
+        },
+    )
     budget = Budget(
-        delegated_costly=Decimal("1000"), deadline=clock.now() + timedelta(hours=1), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500)  # noqa: E501
+        delegated_costly=Decimal("1000"), deadline=clock.now() + timedelta(hours=1)
+    )
 
     # No budget configured → WAIT + human_message, gate stays open
     rt0 = await open_runtime(
@@ -67,7 +69,7 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
     await rt0.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_nb",
         hitl_policy=policy,
@@ -75,8 +77,7 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
     _, arts0 = attach_executor(rt0, tmp_path / "nb")
     await record_success(rt0, await rt0.start_attempt("SPEC"), arts0)
     rid0 = await rt0.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=100)
-    await rt0.answer_hitl(rid0, "delegate",
-            critic_accepts=True)
+    await rt0.answer_hitl(rid0, "delegate")
     assert rt0.hitl[rid0].open is True
     note0 = [e for e in await rt0.store.read_all() if e.payload.get("request_id") == rid0]
     assert any(e.payload.get("reason") == "delegation_disabled" for e in note0)
@@ -89,7 +90,7 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_cost",
         hitl_policy=policy,
@@ -100,8 +101,7 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
 
     # «реши сам» with budget → critic, delegated_by=human; settle debits actual
     rid = await rt.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=400)
-    await rt.answer_hitl(rid, "delegate",
-            critic_accepts=True)
+    await rt.answer_hitl(rid, "delegate")
     assert rt.hitl[rid].open is False
     decided = [
         e
@@ -119,13 +119,11 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
 
     # actual > estimate → blocked; further «реши сам» → WAIT
     rid2 = await rt.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=200)
-    await rt.answer_hitl(rid2, "delegate",
-            critic_accepts=True)
+    await rt.answer_hitl(rid2, "delegate")
     await rt.settle_delegated_spend(rid2, actual_rub=400)
     assert rt.delegated_budget.blocked
     rid3 = await rt.open_hitl("HYP", kind="costly_or_nonreal", cost_rub=10)
-    await rt.answer_hitl(rid3, "delegate",
-            critic_accepts=True)
+    await rt.answer_hitl(rid3, "delegate")
     assert rt.hitl[rid3].open is True
     notice = [e for e in await rt.store.read_all() if e.payload.get("request_id") == rid3]
     assert any(e.payload.get("reason") == "delegation_disabled" for e in notice)
@@ -160,16 +158,18 @@ async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
             "costly_or_nonreal": GateConfig(
                 enabled=True, timeout_s=30, on_timeout="fail"
             )
-        }, timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"})  # noqa: E501
+        },
+    )
     budget = Budget(
-        delegated_costly=Decimal("1000"), deadline=clock.now() + timedelta(hours=1), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500)  # noqa: E501
+        delegated_costly=Decimal("1000"), deadline=clock.now() + timedelta(hours=1)
+    )
     rt = await open_runtime(
         tmp_path, "st_bud_rec", clock=clock, runtime_cls=ExpStudyRuntime
     )
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_bud_rec",
         hitl_policy=policy,
@@ -178,8 +178,7 @@ async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
     _, arts = attach_executor(rt, tmp_path)
     await record_success(rt, await rt.start_attempt("SPEC"), arts)
     rid = await rt.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=400)
-    await rt.answer_hitl(rid, "delegate",
-            critic_accepts=True)
+    await rt.answer_hitl(rid, "delegate")
     await rt.settle_delegated_spend(rid, actual_rub=350)
     assert rt.delegated_budget is not None
     assert rt.delegated_budget.spent_rub == 350
@@ -194,8 +193,7 @@ async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
     assert rt2.delegated_budget.remaining_rub == 650
     # cost_rub > 650 remaining → blocked (WAIT / exceeds remainder)
     rid_blocked = await rt2.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=651)
-    await rt2.answer_hitl(rid_blocked, "delegate",
-            critic_accepts=True)
+    await rt2.answer_hitl(rid_blocked, "delegate")
     assert rt2.hitl[rid_blocked].open is True
     notices = [
         e
@@ -222,7 +220,8 @@ async def test_study_budget_exceeded_from_costly_spend(tmp_path, clock, runtime_
     budget = Budget(
         max_cost_rub=Decimal("100"),
         delegated_costly=Decimal("100"),
-        deadline=clock.now() + timedelta(hours=1), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500)
+        deadline=clock.now() + timedelta(hours=1),
+    )
     sid = "st_study_bud"
     rt = await open_runtime(
         tmp_path, sid, clock=clock, runtime_cls=runtime_cls, owner="t1"
@@ -230,7 +229,7 @@ async def test_study_budget_exceeded_from_costly_spend(tmp_path, clock, runtime_
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(minutes=30),
         sid=sid,
         budget=budget,
@@ -265,11 +264,13 @@ async def test_settle_delegated_spend_emits_study_budget(tmp_path, clock):
             "costly_or_nonreal": GateConfig(
                 enabled=True, timeout_s=30, on_timeout="fail"
             )
-        }, timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"})  # noqa: E501
+        },
+    )
     budget = Budget(
         max_cost_rub=Decimal("100"),
         delegated_costly=Decimal("100"),
-        deadline=clock.now() + timedelta(hours=1), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500)
+        deadline=clock.now() + timedelta(hours=1),
+    )
     sid = "st_settle_bud"
     rt = await open_runtime(
         tmp_path, sid, clock=clock, runtime_cls=ExpStudyRuntime, owner="t1"
@@ -277,7 +278,7 @@ async def test_settle_delegated_spend_emits_study_budget(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(minutes=30),
         sid=sid,
         hitl_policy=policy,
@@ -287,8 +288,7 @@ async def test_settle_delegated_spend_emits_study_budget(tmp_path, clock):
     _, arts = attach_executor(rt, tmp_path)
     await record_success(rt, await rt.start_attempt("SPEC"), arts)
     rid = await rt.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=100)
-    await rt.answer_hitl(rid, "delegate",
-            critic_accepts=True)
+    await rt.answer_hitl(rid, "delegate")
     await rt.settle_delegated_spend(rid, actual_rub=100)
     types = [e.type for e in await rt.store.read_all()]
     assert "BudgetDebited" in types

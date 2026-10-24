@@ -1,4 +1,4 @@
-"""PR2 finalize totality, I2 replay, last-resort fallbacks, legacy journal reopen."""
+"""PR2 finalize totality, I2 replay, last-resort fallbacks, legacy upcasts."""
 
 from __future__ import annotations
 
@@ -6,17 +6,17 @@ from datetime import timedelta
 
 import pytest
 
-from coscientist.core.events.events import UnstampedEvent, make_idem
+from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.execution.artifacts import LocalArtifactStore
-from coscientist.core.execution.domain import QuestionSpec, TaskKind, TaskState
+from coscientist.core.execution.domain import HitlPolicy, QuestionSpec, TaskKind, TaskState
 from coscientist.core.finalize.finalize import last_resort_payload
 from coscientist.core.finalize.finalize_nodes import (
     conclusion_id_for_question,
     conclusion_id_for_study,
     conclusion_ids_for,
 )
-from tests.helpers import close_runtime, make_study_created_payload, open_runtime
+from tests.helpers import close_runtime, open_runtime
 from tests.test_finalize import _boot, _fin, _skip_all, _spec
 
 
@@ -144,7 +144,7 @@ def test_last_resort_payload_constants_only():
 async def test_i2_conclusions_after_restart(tmp_path, clock):
     sid = "st_i2"
     rt = await _boot(tmp_path, clock, sid)
-    qs = [QuestionSpec(id="Q1", text="one", final_type="verdict"), QuestionSpec(id="Q2", text="two", final_type="verdict")]  # noqa: E501
+    qs = [QuestionSpec(id="Q1", text="one"), QuestionSpec(id="Q2", text="two")]
     await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs)
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
@@ -466,35 +466,36 @@ async def test_tick_ensure_lease_after_finalized(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
-    """Seeded complete v1 PlanAccepted + TaskCreated reopen and finalize."""
+async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
+    """Old journal PlanAccepted v1 + TaskCreated v2 upcast and finalize."""
     sid = "st_leg"
     root = tmp_path / sid
     root.mkdir()
-    store = SqliteEventStore(sid, root / "events.db", clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore(sid, root / "events.db", clock=clock)
     await store.acquire_lease("seeder")
     now = clock.now()
     dl = now + timedelta(seconds=120)
     await store.append_many(
         [
-            UnstampedEvent(
+            EventEnvelope(
                 study_id=sid,
                 type="StudyCreated",
                 entity_key=sid,
                 idem_key=make_idem("StudyCreated", sid),
-                payload=make_study_created_payload(
-                    study_id=sid,
-                    profile="research",
-                    request="legacy",
-                    catalog_version="1.0.0",
-                    created_at=now,
-                    deadline=dl,
-                    finalize_reserve_s=5,
-                ),
+                payload={
+                    "study_id": sid,
+                    "profile": "research",
+                    "request": "legacy",
+                    "catalog_version": "0.1.0",
+                    "hitl_policy": HitlPolicy().model_dump(mode="json"),
+                    "deadline": dl.isoformat(),
+                    "created_at": now.isoformat(),
+                    "finalize_reserve_s": 5,
+                },
                 ts=now,
-                schema_version=1,
-),
-            UnstampedEvent(
+                schema_version=2,
+            ),
+            EventEnvelope(
                 study_id=sid,
                 type="PlanAccepted",
                 entity_key="pl_old",
@@ -511,17 +512,14 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
                             "goal": "g",
                             "route": "experiment",
                             "depends_on": ["PLAN"],
-                            "addresses": [],
-                            "required": True,
-                            "tolerate_failed_dep": False,
                         }
                     ],
-                    "questions": [],
+                    # no questions / addresses → upcast v1→v2
                 },
                 ts=now,
                 schema_version=1,
-),
-            UnstampedEvent(
+            ),
+            EventEnvelope(
                 study_id=sid,
                 type="TaskCreated",
                 entity_key=f"{sid}/E1",
@@ -535,9 +533,6 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
                         "goal": "g",
                         "route": "experiment",
                         "depends_on": ["PLAN"],
-                        "addresses": [],
-                        "required": True,
-                        "tolerate_failed_dep": False,
                     },
                     "state": TaskState.PENDING.value,
                     "outcome": None,
@@ -545,11 +540,10 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
                     "deadline": dl.isoformat(),
                     "attempts": [],
                     "inherited_from": None,
-                    "plan_role": "none",
                 },
                 ts=now,
-                schema_version=1,
-),
+                schema_version=2,  # upcast → addresses=[]
+            ),
         ]
     )
     await store.release_lease("seeder", store.epoch)
@@ -567,12 +561,13 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
 
 def test_pick_finalize_trigger(impl):
     assert impl.pick_finalize_trigger(
-        cancelled=True, budget=True, deadline=True, refused=False, all_done=False) == "cancel"
-    assert impl.pick_finalize_trigger(budget=True, deadline=True, cancelled=False, refused=False, all_done=False) == "budget"  # noqa: E501
-    assert impl.pick_finalize_trigger(refused=True, deadline=True, cancelled=False, budget=False, all_done=False) == "intake"  # noqa: E501
-    assert impl.pick_finalize_trigger(deadline=True, all_done=True, cancelled=False, budget=False, refused=False) == "deadline"  # noqa: E501
-    assert impl.pick_finalize_trigger(all_done=True, cancelled=False, budget=False, refused=False, deadline=False) == "all_done"  # noqa: E501
-    assert impl.pick_finalize_trigger(cancelled=False, budget=False, refused=False, deadline=False, all_done=False) is None  # noqa: E501
+        cancelled=True, budget=True, deadline=True
+    ) == "cancel"
+    assert impl.pick_finalize_trigger(budget=True, deadline=True) == "budget"
+    assert impl.pick_finalize_trigger(refused=True, deadline=True) == "intake"
+    assert impl.pick_finalize_trigger(deadline=True, all_done=True) == "deadline"
+    assert impl.pick_finalize_trigger(all_done=True) == "all_done"
+    assert impl.pick_finalize_trigger() is None
 
 
 def test_terminal_reason_for(impl):
@@ -580,7 +575,6 @@ def test_terminal_reason_for(impl):
 
     from coscientist.core.claims.reasons import TaskReason
     from coscientist.core.execution.domain import (
-        PlanRole,
         Task,
         TaskKind,
         TaskOutcome,
@@ -592,13 +586,12 @@ def test_terminal_reason_for(impl):
     t = Task(
         task_id="st/A",
         kind=TaskKind.EXPERIMENT,
-        spec=TaskSpec(task_key="A", title="a", goal="g", route="experiment", required=True, tolerate_failed_dep=False),
+        spec=TaskSpec(task_key="A", title="a", goal="g", route="experiment"),
         state=TaskState.DONE,
         outcome=TaskOutcome.FAILED,
         reason=TaskReason.HUMAN_TIMEOUT,
         deadline=now,
-        plan_role=PlanRole.NONE,
-)
+    )
     assert (
         impl.terminal_reason_for(
             "all_done", tasks={"a": t}, question_dispositions={}

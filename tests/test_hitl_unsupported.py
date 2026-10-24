@@ -9,7 +9,6 @@ import pytest
 
 from coscientist.core.events.errors import HitlUnsupported
 from coscientist.core.events.store import SqliteEventStore
-from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import GateConfig, HitlPolicy
 from coscientist.core.execution.machine import StudyRuntime as CoreStudyRuntime
 from coscientist.core.execution.recover import recover
@@ -25,7 +24,7 @@ async def _boot_exp(tmp_path: Path, clock, sid: str = "st_hitl", **study_kw):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(minutes=30),
         sid=sid,
         **study_kw,
@@ -45,9 +44,7 @@ async def _close_and_expire(rt, clock) -> str:
 @pytest.mark.asyncio
 async def test_core_open_runtime_rejects_open_hitl_journal(tmp_path, clock):
     root, rt = await _boot_exp(tmp_path, clock)
-    await rt.open_hitl(
-        "PLAN", kind="plan_approval", timeout_s=60, expand_after_task="PLAN",
-            cost_rub=0.0)
+    await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
     assert any(h.open for h in rt.hitl.values())
     await _close_and_expire(rt, clock)
     with pytest.raises(HitlUnsupported, match="open HITL"):
@@ -59,23 +56,12 @@ async def test_core_open_runtime_rejects_open_hitl_journal(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_core_recover_rejects_open_hitl_journal(tmp_path, clock):
     root, rt = await _boot_exp(tmp_path, clock)
-    await rt.open_hitl(
-        "PLAN", kind="plan_approval", timeout_s=60, expand_after_task="PLAN",
-            cost_rub=0.0)
+    await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
     owner = await _close_and_expire(rt, clock)
     exp = await open_runtime(
         root, "st_hitl", clock=clock, runtime_cls=ExpStudyRuntime, owner=owner
     )
-    from coscientist.core.claims.graph import default_execution_registry
-
-    core = CoreStudyRuntime(
-        exp.store,
-        exp.writer,
-        clock=clock,
-        owner=exp.owner,
-        max_attempts=3,
-        registry=default_execution_registry(),
-    )
+    core = CoreStudyRuntime(exp.store, exp.writer, clock=clock, owner=exp.owner)
     for ev in await exp.store.read_all():
         core._project_local(ev)  # noqa: SLF001
     with pytest.raises(HitlUnsupported, match="open HITL"):
@@ -86,9 +72,7 @@ async def test_core_recover_rejects_open_hitl_journal(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_experimental_open_runtime_accepts_open_hitl_journal(tmp_path, clock):
     root, rt = await _boot_exp(tmp_path, clock)
-    await rt.open_hitl(
-        "PLAN", kind="plan_approval", timeout_s=60, expand_after_task="PLAN",
-            cost_rub=0.0)
+    await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
     owner = await _close_and_expire(rt, clock)
     rt2 = await open_runtime(
         root, "st_hitl", clock=clock, runtime_cls=ExpStudyRuntime, owner=owner
@@ -103,11 +87,8 @@ async def test_core_opens_when_all_hitl_gates_closed(tmp_path, clock):
     from coscientist.core.execution.domain import TaskState
 
     root, rt = await _boot_exp(tmp_path, clock)
-    rid = await rt.open_hitl(
-        "PLAN", kind="plan_approval", timeout_s=60, expand_after_task="PLAN",
-            cost_rub=0.0)
-    await rt.answer_hitl(rid, "accept",
-            critic_accepts=True)
+    rid = await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
+    await rt.answer_hitl(rid, "accept")
     assert rt.hitl[rid].open is False
     owner = await _close_and_expire(rt, clock)
 
@@ -137,12 +118,12 @@ async def test_core_rejects_wait_keep_open_hitl_gate(tmp_path, clock):
             "costly_or_nonreal": GateConfig(
                 enabled=True, timeout_s=30, on_timeout="fail"
             )
-        }, timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"})  # noqa: E501
+        },
+    )
     root, rt = await _boot_exp(tmp_path, clock, hitl_policy=policy)
-    # No Budget(delegated_costly, max_llm_calls=100, max_tokens=1000000, max_tool_calls=500) → «реши сам» yields WAIT / keep_open.  # noqa: E501
+    # No Budget(delegated_costly) → «реши сам» yields WAIT / keep_open.
     rid = await rt.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=100)
-    await rt.answer_hitl(rid, "delegate",
-            critic_accepts=True)
+    await rt.answer_hitl(rid, "delegate")
     assert rt.hitl[rid].open is True
     await _close_and_expire(rt, clock)
 
@@ -156,9 +137,7 @@ async def test_core_rejects_wait_keep_open_hitl_gate(tmp_path, clock):
 async def test_hitl_unsupported_does_not_hold_lease(tmp_path, clock):
     """Refused core open must not acquire a lease (journal checked first)."""
     root, rt = await _boot_exp(tmp_path, clock, sid="st_lease")
-    await rt.open_hitl(
-        "PLAN", kind="plan_approval", timeout_s=60, expand_after_task="PLAN",
-            cost_rub=0.0)
+    await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
     await _close_and_expire(rt, clock)
 
     with pytest.raises(HitlUnsupported):
@@ -167,7 +146,7 @@ async def test_hitl_unsupported_does_not_hold_lease(tmp_path, clock):
         )
 
     # No lease row held by core-x; experimental can acquire immediately.
-    store = SqliteEventStore("st_lease", root / "st_lease" / "events.db", clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore("st_lease", root / "st_lease" / "events.db", clock=clock)
     owner, epoch, expires = await store.current_lease()
     await store.close()
     assert owner != "core-x"
@@ -187,7 +166,7 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
     opener's acquire_lease. Core must raise HitlUnsupported and release; the
     experimental path must project both new events.
     """
-    from coscientist.core.events.events import UnstampedEvent, make_idem
+    from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.events.ids import hitl_request_id
     from coscientist.core.execution.domain import TaskOutcome, TaskState
 
@@ -203,7 +182,7 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
         if not injected["done"]:
             injected["done"] = True
             # Inject under a separate connection using the unbound method (not the patch).
-            racer = SqliteEventStore("st_race", db_path, clock=clock, lease_ttl_s=30.0)
+            racer = SqliteEventStore("st_race", db_path, clock=clock)
             await real_acquire(racer, "racer")
             now = clock.now()
             rid = hitl_request_id()
@@ -219,16 +198,15 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
             }
             await racer.append_many(
                 [
-                    UnstampedEvent(
+                    EventEnvelope(
                         study_id="st_race",
                         type="HitlOpened",
                         entity_key=rid,
                         idem_key=make_idem("HitlOpened", rid),
                         payload=hitl_payload,
                         ts=now,
-                        schema_version=writer_schema_version('HitlOpened'),
-                ),
-                    UnstampedEvent(
+                    ),
+                    EventEnvelope(
                         study_id="st_race",
                         type="TaskDone",
                         entity_key="st_race/REPORT",
@@ -239,8 +217,8 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
                             "reason": "cancelled",
                         },
                         ts=now,
-                        schema_version=1,
-),
+                        schema_version=2,
+                    ),
                 ]
             )
             await racer.release_lease("racer", racer.epoch)
@@ -253,7 +231,7 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
         await open_runtime(
             root, "st_race", clock=clock, runtime_cls=CoreStudyRuntime, owner="core-race"
         )
-    store = SqliteEventStore("st_race", db_path, clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore("st_race", db_path, clock=clock)
     held_owner, _, _ = await store.current_lease()
     await store.close()
     assert held_owner != "core-race"

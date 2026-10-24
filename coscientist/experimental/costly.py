@@ -5,40 +5,14 @@ Experimental / pre-M2: not exported from ``coscientist.core``.
 
 from __future__ import annotations
 
-from enum import Enum
 from typing import Any
 
 
-class CostlyEffect(str, Enum):
-    """Structured gate outcome — callers must match on this, not string prefixes."""
-
-    RUN = "RUN"
-    WAIT = "WAIT"
-    FAILED_HUMAN_TIMEOUT = "FAILED(human_timeout)"
-    SKIPPED_BUDGET = "SKIPPED(budget)"
-    SKIPPED_HUMAN_REJECTED = "SKIPPED(human_rejected)"
-    SKIPPED_CRITIC_REJECTED = "SKIPPED(critic_rejected)"
-
-
-def _require_float(value: object, *, what: str) -> float:
-    if type(value) is not float and type(value) is not int:
-        raise TypeError(f"{what} must be int|float, got {type(value).__name__}")
-    return float(value)  # audit-ok[coerce_float]: coerce after explicit numeric type gate
-
-
-def _require_bool(value: object, *, what: str) -> bool:
-    if type(value) is not bool:
-        raise TypeError(f"{what} must be bool, got {type(value).__name__}")
-    return value
-
-
 class DelegatedBudget:
-    """Budget(delegated_costly, max_llm_calls=100, max_tokens=1000000, max_tool_calls=500), ₽: stateful counter; actual spend is debited after each attempt."""  # noqa: E501
+    """Budget(delegated_costly), ₽: stateful counter; actual spend is debited after each attempt."""
 
     def __init__(self, limit_rub: float) -> None:
-        self.limit_rub = _require_float(limit_rub, what="limit_rub")
-        self.spent_rub = 0.0
-        self.blocked = False
+        self.limit_rub, self.spent_rub, self.blocked = float(limit_rub), 0.0, False
 
     @property
     def remaining_rub(self) -> float:
@@ -66,47 +40,27 @@ class DelegatedBudget:
 
     @classmethod
     def from_state(cls, state: dict[str, Any]) -> DelegatedBudget:
-        if "limit_rub" not in state:
-            raise KeyError("DelegatedBudget state missing limit_rub")
         b = cls(state["limit_rub"])
-        if "spent_rub" not in state:
-            raise KeyError("DelegatedBudget state missing spent_rub")
-        if "blocked" not in state:
-            raise KeyError("DelegatedBudget state missing blocked")
-        b.spent_rub = _require_float(state["spent_rub"], what="spent_rub")
-        b.blocked = _require_bool(state["blocked"], what="blocked")
+        b.spent_rub = float(state.get("spent_rub") or 0.0)
+        b.blocked = bool(state.get("blocked"))
         return b
 
 
 def costly_gate(
     mode: str,
     answer: str | None,
-    cost_estimate_rub: float,
-    budget: DelegatedBudget | None,
-    critic_accepts: bool,
-) -> tuple[CostlyEffect, dict[str, Any]]:
+    cost_estimate_rub: float = 0.0,
+    budget: DelegatedBudget | None = None,
+    critic_accepts: bool = True,
+):
     """HITL gate costly_or_nonreal. answer: approve | reject | delegate | None (timeout).
 
     ``critic_accepts`` is a **stub**: M0/experimental has no real critic agent.
     Callers pass True/False to simulate accept vs reject; wiring to the critic
     role lands in M2. See docs/DESIGN.md §15 M0 notes.
-
-    Returns ``(CostlyEffect, event_dict)``. Unknown outcomes raise.
     """
-    if type(cost_estimate_rub) is not float and type(cost_estimate_rub) is not int:
-        raise TypeError(
-            f"cost_estimate_rub must be int|float, got {type(cost_estimate_rub).__name__}"
-        )
-    if type(critic_accepts) is not bool:
-        raise TypeError(
-            f"critic_accepts must be bool, got {type(critic_accepts).__name__}"
-        )
     if answer in ("approve", "reject"):
-        eff = (
-            CostlyEffect.RUN
-            if answer == "approve"
-            else CostlyEffect.SKIPPED_HUMAN_REJECTED  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
-        )
+        eff = "RUN" if answer == "approve" else "SKIPPED(human_rejected)"
         return eff, {
             "decided_by": "human",
             "delegated_by": None,
@@ -115,15 +69,10 @@ def costly_gate(
         }
     if mode not in ("fail", "delegate_capped", "delegate"):
         raise ValueError(mode)
-    if answer == "delegate":
-        delegated_by = "human"
-    elif answer is None:
-        delegated_by = "timeout"
-    else:
-        raise ValueError(f"costly_gate unexpected answer={answer!r}")
+    delegated_by = "human" if answer == "delegate" else "timeout"
     if mode == "fail" and answer is None:
         return (
-            CostlyEffect.FAILED_HUMAN_TIMEOUT,
+            "FAILED(human_timeout)",
             {
                 "decided_by": None,
                 "delegated_by": None,
@@ -132,11 +81,7 @@ def costly_gate(
             },
         )
     if mode != "delegate":
-        why: str | None
-        if budget is None:
-            why = "нет бюджета"
-        else:
-            why = budget.refuse_reason(cost_estimate_rub)
+        why = "нет бюджета" if budget is None else budget.refuse_reason(cost_estimate_rub)
         if why:
             ev = {
                 "decided_by": None,
@@ -145,9 +90,9 @@ def costly_gate(
                 "human_message": why,
             }
             if mode == "fail":
-                return CostlyEffect.WAIT, {**ev, "reason": "delegation_disabled"}
+                return "WAIT", {**ev, "reason": "delegation_disabled"}
             return (
-                CostlyEffect.SKIPPED_BUDGET,
+                "SKIPPED(budget)",
                 {
                     **ev,
                     "decided_by": "critic",
@@ -155,11 +100,7 @@ def costly_gate(
                 },
             )
     # stub: critic_accepts stands in for a real critic verdict (M2)
-    eff = (
-        CostlyEffect.RUN
-        if critic_accepts
-        else CostlyEffect.SKIPPED_CRITIC_REJECTED  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
-    )
+    eff = "RUN" if critic_accepts else "SKIPPED(critic_rejected)"
     return (
         eff,
         {
@@ -174,7 +115,7 @@ def costly_gate(
 
 def settle(event: dict[str, Any], budget: DelegatedBudget | None, actual_rub: float):
     """After the attempt: debit actual spend (if budgeted) and record it for the report."""
-    if budget is not None and event.get("decided_by") == "critic":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-        budget.debit(actual_rub, event["cost_estimate_rub"])
+    if budget is not None and event.get("decided_by") == "critic":
+        budget.debit(actual_rub, event.get("cost_estimate_rub", 0.0))
     event["spent_rub"] = actual_rub
     return event

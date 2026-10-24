@@ -8,14 +8,9 @@ from pathlib import Path
 import pytest
 
 from coscientist.core.events.clock import FakeClock
+from coscientist.core.execution.domain import HitlPolicy
 from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
-from tests.helpers import (
-    attach_executor,
-    close_runtime,
-    default_test_hitl_policy,
-    open_runtime,
-    record_success,
-)
+from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
 
 async def _boot(tmp_path: Path, clock: FakeClock, seconds: int = 60, **kw):
@@ -26,7 +21,7 @@ async def _boot(tmp_path: Path, clock: FakeClock, seconds: int = 60, **kw):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=seconds),
         sid="st_tr",
         **kw,
@@ -41,14 +36,12 @@ async def test_hitl_delegate_records_critic(tmp_path, clock):
         tmp_path,
         clock,
         seconds=60,
-        hitl_policy=default_test_hitl_policy(),
+        hitl_policy=HitlPolicy(on_timeout="delegate"),
     )
     _, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
     await record_success(rt, aid, arts)
-    rid = await rt.open_hitl(
-        "PLAN", kind="plan_approval", timeout_s=1, expand_after_task="PLAN",
-            cost_rub=0.0)
+    rid = await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=1)
     clock.advance(timedelta(seconds=2))
     await rt.tick()
     assert rt.hitl[rid].open is False
@@ -65,11 +58,8 @@ async def test_hitl_human_delegate_records_critic(tmp_path, clock):
     _, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
     await record_success(rt, aid, arts)
-    rid = await rt.open_hitl(
-        "PLAN", kind="plan_approval", timeout_s=60, expand_after_task="PLAN",
-            cost_rub=0.0)
-    await rt.answer_hitl(rid, "delegate",
-            critic_accepts=True)
+    rid = await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
+    await rt.answer_hitl(rid, "delegate")
     assert rt.hitl[rid].open is False
     decided = [
         e for e in await rt.store.read_all() if e.type == "HitlDecided" and e.entity_key == rid

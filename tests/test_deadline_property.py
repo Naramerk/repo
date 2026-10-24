@@ -99,7 +99,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
             self.rt.create_study(
                 profile="research",
                 request="prop",
-                catalog_version="1.0.0",
+                catalog_version="0.1.0",
                 deadline=self.study_deadline,
                 sid=self.sid,
                 finalize_reserve_s=5,
@@ -132,13 +132,15 @@ class StudyClosesMachine(RuleBasedStateMachine):
                     title="e1",
                     goal="g",
                     route="experiment",
-                    depends_on=["PLAN"], required=True, tolerate_failed_dep=False),
+                    depends_on=["PLAN"],
+                ),
                 TaskSpec(
                     task_key="EXP-2",
                     title="e2",
                     goal="g",
                     route="experiment",
-                    depends_on=["EXP-1"], required=True, tolerate_failed_dep=False),
+                    depends_on=["EXP-1"],
+                ),
             ]
             self._call(self.rt.accept_plan(specs))
         return "EXP-1"
@@ -174,10 +176,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
     @rule(key=task_keys, target=hitl_ids)
     def open_hitl(self, key):
         return self._call(
-            self.rt.open_hitl(
-                key, kind="plan_approval", timeout_s=15, expand_after_task=key,
-            cost_rub=0.0),
-            default="none",
+            self.rt.open_hitl(key, kind="plan_approval", timeout_s=15), default="none"
         ) or "none"
 
     @precondition(lambda self: self._hitl_ok())
@@ -185,7 +184,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
     def answer_hitl(self, hid):
         if hid == "none":
             return
-        self._call(self.rt.answer_hitl(hid, "accept", critic_accepts=True))
+        self._call(self.rt.answer_hitl(hid))
 
     @rule()
     def recover_after_idle(self):
@@ -211,8 +210,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
     @rule()
     def fork_session(self):
         try:
-            self._run(self.rt.fork([Clarification(target="EXP-1", text="retry")],
-            nonce=""))
+            self._run(self.rt.fork([Clarification(target="EXP-1", text="retry")]))
             self.fork_count += 1
         except LeaseLost:
             self.lost_lease = True

@@ -7,10 +7,10 @@ from datetime import timedelta
 import pytest
 
 from coscientist.core.claims.graph import GraphEdge, GraphNode
-from coscientist.core.events.events import UnstampedEvent, make_idem
+from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id
-from coscientist.core.events.upcasters import writer_schema_version
-from coscientist.core.execution.domain import InputSpec, PlanRole, TaskSpec
+from coscientist.core.events.upcasters import upcast
+from coscientist.core.execution.domain import InputSpec, TaskSpec
 from coscientist.core.execution.inputs import (
     InputUnavailable,
     bind_inputs,
@@ -24,7 +24,7 @@ def test_bind_claim_input_requires_known_ref():
     child = _task(
         "B",
         None,
-        inputs=[InputSpec(kind="claim", ref="cl_1", from_task="", output="", mode="forbid")],
+        inputs=[InputSpec(kind="claim", ref="cl_1")],
     )
     with pytest.raises(InputUnavailable, match="claim_unavailable"):
         bind_inputs(
@@ -59,7 +59,7 @@ def test_claim_provenance_from_producing_attempt():
     child = _task(
         "B",
         None,
-        inputs=[InputSpec(kind="claim", ref="cl_stub", from_task="", output="", mode="forbid")],
+        inputs=[InputSpec(kind="claim", ref="cl_stub")],
     )
     bindings, prov = bind_inputs(
         child,
@@ -78,7 +78,7 @@ def test_claim_unknown_provenance_defaults_to_stub():
     child = _task(
         "B",
         None,
-        inputs=[InputSpec(kind="claim", ref="cl_unk", from_task="", output="", mode="forbid")],
+        inputs=[InputSpec(kind="claim", ref="cl_unk")],
     )
     bindings, prov = bind_inputs(
         child,
@@ -92,6 +92,55 @@ def test_claim_unknown_provenance_defaults_to_stub():
     assert prov == "stub"
 
 
+def test_upcast_task_created_input_kind_defaults():
+    v, p = upcast(
+        "TaskCreated",
+        4,
+        {
+            "task_id": "st/E1",
+            "kind": "experiment",
+            "spec": {
+                "task_key": "E1",
+                "title": "e",
+                "goal": "g",
+                "route": "experiment",
+                "inputs": [{"from_task": "A", "output": "main", "mode": "forbid"}],
+            },
+            "state": "PENDING",
+            "deadline": "2026-01-01T00:00:00+00:00",
+        },
+    )
+    assert v == 13
+    inp = p["spec"]["inputs"][0]
+    assert inp["kind"] == "artifact"
+    assert inp["ref"] is None
+    assert inp["quorum"] is None
+    assert p["spec"]["sandbox_timeout_s"] is None
+    assert p["spec"]["budget_share"] is None
+
+
+def test_upcast_attempt_started_inputs_default():
+    v, p = upcast(
+        "AttemptStarted",
+        2,
+        {
+            "attempt_id": "st/E1#1",
+            "n": 1,
+            "task_id": "st/E1",
+            "study_id": "st",
+            "provenance": "real",
+            "deadline": "2026-01-01T00:00:00+00:00",
+        },
+    )
+    # …v7 tainted (PR18) → v8 inputs_digest (#23) → v9 attempt_role (PR20).
+    assert v == 9
+    assert p["inputs"] == []
+    assert p["limitations"] == []
+    assert p["allocated_budget_rub"] is None
+    assert p["budget_limit_rub"] is None
+    assert p["tainted_context"] is False
+    assert p.get("inputs_digest") is None
+    assert p["attempt_role"] == "agent"
 
 
 @pytest.mark.asyncio
@@ -102,7 +151,7 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -118,7 +167,8 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                inputs=[InputSpec(kind="verdict", from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False)  # noqa: E501
+                inputs=[InputSpec(kind="verdict")],
+            )
         ],
         questions=[],
     )
@@ -137,7 +187,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -153,7 +203,8 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                inputs=[InputSpec(kind="artifact", from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False)  # noqa: E501
+                inputs=[InputSpec(kind="artifact")],
+            )
         ],
         questions=[],
     )
@@ -168,7 +219,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
     await rt2.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid2,
         finalize_reserve_s=5,
@@ -184,7 +235,8 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                inputs=[InputSpec(kind="claim", from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False)  # noqa: E501
+                inputs=[InputSpec(kind="claim")],
+            )
         ],
         questions=[],
     )
@@ -205,7 +257,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -216,7 +268,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
     claim_id = f"{sid}:claim:C1"
     await rt._append(
         [
-            UnstampedEvent(
+            EventEnvelope(
                 study_id=sid,
                 type="GraphNodeUpserted",
                 entity_key=claim_id,
@@ -229,8 +281,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
                     attrs={"provenance": "real"},
                 ).model_dump(mode="json"),
                 ts=clock.now(),
-                schema_version=writer_schema_version('GraphNodeUpserted'),
-                )
+            )
         ]
     )
     await rt.accept_plan(
@@ -241,7 +292,8 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                inputs=[InputSpec(kind="claim", ref=claim_id, from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False)  # noqa: E501
+                inputs=[InputSpec(kind="claim", ref=claim_id)],
+            )
         ],
         questions=[],
     )
@@ -251,7 +303,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
     edges = [e for e in rt.graph.edges_from(exp_id) if e.kind == "uses_claim"]
     assert len(edges) == 1 and edges[0].dst_id == claim_id
     started = next(e for e in await rt.store.read_all() if e.type == "AttemptStarted" and e.entity_key == aid)
-    assert started.schema_version == 1
+    assert started.schema_version == 9
     assert started.payload.get("tainted_context") is False
     assert started.payload.get("inputs_digest")
     assert started.payload.get("attempt_role") == "agent"
@@ -287,7 +339,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -309,23 +361,25 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False),
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            ),
             TaskSpec(
                 task_key="E1",
                 title="consumer",
                 goal="g",
                 route="experiment",
                 depends_on=["E0"],
-                inputs=[InputSpec(kind="claim", ref=claim_id, from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False),  # noqa: E501
+                inputs=[InputSpec(kind="claim", ref=claim_id)],
+            ),
         ],
-        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid0 = await rt.start_attempt("E0", provenance="stub")
     assert aid0 == aid0_expected
     content = b'{"count": 225}'
     art = arts.put(
-        content, make_tool_ref(f"{aid0}:1", attempt_id=aid0), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
     )
     await rt.executor.record(
         aid0,
@@ -356,7 +410,7 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -364,7 +418,7 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
     with pytest.raises(KeyError, match="edge src missing|edge dst missing"):
         await rt._append(
             [
-                UnstampedEvent(
+                EventEnvelope(
                     study_id=sid,
                     type="GraphEdgeAdded",
                     entity_key="uses_claim:missing",
@@ -377,7 +431,6 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
                         dst_id="no_claim",
                     ).model_dump(mode="json"),
                     ts=clock.now(),
-                    schema_version=writer_schema_version('GraphEdgeAdded'),
                 )
             ]
         )
@@ -385,12 +438,9 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
-
-async def test_replay_task_created_input_kind_required(tmp_path, clock, runtime_cls):
-    """TaskCreated omitting InputSpec.kind fails closed (no silent artifact invent)."""
+async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
+    """Old TaskCreated schema_version=4 (no kind) upcasts on reopen."""
     from datetime import UTC, datetime
-
-    from pydantic import ValidationError
 
     from coscientist.core.execution.domain import Task, TaskKind, TaskState
 
@@ -401,11 +451,12 @@ async def test_replay_task_created_input_kind_required(tmp_path, clock, runtime_
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
     )
+    # Inject a v4 TaskCreated as written before PR7 (no InputSpec.kind).
     tid = f"{sid}/LEGACY"
     legacy = Task(
         task_id=tid,
@@ -415,25 +466,44 @@ async def test_replay_task_created_input_kind_required(tmp_path, clock, runtime_
             title="l",
             goal="g",
             route="experiment",
-            inputs=[InputSpec(from_task="A", output="main", mode="forbid", kind="artifact")],
-            required=True,
-            tolerate_failed_dep=False,
+            inputs=[InputSpec(from_task="A", output="main", mode="forbid")],
         ),
         state=TaskState.PENDING,
         deadline=datetime(2026, 1, 1, tzinfo=UTC),
-        plan_role=PlanRole.NONE,
     )
     payload = legacy.model_dump(mode="json")
+    # Strip kind/ref as an old writer would have omitted them after dump defaults —
+    # simulate pre-PR7 payload shape.
     for inp in payload["spec"]["inputs"]:
         inp.pop("kind", None)
         inp.pop("ref", None)
-    with pytest.raises((ValidationError, Exception)):
-        TaskSpec.model_validate(payload["spec"])
+    await rt._append(
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="TaskCreated",
+                entity_key=tid,
+                idem_key=make_idem("TaskCreated", tid),
+                payload=payload,
+                ts=clock.now(),
+                schema_version=4,
+            )
+        ]
+    )
     await close_runtime(rt)
 
+    rt2 = await open_runtime(
+        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
+    )
+    task = rt2.tasks[tid]
+    assert task.spec.inputs[0].kind == "artifact"
+    assert task.spec.inputs[0].from_task == "A"
+    await close_runtime(rt2)
+
+
 @pytest.mark.asyncio
-async def test_replay_attempt_started_inputs_empty(tmp_path, clock, runtime_cls):
-    """AttemptStarted v1 with inputs=[] survives reopen."""
+async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
+    """Old AttemptStarted schema_version=2 (no inputs) upcasts to [] on reopen."""
     sid = "st_as_v2"
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
@@ -441,11 +511,12 @@ async def test_replay_attempt_started_inputs_empty(tmp_path, clock, runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
     )
+    # Seed a task, then inject a pre-PR7 AttemptStarted (v2, no inputs field).
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
@@ -456,7 +527,8 @@ async def test_replay_attempt_started_inputs_empty(tmp_path, clock, runtime_cls)
                 title="e",
                 goal="g",
                 route="experiment",
-                depends_on=["PLAN"], required=True, tolerate_failed_dep=False)
+                depends_on=["PLAN"],
+            )
         ],
         questions=[],
     )
@@ -464,7 +536,7 @@ async def test_replay_attempt_started_inputs_empty(tmp_path, clock, runtime_cls)
     aid = f"{tid}#1"
     await rt._append(
         [
-            UnstampedEvent(
+            EventEnvelope(
                 study_id=sid,
                 type="AttemptStarted",
                 entity_key=aid,
@@ -481,13 +553,10 @@ async def test_replay_attempt_started_inputs_empty(tmp_path, clock, runtime_cls)
                     "deadline": (clock.now() + timedelta(seconds=30)).isoformat(),
                     "task_id": tid,
                     "study_id": sid,
-                    "inputs": [],
-                    "attempt_role": "agent",
-                    "charged": True,
                 },
                 ts=clock.now(),
-                schema_version=1,
-)
+                schema_version=2,
+            )
         ]
     )
     await close_runtime(rt)

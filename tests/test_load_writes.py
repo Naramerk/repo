@@ -17,9 +17,8 @@ from typing import Any, Mapping
 import pytest
 
 from coscientist.core.events.clock import SystemClock
-from coscientist.core.events.events import UnstampedEvent, make_idem
+from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.projections import _row_key, fold_events
-from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.source_fetch import verify_fetch_capability
 from coscientist.tools.effects import _mint_fetch_capability_for_tests
 from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success
@@ -284,7 +283,7 @@ async def _run_load(
     await rt.create_study(
         profile="research",
         request="load",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(hours=1),
         sid="st_load",
     )
@@ -300,7 +299,7 @@ async def _run_load(
         aid = await rt.start_attempt(f"EXP-{i}")
         for _ in range(routes_per_attempt):
             await rt.writer.append(
-                UnstampedEvent(
+                EventEnvelope(
                     study_id="st_load",
                     type="RouteReturned",
                     entity_key=aid,
@@ -310,8 +309,7 @@ async def _run_load(
                         "agent_output_digest": f"d{random.randrange(1 << 20)}",
                     },
                     ts=clock.now(),
-                    schema_version=writer_schema_version('RouteReturned'),
-)
+                )
             )
         await record_success(rt, aid, arts)
 
@@ -340,7 +338,7 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
     digest = "a" * 64
 
     await rt.writer.append(
-        UnstampedEvent(
+        EventEnvelope(
             study_id=sid,
             type="AttemptTainted",
             entity_key=aid,
@@ -354,7 +352,7 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
             },
             ts=now,
             schema_version=1,
-)
+        )
     )
 
     cap = _mint_fetch_capability_for_tests(
@@ -368,7 +366,7 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
         attempt_id=aid,
     )
     await rt.writer.append(
-        UnstampedEvent(
+        EventEnvelope(
             study_id=sid,
             type="SourceFetched",
             entity_key=digest,
@@ -382,12 +380,12 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
             },
             ts=now,
             schema_version=1,
-),
+        ),
         _source_fetched_cap_id=cap.id,
     )
 
     await rt.writer.append(
-        UnstampedEvent(
+        EventEnvelope(
             study_id=sid,
             type="FetchIntegrityRaised",
             entity_key="integrity-seed",
@@ -400,12 +398,12 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
             },
             ts=now,
             schema_version=1,
-)
+        )
     )
 
     rid = "hitl-seed-1"
     await rt.writer.append(
-        UnstampedEvent(
+        EventEnvelope(
             study_id=sid,
             type="HitlOpened",
             entity_key=rid,
@@ -418,8 +416,7 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
                 "cost_rub": 0.0,
             },
             ts=now,
-            schema_version=writer_schema_version('HitlOpened'),
-)
+        )
     )
 
     # PR16: GraphNodeUpserted + GraphEdgeAdded(kind=decomposes) must project via
@@ -428,7 +425,7 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
     q_child = f"{sid}:question:Q.a"
     for nid, ref, text in ((q_root, "Q", "root"), (q_child, "Q.a", "child")):
         await rt.writer.append(
-            UnstampedEvent(
+            EventEnvelope(
                 study_id=sid,
                 type="GraphNodeUpserted",
                 entity_key=nid,
@@ -442,11 +439,11 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
                 },
                 ts=now,
                 schema_version=1,
-)
+            )
         )
     eid = f"decomposes:{q_child}:{q_root}"
     await rt.writer.append(
-        UnstampedEvent(
+        EventEnvelope(
             study_id=sid,
             type="GraphEdgeAdded",
             entity_key=eid,
@@ -461,12 +458,12 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
             },
             ts=now,
             schema_version=1,
-)
+        )
     )
 
     # PR15: QuestionDisposed + QuestionDisposeRejected (dirty-key tables).
     await rt.writer.append(
-        UnstampedEvent(
+        EventEnvelope(
             study_id=sid,
             type="QuestionDisposed",
             entity_key="Qseed",
@@ -480,10 +477,10 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
             },
             ts=now,
             schema_version=1,
-)
+        )
     )
     await rt.writer.append(
-        UnstampedEvent(
+        EventEnvelope(
             study_id=sid,
             type="QuestionDisposeRejected",
             entity_key="Qrej",
@@ -498,7 +495,7 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
             },
             ts=now,
             schema_version=1,
-)
+        )
     )
 
 
@@ -698,13 +695,13 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
         await rt.create_study(
             profile="research",
             request="delay-gate",
-            catalog_version="1.0.0",
+            catalog_version="0.1.0",
             deadline=clock.now() + timedelta(hours=1),
             sid=sid,
         )
         for i in range(20):
             await rt.writer.append(
-                UnstampedEvent(
+                EventEnvelope(
                     study_id=sid,
                     type="RouteReturned",
                     entity_key=f"{sid}/EXP-delay:{i}",
@@ -714,8 +711,7 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
                         "agent_output_digest": f"d{i}",
                     },
                     ts=clock.now(),
-                    schema_version=writer_schema_version('RouteReturned'),
-)
+                )
             )
         lat = rt.writer.latency_samples_ms()
         await close_runtime(rt)

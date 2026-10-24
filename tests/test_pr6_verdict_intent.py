@@ -13,6 +13,7 @@ from coscientist.core.claims.r17 import (
     r17_threshold_source_not_counted,
 )
 from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.domain import TaskSpec
 from tests.helpers import close_runtime, open_runtime
 
@@ -227,6 +228,50 @@ def test_tests_edge_declares_intent_attr():
     assert attrs["intent"].get("default") == "confirm"
 
 
+def test_upcast_study_created_k_ref_defaults():
+    v, p = upcast(
+        "StudyCreated",
+        2,
+        {
+            "study_id": "s",
+            "profile": "research",
+            "finalize_reserve_s": 30,
+        },
+    )
+    # v2→…→v10 max_loop_iter (#24) → v11 as_of/ids (#23) → v12 max_proposals (PR20)
+    assert v == 12
+    assert p["refutations_needed"] == 1
+    assert p["refutation_priority"] is False
+    assert p["confirmations_needed"] == 1
+    assert p["aggregate"] == "count"
+    assert p["supported_needed"] == 2
+    assert p["max_expansions"] == 2
+    assert p.get("max_loop_iter") == 8
+    assert p.get("as_of") is None
+    assert p.get("user_input_ids") == []
+    assert p["max_proposals"] == 3
+
+
+def test_upcast_study_created_confirmations_needed_v3_to_v4():
+    v, p = upcast(
+        "StudyCreated",
+        3,
+        {
+            "study_id": "s",
+            "profile": "research",
+            "finalize_reserve_s": 30,
+            "refutations_needed": 2,
+            "refutation_priority": True,
+        },
+    )
+    assert v == 12
+    assert p["confirmations_needed"] == 1
+    assert p["refutations_needed"] == 2
+    assert p["refutation_priority"] is True
+    assert p["aggregate"] == "count"
+    assert p["supported_needed"] == 2
+    assert p.get("user_input_ids") == []
+    assert p["max_proposals"] == 3
 
 
 @pytest.mark.asyncio
@@ -238,7 +283,7 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -249,7 +294,7 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
     assert rt.study.refutations_needed == 3
     assert rt.study.refutation_priority is True
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 1
+    assert created.schema_version == 12
     assert created.payload["refutations_needed"] == 3
     assert created.payload["confirmations_needed"] == 1
     assert created.payload["aggregate"] == "count"
@@ -269,7 +314,7 @@ async def test_study_refutations_needed_to_verdict(tmp_path, clock, runtime_cls,
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -318,7 +363,7 @@ async def test_cancel_study_tick_closes_remaining(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -329,9 +374,11 @@ async def test_cancel_study_tick_closes_remaining(
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),  # noqa: E501
+                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"]
+            ),
             TaskSpec(
-                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"], required=True, tolerate_failed_dep=False),  # noqa: E501
+                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"]
+            ),
         ],
         questions=[],
     )
@@ -374,7 +421,7 @@ async def test_cancel_study_then_tick_plain(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,

@@ -72,7 +72,7 @@ def _require_str(value: object, *, what: str) -> str:
 def _coerce_float(value: object, *, what: str) -> float:
     if type(value) is bool or not isinstance(value, (int, float)):
         raise JournalFormatError(f"{what} must be numeric, got {type(value).__name__}")
-    return float(value)  # audit-ok[coerce_float]: coerce after int|float type gate (bool rejected)
+    return float(value)
 
 
 class InputUnavailable(Exception):
@@ -114,7 +114,7 @@ def verdict_binding_digest(*, ref: str, snapshot: dict[str, Any]) -> str:
             {
                 "kind": "verdict",
                 "ref": ref,
-                "verdict": snapshot.get("verdict"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                "verdict": snapshot.get("verdict"),
                 "by_literature": _require_bool(
                     snapshot["by_literature"], what="verdict.by_literature"
                 ),
@@ -137,7 +137,7 @@ def _claim_source(
 
     Unknown / missing attrs → ``stub`` (never treat as real).
     """
-    prov = claim_provenance.get(ref)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+    prov = claim_provenance.get(ref)
     if prov not in VALID_PROVENANCE:
         return "stub"
     return prov  # type: ignore[return-value]
@@ -178,7 +178,7 @@ def bind_inputs(
         if kind == "verdict":
             if not spec.ref:
                 raise InputUnavailable("verdict_ref_missing")
-            snap = snapshots.get(spec.ref)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            snap = snapshots.get(spec.ref)
             if snap is None:
                 raise InputUnavailable("verdict_unavailable")
             if "provenance" not in snap:
@@ -230,7 +230,7 @@ def bind_inputs(
         if not spec.from_task or not spec.output:
             raise InputUnavailable("artifact_spec_incomplete")
         mode = normalize_input_mode(spec)
-        dep = dep_tasks.get(spec.from_task)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        dep = dep_tasks.get(spec.from_task)
         if dep is None or dep.state != TaskState.DONE:
             raise InputUnavailable("input_unavailable")
         if spec.from_task not in dep_outputs:
@@ -240,10 +240,10 @@ def bind_inputs(
                 raise InputUnavailable("dep_outputs_missing")
         else:
             arts = dep_outputs[spec.from_task]
-        aid = arts.get(spec.output)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        aid = arts.get(spec.output)
         if spec.from_task not in dep_provenance:
             if mode == InputMode.SIMULATE:
-                dep_prov: Provenance = "stub"  # audit-ok[field_default]: structural absent provenance under simulate
+                dep_prov: Provenance = "stub"
             else:
                 raise InputUnavailable("dep_provenance_missing")
         else:
@@ -300,7 +300,7 @@ def _claim_structurally_ok(
         return False
     if not target or not target_id:
         return False
-    if id_collides or target_changed or about_retarget:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
+    if id_collides or target_changed or about_retarget:
         return False
     if graph is None:
         return False
@@ -330,7 +330,7 @@ def claim_nodes_from_attempt(
     all claims. Scientific FAILED/PARTIAL (criteria not met) **keep** claims so
     ``not_met`` can refute (graph_schema invariant 10).
     """
-    drops: list[dict[str, str]] = []  # audit-ok[field_default]: structural empty = collecting drop records
+    drops: list[dict[str, str]] = []
     if infra_failure:
         return [], drops
     if provenance not in VALID_PROVENANCE:
@@ -355,7 +355,7 @@ def claim_nodes_from_attempt(
             drops.append({"key": agent_key, "reason": "foreign_claim_id"})
             continue
         attrs = whitelist_claim_attrs(raw)
-        target = attrs.get("target")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        target = attrs.get("target")
         if not target:
             drops.append({"key": agent_key, "reason": "target_missing"})
             continue
@@ -374,7 +374,7 @@ def claim_nodes_from_attempt(
                 if existing.kind != "claim":
                     id_collides = True
                 else:
-                    old_target = existing.attrs.get("target")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                    old_target = existing.attrs.get("target")
                     if old_target is not None and str(old_target) != str(target):
                         target_changed = True
                     old_about = [e for e in graph.edges_from(cid) if e.kind == "about"]
@@ -405,7 +405,7 @@ def claim_nodes_from_attempt(
         if graph is not None:
             existing = graph.get_node(cid)
             if existing is not None:
-                old = existing.attrs.get("provenance")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                old = existing.attrs.get("provenance")
                 if old in VALID_PROVENANCE:
                     new_prov = worst_provenance(old, provenance)  # type: ignore[arg-type]
 
@@ -421,9 +421,9 @@ def claim_nodes_from_attempt(
                     core = {}
                 else:
                     core = dict(derived)
-        except Exception:  # audit-ok[broad_except]: derive_attrs must stay total; drop claim not abort attempt
+        except Exception:
             drops.append({"key": agent_key, "reason": "derive_attrs_error"})
-            continue # audit-ok[except_silent_continue]: paired with derive_attrs totality drop above  # audit-ok[except_silent_continue]: skip malformed row; fail-closed on required paths elsewhere  # noqa: E501
+            continue
         attrs["provenance"] = new_prov
         attrs["attempt_id"] = attempt_id
         attrs["attempt_outcome"] = attempt_outcome
@@ -454,7 +454,7 @@ def claim_nodes_from_attempt(
         if role not in ("prediction", "validity", "unknown"):
             raise JournalFormatError(f"claim check_role invalid: {role!r}")
         attrs["check_role"] = role
-        excl = core.get("exclusion_reason")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        excl = core.get("exclusion_reason")
         if excl in (
             "validity_failed",
             "unknown_role",
@@ -491,33 +491,33 @@ def claim_nodes_from_attempt(
         attrs["claim_outcome"] = oc
         # sesoi only from core (catalog-frozen criterion) — never stamp 0.0 freely.
         for num_key in ("p_value", "power", "sesoi", "alpha"):
-            if core.get(num_key) is not None:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            if core.get(num_key) is not None:
                 attrs[num_key] = _coerce_float(core[num_key], what=f"claim.{num_key}")
         for flag in ("uses_sesoi", "used_sesoi", "predicts_null"):
             if flag in core:
                 attrs[flag] = _require_bool(core[flag], what=f"claim.{flag}")
-        if core.get("predicted_direction") in ("positive", "negative", "two_sided"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        if core.get("predicted_direction") in ("positive", "negative", "two_sided"):
             attrs["predicted_direction"] = _require_str(
                 core["predicted_direction"], what="claim.predicted_direction"
             )
-        if isinstance(core.get("data_digests"), list):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        if isinstance(core.get("data_digests"), list):
             attrs["data_digests"] = [
                 _require_str(x, what="claim.data_digests[]") for x in core["data_digests"]
             ]
-        if isinstance(core.get("criterion_template_ids"), list):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        if isinstance(core.get("criterion_template_ids"), list):
             attrs["criterion_template_ids"] = [
                 _require_str(x, what="claim.criterion_template_ids[]")
                 for x in core["criterion_template_ids"]
                 if x
             ]
-        if isinstance(core.get("independence_notes"), list) and core["independence_notes"]:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        if isinstance(core.get("independence_notes"), list) and core["independence_notes"]:
             attrs["independence_notes"] = [
                 _require_str(x, what="claim.independence_notes[]")
                 for x in core["independence_notes"]
             ]
-        if core.get("study_id"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        if core.get("study_id"):
             attrs["study_id"] = _require_str(core["study_id"], what="claim.study_id")
-        if core.get("experiment_id"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        if core.get("experiment_id"):
             attrs["experiment_id"] = _require_str(
                 core["experiment_id"], what="claim.experiment_id"
             )
@@ -527,20 +527,20 @@ def claim_nodes_from_attempt(
                 raise JournalFormatError(
                     f"claim experiment_id missing and attempt_id not structured: {attempt_id!r}"
                 )
-            base, sep, n = attempt_id.partition("#")  # audit-ok[str_partition]: structured attempt_id allowlist parse
+            base, sep, n = attempt_id.partition("#")
             if sep != "#" or not base or not n.isdigit():
                 raise JournalFormatError(
                     f"claim experiment_id empty/invalid from attempt_id: {attempt_id!r}"
                 )
             attrs["experiment_id"] = base
-        if core.get("independence_key"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        if core.get("independence_key"):
             attrs["independence_key"] = _require_str(
                 core["independence_key"], what="claim.independence_key"
             )
         else:
             from coscientist.core.claims.verdict import independence_key_for
 
-            exp_id = attrs.get("experiment_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            exp_id = attrs.get("experiment_id")
             if not isinstance(exp_id, str) or not exp_id:
                 raise JournalFormatError("claim experiment_id required for independence_key")
             attrs["independence_key"] = independence_key_for(experiment_id=exp_id)
@@ -566,18 +566,18 @@ def claim_nodes_from_attempt(
                 "P",
                 (),
                 {
-                    "claim_outcome": attrs.get("claim_outcome"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                    "claim_outcome": attrs.get("claim_outcome"),
                     "validity_ok": attrs["validity_ok"],
                     "frozen": attrs["frozen"],
-                    "sesoi": attrs.get("sesoi"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-                    "uses_sesoi": attrs.get("uses_sesoi"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-                    "used_sesoi": attrs.get("used_sesoi"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                    "sesoi": attrs.get("sesoi"),
+                    "uses_sesoi": attrs.get("uses_sesoi"),
+                    "used_sesoi": attrs.get("used_sesoi"),
                     "predicts_null": attrs["predicts_null"],
                     "predicted_direction": attrs["predicted_direction"],
                     "effect": (
                         dict(core["effect"])
-                        if isinstance(core.get("effect"), dict)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-                        else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+                        if isinstance(core.get("effect"), dict)
+                        else None
                     ),
                     "severe": None,
                     "criterion_frozen_at_seq": None,
@@ -585,9 +585,9 @@ def claim_nodes_from_attempt(
                 },
             )()
             attrs["severe"] = claim_is_severe(probe)
-        if core.get("artifact_id"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        if core.get("artifact_id"):
             attrs["artifact_id"] = core["artifact_id"]
-        if isinstance(core.get("effect"), dict):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        if isinstance(core.get("effect"), dict):
             # No invented call_id: missing produced_by_call_id ⇒ not countable.
             attrs["effect"] = dict(core["effect"])
 
@@ -819,7 +819,7 @@ def collect_bindable_claims(
     FAILED (criteria not met) remains bindable.
     """
     known: set[str] = set()
-    claim_provenance: dict[str, Provenance] = {}  # audit-ok[field_default]: structural empty = collecting claim provenance  # noqa: E501
+    claim_provenance: dict[str, Provenance] = {}
     if graph is None:
         return known, claim_provenance
     try:
@@ -828,11 +828,11 @@ def collect_bindable_claims(
         raise JournalFormatError("graph missing claim kind") from e
     for node in nodes:
         attrs = node.attrs
-        aid = attrs.get("attempt_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-        if producer_attempt_failed(str(aid) if aid else None, results=results):  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        aid = attrs.get("attempt_id")
+        if producer_attempt_failed(str(aid) if aid else None, results=results):
             continue
         known.add(node.node_id)
-        p = attrs.get("provenance")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        p = attrs.get("provenance")
         if p in VALID_PROVENANCE:
             claim_provenance[node.node_id] = p  # type: ignore[assignment]
     return known, claim_provenance

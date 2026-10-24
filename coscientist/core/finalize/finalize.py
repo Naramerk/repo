@@ -78,7 +78,7 @@ def _escape_report_text(value: object) -> str:
     Keeps alphanumeric reason codes readable (e.g. ``sandbox_unavailable``) while
     neutralizing fence/link/HTML injection and collapsing newlines.
     """
-    text = " ".join(str(value).split())[:2000]  # audit-ok[str_split]: structural id/key parse after typed gate
+    text = " ".join(str(value).split())[:2000]
     return (
         text.replace("\\", "\\\\")
         .replace("`", "'")
@@ -215,10 +215,10 @@ def contributing_reasons_ordered(
     events: list[UnstampedEvent] | list[StoredEvent],
 ) -> list[str]:
     """TaskReason + ExpansionRefused / foreach / quorum / timeout lines (by seq)."""
-    seen: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
+    seen: list[str] = []
     for ev in sorted(events, key=lambda e: _or_zero_int(e.seq)):
         if ev.type == "TaskDone":
-            reason = ev.payload.get("reason")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            reason = ev.payload.get("reason")
             if reason and reason not in seen:
                 try:
                     TaskReason(reason)
@@ -229,7 +229,7 @@ def contributing_reasons_ordered(
                 seen.append(str(reason))
                 line = sandbox_timeout_report_line(
                     str(reason),
-                    _or_empty_str(ev.payload.get('detail')),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                    _or_empty_str(ev.payload.get('detail')),
                 )
                 if line and line not in seen:
                     seen.append(line)
@@ -239,10 +239,10 @@ def contributing_reasons_ordered(
 
                 if TASK_BUDGET_EXHAUSTED_LINE not in seen:
                     seen.append(TASK_BUDGET_EXHAUSTED_LINE)
-            line = _TASKDONE_DETAIL_LINES.get(_or_empty_str(ev.payload.get('detail')))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            line = _TASKDONE_DETAIL_LINES.get(_or_empty_str(ev.payload.get('detail')))
             if line and line not in seen:
                 seen.append(line)
-            if ev.payload.get("budget_overrun"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            if ev.payload.get("budget_overrun"):
                 from coscientist.core.plan.shares import TASK_BUDGET_OVERRUN_LINE
 
                 if TASK_BUDGET_OVERRUN_LINE not in seen:
@@ -257,23 +257,23 @@ def contributing_reasons_ordered(
 
             if BUDGET_SHARES_REFUSED_LINE not in seen:
                 seen.append(BUDGET_SHARES_REFUSED_LINE)
-        elif ev.type == "ResultRecorded" and ev.payload.get("budget_overrun"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        elif ev.type == "ResultRecorded" and ev.payload.get("budget_overrun"):
             from coscientist.core.plan.shares import TASK_BUDGET_OVERRUN_LINE
 
             if TASK_BUDGET_OVERRUN_LINE not in seen:
                 seen.append(TASK_BUDGET_OVERRUN_LINE)
         elif ev.type == "ExpansionRefused":
-            custom = _or_empty_dict(ev.payload).get("report_line")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            custom = _or_empty_dict(ev.payload).get("report_line")
             if custom:
                 line = str(custom)
             else:
                 line = expansion_not_done_line(
-                    _or_empty_str(ev.payload.get('reason')),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-                    _or_empty_str(ev.payload.get('detail')),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                    _or_empty_str(ev.payload.get('reason')),
+                    _or_empty_str(ev.payload.get('detail')),
                 )
             if line not in seen:
                 seen.append(line)
-        elif ev.type == "PlanExpanded" and ev.payload.get("foreach"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        elif ev.type == "PlanExpanded" and ev.payload.get("foreach"):
             _append_foreach_report_lines(seen, ev.payload)
         elif ev.type == "LoopCapped":
             _append_loop_capped_report_line(seen, ev.payload)
@@ -282,8 +282,8 @@ def contributing_reasons_ordered(
         elif ev.type == "LoopCompleted":
             _append_loop_completed_report_line(seen, ev.payload)
         elif ev.type == "SideEffectDenied":
-            tool = _or_empty_str(ev.payload.get("tool")) or _UNKNOWN_TOOL  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
-            reason = _or_empty_str(ev.payload.get('reason'))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            tool = _or_empty_str(ev.payload.get("tool")) or _UNKNOWN_TOOL
+            reason = _or_empty_str(ev.payload.get('reason'))
             if reason == "taint_deny":
                 line = f"отклонено: tainted контекст ({tool})"
             else:
@@ -294,13 +294,13 @@ def contributing_reasons_ordered(
             if "internal_error" not in seen:
                 seen.append("internal_error")
         elif ev.type == "QuestionDisposeRejected":
-            custom = _or_empty_dict(ev.payload).get("report_line")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            custom = _or_empty_dict(ev.payload).get("report_line")
             if custom:
                 line = str(custom)
             else:
                 from coscientist.core.claims.dispose import dispose_reject_report_line
 
-                line = dispose_reject_report_line(_or_empty_str(ev.payload.get('detail')))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                line = dispose_reject_report_line(_or_empty_str(ev.payload.get('detail')))
             if line and line not in seen:
                 seen.append(line)
         elif ev.type == "EffectIntended":
@@ -309,19 +309,19 @@ def contributing_reasons_ordered(
     # PR18: EffectIntended without EffectDone → status unknown in the report.
     intended_keys: set[str] = set()
     done_keys: set[str] = set()
-    intended_meta: dict[str, dict[str, Any]] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value  # noqa: E501
+    intended_meta: dict[str, dict[str, Any]] = {}
     for ev in sorted(events, key=lambda e: _or_zero_int(e.seq)):
         if ev.type == "EffectIntended":
-            k = str(ev.payload.get("key") or ev.entity_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
+            k = str(ev.payload.get("key") or ev.entity_key)
             intended_keys.add(k)
             intended_meta[k] = dict(ev.payload)
         elif ev.type == "EffectDone":
-            done_keys.add(str(ev.payload.get("key") or ev.entity_key))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
+            done_keys.add(str(ev.payload.get("key") or ev.entity_key))
     for k in sorted(intended_keys - done_keys):
-        meta = intended_meta.get(k)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        meta = intended_meta.get(k)
         if meta is None:
             meta = {}
-        tool = _or_empty_str(meta.get("tool")) or _UNKNOWN_TOOL  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
+        tool = _or_empty_str(meta.get("tool")) or _UNKNOWN_TOOL
         line = f"эффект неизвестен: {tool}"
         if line not in seen:
             seen.append(line)
@@ -355,7 +355,7 @@ def _append_loop_capped_report_line(seen: list[str], p: dict[str, Any]) -> None:
         detail = ""
     # Classify only by validated journal reason — never by detail text.
     if reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED):
-        line = f"цикл остановлен ошибкой после {i} итераций: {detail or reason}"  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
+        line = f"цикл остановлен ошибкой после {i} итераций: {detail or reason}"
         if line not in seen:
             seen.append(line)
         if reason not in seen:
@@ -384,7 +384,7 @@ def _append_loop_refused_report_line(seen: list[str], p: dict[str, Any]) -> None
         detail = _or_empty_str(p["detail"])
     else:
         detail = ""
-    line = f"цикл остановлен ошибкой после {i} итераций: {detail or reason}"  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
+    line = f"цикл остановлен ошибкой после {i} итераций: {detail or reason}"
     if line not in seen:
         seen.append(line)
     if reason not in seen:
@@ -401,34 +401,34 @@ def _append_loop_completed_report_line(seen: list[str], p: dict[str, Any]) -> No
         seen.append(line)
 
 def _append_foreach_report_lines(seen: list[str], p: dict[str, Any]) -> None:
-    items = _or_empty_list(p.get("foreach_items"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-    added = _or_empty_list(p.get("added_tasks"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-    dropped = [_or_empty_str(x) for x in _or_empty_list(p.get("foreach_dropped"))]  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-    total = p.get("foreach_total")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    items = _or_empty_list(p.get("foreach_items"))
+    added = _or_empty_list(p.get("added_tasks"))
+    dropped = [_or_empty_str(x) for x in _or_empty_list(p.get("foreach_dropped"))]
+    total = p.get("foreach_total")
     if total is None:
         total = len(items) + len(dropped)
     refute = "не выполнено: проверка опровержения не выполнена"
     if not items and not added:
         if "не выполнено: foreach пуст" not in seen:
             seen.append("не выполнено: foreach пуст")
-        if p.get("foreach_refute") and refute not in seen:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        if p.get("foreach_refute") and refute not in seen:
             seen.append(refute)
         return
     line = f"foreach: развёрнуто {len(added)}"
     if line not in seen:
         seen.append(line)
-    if p.get("foreach_capped") or dropped:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
+    if p.get("foreach_capped") or dropped:
         cap = f"ограничение foreach: взято {len(added)} из {total}"
         if dropped:
             cap += f", отброшены {', '.join(dropped)}"
         if cap not in seen:
             seen.append(cap)
-    if p.get("foreach_refute"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    if p.get("foreach_refute"):
         for did in dropped:
             r = f"{refute} ({did})"
             if r not in seen:
                 seen.append(r)
-    for n in _or_empty_list(p.get("foreach_rank_notes")):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+    for n in _or_empty_list(p.get("foreach_rank_notes")):
         if n and str(n) not in seen:
             seen.append(str(n))
 
@@ -486,7 +486,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     failed, or a peer finalized first). Otherwise the error is re-raised —
     never mark finalized without the event.
     """
-    if runtime.study is None or is_finalized(runtime):  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
+    if runtime.study is None or is_finalized(runtime):
         return
     sid = runtime.study.study_id
     refusal = _refusal_payload(runtime, trigger)
@@ -501,7 +501,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
             trigger=trigger,
             fallback_reason=type(e).__name__,
             refusal=refusal,
-        )  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
+        )
     try:
         await _append_finalized(runtime, sid=sid, payload=payload)
     except LeaseLost:
@@ -524,7 +524,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
         except LeaseLost:
             raise
         except (Conflict, StudyClosedError) as err:
-            await _sync_finalized_from_store(runtime, sid=sid, err=err)  # audit-ok[broad_except]: cleanup then re-raise; does not swallow  # noqa: E501
+            await _sync_finalized_from_store(runtime, sid=sid, err=err)
     runtime._finalized = True  # noqa: SLF001
 
 async def _sync_finalized_from_store(
@@ -568,9 +568,9 @@ def truncate_contributing_reasons(reasons: list[str] | None, *, limit: int) -> l
     src = [_or_empty_str(r) for r in _or_empty_list(reasons)]
     if len(src) <= limit:
         return src
-    pinned: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
+    pinned: list[str] = []
     pinned_seen: set[str] = set()
-    others: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
+    others: list[str] = []
     for r in src:
         if r in _PROTECTED_CONTRIBUTING_REASONS:
             if r not in pinned_seen:
@@ -589,13 +589,13 @@ def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
     out = dict(payload)
     if len(canonical_json(out)) <= MAX_FINALIZED_PAYLOAD_BYTES:
         return out
-    raw_qdisp = out.get("question_dispositions")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+    raw_qdisp = out.get("question_dispositions")
     qdisp_src = _or_empty_dict(raw_qdisp)
     qdisp = {}
     for qid, d in qdisp_src.items():
         if isinstance(d, dict):
             row = dict(d)
-            form = _or_empty_str(row.get("formulation"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            form = _or_empty_str(row.get("formulation"))
             row["formulation"] = form[:80]
         else:
             row = {}
@@ -603,7 +603,7 @@ def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
         qdisp[qid] = row
     out["question_dispositions"] = qdisp
     out["contributing_reasons"] = truncate_contributing_reasons(
-        _or_empty_list(out.get("contributing_reasons")),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        _or_empty_list(out.get("contributing_reasons")),
         limit=CONTRIB_REASONS_LIMIT,
     )
     if len(canonical_json(out)) <= MAX_FINALIZED_PAYLOAD_BYTES:
@@ -615,14 +615,14 @@ def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
     arts = runtime.artifacts
     if arts is None:
         ex = runtime.executor
-        arts = None if ex is None else ex.artifacts  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        arts = None if ex is None else ex.artifacts
     if arts is None:
         return None
     try:
         lookup = arts.get_meta
     except AttributeError:
-        return None  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
-    return lookup if callable(lookup) else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        return None
+    return lookup if callable(lookup) else None
 
 async def _build_rich_payload(
     runtime: StudyRuntime, *, sid: str, trigger: FinalizeTrigger
@@ -637,7 +637,7 @@ async def _build_rich_payload(
     except LeaseLost:
         raise
     except Exception:  # noqa: BLE001
-        log.warning("reconcile_fetch_integrity failed", exc_info=True)  # audit-ok[broad_except]: cleanup then re-raise; does not swallow  # noqa: E501
+        log.warning("reconcile_fetch_integrity failed", exc_info=True)
 
     plans = await _load_plans(runtime)
     lookup = _artifact_lookup(runtime)
@@ -667,7 +667,7 @@ async def _build_rich_payload(
     # If journaling failed/skipped, fold still surfaces fetch_integrity → reason.
     if "internal_error" not in contrib:
         folded = fold_events(events)
-        if folded.get("fetch_integrity"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        if folded.get("fetch_integrity"):
             contrib.append("internal_error")
     # PR15: stamped ArtifactRegistered with missing meta on replay → tainted mark.
     if "internal_error" not in contrib and runtime._stamp_meta_missing:
@@ -676,33 +676,33 @@ async def _build_rich_payload(
     # Note: legacy dual StudyFinalized is *not* folded into contrib here — finalize()
     # returns early when already finalized, so that taint lives in meta / local fold only.
     for d in qdisp.values():
-        line = d.get("report_line") if isinstance(d, dict) else None  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        line = d.get("report_line") if isinstance(d, dict) else None
         if line and line not in contrib:
             contrib.append(str(line))
     # PlanRefused / invalid final_type lines folded from events.
     for ev in events:
         if ev.type == "PlanRefused":
-            line = _or_empty_dict(ev.payload).get("report_line")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            line = _or_empty_dict(ev.payload).get("report_line")
             if line is None:
                 line = "не выполнено: план отклонён"
             if line not in contrib:
                 contrib.append(_or_empty_str(line))
         if ev.type == "JudgeCasCorrupt":
-            line = _or_empty_dict(ev.payload).get("report_line")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            line = _or_empty_dict(ev.payload).get("report_line")
             if line is None:
                 line = "не выполнено: внутренняя ошибка (judge CAS)"
             if line not in contrib:
                 contrib.append(_or_empty_str(line))
     # Upcaster-coerced unknown final_type → report line on plan questions.
-    plan_rows = list(plans.values()) if isinstance(plans, dict) else _or_empty_list(plans)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+    plan_rows = list(plans.values()) if isinstance(plans, dict) else _or_empty_list(plans)
     for plan in plan_rows:
         if isinstance(plan, dict):
-            qs = plan.get("questions")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            qs = plan.get("questions")
         else:
             qs = plan.questions
         for q in _or_empty_list(qs):
             if isinstance(q, dict):
-                line = q.get("final_type_report_line")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                line = q.get("final_type_report_line")
                 if line and line not in contrib:
                     contrib.append(_or_empty_str(line))
     study = runtime.study
@@ -744,9 +744,9 @@ async def _load_plans(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
     if isinstance(local, dict) and local:
         return local
     rows = await runtime.store.get_projection("plans")
-    out: dict[str, dict[str, Any]] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value  # noqa: E501
+    out: dict[str, dict[str, Any]] = {}
     for i, r in enumerate(rows):
-        pid = _or_empty_str(r.get("plan_id"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        pid = _or_empty_str(r.get("plan_id"))
         if not pid:
             pid = _or_empty_str(i)
         out[pid] = r
@@ -762,7 +762,7 @@ def _refusal_payload(runtime: StudyRuntime, trigger: FinalizeTrigger) -> str | N
 
     kind = ref.kind
     reason = ref.reason
-    kv = kind.value if isinstance(kind, Enum) else kind  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+    kv = kind.value if isinstance(kind, Enum) else kind
     if kv:
         return f"{kv}:{reason}"
     return _or_empty_str(reason)
@@ -820,16 +820,16 @@ async def _build_finalized_payload(
         except LeaseLost:
             raise
         except Exception as e2:  # noqa: BLE001
-            raise RuntimeError(f"minimal_report:{type(e2).__name__}") from e2  # audit-ok[broad_except]: cleanup then re-raise; does not swallow  # noqa: E501
+            raise RuntimeError(f"minimal_report:{type(e2).__name__}") from e2
     custom_checks = _safe_custom_checks(runtime)
     # Findings outside the plan stay unverified observations (DESIGN_M1 §16).
     observations = _or_empty_list(runtime._observations)
     if minimal is not None and isinstance(minimal, dict):
         minimal = dict(minimal)
         # Prefer already-truncated lists from build_minimal_report when present.
-        if not minimal.get("custom_checks"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        if not minimal.get("custom_checks"):
             minimal["custom_checks"] = custom_checks
-        if not minimal.get("observations"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        if not minimal.get("observations"):
             minimal["observations"] = observations
     return {
         "trigger": trigger,
@@ -858,7 +858,7 @@ def _safe_custom_checks(runtime: Any) -> list[dict[str, Any]]:
         raise
     except Exception as e:  # noqa: BLE001
         log.warning("custom_checks_report failed: %s", e, exc_info=True)
-        return []  # audit-ok[broad_except]: cleanup then re-raise; does not swallow # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class  # noqa: E501
+        return []
 
 async def _primary_report_path(
     runtime: StudyRuntime,
@@ -872,7 +872,7 @@ async def _primary_report_path(
     refusal: str | None = None,
 ) -> str:
     study = runtime.study
-    as_of_raw = study.as_of if study is not None else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+    as_of_raw = study.as_of if study is not None else None
     as_of_s = None
     if as_of_raw is not None:
         try:
@@ -890,7 +890,7 @@ async def _primary_report_path(
         tasks=runtime.tasks,
         refusal=refusal,
         as_of=as_of_s,
-        plans=plans_local if isinstance(plans_local, dict) else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        plans=plans_local if isinstance(plans_local, dict) else None,
         custom_checks=_safe_custom_checks(runtime),
         observations=_or_empty_list(runtime._observations),
     )
@@ -900,15 +900,15 @@ async def _primary_report_path(
     results = runtime.results
     if results is None:
         results = {}
-    detail_lines: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
+    detail_lines: list[str] = []
     for rid in sorted(results):
         res = results[rid]
         if not isinstance(res, dict):
             continue
-        detail = res.get("detail")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        detail = res.get("detail")
         if detail:
             detail_lines.append(f"- result `{rid}` detail: {_escape_report_text(detail)}")
-        reason = res.get("reason")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        reason = res.get("reason")
         if reason:
             detail_lines.append(f"- result `{rid}` reason: {_escape_report_text(reason)}")
     if detail_lines:

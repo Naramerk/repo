@@ -20,7 +20,6 @@ from coscientist.checks.kinds._util import (
     MALFORMED_JUNIT,
     MALFORMED_METRICS,
     MALFORMED_REWARD,
-    SANDBOX_LOG_NAME,
     base_result,
     cmp,
     guest_timeout_result,
@@ -40,8 +39,7 @@ from coscientist.checks.sandbox import (
     run_verifier,
 )
 from coscientist.core.events.digest import canonical_json, sha256_hex
-from coscientist.core.events.errors import CatalogError, JournalFormatError, SandboxInfraError
-from coscientist.core.events.upcasters import require_exact_int
+from coscientist.core.events.errors import CatalogError, SandboxInfraError
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -51,7 +49,9 @@ from coscientist.core.execution.domain import (
     EvidenceRef,
 )
 
-EXECUTABLE_KINDS = frozenset({"exec_runs", "tests_pass", "metric_on_holdout", "reproducible_rerun"})
+EXECUTABLE_KINDS = frozenset(
+    {"exec_runs", "tests_pass", "metric_on_holdout", "reproducible_rerun"}
+)
 
 REWARD_NAME = "reward.txt"
 REWARD_SCHEMA = "coscientist.reward.v1"
@@ -82,21 +82,19 @@ _BLOCKED_AGENT_NAMES = frozenset(
         "signal.py",
     }
 )
-_SAFE_AGENT_NAME = re.compile(  # audit-ok[re_compile]: agent basename allowlist regex (security companion to denylist)
-    r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_+-]+)?$"
-)
+_SAFE_AGENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_+-]+)?$")
 
 
 def agent_filename_allowed(name: str) -> bool:
     """Defense-in-depth denylist (hooks / stdlib shadows). Prefer allowlists."""
-    base = name.rsplit("/", 1)[-1]  # audit-ok[str_rsplit]: basename from agent-declared path (security allowlist)
-    if not base or base[:1] == ".":
+    base = name.rsplit("/", 1)[-1]
+    if not base or base.startswith("."):
         return False
-    if base[-4:] == ".pth" or base in _BLOCKED_AGENT_NAMES:
+    if base.endswith(".pth") or base in _BLOCKED_AGENT_NAMES:
         return False
-    if ".." in name or name[:1] == "/":
+    if ".." in name or name.startswith("/"):
         return False
-    return _SAFE_AGENT_NAME.match(base) is not None
+    return bool(_SAFE_AGENT_NAME.match(base))
 
 
 def _input_allowlist(check: CodeCheck) -> frozenset[str]:
@@ -111,43 +109,20 @@ def _input_allowlist(check: CodeCheck) -> frozenset[str]:
     return frozenset()
 
 
-def _require_str(value: object, *, what: str) -> str:
-    if not isinstance(value, str):
-        raise JournalFormatError(f"{what} must be str, got {type(value).__name__}")
-    return value
-
-
-def _core_call_id(attempt_id: str | None, check_id: str) -> str:
-    if attempt_id is None:
-        aid = "noattempt"
-    else:
-        aid = attempt_id
-    return f"{aid}:core:{check_id}"
-
-
-def _as_metric_float(value: object) -> float:
-    if type(value) is bool or not isinstance(value, (int, float)):
-        raise JournalFormatError(f"metric value must be numeric, got {type(value).__name__}")
-    return float(value)  # audit-ok[coerce_float]: coerce after int|float type gate (bool rejected)
-
-
 def _argv_for(check: CodeCheck) -> list[str]:
     if check.argv:
-        return [_require_str(a, what="CodeCheck.argv[]") for a in check.argv]
+        return [str(a) for a in check.argv]
     if check.command:
-        return [_require_str(check.command, what="CodeCheck.command")]
+        return [str(check.command)]
     return []
 
 
 def _limits(check: CodeCheck):
-    allow = check.allow_network
-    if type(allow) is not bool:
-        raise JournalFormatError(f"CodeCheck.allow_network must be bool, got {type(allow).__name__}")
     return limits_from_check(
         timeout_s=check.timeout_s,
         memory_mb=check.memory_mb,
         max_output_bytes=check.max_output_bytes,
-        allow_network=allow,
+        allow_network=bool(check.allow_network),
         reap_timeout_s=check.reap_timeout_s,
         output_drain_join_s=check.output_drain_join_s,
     )
@@ -172,12 +147,12 @@ def parse_reward(raw: bytes) -> float:
         raise ValueError(f"reward_not_json:{e.__class__.__name__}") from e
     if not isinstance(doc, dict):
         raise ValueError("reward_not_object")
-    if doc.get("schema") != REWARD_SCHEMA:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+    if doc.get("schema") != REWARD_SCHEMA:
         raise ValueError("reward_bad_schema")
-    val = doc.get("value")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    val = doc.get("value")
     if isinstance(val, bool) or not isinstance(val, (int, float)):
         raise ValueError("reward_bad_value")
-    return float(val)  # audit-ok[coerce_float]: coerce after int|float type gate (bool rejected)
+    return float(val)
 
 
 def _collect_declared_outputs(
@@ -192,10 +167,14 @@ def _collect_declared_outputs(
     ``name_allowlist`` is allowlist-only (``None``/empty → collect nothing).
     Denylist still rejects import hooks even if mistakenly allowlisted.
     """
-    inputs: dict[str, bytes] = {}  # audit-ok[field_default]: structural empty = collecting mounts
-    evidence: list[EvidenceRef] = []  # audit-ok[field_default]: structural empty = collecting evidence
-    allow = name_allowlist if name_allowlist is not None else frozenset()  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
-    items = ((s, out.outputs[s]) for s in slots if s in out.outputs) if slots is not None else out.outputs.items()  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+    inputs: dict[str, bytes] = {}
+    evidence: list[EvidenceRef] = []
+    allow = name_allowlist if name_allowlist is not None else frozenset()
+    items = (
+        ((s, out.outputs[s]) for s in slots if s in out.outputs)
+        if slots is not None
+        else out.outputs.items()
+    )
     for slot, handle in items:
         fname = slot_filename(slot)
         if fname not in allow and slot not in allow:
@@ -207,36 +186,39 @@ def _collect_declared_outputs(
             continue
         data = artifacts.read(handle.artifact_id)
         inputs[fname] = data
-        evidence.append(EvidenceRef(artifact_id=handle.artifact_id, digest=meta.sha256))
+        evidence.append(
+            EvidenceRef(artifact_id=handle.artifact_id, digest=meta.sha256)
+        )
     return inputs, evidence
 
 
 def jail_mount_digest(inputs: dict[str, bytes]) -> str:
     """Content digest of bytes actually mounted into the jail (normalized names)."""
-    return sha256_hex(canonical_json({"mounted": {str(k): sha256_hex(v) for k, v in sorted(inputs.items())}}))
+    return sha256_hex(
+        canonical_json(
+            {
+                "mounted": {
+                    str(k): sha256_hex(v) for k, v in sorted(inputs.items())
+                }
+            }
+        )
+    )
 
 
 def _timeout_kind_for_role(result: Any, role: CheckRole) -> str:
     """Host-classified kind; refute + no cpu.stat → idle (untestable)."""
-    from coscientist.checks.sandbox import SandboxResult, classify_guest_timeout
+    from coscientist.checks.sandbox import classify_guest_timeout
 
-    if not isinstance(result, SandboxResult):
-        raise TypeError(f"_timeout_kind_for_role expects SandboxResult, got {type(result).__name__}")
-    if result.status is not SandboxStatus.TIMEOUT:
+    if getattr(result, "status", None) is not SandboxStatus.TIMEOUT:
         return "wall_timeout"
-    raw = result.reason
-    if not isinstance(raw, str) or not raw:
-        raw = "wall_timeout"
+    raw = str(getattr(result, "reason", "") or "wall_timeout")
     # Re-classify with role so missing cgroup elevates refute to idle.
-    classified = classify_guest_timeout(
-        kill_cause=result.timeout_kill,
-        duration_s=float(result.duration_s),  # audit-ok[coerce_float]: coerce after SandboxResult.duration_s float field  # noqa: E501
-        cpu_usage_s=result.cpu_usage_s,
+    return classify_guest_timeout(
+        kill_cause=getattr(result, "timeout_kill", None),
+        duration_s=float(getattr(result, "duration_s", 0.0) or 0.0),
+        cpu_usage_s=getattr(result, "cpu_usage_s", None),
         refute_role=(role == "prediction"),
-    )
-    if classified:
-        return classified
-    return raw
+    ) or raw
 
 
 def evaluate_exec_runs(
@@ -251,28 +233,28 @@ def evaluate_exec_runs(
 ) -> CheckResult:
     argv = _argv_for(check)
     if not argv:
-        raise SandboxInfraError("sandbox_unavailable:missing_command", transient=False)
+        raise SandboxInfraError("sandbox_unavailable:missing_command")
     allow = _input_allowlist(check)
     slots = [check.output] if check.output else None
-    inputs, _ev = _collect_declared_outputs(out, artifacts, slots, name_allowlist=allow)
+    inputs, _ev = _collect_declared_outputs(
+        out, artifacts, slots, name_allowlist=allow
+    )
     mount_digest = jail_mount_digest(inputs)
     # Refute/prediction: verifier jail (catalog command; agent inputs RO).
     if role == "prediction":
-        holdout_b = canonical_json(check.holdout) if check.holdout is not None else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
-        if inputs:
-            mount_inputs = inputs
-        else:
-            mount_inputs = {}
+        holdout_b = (
+            canonical_json(check.holdout) if check.holdout is not None else None
+        )
         result = run_verifier(
             argv,
-            inputs=mount_inputs,
+            inputs=inputs or {},
             limits=_limits(check),
             holdout=holdout_b,
             input_allowlist=allow,
             collect=(),
         )
     else:
-        result = run_sandbox(argv, limits=_limits(check), inputs=inputs if inputs else None)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        result = run_sandbox(argv, limits=_limits(check), inputs=inputs or None)
     raise_if_infra(
         result.status,
         result.reason,
@@ -280,14 +262,9 @@ def evaluate_exec_runs(
         fs_isolation=result.fs_isolation,
         note=result.note,
     )
-    # Log rendering only — exit_code is int|None from SandboxResult.
-    if result.exit_code is None:
-        exit_s = "None"
-    else:
-        exit_s = format(result.exit_code)
     log_body = (
         b"exit="
-        + exit_s.encode()
+        + str(result.exit_code).encode()
         + b" net="
         + result.net_isolation.encode()
         + b" fs="
@@ -304,9 +281,8 @@ def evaluate_exec_runs(
         body=log_body,
         net_isolation=result.net_isolation,
         fs_isolation=result.fs_isolation,
-        name=SANDBOX_LOG_NAME,
     )
-    note = result.note or soft_note(result.net_isolation, result.fs_isolation)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
+    note = result.note or soft_note(result.net_isolation, result.fs_isolation)
     # Guest timeout: never countable; classified host-side (idle/cpu/wall).
     if result.status is SandboxStatus.TIMEOUT:
         kind = _timeout_kind_for_role(result, role)
@@ -333,7 +309,6 @@ def evaluate_exec_runs(
                     "wall_s": result.duration_s,
                     "jail_inputs_digest": mount_digest,
                 },
-                observation_only=False,
             ),
         )
     # Guest-caused output flood — scientific not_met (still countable when bound).
@@ -353,8 +328,6 @@ def evaluate_exec_runs(
                 net_isolation=result.net_isolation,
                 fs_isolation=result.fs_isolation,
                 note=note,
-                observation_only=False,
-                refute_unresolved=False,
             ),
         )
     ok = result.status is SandboxStatus.OK and result.exit_code == 0
@@ -364,7 +337,7 @@ def evaluate_exec_runs(
         role=role,
         ok=ok,
         evidence=[EvidenceRef(artifact_id=art_id, digest=digest)],
-        detail=merge_detail(None if ok else result.reason, note),  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        detail=merge_detail(None if ok else result.reason, note),
         effect=sandbox_effect(
             attempt_id=attempt_id,
             check_id=check_id,
@@ -373,8 +346,6 @@ def evaluate_exec_runs(
             net_isolation=result.net_isolation,
             fs_isolation=result.fs_isolation,
             note=note,
-            observation_only=False,
-            refute_unresolved=False,
         ),
     )
 
@@ -401,15 +372,15 @@ def _tests_pass_launcher() -> bytes:
     import site
     from pathlib import Path as P
 
-    sites: list[str] = []  # audit-ok[field_default]: structural empty = collecting site-packages paths
+    sites: list[str] = []
     try:
         sites.extend(site.getsitepackages())
-    except Exception:  # audit-ok[broad_except]: site.getsitepackages optional; empty list = no site path
-        pass  # audit-ok[except_pass]: best-effort secondary close after primary error path
+    except Exception:  # noqa: BLE001
+        pass
     try:
         sites.append(site.getusersitepackages())
-    except Exception:  # audit-ok[broad_except]: site.getusersitepackages optional; skip if unavailable
-        pass  # audit-ok[except_pass]: best-effort secondary close after primary error path
+    except Exception:  # noqa: BLE001
+        pass
     sites = [p for p in sites if p and P(p).is_dir()]
     return f"""
 import importlib.util
@@ -462,8 +433,9 @@ def evaluate_tests_pass(
     argv = _argv_for(check)
     catalog_tests = _catalog_tests_bytes(check)
     use_catalog_pytest = (
-        not argv or argv == ["catalog:pytest"] or argv[0] == "catalog:pytest"
-    ) and catalog_tests is not None
+        (not argv or argv == ["catalog:pytest"] or argv[0] == "catalog:pytest")
+        and catalog_tests is not None
+    )
     if not argv and catalog_tests is None:
         return base_result(
             check_id=check_id,
@@ -478,14 +450,16 @@ def evaluate_tests_pass(
                 "core_evaluated": True,
                 "countable": False,
                 "observation_only": True,
-                "produced_by_call_id": _core_call_id(attempt_id, check_id),
+                "produced_by_call_id": f"{attempt_id or 'noattempt'}:core:{check_id}",
                 "note": _TESTS_PASS_NOTE,
             },
         )
 
     allow = _input_allowlist(check)
     # Agent code under /inputs (allowlisted names only); catalog tests under /tests.
-    code_inputs, ev = _collect_declared_outputs(out, artifacts, name_allowlist=allow)
+    code_inputs, ev = _collect_declared_outputs(
+        out, artifacts, name_allowlist=allow
+    )
     collect = [JUNIT_NAME]
     scorer_bytes = None
 
@@ -526,10 +500,10 @@ def evaluate_tests_pass(
     if timed is not None:
         return timed
     note = merge_detail(
-        result.note or soft_note(result.net_isolation, result.fs_isolation),  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
+        result.note or soft_note(result.net_isolation, result.fs_isolation),
         _TESTS_PASS_NOTE,
     )
-    raw = result.result_files.get(JUNIT_NAME)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+    raw = result.result_files.get(JUNIT_NAME)
     if raw is None:
         art_id, digest, _t = store_log(
             artifacts,
@@ -556,7 +530,6 @@ def evaluate_tests_pass(
                 fs_isolation=result.fs_isolation,
                 note=note,
                 observation_only=True,
-                refute_unresolved=False,
             ),
         )
     try:
@@ -571,7 +544,7 @@ def evaluate_tests_pass(
             net_isolation=result.net_isolation,
             fs_isolation=result.fs_isolation,
         )
-        return base_result(  # audit-ok[except_silent_return]: malformed junit → FAILED observation (never invent pass)
+        return base_result(
             check_id=check_id,
             template_id=template_id,
             role=role,
@@ -587,13 +560,9 @@ def evaluate_tests_pass(
                 fs_isolation=result.fs_isolation,
                 note=note,
                 observation_only=True,
-                refute_unresolved=False,
             ),
         )
-    if check.min_tests is None:
-        min_tests = 1
-    else:
-        min_tests = require_exact_int(check.min_tests, what="CodeCheck.min_tests")
+    min_tests = int(check.min_tests) if check.min_tests is not None else 1
     ok = failures == 0 and tests >= min_tests
     summary = (
         f"tests={tests} failures={failures} min_tests={min_tests} ok={ok} "
@@ -614,7 +583,9 @@ def evaluate_tests_pass(
         role=role,
         ok=ok,
         evidence=[*ev, EvidenceRef(artifact_id=art_id, digest=digest)],
-        detail=merge_detail(None if ok else f"failures={failures} tests={tests}", note),
+        detail=merge_detail(
+            None if ok else f"failures={failures} tests={tests}", note
+        ),
         effect=sandbox_effect(
             attempt_id=attempt_id,
             check_id=check_id,
@@ -624,7 +595,6 @@ def evaluate_tests_pass(
             fs_isolation=result.fs_isolation,
             note=note,
             observation_only=True,
-            refute_unresolved=False,
         ),
     )
 
@@ -637,7 +607,7 @@ def _validate_predictions(pred_bytes: bytes) -> dict[str, Any]:
         raise ValueError(f"predictions_not_json:{e.__class__.__name__}") from e
     if not isinstance(doc, dict):
         raise ValueError("predictions_not_object")
-    y_hat = doc.get("y_hat")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    y_hat = doc.get("y_hat")
     if not isinstance(y_hat, list) or not y_hat:
         raise ValueError("predictions_missing_y_hat")
     return doc
@@ -655,21 +625,21 @@ def evaluate_metric_on_holdout(
     prov_fields: dict[str, Any],
 ) -> CheckResult:
     """metric = catalog scorer(predictions data, catalog holdout) — no agent code."""
-    if check.output is None:
-        pred_slot = "predictions"
-    else:
-        pred_slot = check.output
-    predictions = out.outputs.get(pred_slot)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+    pred_slot = check.output or "predictions"
+    predictions = out.outputs.get(pred_slot)
     # Agent-supplied holdout slots are ignored — labels come from the catalog only.
     if check.holdout is None:
-        raise SandboxInfraError("sandbox_unavailable:holdout_missing", transient=False)
+        raise SandboxInfraError("sandbox_unavailable:holdout_missing")
     frozen = check.holdout_digest
     if not frozen:
         raise CatalogError("metric_on_holdout: holdout_digest missing")
     holdout_bytes = canonical_json(check.holdout)
     holdout_digest = sha256_hex(holdout_bytes)
     if holdout_digest != frozen:
-        raise CatalogError(f"metric_on_holdout: holdout_digest mismatch (catalog={frozen} computed={holdout_digest})")
+        raise CatalogError(
+            f"metric_on_holdout: holdout_digest mismatch "
+            f"(catalog={frozen} computed={holdout_digest})"
+        )
 
     if predictions is None:
         return base_result(
@@ -694,14 +664,13 @@ def evaluate_metric_on_holdout(
         pred_bytes = artifacts.read(predictions.artifact_id)
     except OSError as e:
         raise SandboxInfraError(
-            f"sandbox_unavailable:host_io:{e.__class__.__name__}",
-            transient=False,
+            f"sandbox_unavailable:host_io:{e.__class__.__name__}"
         ) from e
 
     try:
         _validate_predictions(pred_bytes)
     except ValueError as e:
-        return base_result(  # audit-ok[except_silent_return]: malformed predictions → FAILED (never invent metric)
+        return base_result(
             check_id=check_id,
             template_id=template_id,
             role=role,
@@ -727,9 +696,10 @@ def evaluate_metric_on_holdout(
                 "producer": "core",
                 "trusted": False,
                 "core_evaluated": True,
-                "countable": attempt_id is not None,
-                "produced_by_call_id": _core_call_id(attempt_id, check_id),
-                "note": "metric_on_holdout requires catalog scorer; agent metrics not trusted",
+                "countable": bool(attempt_id),
+                "produced_by_call_id": f"{attempt_id or 'noattempt'}:core:{check_id}",
+                "note": "metric_on_holdout requires catalog scorer; "
+                "agent metrics not trusted",
             },
         )
 
@@ -771,10 +741,10 @@ def evaluate_metric_on_holdout(
     )
     if timed is not None:
         return timed
-    note = result.note or soft_note(result.net_isolation, result.fs_isolation)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
+    note = result.note or soft_note(result.net_isolation, result.fs_isolation)
 
     left: Any = None
-    reward = result.result_files.get(REWARD_NAME)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+    reward = result.result_files.get(REWARD_NAME)
     if reward is not None:
         try:
             left = parse_reward(reward)
@@ -788,7 +758,6 @@ def evaluate_metric_on_holdout(
             body=b"missing/malformed reward\n" + result.stderr,
             net_isolation=result.net_isolation,
             fs_isolation=result.fs_isolation,
-            name=SANDBOX_LOG_NAME,
         )
         return base_result(
             check_id=check_id,
@@ -808,15 +777,11 @@ def evaluate_metric_on_holdout(
                 net_isolation=result.net_isolation,
                 fs_isolation=result.fs_isolation,
                 note=note,
-                observation_only=False,
-                refute_unresolved=False,
             ),
         )
 
     target = check.target
-    if check.op is None:
-        raise CatalogError("metric_on_holdout: CodeCheck.op required")
-    op = check.op
+    op = check.op or ">="
     ok = cmp(op, left, target, check.tolerance)
     summary = canonical_json(
         {
@@ -838,7 +803,6 @@ def evaluate_metric_on_holdout(
         body=summary,
         net_isolation=result.net_isolation,
         fs_isolation=result.fs_isolation,
-        name=SANDBOX_LOG_NAME,
     )
     effect = sandbox_effect(
         attempt_id=attempt_id,
@@ -848,9 +812,7 @@ def evaluate_metric_on_holdout(
         net_isolation=result.net_isolation,
         fs_isolation=result.fs_isolation,
         note=note,
-        extra=merge_numeric_extra(prov_fields, est=_as_metric_float(left)),
-        observation_only=False,
-        refute_unresolved=False,
+        extra=merge_numeric_extra(prov_fields, est=float(left)),
     )
     return base_result(
         check_id=check_id,
@@ -911,23 +873,22 @@ def evaluate_reproducible_rerun(
     _ = prov_fields  # unused: never copy agent-derived est into a countable effect
     argv = _ensure_python_isolated(_argv_for(check))
     if not argv:
-        raise SandboxInfraError("sandbox_unavailable:missing_command", transient=False)
-    if check.tolerance is not None:
-        tol = _as_metric_float(check.tolerance)
-    elif check.rerun_tol is not None:
-        tol = _as_metric_float(check.rerun_tol)
-    else:
-        tol = 0.0
+        raise SandboxInfraError("sandbox_unavailable:missing_command")
+    tol = float(check.tolerance) if check.tolerance is not None else float(
+        check.rerun_tol if check.rerun_tol is not None else 0.0
+    )
     allow = _input_allowlist(check)
     inputs, ev = _collect_declared_outputs(out, artifacts, name_allowlist=allow)
+    from typing import cast
+
     from coscientist.checks.sandbox import FsIsolation, NetIsolation
 
     _RERUN_NOTE = "reproducible_rerun is observation-only in M1; not counted"
-    blobs: list[bytes] = []  # audit-ok[field_default]: structural empty = collecting rerun blobs
-    digests: list[str] = []  # audit-ok[field_default]: structural empty = collecting digests
-    logs: list[bytes] = []  # audit-ok[field_default]: structural empty = collecting logs
-    net_i: NetIsolation | None = None
-    fs_i: FsIsolation | None = None
+    blobs: list[bytes] = []
+    digests: list[str] = []
+    logs: list[bytes] = []
+    net_i: NetIsolation = "none"
+    fs_i: FsIsolation = "none"
     note: str | None = None
     for i in range(2):
         result = run_verifier(
@@ -944,14 +905,19 @@ def evaluate_reproducible_rerun(
             fs_isolation=result.fs_isolation,
             note=result.note,
         )
-        net_i = result.net_isolation
-        fs_i = result.fs_isolation
-        note = merge_detail(result.note or soft_note(net_i, fs_i), _RERUN_NOTE)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
-        if result.exit_code is None:
-            exit_s = "None"
-        else:
-            exit_s = format(result.exit_code)
-        logs.append(b"run=" + format(i).encode() + b" exit=" + exit_s.encode() + b"\n" + result.stderr)
+        net_i = cast(NetIsolation, str(result.net_isolation))
+        fs_i = cast(FsIsolation, str(result.fs_isolation))
+        note = merge_detail(
+            result.note or soft_note(net_i, fs_i), _RERUN_NOTE
+        )
+        logs.append(
+            b"run="
+            + str(i).encode()
+            + b" exit="
+            + str(result.exit_code).encode()
+            + b"\n"
+            + result.stderr
+        )
         if result.status is not SandboxStatus.OK:
             art_id, digest, _trusted = store_log(
                 artifacts,
@@ -960,7 +926,6 @@ def evaluate_reproducible_rerun(
                 body=b"\n".join(logs),
                 net_isolation=net_i,
                 fs_isolation=fs_i,
-                name=SANDBOX_LOG_NAME,
             )
             return base_result(
                 check_id=check_id,
@@ -978,10 +943,11 @@ def evaluate_reproducible_rerun(
                     fs_isolation=fs_i,
                     note=note,
                     observation_only=True,
-                    refute_unresolved=False,
                 ),
             )
-        blob = result.result_files.get(DIGEST_NAME) or result.result_files.get(REWARD_NAME)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
+        blob = result.result_files.get(DIGEST_NAME) or result.result_files.get(
+            REWARD_NAME
+        )
         if blob is None:
             art_id, digest, _trusted = store_log(
                 artifacts,
@@ -990,7 +956,6 @@ def evaluate_reproducible_rerun(
                 body=b"\n".join(logs),
                 net_isolation=net_i,
                 fs_isolation=fs_i,
-                name=SANDBOX_LOG_NAME,
             )
             return base_result(
                 check_id=check_id,
@@ -1008,14 +973,11 @@ def evaluate_reproducible_rerun(
                     fs_isolation=fs_i,
                     note=note,
                     observation_only=True,
-                    refute_unresolved=False,
                 ),
             )
         blobs.append(blob)
         digests.append(sha256_hex(blob))
 
-    if net_i is None or fs_i is None:
-        raise SandboxInfraError("sandbox_unavailable:reproducible_rerun_no_result", transient=False)
     ok = digests[0] == digests[1]
     delta = 0.0
     try:
@@ -1043,7 +1005,6 @@ def evaluate_reproducible_rerun(
         body=summary + b"\n" + b"\n".join(logs),
         net_isolation=net_i,
         fs_isolation=fs_i,
-        name=SANDBOX_LOG_NAME,
     )
     # No est — agent-chosen constant reward must not enter a countable effect.
     effect = sandbox_effect(
@@ -1055,7 +1016,6 @@ def evaluate_reproducible_rerun(
         fs_isolation=fs_i,
         note=note,
         observation_only=True,
-        refute_unresolved=False,
     )
     return base_result(
         check_id=check_id,
@@ -1063,7 +1023,9 @@ def evaluate_reproducible_rerun(
         role=role,
         ok=ok,
         evidence=[*ev, EvidenceRef(artifact_id=art_id, digest=digest)],
-        detail=merge_detail(None if ok else f"digest_mismatch {digests[0]} != {digests[1]}", note),
+        detail=merge_detail(
+            None if ok else f"digest_mismatch {digests[0]} != {digests[1]}", note
+        ),
         effect=effect,
     )
 
@@ -1121,4 +1083,4 @@ def evaluate_executable(
             attempt_id=attempt_id,
             prov_fields=prov_fields,
         )
-    raise SandboxInfraError(f"sandbox_unavailable:unknown_kind:{check.kind}", transient=False)
+    raise SandboxInfraError(f"sandbox_unavailable:unknown_kind:{check.kind}")

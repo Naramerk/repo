@@ -80,7 +80,7 @@ async def open_runtime(
         try:
             await store.close()
         except BaseException:
-            log.warning("store.close failed during pre-lease cleanup", exc_info=True)  # audit-ok[broad_except]: cleanup then re-raise; does not swallow  # noqa: E501
+            log.warning("store.close failed during pre-lease cleanup", exc_info=True)
         raise
 
     writer: StudyWriter | None = None
@@ -98,7 +98,7 @@ async def open_runtime(
                 try:
                     await task
                 except BaseException:
-                    pass  # audit-ok[broad_except]: cleanup then re-raise; does not swallow # audit-ok[except_pass]: best-effort secondary close after primary error path  # audit-ok[except_pass]: best-effort secondary close after primary error path  # noqa: E501
+                    pass
                 acquired_here = store.owner == owner and store.owner_nonce is not None
                 raise
 
@@ -120,7 +120,7 @@ async def open_runtime(
         for ev in events:
             rt._project_local(ev)  # noqa: SLF001
         # Production path: Executor always via make_executor (live get_graph).
-        arts = artifacts if artifacts is not None else LocalArtifactStore(root / "arts")  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        arts = artifacts if artifacts is not None else LocalArtifactStore(root / "arts")
         rt.make_executor(catalog, arts)
         # PR13: rebuild judge state from journal so reopen == live.
         from coscientist.core.claims.reviews import (
@@ -138,7 +138,7 @@ async def open_runtime(
             from coscientist.core.execution.domain import TaskOutcome, TaskState
 
             now = rt.clock.now()
-            sid = rt.study.study_id if rt.study else study_id  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+            sid = rt.study.study_id if rt.study else study_id
             close_events: list[Any] = [
                 UnstampedEvent(
                     study_id=sid,
@@ -188,7 +188,7 @@ async def open_runtime(
             except LeaseLost:
                 raise
             except Exception:
-                log.warning("reconcile_fetch_integrity on open failed", exc_info=True)  # audit-ok[broad_except]: cleanup then re-raise; does not swallow  # noqa: E501
+                log.warning("reconcile_fetch_integrity on open failed", exc_info=True)
         return rt
     except BaseException:
         # Stop the writer first so in-flight appends cannot race release.
@@ -196,16 +196,16 @@ async def open_runtime(
             try:
                 await writer.stop()
             except BaseException:
-                log.warning("writer.stop failed during open_runtime cleanup", exc_info=True)  # audit-ok[broad_except]: cleanup then re-raise; does not swallow  # noqa: E501
+                log.warning("writer.stop failed during open_runtime cleanup", exc_info=True)
         if acquired_here and store.epoch is not None:
             try:
                 await store.release_lease(owner, store.epoch)
             except BaseException:
-                log.warning("release_lease failed during open_runtime cleanup", exc_info=True)  # audit-ok[broad_except]: cleanup then re-raise; does not swallow  # noqa: E501
+                log.warning("release_lease failed during open_runtime cleanup", exc_info=True)
         try:
             await store.close()
         except BaseException:
-            log.warning("store.close failed during open_runtime cleanup", exc_info=True)  # audit-ok[broad_except]: cleanup then re-raise; does not swallow  # noqa: E501
+            log.warning("store.close failed during open_runtime cleanup", exc_info=True)
         raise
 
 async def close_runtime(rt: StudyRuntime) -> None:

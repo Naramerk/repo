@@ -23,7 +23,7 @@ async def cancel_study(runtime: StudyRuntime, by: str) -> None:
     """Emit StudyCancelled, close open work as cancelled, then finalize(trigger=cancel)."""
     if not isinstance(by, str) or not by:
         raise ValueError("cancel_study requires non-empty by=")
-    if runtime.study is None or finalize_mod.is_finalized(runtime):  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
+    if runtime.study is None or finalize_mod.is_finalized(runtime):
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
@@ -64,7 +64,7 @@ def _close_open_work(
         if task.state == TaskState.DONE:
             continue
         for aid in task.attempts:
-            attempt = runtime.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            attempt = runtime.attempts.get(aid)
             if attempt is None:
                 raise JournalFormatError(
                     f"attempt {aid!r} missing from runtime.attempts"

@@ -21,7 +21,7 @@ class _Item:
 class StudyWriter:
     """Serializes all study mutations through one queue (maxsize=1000)."""
 
-    def __init__(self, store: SqliteEventStore, *, maxsize: int = 1000) -> None:  # audit-ok[number_outside_domain]: platform constant documented at call site  # noqa: E501
+    def __init__(self, store: SqliteEventStore, *, maxsize: int = 1000) -> None:
         self.store = store
         self.queue: asyncio.Queue[_Item | None] = asyncio.Queue(maxsize=maxsize)
         self._task: asyncio.Task[None] | None = None
@@ -33,9 +33,9 @@ class StudyWriter:
         self.source_fetch_seq = 0
         # PR18 effect/taint fold caches (attached by tools.effects; optional).
         self._pr18_effect_idx: Any | None = None
-        self._pr18_effect_seq: int = 0  # audit-ok[field_default]: structural zero = effect fold seq unset
+        self._pr18_effect_seq: int = 0
         self._pr18_taint_by_attempt: dict[str, bool] | None = None
-        self._pr18_taint_seq: int = 0  # audit-ok[field_default]: structural zero = taint fold seq unset
+        self._pr18_taint_seq: int = 0
 
     @property
     def depth(self) -> int:
@@ -76,7 +76,7 @@ class StudyWriter:
                 result = await item.coro_factory()
                 if not item.future.done():
                     item.future.set_result(result)
-            except Exception as e:  # audit-ok[broad_except]: queue worker must set_exception so waiters see all failures  # noqa: E501
+            except Exception as e:
                 if not item.future.done():
                     item.future.set_exception(e)
             finally:

@@ -36,6 +36,18 @@ from coscientist.core.claims.reasons import Disposition
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.verdict import hypothesis_verdict
 from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.events.events import (
+    PLAN_ACCEPTED_SCHEMA_VERSION,
+    PLAN_EXPANDED_SCHEMA_VERSION,
+    TASK_CREATED_SCHEMA_VERSION,
+)
+from coscientist.core.events.upcasters import (
+    UPCASTERS,
+    assert_upcaster_chain_continuous,
+    register_upcaster,
+    upcast,
+    writer_schema_version,
+)
 from coscientist.core.execution.artifact_stamp import apply_kind_stamp
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
@@ -83,9 +95,11 @@ def _exp_design(key: str, *, addresses: list[str]) -> TaskSpec:
                 media_type="text/markdown",
                 role="report",
                 rubric=rub,
-                kind="experiment_design", required=True)
+                kind="experiment_design",
+            )
         ],
-        criteria=[RequirementRef(template_id="rubric_check", required=True)], required=True, tolerate_failed_dep=False)
+        criteria=[RequirementRef(template_id="rubric_check")],
+    )
 
 
 async def _boot(tmp_path, clock, sid: str):
@@ -113,7 +127,7 @@ async def _complete_report_and_finalize(rt, tmp_path) -> None:
     ex, arts = attach_executor(rt, tmp_path)
     art = arts.put(
         b"# report\n",
-        make_tool_ref(f"{aid}:main", attempt_id=aid),
+        make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
     )
@@ -166,8 +180,10 @@ def test_output_spec_kind_enforced_by_plan_validator():
                         ),
                     ],
                     aggregate="all_required",
-                ), required=True)
-        ], required=True, tolerate_failed_dep=False)
+                ),
+            )
+        ],
+    )
     with pytest.raises(ValueError, match="experiment_design"):
         validate_output_kinds([bad])
     # Invalid kind literal rejected by pydantic.
@@ -177,7 +193,6 @@ def test_output_spec_kind_enforced_by_plan_validator():
             media_type="text/markdown",
             role="report",
             kind="not_a_kind",  # type: ignore[arg-type]
-            required=True,
         )
 
 
@@ -186,7 +201,7 @@ def test_needs_more_data_requires_design_validation():
         question_id="Q1",
         disposition="needs_more_data",
         reason="insufficient power",
-        refs=[{"kind": "evidence", "id": "e1"}],
+        refs=["evidence:e1"],
         design_artifact_id=None,
     )
     with pytest.raises(DisposeRejected) as ei:
@@ -199,29 +214,20 @@ def test_infeasible_disposal_ok_without_design():
         question_id="Q1",
         disposition="infeasible",
         reason="no assay",
-        refs=[{"kind": "hitl", "id": "h1"}],
+        refs=["hitl:h1"],
     )
     validate_disposal(d, known_question_ids={"Q1"})
 
 
 def test_refs_require_known_prefix():
-    """Typed DisposeRef only — string prefixes / unknown kinds refused."""
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError):
-        QuestionDisposal(
-            question_id="Q1",
-            disposition="infeasible",
-            reason="x",
-            refs=["zz"],  # type: ignore[list-item]
-        )
-    with pytest.raises(ValidationError):
-        QuestionDisposal(
-            question_id="Q1",
-            disposition="infeasible",
-            reason="x",
-            refs=[{"kind": "nope", "id": "zz"}],  # type: ignore[list-item]
-        )
+    d = QuestionDisposal(
+        question_id="Q1",
+        disposition="infeasible",
+        reason="x",
+        refs=["zz"],  # 2 chars but no prefix
+    )
+    with pytest.raises(DisposeRejected, match="ref"):
+        validate_disposal(d, known_question_ids={"Q1"})
 
 
 def test_design_artifact_ok_ignores_meta_kind_without_journal(tmp_path):
@@ -231,7 +237,7 @@ def test_design_artifact_ok_ignores_meta_kind_without_journal(tmp_path):
     )
     art = arts.put(
         b"design",
-        make_tool_ref("a:1", attempt_id="a"),
+        make_tool_ref("a:1"),
         name="main",
         media_type="text/markdown",
         role="report",
@@ -287,8 +293,9 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
         depends_on=["PLAN"],
         addresses=["Q1"],
         expected_outputs=[
-            OutputSpec(name="main", media_type="text/plain", role="code", rubric=rub, required=True)
-        ], required=True, tolerate_failed_dep=False)
+            OutputSpec(name="main", media_type="text/plain", role="code", rubric=rub)
+        ],
+    )
     assert is_derivation_task_spec(spoof) is False
     with pytest.raises(ValidationError):
         OutputSpec(
@@ -296,7 +303,6 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
             media_type="text/plain",
             role="code",
             evidence_kind="not_a_kind",  # type: ignore[arg-type]
-            required=True,
         )
     bad_role = TaskSpec(
         task_key="D1",
@@ -310,8 +316,10 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
                 name="main",
                 media_type="text/plain",
                 role="data",
-                evidence_kind="derivation", required=True)
-        ], required=True, tolerate_failed_dep=False)
+                evidence_kind="derivation",
+            )
+        ],
+    )
     with pytest.raises(ValueError, match="derivation"):
         validate_evidence_kinds([bad_role])
     ok = TaskSpec(
@@ -326,8 +334,10 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
                 name="main",
                 media_type="text/plain",
                 role="code",
-                evidence_kind="derivation", required=True)
-        ], required=True, tolerate_failed_dep=False)
+                evidence_kind="derivation",
+            )
+        ],
+    )
     validate_evidence_kinds([ok])
     assert is_derivation_task_spec(ok) is True
 
@@ -363,7 +373,7 @@ def test_question_disposed_fold_first_wins():
             "question_id": "Q1",
             "disposition": "needs_more_data",
             "reason": "second",
-            "refs": [{"kind": "evidence", "id": "e1"}],
+            "refs": ["evidence:e1"],
             "design_artifact_id": "art_x",
         },
     )
@@ -411,7 +421,7 @@ def test_honest_terminals_stamp_verdict_for_rollup():
         "Q_nmd": {
             "disposition": "needs_more_data",
             "reason": "need RCT",
-            "refs": [{"kind": "evidence", "id": "e1"}],
+            "refs": ["evidence:e1"],
             "design_artifact_id": "art_design",
         },
         "Q_inf": {
@@ -439,7 +449,7 @@ def test_honest_terminals_stamp_verdict_for_rollup():
             "Q": {
                 "disposition": "needs_more_data",
                 "reason": "x",
-                "refs": [{"kind": "evidence", "id": "e1"}],
+                "refs": ["evidence:e1"],
                 "design_artifact_id": "missing",
             }
         },
@@ -496,7 +506,7 @@ async def test_needs_more_data_requires_design(tmp_path, clock):
             "question_id": "Q1",
             "disposition": "needs_more_data",
             "reason": "need RCT",
-            "refs": [{"kind": "evidence", "id": "e1"}],
+            "refs": ["evidence:e1"],
         }
     )
     assert got is None
@@ -508,7 +518,7 @@ async def test_needs_more_data_requires_design(tmp_path, clock):
     # Journaled ArtifactRegistered(stamped) unlocks needs_more_data (not meta alone).
     art = arts.put_core(
         b"# design\nhypothesis / variables / n / criterion\n",
-        make_tool_ref("core:design", attempt_id="core"),
+        make_tool_ref("core:design"),
         name="main",
         media_type="text/markdown",
         role="report",
@@ -534,7 +544,7 @@ async def test_needs_more_data_requires_design(tmp_path, clock):
             question_id="Q1",
             disposition="needs_more_data",
             reason="need RCT",
-            refs=[{"kind": "evidence", "id": "e1"}],
+            refs=["evidence:e1"],
             design_artifact_id=art.artifact_id,
         )
     )
@@ -581,7 +591,7 @@ async def test_disposal_unknown_question_fail_closed_empty_graph(tmp_path, clock
     assert aid is not None
     art = arts.put(
         b"r",
-        make_tool_ref(f"{aid}:main", attempt_id=aid),
+        make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
     )
@@ -595,7 +605,7 @@ async def test_disposal_unknown_question_fail_closed_empty_graph(tmp_path, clock
                     "question_id": "QX",
                     "disposition": "infeasible",
                     "reason": "spoof",
-                    "refs": [{"kind": "hitl", "id": "h1"}],
+                    "refs": ["hitl:h1"],
                 }
             ],
         ),
@@ -627,7 +637,7 @@ async def test_dispose_rejected_survives_restart(tmp_path, clock):
             "question_id": "Q1",
             "disposition": "needs_more_data",
             "reason": "need design",
-            "refs": [{"kind": "evidence", "id": "e1"}],
+            "refs": ["evidence:e1"],
         }
     )
     assert got is None
@@ -839,6 +849,48 @@ def test_executable_check_met_excludes_presence_and_waived():
     assert executable_check_met([real], bound_key="x") is True
 
 
+def test_upcaster_chains_continuous_and_no_overwrite():
+    """Checklist: chains 1..N-1 continuous vs writer versions; no registry mutate."""
+    for et in (
+        "TaskCreated",
+        "PlanAccepted",
+        "PlanExpanded",
+        "AttemptStarted",
+        "ResultRecorded",
+        "StudyCreated",
+        "StudyFinalized",
+        "TaskDone",
+        "AttemptClosed",
+        "QuestionDisposed",
+        "QuestionDisposeRejected",
+    ):
+        w = writer_schema_version(et)
+        assert_upcaster_chain_continuous(et, w)
+    # Writers for plan events match registered chain ends (PR15 OutputSpec.kind).
+    assert writer_schema_version("TaskCreated") == TASK_CREATED_SCHEMA_VERSION == 13
+    assert writer_schema_version("PlanAccepted") == PLAN_ACCEPTED_SCHEMA_VERSION == 11
+    assert writer_schema_version("PlanExpanded") == PLAN_EXPANDED_SCHEMA_VERSION == 5
+    assert writer_schema_version("QuestionDisposed") == 1
+    assert writer_schema_version("QuestionDisposeRejected") == 1
+    v, p = upcast(
+        "TaskCreated",
+        12,
+        {
+            "task_id": "t",
+            "spec": {
+                "task_key": "E0",
+                "expected_outputs": [{"name": "main", "media_type": "text/plain"}],
+            },
+        },
+    )
+    assert v == 13
+    assert p["spec"]["expected_outputs"][0].get("evidence_kind") is None
+    # Duplicate guard without mutating production event registries.
+    register_upcaster("_pr15_dup_guard", 1, lambda p: p)
+    with pytest.raises(ValueError, match="duplicate upcaster"):
+        register_upcaster("_pr15_dup_guard", 1, lambda p: p)
+    UPCASTERS.pop("_pr15_dup_guard", None)
+
 
 @pytest.mark.asyncio
 async def test_impossible_task_still_closes_with_report(tmp_path, clock):
@@ -868,7 +920,7 @@ async def test_stamp_kind_not_applied_before_commit_failure(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"# design\n",
-        make_tool_ref(f"{aid}:main", attempt_id=aid),
+        make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
         role="report",
@@ -911,7 +963,7 @@ async def test_stamp_kind_e2e_replay_and_missing_meta_marks_internal_error(tmp_p
     assert aid is not None
     art = arts.put(
         b"# design\n",
-        make_tool_ref(f"{aid}:main", attempt_id=aid),
+        make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
         role="report",
@@ -926,7 +978,7 @@ async def test_stamp_kind_e2e_replay_and_missing_meta_marks_internal_error(tmp_p
                     "question_id": "Q1",
                     "disposition": "needs_more_data",
                     "reason": "need RCT",
-                    "refs": [{"kind": "evidence", "id": "e1"}],
+                    "refs": ["evidence:e1"],
                     "design_artifact_id": art.artifact_id,
                 }
             ],

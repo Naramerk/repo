@@ -499,7 +499,7 @@ class Study(Frozen):
         span = (self.effective_deadline() - self.created_at).total_seconds()
         if span < 0.0:
             raise ValueError(f"replan_budget_s: negative span {span}")
-        reserve = float(self.replan_reserve)  # audit-ok[coerce_float]: coerce after explicit numeric type gate
+        reserve = float(self.replan_reserve)
         if reserve < 0.0:
             raise ValueError(f"replan_budget_s: negative replan_reserve {reserve}")
         return reserve * span
@@ -764,7 +764,7 @@ class CodeCheck(Frozen):
             raise ValueError(
                 f"host budget must be a real number, got {type(v).__name__}"
             )
-        fv = float(v)  # audit-ok[coerce_float]: coerce after int|float type gate (bool rejected)
+        fv = float(v)
         if not math.isfinite(fv) or fv <= 0.0:
             raise ValueError(f"host budget must be finite and > 0, got {v!r}")
         return fv

@@ -7,8 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
-from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.events import StoredEvent, UnstampedEvent
+from coscientist.core.events.events import EventEnvelope
 from coscientist.core.execution.domain import HitlRequest
 from coscientist.core.finalize.study_view import study_view
 from coscientist.experimental.costly import DelegatedBudget
@@ -24,66 +23,55 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.hitl = {}
+        self.hitl: dict[str, HitlRequest] = {}
         self._delegated_costly_spent: Decimal = Decimal("0")
         self.delegated_budget: DelegatedBudget | None = None
-        self._pending_costly_events = {}
-        self._hitl_notices: list[dict[str, Any]] = []  # audit-ok[field_default]: structural empty = no hitl notices yet
+        self._pending_costly_events: dict[str, dict[str, Any]] = {}
+        self._hitl_notices: list[dict[str, Any]] = []
 
-    def _project_local(self, ev: UnstampedEvent | StoredEvent) -> None:
+    def _project_local(self, ev: EventEnvelope) -> None:
         p = ev.payload
         if ev.type == "StudyCreated":
             super()._project_local(ev)
             if self.study and self.study.budget and self.study.budget.delegated_costly is not None:
-                # Budget.delegated_costly is Decimal; DelegatedBudget requires float.
                 self.delegated_budget = DelegatedBudget(
-                    float(self.study.budget.delegated_costly)  # audit-ok[coerce_float]: Decimal→float for DelegatedBudget wire  # noqa: E501
+                    float(self.study.budget.delegated_costly)
                 )
             return
         if ev.type == "BudgetDebited":
             super()._project_local(ev)  # study spent for BudgetExceeded
-            if p.get("budget"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            if p.get("budget"):
                 self.delegated_budget = DelegatedBudget.from_state(p["budget"])
-            if "spent_rub" not in p:
-                raise JournalFormatError("BudgetDebited missing spent_rub")
-            raw_spent = p["spent_rub"]
-            if type(raw_spent) is float:
-                spent = Decimal(str(raw_spent))
-            else:
-                spent = Decimal(raw_spent)
+            spent = Decimal(str(p.get("spent_rub") or 0))
             if spent > 0:
                 self._delegated_costly_spent += spent
             return
         if ev.type == "HitlOpened":
             # Strip unknown keys (e.g. legacy proposal_id); HitlRequest is extra=forbid.
-            fields = HitlRequest.model_fields
-            clean = {k: v for k, v in p.items() if k in fields}
+            fields = getattr(HitlRequest, "model_fields", None) or {}
+            clean = {k: v for k, v in p.items() if k in fields} if fields else dict(p)
             self.hitl[p["request_id"]] = HitlRequest.model_validate(clean)
-            # Core fold: _hitl_requests (expand delegated_by gate).
-            super()._project_local(ev)
             return
         if ev.type in ("HitlDecided", "HitlTimedOut"):
-            if p.get("keep_open") or p.get("effect") == "WAIT":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            if p.get("keep_open") or p.get("effect") == "WAIT":
                 self._hitl_notices.append(dict(p))
             else:
-                h = self.hitl.get(p["request_id"])  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                h = self.hitl.get(p["request_id"])
                 if h:
                     self.hitl[p["request_id"]] = h.model_copy(update={"open": False})
-            if "spent_rub" in p:
-                raw_spent = p["spent_rub"]
-                if type(raw_spent) is float:
-                    spent = Decimal(str(raw_spent))
-                else:
-                    spent = Decimal(raw_spent)
-                if spent > 0:
-                    self._delegated_costly_spent += spent
-            # Core fold: _hitl_decisions + close _hitl_requests (HitlDecided).
-            # HitlTimedOut has no core fold — experimental UI state only.
+            spent = Decimal(str(p.get("spent_rub") or 0))
+            if spent > 0:
+                self._delegated_costly_spent += spent
             if ev.type == "HitlDecided":
-                super()._project_local(ev)
+                rid = str(p.get("request_id") or ev.entity_key)
+                decisions = getattr(self, "_hitl_decisions", None)
+                if not isinstance(decisions, dict):
+                    self._hitl_decisions = {}
+                    decisions = self._hitl_decisions
+                decisions[rid] = dict(p)
             return
         if ev.type == "HitlDeadlineExtended":
-            h = self.hitl.get(p["request_id"])  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            h = self.hitl.get(p["request_id"])
             if h and "deadline" in p:
                 dl = p["deadline"]
                 if isinstance(dl, str):
@@ -96,46 +84,23 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
         from coscientist.core.claims.dispositions import dispositions
 
         open_hitl = sum(1 for h in self.hitl.values() if h.open)
-        # Prefer direct attribute; AttributeError → no lookup (structural absent).
-        try:
-            arts = self.artifacts
-        except AttributeError:
-            arts = None
-        try:
-            lookup = arts.get_meta if arts is not None else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
-        except AttributeError:
-            lookup = None
-        try:
-            results = self.results
-        except AttributeError:
-            results = None
-        try:
-            graph = self.graph
-        except AttributeError:
-            graph = None
-        try:
-            question_disposals = self.question_disposals
-        except AttributeError:
-            question_disposals = None
-        try:
-            journal_kinds = self.artifact_kinds
-        except AttributeError:
-            journal_kinds = None
+        arts = getattr(self, "artifacts", None)
+        lookup = getattr(arts, "get_meta", None) if arts is not None else None
         qdisp = (
             dispositions(
                 tasks=self.tasks,
                 plans=self.plans,
-                graph=graph,
+                graph=getattr(self, "graph", None),
                 study=self.study,
-                results=results,
-                artifact_lookup=lookup if callable(lookup) else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
-                question_disposals=question_disposals,
-                journal_kinds=journal_kinds,
+                results=getattr(self, "results", None),
+                artifact_lookup=lookup if callable(lookup) else None,
+                question_disposals=getattr(self, "question_disposals", None),
+                journal_kinds=getattr(self, "artifact_kinds", None),
             )
             if self.plans
             else None
         )
-        ed = self.study.effective_deadline() if self.study else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        ed = self.study.effective_deadline() if self.study else None
         return study_view(
             self.tasks.values(),
             open_hitl=open_hitl,
@@ -158,7 +123,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
         return True
 
     async def tick(self) -> None:
-        if self.study is None or self._lease_lost:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
+        if self.study is None or self._lease_lost:
             return
         await self.ensure_lease()
         now = self.clock.now()

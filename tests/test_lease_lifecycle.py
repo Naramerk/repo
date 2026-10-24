@@ -18,7 +18,7 @@ from tests.helpers import close_runtime, open_runtime
 
 
 async def _lease_owner(db: Path, study_id: str, clock: FakeClock) -> str | None:
-    store = SqliteEventStore(study_id, db, clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore(study_id, db, clock=clock)
     owner, _epoch, _exp = await store.current_lease()
     await store.close()
     return owner
@@ -39,7 +39,7 @@ async def test_close_runtime_releases_lease(tmp_path, clock):
 
 @pytest.mark.asyncio
 async def test_release_lease_requires_matching_epoch(tmp_path, clock):
-    store = SqliteEventStore("st_ep", tmp_path / "st_ep.db", clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore("st_ep", tmp_path / "st_ep.db", clock=clock)
     epoch = await store.acquire_lease("same-owner", ttl_s=30)
     with pytest.raises(LeaseLost, match="epoch/nonce mismatch"):
         await store.release_lease("same-owner", epoch - 1)
@@ -53,7 +53,7 @@ async def test_release_lease_requires_matching_epoch(tmp_path, clock):
 
 @pytest.mark.asyncio
 async def test_release_lease_rejects_foreign_owner(tmp_path, clock):
-    store = SqliteEventStore("st_fo", tmp_path / "st_fo.db", clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore("st_fo", tmp_path / "st_fo.db", clock=clock)
     epoch = await store.acquire_lease("owner-a", ttl_s=30)
     nonce = store.owner_nonce
     assert nonce
@@ -67,7 +67,7 @@ async def test_release_lease_rejects_foreign_owner(tmp_path, clock):
 
 @pytest.mark.asyncio
 async def test_release_lease_rejects_foreign_nonce(tmp_path, clock):
-    store = SqliteEventStore("st_fn", tmp_path / "st_fn.db", clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore("st_fn", tmp_path / "st_fn.db", clock=clock)
     epoch = await store.acquire_lease("owner-a", ttl_s=30)
     with pytest.raises(LeaseLost, match="epoch/nonce mismatch"):
         await store.release_lease("owner-a", epoch, nonce="not-the-holder-nonce")
@@ -80,7 +80,7 @@ async def test_release_lease_rejects_foreign_nonce(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_release_and_renew_raise_on_missing_nonce(tmp_path, clock):
     """release_lease and renew_lease share the same missing-nonce failure mode."""
-    store = SqliteEventStore("st_mn", tmp_path / "st_mn.db", clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore("st_mn", tmp_path / "st_mn.db", clock=clock)
     epoch = await store.acquire_lease("owner-a", ttl_s=30)
     store.owner_nonce = None
     with pytest.raises(LeaseLost, match="missing owner nonce"):
@@ -94,10 +94,10 @@ async def test_release_and_renew_raise_on_missing_nonce(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_same_owner_name_different_nonce_cannot_steal(tmp_path, clock):
     db = tmp_path / "st_steal.db"
-    holder = SqliteEventStore("st_steal", db, clock=clock, lease_ttl_s=30.0)
+    holder = SqliteEventStore("st_steal", db, clock=clock)
     epoch = await holder.acquire_lease("shared-name", ttl_s=30)
     assert epoch == 1
-    interloper = SqliteEventStore("st_steal", db, clock=clock, lease_ttl_s=30.0)
+    interloper = SqliteEventStore("st_steal", db, clock=clock)
     with pytest.raises(LeaseLost, match="different nonce"):
         await interloper.acquire_lease("shared-name", ttl_s=30)
     with pytest.raises(LeaseLost):
@@ -108,10 +108,8 @@ async def test_same_owner_name_different_nonce_cannot_steal(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_pre_baseline_lease_without_owner_nonce_refused(tmp_path, clock):
-    """Pre-baseline journals missing owner_nonce column are refused (no DEFAULT '')."""
-    from coscientist.core.events.errors import JournalFormatError
-
+async def test_migrated_live_lease_empty_nonce_waits_for_ttl(tmp_path, clock):
+    """Old schema rows get owner_nonce=''; same owner cannot steal until TTL."""
     db = tmp_path / "st_mig.db"
     sid = "st_mig"
     expires = (clock.now() + timedelta(seconds=30)).isoformat()
@@ -128,13 +126,31 @@ async def test_pre_baseline_lease_without_owner_nonce_refused(tmp_path, clock):
     conn.commit()
     conn.close()
 
-    with pytest.raises(JournalFormatError, match="owner_nonce|pre-baseline"):
-        SqliteEventStore(sid, db, clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore(sid, db, clock=clock)
+    cols = {
+        str(r[1]) for r in store._conn.execute("PRAGMA table_info(lease)").fetchall()
+    }
+    assert "owner_nonce" in cols
+    held = store._conn.execute(
+        "SELECT owner_nonce, epoch FROM lease WHERE study_id=?", (sid,)
+    ).fetchone()
+    assert held["owner_nonce"] == ""
+    assert int(held["epoch"]) == 3
+
+    with pytest.raises(LeaseLost, match="different nonce"):
+        await store.acquire_lease("migrated-owner", ttl_s=30)
+    assert (await store.current_lease())[0] == "migrated-owner"
+
+    clock.advance(timedelta(seconds=31))
+    epoch = await store.acquire_lease("migrated-owner", ttl_s=30)
+    assert epoch == 4
+    assert store.owner_nonce
+    await store.close()
 
 
 @pytest.mark.asyncio
 async def test_store_close_is_idempotent(tmp_path, clock):
-    store = SqliteEventStore("st_close2", tmp_path / "st_close2.db", clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore("st_close2", tmp_path / "st_close2.db", clock=clock)
     assert store.closed is False
     await store.close()
     assert store.closed is True
@@ -219,7 +235,7 @@ async def test_open_runtime_acquire_false_does_not_release_seeded_nonce(
     db = tmp_path / sid / "events.db"
     db.parent.mkdir(parents=True, exist_ok=True)
 
-    seeder = SqliteEventStore(sid, db, clock=clock, lease_ttl_s=30.0)
+    seeder = SqliteEventStore(sid, db, clock=clock)
     await seeder.acquire_lease("holder", ttl_s=30)
     holder_nonce = seeder.owner_nonce
     holder_epoch = seeder.epoch
@@ -247,7 +263,8 @@ async def test_open_runtime_acquire_false_does_not_release_seeded_nonce(
     # Lease must still be held — cleanup must not release a seeded nonce.
     assert await _lease_owner(db, sid, clock) == "holder"
     cleanup = SqliteEventStore(
-        sid, db, clock=clock, owner="holder", owner_nonce=holder_nonce, epoch=holder_epoch, lease_ttl_s=30.0)
+        sid, db, clock=clock, owner="holder", owner_nonce=holder_nonce, epoch=holder_epoch
+    )
     await cleanup.release_lease("holder", holder_epoch)
     await cleanup.close()
 
@@ -267,7 +284,7 @@ async def test_open_runtime_cancelled_error_stops_writer_before_release(
     await seed.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(minutes=30),
         sid=sid,
     )
@@ -337,7 +354,7 @@ async def test_open_runtime_releases_lease_on_post_acquire_failure(
     await seed.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(minutes=30),
         sid=sid,
     )
@@ -403,7 +420,7 @@ async def test_open_runtime_releases_lease_on_post_acquire_failure(
         assert stores[-1].closed
         assert writers, "writer starts before runtime_cls"
         assert writers[-1].running is False
-        store = SqliteEventStore(sid, db, clock=clock, lease_ttl_s=30.0)
+        store = SqliteEventStore(sid, db, clock=clock)
         await store.acquire_lease("reopen")
         assert (await store.current_lease())[0] == "reopen"
         await store.release_lease("reopen", store.epoch)
@@ -429,7 +446,7 @@ async def test_open_runtime_releases_lease_on_post_acquire_failure(
         # start() raised before the writer was marked running.
         assert writers and writers[-1].running is False
     # Prove the lease is free without going through the still-patched open_runtime.
-    store = SqliteEventStore(sid, db, clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore(sid, db, clock=clock)
     await store.acquire_lease("reopen")
     assert (await store.current_lease())[0] == "reopen"
     await store.release_lease("reopen", store.epoch)

@@ -13,15 +13,13 @@ from coscientist.core.claims.reviews import review_key
 from coscientist.core.claims.rubric import freeze_rubric, rubric_digest
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.stance import claim_stance
-from coscientist.core.events.events import UnstampedEvent, make_idem
-from coscientist.core.events.upcasters import writer_schema_version
+from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     CodeCheck,
     OutputSpec,
-    PlanRole,
     QuestionSpec,
     ReqStatus,
     RequirementRef,
@@ -52,7 +50,7 @@ async def _complete_report_and_finalize(rt, tmp_path) -> None:
     ex, arts = attach_executor(rt, tmp_path)
     art = arts.put(
         b"# report\n",
-        make_tool_ref(f"{aid}:main", attempt_id=aid),
+        make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
     )
@@ -103,7 +101,8 @@ def _exp(
             name="main",
             media_type="text/markdown",
             role="report",
-            rubric=rubric, required=True)
+            rubric=rubric,
+        )
     ]
     return TaskSpec(
         task_key=key,
@@ -113,7 +112,8 @@ def _exp(
         depends_on=depends_on or ["PLAN"],
         addresses=addresses or [],
         expected_outputs=outs,
-        criteria=criteria if criteria is not None else ([RequirementRef(template_id="rubric_check", required=True)] if rubric else []), required=True, tolerate_failed_dep=False)  # noqa: E501
+        criteria=criteria if criteria is not None else ([RequirementRef(template_id="rubric_check")] if rubric else []),
+    )
 
 
 async def _boot(tmp_path, clock, sid: str, *, cancel_stages: bool = True):
@@ -153,7 +153,7 @@ async def _record_hitl_expand(rt, **kwargs):
     tid = next(iter(rt.tasks))
     await rt._append(
         [
-            UnstampedEvent(
+            EventEnvelope(
                 study_id=rt.study.study_id,
                 type="HitlOpened",
                 entity_key=rid,
@@ -170,13 +170,12 @@ async def _record_hitl_expand(rt, **kwargs):
                     "cost_rub": 0.0,
                 },
                 ts=rt.clock.now(),
-                schema_version=writer_schema_version('HitlOpened'),
-)
+            )
         ]
     )
     await rt._append(
         [
-            UnstampedEvent(
+            EventEnvelope(
                 study_id=rt.study.study_id,
                 type="HitlDecided",
                 entity_key=rid,
@@ -185,18 +184,15 @@ async def _record_hitl_expand(rt, **kwargs):
                     "request_id": rid,
                     "decision": "accept",
                     "by": "human",
-                    "delegated_by": "human",
+                    "decided_by": "human",
+                    "approved_by": "human",
                     "reason": "answered",
                     "spent_rub": 0.0,
                 },
                 ts=rt.clock.now(),
-                schema_version=writer_schema_version('HitlDecided'),
-)
+            )
         ]
     )
-    kwargs.setdefault("reason", "hitl_expand")
-    kwargs.setdefault("assign_keys", False)
-    kwargs.setdefault("origin", "plan")
     return await rt.expand_plan(**kwargs, hitl_request_id=rid)
 
 
@@ -232,10 +228,11 @@ def test_plan_validator_verdict_requires_criterion():
         depends_on=["PLAN"],
         addresses=["Q1"],
         criteria=[],
-        expected_outputs=[], required=True, tolerate_failed_dep=False)
+        expected_outputs=[],
+    )
     with pytest.raises(ValueError, match="criterion"):
         validate_final_types([bad], [q], catalog=None)
-    ok = bad.model_copy(update={"criteria": [RequirementRef(template_id="value_match", required=True)]})
+    ok = bad.model_copy(update={"criteria": [RequirementRef(template_id="value_match")]})
     validate_final_types([ok], [q])
 
 
@@ -283,7 +280,7 @@ def test_rubric_never_changes_stance():
     # Simulate rubric CheckResult on the side — stance property ignores it.
     key = _rk("rubric_check#0", "adequate")
     rub = evaluate_rubric(
-        CodeCheck(kind="rubric", output="main", rubric=_judge_only_rubric(), allow_network=False),
+        CodeCheck(kind="rubric", output="main", rubric=_judge_only_rubric()),
         template_id="rubric_check",
         check_id="rubric_check#0",
         out=AgentTaskOutput(summary="x"),
@@ -301,7 +298,7 @@ def test_rubric_never_changes_stance():
 def test_judge_not_met_stays_failed():
     """Judge verdict not-met → FAILED (never remapped to UNASSESSED)."""
     rub = _judge_only_rubric()
-    check = CodeCheck(kind="rubric", output="main", rubric=rub, allow_network=False)
+    check = CodeCheck(kind="rubric", output="main", rubric=rub)
     key = _rk("r#0", "adequate")
     cr = evaluate_rubric(
         check,
@@ -321,7 +318,7 @@ def test_judge_not_met_stays_failed():
 def test_judge_failure_unassessed_retry():
     """Infra failure → UNASSESSED path; retry then MET."""
     rub = _judge_only_rubric()
-    check = CodeCheck(kind="rubric", output="main", rubric=rub, allow_network=False)
+    check = CodeCheck(kind="rubric", output="main", rubric=rub)
     key = _rk("r#0", "adequate")
     # First infra failure while waiting → PENDING (attempt stays open).
     cr = evaluate_rubric(
@@ -398,7 +395,7 @@ async def test_final_type_artifact_fulfilled_by_rubric(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"# Literature review\n...",
-        make_tool_ref(f"{aid}:main", attempt_id=aid),
+        make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
     )
@@ -434,9 +431,6 @@ async def test_rubric_frozen_digest_runtime(tmp_path, clock):
     tasks, qs = freeze_plan_rubrics(
         [_exp("E0", addresses=["Q1"], rubric=rub.model_copy(update={"digest": ""}))],
         [QuestionSpec(id="Q1", text="q", final_type="artifact")],
-        rollup="all",
-        max_depth=8,
-        max_tasks=64,
     )
     assert tasks[0].expected_outputs[0].rubric is not None
     assert tasks[0].expected_outputs[0].rubric.digest == expected
@@ -574,7 +568,7 @@ async def test_judge_rubric_e2e_met_failed_retry(tmp_path, clock):
     task_id = rt.attempts[aid]["task_id"]
     art = arts.put(
         b"# review\n",
-        make_tool_ref(f"{aid}:main", attempt_id=aid),
+        make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
     )
@@ -667,7 +661,7 @@ async def test_judge_restart_after_review_scheduled(tmp_path, clock):
                 "E0",
                 addresses=["Q1"],
                 rubric=rub,
-                criteria=[RequirementRef(template_id="rubric_check", required=True)],
+                criteria=[RequirementRef(template_id="rubric_check")],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="lit", final_type="artifact")],
@@ -677,7 +671,7 @@ async def test_judge_restart_after_review_scheduled(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"# review\n",
-        make_tool_ref(f"{aid}:main", attempt_id=aid),
+        make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
     )
@@ -730,7 +724,7 @@ async def test_judge_restart_after_judge_failure(tmp_path, clock):
                 "E0",
                 addresses=["Q1"],
                 rubric=rub,
-                criteria=[RequirementRef(template_id="rubric_check", required=True)],
+                criteria=[RequirementRef(template_id="rubric_check")],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="lit", final_type="artifact")],
@@ -740,7 +734,7 @@ async def test_judge_restart_after_judge_failure(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"# review\n",
-        make_tool_ref(f"{aid}:main", attempt_id=aid),
+        make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
     )
@@ -785,7 +779,8 @@ async def test_plan_refused_invalid_rubric_still_finalizes(tmp_path, clock):
         depends_on=["PLAN"],
         addresses=["Q1"],
         criteria=[],
-        expected_outputs=[OutputSpec(name="main", media_type="text/markdown", role="report", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
+        expected_outputs=[OutputSpec(name="main", media_type="text/markdown", role="report")],
+    )
     pid = await rt.accept_plan([bad], questions=[q])
     assert pid == ""
     events = await rt.store.read_all()
@@ -825,7 +820,7 @@ def test_final_type_both_requires_verdict_and_rubric(clock):
         "E0",
         addresses=["Q1"],
         rubric=rub,
-        criteria=[RequirementRef(template_id="value_match", required=True)],
+        criteria=[RequirementRef(template_id="value_match")],
     )
     task = Task(
         task_id="s/E0",
@@ -835,8 +830,7 @@ def test_final_type_both_requires_verdict_and_rubric(clock):
         deadline=clock.now() + timedelta(hours=1),
         attempts=["a1"],
         outcome=TaskOutcome.SUCCESS,
-        plan_role=PlanRole.NONE,
-)
+    )
     plans = {
         "p1": {
             "questions": [{"id": "Q1", "text": "both?", "final_type": "both"}],
@@ -919,6 +913,59 @@ def test_rubric_digest_stable_canonical():
     assert rubric_digest(items, "all_required", 99) == d1
 
 
+def test_upcast_taskcreated_v10_and_plan_expanded_v2():
+    from coscientist.core.events.upcasters import upcast
+
+    v, p = upcast(
+        "TaskCreated",
+        9,
+        {
+            "task_id": "t",
+            "spec": {
+                "task_key": "E1",
+                "expected_outputs": [{"name": "main", "media_type": "text/plain"}],
+            },
+        },
+    )
+    # PR13 rubric (v10) + PR11 loop (v11) + PR15 kind (v12) + evidence_kind (v13).
+    assert v == 13
+    assert p["spec"]["expected_outputs"][0]["rubric"] is None
+    assert p["spec"]["expected_outputs"][0]["kind"] is None
+    v2, p2 = upcast(
+        "PlanExpanded",
+        1,
+        {
+            "plan_id": "p",
+            "added_tasks": [
+                {
+                    "task_key": "E1",
+                    "expected_outputs": [{"name": "main", "media_type": "text/plain"}],
+                }
+            ],
+            "added_questions": [{"id": "Q1", "text": "q"}],
+        },
+    )
+    assert v2 == 5  # PR15 kind v5 after PR16 decomposes v4
+    assert p2["added_tasks"][0]["expected_outputs"][0]["rubric"] is None
+    assert p2["added_tasks"][0]["loop_id"] is None
+    assert p2["added_tasks"][0]["expected_outputs"][0]["kind"] is None
+    assert p2["added_questions"][0]["final_type"] == "verdict"
+    assert p2.get("rollup") == "all"
+    # Legacy unknown final_type coerced to verdict (current unknown → PlanRefused).
+    v3, p3 = upcast(
+        "PlanAccepted",
+        7,
+        {
+            "plan_id": "p",
+            "questions": [{"id": "Q1", "text": "q", "final_type": "nope"}],
+            "tasks": [],
+        },
+    )
+    assert v3 == 11  # PR15 kind v11 after PR16 decomposes v10
+    assert p3["questions"][0]["final_type"] == "verdict"
+    assert p3.get("loops") == []
+    assert p3.get("rollup") == "all"
+
 
 def test_study_view_uses_study_fulfilled_final_types():
     """view must not stay fulfilled when study_fulfilled would downgrade (artifact+refuted)."""
@@ -934,8 +981,7 @@ def test_study_view_uses_study_fulfilled_final_types():
         deadline=__import__("datetime").datetime(2026, 1, 1, tzinfo=__import__("datetime").timezone.utc),
         outcome=TaskOutcome.SUCCESS,
         attempts=["a0"],
-        plan_role=PlanRole.NONE,
-)
+    )
     # Task-level SUCCESS would be fulfilled, but artifact+refuted must cap at partial.
     view = study_view(
         [t],
@@ -1001,7 +1047,7 @@ def test_review_key_scoped_no_cross_attempt():
     from coscientist.checks.kinds.rubric import evaluate_rubric
 
     rub = _judge_only_rubric()
-    check = CodeCheck(kind="rubric", output="main", rubric=rub, allow_network=False)
+    check = CodeCheck(kind="rubric", output="main", rubric=rub)
     foreign = review_key(
         task_id="other",
         attempt_id="aX",
@@ -1036,7 +1082,7 @@ def test_review_key_empty_fields_fail_closed():
         )
     with pytest.raises(ValueError, match="non-empty"):
         evaluate_rubric(
-            CodeCheck(kind="rubric", output="main", rubric=_judge_only_rubric(), allow_network=False),
+            CodeCheck(kind="rubric", output="main", rubric=_judge_only_rubric()),
             template_id="r",
             check_id="r#0",
             out=AgentTaskOutput(summary="x"),
@@ -1055,7 +1101,7 @@ def test_plan_refused_idem_hashes_full_detail():
     from coscientist.core.plan.plan_validate import refuse_detail
 
     long = "x" * 500
-    full = refuse_detail(long, truncate=False)
+    full = refuse_detail(long)
     assert len(full) == 500
     assert plan_refused_idem("s1", full) == make_idem("PlanRefused", "s1", sha256_hex(full.encode("utf-8")))
     # Truncated snippet must not be what we hash.
@@ -1077,7 +1123,7 @@ def test_both_rubric_pending_own_reason(clock):
         "E0",
         addresses=["Q1"],
         rubric=rub,
-        criteria=[RequirementRef(template_id="value_match", required=True)],
+        criteria=[RequirementRef(template_id="value_match")],
     )
     task = Task(
         task_id="s/E0",
@@ -1087,8 +1133,7 @@ def test_both_rubric_pending_own_reason(clock):
         deadline=clock.now() + timedelta(hours=1),
         attempts=["a1"],
         outcome=TaskOutcome.SUCCESS,
-        plan_role=PlanRole.NONE,
-)
+    )
     plans = {
         "p1": {
             "questions": [{"id": "Q1", "text": "q", "final_type": "both"}],
@@ -1286,7 +1331,7 @@ async def test_e2e_fulfilled_view_matches_payload(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"# Literature review\n...",
-        make_tool_ref(f"{aid}:main", attempt_id=aid),
+        make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
     )
@@ -1317,7 +1362,7 @@ async def test_e2e_downgrade_unaddressed_question_view_matches(tmp_path, clock):
     rt, _ex, arts = await _boot_stages_ok(tmp_path, clock, "st_pr13_downgrade")
     # E0 does not address Q1 → disposition not_attempted; tasks can still all SUCCESS.
     await rt.accept_plan(
-        [_exp("E0", addresses=[], rubric=None, criteria=[RequirementRef(template_id="artifact_present", required=True)])],  # noqa: E501
+        [_exp("E0", addresses=[], rubric=None, criteria=[RequirementRef(template_id="artifact_present")])],
         questions=[QuestionSpec(id="Q1", text="orphan question", final_type="verdict")],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -1325,7 +1370,7 @@ async def test_e2e_downgrade_unaddressed_question_view_matches(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"{}",
-        make_tool_ref(f"{aid}:main", attempt_id=aid),
+        make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="application/json",
     )
@@ -1354,7 +1399,7 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
     from coscientist.core.claims.reviews import JudgePendingCorrupt, rebuild_judge_state
 
     # Unit: rebuild must raise on non-int retry (fail-closed).
-    bad = UnstampedEvent(
+    bad = EventEnvelope(
         study_id="s",
         type="ReviewRecorded",
         entity_key="a1",
@@ -1366,8 +1411,7 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
             "attempt_id": "a1",
         },
         ts=clock.now(),
-        schema_version=writer_schema_version('ReviewRecorded'),
-)
+    )
     with pytest.raises(JudgePendingCorrupt, match="retry_corrupt"):
         rebuild_judge_state([bad], artifacts=None)
 
@@ -1386,7 +1430,7 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
                 "E0",
                 addresses=["Q1"],
                 rubric=rub,
-                criteria=[RequirementRef(template_id="rubric_check", required=True)],
+                criteria=[RequirementRef(template_id="rubric_check")],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="lit", final_type="artifact")],
@@ -1396,7 +1440,7 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"# review\n",
-        make_tool_ref(f"{aid}:main", attempt_id=aid),
+        make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
     )
@@ -1418,7 +1462,7 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
     )
     await rt._append(
         [
-            UnstampedEvent(
+            EventEnvelope(
                 study_id=sid,
                 type="ReviewRecorded",
                 entity_key=aid,
@@ -1435,8 +1479,7 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
                     "retry": {"bad": True},
                 },
                 ts=rt.clock.now(),
-                schema_version=writer_schema_version('ReviewRecorded'),
-)
+            )
         ]
     )
     await close_runtime(rt)
@@ -1468,7 +1511,7 @@ async def test_corrupt_judge_cas_finalizes_internal_error(tmp_path, clock):
                 "E0",
                 addresses=["Q1"],
                 rubric=rub,
-                criteria=[RequirementRef(template_id="rubric_check", required=True)],
+                criteria=[RequirementRef(template_id="rubric_check")],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="lit", final_type="artifact")],
@@ -1478,7 +1521,7 @@ async def test_corrupt_judge_cas_finalizes_internal_error(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"# review\n",
-        make_tool_ref(f"{aid}:main", attempt_id=aid),
+        make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
     )
@@ -1520,7 +1563,7 @@ async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
                 "E0",
                 addresses=["Q1"],
                 rubric=rub,
-                criteria=[RequirementRef(template_id="artifact_present", required=True)],
+                criteria=[RequirementRef(template_id="artifact_present")],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="both?", final_type="both")],
@@ -1530,7 +1573,7 @@ async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"body",
-        make_tool_ref(f"{aid}:main", attempt_id=aid),
+        make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
     )
@@ -1542,12 +1585,10 @@ async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             claims=[
                 {
-                    "id": "c1",
                     "text": "c1",
                     "polarity": "supports",
                     "target": "Q1",
                     "about": "Q1",
-                    "checked_against": "artifact_present",
                 }
             ],
         ),
@@ -1592,8 +1633,7 @@ def test_met_one_task_never_covers_another(clock):
         deadline=clock.now() + timedelta(hours=1),
         outcome=TaskOutcome.SUCCESS,
         attempts=["a0"],
-        plan_role=PlanRole.NONE,
-)
+    )
     t1 = Task(
         task_id="s/E1",
         kind=TaskKind.EXPERIMENT,
@@ -1602,8 +1642,7 @@ def test_met_one_task_never_covers_another(clock):
         deadline=clock.now() + timedelta(hours=1),
         outcome=TaskOutcome.SUCCESS,
         attempts=["a1"],
-        plan_role=PlanRole.NONE,
-)
+    )
     results = {
         "a0": {
             "attempt_id": "a0",

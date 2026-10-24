@@ -31,8 +31,8 @@ from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     CodeCheck,
+    HitlPolicy,
     Outcome,
-    PlanRole,
     ReqStatus,
     RequirementRef,
     SourceQuote,
@@ -50,7 +50,7 @@ from coscientist.tools.effects import (
     _mint_fetch_capability_for_tests,
     invoke_tool,
 )
-from tests.helpers import attach_executor, close_runtime, default_test_hitl_policy, open_runtime, record_success
+from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
 
 def _cap(
@@ -79,7 +79,7 @@ def _put_paper(
     try:
         return arts.put_fetched(
             content,
-            make_tool_ref(call, tool=tool, attempt_id=call),
+            make_tool_ref(call, tool=tool),
             name="paper.txt",
             media_type="text/plain",
             role="paper",
@@ -97,9 +97,8 @@ def _put_paper(
 def _catalog_quote() -> object:
     return load_catalog(
         {
-            "catalog_version": "1.0.0",
+            "catalog_version": "0.1.0-pr14",
             "edition": "pr14",
-            "sources_sha256": {},
             "rules": [
                 {
                     "rule_id": "R11",
@@ -116,19 +115,9 @@ def _catalog_quote() -> object:
                     "rule_ids": ["R11"],
                     "method_sources": ["test"],
                     "applies_to": ["experiment"],
-                    "check": {
-                        "check_type": "code",
-                        "kind": "quote_in_source",
-                        "output": "quote",
-                        "allow_network": False,
-                    },
+                    "check": {"kind": "quote_in_source", "output": "quote"},
                     "role": "validity",
-                    "kind": "catalog",
                     "required": True,
-                    "version": "1",
-                    "uses_sesoi": False,
-                    "predicts_null": False,
-                    "predicted_direction": "two_sided",
                 }
             ],
             "defaults": {"experiment": ["quote_ok"]},
@@ -139,7 +128,7 @@ def _catalog_quote() -> object:
 def _put_quote_json(arts: LocalArtifactStore, payload: dict, *, call: str):
     return arts.put(
         json.dumps(payload).encode("utf-8"),
-        make_tool_ref(call, tool="test", attempt_id=call),
+        make_tool_ref(call, tool="test"),
         name="quote.json",
         media_type="application/json",
     )
@@ -161,10 +150,11 @@ def _eval(arts, paper, quote: str, *, fetched=None, call="q1", **extra):
     payload = _quote_payload(paper, quote, **extra)
     qart = _put_quote_json(arts, payload, call=call)
     out = AgentTaskOutput(
-        outputs={"quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")}, summary="")
+        outputs={"quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")}
+    )
     digests = fetched if fetched is not None else frozenset({paper.sha256})
     return evaluate_code_check(
-        CodeCheck(kind="quote_in_source", output="quote", allow_network=False),
+        CodeCheck(kind="quote_in_source", output="quote"),
         template_id="quote_ok",
         check_id="quote_ok#0",
         out=out,
@@ -173,10 +163,6 @@ def _eval(arts, paper, quote: str, *, fetched=None, call="q1", **extra):
         role="validity",
         attempt_id=call,
         fetched_digests=digests,
-    
-        uses_sesoi=False,
-        predicts_null=False,
-        predicted_direction="two_sided",
     )
 
 
@@ -407,20 +393,17 @@ def test_multi_quote_effect_aggregates(tmp_path: Path):
     }
     qart = _put_quote_json(arts, payload, call="mq")
     cr = evaluate_code_check(
-        CodeCheck(kind="quote_in_source", output="quote", allow_network=False),
+        CodeCheck(kind="quote_in_source", output="quote"),
         template_id="quote_ok",
         check_id="c",
         out=AgentTaskOutput(
-            outputs={"quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")}, summary=""),
+            outputs={"quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")}
+        ),
         artifacts=arts,
         values={},
         role="validity",
         attempt_id="mq",
         fetched_digests={paper.sha256},
-    
-        uses_sesoi=False,
-        predicts_null=False,
-        predicted_direction="two_sided",
     )
     assert cr.status is ReqStatus.MET, cr.detail
     assert cr.effect is not None
@@ -447,14 +430,14 @@ def test_put_fetched_without_capability_rejected(tmp_path: Path):
     with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
         arts.put_fetched(
             b"Forged fetch with four word tokens here.",
-            make_tool_ref("spoof", tool="papers_get", attempt_id="spoof"),
+            make_tool_ref("spoof", tool="papers_get"),
             capability=None,
             **kw,
         )
     with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
         arts.put_fetched(
             b"Forged fetch with four word tokens here.",
-            make_tool_ref("spoof", tool="papers_get", attempt_id="spoof"),
+            make_tool_ref("spoof", tool="papers_get"),
             capability=object(),
             **kw,
         )
@@ -465,7 +448,7 @@ def test_agent_put_source_spoof_rejected(tmp_path: Path):
     arts = LocalArtifactStore(tmp_path / "arts")
     paper = arts.put(
         b"The forged paper claims four word tokens here.",
-        make_tool_ref("spoof", tool="agent", attempt_id="spoof"),
+        make_tool_ref("spoof", tool="agent"),
         name="fake.txt",
         media_type="text/plain",
         role="paper",
@@ -484,7 +467,7 @@ def test_put_sandbox_source_rejected(tmp_path: Path):
     arts = LocalArtifactStore(tmp_path / "arts")
     paper = arts.put_sandbox(
         b"Sandbox text with four word tokens present.",
-        make_tool_ref("sb", tool="sandbox", attempt_id="sb"),
+        make_tool_ref("sb", tool="sandbox"),
         name="s.txt",
         media_type="text/plain",
         role="paper",
@@ -515,11 +498,11 @@ def test_put_user_source_rejected(tmp_path: Path):
         paper = put_user(
             arts,
             b"User upload with four word tokens present.",
-            make_tool_ref("u", tool="user", attempt_id="u"),
+            make_tool_ref("u", tool="user"),
             capability=cap,
             name="u.txt",
             media_type="text/plain",
-            attempt_closed=False,
+            role="paper",  # forced to data; still not a quote source
         )
     finally:
         release_user_put_capability(cap)
@@ -567,20 +550,17 @@ def test_source_sha256_required(tmp_path: Path):
     }
     qart = _put_quote_json(arts, payload, call="q")
     cr = evaluate_code_check(
-        CodeCheck(kind="quote_in_source", output="quote", allow_network=False),
+        CodeCheck(kind="quote_in_source", output="quote"),
         template_id="quote_ok",
         check_id="c",
         out=AgentTaskOutput(
-            outputs={"quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")}, summary=""),
+            outputs={"quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")}
+        ),
         artifacts=arts,
         values={},
         role="validity",
         attempt_id="q",
         fetched_digests={paper.sha256},
-    
-        uses_sesoi=False,
-        predicts_null=False,
-        predicted_direction="two_sided",
     )
     assert cr.status is ReqStatus.FAILED
     assert cr.detail == "quote_payload_invalid"
@@ -593,9 +573,10 @@ def test_values_source_quote_path_removed(tmp_path: Path):
     out = AgentTaskOutput(
         values={
             "source_quote": _quote_payload(paper, "four word tokens appear"),
-        }, summary="")
+        }
+    )
     cr = evaluate_code_check(
-        CodeCheck(kind="quote_in_source", allow_network=False),
+        CodeCheck(kind="quote_in_source"),
         template_id="quote_ok",
         check_id="c",
         out=out,
@@ -603,10 +584,6 @@ def test_values_source_quote_path_removed(tmp_path: Path):
         values=out.values,
         role="validity",
         fetched_digests={paper.sha256},
-    
-        uses_sesoi=False,
-        predicts_null=False,
-        predicted_direction="two_sided",
     )
     assert cr.status is ReqStatus.FAILED
     assert cr.detail == "output_not_submitted"
@@ -621,20 +598,17 @@ def test_missing_normalization_version_unassessed(tmp_path: Path):
     payload["normalization_version"] = None
     qart = _put_quote_json(arts, payload, call="q")
     cr = evaluate_code_check(
-        CodeCheck(kind="quote_in_source", output="quote", allow_network=False),
+        CodeCheck(kind="quote_in_source", output="quote"),
         template_id="quote_ok",
         check_id="c",
         out=AgentTaskOutput(
-            outputs={"quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")}, summary=""),
+            outputs={"quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")}
+        ),
         artifacts=arts,
         values={},
         role="validity",
         attempt_id="q",
         fetched_digests={paper.sha256},
-    
-        uses_sesoi=False,
-        predicts_null=False,
-        predicted_direction="two_sided",
     )
     assert cr.status is ReqStatus.UNASSESSED
     assert cr.detail == "normalization_version_mismatch"
@@ -692,7 +666,7 @@ class _FetchTool:
         call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
         art = self.arts.put_fetched(
             self.body,
-            make_tool_ref(call_id, tool=self.spec.name, attempt_id=call_id),
+            make_tool_ref(call_id, tool=self.spec.name),
             name="paper.txt",
             media_type="text/plain",
             role="paper",
@@ -720,7 +694,7 @@ class _ReadNonFetchTool:
         with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
             self.arts.put_fetched(
                 self.body,
-                make_tool_ref(call_id, tool=self.spec.name, attempt_id=call_id),
+                make_tool_ref(call_id, tool=self.spec.name),
                 name="x.txt",
                 media_type="text/plain",
                 role="paper",
@@ -742,7 +716,7 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0-pr14",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -759,7 +733,8 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
+                criteria=[RequirementRef(template_id="quote_ok")],
+            )
         ],
         questions=[],
     )
@@ -771,7 +746,7 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
         study_id=sid,
         task_key="LIT-0",
         attempt_id=aid,
-        hitl_policy=default_test_hitl_policy(),
+        hitl_policy=HitlPolicy(),
         call_seq=1,
     )
     agent_url = "https://agent-supplied.example/ignored"
@@ -814,7 +789,8 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
             claim=Outcome.SUCCESS,
             outputs={
                 "quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")
-            }, summary=""),
+            },
+        ),
     )
     assert result.outcome == Outcome.SUCCESS
     await rt.fail_attempt(await rt.start_attempt("REPORT"), retryable=False)
@@ -834,7 +810,7 @@ async def test_invoke_tool_non_fetch_read_rejected(
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0-pr14",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -848,7 +824,7 @@ async def test_invoke_tool_non_fetch_read_rejected(
         study_id=sid,
         task_key="LIT",
         attempt_id="att_nf",
-        hitl_policy=default_test_hitl_policy(),
+        hitl_policy=HitlPolicy(),
         call_seq=1,
     )
     await invoke_tool(
@@ -870,7 +846,7 @@ async def test_store_fetched_source_journals_and_matches(
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0-pr14",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -887,7 +863,8 @@ async def test_store_fetched_source_journals_and_matches(
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
+                criteria=[RequirementRef(template_id="quote_ok")],
+            )
         ],
         questions=[],
     )
@@ -901,7 +878,8 @@ async def test_store_fetched_source_journals_and_matches(
         call_id="spoofatt:1",
         tool="papers_get",
         url="https://example.org/paper",
-        capability=cap, name="source.txt", media_type="text/plain", role="paper")
+        capability=cap,
+    )
     assert paper.tainted is True
     events = await rt.store.read_all()
     assert any(
@@ -910,7 +888,7 @@ async def test_store_fetched_source_journals_and_matches(
     )
     spoof = arts.put(
         b"The known result was confirmed under careful review today.",
-        make_tool_ref("spoof", tool="agent", attempt_id="spoof"),
+        make_tool_ref("spoof", tool="agent"),
         name="spoof.txt",
         media_type="text/plain",
         role="paper",
@@ -929,7 +907,8 @@ async def test_store_fetched_source_journals_and_matches(
             claim=Outcome.SUCCESS,
             outputs={
                 "quote": ArtifactHandle(artifact_id=q_spoof.artifact_id, name="quote")
-            }, summary=""),
+            },
+        ),
     )
     assert result.outcome in (Outcome.FAILED, Outcome.PARTIAL)
     if "REPORT" in {t.spec.task_key for t in rt.tasks.values()}:
@@ -956,7 +935,7 @@ async def test_source_fetched_survives_crash_reopen(
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0-pr14",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -979,7 +958,8 @@ async def test_source_fetched_survives_crash_reopen(
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
+                criteria=[RequirementRef(template_id="quote_ok")],
+            )
         ],
         questions=[],
     )
@@ -994,7 +974,8 @@ async def test_source_fetched_survives_crash_reopen(
         call_id=call_id,
         tool="papers_get",
         url="https://example.org/reopen",
-        capability=_cap(call_id, "papers_get", study_id=sid), name="source.txt", media_type="text/plain", role="paper")
+        capability=_cap(call_id, "papers_get", study_id=sid),
+    )
     paper_id = paper.artifact_id
     paper_sha = paper.sha256
     assert any(
@@ -1036,7 +1017,8 @@ async def test_source_fetched_survives_crash_reopen(
             claim=Outcome.SUCCESS,
             outputs={
                 "quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")
-            }, summary=""),
+            },
+        ),
     )
     assert result.outcome == Outcome.SUCCESS
     await rt2.fail_attempt(await rt2.start_attempt("REPORT"), retryable=False)
@@ -1053,7 +1035,7 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0-pr14",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -1070,7 +1052,8 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
+                criteria=[RequirementRef(template_id="quote_ok")],
+            )
         ],
         questions=[],
     )
@@ -1085,7 +1068,8 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
         call_id=call_id,
         tool="papers_get",
         url="https://example.org/ok",
-        capability=_cap(call_id, "papers_get", study_id=sid), name="source.txt", media_type="text/plain", role="paper")
+        capability=_cap(call_id, "papers_get", study_id=sid),
+    )
     qart = _put_quote_json(
         arts,
         _quote_payload(paper, "the known result was confirmed"),
@@ -1097,7 +1081,8 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
             claim=Outcome.SUCCESS,
             outputs={
                 "quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")
-            }, summary=""),
+            },
+        ),
     )
     assert result.outcome == Outcome.SUCCESS
     recorded = [
@@ -1165,14 +1150,17 @@ def test_evaluate_task_checks_passes_fetched(tmp_path: Path):
             title="lit",
             goal="g",
             route="literature",
-            criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False),
+            criteria=[RequirementRef(template_id="quote_ok")],
+        ),
         AgentTaskOutput(
             outputs={
                 "quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")
-            }, summary=""),
+            }
+        ),
         arts,
         attempt_id="att",
-        plan_role=PlanRole.NONE,
+        task_kind="literature",
+        task_key="LIT-0",
         fetched_digests={paper.sha256},
     )
     assert any(r.status is ReqStatus.MET for r in results)
@@ -1189,7 +1177,7 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0-pr14",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -1206,7 +1194,8 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
+                criteria=[RequirementRef(template_id="quote_ok")],
+            )
         ],
         questions=[],
     )
@@ -1217,7 +1206,7 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
         study_id=sid,
         task_key="LIT-0",
         attempt_id=aid,
-        hitl_policy=default_test_hitl_policy(),
+        hitl_policy=HitlPolicy(),
         call_seq=1,
     )
     out = await invoke_tool(
@@ -1241,7 +1230,7 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
         study_id=sid,
         task_key="LIT-0",
         attempt_id=aid,
-        hitl_policy=default_test_hitl_policy(),
+        hitl_policy=HitlPolicy(),
         call_seq=2,
     )
     with pytest.raises(ToolError, match="tainted context"):
@@ -1329,7 +1318,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0-pr14",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -1347,7 +1336,8 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
+                criteria=[RequirementRef(template_id="quote_ok")],
+            )
         ],
         questions=[],
     )
@@ -1360,7 +1350,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
             study_id=sid,
             task_key="LIT-0",
             attempt_id=aid,
-            hitl_policy=default_test_hitl_policy(),
+            hitl_policy=HitlPolicy(),
             call_seq=1,
         ),
         writer=rt.writer,
@@ -1395,7 +1385,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
                 study_id=sid,
                 task_key="LIT-0",
                 attempt_id=aid,
-                hitl_policy=default_test_hitl_policy(),
+                hitl_policy=HitlPolicy(),
                 call_seq=2,
             ),
             writer=rt2.writer,
@@ -1408,19 +1398,19 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
 async def test_direct_writer_append_source_fetched_rejected(tmp_path: Path, clock):
     """MAJOR: StudyWriter.append / store.append_many SourceFetched without permit."""
     from coscientist.core.events.errors import ArtifactRejected
-    from coscientist.core.events.events import UnstampedEvent, make_idem
+    from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.execution.source_fetch import FetchCapability
 
     rt = await open_runtime(tmp_path, "st_sf_deny", clock=clock)
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0-pr14",
         deadline=clock.now() + timedelta(seconds=30),
         sid="st_sf_deny",
         finalize_reserve_s=5,
     )
-    ev = UnstampedEvent(
+    ev = EventEnvelope(
         study_id="st_sf_deny",
         type="SourceFetched",
         entity_key="spoof",
@@ -1433,7 +1423,7 @@ async def test_direct_writer_append_source_fetched_rejected(tmp_path: Path, cloc
         },
         ts=datetime.now(UTC),
         schema_version=1,
-)
+    )
     with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
         await rt.writer.append(ev)
     with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
@@ -1511,7 +1501,7 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0-pr14",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -1528,7 +1518,8 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
+                criteria=[RequirementRef(template_id="quote_ok")],
+            )
         ],
         questions=[],
     )
@@ -1549,7 +1540,7 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
                 study_id=sid,
                 task_key="LIT-0",
                 attempt_id=aid,
-                hitl_policy=default_test_hitl_policy(),
+                hitl_policy=HitlPolicy(),
                 call_seq=1,
             ),
             writer=rt.writer,
@@ -1578,7 +1569,7 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
                 study_id=sid,
                 task_key="LIT-0",
                 attempt_id=aid,
-                hitl_policy=default_test_hitl_policy(),
+                hitl_policy=HitlPolicy(),
                 call_seq=2,
             ),
             writer=rt.writer,
@@ -1589,11 +1580,11 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
 
 def test_projection_source_fetched_requires_fetch_call_pairing():
     """SourceFetched without prior AttemptTainted fetch_call is not folded."""
-    from coscientist.core.events.events import UnstampedEvent
+    from coscientist.core.events.events import EventEnvelope
     from coscientist.core.events.projections import _get, _put, apply_to_map
 
     proj: dict = {}
-    sf = UnstampedEvent(
+    sf = EventEnvelope(
         study_id="s",
         type="SourceFetched",
         entity_key="x",
@@ -1607,11 +1598,11 @@ def test_projection_source_fetched_requires_fetch_call_pairing():
         ts=datetime.now(UTC),
         schema_version=1,
         seq=1,
-)
+    )
     apply_to_map(proj, sf)
     assert not proj.get("source_fetches")
     _put(proj, "attempts", "att", {"attempt_id": "att", "reason": "keep_me"})
-    at = UnstampedEvent(
+    at = EventEnvelope(
         study_id="s",
         type="AttemptTainted",
         entity_key="att",
@@ -1626,7 +1617,7 @@ def test_projection_source_fetched_requires_fetch_call_pairing():
         ts=datetime.now(UTC),
         schema_version=1,
         seq=2,
-)
+    )
     # Registry must know papers_get as is_fetch for the marker check.
     _reset_registry_for_tests()
     _register_tool_for_tests(
@@ -1660,7 +1651,7 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0-pr14",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -1677,7 +1668,8 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
+                criteria=[RequirementRef(template_id="quote_ok")],
+            )
         ],
         questions=[],
     )
@@ -1690,7 +1682,7 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
             study_id=sid,
             task_key="LIT-0",
             attempt_id=aid,
-            hitl_policy=default_test_hitl_policy(),
+            hitl_policy=HitlPolicy(),
             call_seq=1,
         ),
         writer=rt.writer,
@@ -1730,7 +1722,7 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
                 arts_out.append(
                     self.arts.put_fetched(
                         body,
-                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name, attempt_id=call_id),
+                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name),
                         name=f"p{i}.txt",
                         media_type="text/plain",
                         role="paper",
@@ -1752,7 +1744,7 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0-pr14",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -1769,7 +1761,8 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
+                criteria=[RequirementRef(template_id="quote_ok")],
+            )
         ],
         questions=[],
     )
@@ -1782,7 +1775,7 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
             study_id=sid,
             task_key="LIT-0",
             attempt_id=aid,
-            hitl_policy=default_test_hitl_policy(),
+            hitl_policy=HitlPolicy(),
             call_seq=1,
         ),
         writer=rt.writer,
@@ -1808,19 +1801,19 @@ def test_core_cannot_bypass_source_fetched_with_bool_flag(tmp_path: Path, clock)
     import asyncio
 
     from coscientist.core.events.errors import ArtifactRejected
-    from coscientist.core.events.events import UnstampedEvent, make_idem
+    from coscientist.core.events.events import EventEnvelope, make_idem
 
     async def _run() -> None:
         rt = await open_runtime(tmp_path, "st_core_bypass", clock=clock)
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version="1.0.0",
+            catalog_version="0.1.0-pr14",
             deadline=clock.now() + timedelta(seconds=30),
             sid="st_core_bypass",
             finalize_reserve_s=5,
         )
-        ev = UnstampedEvent(
+        ev = EventEnvelope(
             study_id="st_core_bypass",
             type="SourceFetched",
             entity_key="bypass",
@@ -1833,7 +1826,7 @@ def test_core_cannot_bypass_source_fetched_with_bool_flag(tmp_path: Path, clock)
             },
             ts=datetime.now(UTC),
             schema_version=1,
-)
+        )
         # No kwarg / empty id / random id — all refused (effects registry).
         with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
             await rt.store.append_many([ev])
@@ -1862,7 +1855,7 @@ async def test_append_failure_on_second_digest_clears_permits(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0-pr14",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -1879,7 +1872,8 @@ async def test_append_failure_on_second_digest_clears_permits(
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
+                criteria=[RequirementRef(template_id="quote_ok")],
+            )
         ],
         questions=[],
     )
@@ -1903,7 +1897,7 @@ async def test_append_failure_on_second_digest_clears_permits(
                 arts_out.append(
                     self.arts.put_fetched(
                         body,
-                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name, attempt_id=call_id),
+                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name),
                         name=f"p{i}.txt",
                         media_type="text/plain",
                         role="paper",
@@ -1937,7 +1931,7 @@ async def test_append_failure_on_second_digest_clears_permits(
                 study_id=sid,
                 task_key="LIT-0",
                 attempt_id=aid,
-                hitl_policy=default_test_hitl_policy(),
+                hitl_policy=HitlPolicy(),
                 call_seq=1,
             ),
             writer=rt.writer,
@@ -1951,7 +1945,7 @@ async def test_append_failure_on_second_digest_clears_permits(
 
 def test_attempt_tainted_without_is_fetch_does_not_pair():
     """Negative: AttemptTainted missing is_fetch must not create fetch_calls."""
-    from coscientist.core.events.events import UnstampedEvent
+    from coscientist.core.events.events import EventEnvelope
     from coscientist.core.events.projections import apply_to_map
     from coscientist.core.execution.source_fetch import (
         SourceFetchIndex,
@@ -1971,7 +1965,7 @@ def test_attempt_tainted_without_is_fetch_does_not_pair():
     apply_source_fetch_events(
         idx,
         [
-            UnstampedEvent(
+            EventEnvelope(
                 study_id="s",
                 type="AttemptTainted",
                 entity_key="att",
@@ -1980,8 +1974,8 @@ def test_attempt_tainted_without_is_fetch_does_not_pair():
                 ts=datetime.now(UTC),
                 schema_version=1,
                 seq=1,
-                ),
-            UnstampedEvent(
+            ),
+            EventEnvelope(
                 study_id="s",
                 type="SourceFetched",
                 entity_key="x",
@@ -1995,14 +1989,14 @@ def test_attempt_tainted_without_is_fetch_does_not_pair():
                 ts=datetime.now(UTC),
                 schema_version=1,
                 seq=2,
-),
+            ),
         ],
     )
     assert "deadbeef" not in idx.digests()
     proj: dict = {}
     apply_to_map(
         proj,
-        UnstampedEvent(
+        EventEnvelope(
             study_id="s",
             type="AttemptTainted",
             entity_key="att",
@@ -2011,7 +2005,7 @@ def test_attempt_tainted_without_is_fetch_does_not_pair():
             ts=datetime.now(UTC),
             schema_version=1,
             seq=1,
-                ),
+        ),
     )
     assert not proj.get("fetch_calls")
 
@@ -2056,11 +2050,11 @@ _RECLASS_FIXTURE = (
     / "reclassified_fetch_old"
 )
 
-# Raw schema_version values committed in events.db (schema v1 baseline).
+# Raw schema_version values committed in events.db (before upcast on open).
 _RECLASS_RAW_SCHEMA_VERSIONS = (
-    ("StudyCreated", 1),
+    ("StudyCreated", 2),
     ("PlanAccepted", 1),
-    ("TaskCreated", 1),
+    ("TaskCreated", 2),
     ("AttemptStarted", 1),
     ("AttemptTainted", 1),
     ("SourceFetched", 1),
@@ -2125,14 +2119,13 @@ def _copy_reclass_fixture(tmp_path: Path) -> tuple[str, str, str, Path]:
 async def test_reclassified_tool_study_opens_finalizes_uncounted(
     tmp_path: Path, clock
 ):
-    """MAJOR: schema-v1 fixture opens under reclassified tool; natural finalize.
+    """MAJOR: OLD-schema fixture opens under reclassified tool; natural finalize.
 
-    Committed journal (complete v1 StudyCreated / PlanAccepted / TaskCreated +
-    AttemptTainted is_fetch=True + SourceFetched). No production upcasters.
+    Committed journal (StudyCreated v2 / PlanAccepted v1 / TaskCreated v2 +
+    AttemptTainted is_fetch=True + SourceFetched). Upcasters run on open.
     Finalization via tick/deadline — not finalize(trigger=...).
     """
     from coscientist.core.events.projections import fold_events
-    from coscientist.core.events.schema_versions import STUDY_CREATED_SCHEMA_VERSION
     from coscientist.core.execution.source_fetch import load_source_fetch_index_from_writer
 
     sid, digest, call_id, db = _copy_reclass_fixture(tmp_path)
@@ -2142,9 +2135,10 @@ async def test_reclassified_tool_study_opens_finalizes_uncounted(
 
     catalog = _catalog_quote()
     rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog, owner="t2")
+    # Upcasters applied on read (StudyCreated lands at current schema).
     events_open = await rt.store.read_all()
     sc = next(e for e in events_open if e.type == "StudyCreated")
-    assert sc.schema_version == STUDY_CREATED_SCHEMA_VERSION == 1
+    assert sc.schema_version >= 9
     assert any(e.type == "FetchIntegrityRaised" for e in events_open)
 
     folded = fold_events(events_open)
@@ -2268,7 +2262,7 @@ def test_fetch_integrity_row_key_without_call_id():
     ``_row_key`` order for fetch_integrity (first non-empty wins):
     ``call_id`` → ``tool`` → ``tool_name`` → ``row_key``.
     """
-    from coscientist.core.events.events import UnstampedEvent, make_idem
+    from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.events.projections import _row_key, apply_to_map, fold_events
 
     # Empty call_id → tool.
@@ -2311,7 +2305,7 @@ def test_fetch_integrity_row_key_without_call_id():
         == "tn"
     )
 
-    ev = UnstampedEvent(
+    ev = EventEnvelope(
         study_id="st",
         type="FetchIntegrityRaised",
         entity_key="papers_get",
@@ -2324,7 +2318,7 @@ def test_fetch_integrity_row_key_without_call_id():
         },
         ts=datetime.now(UTC),
         schema_version=1,
-)
+    )
     folded = fold_events([ev])
     assert "papers_get" in (folded.get("fetch_integrity") or {})
     # Round-trip via _row_key after store-shaped row.

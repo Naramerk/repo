@@ -10,13 +10,19 @@ import pytest
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import Disposition, TaskReason, TerminalReason
 from coscientist.core.events.ids import hypothesis_node_id
+from coscientist.core.events.upcasters import (
+    UPCASTERS,
+    assert_upcaster_chain_continuous,
+    register_upcaster,
+    upcast,
+    writer_schema_version,
+)
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     LoopPredicate,
     LoopSpec,
-    PlanRole,
     QuestionSpec,
     RequirementRef,
     Task,
@@ -34,7 +40,7 @@ from coscientist.core.plan.loop_predicates import (
     scope_fingerprint,
     validate_loop_predicate,
 )
-from tests.helpers import attach_executor, close_runtime, default_test_hitl_policy, make_test_study, open_runtime
+from tests.helpers import attach_executor, close_runtime, open_runtime
 
 
 def _body(key: str = "BODY", *, depends_on: list[str] | None = None) -> list[TaskSpec]:
@@ -46,7 +52,8 @@ def _body(key: str = "BODY", *, depends_on: list[str] | None = None) -> list[Tas
             route="experiment",
             depends_on=list(depends_on or []),
             addresses=["Q1"],
-            criteria=[RequirementRef(template_id="value_match", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
+            criteria=[RequirementRef(template_id="value_match")],
+        )
     ]
 
 
@@ -83,7 +90,7 @@ async def _ok(rt, arts, aid: str, *, count: int = 1) -> None:
     """Record experiment output. ``count=225`` matches catalog ``value_match`` target."""
     content = f'{{"count": {int(count)}}}'.encode()
     art = arts.put(
-        content, make_tool_ref(f"{aid}:out", attempt_id=aid), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
     )
     await rt.executor.record(
         aid,
@@ -138,7 +145,7 @@ async def _open_study(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
@@ -246,9 +253,10 @@ async def test_loop_max_iter_missing_honest_refusal(tmp_path, clock, runtime_cls
                 route="experiment",
                 depends_on=["PLAN"],
                 addresses=["Q1"],
-                criteria=[RequirementRef(template_id="value_match", required=True)], required=True, tolerate_failed_dep=False)  # noqa: E501
+                criteria=[RequirementRef(template_id="value_match")],
+            )
         ],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[
             {
                 "loop_id": "L1",
@@ -288,10 +296,11 @@ async def test_loop_max_iter_exceeds_profile_rejected(tmp_path, clock, runtime_c
                 route="experiment",
                 depends_on=["loop:L1"],
                 addresses=["Q1"],
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                required=False, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="value_match")],
+                required=False,
+            )
         ],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[_loop(max_iter=9)],
     )
     assert pid == ""
@@ -306,7 +315,7 @@ async def test_loop_unknown_predicate_rejected(tmp_path, clock, runtime_cls):
     )
     pid = await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[_loop(until=LoopPredicate(name="not_a_real_pred", params={}))],
     )
     assert pid == ""
@@ -322,7 +331,7 @@ async def test_loop_unknown_scope_question_refused(tmp_path, clock, runtime_cls)
     )
     pid = await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[_loop(scope_questions=["Q_MISSING"])],
     )
     assert pid == ""
@@ -337,7 +346,7 @@ async def test_loop_unknown_scope_hypothesis_refused(tmp_path, clock, runtime_cl
     )
     pid = await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[_loop(scope_hypotheses=["H_MISSING"])],
     )
     assert pid == ""
@@ -360,10 +369,11 @@ async def test_loop_until_empty_scope_completes(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["loop:L1"],
                 addresses=["Q1"],
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                required=False, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="value_match")],
+                required=False,
+            )
         ],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[
             _loop(
                 max_iter=5,
@@ -416,10 +426,11 @@ async def test_loop_iteration_cap_honest_final(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["loop:L1"],
                 addresses=["Q1"],
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                required=False, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="value_match")],
+                required=False,
+            )
         ],
-        questions=[QuestionSpec(id="Q1", text="which hyp", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="which hyp")],
         loops=[
             _loop(
                 max_iter=2,
@@ -470,7 +481,7 @@ async def test_loop_infinite_guard_max_iter(tmp_path, clock, runtime_cls):
     _upsert_hyps(rt, "H1")
     await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[
             _loop(
                 max_iter=3,
@@ -506,10 +517,11 @@ async def test_loop_completed_survives_restart(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["loop:L1"],
                 addresses=["Q1"],
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                required=False, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="value_match")],
+                required=False,
+            )
         ],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[
             _loop(
                 max_iter=5,
@@ -560,10 +572,11 @@ async def test_loop_capped_survives_restart(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["loop:L1"],
                 addresses=["Q1"],
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                required=False, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="value_match")],
+                required=False,
+            )
         ],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[
             _loop(
                 max_iter=2,
@@ -613,10 +626,11 @@ async def test_loop_refuse_error_survives_restart(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["loop:L1"],
                 addresses=["Q1"],
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                required=False, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="value_match")],
+                required=False,
+            )
         ],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[
             _loop(
                 max_iter=5,
@@ -676,7 +690,7 @@ async def test_loop_no_change_stops_on_stable_scope(tmp_path, clock, runtime_cls
     )
     await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[loop],
     )
     assert len(current_loop_iter_tasks(rt, "L1", 1)) == 1
@@ -703,7 +717,7 @@ async def test_loop_criterion_met(tmp_path, clock, runtime_cls):
     )
     await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[
             _loop(
                 max_iter=4,
@@ -746,11 +760,11 @@ def test_pred_criterion_met_reads_check_results():
                         goal="g",
                         route="experiment",
                         loop_id="L1",
-                        loop_iter=1, required=True, tolerate_failed_dep=False),
+                        loop_iter=1,
+                    ),
                     state=TaskState.DONE,
                     deadline=datetime.now(timezone.utc),
-        plan_role=PlanRole.NONE,
-)
+                )
             }
             self.attempts = {"a1": {"task_id": "t1"}}
             self.results = {
@@ -785,7 +799,7 @@ async def test_loop_restart_idempotent(tmp_path, clock, runtime_cls):
     _upsert_hyps(rt, "H1")
     await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[
             _loop(
                 max_iter=2,
@@ -926,6 +940,7 @@ def test_survivors_le_real_graph_scope_filter():
     from datetime import datetime, timezone
 
     from coscientist.core.claims.graph import GraphStore, default_execution_registry
+    from coscientist.core.execution.domain import HitlPolicy, Study
 
     now = datetime.now(timezone.utc)
     loop_key = "EXP-LOOP"
@@ -934,12 +949,12 @@ def test_survivors_le_real_graph_scope_filter():
 
     class RT:
         def __init__(self):
-            self.study = make_test_study(
+            self.study = Study(
                 study_id=sid,
                 profile="research",
                 request="q",
-                catalog_version="1.0.0",
-                hitl_policy=default_test_hitl_policy(),
+                catalog_version="0.1.0",
+                hitl_policy=HitlPolicy(),
                 deadline=now,
                 created_at=now,
                 refutations_needed=1,
@@ -961,11 +976,11 @@ def test_survivors_le_real_graph_scope_filter():
                         goal="g",
                         route="experiment",
                         loop_id="L1",
-                        loop_iter=1, required=True, tolerate_failed_dep=False),
+                        loop_iter=1,
+                    ),
                     state=TaskState.DONE,
                     deadline=now,
-        plan_role=PlanRole.NONE,
-),
+                ),
                 "t_out": Task(
                     task_id=f"{sid}/{outside_key}",
                     kind=TaskKind.EXPERIMENT,
@@ -973,11 +988,11 @@ def test_survivors_le_real_graph_scope_filter():
                         task_key=outside_key,
                         title="out",
                         goal="g",
-                        route="experiment", required=True, tolerate_failed_dep=False),
+                        route="experiment",
+                    ),
                     state=TaskState.DONE,
                     deadline=now,
-        plan_role=PlanRole.NONE,
-),
+                ),
             }
 
     rt = RT()
@@ -1024,7 +1039,7 @@ async def test_survivors_le_e2e_real_graph_runtime(tmp_path, clock, runtime_cls)
     _upsert_hyps(rt, "H1", "H2")
     await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[
             _loop(
                 max_iter=3,
@@ -1150,8 +1165,98 @@ def test_dispositions_preserve_infeasible_and_outside_answers_under_cap():
     assert err["Q2"]["disposition"] == Disposition.NOT_ATTEMPTED.value
 
 
+def test_upcast_study_created_max_loop_iter():
+    v, p = upcast(
+        "StudyCreated",
+        1,
+        {
+            "study_id": "st_old",
+            "profile": "research",
+            "request": "q",
+            "catalog_version": "0.1.0",
+            "hitl_policy": {},
+            "deadline": "2026-01-01T01:00:00+00:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
+    assert v == 12
+    # #24 v10 setdefault(max_loop_iter, 8); #23 v11 preserves it; PR20 v12 max_proposals.
+    assert p["max_loop_iter"] == 8
+    assert p["as_of"] is None
+    assert p["user_input_ids"] == []
+    assert p["max_proposals"] == 3
+    from coscientist.core.events.upcasters import _study_created_v9_to_v10
+
+    assert _study_created_v9_to_v10({})["max_loop_iter"] == 8
 
 
+def test_upcast_plan_accepted_loops_default():
+    v, p = upcast(
+        "PlanAccepted",
+        1,
+        {
+            "plan_id": "pl1",
+            "study_id": "st",
+            "revision": 1,
+            "hypothesis_id": None,
+            "tasks": [],
+        },
+    )
+    assert v == 11  # PR15 kind after PR16 decomposes v10
+    assert p["loops"] == []
+    assert p.get("rollup") == "all"
+
+
+def test_upcast_task_created_loop_fields():
+    v, p = upcast(
+        "TaskCreated",
+        1,
+        {
+            "task_id": "st:EXP-0",
+            "kind": "experiment",
+            "spec": {
+                "task_key": "EXP-0",
+                "title": "t",
+                "goal": "g",
+                "route": "experiment",
+            },
+            "state": "PENDING",
+            "deadline": "2026-01-01T01:00:00+00:00",
+        },
+    )
+    assert v == 13
+    assert p["spec"]["loop_id"] is None
+    assert p["spec"]["loop_iter"] is None
+
+
+def test_upcaster_duplicate_and_continuous_chains():
+    from coscientist.core.events.events import (
+        PLAN_ACCEPTED_SCHEMA_VERSION,
+        STUDY_CREATED_SCHEMA_VERSION,
+        TASK_CREATED_SCHEMA_VERSION,
+    )
+
+    with pytest.raises(ValueError, match="duplicate upcaster"):
+        register_upcaster("TaskCreated", 1, lambda p: p)
+    for etype, writer in (
+        ("StudyCreated", STUDY_CREATED_SCHEMA_VERSION),
+        ("PlanAccepted", PLAN_ACCEPTED_SCHEMA_VERSION),
+        ("TaskCreated", TASK_CREATED_SCHEMA_VERSION),
+        ("AttemptStarted", writer_schema_version("AttemptStarted")),
+        ("ResultRecorded", writer_schema_version("ResultRecorded")),
+        ("StudyFinalized", writer_schema_version("StudyFinalized")),
+    ):
+        assert_upcaster_chain_continuous(etype, writer)
+        assert writer_schema_version(etype) == writer
+    # Writer constants must match the end of each upcaster chain.
+    assert writer_schema_version("StudyCreated") == STUDY_CREATED_SCHEMA_VERSION
+    assert writer_schema_version("PlanAccepted") == PLAN_ACCEPTED_SCHEMA_VERSION
+    assert writer_schema_version("TaskCreated") == TASK_CREATED_SCHEMA_VERSION
+    # Every registered chain is continuous 1..N-1 for its max.
+    for etype, bucket in UPCASTERS.items():
+        n = writer_schema_version(etype)
+        assert_upcaster_chain_continuous(etype, n)
+        assert max(bucket) == n - 1
 
 
 def test_validate_loop_predicate_builtins():
@@ -1188,7 +1293,7 @@ async def test_survivors_le_huge_n_plan_refused(tmp_path, clock, runtime_cls):
     )
     pid = await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[
             _loop(
                 until=LoopPredicate(name="survivors_le", params={"n": 10**400}),
@@ -1267,10 +1372,11 @@ async def test_fullwidth_loop_dep_normalized_on_accept(tmp_path, clock, runtime_
                 route="experiment",
                 depends_on=["loop:Ｌ１"],
                 addresses=["Q1"],
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                required=False, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="value_match")],
+                required=False,
+            )
         ],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[
             _loop(
                 loop_id="Ｌ１",
@@ -1319,10 +1425,11 @@ async def test_unregistered_plugin_predicate_fail_closed_on_restart(
                 route="experiment",
                 depends_on=["loop:L1"],
                 addresses=["Q1"],
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                required=False, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="value_match")],
+                required=False,
+            )
         ],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[
             _loop(
                 max_iter=5,
@@ -1364,14 +1471,14 @@ async def test_unregistered_plugin_predicate_fail_closed_on_restart(
 
 @pytest.mark.asyncio
 async def test_plan_expanded_uses_writer_constant(tmp_path, clock, runtime_cls):
-    from coscientist.core.events.schema_versions import PLAN_EXPANDED_SCHEMA_VERSION
+    from coscientist.core.events.events import PLAN_EXPANDED_SCHEMA_VERSION
 
     rt, arts = await _open_study(
         tmp_path, clock, "st_loop_sv", runtime_cls=runtime_cls
     )
     await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[
             _loop(
                 max_iter=1,
@@ -1413,7 +1520,7 @@ async def test_loop_unexpected_error_finalizes_live(tmp_path, clock, runtime_cls
         )
         await rt.accept_plan(
             [],
-            questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+            questions=[QuestionSpec(id="Q1", text="q")],
             loops=[
                 _loop(
                     max_iter=5,
@@ -1459,7 +1566,7 @@ async def test_loop_unexpected_error_finalizes_on_recover(
         )
         await rt.accept_plan(
             [],
-            questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+            questions=[QuestionSpec(id="Q1", text="q")],
             loops=[
                 _loop(
                     max_iter=5,
@@ -1552,7 +1659,7 @@ def test_count_survivors_and_validate_loop_specs_plan_invalid():
 @pytest.mark.asyncio
 async def test_materialize_loop_iter_writes_plan_expanded(tmp_path, clock, runtime_cls):
     """materialize_loop_iter emits PlanExpanded(loop=true) at writer schema."""
-    from coscientist.core.events.schema_versions import PLAN_EXPANDED_SCHEMA_VERSION
+    from coscientist.core.events.events import PLAN_EXPANDED_SCHEMA_VERSION
     from coscientist.core.plan.loop import materialize_loop_iter
 
     rt, arts = await _open_study(
@@ -1560,7 +1667,7 @@ async def test_materialize_loop_iter_writes_plan_expanded(tmp_path, clock, runti
     )
     await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[],
     )
     # Direct materialize (accept with empty loops leaves no auto-iter).
@@ -1590,8 +1697,11 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
     """Corrupt plan loops → real pydantic ValidationError → internal_error finalize."""
     import coscientist.core.plan.loop_predicates as lp
     from coscientist.core.claims.reasons import TerminalReason
-    from coscientist.core.events.events import UnstampedEvent, make_idem
-    from coscientist.core.events.schema_versions import PLAN_ACCEPTED_SCHEMA_VERSION
+    from coscientist.core.events.events import (
+        PLAN_ACCEPTED_SCHEMA_VERSION,
+        EventEnvelope,
+        make_idem,
+    )
 
     name = f"test_plugin_keep_running_{runtime_cls.__name__}"
     lp._REGISTRY.pop(name, None)
@@ -1602,7 +1712,7 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
         )
         await rt.accept_plan(
             [],
-            questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+            questions=[QuestionSpec(id="Q1", text="q")],
             loops=[
                 _loop(
                     max_iter=5,
@@ -1629,7 +1739,7 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
         # Inject a higher-revision PlanAccepted whose loops fail LoopSpec.model_validate.
         await rt2._append(  # noqa: SLF001
             [
-                UnstampedEvent(
+                EventEnvelope(
                     study_id=sid,
                     type="PlanAccepted",
                     entity_key="pl_corrupt_loops",
@@ -1653,7 +1763,7 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
                     },
                     ts=rt2.clock.now(),
                     schema_version=PLAN_ACCEPTED_SCHEMA_VERSION,
-)
+                )
             ]
         )
         await recover(rt2)
@@ -1693,7 +1803,7 @@ async def test_refuse_loop_failure_in_expected_branch_finalizes(
         )
         await rt.accept_plan(
             [],
-            questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+            questions=[QuestionSpec(id="Q1", text="q")],
             loops=[
                 _loop(
                     max_iter=5,
@@ -1754,10 +1864,11 @@ async def test_internal_error_closes_running_tasks_and_attempts(
                     goal="g",
                     route="experiment",
                     addresses=["Q1"],
-                    criteria=[RequirementRef(template_id="value_match", required=True)],
-                    required=False, tolerate_failed_dep=False)
+                    criteria=[RequirementRef(template_id="value_match")],
+                    required=False,
+                )
             ],
-            questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+            questions=[QuestionSpec(id="Q1", text="q")],
             loops=[
                 _loop(
                     max_iter=5,
@@ -1843,10 +1954,11 @@ async def test_internal_error_close_does_not_reenter_hooks(
                     goal="g",
                     route="experiment",
                     addresses=["Q1"],
-                    criteria=[RequirementRef(template_id="value_match", required=True)],
-                    required=False, tolerate_failed_dep=False)
+                    criteria=[RequirementRef(template_id="value_match")],
+                    required=False,
+                )
             ],
-            questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+            questions=[QuestionSpec(id="Q1", text="q")],
             expand_after=["OUT"],
             loops=[
                 _loop(
@@ -1898,7 +2010,7 @@ async def test_count_survivors_failure_finalizes_internal_error(
     )
     await rt.accept_plan(
         [],
-        questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="q")],
         loops=[
             _loop(
                 max_iter=5,
@@ -1933,7 +2045,7 @@ async def test_materialize_loop_iter_failure_finalizes_internal_error(
         )
         await rt.accept_plan(
             [],
-            questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+            questions=[QuestionSpec(id="Q1", text="q")],
             loops=[
                 _loop(
                     max_iter=5,
@@ -1979,7 +2091,7 @@ async def test_plan_invalid_from_predicate_body_finalizes(
         )
         await rt.accept_plan(
             [],
-            questions=[QuestionSpec(id="Q1", text="q", final_type="verdict")],
+            questions=[QuestionSpec(id="Q1", text="q")],
             loops=[
                 _loop(
                     max_iter=5,
@@ -2000,3 +2112,32 @@ async def test_plan_invalid_from_predicate_body_finalizes(
         lp._REGISTRY.pop(name, None)
 
 
+def test_upcast_plan_expanded_v2_loop_field_defaults():
+    """Old PlanExpanded v2 without loop fields → TaskSpec defaults on replay."""
+    v, p = upcast(
+        "PlanExpanded",
+        2,
+        {
+            "plan_id": "pl_old",
+            "added_tasks": [
+                {
+                    "task_key": "EXP-0",
+                    "title": "t",
+                    "goal": "g",
+                    "route": "experiment",
+                    "expected_outputs": [
+                        {"name": "main", "media_type": "application/json"}
+                    ],
+                }
+            ],
+            "added_questions": [],
+        },
+    )
+    assert v == 5  # PR15 kind+evidence after PR16 decomposes v4
+    spec = p["added_tasks"][0]
+    assert spec["loop_id"] is None
+    assert spec["loop_iter"] is None
+    assert spec["loop_template_key"] is None
+    assert p.get("rollup") == "all"
+    assert spec["expected_outputs"][0].get("kind") is None
+    assert spec["expected_outputs"][0].get("evidence_kind") is None

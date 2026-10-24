@@ -144,7 +144,7 @@ def assert_fetch_capability_bound(
 
 def _optional_payload_str(payload: dict[str, Any], key: str) -> str:
     """Return payload[key] when a non-empty str; else empty (shape check fail)."""
-    raw = payload.get(key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    raw = payload.get(key)
     if raw is None:
         return ""
     if not isinstance(raw, str):
@@ -184,7 +184,7 @@ def task_needs_source_fetch(catalog: Catalog, spec: TaskSpec) -> bool:
         for tid in catalog.defaults["experiment"]:
             refs.append(RequirementRef(template_id=tid, required=True))
     for ref in refs:
-        tmpl = by_id.get(ref.template_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        tmpl = by_id.get(ref.template_id)
         if tmpl is None:
             continue
         check = tmpl.check
@@ -197,7 +197,7 @@ def _attempt_id_from_call_id(call_id: str) -> str:
     """``call_id`` is ``{attempt_id}:{call_seq}`` — split on the last colon."""
     if ":" not in call_id:
         return call_id
-    return call_id.rsplit(":", 1)[0]  # audit-ok[str_rsplit]: structural id/key parse after typed gate
+    return call_id.rsplit(":", 1)[0]
 
 
 def source_fetched_payload_ok(payload: dict[str, Any]) -> bool:
@@ -205,7 +205,7 @@ def source_fetched_payload_ok(payload: dict[str, Any]) -> bool:
     call_id = _optional_payload_str(payload, "call_id")
     tool = _optional_payload_str(payload, "tool")
     digest = _optional_payload_str(payload, "digest")
-    url = payload.get("url")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    url = payload.get("url")
     if not call_id or ":" not in call_id:
         return False
     if not tool or not digest:
@@ -224,7 +224,7 @@ def source_fetched_paired_with_fetch_call(
         return False
     call_id = _optional_payload_str(payload, "call_id")
     tool = _optional_payload_str(payload, "tool")
-    return fetch_calls.get(call_id) == tool  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+    return fetch_calls.get(call_id) == tool
 
 
 @dataclass
@@ -252,7 +252,7 @@ class SourceFetchIndex:
         if not call_id and not tool:
             return
         for row in self.reclassified:
-            if row.get("call_id") == call_id and row.get("tool") == tool:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            if row.get("call_id") == call_id and row.get("tool") == tool:
                 return
         self.reclassified.append({"call_id": call_id, "tool": tool})
 
@@ -277,7 +277,7 @@ class SourceFetchIndex:
     def digests_for_attempt(self, attempt_id: str) -> frozenset[str]:
         if not attempt_id:
             return frozenset()
-        bag = self.by_attempt.get(attempt_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        bag = self.by_attempt.get(attempt_id)
         if bag is None:
             return frozenset()
         return frozenset(bag)
@@ -294,7 +294,7 @@ def note_fetch_call_from_attempt_tainted(payload: dict[str, Any]) -> tuple[str, 
     """
     if _optional_payload_str(payload, "reason") != "source_fetch":
         return None
-    is_fetch = payload.get("is_fetch")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+    is_fetch = payload.get("is_fetch")
     if is_fetch is not True:
         return None
     tool = _optional_payload_str(payload, "tool")
@@ -365,7 +365,7 @@ async def journal_fetch_integrity_raised(
         call_id = _optional_payload_str(issue, "call_id")
         if not tool and not call_id:
             continue
-        entity = call_id if call_id else tool  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        entity = call_id if call_id else tool
         ev = UnstampedEvent(
             study_id=study_id,
             type="FetchIntegrityRaised",
@@ -516,7 +516,7 @@ async def append_source_fetched(
         stored = await writer.append(ev, _source_fetched_cap_id=capability.id)
     except BaseException:
         release_source_fetched_write_permit(capability.id)
-        raise  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
+        raise
     _cache_note_fetch(writer, stored)
     if on_event is not None:
         on_event(stored)

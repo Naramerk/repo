@@ -53,13 +53,13 @@ def _fetch_url(output: object) -> str:
     try:
         data = output.data  # type: ignore[attr-defined]
     except AttributeError:
-        return ""  # audit-ok[except_silent_return]: structural absent output.data
+        return ""
     if not isinstance(data, dict):
         return ""
-    url = data.get("url")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    url = data.get("url")
     if isinstance(url, str) and url:
         return url
-    uri = data.get("uri")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    uri = data.get("uri")
     if isinstance(uri, str) and uri:
         return uri
     return ""
@@ -84,10 +84,10 @@ class _IssuedFetchCap:
     attempt_id: str
 
 
-_ISSUED_FETCH_CAPS: dict[str, Any] = {}  # audit-ok[field_default]: structural empty = no issued fetch caps yet
+_ISSUED_FETCH_CAPS: dict[str, Any] = {}
 # After verify consumes an issued id, a one-shot write permit for SourceFetched
 # remains until store/writer takes it (bound to the same capability id).
-_SOURCE_FETCHED_WRITE_PERMITS: dict[str, Any] = {}  # audit-ok[field_default]: structural empty = no write permits yet
+_SOURCE_FETCHED_WRITE_PERMITS: dict[str, Any] = {}
 
 
 def _mint_fetch_capability(
@@ -112,12 +112,12 @@ def _mint_fetch_capability_for_tests(
     *,
     tool: str,
     call_id: str,
-    study_id: str = _TEST_STUDY_ID,  # audit-ok[named_default]: named constant / enum member default; not silent invent
+    study_id: str = _TEST_STUDY_ID,
     attempt_id: str | None = None,
 ) -> FetchCapability:
     """Test-only mint (AST-banned outside ``tests/``)."""
     aid = attempt_id if attempt_id is not None else (
-        call_id.rsplit(":", 1)[0] if ":" in call_id else call_id  # audit-ok[ternary_name]: structured call_id parse # audit-ok[str_rsplit]: structured call_id parse  # audit-ok[str_rsplit]: structural id/key parse after typed gate  # audit-ok[str_rsplit]: structural id/key parse after typed gate  # noqa: E501
+        call_id.rsplit(":", 1)[0] if ":" in call_id else call_id
     )
     return _mint_fetch_capability(
         tool=tool, call_id=call_id, study_id=study_id, attempt_id=aid
@@ -144,7 +144,7 @@ def _lookup_issued(
 ) -> tuple[FetchCapability, _IssuedFetchCap]:
     if not isinstance(capability, FetchCapability):
         raise ArtifactRejected("fetch_capability_required")
-    entry = _ISSUED_FETCH_CAPS.get(capability.id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+    entry = _ISSUED_FETCH_CAPS.get(capability.id)
     if entry is None:
         raise ArtifactRejected("fetch_capability_required")
     if tool is not None and entry.tool != tool:
@@ -209,7 +209,7 @@ def _take_source_fetched_write_permit(
 
     Bind mismatches raise without consuming so a correct retry can still take.
     """
-    entry = _SOURCE_FETCHED_WRITE_PERMITS.get(cap_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+    entry = _SOURCE_FETCHED_WRITE_PERMITS.get(cap_id)
     if entry is None:
         raise ArtifactRejected("fetch_capability_required")
     if entry.tool != tool or entry.call_id != call_id or entry.study_id != study_id:
@@ -311,10 +311,10 @@ class EffectIndex:
             if key in self.done:
                 continue
             if (
-                _or_empty_str(payload.get('study_id')) == study_id  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-                and _or_empty_str(payload.get('task_key')) == task_key  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-                and _or_empty_str(payload.get('tool')) == tool  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-                and _or_empty_str(payload.get('args_digest')) == args_digest  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                _or_empty_str(payload.get('study_id')) == study_id
+                and _or_empty_str(payload.get('task_key')) == task_key
+                and _or_empty_str(payload.get('tool')) == tool
+                and _or_empty_str(payload.get('args_digest')) == args_digest
             ):
                 return dict(payload)
         return None
@@ -323,19 +323,19 @@ class EffectIndex:
 def load_effect_index(events: list[StoredEvent] | list[Any]) -> EffectIndex:
     idx = EffectIndex()
     for ev in events:
-        t = ev.type or (ev.get("type") if isinstance(ev, dict) else None)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        t = ev.type or (ev.get("type") if isinstance(ev, dict) else None)
         if isinstance(ev, dict):
-            p = ev.get("payload")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            p = ev.get("payload")
         else:
             p = ev.payload
         if p is None:
             p = {}
         if not isinstance(p, dict):
             continue
-        key = _or_empty_str(p.get("key"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        key = _or_empty_str(p.get("key"))
         if not key:
             if isinstance(ev, dict):
-                key = _or_empty_str(ev.get("entity_key"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                key = _or_empty_str(ev.get("entity_key"))
             else:
                 key = _or_empty_str(ev.entity_key)
         if not key:
@@ -360,7 +360,7 @@ def _apply_events(idx: EffectIndex, events: list[Any]) -> int:
             p = {}
         if not isinstance(p, dict):
             continue
-        key = _or_empty_str(p.get("key"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        key = _or_empty_str(p.get("key"))
         if not key:
             key = _or_empty_str(ev.entity_key)
         if not key:
@@ -414,14 +414,14 @@ def _note_attempt_taint(cache: dict[str, bool], ev: Any) -> None:
         p = {}
     if not isinstance(p, dict):
         return
-    aid = _or_empty_str(p.get("attempt_id"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+    aid = _or_empty_str(p.get("attempt_id"))
     if not aid:
         aid = _or_empty_str(ev.entity_key)
     if not aid:
         return
     if t == "AttemptStarted":
         # Sticky OR: later AttemptTainted must not be cleared by replay order.
-        cache[aid] = (cache.get(aid) is True) or (p.get("tainted_context") is True)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        cache[aid] = (cache.get(aid) is True) or (p.get("tainted_context") is True)
     elif t == "AttemptTainted":
         cache[aid] = True
 
@@ -518,18 +518,18 @@ def _restore_output(
     done: dict[str, Any],
 ) -> ToolOutput:
     """Return the stored result or raise — never a stub ``{restored: True}``."""
-    status = _or_empty_str(done.get("status"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+    status = _or_empty_str(done.get("status"))
     if not status:
         status = "ok"
     if status == "failed":
-        kind = _or_empty_str(done.get("error_kind"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        kind = _or_empty_str(done.get("error_kind"))
         if not kind:
             kind = "opaque"
-        detail = _or_empty_str(done.get("detail"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        detail = _or_empty_str(done.get("detail"))
         if not detail:
             detail = "EffectDone(failed)"
         raise ToolError(kind, detail)  # type: ignore[arg-type]
-    result_ref = done.get("result_ref")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+    result_ref = done.get("result_ref")
     if not result_ref:
         raise ToolError("opaque", "EffectDone missing result_ref")
     if arts is None:
@@ -539,7 +539,7 @@ def _restore_output(
         )
     raw = arts.read(str(result_ref))
     payload = json.loads(raw.decode("utf-8"))
-    return ToolOutput.model_validate(payload.get("output") or payload)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # noqa: E501
+    return ToolOutput.model_validate(payload.get("output") or payload)
 
 
 async def _append(
@@ -754,7 +754,7 @@ async def invoke_tool(
                 idx.intended[k] = v
 
     # Same-attempt Done → restore.
-    done = idx.done.get(key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    done = idx.done.get(key)
     if done is not None:
         return _restore_output(artifacts, done)
 
@@ -768,14 +768,14 @@ async def invoke_tool(
         args_digest=digest,
     )
     if doubt is not None:
-        same_attempt = _or_empty_str(doubt.get('attempt_id')) == ctx.attempt_id  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        same_attempt = _or_empty_str(doubt.get('attempt_id')) == ctx.attempt_id
         if same_attempt and reg.supports_idem_key:
             pass  # re-call with server-side idem_key
         else:
             raise ToolError(
                 "opaque",
                 "EffectIntended without EffectDone; status unknown "
-                f"(attempt={doubt.get('attempt_id')!r})",  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                f"(attempt={doubt.get('attempt_id')!r})",
             )
 
     now = datetime.now(UTC)
@@ -848,12 +848,12 @@ async def invoke_tool(
             )
             idx.note_done(key, {"key": key, "status": "failed"})
         raise
-    except Exception as exc:  # audit-ok[broad_except]: tool failure → opaque EffectDone (never invent success)
+    except Exception as exc:
         raise ToolError("opaque", f"tool raised: {type(exc).__name__}: {exc}") from exc
 
     if output.artifacts:
         tainted_arts = [
-            a if a.tainted else a.model_copy(update={"tainted": True})  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+            a if a.tainted else a.model_copy(update={"tainted": True})
             for a in output.artifacts
         ]
         output = output.model_copy(update={"artifacts": tainted_arts})

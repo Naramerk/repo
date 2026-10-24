@@ -28,7 +28,7 @@ async def test_intake_empty_request():
 
 @pytest.mark.asyncio
 async def test_intake_budget_zero():
-    r = await intake("q", [], "research", Budget(max_cost_rub=Decimal("0"), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500))  # noqa: E501
+    r = await intake("q", [], "research", Budget(max_cost_rub=Decimal("0")))
     assert isinstance(r, IntakeRefuse)
     assert r.kind == RefusalKind.BUDGET_ZERO
 
@@ -39,7 +39,7 @@ async def test_intake_below_min_plan_cost():
         "q",
         [],
         "research",
-        Budget(max_cost_rub=Decimal("5"), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500),
+        Budget(max_cost_rub=Decimal("5")),
         min_plan_cost=Decimal("10"),
     )
     assert isinstance(r, IntakeRefuse) and r.kind == RefusalKind.BUDGET_ZERO
@@ -63,7 +63,7 @@ async def test_intake_duration_too_short():
 async def test_intake_accepts_ok():
     assert isinstance(
         await intake(
-            "do science", [], "research", Budget(max_cost_rub=Decimal("100"), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500)  # noqa: E501
+            "do science", [], "research", Budget(max_cost_rub=Decimal("100"))
         ),
         IntakeAccept,
     )
@@ -166,7 +166,7 @@ async def test_intake_refuses_before_spec(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid="st_in",
         finalize_reserve_s=5,
@@ -210,11 +210,11 @@ async def test_budget_zero_refused(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid="st_b0",
         finalize_reserve_s=5,
-        budget=Budget(max_cost_rub=Decimal("0"), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500),
+        budget=Budget(max_cost_rub=Decimal("0")),
     )
     assert rt._finalized and not rt.tasks
     fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
@@ -230,7 +230,7 @@ async def test_duration_le_reserve_refused(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=30),
         sid="st_dur",
         finalize_reserve_s=30,
@@ -261,7 +261,7 @@ async def test_intake_refuse_survives_crash(tmp_path, clock, runtime_cls, monkey
         await rt.create_study(
             profile="research",
             request="",
-            catalog_version="1.0.0",
+            catalog_version="0.1.0",
             deadline=clock.now() + timedelta(seconds=60),
             sid=sid,
             finalize_reserve_s=5,

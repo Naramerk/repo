@@ -1,4 +1,4 @@
-"""PR 2: study finalizer, dispositions, minimal_report."""
+"""PR 2: study finalizer, dispositions, minimal_report, upcasts."""
 
 from __future__ import annotations
 
@@ -11,15 +11,14 @@ import pytest
 
 from coscientist.core.claims.dispositions import dispositions
 from coscientist.core.claims.reasons import NotAttemptedReason, TaskReason, TerminalReason
-from coscientist.core.events.digest import canonical_json, payload_digest
+from coscientist.core.events.digest import canonical_json
 from coscientist.core.events.errors import Conflict, Idempotent, StudyClosedError
-from coscientist.core.events.events import UnstampedEvent, make_idem
+from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.metrics import late_write_rejected_total
 from coscientist.core.events.projections import fold_events
-from coscientist.core.events.upcasters import writer_schema_version
+from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.domain import (
-    PlanRole,
     QuestionSpec,
     RequirementRef,
     Task,
@@ -55,7 +54,7 @@ async def _boot(
         tmp, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
     await rt.create_study(
-        profile="research", request="q", catalog_version="1.0.0",
+        profile="research", request="q", catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=seconds), sid=sid,
         finalize_reserve_s=reserve,
     )
@@ -89,11 +88,10 @@ def _task(key, *, outcome=TaskOutcome.SUCCESS, reason=None, required=True,
           kind=TaskKind.EXPERIMENT, state=TaskState.DONE):
     return Task(
         task_id=f"st/{key}", kind=kind,
-        spec=TaskSpec(task_key=key, title=key, goal="g", route="experiment", required=required, tolerate_failed_dep=False),  # noqa: E501
+        spec=TaskSpec(task_key=key, title=key, goal="g", route="experiment", required=required),
         state=state, outcome=outcome if state == TaskState.DONE else None,
         reason=reason, deadline=_TS,
-        plan_role=PlanRole.NONE,
-)
+    )
 
 
 def _spec(key, addresses=None, deps=None):
@@ -101,14 +99,15 @@ def _spec(key, addresses=None, deps=None):
         task_key=key, title=key, goal="g", route="experiment",
         depends_on=deps or ["PLAN"], addresses=addresses or [],
     # Explicit criterion — PlanValidator does not credit catalog defaults.
-    criteria=[RequirementRef(template_id="artifact_present", required=True)] if addresses else [], required=True, tolerate_failed_dep=False)  # noqa: E501
+    criteria=[RequirementRef(template_id="artifact_present")] if addresses else [],
+    )
 
 
 def test_same_tick_tiebreak():
-    assert pick_finalize_trigger(cancelled=True, budget=True, deadline=True, refused=False, all_done=False) == "cancel"
-    assert pick_finalize_trigger(budget=True, deadline=True, cancelled=False, refused=False, all_done=False) == "budget"
-    assert pick_finalize_trigger(refused=True, deadline=True, cancelled=False, budget=False, all_done=False) == "intake"
-    assert pick_finalize_trigger(deadline=True, all_done=True, cancelled=False, budget=False, refused=False) == "deadline"  # noqa: E501
+    assert pick_finalize_trigger(cancelled=True, budget=True, deadline=True) == "cancel"
+    assert pick_finalize_trigger(budget=True, deadline=True) == "budget"
+    assert pick_finalize_trigger(refused=True, deadline=True) == "intake"
+    assert pick_finalize_trigger(deadline=True, all_done=True) == "deadline"
 
 
 def test_terminal_reason_trigger_cancel():
@@ -154,11 +153,10 @@ def test_all_done_not_attempted_is_completed_not_infeasible():
 
 def test_contributing_reasons_ordered_by_seq():
     def td(key, reason, seq):
-        return UnstampedEvent(
+        return EventEnvelope(
             study_id="s", type="TaskDone", entity_key=key, idem_key=key,
             payload={"reason": reason}, ts=_TS, seq=seq,
-            schema_version=writer_schema_version('TaskDone'),
-                )
+        )
     assert contributing_reasons_ordered([td("a", "budget", 2), td("b", "cancelled", 1), td("c", "budget", 3)]) == [
         "cancelled", "budget", "не выполнено: бюджет задачи исчерпан",
     ]
@@ -211,9 +209,147 @@ def test_questions_from_spec_output_wired():
     assert out == [{"id": "Q1", "text": "one"}, {"id": "Q2", "text": "two"}, {"id": "Q3", "text": "three"}]
 
 
+def test_upcast_taskcreated_addresses_default():
+    v, p = upcast("TaskCreated", 2, {"task_id": "t", "spec": {"task_key": "E1"}})
+# …→v10 rubric → v11 loop → v12 kind → v13 evidence_kind.
+    assert v == 13 and p["spec"]["addresses"] == []
+    assert p["spec"]["foreach"] is None
+    assert p["spec"]["sandbox_timeout_s"] is None
+    assert p["spec"]["budget_share"] is None
+    assert p["spec"]["loop_id"] is None
 
 
+def test_upcast_taskcreated_input_mode_old_default():
+    v, p = upcast(
+        "TaskCreated",
+        3,
+        {
+            "task_id": "t",
+            "spec": {
+                "task_key": "E1",
+                "addresses": [],
+                "inputs": [{"from_task": "A", "output": "main"}],
+            },
+        },
+    )
+    assert v == 13
+    assert p["spec"]["inputs"][0]["mode"] == "use_partial"
+    assert p["spec"]["inputs"][0]["kind"] == "artifact"
+    assert p["spec"]["inputs"][0]["quorum"] is None
+    assert p["spec"]["sandbox_memory_mb"] is None
+    assert p["spec"]["deadline_share"] is None
+    assert p["spec"]["loop_iter"] is None
 
+
+def test_upcast_planaccepted_questions_default():
+    v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
+    assert v == 11 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
+    assert p.get("rollup") == "all" and p.get("subquestions") == []
+
+    # PR13 rubric (v8); PR11 loops (v9); PR16 rollup (v10); PR15 kind (v11).
+    v2, p2 = upcast(
+        "PlanAccepted",
+        7,
+        {
+            "plan_id": "p",
+            "questions": [{"id": "Q1", "text": "q"}],
+            "tasks": [
+                {
+                    "task_key": "E1",
+                    "expected_outputs": [{"name": "main", "media_type": "text/plain"}],
+                }
+            ],
+        },
+    )
+    assert v2 == 11
+    assert p2["questions"][0]["final_type"] == "verdict"
+    assert p2["loops"] == []
+    assert p2.get("rollup") == "all"
+    assert p2["tasks"][0]["expected_outputs"][0]["kind"] is None
+    assert p2["tasks"][0]["expected_outputs"][0]["evidence_kind"] is None
+
+    assert p["expand_after"] == []
+    assert p["loops"] == []
+    assert p["tasks"][0]["foreach"] is None
+    assert p["tasks"][0]["sandbox_timeout_s"] is None
+    assert p["tasks"][0]["budget_share"] is None
+    assert p["tasks"][0]["loop_id"] is None
+
+
+def test_upcast_taskcreated_strips_plan_criterion_role():
+    """v5→v6 drops plan-side role; catalog is the authority at evaluate time."""
+    v, p = upcast(
+        "TaskCreated",
+        5,
+        {
+            "task_id": "t",
+            "spec": {
+                "task_key": "E1",
+                "addresses": [],
+                "criteria": [
+                    {
+                        "template_id": "value_match",
+                        "required": True,
+                        "role": "validity",  # stale / wrong — stripped
+                    },
+                    {"template_id": "artifact_present", "required": True},
+                ],
+            },
+        },
+    )
+    assert v == 13
+    for c in p["spec"]["criteria"]:
+        assert "role" not in c
+    assert p["spec"]["foreach"] is None
+    assert p["spec"]["sandbox_timeout_s"] is None
+    assert p["spec"]["budget_share"] is None
+    assert p["spec"]["loop_template_key"] is None
+
+
+def test_upcast_study_finalized_v1_adds_counts_and_refusal():
+    v, p = upcast(
+        "StudyFinalized",
+        1,
+        {
+            "trigger": "all_done",
+            "terminal_reason": "completed",
+            "contributing_reasons": [],
+            "verdict": "partial",
+            "question_dispositions": {},
+            "report_artifact_id": None,
+            "conclusion_ids": [],
+            "minimal_report": {
+                "study_id": "st",
+                "terminal_reason": "completed",
+                "trigger": "all_done",
+                "contributing_reasons": [],
+                "summary": "x",
+                "fallback_reason": None,
+                "verdict": "partial",
+                "tasks": [],
+                "questions": [
+                    {
+                        "question_id": "Q1",
+                        "formulation": "q",
+                        "disposition": "not_attempted",
+                        "reason": "no_task",
+                    }
+                ],
+                "sections": {"real": [], "stub": [], "human": []},
+                "truncated": False,
+            },
+            "fallback_reason": None,
+        },
+    )
+    # v1→v2 (refusal/counts) → v2→v3 (hypotheses[]) → v3→v4 (custom_checks PR20)
+    assert v == 4
+    assert p["refusal"] is None
+    assert p["minimal_report"]["question_count"] == 1
+    assert p["minimal_report"]["not_attempted_count"] == 1
+    assert p["minimal_report"]["refusal"] is None
+    assert p["minimal_report"]["hypotheses"] == []
+    assert p["custom_checks"] == []
+    assert p["observations"] == []
 
 
 def test_minimal_report_le_10kb():
@@ -328,18 +464,20 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="A", title="a", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),  # noqa: E501
+                task_key="A", title="a", goal="g", route="experiment", depends_on=["PLAN"]
+            ),
             TaskSpec(
-                task_key="B", title="b", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),  # noqa: E501
+                task_key="B", title="b", goal="g", route="experiment", depends_on=["PLAN"]
+            ),
         ],
         questions=[],
     )
     a = rt.tasks[f"{sid}/A"]
-    events: list[UnstampedEvent] = []
+    events: list[EventEnvelope] = []
     for aid in a.attempts:
         if not rt.attempts.get(aid, {}).get("closed"):
             events.append(
-                UnstampedEvent(
+                EventEnvelope(
                     study_id=sid,
                     type="AttemptClosed",
                     entity_key=aid,
@@ -353,11 +491,11 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
                         "task_id": a.task_id,
                     },
                     ts=clock.now(),
-                    schema_version=1,
-)
+                    schema_version=2,
+                )
             )
     events.append(
-        UnstampedEvent(
+        EventEnvelope(
             study_id=sid,
             type="TaskDone",
             entity_key=a.task_id,
@@ -368,8 +506,8 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
                 "reason": TaskReason.BUDGET.value,
             },
             ts=clock.now(),
-            schema_version=1,
-)
+            schema_version=2,
+        )
     )
     await rt._append(events)
     await rt.tick()
@@ -388,7 +526,7 @@ async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -417,14 +555,15 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
     sid = "st_bg_debit_crash"
     budget = Budget(
         max_cost_rub=Decimal("50"),
-        deadline=clock.now() + timedelta(seconds=60), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500)
+        deadline=clock.now() + timedelta(seconds=60),
+    )
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         budget=budget,
@@ -462,12 +601,13 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version="1.0.0",
+            catalog_version="0.1.0",
             deadline=clock.now() + timedelta(seconds=60),
             sid=sid,
             budget=Budget(
                 max_cost_rub=Decimal("100"),
-                delegated_costly=Decimal("101"), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500),
+                delegated_costly=Decimal("101"),
+            ),
             finalize_reserve_s=5,
         )
     await close_runtime(rt)
@@ -484,26 +624,34 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
     from decimal import Decimal
 
     from coscientist.core.events.store import SqliteEventStore
-    from coscientist.core.execution.domain import Budget, Study
+    from coscientist.core.execution.domain import Budget, HitlPolicy, Study
 
     sid = "st_bg_old_ratio"
     root = tmp_path / sid
     root.mkdir()
-    store = SqliteEventStore(sid, root / "events.db", clock=clock, owner="seed", lease_ttl_s=30.0)
+    store = SqliteEventStore(sid, root / "events.db", clock=clock, owner="seed")
     await store.acquire_lease("seed")
     now = clock.now()
     # Raw journal row (pre-create_study check): looser delegated_costly than max_cost_rub.
-    from tests.helpers import make_study_created_payload
-
-    payload = make_study_created_payload(
-        study_id=sid,
-        created_at=now,
-        deadline=now + timedelta(seconds=60),
-        finalize_reserve_s=5,
-        budget=Budget(
-            max_cost_rub=Decimal("50"),
-            delegated_costly=Decimal("999"), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500),
-    )
+    payload = {
+        "study_id": sid,
+        "profile": "research",
+        "request": "q",
+        "catalog_version": "0.1.0",
+        "hitl_policy": HitlPolicy().model_dump(mode="json"),
+        "deadline": (now + timedelta(seconds=60)).isoformat(),
+        "created_at": now.isoformat(),
+        "parent_study_id": None,
+        "budget": {
+            "max_llm_calls": 100,
+            "max_tokens": 1_000_000,
+            "max_cost_rub": "50",
+            "max_tool_calls": 500,
+            "deadline": None,
+            "delegated_costly": "999",
+        },
+        "finalize_reserve_s": 5,
+    }
     # Pin: fold path uses the same Study.model_validate as local_project.
     folded = Study.model_validate(payload)
     assert folded.budget is not None
@@ -512,15 +660,15 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
     # Budget alone also accepts the legacy ratio (no model_validator).
     Budget.model_validate(payload["budget"])
     await store.append(
-        UnstampedEvent(
+        EventEnvelope(
             study_id=sid,
             type="StudyCreated",
             entity_key=sid,
             idem_key=make_idem("StudyCreated", sid),
             payload=payload,
             ts=now,
-            schema_version=1,
-                )
+            schema_version=2,
+        )
     )
     await store.release_lease("seed", store.epoch)
     await store.close()
@@ -600,7 +748,7 @@ async def test_phase_finalizing_between_done_and_finalized(tmp_path, clock):
 async def test_conclusion_per_question(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_cq")
     rt.artifacts = LocalArtifactStore(tmp_path / "arts")
-    qs = [QuestionSpec(id="Q1", text="one", final_type="verdict"), QuestionSpec(id="Q2", text="two", final_type="verdict")]  # noqa: E501
+    qs = [QuestionSpec(id="Q1", text="one"), QuestionSpec(id="Q2", text="two")]
     await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs)
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
@@ -654,7 +802,7 @@ async def test_finalize_total_on_cas_failure(tmp_path, clock):
 async def test_finalized_dispositions_replay(tmp_path, clock):
     sid = "st_rep"
     rt = await _boot(tmp_path, clock, sid)
-    await rt.accept_plan([_spec("E1", ["Q1"])], questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")])
+    await rt.accept_plan([_spec("E1", ["Q1"])], questions=[QuestionSpec(id="Q1", text="why")])
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     payload = _fin(await rt.store.read_all()).payload["question_dispositions"]
@@ -676,8 +824,8 @@ async def test_finalize_idempotent(tmp_path, clock):
     await close_runtime(rt)
 
 
-def _study_finalized_envelope(sid: str, clock, *, idem_key: str, payload: dict) -> UnstampedEvent:
-    return UnstampedEvent(
+def _study_finalized_envelope(sid: str, clock, *, idem_key: str, payload: dict) -> EventEnvelope:
+    return EventEnvelope(
         study_id=sid,
         type="StudyFinalized",
         entity_key=sid,
@@ -685,7 +833,7 @@ def _study_finalized_envelope(sid: str, clock, *, idem_key: str, payload: dict) 
         payload=payload,
         ts=clock.now(),
         schema_version=1,
-                )
+    )
 
 
 @pytest.mark.asyncio
@@ -756,15 +904,15 @@ async def test_identical_finalize_retry_returns_original(tmp_path, clock):
     # Late non-finalize write rejected ⇒ study is closed (behavior, not cache).
     with pytest.raises(StudyClosedError):
         await rt.store.append(
-            UnstampedEvent(
+            EventEnvelope(
                 study_id=sid,
                 type="TaskDone",
                 entity_key="late",
                 idem_key=make_idem("TaskDone", "late"),
                 payload={"task_id": "late", "outcome": "FAILED", "reason": "failed"},
                 ts=clock.now(),
-                schema_version=1,
-)
+                schema_version=2,
+            )
         )
     # Writer path (append_many): returns existing envelope.
     out = await rt.store.append_many(
@@ -860,7 +1008,7 @@ async def test_append_many_study_finalized_then_other_rejects(tmp_path, clock):
         idem_key=make_idem("StudyFinalized", sid),
         payload=_fin_payload(study_id=sid),
     )
-    late = UnstampedEvent(
+    late = EventEnvelope(
         study_id=sid,
         type="TaskCreated",
         entity_key=f"{sid}/X",
@@ -879,7 +1027,7 @@ async def test_append_many_study_finalized_then_other_rejects(tmp_path, clock):
         },
         ts=clock.now(),
         schema_version=1,
-)
+    )
     with pytest.raises(StudyClosedError):
         await rt.store.append_many([sf, late])
     events = await rt.store.read_all()
@@ -976,6 +1124,7 @@ async def test_legacy_two_study_finalized_fold_first_wins(tmp_path, clock):
     """Legacy journal with two SF: fold first-wins == store projections == rt2 graph."""
     import json
 
+    from coscientist.core.events.digest import payload_digest
     from coscientist.core.events.projections import apply_event
     from coscientist.core.events.store import SqliteEventStore
     from coscientist.core.finalize.finalize_nodes import (
@@ -1017,12 +1166,12 @@ async def test_legacy_two_study_finalized_fold_first_wins(tmp_path, clock):
     db = rt.store.db_path
     await close_runtime(rt)
 
-    store = SqliteEventStore(sid, db, clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore(sid, db, clock=clock)
     await store.acquire_lease("fold")
     events = await store.read_all()
     fins = [e for e in events if e.type == "StudyFinalized"]
     assert len(fins) == 2
-    # Replay SF into projections (envelopes from read_all) — first-wins.
+    # Replay SF into projections (upcasted envelopes from read_all) — first-wins.
     for ev in fins:
         apply_event(store, ev)
     store._conn.commit()  # noqa: SLF001
@@ -1093,6 +1242,7 @@ async def test_legacy_duplicate_study_finalized_taints_and_report(tmp_path, cloc
     """Second SF in a legacy journal taints meta + local fold (not the frozen report)."""
     import json
 
+    from coscientist.core.events.digest import payload_digest
     from coscientist.core.events.projections import apply_event
     from coscientist.core.events.store import SqliteEventStore
 
@@ -1125,7 +1275,7 @@ async def test_legacy_duplicate_study_finalized_taints_and_report(tmp_path, cloc
     db = rt.store.db_path
     await close_runtime(rt)
 
-    store = SqliteEventStore(sid, db, clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore(sid, db, clock=clock)
     await store.acquire_lease("taint")
     events = await store.read_all()
     fins = [e for e in events if e.type == "StudyFinalized"]
@@ -1219,7 +1369,7 @@ async def test_plan_refused_and_normal_finalize_exactly_one(tmp_path, clock):
     """PlanRefused path and normal finalize each leave exactly one StudyFinalized."""
     rt = await _boot(tmp_path, clock, "st_sf_plan")
     await rt.accept_plan(
-        [_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok", final_type="verdict")]
+        [_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")]
     )
     events = await rt.store.read_all()
     assert any(e.type == "PlanRefused" for e in events)
@@ -1283,7 +1433,7 @@ async def test_fetch_integrity_raised_before_finalize_then_guard(tmp_path, clock
     sid = "st_sf_fir"
     rt = await _boot(tmp_path, clock, sid)
     await _skip_all(rt)
-    fir = UnstampedEvent(
+    fir = EventEnvelope(
         study_id=sid,
         type="FetchIntegrityRaised",
         entity_key="call1",
@@ -1296,7 +1446,7 @@ async def test_fetch_integrity_raised_before_finalize_then_guard(tmp_path, clock
         },
         ts=clock.now(),
         schema_version=1,
-)
+    )
     stored_fir = (await rt.store.append_many([fir]))[0]
     assert stored_fir.type == "FetchIntegrityRaised"
     await rt.finalize(trigger="all_done")
@@ -1308,7 +1458,7 @@ async def test_fetch_integrity_raised_before_finalize_then_guard(tmp_path, clock
     # Late FIR (new idem_key) after StudyFinalized → StudyClosedError.
     with pytest.raises(StudyClosedError):
         await rt.store.append(
-            UnstampedEvent(
+            EventEnvelope(
                 study_id=sid,
                 type="FetchIntegrityRaised",
                 entity_key="call2",
@@ -1321,7 +1471,7 @@ async def test_fetch_integrity_raised_before_finalize_then_guard(tmp_path, clock
                 },
                 ts=clock.now(),
                 schema_version=1,
-)
+            )
         )
     # Identical FIR retry is idempotent (same as SF: check before StudyClosedError).
     with pytest.raises(Idempotent) as ei:
@@ -1340,12 +1490,12 @@ async def test_write_after_finalized_rejected_no_event(tmp_path, clock):
     late_write_rejected_total.clear()
     tid = next(iter(rt.tasks))
     with pytest.raises(StudyClosedError):
-        await rt.store.append(UnstampedEvent(
+        await rt.store.append(EventEnvelope(
             study_id=rt.study.study_id, type="TaskDone", entity_key=tid,
             idem_key=make_idem("TaskDone", tid, "late"),
             payload={"task_id": tid, "outcome": "FAILED", "reason": "failed"},
-            ts=clock.now(), schema_version=1,
-))
+            ts=clock.now(), schema_version=2,
+        ))
     assert late_write_rejected_total["TaskDone"] >= 1
     assert len(await rt.store.read_all()) == n_before
     await close_runtime(rt)
@@ -1394,7 +1544,7 @@ async def test_p5_after_long_downtime_uses_task_deadline(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_ua")
-    pid = await rt.accept_plan([_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok", final_type="verdict")])  # noqa: E501
+    pid = await rt.accept_plan([_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")])
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
@@ -1406,8 +1556,8 @@ async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_accept_plan_rejects_question_text_conflict(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_qc")
-    await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="one", final_type="verdict")], revision=1)
-    pid = await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="other", final_type="verdict")], revision=2)
+    await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="one")], revision=1)
+    pid = await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="other")], revision=2)
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
@@ -1454,13 +1604,13 @@ async def test_finalized_rollback_allows_retry_then_closes(tmp_path, clock, monk
     store = rt.store
     real_apply = store._apply_projection
 
-    def boom_after_insert(ev: UnstampedEvent) -> None:
+    def boom_after_insert(ev: EventEnvelope) -> None:
         real_apply(ev)
         if ev.type == "StudyFinalized":
             raise RuntimeError("after_insert_before_commit")
 
     monkeypatch.setattr(store, "_apply_projection", boom_after_insert)
-    fin_ev = UnstampedEvent(
+    fin_ev = EventEnvelope(
         study_id=sid,
         type="StudyFinalized",
         entity_key=sid,
@@ -1468,7 +1618,7 @@ async def test_finalized_rollback_allows_retry_then_closes(tmp_path, clock, monk
         payload=_fin_payload(study_id=sid),
         ts=clock.now(),
         schema_version=1,
-                )
+    )
     with pytest.raises(RuntimeError, match="after_insert_before_commit"):
         if via == "append_many":
             await store.append_many([fin_ev])
@@ -1483,15 +1633,15 @@ async def test_finalized_rollback_allows_retry_then_closes(tmp_path, clock, monk
     _fin(await store.read_all())
     with pytest.raises(StudyClosedError):
         await store.append(
-            UnstampedEvent(
+            EventEnvelope(
                 study_id=sid,
                 type="TaskDone",
                 entity_key="x",
                 idem_key=make_idem("TaskDone", "x", "late"),
                 payload={"task_id": "x", "outcome": "FAILED", "reason": "failed"},
                 ts=clock.now(),
-                schema_version=1,
-)
+                schema_version=2,
+            )
         )
     await close_runtime(rt)
 
@@ -1517,7 +1667,7 @@ async def test_lease_reacquire_sees_peer_finalize(tmp_path, clock):
     store_b = SqliteEventStore(sid, db, clock=clock, owner="b", lease_ttl_s=30)
     await store_b.acquire_lease("b")
     await store_b.append(
-        UnstampedEvent(
+        EventEnvelope(
             study_id=sid,
             type="StudyFinalized",
             entity_key=sid,
@@ -1525,7 +1675,7 @@ async def test_lease_reacquire_sees_peer_finalize(tmp_path, clock):
             payload=_fin_payload(study_id=sid),
             ts=clock.now(),
             schema_version=1,
-                )
+        )
     )
     await store_b.release_lease("b", store_b.epoch)
     await store_b.close()
@@ -1534,15 +1684,15 @@ async def test_lease_reacquire_sees_peer_finalize(tmp_path, clock):
     await store_a.acquire_lease("a")
     with pytest.raises(StudyClosedError):
         await store_a.append(
-            UnstampedEvent(
+            EventEnvelope(
                 study_id=sid,
                 type="TaskDone",
                 entity_key="late",
                 idem_key=make_idem("TaskDone", "late"),
                 payload={"task_id": "late", "outcome": "FAILED", "reason": "failed"},
                 ts=clock.now(),
-                schema_version=1,
-)
+                schema_version=2,
+            )
         )
     study_closed = await store_a.get_row("studies", sid)
     assert study_closed is not None and study_closed.get("finalized") is True

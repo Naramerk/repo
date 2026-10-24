@@ -23,7 +23,7 @@ from coscientist.core.execution.taint import derived_tainted
 
 def _infer_artifact_role(media_type: str) -> ArtifactRole:
     """Fallback media_type → role when OutputSpec.role is absent."""
-    mt = (media_type or "").lower()  # audit-ok[or_literal]: structural empty coalesce; absent → empty container/str  # audit-ok[str_lower]: case-fold after str gate  # noqa: E501
+    mt = (media_type or "").lower()
     if any(
         tok in mt
         for tok in (
@@ -37,7 +37,7 @@ def _infer_artifact_role(media_type: str) -> ArtifactRole:
         )
     ):
         return "code"
-    if mt.startswith("text/x-"):  # audit-ok[str_startswith]: RFC/allowlist layout prefix (not name heuristic)
+    if mt.startswith("text/x-"):
         return "code"
     return "data"
 
@@ -51,9 +51,9 @@ class LocalArtifactStore:
         self.cas.mkdir(parents=True, exist_ok=True)
         self.meta.mkdir(parents=True, exist_ok=True)
         self.tmp.mkdir(parents=True, exist_ok=True)
-        self._index: dict[str, Artifact] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value  # noqa: E501
+        self._index: dict[str, Artifact] = {}
 
-    def put_cas(self, content: bytes, *, tmp_name: str = "cas") -> str:  # audit-ok[param_default]: explicit API/default param; not silent domain invent  # noqa: E501
+    def put_cas(self, content: bytes, *, tmp_name: str = "cas") -> str:
         """Write raw bytes to content-addressed storage; return sha256 hex digest."""
         digest = sha256_hex(content)
         blob = self.cas / digest
@@ -84,11 +84,11 @@ class LocalArtifactStore:
         schema_ref: str | None = None,
         role: str | None = None,
         kind: str | None = None,
-        attempt_closed: bool = False,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
+        attempt_closed: bool = False,
         net_isolation: NetIsolation | None = None,
         fs_isolation: FsIsolation | None = None,
-        tainted: bool = False,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
-        context_tainted: bool = False,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
+        tainted: bool = False,
+        context_tainted: bool = False,
         user_put: object | None = None,
     ) -> Artifact:
         if attempt_closed:
@@ -122,7 +122,7 @@ class LocalArtifactStore:
         # kind is core-stamped only (experiment_design / contradiction_map).
         stamped_kind = cast(
             ArtifactKind | None,
-            kind if kind in ("experiment_design", "contradiction_map") else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+            kind if kind in ("experiment_design", "contradiction_map") else None,
         )
         art = Artifact(
             artifact_id=artifact_id,
@@ -136,8 +136,8 @@ class LocalArtifactStore:
             role=inferred,  # type: ignore[arg-type]
             kind=stamped_kind,
             producer=producer,
-            net_isolation=net_isolation if producer == "sandbox" else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
-            fs_isolation=fs_isolation if producer == "sandbox" else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+            net_isolation=net_isolation if producer == "sandbox" else None,
+            fs_isolation=fs_isolation if producer == "sandbox" else None,
             # context_tainted arg OR ContextVar (per-attempt; safe under foreach).
             tainted=derived_tainted(context_tainted=context_tainted, explicit=tainted),
         )
@@ -157,9 +157,9 @@ class LocalArtifactStore:
         schema_ref: str | None = None,
         role: str | None = None,
         kind: str | None = None,
-        attempt_closed: bool = False,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
-        tainted: bool = False,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
-        context_tainted: bool = False,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
+        attempt_closed: bool = False,
+        tainted: bool = False,
+        context_tainted: bool = False,
     ) -> Artifact:
         """Agent-controlled path — always ``producer=agent`` (never trusted).
 
@@ -190,8 +190,8 @@ class LocalArtifactStore:
         media_type: str,
         schema_ref: str | None = None,
         role: str | None = None,
-        attempt_closed: bool = False,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
-        context_tainted: bool = False,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
+        attempt_closed: bool = False,
+        context_tainted: bool = False,
     ) -> Artifact:
         """Web/tool output — always ``tainted=True`` (DESIGN_M1 §8)."""
         return self.put(
@@ -216,8 +216,8 @@ class LocalArtifactStore:
         capability: object,
         schema_ref: str | None = None,
         role: str | None = None,
-        attempt_closed: bool = False,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
-        context_tainted: bool = False,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
+        attempt_closed: bool = False,
+        context_tainted: bool = False,
         expected_tool: str,
         expected_call_id: str,
         expected_study_id: str,
@@ -264,9 +264,9 @@ class LocalArtifactStore:
         schema_ref: str | None = None,
         role: str | None = None,
         kind: str | None = None,
-        attempt_closed: bool = False,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
-        context_tainted: bool = False,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
-        tainted: bool = False,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
+        attempt_closed: bool = False,
+        context_tainted: bool = False,
+        tainted: bool = False,
     ) -> Artifact:
         """Core-owned write (trusted for verdict evidence)."""
         return self._store(
@@ -292,11 +292,11 @@ class LocalArtifactStore:
         media_type: str,
         schema_ref: str | None = None,
         role: str | None = None,
-        attempt_closed: bool = False,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
-        net_isolation: NetIsolation = "none",  # audit-ok[param_default]: explicit API/default param; not silent domain invent  # noqa: E501
-        fs_isolation: FsIsolation = "none",  # audit-ok[param_default]: explicit API/default param; not silent domain invent  # noqa: E501
-        context_tainted: bool = False,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
-        tainted: bool = False,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
+        attempt_closed: bool = False,
+        net_isolation: NetIsolation = "none",
+        fs_isolation: FsIsolation = "none",
+        context_tainted: bool = False,
+        tainted: bool = False,
     ) -> Artifact:
         """Sandbox / verifier write. Context taint propagates to the output."""
         return self._store(
@@ -335,22 +335,13 @@ class LocalArtifactStore:
         return json.loads(self.read(artifact_id))
 
 
-def make_tool_ref(
-    call_id: str,
-    tool: str = "local",  # audit-ok[param_default]: explicit API/default param; not silent domain invent
-    args: str = "",  # audit-ok[param_default]: explicit API/default param; not silent domain invent
-    *,
-    attempt_id: str,
-) -> ToolCallRef:
-    if not isinstance(attempt_id, str) or not attempt_id:
-        raise TypeError("make_tool_ref requires non-empty attempt_id")
+def make_tool_ref(call_id: str, tool: str = "local", args: str = "") -> ToolCallRef:
     return ToolCallRef(
         call_id=call_id,
         tool=tool,
         args_digest=sha256_hex(args),
         started_at=datetime.now(UTC),
         ended_at=datetime.now(UTC),
-        attempt_id=attempt_id,
     )
 
 
@@ -360,13 +351,13 @@ def artifact_producer_trusted(
     """True when producer is core, or sandbox with both net and fs isolation hard."""
     if meta is None:
         return False
-    producer = getattr(meta, "producer", "agent")  # audit-ok[getattr_default]: structural missing attr → default after typed gate  # noqa: E501
+    producer = getattr(meta, "producer", "agent")
     if producer == "core":
         return True
     if producer == "sandbox":
         return (
-            getattr(meta, "net_isolation", None) == "hard"  # audit-ok[getattr_default]: structural missing attr → default after typed gate  # noqa: E501
-            and getattr(meta, "fs_isolation", None) == "hard"  # audit-ok[getattr_default]: structural missing attr → default after typed gate  # noqa: E501
+            getattr(meta, "net_isolation", None) == "hard"
+            and getattr(meta, "fs_isolation", None) == "hard"
         )
     return False
 
@@ -381,4 +372,4 @@ def output_kind_from_spec(
         return "code"
     if role in ("data", "paper", "figure", "table", "log", "report"):
         return "data"
-    return "code" if _infer_artifact_role(media_type or "") == "code" else "data"  # audit-ok[or_literal]: structural empty coalesce; absent → empty container/str # audit-ok[ternary_default]: branch selects typed literal required by contract  # noqa: E501
+    return "code" if _infer_artifact_role(media_type or "") == "code" else "data"

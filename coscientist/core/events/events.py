@@ -20,7 +20,7 @@ class UnstampedEvent(BaseModel):
     study_id: str
     # str (not EventType Literal): synthetic upcaster types in tests + write-path
     # writer_schema_version / upcast already refuse unknown production types.
-    type: str
+    type: "EventType"
     entity_key: str
     idem_key: str
     payload: dict[str, Any]

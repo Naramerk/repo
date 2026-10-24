@@ -115,7 +115,7 @@ def plan_graph_events(
 
 def _decomposes_parent_map(runtime: StudyRuntime) -> dict[str, str | None]:
     """Existing decomposes edges as question_id → parent_id (plus known roots)."""
-    parent_of: dict[str, str | None] = {}  # audit-ok[field_default]: structural empty = collecting decomposes parents
+    parent_of: dict[str, str | None] = {}
 
     def _qid(node_id: str, node: Any) -> str:
         if node is None:
@@ -299,11 +299,11 @@ def skip_superseded_task_events(
     events = []
     for tkey in superseded_tasks:
         tid = task_id(sid, tkey)
-        task = runtime.tasks.get(tid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        task = runtime.tasks.get(tid)
         if task is None or task.state == TaskState.DONE:
             continue
         for aid in task.attempts:
-            attempt = runtime.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            attempt = runtime.attempts.get(aid)
             if attempt is None:
                 raise JournalFormatError(
                     f"attempt {aid!r} missing from runtime.attempts"

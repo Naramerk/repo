@@ -13,7 +13,7 @@ import pytest
 
 from coscientist.core.claims.reasons import RefusalKind, TerminalReason
 from coscientist.core.events.errors import ArtifactRejected
-from coscientist.core.events.upcasters import writer_schema_version
+from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution._ingest_gate import (
     mint_user_put_capability,
     put_user,
@@ -125,11 +125,11 @@ def test_put_user_is_task_data_not_paper(tmp_path):
         return put_user(
             arts,
             b"not a paper",
-            make_tool_ref("u1", "user_input", "csv", attempt_id="u1"),
+            make_tool_ref("u1", "user_input", "csv"),
             capability=cap,
             name="data.csv",
             media_type="text/csv",
-            attempt_closed=False,
+            role="paper",  # ignored — forced data
         )
 
     art = _with_user_put(_run)
@@ -146,11 +146,10 @@ def test_put_user_denied_without_capability(tmp_path):
         put_user(
             arts,
             b"x",
-            make_tool_ref("u", "user_input", "x", attempt_id="u"),
+            make_tool_ref("u", "user_input", "x"),
             capability=object(),  # type: ignore[arg-type]
             name="x",
             media_type="text/plain",
-            attempt_closed=False,
         )
 
 
@@ -162,7 +161,7 @@ def test_store_producer_user_requires_capability(tmp_path):
     with pytest.raises(ArtifactRejected, match="user_put_capability_required"):
         arts._store(
             b"x",
-            make_tool_ref("u", "user_input", "x", attempt_id="u"),
+            make_tool_ref("u", "user_input", "x"),
             name="x",
             media_type="text/plain",
             producer="user",
@@ -183,7 +182,7 @@ def test_store_forged_capability_object_rejected(tmp_path):
     with pytest.raises(ArtifactRejected, match="user_put_capability_required"):
         arts._store(
             b"x",
-            make_tool_ref("u", "user_input", "x", attempt_id="u"),
+            make_tool_ref("u", "user_input", "x"),
             name="x",
             media_type="text/plain",
             producer="user",
@@ -234,11 +233,10 @@ def test_put_user_denied_when_attempt_active(tmp_path):
                 put_user(
                     arts,
                     b"launder",
-                    make_tool_ref("u", "user_input", "x", attempt_id="u"),
+                    make_tool_ref("u", "user_input", "x"),
                     capability=cap,
                     name="x",
                     media_type="text/plain",
-                    attempt_closed=False,
                 )
         finally:
             release_user_put_capability(cap)
@@ -527,8 +525,8 @@ def test_limits_is_not_none_not_truthiness():
 def test_inputs_digest_stable_sorted():
     from coscientist.core.execution.domain import InputBinding
 
-    a = InputBinding(input="b", artifact_id="1", source="real", digest="aa", kind="artifact")
-    b = InputBinding(input="a", artifact_id="2", source="real", digest="bb", kind="artifact")
+    a = InputBinding(input="b", artifact_id="1", source="real", digest="aa")
+    b = InputBinding(input="a", artifact_id="2", source="real", digest="bb")
     d1 = inputs_digest_of([a, b])
     d2 = inputs_digest_of([b, a])
     assert d1 == d2
@@ -575,18 +573,18 @@ def test_snapshot_bindings_uses_cas_sha(tmp_path):
         lambda cap: put_user(
             arts,
             b"payload-bytes",
-            make_tool_ref("c1", "user_input", "n", attempt_id="c1"),
+            make_tool_ref("c1", "user_input", "n"),
             capability=cap,
             name="n",
             media_type="text/plain",
-            attempt_closed=False,
         )
     )
     b = InputBinding(
         input="n",
         artifact_id=art.artifact_id,
         source="real",
-        digest="old-meta", kind="artifact")
+        digest="old-meta",
+    )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     out, lims = snapshot_bindings_at_p2([b], now=now, get_meta=arts.get_meta)
     assert lims == []
@@ -600,7 +598,7 @@ def test_snapshot_bindings_uses_cas_sha(tmp_path):
 def test_snapshot_get_meta_errors_propagate():
     from coscientist.core.execution.domain import InputBinding
 
-    b = InputBinding(input="n", artifact_id="art_x", source="real", kind="artifact")
+    b = InputBinding(input="n", artifact_id="art_x", source="real")
     now = datetime(2026, 1, 1, tzinfo=UTC)
 
     def boom(_aid: str):
@@ -617,7 +615,8 @@ def test_snapshot_missing_meta_yields_limitation():
         input="n",
         artifact_id="art_missing",
         source="real",
-        digest="meta-only", kind="artifact")
+        digest="meta-only",
+    )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     out, lims = snapshot_bindings_at_p2([b], now=now, get_meta=lambda _aid: None)
     assert out[0].digest == "meta-only"
@@ -664,7 +663,7 @@ async def test_zip_bomb_refused_ends_in_study_finalized(tmp_path, clock, runtime
     await _create_with_inputs(rt, 
         profile="research",
         request="analyse archive",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -706,7 +705,7 @@ async def test_zip_bomb_refuse_survives_finalize_crash(
         await _create_with_inputs(rt, 
             profile="research",
             request="analyse archive",
-            catalog_version="1.0.0",
+            catalog_version="0.1.0",
             deadline=clock.now() + timedelta(seconds=120),
             sid=sid,
             finalize_reserve_s=5,
@@ -750,7 +749,7 @@ async def test_client_raising_limits_refuses_input_invalid(
     await rt.create_study(
         profile="research",
         request="raise limits",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -772,7 +771,7 @@ async def test_user_inputs_registered_before_spec(tmp_path, clock, runtime_cls):
     await _create_with_inputs(rt, 
         profile="research",
         request="use my csv",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -828,7 +827,7 @@ async def test_user_input_ids_bound_into_attempt(tmp_path, clock, runtime_cls):
     await _create_with_inputs(rt, 
         profile="research",
         request="bind me",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -861,7 +860,7 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -876,7 +875,8 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
                 title="e",
                 goal="g",
                 route="experiment",
-                depends_on=["PLAN"], required=True, tolerate_failed_dep=False)
+                depends_on=["PLAN"],
+            )
         ],
         questions=[],
     )
@@ -886,8 +886,8 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
         for e in await rt.store.read_all()
         if e.type == "AttemptStarted" and e.entity_key == aid
     )
-    # Schema v1 AttemptStarted carries inputs_digest + attempt_role.
-    assert started.schema_version == 1
+    # #23 writer v8 (inputs_digest); PR20 stacks v9 (attempt_role).
+    assert started.schema_version == 9
     assert started.payload.get("inputs_digest")
     assert isinstance(started.payload["inputs_digest"], str)
     assert len(started.payload["inputs_digest"]) == 64
@@ -910,7 +910,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -927,15 +927,17 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", required=True)
-                ], required=True, tolerate_failed_dep=False),
+                    OutputSpec(name="main", media_type="application/json")
+                ],
+            ),
             TaskSpec(
                 task_key="E1",
                 title="e",
                 goal="g",
                 route="experiment",
                 depends_on=["P1"],
-                inputs=[InputSpec(from_task="P1", output="main", mode="forbid", kind="artifact")], required=True, tolerate_failed_dep=False),  # noqa: E501
+                inputs=[InputSpec(from_task="P1", output="main", mode="forbid")],
+            ),
         ],
         questions=[],
     )
@@ -948,7 +950,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
     await rt.fail_attempt(aid1, retryable=True)
     new_art = arts.put_core(
         b'{"count": 999, "drift": true}',
-        make_tool_ref(f"{aid_p}:v2", "core", "main", attempt_id=aid_p),
+        make_tool_ref(f"{aid_p}:v2", "core", "main"),
         name="main",
         media_type="application/json",
         role="data",
@@ -985,7 +987,7 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -1000,35 +1002,33 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
                 title="e",
                 goal="g",
                 route="experiment",
-                depends_on=["PLAN"], required=True, tolerate_failed_dep=False)
+                depends_on=["PLAN"],
+            )
         ],
         questions=[],
     )
-    # Seed a synthetic prior CLOSED attempt with null digests (stale formula).
+    # Seed a synthetic prior CLOSED attempt as if replayed from v7 (null digests).
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
-    payload = {
-        "attempt_id": fake_aid,
-        "n": 1,
-        "dispatch_id": f"dispatch:{fake_aid}",
-        "task_id": task.task_id,
-        "study_id": sid,
-        "provenance": "real",
-        "charged": True,
-        "closed": True,
-        "close_reason": "failed",
-        "inputs": [
-            {
-                "input": "x",
-                "artifact_id": "art_old",
-                "source": "real",
-                "digest": None,
-            }
-        ],
-        "tainted_context": False,
-        "inputs_digest": "deadbeef" * 8,
-        "attempt_role": "agent",
-    }
+    v, payload = upcast(
+        "AttemptStarted",
+        7,
+        {
+            "attempt_id": fake_aid,
+            "n": 1,
+            "dispatch_id": f"dispatch:{fake_aid}",
+            "task_id": task.task_id,
+            "study_id": sid,
+            "provenance": "real",
+            "closed": True,
+            "close_reason": "failed",
+            "inputs": [{"input": "x", "artifact_id": "art_old", "source": "real"}],
+            "tainted_context": False,
+            "inputs_digest": "deadbeef" * 8,
+        },
+    )
+    # #23 v7→v8 inputs_digest; PR20 v8→v9 attempt_role (continuous chain).
+    assert v == 9
     assert payload["inputs"][0].get("digest") is None
     assert payload.get("attempt_role") == "agent"
     rt.attempts[fake_aid] = payload
@@ -1060,7 +1060,7 @@ async def test_adversarial_empty_garbage_still_finalizes(tmp_path, clock, runtim
     await _create_with_inputs(rt, 
         profile="research",
         request="anything",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1090,7 +1090,7 @@ async def test_as_of_appears_in_report(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="time sensitive",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1111,11 +1111,33 @@ async def test_as_of_appears_in_report(tmp_path, clock, runtime_cls):
     await close_runtime(rt)
 
 
+def test_upcast_study_created_v9_to_v11():
+    """#24 v10 setdefault max_loop_iter; #23 v11 as_of/ids; PR20 v12 max_proposals."""
+    v, p = upcast("StudyCreated", 9, {"study_id": "s", "request": "q"})
+    assert v == 12
+    assert p.get("max_loop_iter") == 8
+    assert p.get("as_of") is None
+    assert p.get("user_input_ids") == []
+    assert p.get("max_proposals") == 3
+
+
+def test_upcast_study_created_v10_to_v11_keeps_max_loop_iter():
+    """Custom max_loop_iter (≠ default 8) must survive v10→v11→v12."""
+    v, p = upcast(
+        "StudyCreated",
+        10,
+        {"study_id": "s", "request": "q", "max_loop_iter": 2},
+    )
+    assert v == 12
+    assert p["max_loop_iter"] == 2
+    assert p.get("as_of") is None
+    assert p.get("user_input_ids") == []
+    assert p.get("max_proposals") == 3
 
 
 @pytest.mark.asyncio
 async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
-    """Writer v1 records max_loop_iter=2; reopen must not raise the cap to 8."""
+    """Writer v12 records max_loop_iter=2; reopen must not raise the cap to 8."""
     sid = "st_loop_iter_2"
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
@@ -1123,7 +1145,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -1132,7 +1154,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
     assert rt.study is not None
     assert rt.study.max_loop_iter == 2
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 1
+    assert created.schema_version == 12
     assert created.payload.get("max_loop_iter") == 2
     assert created.payload.get("max_proposals") == 3
     await close_runtime(rt)
@@ -1145,6 +1167,25 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
     await close_runtime(rt2)
 
 
+def test_upcast_attempt_started_v7_to_v8():
+    """#23 v7→v8 inputs_digest; PR20 continues to v9 attempt_role."""
+    v, p = upcast(
+        "AttemptStarted",
+        7,
+        {
+            "attempt_id": "a",
+            "inputs": [{"input": "x", "artifact_id": "", "source": "real"}],
+            "tainted_context": False,
+        },
+    )
+    assert v == 9
+    assert "inputs_digest" in p
+    assert p.get("attempt_role") == "agent"
+    assert p["inputs"][0].get("digest") is None
+    assert p["inputs"][0].get("digest_version") is None
+    assert p["inputs"][0].get("retrieved_at") is None
+    assert p["inputs"][0].get("source_uri") is None
+
 
 @pytest.mark.asyncio
 async def test_oversized_input_refused_via_create_study(tmp_path, clock, runtime_cls):
@@ -1155,7 +1196,7 @@ async def test_oversized_input_refused_via_create_study(tmp_path, clock, runtime
     await _create_with_inputs(rt, 
         profile="research",
         request="too big",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1189,7 +1230,7 @@ async def test_missing_artifact_store_refuses_user_inputs(
     await _create_with_inputs(rt, 
         profile="research",
         request="need data",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1208,20 +1249,17 @@ async def test_missing_artifact_store_refuses_user_inputs(
 
 def test_api_parse_rejects_raised_limits_as_input_invalid():
     from coscientist.api.studies import parse_create_study_body
-    from tests.helpers import make_create_study_body_dict
 
     profile = InputLimits(max_bytes=1000, max_wire_bytes=10_000)
     parsed = parse_create_study_body(
-        make_create_study_body_dict(request="q", input_limits={"max_bytes": 500}),
+        {"request": "q", "input_limits": {"max_bytes": 500}},
         profile_limits=profile,
     )
     assert parsed[0] is not None
     body, lim = parsed
     assert lim.max_bytes == 500
     none, bad = parse_create_study_body(
-        make_create_study_body_dict(
-            request="q", input_limits={"max_bytes": 10**12}
-        ),
+        {"request": "q", "input_limits": {"max_bytes": 10**12}},
         profile_limits=profile,
     )
     assert none is None and bad[0] == RefusalKind.INPUT_INVALID
@@ -1358,12 +1396,11 @@ async def test_api_corrupt_deflate_study_finalized_not_500(tmp_path, catalog):
     import base64
 
     from coscientist.api.studies import post_studies
-    from tests.helpers import make_create_study_body_dict
 
     data = _corrupt_deflate_zip()
-    body = make_create_study_body_dict(
-        request="analyse corrupt zip",
-        inputs=[
+    body = {
+        "request": "analyse corrupt zip",
+        "inputs": [
             {
                 "name": "c.zip",
                 "content": base64.b64encode(data).decode(),
@@ -1371,7 +1408,7 @@ async def test_api_corrupt_deflate_study_finalized_not_500(tmp_path, catalog):
                 "media_type": "application/zip",
             }
         ],
-    )
+    }
     out = await post_studies(
         tmp_path,
         body,
@@ -1387,12 +1424,10 @@ async def test_api_corrupt_deflate_study_finalized_not_500(tmp_path, catalog):
 
 
 @pytest.mark.asyncio
-async def test_journal_replay_null_digest_version_drift_unknown(
-    tmp_path, clock, runtime_cls
-):
-    """Persist AttemptStarted with bindings lacking digest_version; reopen → unknown."""
+async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls):
+    """Persist AttemptStarted schema_version=7, reopen (upcast), next attempt unknown."""
     from coscientist.core.claims.reasons import CloseReason
-    from coscientist.core.events.events import UnstampedEvent, make_idem
+    from coscientist.core.events.events import EventEnvelope, make_idem
 
     sid = "st_v7_replay"
     rt = await open_runtime(
@@ -1401,7 +1436,7 @@ async def test_journal_replay_null_digest_version_drift_unknown(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1416,15 +1451,16 @@ async def test_journal_replay_null_digest_version_drift_unknown(
                 title="e",
                 goal="g",
                 route="experiment",
-                depends_on=["PLAN"], required=True, tolerate_failed_dep=False)
+                depends_on=["PLAN"],
+            )
         ],
         questions=[],
     )
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
-    # Bindings without digest / digest_version → input_drift_unknown on next attempt.
+    # Write a raw v7 journal row (pre-PR19) then close it.
     await rt.store.append(
-        UnstampedEvent(
+        EventEnvelope(
             study_id=sid,
             type="AttemptStarted",
             entity_key=fake_aid,
@@ -1436,20 +1472,18 @@ async def test_journal_replay_null_digest_version_drift_unknown(
                 "task_id": task.task_id,
                 "study_id": sid,
                 "provenance": "real",
-                "charged": True,
                 "closed": False,
                 "inputs": [
                     {"input": "x", "artifact_id": "art_old", "source": "real"}
                 ],
                 "tainted_context": False,
-                "attempt_role": "agent",
             },
             ts=clock.now(),
-            schema_version=writer_schema_version("AttemptStarted"),
-)
+            schema_version=7,
+        )
     )
     await rt.store.append(
-        UnstampedEvent(
+        EventEnvelope(
             study_id=sid,
             type="AttemptClosed",
             entity_key=fake_aid,
@@ -1461,11 +1495,12 @@ async def test_journal_replay_null_digest_version_drift_unknown(
                 "closed": True,
             },
             ts=clock.now(),
-            schema_version=writer_schema_version("AttemptClosed"),
-)
+            schema_version=2,
+        )
     )
     await close_runtime(rt)
 
+    # Reopen → store upcasts v7→v8 (digest_version=None).
     rt2 = await open_runtime(
         tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
     )
@@ -1486,16 +1521,16 @@ async def test_journal_replay_null_digest_version_drift_unknown(
     await close_runtime(rt2)
 
 
-def test_study_created_writer_is_v1_with_loop_and_proposals_fields():
-    """Schema v1 baseline: StudyCreated writer is 1; Study carries loop/proposal caps."""
-    from coscientist.core.events.schema_versions import STUDY_CREATED_SCHEMA_VERSION
+def test_study_created_writer_is_v11_after_loopspec():
+    """#24 owns max_loop_iter (v10); #23 writer was v11; PR20 stacks v12."""
+    from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION
     from coscientist.core.events.upcasters import writer_schema_version
     from coscientist.core.execution.domain import Study
 
     assert "max_loop_iter" in Study.model_fields
     assert "max_proposals" in Study.model_fields
-    assert STUDY_CREATED_SCHEMA_VERSION == 1
-    assert writer_schema_version("StudyCreated") == 1
+    assert STUDY_CREATED_SCHEMA_VERSION == 12
+    assert writer_schema_version("StudyCreated") == 12
 
 
 def test_tar_many_members_early_exit():
@@ -1604,15 +1639,16 @@ def test_stale_digest_version_garbage_fails_closed():
 
 
 @pytest.mark.asyncio
-async def test_stale_digest_formula_without_version_drift_unknown(
+async def test_old_study_created_v9_with_digest_drift_unknown(
     tmp_path, clock, runtime_cls
 ):
-    """AttemptStarted with non-empty digest but absent digest_version → unknown.
+    """Real pre-PR19 StudyCreated v9 + AttemptStarted with non-empty old digest.
 
     Absent digest_version → input_drift_unknown without partial (not empty digest).
     """
     from coscientist.core.claims.reasons import CloseReason
-    from coscientist.core.events.events import UnstampedEvent, make_idem
+    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.schema_versions import STUDY_CREATED_SCHEMA_VERSION
 
     sid = "st_v9_digest"
     rt = await open_runtime(
@@ -1621,14 +1657,24 @@ async def test_stale_digest_formula_without_version_drift_unknown(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
-        max_loop_iter=2,
     )
-    assert rt.study is not None
-    assert rt.study.max_loop_iter == 2
+    # Rewrite StudyCreated as schema_version=9 with non-default max_loop_iter.
+    events = await rt.store.read_all()
+    created = next(e for e in events if e.type == "StudyCreated")
+    v9_payload = dict(created.payload)
+    v9_payload.pop("as_of", None)
+    v9_payload.pop("user_input_ids", None)
+    v9_payload["max_loop_iter"] = 2
+    # Upcast continuity: v9 → v10 keeps 2; v11 adds as_of/ids and keeps 2.
+    v_after, up = upcast("StudyCreated", 9, dict(v9_payload))
+    assert v_after == STUDY_CREATED_SCHEMA_VERSION
+    assert up.get("max_loop_iter") == 2
+    assert "user_input_ids" in up
+    assert "as_of" in up
 
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -1640,7 +1686,8 @@ async def test_stale_digest_formula_without_version_drift_unknown(
                 title="e",
                 goal="g",
                 route="experiment",
-                depends_on=["PLAN"], required=True, tolerate_failed_dep=False)
+                depends_on=["PLAN"],
+            )
         ],
         questions=[],
     )
@@ -1648,7 +1695,7 @@ async def test_stale_digest_formula_without_version_drift_unknown(
     fake_aid = f"{task.task_id}/a1"
     old_digest = "a" * 64  # non-empty legacy formula digest, no digest_version
     await rt.store.append(
-        UnstampedEvent(
+        EventEnvelope(
             study_id=sid,
             type="AttemptStarted",
             entity_key=fake_aid,
@@ -1660,7 +1707,6 @@ async def test_stale_digest_formula_without_version_drift_unknown(
                 "task_id": task.task_id,
                 "study_id": sid,
                 "provenance": "real",
-                "charged": True,
                 "closed": False,
                 "inputs": [
                     {
@@ -1671,14 +1717,13 @@ async def test_stale_digest_formula_without_version_drift_unknown(
                     }
                 ],
                 "tainted_context": False,
-                "attempt_role": "agent",
             },
             ts=clock.now(),
-            schema_version=writer_schema_version("AttemptStarted"),
-)
+            schema_version=7,
+        )
     )
     await rt.store.append(
-        UnstampedEvent(
+        EventEnvelope(
             study_id=sid,
             type="AttemptClosed",
             entity_key=fake_aid,
@@ -1690,16 +1735,14 @@ async def test_stale_digest_formula_without_version_drift_unknown(
                 "closed": True,
             },
             ts=clock.now(),
-            schema_version=writer_schema_version("AttemptClosed"),
-)
+            schema_version=2,
+        )
     )
     await close_runtime(rt)
 
     rt2 = await open_runtime(
         tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
     )
-    assert rt2.study is not None
-    assert rt2.study.max_loop_iter == 2
     prior = rt2.attempts.get(fake_aid) or {}
     assert prior.get("inputs")
     assert prior["inputs"][0].get("digest") == old_digest
@@ -1782,13 +1825,12 @@ async def test_api_zip_member_errors_study_finalized_not_500(tmp_path, catalog):
     import base64
 
     from coscientist.api.studies import post_studies
-    from tests.helpers import make_create_study_body_dict
 
     for factory in (_zip_encrypted, _zip_method_99, _zip_corrupt_bzip2_member):
         data = factory()
-        body = make_create_study_body_dict(
-            request="analyse bad zip",
-            inputs=[
+        body = {
+            "request": "analyse bad zip",
+            "inputs": [
                 {
                     "name": "bad.zip",
                     "content": base64.b64encode(data).decode(),
@@ -1796,7 +1838,7 @@ async def test_api_zip_member_errors_study_finalized_not_500(tmp_path, catalog):
                     "media_type": "application/zip",
                 }
             ],
-        )
+        }
         out = await post_studies(
             tmp_path,
             body,
@@ -2822,7 +2864,7 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
 ):
     """PR19 intake refuse → one StudyFinalized; #31 store guard blocks later writes."""
     from coscientist.core.events.errors import StudyClosedError
-    from coscientist.core.events.events import UnstampedEvent, make_idem
+    from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.execution.archive_limits import MAX_TAR_META_CHAIN
 
     sid = "st_b5_meta_closed"
@@ -2835,7 +2877,7 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
         rt,
         profile="research",
         request="analyse nested meta",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -2855,15 +2897,14 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
     # StudyFinalized is last — PR19 must not append after it.
     assert types[-1] == "StudyFinalized"
     n_before = len(events)
-    late = UnstampedEvent(
+    late = EventEnvelope(
         study_id=sid,
         type="GraphNodeUpserted",
         entity_key=f"{sid}:late",
         idem_key=make_idem("GraphNodeUpserted", f"{sid}:late"),
         payload={"node_id": f"{sid}:late", "kind": "study", "study_id": sid},
         ts=clock.now(),
-        schema_version=writer_schema_version('GraphNodeUpserted'),
-)
+    )
     with pytest.raises(StudyClosedError):
         await rt.store.append(late)
     events2 = await rt.store.read_all()

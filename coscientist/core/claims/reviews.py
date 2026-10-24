@@ -77,7 +77,7 @@ def parse_review_key(key: str) -> dict[str, str] | None:
     try:
         parts = json.loads(key)
     except (TypeError, json.JSONDecodeError):
-        return None  # audit-ok[except_silent_return]: malformed key = absent (caller treats as unknown)
+        return None
     if not isinstance(parts, list) or len(parts) != 5:
         return None
     out = {}
@@ -145,7 +145,7 @@ def review_scheduled_events(
                 f"ReviewCheck.effect must be dict|None, got {type(effect).__name__}"
             )
         else:
-            item_statuses = effect.get("item_statuses")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            item_statuses = effect.get("item_statuses")
             if "pending_items" not in effect:
                 pending = set()
             else:
@@ -164,7 +164,7 @@ def review_scheduled_events(
         if isinstance(item_statuses, dict):
             # Sole pending token is PENDING (UNASSESSED is a different status).
             for item_id, st in item_statuses.items():
-                st_s = st.value if isinstance(st, ReqStatus) else st  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+                st_s = st.value if isinstance(st, ReqStatus) else st
                 if st_s != ReqStatus.PENDING.value and item_id not in pending:
                     continue
                 check_id = c.check_id
@@ -308,7 +308,7 @@ def rebuild_judge_state(
             pending_digests[aid] = dig
         elif t == "ReviewRecorded":
             key = _require_nonempty_str(p, "review_key", event_type=t)
-            st_raw = p.get("status")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            st_raw = p.get("status")
             if st_raw is not None:
                 if isinstance(st_raw, ReqStatus):
                     review_statuses[key] = st_raw
@@ -324,12 +324,12 @@ def rebuild_judge_state(
                         f"ReviewRecorded: status must be str|ReqStatus, "
                         f"got {type(st_raw).__name__}"
                     )
-            retry = p.get("retry")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            retry = p.get("retry")
             if retry is not None:
                 if type(retry) is not int:
                     raise JudgePendingCorrupt(f"retry_corrupt:{key}:{retry!r}")
                 judge_retry[key] = retry
-            fk = p.get("failure_kind")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            fk = p.get("failure_kind")
             if fk is not None:
                 if not isinstance(fk, str) or not fk:
                     raise JournalFormatError(

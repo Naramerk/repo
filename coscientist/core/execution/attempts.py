@@ -64,7 +64,7 @@ def _attempt_role_from_reviews(runtime: Any, task_id: str) -> str:
             )
         if status != "pending":
             continue
-        rtid = rev.get("reviewer_task_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        rtid = rev.get("reviewer_task_id")
         if not isinstance(rtid, str) or not rtid:
             continue
         if rtid == tid:
@@ -108,8 +108,8 @@ class AttemptsMixin:
         raise NotImplementedError
 
     def _lookup_dep(self, key: str) -> Task | None:
-        dep_id = task_id(self.study.study_id, key) if self.study else key  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
-        dep = self.tasks.get(dep_id) or self.tasks.get(key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
+        dep_id = task_id(self.study.study_id, key) if self.study else key
+        dep = self.tasks.get(dep_id) or self.tasks.get(key)
         if dep is None:
             matches = [t for t in self.tasks.values() if t.spec.task_key == key]
             dep = matches[0] if matches else None
@@ -176,7 +176,7 @@ class AttemptsMixin:
                 f"results must be dict, got {type(results).__name__}"
             )
         for aid in reversed(dep.attempts):
-            row = results.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            row = results.get(aid)
             if not isinstance(row, dict):
                 continue
             if "result_class" not in row or row["result_class"] is None:
@@ -237,7 +237,7 @@ class AttemptsMixin:
         External drivers should iterate this list — never call ``start_attempt``
         on a template with ``spec.foreach`` set.
         """
-        out: list[Task] = []  # audit-ok[field_default]: structural empty = collecting dispatchable
+        out: list[Task] = []
         for task in self.tasks.values():
             if task.state != TaskState.PENDING:
                 continue
@@ -247,7 +247,7 @@ class AttemptsMixin:
                 continue
             open_atts = []
             for a in task.attempts:
-                row = self.attempts.get(a)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                row = self.attempts.get(a)
                 if row is None:
                     raise JournalFormatError(f"attempt row missing: {a!r}")
                 if "closed" not in row:
@@ -284,7 +284,7 @@ class AttemptsMixin:
             raise RuntimeError("dependencies not DONE")
         open_atts = []
         for a in task.attempts:
-            row = self.attempts.get(a)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            row = self.attempts.get(a)
             if row is None:
                 raise JournalFormatError(f"attempt row missing: {a!r}")
             if "closed" not in row:
@@ -298,7 +298,7 @@ class AttemptsMixin:
 
         charged = 0
         for aid in task.attempts:
-            att = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            att = self.attempts.get(aid)
             if att is None:
                 raise JournalFormatError(f"attempt row missing: {aid!r}")
             if "charged" not in att:
@@ -374,7 +374,7 @@ class AttemptsMixin:
                                 cover_keys.add(spec.task_key)
                 cover_tasks = [t for t in self.tasks.values() if t.spec.task_key in cover_keys] or list(
                     self.tasks.values()
-                )  # audit-ok[or_call]: coalesce existing call result; no invented literal
+                )
                 any_exp = any(
                     t.state == TaskState.DONE
                     and t.outcome
@@ -419,7 +419,7 @@ class AttemptsMixin:
         use_groups = any(
             inp.from_task in fe_from or inp.quorum is not None for inp, _ in groups
         )
-        limitations: list[Any] = []  # audit-ok[field_default]: structural empty = collecting limitations
+        limitations: list[Any] = []
         try:
             if use_groups:
                 bindings, derived, limitations = bind_input_groups(
@@ -453,7 +453,7 @@ class AttemptsMixin:
                 detail = "foreach_empty"
             elif reason == "foreach_quorum_gt_children":
                 detail = "foreach_quorum_gt_children"
-            elif reason == "quorum" or any(i.quorum is not None for i in task.spec.inputs):  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
+            elif reason == "quorum" or any(i.quorum is not None for i in task.spec.inputs):
                 detail = "quorum"
             else:
                 detail = None
@@ -466,7 +466,7 @@ class AttemptsMixin:
 
         # method=simulation is scientific metadata (not a stub by itself); input
         # provenance from bind_inputs still downgrades (H-b / DESIGN §6.7).
-        prov = provenance if provenance is not None else derived  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        prov = provenance if provenance is not None else derived
         if prov not in VALID_PROVENANCE:
             raise ValueError(f"invalid provenance: {prov}")
 
@@ -557,7 +557,7 @@ class AttemptsMixin:
 
         lim_payload = []
         for lim in limitations:
-            if hasattr(lim, "model_dump"):  # audit-ok[hasattr]: duck-type Limitation|dict payload
+            if hasattr(lim, "model_dump"):
                 lim_payload.append(lim.model_dump(mode="json"))
             elif isinstance(lim, dict):
                 lim_payload.append(dict(lim))
@@ -645,10 +645,10 @@ class AttemptsMixin:
         aid: str,
         *,
         retryable: bool,
-        close_reason: str | CloseReason = CloseReason.FAILED,  # audit-ok[named_default]: named constant / enum member default; not silent invent  # noqa: E501
+        close_reason: str | CloseReason = CloseReason.FAILED,
     ) -> None:
         att = self.attempts[aid]
-        if att.get("closed"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        if att.get("closed"):
             raise RuntimeError("attempt closed")
         now = self.clock.now()
         sid = att["study_id"]
@@ -679,7 +679,7 @@ class AttemptsMixin:
 
         charged = 0
         for a in task.attempts:
-            row = self.attempts.get(a)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            row = self.attempts.get(a)
             if row is None:
                 raise JournalFormatError(f"attempt row missing: {a!r}")
             if "charged" not in row:
@@ -722,14 +722,14 @@ class AttemptsMixin:
     def _provenance_for_retry(self, tid: str) -> Provenance:
         """Last closed attempt's provenance (survives crash/reopen via the journal)."""
 
-        task = self.tasks.get(tid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        task = self.tasks.get(tid)
         if task is None:
             raise JournalFormatError(f"provenance_for_retry: unknown task {tid!r}")
         for aid in reversed(task.attempts):
-            att = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            att = self.attempts.get(aid)
             if att is None:
                 raise JournalFormatError(f"attempt row missing: {aid!r}")
-            if att.get("closed"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            if att.get("closed"):
                 if "provenance" not in att:
                     raise JournalFormatError(f"attempt {aid!r} missing provenance")
                 prov = att["provenance"]
@@ -741,7 +741,7 @@ class AttemptsMixin:
     async def cancel_task(
         self,
         task_key_or_id: str,
-        reason: str | TaskReason = TaskReason.CANCELLED,  # audit-ok[named_default]: named constant / enum member default; not silent invent  # noqa: E501
+        reason: str | TaskReason = TaskReason.CANCELLED,
         *,
         detail: str | None = None,
     ) -> None:
@@ -761,9 +761,9 @@ class AttemptsMixin:
             cr_s = CloseReason(reason_s).value
         except ValueError:
             cr_s = CloseReason.CANCELLED.value
-        events: list[UnstampedEvent] = []  # audit-ok[field_default]: structural empty = building event batch
+        events: list[UnstampedEvent] = []
         for aid in task.attempts:
-            _arow = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            _arow = self.attempts.get(aid)
             if _arow is None:
                 raise JournalFormatError(f"attempt row missing: {aid!r}")
             if "closed" not in _arow:

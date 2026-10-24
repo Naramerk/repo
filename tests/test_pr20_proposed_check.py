@@ -18,15 +18,16 @@ from coscientist.core.claims.claims import RuntimeClaim
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.verdict import claim_is_severe, exclusion_reason, hypothesis_verdict
-from coscientist.core.events.clock import FakeClock, SystemClock
+from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.errors import AttemptClosedError, Conflict, StudyClosedError
-from coscientist.core.events.events import UnstampedEvent, make_idem
-from coscientist.core.events.ids import hitl_request_id
-from coscientist.core.events.schema_versions import (
+from coscientist.core.events.events import (
     STUDY_CREATED_SCHEMA_VERSION,
     STUDY_FINALIZED_SCHEMA_VERSION,
+    EventEnvelope,
+    make_idem,
 )
-from coscientist.core.events.upcasters import writer_schema_version
+from coscientist.core.events.ids import hitl_request_id
+from coscientist.core.events.upcasters import UPCASTERS, register_upcaster, upcast
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     PROPOSED_CHECK_TEMPLATE_ID,
@@ -34,6 +35,7 @@ from coscientist.core.execution.domain import (
     ArtifactHandle,
     CheckProposal,
     CodeCheck,
+    HitlPolicy,
     QuestionSpec,
     RejectedTemplateNote,
     ReqStatus,
@@ -62,7 +64,6 @@ from coscientist.tools.propose_check_tool import ProposeCheckTool
 from tests.helpers import (
     attach_executor,
     close_runtime,
-    make_study_created_payload,
     open_runtime,
     open_runtime_experimental,
 )
@@ -99,7 +100,8 @@ def _value_check(*, target: int = 42) -> CodeCheck:
         kind="value_matches",
         output="main",
         pointer="/count",
-        target=target, allow_network=False)
+        target=target,
+    )
 
 
 def _task_id(rt, key: str) -> str:
@@ -118,16 +120,17 @@ def _exp_spec(**kwargs) -> TaskSpec:
         depends_on=kwargs.get("depends_on", ["PLAN"]),
         addresses=kwargs.get("addresses", []),
         criteria=kwargs.get(
-            "criteria", [RequirementRef(template_id="artifact_present", required=True)]
+            "criteria", [RequirementRef(template_id="artifact_present")]
         ),
-        expected_outputs=kwargs.get("expected_outputs", []), required=True, tolerate_failed_dep=False)
+        expected_outputs=kwargs.get("expected_outputs", []),
+    )
 
 
 async def _create(rt, request: str = "pr20", **kwargs):
     await rt.create_study(
         profile="t",
         request=request,
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         **kwargs,
     )
 
@@ -153,7 +156,7 @@ async def _finish_report(rt, tmp_path: Path) -> None:
     ex, arts = attach_executor(rt, tmp_path)
     art = arts.put(
         b"# report\n",
-        make_tool_ref(f"{aid}:main", attempt_id=aid),
+        make_tool_ref(f"{aid}:main"),
         name="main",
         media_type="text/markdown",
     )
@@ -172,7 +175,7 @@ def _set_proposed_criteria(
     rt, task_id: str, pid: str, target: str, *extra: RequirementRef
 ) -> None:
     task = rt.tasks[task_id]
-    criteria = [requirement_ref_for_proposal(pid, target=target, required=True), *extra]
+    criteria = [requirement_ref_for_proposal(pid, target=target), *extra]
     rt.tasks[task_id] = task.model_copy(
         update={"spec": task.spec.model_copy(update={"criteria": criteria})}
     )
@@ -195,18 +198,18 @@ async def _plant_proposed_hitl(rt, pid: str, task_id: str) -> str:
         deadline=now + timedelta(seconds=120),
         study_id=study.study_id,
         task_id=str(task_id),
-        open=True, cost_rub=0.0)
+        open=True,
+    )
     await rt._append(
         [
-            UnstampedEvent(
+            EventEnvelope(
                 study_id=study.study_id,
                 type="HitlOpened",
                 entity_key=rid,
                 idem_key=make_idem("HitlOpened", rid),
                 payload=req.model_dump(mode="json"),
                 ts=now,
-                schema_version=writer_schema_version('HitlOpened'),
-                )
+            )
         ]
     )
     return rid
@@ -222,7 +225,7 @@ async def _plant_human_hitl_decision(
     assert study is not None
     await rt._append(
         [
-            UnstampedEvent(
+            EventEnvelope(
                 study_id=study.study_id,
                 type="HitlDecided",
                 entity_key=rid,
@@ -231,14 +234,13 @@ async def _plant_human_hitl_decision(
                     "request_id": rid,
                     "decision": decision,
                     "by": "human",
-                    "delegated_by": "human" if decision in ("accept", "approve") else None,
+                    "approved_by": "human" if decision in ("accept", "approve") else None,
                     "reason": "proposed_check_test",
                     "proposal_id": pid,
                     "spent_rub": 0.0,
                 },
                 ts=now,
-                schema_version=writer_schema_version('HitlDecided'),
-)
+            )
         ]
     )
     return rid
@@ -246,7 +248,7 @@ async def _plant_human_hitl_decision(
 
 async def _approve_human(rt, pid: str, task_id: str, *, source: str = "api") -> str:
     rid = await _plant_human_hitl_decision(rt, pid, task_id, decision="accept")
-    await approve_check(rt, pid, source=source, hitl_request_id_s=rid, delegated=False)  # type: ignore[arg-type]
+    await approve_check(rt, pid, source=source, hitl_request_id_s=rid)  # type: ignore[arg-type]
     return rid
 
 
@@ -261,10 +263,10 @@ async def test_propose_preregisters_digest_before_result(tmp_path: Path) -> None
             [
                 _exp_spec(
                     addresses=["q1"],
-                    criteria=[RequirementRef(template_id="artifact_present", required=True)],
+                    criteria=[RequirementRef(template_id="artifact_present")],
                 )
             ],
-            questions=[QuestionSpec(id="q1", text="Q?", final_type="verdict")],
+            questions=[QuestionSpec(id="q1", text="Q?")],
         )
         exp_tid = _task_id(rt, "EXP")
         pid = await propose_check(
@@ -277,7 +279,8 @@ async def test_propose_preregisters_digest_before_result(tmp_path: Path) -> None
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         row = rt._check_proposals[pid]
         digest = row["proposal_digest"]
@@ -294,7 +297,8 @@ async def test_propose_preregisters_digest_before_result(tmp_path: Path) -> None
         assert proposed[0].payload["proposal_digest"] == digest
         assert proposed[0].schema_version == 1
         created = [e for e in events if e.type == "StudyCreated"][0]
-        assert created.schema_version == STUDY_CREATED_SCHEMA_VERSION == 1
+        assert created.schema_version == STUDY_CREATED_SCHEMA_VERSION
+        assert created.schema_version == 12
         assert created.payload.get("max_proposals") == 3
         # Evaluating attempt starts only after CheckProposed.
         aid = await rt.start_attempt("EXP")
@@ -314,10 +318,10 @@ async def test_unapproved_check_excluded_from_verdict(tmp_path: Path) -> None:
             [
                 _exp_spec(
                     addresses=["q1"],
-                    criteria=[RequirementRef(template_id="artifact_present", required=True)],
+                    criteria=[RequirementRef(template_id="artifact_present")],
                 )
             ],
-            questions=[QuestionSpec(id="q1", text="Q?", final_type="verdict")],
+            questions=[QuestionSpec(id="q1", text="Q?")],
         )
         exp_tid = _task_id(rt, "EXP")
         pid = await propose_check(
@@ -330,7 +334,8 @@ async def test_unapproved_check_excluded_from_verdict(tmp_path: Path) -> None:
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         _set_proposed_criteria(rt, exp_tid, pid, "q1")
         aid = await rt.start_attempt("EXP")
@@ -338,7 +343,7 @@ async def test_unapproved_check_excluded_from_verdict(tmp_path: Path) -> None:
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
         art = arts.put(
-            content, make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
+            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
         )
         result = await ex.record(
             aid,
@@ -373,10 +378,10 @@ async def test_approved_executable_counts_like_catalog(tmp_path: Path) -> None:
             [
                 _exp_spec(
                     addresses=["q1"],
-                    criteria=[RequirementRef(template_id="artifact_present", required=True)],
+                    criteria=[RequirementRef(template_id="artifact_present")],
                 )
             ],
-            questions=[QuestionSpec(id="q1", text="Q?", final_type="verdict")],
+            questions=[QuestionSpec(id="q1", text="Q?")],
         )
         exp_tid = _task_id(rt, "EXP")
         pid = await propose_check(
@@ -389,19 +394,20 @@ async def test_approved_executable_counts_like_catalog(tmp_path: Path) -> None:
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         await _approve_human(rt, pid, exp_tid)
         assert rt._check_proposals[pid]["status"] == "approved"
         _set_proposed_criteria(
-            rt, exp_tid, pid, "q1", RequirementRef(template_id="artifact_present", required=True)
+            rt, exp_tid, pid, "q1", RequirementRef(template_id="artifact_present")
         )
         aid = await rt.start_attempt("EXP")
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
         art = arts.put(
-            content, make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
+            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -584,7 +590,8 @@ async def test_proposal_quota_closes_task(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid1
         pid2 = await propose_check(
             rt,
@@ -596,7 +603,8 @@ async def test_proposal_quota_closes_task(tmp_path: Path) -> None:
             check=_value_check(target=2),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid2 is None
         task = rt.tasks[exp_tid]
         assert task.reason == TaskReason.PROPOSAL_QUOTA
@@ -629,7 +637,8 @@ async def test_max_proposals_zero_immediate_quota(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid is None
         assert rt.tasks[exp_tid].reason == TaskReason.PROPOSAL_QUOTA
     finally:
@@ -656,7 +665,8 @@ async def test_quota_close_late_record_attempt_closed(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid1
         pid2 = await propose_check(
             rt,
@@ -668,12 +678,13 @@ async def test_quota_close_late_record_attempt_closed(tmp_path: Path) -> None:
             check=_value_check(target=2),
             task_id=exp_tid,
             attempt_id=aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid2 is None
         assert rt.attempts[aid].get("closed")
         ex, arts = attach_executor(rt, tmp_path)
         art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
+            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
         )
         with pytest.raises(AttemptClosedError):
             await ex.record(
@@ -716,15 +727,16 @@ async def test_reject_and_timeout_still_finalize(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
-        await reject_check(rt, pid, source="timeout", reason="human_timeout", delegated=False)
+        await reject_check(rt, pid, source="timeout", reason="human_timeout")
         assert rt._check_proposals[pid]["status"] == "rejected"
         aid = await rt.start_attempt("EXP")
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
         art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
+            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -767,7 +779,8 @@ async def test_post_delegate_timeout_equiv_reject(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         await schedule_proposed_check_review(rt, pid, timeout_s=5)
         assert rt._proposed_check_reviews[pid]["status"] == "pending"
@@ -802,7 +815,8 @@ async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         # Authentic HitlDecided before finalize so approve auth reaches StudyClosedError.
         closed_hitl_rid = await _plant_human_hitl_decision(rt, pid, exp_tid)
@@ -813,7 +827,7 @@ async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
         art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
+            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -844,11 +858,12 @@ async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
                 check=_value_check(target=9),
                 task_id=exp_tid,
                 attempt_id=proposer_aid,
-                open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+                open_hitl=False,
+            )
         with pytest.raises(StudyClosedError):
-            await approve_check(rt, pid, source="api", hitl_request_id_s=closed_hitl_rid, delegated=False)
+            await approve_check(rt, pid, source="api", hitl_request_id_s=closed_hitl_rid)
         with pytest.raises(StudyClosedError):
-            await reject_check(rt, pid, source="timeout", reason="too_late", delegated=False)
+            await reject_check(rt, pid, source="timeout", reason="too_late")
         # schedule: idem Conflict / StudyClosedError / silent replay — no new rows.
         try:
             await schedule_proposed_check_review(
@@ -885,7 +900,8 @@ async def test_kill_reopen_restores_proposals(tmp_path: Path) -> None:
             check=_value_check(target=7),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         digest = rt._check_proposals[pid]["proposal_digest"]
     finally:
@@ -927,7 +943,8 @@ async def test_restart_open_hitl_and_delegated_review_live_eq_replay(
             task_id=exp_tid,
             attempt_id=proposer_aid,
             open_hitl=True,
-            timeout_s=120, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            timeout_s=120,
+        )
         assert pid
         await schedule_proposed_check_review(rt, pid, timeout_s=60)
         live_status = rt._check_proposals[pid]["status"]
@@ -979,7 +996,8 @@ async def test_delegated_reviewer_adversarial(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         # Designated reviewer task — foreign live attempts must not bind.
         await schedule_proposed_check_review(
@@ -1076,7 +1094,8 @@ async def test_bind_closed_designated_reviewer_fail_closed(tmp_path: Path) -> No
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         await schedule_proposed_check_review(
             rt, pid, timeout_s=60, reviewer_task_id=rev_tid
@@ -1112,7 +1131,8 @@ async def test_bind_requires_reviewer_task_id_on_schedule(tmp_path: Path) -> Non
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         await schedule_proposed_check_review(rt, pid, timeout_s=60)
         assert not rt._proposed_check_reviews[pid].get("reviewer_task_id")
@@ -1142,18 +1162,19 @@ async def test_approve_source_human_and_reviewer_guards(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         with pytest.raises(TypeError):
-            await approve_check(rt, pid, by="human", delegated=False)  # type: ignore[call-arg]
+            await approve_check(rt, pid, by="human")  # type: ignore[call-arg]
         with pytest.raises(ValueError, match="invalid approval source"):
-            await approve_check(rt, pid, source="human", delegated=False)  # type: ignore[arg-type]
+            await approve_check(rt, pid, source="human")  # type: ignore[arg-type]
         with pytest.raises(ValueError, match="delegated=True"):
             await approve_check(rt, pid, source="reviewer", delegated=False)
         with pytest.raises(ValueError, match="hitl_request_id|HitlOpened"):
-            await approve_check(rt, pid, source="api", delegated=False)
+            await approve_check(rt, pid, source="api")
         with pytest.raises(ValueError, match="hitl_request_id|verifiable|HitlOpened"):
-            await approve_check(rt, pid, source="hitl", delegated=False)
+            await approve_check(rt, pid, source="hitl")
         with pytest.raises(ValueError, match="reviewer_attempt_id|unknown|not bound|ReviewScheduled"):
             await approve_check(
                 rt,
@@ -1192,10 +1213,10 @@ async def test_prereg_after_attempt_fails_eval(tmp_path: Path) -> None:
             [
                 _exp_spec(
                     addresses=["q1"],
-                    criteria=[RequirementRef(template_id="artifact_present", required=True)],
+                    criteria=[RequirementRef(template_id="artifact_present")],
                 )
             ],
-            questions=[QuestionSpec(id="q1", text="Q?", final_type="verdict")],
+            questions=[QuestionSpec(id="q1", text="Q?")],
         )
         exp_tid = _task_id(rt, "EXP")
         aid = await rt.start_attempt("EXP")
@@ -1210,14 +1231,15 @@ async def test_prereg_after_attempt_fails_eval(tmp_path: Path) -> None:
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         await _approve_human(rt, pid, exp_tid)
         _set_proposed_criteria(rt, exp_tid, pid, "q1")
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
         art = arts.put(
-            content, make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
+            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -1256,7 +1278,7 @@ async def test_approval_cannot_bind_another_task_id(tmp_path: Path) -> None:
                 _exp_spec(task_key="EXP", addresses=["q1"]),
                 _exp_spec(task_key="EXP2", addresses=["q1"], title="other"),
             ],
-            questions=[QuestionSpec(id="q1", text="Q?", final_type="verdict")],
+            questions=[QuestionSpec(id="q1", text="Q?")],
         )
         exp_tid = _task_id(rt, "EXP")
         exp2_tid = _task_id(rt, "EXP2")
@@ -1270,7 +1292,8 @@ async def test_approval_cannot_bind_another_task_id(tmp_path: Path) -> None:
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         await _approve_human(rt, pid, exp_tid)
         _set_proposed_criteria(rt, exp2_tid, pid, "q1")
@@ -1279,7 +1302,7 @@ async def test_approval_cannot_bind_another_task_id(tmp_path: Path) -> None:
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
         art = arts.put(
-            content, make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
+            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -1317,7 +1340,7 @@ async def test_cannot_propose_after_result_recorded(tmp_path: Path) -> None:
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
         art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
+            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -1339,7 +1362,8 @@ async def test_cannot_propose_after_result_recorded(tmp_path: Path) -> None:
                 check=_value_check(target=1),
                 task_id=exp_tid,
                 attempt_id=proposer_aid,
-                open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+                open_hitl=False,
+            )
     finally:
         await close_runtime(rt)
 
@@ -1426,9 +1450,10 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
-        ref = requirement_ref_for_proposal(pid, target="q1", required=True)
+        ref = requirement_ref_for_proposal(pid, target="q1")
         # Re-accept not needed — plan already has EXP; expand criteria via propose bind.
         await _approve_human(rt, pid, exp_tid)
         # Replace EXP criteria by recording with proposed_check in a fresh plan child:
@@ -1439,7 +1464,7 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
         art = arts.put(
-            content, make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
+            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -1465,42 +1490,82 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
         await close_runtime(rt)
 
 
+def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
+    """Main v10 → #23 v11 (as_of/user_input_ids) → PR20 v12 (max_proposals)."""
+    v, payload = upcast("StudyCreated", 10, {"study_id": "s", "max_loop_iter": 8})
+    assert v == STUDY_CREATED_SCHEMA_VERSION == 12
+    assert payload.get("max_proposals") == 3
+    assert payload.get("as_of") is None
+    assert payload.get("user_input_ids") == []
+    assert payload.get("max_loop_iter") == 8
+    v12, p12 = upcast(
+        "StudyCreated", 11, {"study_id": "s", "as_of": None, "user_input_ids": []}
+    )
+    assert v12 == 12
+    assert p12.get("max_proposals") == 3
+    assert 10 in UPCASTERS["StudyCreated"] and 11 in UPCASTERS["StudyCreated"]
 
+
+def test_upcaster_studycreated_v10_preserves_max_loop_iter() -> None:
+    """v10→v11 bridge must not pop max_loop_iter (real cap on main / identical to #23)."""
+    mid = UPCASTERS["StudyCreated"][10]({"study_id": "s", "max_loop_iter": 2})
+    assert mid["max_loop_iter"] == 2
+    assert "max_loop_iter" in mid
+    assert mid.get("as_of") is None
+    assert mid.get("user_input_ids") == []
+    v, payload = upcast("StudyCreated", 10, {"study_id": "s", "max_loop_iter": 2})
+    assert v == 12
+    assert payload["max_loop_iter"] == 2
+    assert payload.get("max_proposals") == 3
+
+
+def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
+    """11→12: existing max_proposals=5 stays 5; missing → default 3."""
+    v, p = upcast(
+        "StudyCreated",
+        11,
+        {"study_id": "s", "as_of": None, "user_input_ids": [], "max_proposals": 5},
+    )
+    assert v == 12
+    assert p["max_proposals"] == 5
+    v2, p2 = upcast(
+        "StudyCreated", 11, {"study_id": "s", "as_of": None, "user_input_ids": []}
+    )
+    assert v2 == 12
+    assert p2["max_proposals"] == 3
 
 
 @pytest.mark.asyncio
-async def test_replay_studycreated_max_loop_iter_preserved(tmp_path: Path) -> None:
-    """Seeded StudyCreated v1 with max_loop_iter=2 reopens as study.max_loop_iter==2."""
+async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -> None:
+    """Seeded StudyCreated v10 with max_loop_iter=2 reopens as study.max_loop_iter==2."""
     from coscientist.core.events.store import SqliteEventStore
 
     sid = "st_pr20_v10_loop"
     root = tmp_path / sid
     root.mkdir(parents=True)
-    store = SqliteEventStore(sid, root / "events.db", lease_ttl_s=30.0, clock=SystemClock())
+    store = SqliteEventStore(sid, root / "events.db")
     await store.acquire_lease("seeder")
     now = datetime.now(timezone.utc)
     dl = now + timedelta(seconds=120)
     await store.append(
-        UnstampedEvent(
+        EventEnvelope(
             study_id=sid,
             type="StudyCreated",
             entity_key=sid,
             idem_key=make_idem("StudyCreated", sid),
-            payload=make_study_created_payload(
-                study_id=sid,
-                profile="research",
-                request="preserve loop cap",
-                catalog_version="1.0.0",
-                created_at=now,
-                deadline=dl,
-                max_loop_iter=2,
-                max_proposals=3,
-                as_of=None,
-                user_input_ids=[],
-            ),
+            payload={
+                "study_id": sid,
+                "profile": "research",
+                "request": "preserve loop cap",
+                "catalog_version": "0.1.0",
+                "hitl_policy": HitlPolicy().model_dump(mode="json"),
+                "deadline": dl.isoformat(),
+                "created_at": now.isoformat(),
+                "max_loop_iter": 2,
+            },
             ts=now,
-            schema_version=1,
-)
+            schema_version=10,
+        )
     )
     await store.release_lease("seeder", store.epoch)
     await store.close()
@@ -1514,12 +1579,23 @@ async def test_replay_studycreated_max_loop_iter_preserved(tmp_path: Path) -> No
         assert rt.study.user_input_ids == []
         created = [e for e in await rt.store.read_all() if e.type == "StudyCreated"]
         assert len(created) == 1
-        assert created[0].schema_version == STUDY_CREATED_SCHEMA_VERSION == 1
+        assert created[0].schema_version == STUDY_CREATED_SCHEMA_VERSION
         assert created[0].payload["max_loop_iter"] == 2
     finally:
         await close_runtime(rt)
 
 
+def test_upcaster_studyfinalized_v3_to_v4_custom_checks() -> None:
+    v, payload = upcast("StudyFinalized", 3, {"trigger": "all_done"})
+    assert v == STUDY_FINALIZED_SCHEMA_VERSION == 4
+    assert payload.get("custom_checks") == []
+    assert payload.get("observations") == []
+
+
+def test_register_upcaster_refuses_overwrite() -> None:
+    with pytest.raises(ValueError, match="duplicate upcaster"):
+        register_upcaster("StudyCreated", 9, lambda p: p)
+    assert 9 in UPCASTERS["StudyCreated"]
 
 
 def test_evaluate_proposed_missing_id_fail_closed(tmp_path: Path) -> None:
@@ -1530,15 +1606,12 @@ def test_evaluate_proposed_missing_id_fail_closed(tmp_path: Path) -> None:
         task_key="EXP",
         title="t",
         goal="g",
-        route="experiment",
+        route="agent",
         criteria=[
-            RequirementRef(template_id=PROPOSED_CHECK_TEMPLATE_ID, params={}, required=True),
-        ], required=True, tolerate_failed_dep=False)
-    from coscientist.core.execution.domain import PlanRole
-
-    results = evaluate_task_checks(
-        catalog, spec, out, arts, proposals={}, plan_role=PlanRole.NONE
+            RequirementRef(template_id=PROPOSED_CHECK_TEMPLATE_ID, params={}),
+        ],
     )
+    results = evaluate_task_checks(catalog, spec, out, arts, proposals={})
     assert results[0].status == ReqStatus.FAILED
     assert "unapproved_check" in (results[0].detail or "")
 
@@ -1568,7 +1641,8 @@ def test_proposal_requires_rejected_templates() -> None:
                 measures="m",
                 check=_value_check(target=1),
                 justification="because",
-                rejected_templates=[], target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id="")  # noqa: E501
+                rejected_templates=[],
+            )
         )
 
 
@@ -1587,7 +1661,8 @@ def test_proposal_rubric_xor_check() -> None:
                 check=_value_check(target=1),
                 rubric=rub,
                 justification="j",
-                rejected_templates=_rejected(), target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id="")  # noqa: E501
+                rejected_templates=_rejected(),
+            )
         )
 
 
@@ -1606,25 +1681,25 @@ def test_nfkc_digest_composed_decomposed_same() -> None:
         justification="j",
         rejected_templates=_rejected(),
     )
-    d1 = compute_proposal_digest(CheckProposal(**base, measures=nfc, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
-    d2 = compute_proposal_digest(CheckProposal(**base, measures=nfd, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
+    d1 = compute_proposal_digest(CheckProposal(**base, measures=nfc))
+    d2 = compute_proposal_digest(CheckProposal(**base, measures=nfd))
     assert d1 == d2
-    d3 = compute_proposal_digest(CheckProposal(**base, measures="other", target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
+    d3 = compute_proposal_digest(CheckProposal(**base, measures="other"))
     assert d3 != d1
     # Targets likewise NFKC-normalized in the prereg body.
-    t1 = compute_proposal_digest(CheckProposal(**{**base, "measures": "m", "target": nfc}, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
-    t2 = compute_proposal_digest(CheckProposal(**{**base, "measures": "m", "target": nfd}, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
+    t1 = compute_proposal_digest(CheckProposal(**{**base, "measures": "m", "target": nfc}))
+    t2 = compute_proposal_digest(CheckProposal(**{**base, "measures": "m", "target": nfd}))
     assert t1 == t2
     # Fullwidth digits/letters and ligatures collapse under NFKC.
     fw = "ｃａｆｅ\uff11"  # fullwidth cafe + fullwidth 1
     lig = "ﬁ"  # fi ligature
     assert unicodedata.normalize("NFKC", fw) == "cafe1"
     assert unicodedata.normalize("NFKC", lig) == "fi"
-    d_fw = compute_proposal_digest(CheckProposal(**base, measures=fw, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
-    d_fw_ascii = compute_proposal_digest(CheckProposal(**base, measures="cafe1", target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
+    d_fw = compute_proposal_digest(CheckProposal(**base, measures=fw))
+    d_fw_ascii = compute_proposal_digest(CheckProposal(**base, measures="cafe1"))
     assert d_fw == d_fw_ascii
-    d_lig = compute_proposal_digest(CheckProposal(**base, measures=lig, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
-    d_fi = compute_proposal_digest(CheckProposal(**base, measures="fi", target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))  # noqa: E501
+    d_lig = compute_proposal_digest(CheckProposal(**base, measures=lig))
+    d_fi = compute_proposal_digest(CheckProposal(**base, measures="fi"))
     assert d_lig == d_fi
 
 
@@ -1647,7 +1722,8 @@ async def test_unicode_measures_and_target(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         row = rt._check_proposals[pid]
         assert row["measures"] == unicodedata.normalize("NFKC", measures)
@@ -1668,7 +1744,8 @@ def test_nan_inf_threshold_rejected_at_validate() -> None:
                 check=_value_check(target=1),
                 justification="j",
                 rejected_templates=_rejected(),
-                threshold=float("nan"), target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id="")  # noqa: E501
+                threshold=float("nan"),
+            )
         )
     with pytest.raises(ValueError, match="finite"):
         validate_proposal_content(
@@ -1680,7 +1757,8 @@ def test_nan_inf_threshold_rejected_at_validate() -> None:
                 check=_value_check(target=1),
                 justification="j",
                 rejected_templates=_rejected(),
-                sesoi=math.inf, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id="")  # noqa: E501
+                sesoi=math.inf,
+            )
         )
 
 
@@ -1691,7 +1769,7 @@ def test_fold_rejects_rejected_to_approved_transition() -> None:
     pid = "prop_fold"
     fold_proposed_check_event(
         rt,
-        UnstampedEvent(
+        EventEnvelope(
             study_id="s",
             type="CheckProposed",
             entity_key=pid,
@@ -1704,12 +1782,11 @@ def test_fold_rejects_rejected_to_approved_transition() -> None:
             },
             ts=now,
             seq=1,
-            schema_version=writer_schema_version('CheckProposed'),
-),
+        ),
     )
     fold_proposed_check_event(
         rt,
-        UnstampedEvent(
+        EventEnvelope(
             study_id="s",
             type="CheckRejected",
             entity_key=pid,
@@ -1718,18 +1795,16 @@ def test_fold_rejects_rejected_to_approved_transition() -> None:
                 "proposal_id": pid,
                 "proposal_digest": "d",
                 "by": "timeout",
-                "rejected_by": "timeout",
                 "reason": "human_timeout",
             },
             ts=now,
             seq=2,
-            schema_version=writer_schema_version('CheckRejected'),
-),
+        ),
     )
     assert rt._check_proposals[pid]["status"] == "rejected"
     fold_proposed_check_event(
         rt,
-        UnstampedEvent(
+        EventEnvelope(
             study_id="s",
             type="CheckApproved",
             entity_key=pid,
@@ -1738,16 +1813,12 @@ def test_fold_rejects_rejected_to_approved_transition() -> None:
                 "proposal_id": pid,
                 "proposal_digest": "d",
                 "by": "human",
-                "approved_by": "human",
                 "source": "api",
                 "delegated": False,
-                "bound_task_id": "s/EXP",
-                "bound_target": "q",
             },
             ts=now,
             seq=3,
-            schema_version=writer_schema_version('CheckApproved'),
-),
+        ),
     )
     assert rt._check_proposals[pid]["status"] == "rejected"
 
@@ -1773,7 +1844,8 @@ async def test_refuse_propose_during_live_attempt_adversarial(tmp_path: Path) ->
                 check=_value_check(target=1),
                 task_id=exp_tid,
                 attempt_id=proposer_aid,
-                open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+                open_hitl=False,
+            )
     finally:
         await close_runtime(rt)
 
@@ -1796,14 +1868,15 @@ async def test_refuse_new_pid_after_result_adversarial(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         await _approve_human(rt, pid, exp_tid)
         aid = await rt.start_attempt("EXP")
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
         art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
+            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -1825,7 +1898,8 @@ async def test_refuse_new_pid_after_result_adversarial(tmp_path: Path) -> None:
                 check=_value_check(target=2),
                 task_id=exp_tid,
                 attempt_id=proposer_aid,
-                open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+                open_hitl=False,
+            )
     finally:
         await close_runtime(rt)
 
@@ -1918,22 +1992,24 @@ async def test_api_approve_without_principal_fail_closed(tmp_path: Path) -> None
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         # Arbitrary non-empty string alone must never authenticate by=human.
         with pytest.raises(ValueError, match="hitl_request_id|HitlOpened|HitlDecided"):
             await approve_check(
-                rt, pid, source="api", human_principal="attacker-free-form", delegated=False)
+                rt, pid, source="api", human_principal="attacker-free-form"
+            )
         with pytest.raises(ValueError, match="hitl_request_id|HitlOpened|HitlDecided"):
-            await approve_check(rt, pid, source="api", human_principal="", delegated=False)
+            await approve_check(rt, pid, source="api", human_principal="")
         with pytest.raises(ValueError, match="hitl_request_id|HitlOpened|HitlDecided"):
-            await approve_check(rt, pid, source="api", human_principal=None, delegated=False)
+            await approve_check(rt, pid, source="api", human_principal=None)
         with pytest.raises(ValueError, match="hitl_request_id|verifiable|HitlOpened|HitlDecided"):
-            await approve_check(rt, pid, source="hitl", hitl_request_id_s="ghost", delegated=False)
+            await approve_check(rt, pid, source="hitl", hitl_request_id_s="ghost")
         # HitlOpened alone (no HitlDecided) is not a human decision.
         opened_only = await _plant_proposed_hitl(rt, pid, exp_tid)
         with pytest.raises(ValueError, match="HitlDecided"):
-            await approve_check(rt, pid, source="api", hitl_request_id_s=opened_only, delegated=False)
+            await approve_check(rt, pid, source="api", hitl_request_id_s=opened_only)
         assert rt._check_proposals[pid]["status"] == "proposed"
     finally:
         await close_runtime(rt)
@@ -1959,7 +2035,8 @@ async def test_propose_open_hitl_api_approve_author_rid_fail_closed(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=True,
+        )
         assert pid
         # Author's HitlOpened from propose_check — no HitlDecided yet.
         author_rids = [
@@ -1975,14 +2052,13 @@ async def test_propose_open_hitl_api_approve_author_rid_fail_closed(
                 for rid, row in opens.items()
                 if isinstance(row, dict) and row.get("payload_ref") == pid
             ]
-        assert author_rids, 'propose_check(open_hitl=True) must journal HitlOpened'
+        assert author_rids, "propose_check(open_hitl=True) must journal HitlOpened"
         rid = author_rids[0]
         with pytest.raises(ValueError, match="HitlDecided"):
-            await approve_check(rt, pid, source="api", hitl_request_id_s=rid, delegated=False)
+            await approve_check(rt, pid, source="api", hitl_request_id_s=rid)
         assert rt._check_proposals[pid]["status"] == "proposed"
         # After authentic answer_hitl decision, approve may proceed.
-        await rt.answer_hitl(rid, "accept",
-            critic_accepts=True)
+        await rt.answer_hitl(rid, "accept")
         assert rt._check_proposals[pid]["status"] == "approved"
         # HITL gate closed after human decision.
         assert hasattr(rt, "hitl")
@@ -2011,7 +2087,8 @@ async def test_hitl_empty_kind_ref_fail_closed(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         study = rt.study
         assert study is not None
@@ -2021,7 +2098,7 @@ async def test_hitl_empty_kind_ref_fail_closed(tmp_path: Path) -> None:
             rid = hitl_request_id()
             await rt._append(
                 [
-                    UnstampedEvent(
+                    EventEnvelope(
                         study_id=study.study_id,
                         type="HitlOpened",
                         entity_key=rid,
@@ -2036,8 +2113,7 @@ async def test_hitl_empty_kind_ref_fail_closed(tmp_path: Path) -> None:
                             "open": True,
                         },
                         ts=now,
-                        schema_version=writer_schema_version('HitlOpened'),
-)
+                    )
                 ]
             )
             return rid
@@ -2045,11 +2121,13 @@ async def test_hitl_empty_kind_ref_fail_closed(tmp_path: Path) -> None:
         rid_empty_kind = await _plant_raw(kind="", ref=pid)
         with pytest.raises(ValueError, match="proposed_check"):
             await approve_check(
-                rt, pid, source="api", hitl_request_id_s=rid_empty_kind, delegated=False)
+                rt, pid, source="api", hitl_request_id_s=rid_empty_kind
+            )
         rid_empty_ref = await _plant_raw(kind="proposed_check", ref="")
         with pytest.raises(ValueError, match="not bound|payload_ref"):
             await approve_check(
-                rt, pid, source="hitl", hitl_request_id_s=rid_empty_ref, delegated=False)
+                rt, pid, source="hitl", hitl_request_id_s=rid_empty_ref
+            )
         assert rt._check_proposals[pid]["status"] == "proposed"
     finally:
         await close_runtime(rt)
@@ -2066,12 +2144,12 @@ async def test_approval_cannot_satisfy_other_target_same_task(tmp_path: Path) ->
             [
                 _exp_spec(
                     addresses=["q1", "q2"],
-                    criteria=[RequirementRef(template_id="artifact_present", required=True)],
+                    criteria=[RequirementRef(template_id="artifact_present")],
                 )
             ],
             questions=[
-                QuestionSpec(id="q1", text="Q1?", final_type="verdict"),
-                QuestionSpec(id="q2", text="Q2?", final_type="verdict"),
+                QuestionSpec(id="q1", text="Q1?"),
+                QuestionSpec(id="q2", text="Q2?"),
             ],
         )
         exp_tid = _task_id(rt, "EXP")
@@ -2085,7 +2163,8 @@ async def test_approval_cannot_satisfy_other_target_same_task(tmp_path: Path) ->
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         await _approve_human(rt, pid, exp_tid)
         # Criterion pretends the same proposal covers q2 — must fail-closed.
@@ -2095,7 +2174,7 @@ async def test_approval_cannot_satisfy_other_target_same_task(tmp_path: Path) ->
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
         art = arts.put(
-            content, make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
+            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -2223,7 +2302,8 @@ async def test_reject_stale_in_tick_after_deadline(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         await schedule_proposed_check_review(rt, pid, timeout_s=30)
         assert rt._proposed_check_reviews[pid]["status"] == "pending"
@@ -2262,7 +2342,8 @@ async def test_check_proposed_idem_without_digest(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         events = await rt.store.read_all()
         proposed = [e for e in events if e.type == "CheckProposed"]
@@ -2303,7 +2384,8 @@ async def test_hitl_concurrent_decisions_first_wins(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=True,
+        )
         assert pid
         rid = next(
             r
@@ -2315,8 +2397,7 @@ async def test_hitl_concurrent_decisions_first_wins(
             exp = (
                 {"reviewer_task_id": rev_tid} if decision == "delegate" else None
             )
-            await rt.answer_hitl(rid, decision, expansion=exp,
-            critic_accepts=True)
+            await rt.answer_hitl(rid, decision, expansion=exp)
 
         # Schedule winner first so it acquires the per-proposal lock; losers race in.
         order = [winner] + [d for d in ("accept", "delegate", "reject") if d != winner]
@@ -2379,7 +2460,8 @@ async def test_hitl_timeout_vs_accept_serialized(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=True,
+        )
         assert pid
         rid = next(
             r
@@ -2388,8 +2470,7 @@ async def test_hitl_timeout_vs_accept_serialized(
         )
 
         async def _accept() -> None:
-            await rt.answer_hitl(rid, "accept",
-            critic_accepts=True)
+            await rt.answer_hitl(rid, "accept")
 
         async def _timeout() -> None:
             h = rt.hitl[rid]
@@ -2473,7 +2554,8 @@ async def test_stale_review_timeout_vs_approve_serialized(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         await schedule_proposed_check_review(
             rt, pid, timeout_s=5, reviewer_task_id=rev_tid
@@ -2557,7 +2639,8 @@ async def test_approve_already_rejected_raises_for_external(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         # Bind reviewer while still proposed, then reject — approve must fail-closed.
         await schedule_proposed_check_review(
@@ -2566,12 +2649,12 @@ async def test_approve_already_rejected_raises_for_external(
         ok = await rt.start_attempt("REV")
         assert ok
         await bind_proposed_check_reviewer(rt, pid, ok)
-        await reject_check(rt, pid, source="timeout", reason="human_timeout", delegated=False)
+        await reject_check(rt, pid, source="timeout", reason="human_timeout")
         assert rt._check_proposals[pid]["status"] == "rejected"
 
         rid = await _plant_human_hitl_decision(rt, pid, exp_tid, decision="accept")
         with pytest.raises(ValueError, match="already rejected"):
-            await approve_check(rt, pid, source="api", hitl_request_id_s=rid, delegated=False)
+            await approve_check(rt, pid, source="api", hitl_request_id_s=rid)
         with pytest.raises(ValueError, match="already rejected"):
             await approve_check(
                 rt,
@@ -2610,16 +2693,19 @@ async def test_reject_already_approved_raises_except_timeout(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         rid = await _approve_human(rt, pid, exp_tid, source="api")
         assert rt._check_proposals[pid]["status"] == "approved"
         with pytest.raises(ValueError, match="already approved"):
             await reject_check(
-                rt, pid, source="api", reason="nope", hitl_request_id_s=rid, delegated=False)
+                rt, pid, source="api", reason="nope", hitl_request_id_s=rid
+            )
         # Internal race path: timeout after approve must not clobber / must not raise.
         await reject_check(
-            rt, pid, source="timeout", reason="human_timeout", hitl_request_id_s=rid, delegated=False)
+            rt, pid, source="timeout", reason="human_timeout", hitl_request_id_s=rid
+        )
         assert rt._check_proposals[pid]["status"] == "approved"
         assert [
             e
@@ -2656,7 +2742,8 @@ async def test_consume_reject_between_bind_and_lock_raises(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         await schedule_proposed_check_review(
             rt, pid, timeout_s=60, reviewer_task_id=rev_tid
@@ -2674,12 +2761,13 @@ async def test_consume_reject_between_bind_and_lock_raises(
                     rt,
                     pid,
                     decision="approve",
-                    reviewer_attempt_id=ok, reason="reviewer_decision")
+                    reviewer_attempt_id=ok,
+                )
             )
             await asyncio.sleep(0)
             assert not consumer.done()
             # Internal timeout/stale path settles while consumer waits on the lock.
-            await reject_check(rt, pid, source="timeout", reason="human_timeout", delegated=False)
+            await reject_check(rt, pid, source="timeout", reason="human_timeout")
             assert rt._check_proposals[pid]["status"] == "rejected"
         with pytest.raises(ValueError, match="already rejected"):
             await consumer
@@ -2805,7 +2893,8 @@ async def test_answer_hitl_empty_and_foreign_proposal_id_guards(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=True,
+        )
         assert pid
         rid = next(
             r
@@ -2815,14 +2904,13 @@ async def test_answer_hitl_empty_and_foreign_proposal_id_guards(
         # Foreign: expansion proposal_id ≠ HitlOpened.payload_ref.
         with pytest.raises(ValueError, match="payload_ref"):
             await rt.answer_hitl(
-                rid, "accept", expansion={"proposal_id": "prop_not_this_one"},
-            critic_accepts=True)
+                rid, "accept", expansion={"proposal_id": "prop_not_this_one"}
+            )
         # Empty: clear payload_ref on the open request.
         h = rt.hitl[rid]
         rt.hitl[rid] = h.model_copy(update={"payload_ref": ""})
         with pytest.raises(ValueError, match="missing proposal_id|payload_ref"):
-            await rt.answer_hitl(rid, "accept",
-            critic_accepts=True)
+            await rt.answer_hitl(rid, "accept")
         assert rt._check_proposals[pid]["status"] == "proposed"
         assert rid not in (getattr(rt, "_hitl_decisions", None) or {})
     finally:
@@ -2851,21 +2939,17 @@ async def test_timeout_between_hitl_decided_and_approve_fail_closed(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         rid = await _plant_human_hitl_decision(rt, pid, exp_tid, decision="accept")
         assert rt._check_proposals[pid]["status"] == "proposed"
         # Simulate timeout racing before approve_check.
         await _reject(
-            rt,
-            pid,
-            source="timeout",
-            reason="human_timeout",
-            hitl_request_id_s=rid,
-            delegated=False,
+            rt, pid, source="timeout", reason="human_timeout", hitl_request_id_s=rid
         )
         assert rt._check_proposals[pid]["status"] == "proposed"
-        await approve_check(rt, pid, source="api", hitl_request_id_s=rid, delegated=False)
+        await approve_check(rt, pid, source="api", hitl_request_id_s=rid)
         assert rt._check_proposals[pid]["status"] == "approved"
     finally:
         await close_runtime(rt)
@@ -2891,7 +2975,8 @@ async def test_hitl_decided_empty_and_foreign_proposal_id_fail_closed(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         study = rt.study
         assert study is not None
@@ -2901,7 +2986,7 @@ async def test_hitl_decided_empty_and_foreign_proposal_id_fail_closed(
             rid = await _plant_proposed_hitl(rt, pid, exp_tid)
             await rt._append(
                 [
-                    UnstampedEvent(
+                    EventEnvelope(
                         study_id=study.study_id,
                         type="HitlDecided",
                         entity_key=rid,
@@ -2914,18 +2999,17 @@ async def test_hitl_decided_empty_and_foreign_proposal_id_fail_closed(
                             "spent_rub": 0.0,
                         },
                         ts=now,
-                        schema_version=writer_schema_version('HitlDecided'),
-)
+                    )
                 ]
             )
             return rid
 
         rid_empty = await _open_and_decide(proposal_id="")
         with pytest.raises(ValueError, match="bound to proposal"):
-            await approve_check(rt, pid, source="api", hitl_request_id_s=rid_empty, delegated=False)
+            await approve_check(rt, pid, source="api", hitl_request_id_s=rid_empty)
         rid_foreign = await _open_and_decide(proposal_id="prop_not_this_one")
         with pytest.raises(ValueError, match="bound to proposal"):
-            await approve_check(rt, pid, source="api", hitl_request_id_s=rid_foreign, delegated=False)
+            await approve_check(rt, pid, source="api", hitl_request_id_s=rid_foreign)
         assert rt._check_proposals[pid]["status"] == "proposed"
     finally:
         await close_runtime(rt)
@@ -2943,7 +3027,7 @@ async def test_finalize_survives_broken_proposals_map(tmp_path: Path) -> None:
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
         art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
+            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -2994,7 +3078,8 @@ async def test_orphaned_hitl_accept_retry_approve(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")  # noqa: E501
+            open_hitl=False,
+        )
         assert pid
         rid = await _plant_human_hitl_decision(rt, pid, exp_tid, decision="accept")
         assert rt._check_proposals[pid]["status"] == "proposed"
@@ -3002,7 +3087,7 @@ async def test_orphaned_hitl_accept_retry_approve(tmp_path: Path) -> None:
         opened = (getattr(rt, "_hitl_requests", None) or {}).get(rid) or {}
         assert opened.get("open") is False
         assert "decision" not in opened
-        await approve_check(rt, pid, source="api", hitl_request_id_s=rid, delegated=False)
+        await approve_check(rt, pid, source="api", hitl_request_id_s=rid)
         assert rt._check_proposals[pid]["status"] == "approved"
     finally:
         await close_runtime(rt)

@@ -22,7 +22,7 @@ def compute_outcome(
     reqs: Sequence[NodeRequirement | CheckResult],
     claim: Outcome | None,
     reason: str | None,
-    provenance: Provenance,
+    provenance: Provenance = "real",
 ) -> tuple[Outcome | None, Downgrade | None]:
     """None = still waiting on CodeCheck/ReviewCheck; task stays RUNNING."""
     req = [r for r in reqs if r.required]
@@ -45,7 +45,7 @@ def compute_outcome(
         base = (
             Outcome.PARTIAL
             if any(status(r) in OK for r in req)
-            else Outcome.FAILED  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            else Outcome.FAILED
         )
     elif (
         code

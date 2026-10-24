@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from coscientist.api.studies import (
+    CreateStudyBody,
     _idem_path,
     _request_digest,
     _write_owner_sidecar,
@@ -25,7 +26,7 @@ from coscientist.api.studies import (
 )
 from coscientist.checks.catalog import minimal_test_catalog
 from coscientist.core.events.errors import Conflict
-from coscientist.core.events.events import UnstampedEvent, make_idem
+from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import Artifact, HitlPolicy
 from coscientist.core.execution.taint import (
@@ -56,12 +57,7 @@ from coscientist.tools.effects import (
 )
 from coscientist.tools.gate import side_effect_allowed, side_effect_decision
 from coscientist.tools.taint import context_is_tainted, filter_tools_for_context
-from tests.helpers import (
-    close_runtime,
-    default_test_hitl_policy,
-    make_create_study_body,
-    open_runtime,
-)
+from tests.helpers import close_runtime, open_runtime
 
 
 @pytest.fixture(autouse=True)
@@ -94,8 +90,8 @@ def test_default_effect_read_advisory_only():
     assert spec.effect == "read"
     assert resolve_effect("lookup") == "read"
     assert resolve_effect("not_in_registry") == "external_effect"
-    assert side_effect_decision(default_test_hitl_policy()) == "deny"
-    assert side_effect_allowed(default_test_hitl_policy()) is False
+    assert side_effect_decision(HitlPolicy()) == "deny"
+    assert side_effect_allowed(HitlPolicy()) is False
 
 
 def test_register_tool_rejects_non_loader_callers():
@@ -153,7 +149,7 @@ class _CountingTool:
 
 
 def _allow_side_effect() -> HitlPolicy:
-    return default_test_hitl_policy(defaults={"side_effect": "allow"})
+    return HitlPolicy(defaults={"side_effect": "allow"})
 
 
 async def _runtime_with_writer(tmp_path: Path, sid: str = "st_pr18"):
@@ -177,7 +173,7 @@ async def _journal_attempt(
 ) -> None:
     sid = rt.study.study_id if rt.study else "st"
     await rt.writer.append(
-        UnstampedEvent(
+        EventEnvelope(
             study_id=sid,
             type="AttemptStarted",
             entity_key=attempt_id,
@@ -194,8 +190,8 @@ async def _journal_attempt(
                 "limitations": [],
             },
             ts=datetime.now(UTC),
-            schema_version=1,
-)
+            schema_version=5,
+        )
     )
 
 
@@ -210,7 +206,7 @@ async def test_write_requires_gate(tmp_path: Path):
             study_id=rt.study.study_id if rt.study else "st_pr18",
             task_key="EXP-0",
             attempt_id="a#1",
-            hitl_policy=default_test_hitl_policy(),
+            hitl_policy=HitlPolicy(),
         )
         with pytest.raises(ToolError) as ei:
             await invoke_tool(write, {"x": 1}, ctx, writer=rt.writer, artifacts=arts)
@@ -246,7 +242,7 @@ async def test_unregistered_tool_is_external_effect(tmp_path: Path):
             study_id=rt.study.study_id if rt.study else "st_pr18_unk",
             task_key="EXP-0",
             attempt_id="a#1",
-            hitl_policy=default_test_hitl_policy(),
+            hitl_policy=HitlPolicy(),
         )
         with pytest.raises(ToolError) as ei:
             await invoke_tool(evil, {}, ctx, writer=rt.writer, artifacts=arts)
@@ -277,7 +273,7 @@ async def test_crash_new_attempt_does_not_repeat_effect(tmp_path: Path):
         )
         sid = rt.study.study_id if rt.study else "st_pr18_xonce"
         await rt.writer.append(
-            UnstampedEvent(
+            EventEnvelope(
                 study_id=sid,
                 type="EffectIntended",
                 entity_key=key1,
@@ -293,7 +289,7 @@ async def test_crash_new_attempt_does_not_repeat_effect(tmp_path: Path):
                 },
                 ts=datetime.now(UTC),
                 schema_version=1,
-)
+            )
         )
         # New attempt, different effect_idem_key — must still refuse.
         ctx2 = CallCtx(
@@ -345,7 +341,7 @@ async def test_read_not_indexed(tmp_path: Path):
             study_id=rt.study.study_id if rt.study else "st_pr18_read",
             task_key="EXP-0",
             attempt_id="a#1",
-            hitl_policy=default_test_hitl_policy(),
+            hitl_policy=HitlPolicy(),
         )
         await invoke_tool(tool, {"q": 1}, ctx, writer=rt.writer)
         await invoke_tool(tool, {"q": 1}, ctx, writer=rt.writer)
@@ -427,8 +423,9 @@ def test_tainted_context_no_write_tools():
         sha256="0" * 64,
         size=0,
         uri="cas://x",
-        produced_by=make_tool_ref("a:1", tool="web", attempt_id="a"),
-        tainted=True, producer="agent")
+        produced_by=make_tool_ref("a:1", tool="web"),
+        tainted=True,
+    )
     assert context_is_tainted([art]) is True
 
 
@@ -515,7 +512,7 @@ async def test_parallel_attempt_taint_puts(tmp_path: Path):
             await asyncio.sleep(0)
             art = arts.put(
                 name.encode(),
-                make_tool_ref(f"c:{name}", attempt_id="c"),
+                make_tool_ref(f"c:{name}"),
                 name=name,
                 media_type="text/plain",
             )
@@ -544,7 +541,7 @@ async def test_side_effect_deny_in_report(tmp_path: Path):
             study_id=rt.study.study_id if rt.study else "st_pr18_deny_rpt",
             task_key="EXP-0",
             attempt_id="a#1",
-            hitl_policy=default_test_hitl_policy(),
+            hitl_policy=HitlPolicy(),
         )
         with pytest.raises(ToolError):
             await invoke_tool(write, {}, ctx, writer=rt.writer, artifacts=arts)
@@ -557,13 +554,13 @@ async def test_side_effect_deny_in_report(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_post_studies_idempotent(tmp_path: Path):
     catalog = minimal_test_catalog()
-    body = make_create_study_body(request="idempotent create", profile="research")
+    body = CreateStudyBody(request="idempotent create", profile="research")
     key = "client-key-001"
     expected = study_id_from_idempotency_key(key)
     r1 = await post_studies(tmp_path, body, idempotency_key=key, catalog=catalog)
     r2 = await post_studies(tmp_path, body, idempotency_key=key, catalog=catalog)
     assert r1["study_id"] == r2["study_id"] == expected
-    other = make_create_study_body(request="different body", profile="research")
+    other = CreateStudyBody(request="different body", profile="research")
     with pytest.raises(Conflict):
         await post_studies(tmp_path, other, idempotency_key=key, catalog=catalog)
 
@@ -572,7 +569,7 @@ async def test_post_studies_idempotent(tmp_path: Path):
 async def test_post_studies_empty_reservation_recoverable(tmp_path: Path):
     """Crash between O_EXCL and write leaves empty file — must not permanent Conflict."""
     catalog = minimal_test_catalog()
-    body = make_create_study_body(request="empty reserve", profile="research")
+    body = CreateStudyBody(request="empty reserve", profile="research")
     key = "empty-key"
     path = _idem_path(Path(tmp_path), key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -586,7 +583,7 @@ async def test_post_studies_empty_reservation_recoverable(tmp_path: Path):
 async def test_post_studies_recent_corrupt_reservation_conflict(tmp_path: Path):
     """Fresh non-empty unreadable file may be a live neighbour — Conflict, do not unlink."""
     catalog = minimal_test_catalog()
-    body = make_create_study_body(request="live neighbour", profile="research")
+    body = CreateStudyBody(request="live neighbour", profile="research")
     key = "live-corrupt-key"
     path = _idem_path(Path(tmp_path), key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -602,7 +599,7 @@ async def test_post_studies_recent_corrupt_reservation_conflict(tmp_path: Path):
 async def test_post_studies_stale_corrupt_reservation_reclaimed(tmp_path: Path):
     """Old unreadable reservation is reclaimable (crash mid-write, owner gone)."""
     catalog = minimal_test_catalog()
-    body = make_create_study_body(request="stale corrupt", profile="research")
+    body = CreateStudyBody(request="stale corrupt", profile="research")
     key = "stale-corrupt-key"
     path = _idem_path(Path(tmp_path), key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -618,7 +615,7 @@ async def test_post_studies_stale_corrupt_reservation_reclaimed(tmp_path: Path):
 async def test_post_studies_dead_owner_sidecar_reclaimed(tmp_path: Path):
     """Corrupt body + same-host dead pid in .owner sidecar → reclaim (pid branch)."""
     catalog = minimal_test_catalog()
-    body = make_create_study_body(request="dead owner sidecar", profile="research")
+    body = CreateStudyBody(request="dead owner sidecar", profile="research")
     key = "dead-owner-key"
     path = _idem_path(Path(tmp_path), key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -634,7 +631,7 @@ async def test_post_studies_dead_owner_sidecar_reclaimed(tmp_path: Path):
 async def test_post_studies_foreign_hostname_no_pid_reclaim(tmp_path: Path):
     """Different hostname: never reclaim by pid — only by age."""
     catalog = minimal_test_catalog()
-    body = make_create_study_body(request="foreign host", profile="research")
+    body = CreateStudyBody(request="foreign host", profile="research")
     key = "foreign-host-key"
     path = _idem_path(Path(tmp_path), key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -651,7 +648,7 @@ async def test_post_studies_restart_after_pending(tmp_path: Path):
     from coscientist.api.studies import _atomic_write
 
     catalog = minimal_test_catalog()
-    body = make_create_study_body(request="restart safe", profile="research")
+    body = CreateStudyBody(request="restart safe", profile="research")
     key = "restart-key"
     sid = study_id_from_idempotency_key(key)
     path = _idem_path(Path(tmp_path), key)
@@ -677,7 +674,7 @@ async def test_post_studies_takeover_after_wait_timeout(tmp_path: Path):
     from coscientist.api.studies import _atomic_write
 
     catalog = minimal_test_catalog()
-    body = make_create_study_body(request="takeover after wait", profile="research")
+    body = CreateStudyBody(request="takeover after wait", profile="research")
     key = "takeover-key"
     sid = study_id_from_idempotency_key(key)
     path = _idem_path(Path(tmp_path), key)
@@ -702,7 +699,7 @@ async def test_post_studies_takeover_after_wait_timeout(tmp_path: Path):
 async def test_post_studies_loser_sees_complete_during_wait(tmp_path: Path):
     """Concurrent loser waiting for complete observes winner finish (no double create)."""
     catalog = minimal_test_catalog()
-    body = make_create_study_body(request="wait sees complete", profile="research")
+    body = CreateStudyBody(request="wait sees complete", profile="research")
     key = "wait-complete-key"
     expected = study_id_from_idempotency_key(key)
 
@@ -730,7 +727,7 @@ async def test_post_studies_loser_sees_complete_during_wait(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_post_studies_concurrent_race(tmp_path: Path):
     catalog = minimal_test_catalog()
-    body = make_create_study_body(request="concurrent", profile="research")
+    body = CreateStudyBody(request="concurrent", profile="research")
     key = "race-key"
     expected = study_id_from_idempotency_key(key)
 
@@ -745,23 +742,14 @@ async def test_post_studies_concurrent_race(tmp_path: Path):
 def _mp_post(data_root: str, key: str) -> str:
     """Module-level worker for multiprocess race (must be picklable)."""
     import asyncio as _aio
-    from datetime import UTC, datetime
 
-    from coscientist.api.studies import post_studies
+    from coscientist.api.studies import CreateStudyBody, post_studies
     from coscientist.checks.catalog import minimal_test_catalog
-    from tests.helpers import make_create_study_body
-
-    # Fixed deadline so all workers share one Idempotency-Key request digest.
-    fixed_deadline = datetime(2099, 1, 1, tzinfo=UTC)
 
     async def _run() -> str:
         r = await post_studies(
             data_root,
-            make_create_study_body(
-                request="mp race",
-                profile="research",
-                deadline=fixed_deadline,
-            ),
+            CreateStudyBody(request="mp race", profile="research"),
             idempotency_key=key,
             catalog=minimal_test_catalog(),
         )

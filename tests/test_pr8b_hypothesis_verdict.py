@@ -28,13 +28,12 @@ from coscientist.core.claims.verdict import (
     root_data_digests_from_bindings,
     tost_holds,
 )
-from coscientist.core.events.upcasters import writer_schema_version
+from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     InputSpec,
     OutputSpec,
-    PlanRole,
     QuestionSpec,
     RequirementRef,
     TaskSpec,
@@ -253,6 +252,25 @@ def test_refuted_with_confirmations_reports_conflict_note():
     assert note == "refuted; 1 supporting results were stub/partial"
 
 
+def test_upcaster_studycreated_v5_to_v6_supported_needed():
+    v, out = upcast("StudyCreated", 5, {"study_id": "s"})
+    assert v == 12
+    assert out["supported_needed"] == 2
+    assert out.get("aggregate", "count") == "count"
+    assert out.get("user_input_ids") == []
+    assert out["max_expansions"] == 2
+    assert out["max_proposals"] == 3
+
+
+def test_upcaster_studycreated_v4_to_v5_defaults():
+    v, out = upcast("StudyCreated", 4, {"study_id": "s", "confirmations_needed": 1})
+    assert v == 12
+    assert out["aggregate"] == "count"
+    assert out["supported_needed"] == 2
+    assert out.get("as_of") is None
+    assert "min_independent_support" not in out
+    assert out["replan_reserve"] == 0.1
+    assert out["max_proposals"] == 3
 
 
 def test_report_hypotheses_payload_schema():
@@ -716,7 +734,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -736,27 +754,30 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
                 expected_outputs=[
                     # Planner declares role=code; catalog does not list "dataset".
                     OutputSpec(
-                        name="dataset", media_type="application/json", role="code", required=True)
+                        name="dataset", media_type="application/json", role="code"
+                    )
                 ],
-                criteria=[RequirementRef(template_id="artifact_present", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False),
+                criteria=[RequirementRef(template_id="artifact_present")],
+                addresses=["Q1"],
+            ),
             TaskSpec(
                 task_key="E0",
                 title="use",
                 goal="g",
                 route="experiment",
                 depends_on=["P0"],
-                inputs=[InputSpec(from_task="P0", output="dataset", mode="forbid", kind="artifact")],
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False),
+                inputs=[InputSpec(from_task="P0", output="dataset")],
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            ),
         ],
-        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid_p = await rt.start_attempt("P0")
     # Spoof: agent labels bytes as python; planner role=code — catalog still data.
     raw = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid_p}:1", attempt_id=aid_p),
+        make_tool_ref(f"{aid_p}:1"),
         name="dataset",
         media_type="text/x-python",
     )
@@ -776,7 +797,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
     aid_e = await rt.start_attempt("E0")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid_e}:1", attempt_id=aid_e),
+        make_tool_ref(f"{aid_e}:1"),
         name="main",
         media_type="application/json",
     )
@@ -786,7 +807,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
+            claims=[{"id": "c1", "target": "Q1"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -894,12 +915,12 @@ def test_value_matches_never_used_sesoi():
         arts = LocalArtifactStore(Path(tmp))
         art = arts.put(
             b'{"count": 225}',
-            make_tool_ref("t:1", attempt_id="t"),
+            make_tool_ref("t:1"),
             name="main",
             media_type="application/json",
         )
         cr = evaluate_code_check(
-            CodeCheck(kind="value_matches", output="main", pointer="/count", target=225, allow_network=False),
+            CodeCheck(kind="value_matches", output="main", pointer="/count", target=225),
             template_id="value_match",
             check_id="value_match#0",
             out=AgentTaskOutput(
@@ -913,8 +934,6 @@ def test_value_matches_never_used_sesoi():
             uses_sesoi=True,
             sesoi=0.5,
             predicts_null=False,
-        
-            predicted_direction="two_sided",
         )
         assert cr.used_sesoi is False
 
@@ -1031,12 +1050,11 @@ def test_minimal_report_hypotheses_truncation_le_10kb():
         "st/T0": Task(
             task_id="st/T0",
             kind=TaskKind.EXPERIMENT,
-            spec=TaskSpec(task_key="T0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),  # noqa: E501
+            spec=TaskSpec(task_key="T0", title="t", goal="g", route="experiment"),
             state=TaskState.DONE,
             outcome=TaskOutcome.SUCCESS,
             deadline=__import__("datetime").datetime(2026, 1, 1),
-        plan_role=PlanRole.NONE,
-)
+        )
     }
     hyps = [
         {
@@ -1297,7 +1315,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1315,15 +1333,16 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 # value_match has no uses_sesoi in catalog.
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            )
         ],
-        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
+        make_tool_ref(f"{aid0}:1"),
         name="main",
         media_type="application/json",
     )
@@ -1333,7 +1352,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
+            claims=[{"id": "c1", "target": "Q1"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1361,7 +1380,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1382,26 +1401,31 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 expected_outputs=[
                     # Planner may lie with role=code; catalog decides kinds.
                     OutputSpec(
-                        name="dataset", media_type="application/json", role="code", required=True),
+                        name="dataset", media_type="application/json", role="code"
+                    ),
                     OutputSpec(
-                        name="data_b", media_type="application/json", role="data", required=True),
+                        name="data_b", media_type="application/json", role="data"
+                    ),
                     OutputSpec(
-                        name="code", media_type="text/x-python", role="code", required=True),
+                        name="code", media_type="text/x-python", role="code"
+                    ),
                 ],
-                criteria=[RequirementRef(template_id="artifact_present", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False),
+                criteria=[RequirementRef(template_id="artifact_present")],
+                addresses=["Q1"],
+            ),
             TaskSpec(
                 task_key="P_MID",
                 title="intermediate",
                 goal="pass-through",
                 route="experiment",
                 depends_on=["P_RAW"],
-                inputs=[InputSpec(from_task="P_RAW", output="dataset", mode="forbid", kind="artifact")],
+                inputs=[InputSpec(from_task="P_RAW", output="dataset")],
                 expected_outputs=[
-                    OutputSpec(name="mid", media_type="application/json", role="data", required=True),
+                    OutputSpec(name="mid", media_type="application/json", role="data"),
                 ],
-                criteria=[RequirementRef(template_id="artifact_present", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False),
+                criteria=[RequirementRef(template_id="artifact_present")],
+                addresses=["Q1"],
+            ),
             TaskSpec(
                 task_key="E1",
                 title="via mid",
@@ -1410,11 +1434,12 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 depends_on=["P_MID"],
                 method=ExperimentMethod.COMPUTATIONAL,
                 inputs=[
-                    InputSpec(from_task="P_MID", output="mid", mode="forbid", kind="artifact"),
-                    InputSpec(from_task="P_RAW", output="code", mode="forbid", kind="artifact"),
+                    InputSpec(from_task="P_MID", output="mid"),
+                    InputSpec(from_task="P_RAW", output="code"),
                 ],
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False),
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            ),
             TaskSpec(
                 task_key="E2",
                 title="direct raw",
@@ -1424,11 +1449,12 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 method=ExperimentMethod.STATISTICAL,
                 inputs=[
                     # Slot rename: bind data output under input name "script".
-                    InputSpec(from_task="P_RAW", output="dataset", mode="forbid", kind="artifact"),
-                    InputSpec(from_task="P_RAW", output="code", mode="forbid", kind="artifact"),
+                    InputSpec(from_task="P_RAW", output="dataset"),
+                    InputSpec(from_task="P_RAW", output="code"),
                 ],
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False),
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            ),
             TaskSpec(
                 task_key="E3",
                 title="other data",
@@ -1437,11 +1463,12 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 depends_on=["P_RAW"],
                 method=ExperimentMethod.SIMULATION,
                 inputs=[
-                    InputSpec(from_task="P_RAW", output="data_b", mode="forbid", kind="artifact"),
-                    InputSpec(from_task="P_RAW", output="code", mode="forbid", kind="artifact"),
+                    InputSpec(from_task="P_RAW", output="data_b"),
+                    InputSpec(from_task="P_RAW", output="code"),
                 ],
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False),
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            ),
             # No-input: goal/title reword + same templates → 1 source.
             TaskSpec(
                 task_key="N1",
@@ -1450,8 +1477,9 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 method=ExperimentMethod.COMPUTATIONAL,
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False),
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            ),
             TaskSpec(
                 task_key="N2",
                 title="reworded title",
@@ -1459,8 +1487,9 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 method=ExperimentMethod.COMPUTATIONAL,
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False),
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            ),
             # Distinct criterion template → separate structural source.
             TaskSpec(
                 task_key="N3",
@@ -1469,29 +1498,30 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 method=ExperimentMethod.COMPUTATIONAL,
-                criteria=[RequirementRef(template_id="artifact_present", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False),
+                criteria=[RequirementRef(template_id="artifact_present")],
+                addresses=["Q1"],
+            ),
         ],
-        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid_p = await rt.start_attempt("P_RAW")
     da = arts.put(
         b'{"count": 1}',
-        make_tool_ref(f"{aid_p}:da", attempt_id=aid_p),
+        make_tool_ref(f"{aid_p}:da"),
         name="dataset",
         media_type="application/json",
         role="code",  # agent code|data role ignored at put
     )
     db = arts.put(
         b'{"count": 2}',
-        make_tool_ref(f"{aid_p}:db", attempt_id=aid_p),
+        make_tool_ref(f"{aid_p}:db"),
         name="data_b",
         media_type="application/json",
         role="data",
     )
     code = arts.put(
         b"print(1)",
-        make_tool_ref(f"{aid_p}:c", attempt_id=aid_p),
+        make_tool_ref(f"{aid_p}:c"),
         name="code",
         media_type="text/x-python",
         role="code",
@@ -1515,7 +1545,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
     aid_mid = await rt.start_attempt("P_MID")
     mid = arts.put(
         b'{"count": 1, "passed": true}',
-        make_tool_ref(f"{aid_mid}:m", attempt_id=aid_mid),
+        make_tool_ref(f"{aid_mid}:m"),
         name="mid",
         media_type="application/json",
         role="data",
@@ -1537,7 +1567,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
         aid = await rt.start_attempt(tk)
         art = arts.put(
             b'{"count": 225}',
-            make_tool_ref(f"{aid}:1", attempt_id=aid),
+            make_tool_ref(f"{aid}:1"),
             name="main",
             media_type="application/json",
             role="data",
@@ -1548,7 +1578,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 summary="ok",
                 outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"count": 225},
-                claims=[{"id": f"c_{tk}", "target": "Q1", "checked_against": "value_match"}],
+                claims=[{"id": f"c_{tk}", "target": "Q1"}],
             ),
         )
         by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1587,7 +1617,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1605,14 +1635,15 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="value_match", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False)
+                addresses=["Q1"],
+            )
         ],
-        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid0 = await rt.start_attempt("E0", provenance="real")
     art = arts.put(
         b'{"count": 999}',
-        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
+        make_tool_ref(f"{aid0}:1"),
         name="main",
         media_type="application/json",
     )
@@ -1649,7 +1680,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1666,15 +1697,16 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            )
         ],
-        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid = await rt.start_attempt("E0")
     foreign = arts.put(
         b'{"count": 225}',
-        make_tool_ref("other_attempt#1:1", attempt_id="other_attempt#1"),
+        make_tool_ref("other_attempt#1:1"),
         name="main",
         media_type="application/json",
     )
@@ -1686,7 +1718,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
                 "main": ArtifactHandle(artifact_id=foreign.artifact_id, name="main")
             },
             values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
+            claims=[{"id": "c1", "target": "Q1"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1721,7 +1753,7 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1738,10 +1770,11 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="value_match", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="value_match")],
+                addresses=["Q1"],
+            )
         ],
-        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid = await rt.start_attempt("E0")
     await rt.executor.record(
@@ -1750,7 +1783,7 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
             summary="no artifact",
             outputs={},
             values={},
-            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
+            claims=[{"id": "c1", "target": "Q1"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1794,7 +1827,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1814,42 +1847,46 @@ async def test_e2e_agent_put_two_independent_mets_supported(
                 goal="d1",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="artifact_present", required=True)],
+                criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
                 expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data", required=True)
-                ], required=True, tolerate_failed_dep=False),
+                    OutputSpec(name="main", media_type="application/json", role="data")
+                ],
+            ),
             TaskSpec(
                 task_key="P2",
                 title="raw2",
                 goal="d2",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="artifact_present", required=True)],
+                criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
                 expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data", required=True)
-                ], required=True, tolerate_failed_dep=False),
+                    OutputSpec(name="main", media_type="application/json", role="data")
+                ],
+            ),
             TaskSpec(
                 task_key="E1",
                 title="exp1",
                 goal="g1",
                 route="experiment",
                 depends_on=["P1"],
-                inputs=[InputSpec(from_task="P1", output="main", mode="forbid", kind="artifact")],
-                criteria=[RequirementRef(template_id="value_match_sesoi", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False),
+                inputs=[InputSpec(from_task="P1", output="main")],
+                criteria=[RequirementRef(template_id="value_match_sesoi")],
+                addresses=["Q1"],
+            ),
             TaskSpec(
                 task_key="E2",
                 title="exp2",
                 goal="g2",
                 route="experiment",
                 depends_on=["P2"],
-                inputs=[InputSpec(from_task="P2", output="main", mode="forbid", kind="artifact")],
-                criteria=[RequirementRef(template_id="value_match_sesoi", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False),
+                inputs=[InputSpec(from_task="P2", output="main")],
+                criteria=[RequirementRef(template_id="value_match_sesoi")],
+                addresses=["Q1"],
+            ),
         ],
-        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="why")],
     )
     now = datetime.now(UTC)
     hid = hypothesis_node_id(sid, "H1")
@@ -1890,7 +1927,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
         aid = await rt.start_attempt(tk)
         art = arts.put(
             blob,
-            make_tool_ref(f"{aid}:1", attempt_id=aid),
+            make_tool_ref(f"{aid}:1"),
             name="main",
             media_type="application/json",
             role="data",
@@ -1909,7 +1946,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
         payload = f'{{"effect": {est}}}'.encode()
         art = arts.put(
             payload,
-            make_tool_ref(f"{aid}:1", attempt_id=aid),
+            make_tool_ref(f"{aid}:1"),
             name="main",
             media_type="application/json",
             role="data",
@@ -1921,7 +1958,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
                 summary="ok",
                 outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"effect": est},
-                claims=[{"id": f"c_{tk}", "target": "H1", "checked_against": "value_match_sesoi"}],
+                claims=[{"id": f"c_{tk}", "target": "H1"}],
             ),
         )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1966,7 +2003,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1986,48 +2023,52 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 goal="d1",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="artifact_present", required=True)],
+                criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
                 expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data", required=True)
-                ], required=True, tolerate_failed_dep=False),
+                    OutputSpec(name="main", media_type="application/json", role="data")
+                ],
+            ),
             TaskSpec(
                 task_key="P2",
                 title="raw2",
                 goal="d2",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="artifact_present", required=True)],
+                criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
                 expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data", required=True)
-                ], required=True, tolerate_failed_dep=False),
+                    OutputSpec(name="main", media_type="application/json", role="data")
+                ],
+            ),
             TaskSpec(
                 task_key="E1",
                 title="s1",
                 goal="g1",
                 route="experiment",
                 depends_on=["P1"],
-                inputs=[InputSpec(from_task="P1", output="main", mode="forbid", kind="artifact")],
-                criteria=[RequirementRef(template_id="value_match_sesoi", required=True)],
+                inputs=[InputSpec(from_task="P1", output="main")],
+                criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
                 expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data", required=True)
-                ], required=True, tolerate_failed_dep=False),
+                    OutputSpec(name="main", media_type="application/json", role="data")
+                ],
+            ),
             TaskSpec(
                 task_key="E2",
                 title="s2",
                 goal="g2",
                 route="experiment",
                 depends_on=["P2"],
-                inputs=[InputSpec(from_task="P2", output="main", mode="forbid", kind="artifact")],
-                criteria=[RequirementRef(template_id="value_match_sesoi", required=True)],
+                inputs=[InputSpec(from_task="P2", output="main")],
+                criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
                 expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data", required=True)
-                ], required=True, tolerate_failed_dep=False),
+                    OutputSpec(name="main", media_type="application/json", role="data")
+                ],
+            ),
         ],
-        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="why")],
     )
     # Hypothesis + tests.intent=refute so capable refute counts toward supported.
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -2063,7 +2104,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
         aid = await rt.start_attempt(tk)
         art = arts.put_sandbox(
             blob,
-            make_tool_ref(f"{aid}:1", attempt_id=aid),
+            make_tool_ref(f"{aid}:1"),
             name="main",
             media_type="application/json",
             role="data",
@@ -2084,7 +2125,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
         payload = f'{{"effect": {est}}}'.encode()
         art = arts.put_sandbox(
             payload,
-            make_tool_ref(f"{aid}:1", attempt_id=aid),
+            make_tool_ref(f"{aid}:1"),
             name="main",
             media_type="application/json",
             role="data",
@@ -2098,7 +2139,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 summary="ok",
                 outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"effect": est},
-                claims=[{"id": f"c_{tk}", "target": "H1", "checked_against": "value_match_sesoi"}],
+                claims=[{"id": f"c_{tk}", "target": "H1"}],
             ),
         )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -2120,7 +2161,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
     await rt2.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid2,
         finalize_reserve_s=5,
@@ -2138,14 +2179,15 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="value_match", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False)
+                addresses=["Q1"],
+            )
         ],
-        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid_f = await rt2.start_attempt("E0", provenance="real")
     art_f = arts2.put_sandbox(
         b'{"count": 999}',
-        make_tool_ref(f"{aid_f}:1", attempt_id=aid_f),
+        make_tool_ref(f"{aid_f}:1"),
         name="main",
         media_type="application/json",
         net_isolation="hard",
@@ -2189,7 +2231,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -2208,24 +2250,26 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="value_match_sesoi", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False),
+                criteria=[RequirementRef(template_id="value_match_sesoi")],
+                addresses=["Q1"],
+            ),
             TaskSpec(
                 task_key="E1",
                 title="consumer",
                 goal="g",
                 route="experiment",
                 depends_on=["E0"],
-                inputs=[InputSpec(kind="verdict", ref="Q1", from_task="", output="", mode="forbid")],
-                criteria=[RequirementRef(template_id="artifact_present", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False),
+                inputs=[InputSpec(kind="verdict", ref="Q1")],
+                criteria=[RequirementRef(template_id="artifact_present")],
+                addresses=["Q1"],
+            ),
         ],
-        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"effect": 2.0}',
-        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
+        make_tool_ref(f"{aid0}:1"),
         name="main",
         media_type="application/json",
     )
@@ -2235,7 +2279,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"effect": 2.0},
-            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match_sesoi"}],
+            claims=[{"id": "c1", "target": "Q1"}],
         ),
     )
     # Bind E1 → records VerdictSnapshotsRecorded for Q1.
@@ -2264,7 +2308,7 @@ async def test_aggregate_evalue_rejected_at_create(tmp_path, clock, runtime_cls)
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version="1.0.0",
+            catalog_version="0.1.0",
             deadline=clock.now() + timedelta(seconds=60),
             sid=sid,
             finalize_reserve_s=5,
@@ -2279,7 +2323,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
 ):
     """Legacy/forged severe=True / refute_capable=True must not survive read/replay."""
     from coscientist.core.claims.graph import GraphEdge, GraphNode
-    from coscientist.core.events.events import UnstampedEvent, make_idem
+    from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.events.ids import claim_node_id, question_node_id
 
     sid = "st_forge"
@@ -2289,7 +2333,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -2305,17 +2349,18 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="artifact_present", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="artifact_present")],
+                addresses=["Q1"],
+            )
         ],
-        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="why")],
     )
     cid = claim_node_id(sid, "forged")
     qid = question_node_id(sid, "Q1")
     aid = f"{sid}/E0#1"
     await rt._append(
         [
-            UnstampedEvent(
+            EventEnvelope(
                 study_id=sid,
                 type="GraphNodeUpserted",
                 entity_key=cid,
@@ -2355,9 +2400,8 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
                     },
                 ).model_dump(mode="json"),
                 ts=clock.now(),
-                schema_version=writer_schema_version('GraphNodeUpserted'),
-                ),
-            UnstampedEvent(
+            ),
+            EventEnvelope(
                 study_id=sid,
                 type="GraphEdgeAdded",
                 entity_key=f"{cid}->about->{qid}",
@@ -2370,8 +2414,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
                     study_id=sid,
                 ).model_dump(mode="json"),
                 ts=clock.now(),
-                schema_version=writer_schema_version('GraphEdgeAdded'),
-                ),
+            ),
         ]
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -2407,7 +2450,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="1.0.0",
+        catalog_version="0.1.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -2424,15 +2467,16 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="tost_equivalence", required=True)],
-                addresses=["Q1"], required=True, tolerate_failed_dep=False)
+                criteria=[RequirementRef(template_id="tost_equivalence")],
+                addresses=["Q1"],
+            )
         ],
-        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
+        questions=[QuestionSpec(id="Q1", text="why")],
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"effect": {"est": 0.0, "ci_low": -0.1, "ci_high": 0.1}}',
-        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
+        make_tool_ref(f"{aid0}:1"),
         name="main",
         media_type="application/json",
     )
@@ -2442,7 +2486,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={},
-            claims=[{"id": "c1", "target": "Q1", "checked_against": "tost_equivalence"}],
+            claims=[{"id": "c1", "target": "Q1"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)

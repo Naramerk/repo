@@ -8,7 +8,6 @@ import pytest
 
 from coscientist.core.execution.domain import (
     InputSpec,
-    PlanRole,
     Task,
     TaskKind,
     TaskOutcome,
@@ -27,12 +26,12 @@ def _task(key: str, outcome: TaskOutcome | None, *, inputs=None):
             title=key,
             goal="g",
             route="experiment",
-            inputs=inputs or [], required=True, tolerate_failed_dep=False),
+            inputs=inputs or [],
+        ),
         state=TaskState.DONE if outcome else TaskState.PENDING,
         outcome=outcome,
         deadline=datetime(2026, 1, 1, tzinfo=UTC),
-        plan_role=PlanRole.NONE,
-)
+    )
 
 
 def test_forbid_failed_dep_raises():
@@ -40,7 +39,7 @@ def test_forbid_failed_dep_raises():
     child = _task(
         "B",
         None,
-        inputs=[InputSpec(from_task="A", output="main", mode="forbid", kind="artifact")],
+        inputs=[InputSpec(from_task="A", output="main", mode="forbid")],
     )
     child = child.model_copy(update={"state": TaskState.PENDING, "outcome": None})
     with pytest.raises(InputUnavailable):
@@ -57,7 +56,7 @@ def test_simulate_when_missing():
     child = _task(
         "B",
         None,
-        inputs=[InputSpec(from_task="A", output="main", mode="simulate", kind="artifact")],
+        inputs=[InputSpec(from_task="A", output="main", mode="simulate")],
     )
     child = child.model_copy(update={"state": TaskState.PENDING, "outcome": None})
     bindings, prov = bind_inputs(

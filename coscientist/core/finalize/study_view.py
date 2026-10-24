@@ -13,9 +13,9 @@ from coscientist.core.execution.domain import StudyView, Task, TaskOutcome, Task
 def _task_is_stub(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> bool:
     """True iff the last closed attempt has provenance=stub."""
     for aid in reversed(task.attempts):
-        att = attempts.get(aid, {})  # audit-ok[dict_get_default]: explicit default only for structural absent key
-        if att.get("closed"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-            return att.get("provenance") == "stub"  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        att = attempts.get(aid, {})
+        if att.get("closed"):
+            return att.get("provenance") == "stub"
     return False
 
 
@@ -25,11 +25,11 @@ def _q_verdicts_from_dispositions(
     """Disposition/verdict strings for study_fulfilled (same mapping as finalize)."""
     if not question_dispositions:
         return {}
-    out: dict[str, str] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
+    out: dict[str, str] = {}
     for qid, d in question_dispositions.items():
         if not isinstance(d, dict):
             continue
-        out[str(qid)] = str(d.get("disposition") or d.get("verdict") or "untested")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_call]: coalesce existing call result; no invented literal # audit-ok[or_literal]: structural empty coalesce; absent → empty container/str  # audit-ok[or_call]: coalesce existing call result; no invented literal # audit-ok[or_literal]: structural empty coalesce; absent → empty container/str  # noqa: E501
+        out[str(qid)] = str(d.get("disposition") or d.get("verdict") or "untested")
     return out
 
 
@@ -43,7 +43,7 @@ def _compute_verdict(
     """Task-level verdict, then cap via study_fulfilled (single source with finalize)."""
     done_tasks = [t for t in tasks if t.state == TaskState.DONE]
     done = len(done_tasks)
-    stub_share = (sum(1 for t in done_tasks if _task_is_stub(t, atts)) / done) if done else 0.0  # audit-ok[ternary_default]: branch selects typed literal required by contract  # noqa: E501
+    stub_share = (sum(1 for t in done_tasks if _task_is_stub(t, atts)) / done) if done else 0.0
     # report is required=False (PR 2) — excluded when required=False
     req = [t for t in tasks if t.spec.required]
     req_ok = {TaskOutcome.SUCCESS, TaskOutcome.PARTIAL}
@@ -64,21 +64,21 @@ def _compute_verdict(
 
     # PR13: same gate as finalize — study_fulfilled + final_types (never diverge).
     if verdict in ("fulfilled", "stubbed"):
-        all_required_success = bool(req) and all(  # audit-ok[coerce_bool]: bool() after explicit type gate
+        all_required_success = bool(req) and all(
             t.state == TaskState.DONE and t.outcome in req_ok for t in req
         )
         q_verdicts = _q_verdicts_from_dispositions(question_dispositions)
-        ftypes = {str(k): str(v) for k, v in (question_final_types or {}).items()}  # audit-ok[or_literal]: structural empty coalesce; absent → empty container/str  # noqa: E501
+        ftypes = {str(k): str(v) for k, v in (question_final_types or {}).items()}
         if not study_fulfilled(q_verdicts, all_required_success, question_final_types=ftypes):
             verdict = "partial"
     return verdict, stub_share
 
 
-def study_phase(*, finalized: bool = False, all_done: bool = False, past_effective: bool = False) -> str:  # audit-ok[param_default]: explicit API/default param; not silent domain invent  # noqa: E501
+def study_phase(*, finalized: bool = False, all_done: bool = False, past_effective: bool = False) -> str:
     """Pure phase: closed | finalizing | running (DESIGN §3.2)."""
     if finalized:
         return "closed"
-    if all_done or past_effective:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
+    if all_done or past_effective:
         return "finalizing"
     return "running"
 
@@ -86,9 +86,9 @@ def study_phase(*, finalized: bool = False, all_done: bool = False, past_effecti
 def study_view(
     tasks: Iterable[Task],
     *,
-    open_hitl: int = 0,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
+    open_hitl: int = 0,
     attempts: Mapping[str, Mapping[str, Any]] | None = None,
-    finalized: bool = False,  # audit-ok[param_default]: explicit API/default param; not silent domain invent
+    finalized: bool = False,
     now: datetime | None = None,
     effective_deadline: datetime | None = None,
     question_dispositions: Mapping[str, Mapping[str, Any]] | None = None,
@@ -101,15 +101,15 @@ def study_view(
     ``study_fulfilled`` + ``question_final_types`` (same source as finalize).
     """
     tasks = list(tasks)
-    atts: Mapping[str, Mapping[str, Any]] = attempts or {}  # audit-ok[or_literal]: structural empty coalesce; absent → empty container/str  # noqa: E501
+    atts: Mapping[str, Mapping[str, Any]] = attempts or {}
     total = len(tasks)
     done = sum(1 for t in tasks if t.state == TaskState.DONE)
-    all_done = bool(tasks) and done == total  # audit-ok[coerce_bool]: bool() after explicit type gate
+    all_done = bool(tasks) and done == total
     past_effective = now is not None and effective_deadline is not None and now >= effective_deadline
     phase = study_phase(finalized=finalized, all_done=all_done, past_effective=past_effective)
     if phase == "closed":
         if not tasks:
-            return StudyView(phase="closed", progress=1.0, awaiting_human=False, stub_share=0.0)
+            return StudyView(phase="closed", progress=1.0, awaiting_human=False)
         verdict, stub_share = _compute_verdict(
             tasks,
             atts=atts,
@@ -132,13 +132,13 @@ def study_view(
         )
         return StudyView(
             phase="finalizing",
-            progress=done / total if total else 1.0,  # audit-ok[ternary_default]: branch selects typed literal required by contract  # noqa: E501
+            progress=done / total if total else 1.0,
             awaiting_human=False,
             verdict=verdict,  # type: ignore[arg-type]
             stub_share=stub_share,
         )
     if not tasks:
-        return StudyView(phase="running", progress=0.0, awaiting_human=open_hitl > 0, stub_share=0.0)
+        return StudyView(phase="running", progress=0.0, awaiting_human=open_hitl > 0)
     stub_share = 0.0
     done_tasks = [t for t in tasks if t.state == TaskState.DONE]
     if done_tasks:

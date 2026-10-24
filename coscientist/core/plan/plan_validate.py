@@ -67,7 +67,7 @@ __all__ = [
 ]
 
 def _rubric_digest_of(spec: TaskSpec) -> str | None:
-    digests: list[str] = []  # audit-ok[field_default]: structural empty = collecting digests
+    digests: list[str] = []
     for o in spec.expected_outputs:
         rub = o.rubric
         if rub is None:
@@ -170,9 +170,9 @@ def validate_final_types(
             if qid in cover:
                 cover[qid].append(spec)
 
-    check_ids = set(active_question_ids) if active_question_ids is not None else set(q_by_id)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+    check_ids = set(active_question_ids) if active_question_ids is not None else set(q_by_id)
     for qid in sorted(check_ids):
-        q = q_by_id.get(qid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        q = q_by_id.get(qid)
         if q is None:
             continue
         ft = q.final_type
@@ -180,7 +180,7 @@ def validate_final_types(
             raise ValueError(f"question {qid!r}: missing final_type")
         if ft not in VALID_FINAL_TYPES:
             raise ValueError(f"question {qid!r}: unknown final_type {ft!r} (expected verdict|artifact|both)")
-        covering = cover.get(qid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        covering = cover.get(qid)
         if covering is None:
             covering = []
         if not covering and ft in ("artifact", "both", "verdict"):
@@ -202,7 +202,7 @@ def refuse_detail(err: BaseException | str, *, truncate: bool) -> str:
     ``truncate=True`` only for human-facing report snippets — never before
     ``plan_refused_idem`` (idem must hash the full detail).
     """
-    msg = str(err) if not isinstance(err, BaseException) else str(err)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+    msg = str(err) if not isinstance(err, BaseException) else str(err)
     if msg:
         full = msg
     else:
@@ -215,7 +215,7 @@ async def apply_plan_refused(
     runtime: Any,
     *,
     detail: str,
-    report_line: str = PLAN_REFUSED_LINE,  # audit-ok[named_default]: named constant / enum member default; not silent invent  # noqa: E501
+    report_line: str = PLAN_REFUSED_LINE,
 ) -> str:
     """Canonical plan refusal (PR13; #24 reuses — do not fork).
 
@@ -278,7 +278,7 @@ async def apply_plan_refused(
                     "outcome": (
                         TaskOutcome.FAILED.value
                         if t.spec.task_key == "PLAN"
-                        else TaskOutcome.SKIPPED.value  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+                        else TaskOutcome.SKIPPED.value
                     ),
                     "reason": TaskReason.SCHEMA_INVALID.value,
                     "detail": detail,
@@ -302,7 +302,7 @@ def validate_rubric_immutable(
         skip: set[str] = set()
     else:
         skip = set(superseded_tasks)
-    prev_digests: dict[str, str] = {}  # audit-ok[field_default]: structural empty = building digests
+    prev_digests: dict[str, str] = {}
     for t in prev_tasks:
         d = _rubric_digest_of(t)
         if d is not None:
@@ -311,7 +311,7 @@ def validate_rubric_immutable(
         if t.task_key in skip:
             continue
         new_d = _rubric_digest_of(t)
-        old_d = prev_digests.get(t.task_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        old_d = prev_digests.get(t.task_key)
         if old_d is None or new_d is None:
             continue
         if new_d != old_d:
@@ -330,14 +330,14 @@ def merge_plan_questions(
     with ``parent_id`` set (from either list) plus any explicit ``subquestions``.
     """
     if questions is None:
-        roots: list[QuestionSpec] = []  # audit-ok[field_default]: structural empty = no root questions
+        roots: list[QuestionSpec] = []
     else:
         roots = list(questions)
     if subquestions is None:
-        subs: list[QuestionSpec] = []  # audit-ok[field_default]: structural empty = no subquestions
+        subs: list[QuestionSpec] = []
     else:
         subs = list(subquestions)
-    by_id: dict[str, QuestionSpec] = {}  # audit-ok[field_default]: structural empty = merging by id
+    by_id: dict[str, QuestionSpec] = {}
     for q in roots + subs:
         if q.id in by_id and by_id[q.id].text != q.text:
             raise ValueError(f"question id {q.id!r} text conflict")
@@ -400,7 +400,7 @@ def validate_decomposes(
             )
     # Explicit subquestions list may include entries not yet merged — check too.
     if subquestions is None:
-        sub_iter: list[QuestionSpec] = []  # audit-ok[field_default]: structural empty = no explicit subs
+        sub_iter: list[QuestionSpec] = []
     else:
         sub_iter = subquestions
     for q in sub_iter:
@@ -437,7 +437,7 @@ def validate_decomposes(
                 if qid in cover:
                     cover[qid].append(spec.task_key)
         for leaf in leaf_ids(parent_of):
-            leaf_cover = cover.get(leaf)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            leaf_cover = cover.get(leaf)
             if (leaf_cover is not None and leaf_cover) or leaf in disposed:
                 continue
             raise ValueError(
@@ -496,7 +496,7 @@ def validate_plan_final_types_or_err(
     from pydantic import ValidationError
 
     try:
-        qspecs: list[QuestionSpec] = []  # audit-ok[field_default]: structural empty = building qspecs
+        qspecs: list[QuestionSpec] = []
         for q in questions:
             if isinstance(q, QuestionSpec):
                 qspecs.append(q)
@@ -534,4 +534,4 @@ def validate_plan_final_types_or_err(
         msg = str(e)
         if not msg:
             raise
-        return msg  # audit-ok[except_silent_return]: validate → typed refuse detail (never invent final_type)
+        return msg

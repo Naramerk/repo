@@ -72,14 +72,14 @@ class HitlForkMixin(CostlyHitlMixin):
         gate = self.study.hitl_policy.gate(kind)
         if gate is None:
             raise ValueError(f"HITL kind {kind!r} has no gate in hitl_policy")
-        to = timeout_s if timeout_s is not None else gate.timeout_s  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        to = timeout_s if timeout_s is not None else gate.timeout_s
         deadline = min(
             now + timedelta(seconds=to),
             task.deadline,
             self.study.effective_deadline(),
         )
         rid = hitl_request_id()
-        if type(cost_rub) not in (int, float) or isinstance(cost_rub, bool):  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
+        if type(cost_rub) not in (int, float) or isinstance(cost_rub, bool):
             raise TypeError(f"cost_rub must be int|float, got {type(cost_rub).__name__}")
         req = HitlRequest(
             request_id=rid,
@@ -89,7 +89,7 @@ class HitlForkMixin(CostlyHitlMixin):
             study_id=self.study.study_id,
             task_id=task.task_id,
             open=True,
-            cost_rub=float(cost_rub),  # audit-ok[coerce_float]: coerce after explicit numeric type gate
+            cost_rub=float(cost_rub),
             expand_after_task=after,
         )
         await self._append(
@@ -200,7 +200,7 @@ class HitlForkMixin(CostlyHitlMixin):
         from coscientist.core.plan.expand_trigger import refuse_expansion
 
         # Sole bind: expansion.after_task or HitlOpened.expand_after_task (no task_id/"HITL").
-        raw_after = expansion.get("after_task")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+        raw_after = expansion.get("after_task")
         if raw_after is None:
             raw_after = h.expand_after_task
         if not isinstance(raw_after, str) or not raw_after:
@@ -244,7 +244,7 @@ class HitlForkMixin(CostlyHitlMixin):
             )
             return
         added_tasks = [
-            TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in raw_tasks  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+            TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in raw_tasks
         ]
         if "added_questions" in expansion:
             raw_qs = expansion["added_questions"]
@@ -259,7 +259,7 @@ class HitlForkMixin(CostlyHitlMixin):
             )
             return
         added_questions = [
-            QuestionSpec.model_validate(q) if isinstance(q, dict) else q for q in raw_qs  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+            QuestionSpec.model_validate(q) if isinstance(q, dict) else q for q in raw_qs
         ]
         if "superseded_questions" in expansion:
             raw_sq = expansion["superseded_questions"]
@@ -274,7 +274,7 @@ class HitlForkMixin(CostlyHitlMixin):
             )
             return
         superseded_questions = [
-            QuestionSupersede.model_validate(s) if isinstance(s, dict) else s  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+            QuestionSupersede.model_validate(s) if isinstance(s, dict) else s
             for s in raw_sq
         ]
         if "superseded_tasks" in expansion:
@@ -303,7 +303,7 @@ class HitlForkMixin(CostlyHitlMixin):
                     f"HITL expansion assign_keys must be bool, got {type(raw_ak).__name__}"
                 )
             assign_keys = raw_ak
-        st_keys: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
+        st_keys: list[str] = []
         for x in raw_st:
             if not isinstance(x, str) or not x:
                 raise ValueError(f"HITL superseded_tasks entry must be non-empty str: {x!r}")
@@ -357,7 +357,7 @@ class HitlForkMixin(CostlyHitlMixin):
                 f"proposed_check HITL {request_id!r} payload_ref={ref_pid!r} "
                 f"!= proposal_id={exp_pid!r}"
             )
-        pid = ref_pid if ref_pid else exp_pid  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+        pid = ref_pid if ref_pid else exp_pid
         if not h.open:
             return
         if not pid:
@@ -443,7 +443,7 @@ class HitlForkMixin(CostlyHitlMixin):
             decisions = self._hitl_decisions
             if not isinstance(decisions, dict):
                 raise JournalFormatError("_hitl_decisions missing after HitlDecided")
-            folded = decisions.get(request_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+            folded = decisions.get(request_id)
             if not isinstance(folded, dict):
                 raise JournalFormatError(
                     f"HitlDecided fold for {request_id!r} missing or not dict"
@@ -515,7 +515,7 @@ class HitlForkMixin(CostlyHitlMixin):
                     raise JournalFormatError(
                         f"_hitl_decisions must be dict, got {type(existing).__name__}"
                     )
-                dec = existing.get(h.request_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                dec = existing.get(h.request_id)
                 if isinstance(dec, dict):
                     if "decision" not in dec or "by" not in dec:
                         raise JournalFormatError(
@@ -540,8 +540,8 @@ class HitlForkMixin(CostlyHitlMixin):
                     raise JournalFormatError(
                         f"_check_proposals must be dict, got {type(proposals).__name__}"
                     )
-                row = proposals.get(pid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
-                if isinstance(row, dict) and row.get("status") in (  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # noqa: E501
+                row = proposals.get(pid)
+                if isinstance(row, dict) and row.get("status") in (
                     "approved",
                     "rejected",
                 ):
@@ -681,7 +681,7 @@ class HitlForkMixin(CostlyHitlMixin):
             study_id=sid,
             ref_id=pid,
             attrs=attrs,
-            created_at=created_at if created_at is not None else now,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+            created_at=created_at if created_at is not None else now,
         )
         await self._append(
             [
@@ -722,7 +722,7 @@ class HitlForkMixin(CostlyHitlMixin):
             attrs["delegated_by"] = delegated_by
         node = GraphNode(
             node_id=nid, kind="hitl", study_id=sid, ref_id=h.request_id, attrs=attrs,
-            created_at=created_at if created_at is not None else now,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+            created_at=created_at if created_at is not None else now,
         )
         if delegated_by is None:
             del_token = "-"
@@ -773,7 +773,7 @@ class HitlForkMixin(CostlyHitlMixin):
 
         err, payload = build_budget_shares_payload(
             self, budget_shares=dict(bmap),
-            deadline_shares=dict(dmap) if dmap else None, request_id=request_id,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # noqa: E501
+            deadline_shares=dict(dmap) if dmap else None, request_id=request_id,
         )
         if err is not None or payload is None:
             if err is not None:
@@ -827,7 +827,7 @@ class HitlForkMixin(CostlyHitlMixin):
 
         return any(walk(d) for d in task.spec.depends_on)
 
-    async def recover_after_idle(self, grace_s: float = 60.0) -> None:  # audit-ok[number_outside_domain]: platform constant documented at call site  # noqa: E501
+    async def recover_after_idle(self, grace_s: float = 60.0) -> None:
         """Extend open HITL deadlines within task/study bounds."""
         if self.study is None:
             return
