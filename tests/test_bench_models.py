@@ -15,16 +15,6 @@ from bench.models import (
 )
 
 
-def _quality(*, status: str = "fulfilled", exp_tasks: int = 2) -> QualityExpectation:
-    return QualityExpectation.model_validate(
-        {
-            "status": status,
-            "exp_tasks": exp_tasks,
-            "evidence": ({"outcome": "success", "count": 2},),
-        }
-    )
-
-
 def _quality_payload(**overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "status": "fulfilled",
@@ -150,8 +140,8 @@ def test_bench_task_is_frozen() -> None:
             quality=_quality_payload(status="graph:fulfilled"),
         )
     )
+    field_name = "task_id"
     with pytest.raises(ValidationError, match="frozen"):
-        field_name = "task_id"
         setattr(task, field_name, "other")
 
 

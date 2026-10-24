@@ -13,6 +13,7 @@
   `ruff format` clean under `ruff.toml`.
 - Alligator fix: tests use `model_validate` / `setattr` (no `# type: ignore`);
   reject cases parametrized with `ids` + `match=`.
+- Alligator fix: drop unused `_quality()`; `field_name` before `with` in freeze test.
 
 ### Graph schema parse (G7 split 1/2) [M1] — AttrType; `GRAPH_SCHEMA_VERSION`; required attrs; explicit `null_ok`. [DESIGN §2](docs/DESIGN.md#2-доменная-модель), [CAP #14](docs/CAPABILITIES.md?plain=1#L23).
 
