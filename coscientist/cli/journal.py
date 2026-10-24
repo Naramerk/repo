@@ -117,10 +117,15 @@ async def record_executor_route(rt: StudyRuntime, aid: str, run: AgentRun) -> No
             media_type="application/json",
         )
         outputs["main"] = ArtifactHandle(artifact_id=main.artifact_id, name="main")
-    attempt = rt.attempts.get(aid) or {}
+    attempt = rt.attempts.get(aid)
+    if not isinstance(attempt, dict):
+        attempt = {}
     task_id = attempt.get("task_id")
     task = rt.tasks.get(task_id) if type(task_id) is str else None
-    addresses = list(task.spec.addresses) if task is not None else []
+    if task is not None:
+        addresses = list(task.spec.addresses)
+    else:
+        addresses = []
     claims = [{"id": f"c_{aid}_{q}", "target": q} for q in addresses]
     await rt.executor.record(
         aid,
