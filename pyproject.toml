@@ -397,6 +397,7 @@ source_modules = [
   "coscientist.tools.gate",
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.propose_check_tool",
+  "coscientist.tools.router",
   "coscientist.tools.taint",
 ]
 forbidden_modules = [
@@ -565,6 +566,7 @@ source_modules = [
   "coscientist.tools.gate",
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.propose_check_tool",
+  "coscientist.tools.router",
   "coscientist.tools.taint",
 ]
 forbidden_modules = ["coscientist.core.plan.lifecycle"]
@@ -727,6 +729,7 @@ source_modules = [
   "coscientist.tools.gate",
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.propose_check_tool",
+  "coscientist.tools.router",
   "coscientist.tools.taint",
 ]
 forbidden_modules = ["coscientist.core.execution._attempt_frame"]

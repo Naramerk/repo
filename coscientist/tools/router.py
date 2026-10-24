@@ -127,7 +127,7 @@ class ToolRouter:
                     if key in bound:
                         raise ToolRouterError(f"duplicate MCP tool key {key!r}")
                     bound[key] = tool
-        except BaseException:
+        except BaseException:  # audit-ok[broad_except]: open() must aclose partial binds on CancelledError too
             for session in opened:
                 await session.aclose()
             raise
@@ -158,7 +158,7 @@ class ToolRouter:
         for session in self._sessions:
             try:
                 await session.aclose()
-            except BaseException as exc:
+            except BaseException as exc:  # audit-ok[broad_except]: aclose collects CancelledError then re-raises first
                 errors.append(exc)
         self._sessions = []
         self._tools = {}
