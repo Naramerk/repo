@@ -33,6 +33,10 @@ class CatalogError(CoreError):
     """Invalid or incomplete requirement catalog / empty required set."""
 
 
+class CheckAttachmentError(CoreError):
+    """Missing CodeCheck/ReviewCheck on a result, or illegal ReqStatus transition (R23)."""
+
+
 class Conflict(CoreError):
     """Idempotency key reused with a different payload."""
 

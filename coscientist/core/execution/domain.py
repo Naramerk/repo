@@ -908,7 +908,7 @@ class NodeRequirement(Frozen):
     evidence: list[EvidenceRef] = Field(default_factory=list)
     verdict: dict[str, Any] | None = None
     waived_by: str | None = None
-    check_version: str
+    check_version: StrictInt
     is_code: bool = True
 
 

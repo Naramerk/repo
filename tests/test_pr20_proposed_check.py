@@ -18,7 +18,7 @@ from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.verdict import claim_is_severe, exclusion_reason, hypothesis_verdict
 from coscientist.core.events.clock import FakeClock
-from coscientist.core.events.errors import AttemptClosedError, Conflict, StudyClosedError
+from coscientist.core.events.errors import AttemptClosedError, CatalogError, Conflict, StudyClosedError
 from coscientist.core.events.events import (
     STUDY_CREATED_SCHEMA_VERSION,
     STUDY_FINALIZED_SCHEMA_VERSION,
@@ -1614,6 +1614,25 @@ def test_evaluate_proposed_missing_id_fail_closed(tmp_path: Path) -> None:
     results = evaluate_task_checks(catalog, spec, out, arts, proposals={})
     assert results[0].status == ReqStatus.FAILED
     assert "unapproved_check" in (results[0].detail or "")
+
+
+def test_evaluate_proposed_bad_role_catalog_error(tmp_path: Path) -> None:
+    catalog = minimal_test_catalog()
+    arts = LocalArtifactStore(tmp_path / "arts")
+    out = AgentTaskOutput(summary="x")
+    spec = TaskSpec(
+        task_key="EXP",
+        title="t",
+        goal="g",
+        route="agent",
+        criteria=[
+            RequirementRef(template_id=PROPOSED_CHECK_TEMPLATE_ID, params={"proposal_id": "p1"}),
+        ],
+    )
+    with pytest.raises(CatalogError, match="role_must_be_prediction_or_validity"):
+        evaluate_task_checks(
+            catalog, spec, out, arts, proposals={"p1": {"status": "approved", "role": "nope"}}
+        )
 
 
 def test_exclusion_reason_unapproved() -> None:

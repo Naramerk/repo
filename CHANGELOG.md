@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Quality checks (#7) — CheckAttachment surface
+- Public `CheckAttachmentError` ([DESIGN §5.4](docs/DESIGN.md) / R23;
+  [CAPABILITIES #7](docs/CAPABILITIES.md)). Agent view: `is_code` + `check_detail`
+  (one discriminator with `CheckResult` / `CheckLike`). Plan:
+  [`docs/plan/quality-hitl.md`](docs/plan/quality-hitl.md).
+
 ### Benchmark harness — typed errors (plan item 2)
 - Add `bench/errors.py`: `BenchError` / `BenchConfigError` (typed refuse; no
   silent fallbacks). import-linter root includes `bench`; forbid

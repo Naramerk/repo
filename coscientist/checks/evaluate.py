@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Collection, Mapping
-from typing import Any
+from typing import Any, assert_never
 
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import (
@@ -559,16 +559,26 @@ def agent_facing_template_view(tmpl: RequirementTemplate) -> dict[str, Any]:
     This is the **only** agent-facing serialization of a catalog template.
     Prompt renderers (arriving later) must call this — never
     ``RequirementTemplate.model_dump`` / full ``CodeCheck``.
+
+    ``is_code`` discriminates attachment class (same owner as ``CheckResult``).
+    ``check_detail`` is ``CodeCheck.kind`` on code rows and
+    ``ReviewCheck.reviewer_role`` on review rows — never one field without
+    ``is_code``.
     """
-    return {
+    base = {
         "template_id": tmpl.id,
         "text_ru": tmpl.text_ru,
         "version": tmpl.version,
         "required": tmpl.required,
         "role": tmpl.role,
-        "is_code": isinstance(tmpl.check, CodeCheck),
-        "check_kind": getattr(tmpl.check, "kind", None) or getattr(tmpl.check, "reviewer_role", None),
     }
+    match tmpl.check:
+        case CodeCheck():
+            return {**base, "is_code": True, "check_detail": tmpl.check.kind}
+        case ReviewCheck():
+            return {**base, "is_code": False, "check_detail": tmpl.check.reviewer_role}
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def agent_facing_catalog_view(catalog: Catalog) -> dict[str, Any]:
@@ -577,8 +587,8 @@ def agent_facing_catalog_view(catalog: Catalog) -> dict[str, Any]:
         "catalog_version": catalog.catalog_version,
         "edition": catalog.edition,
         "templates": [agent_facing_template_view(t) for t in catalog.templates],
-        "defaults": {k: list(v) for k, v in (catalog.defaults or {}).items()},
-        "code_output_names": list(catalog.code_output_names or []),
+        "defaults": {k: list(v) for k, v in catalog.defaults.items()},
+        "code_output_names": list(catalog.code_output_names),
     }
 
 
@@ -586,20 +596,23 @@ def template_to_requirement(
     tmpl: RequirementTemplate,
     node_id: str,
     *,
+    req_id: str,
     status: ReqStatus = ReqStatus.PENDING,
-    req_id: str | None = None,
 ) -> NodeRequirement:
-    """Build a NodeRequirement from the agent-facing template view (no check body)."""
+    """Build a NodeRequirement from the agent-facing template view (no check body).
+
+    ``req_id`` is required — callers own the id (no guessed ``node:template`` default).
+    """
     view = agent_facing_template_view(tmpl)
     return NodeRequirement(
-        id=req_id or f"{node_id}:{view['template_id']}",
-        template_id=str(view["template_id"]),
+        id=req_id,
+        template_id=view["template_id"],
         node_id=node_id,
-        text_ru=str(view["text_ru"] or ""),
-        required=bool(view["required"]),
+        text_ru=view["text_ru"],
+        required=view["required"],
         status=status,
-        check_version=str(view["version"]),
-        is_code=bool(view["is_code"]),
+        check_version=view["version"],
+        is_code=isinstance(tmpl.check, CodeCheck),
     )
 
 
@@ -665,7 +678,14 @@ def _evaluate_proposed_check(
             effect={**base_effect, "exclusion_reason": "unapproved_check"},
         )
     status = str(row.get("status") or "proposed")
-    role: CheckRole = row.get("role") if row.get("role") in ("prediction", "validity") else "unknown"  # type: ignore[assignment]
+    raw_role = row.get("role")
+    role: CheckRole
+    if raw_role == "prediction":
+        role = "prediction"
+    elif raw_role == "validity":
+        role = "validity"
+    else:
+        raise CatalogError(f"proposed_check:{pid}:role_must_be_prediction_or_validity_got:{raw_role!r}")
     base_effect["proposal_digest"] = row.get("proposal_digest")
     base_effect["delegated"] = bool(row.get("delegated"))
     base_effect["bound_task_id"] = row.get("bound_task_id") or row.get("task_id")
