@@ -48,7 +48,7 @@ Edge direction: **agents produce `Usage` on `AgentRun`; [#70](https://github.com
 **Where:** module **`coscientist.agents.contract`** (Protocol + `AgentRun`, `AgentError` + fakes). Delete `Any` stub in `core/events/ports.py` in this same PR.  
 **Role:** `role: RoleName` via `from coscientist.profiles import RoleName`.  
 **Tools:** `tools: list[Tool]` with `Tool` from `coscientist.tools.contract`.  
-**import-linter (G1 lands pyproject; this docs PR does not prove lint-imports):** see decision below + DESIGN §7.2. Coordinated with tools track [#65](https://github.com/Naramerk/repo/pull/65) for `tools.effects` →\* `ignore_imports`. Agents↔`invoke_tool` rule is [DESIGN §6.1](../DESIGN.md) on main (#65 does not edit DESIGN).  
+**import-linter (G1 lands pyproject; this docs PR does not prove lint-imports):** see decision below + DESIGN §7.2. Agents↔`invoke_tool` rule is [DESIGN §6.1](../DESIGN.md#L543) on main. Coordinated with tools track [#65](https://github.com/Naramerk/repo/pull/65) for `tools.effects` →\* `ignore_imports` only (#65 does not edit DESIGN).  
 **Usage/Budget:** return `llm.types.Usage`; accept domain `Budget`.  
 **Acceptance:** mypy-clean; fake port tests; no orchestrator/journal/MCP; audit `--vs-main`; **`lint-imports` green with the pyproject change G1 lands**; **AST boundary test mandatory in G1** (no `Tool.call`, no `register_tool`, no direct gate/taint/registry misuse — мартышка + крокодил); CHANGELOG.  
 **DoD:** below + **CI green on push and on merge-ref vs current main** + lint-imports + AST test.
@@ -109,7 +109,7 @@ ignore_imports = [
 
 Direct `agents → tools.gate`, `tools.taint`, and `tool_registry` stay forbidden. Runtime: **`invoke_tool` only**. **G1 must ship an AST boundary test** (мартышка + крокодил) — lint-imports alone is not enough.
 
-Tools-side record: [#65](https://github.com/Naramerk/repo/pull/65) (effects ignores). Agents↔`invoke_tool`: [DESIGN §6.1](../DESIGN.md) on main. G1 DoD: `lint-imports` + AST test after pyproject edit.
+Agents↔`invoke_tool`: [DESIGN §6.1](../DESIGN.md#L543). Tools-side `effects` ignores: [#65](https://github.com/Naramerk/repo/pull/65). G1 DoD: `lint-imports` + AST test after pyproject edit.
 
 ## Вопросы
 
