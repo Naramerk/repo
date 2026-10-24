@@ -1061,10 +1061,9 @@ async def test_store_open_locked_raises_journal_locked(tmp_path, monkeypatch):
         store_mod.SqliteEventStore("s", tmp_path / "locked.db")
 
 
-def test_apply_pending_requires_after_task(monkeypatch):
+@pytest.mark.asyncio
+async def test_apply_pending_requires_after_task(monkeypatch):
     """meta.after_task is required — no fallback to plan_key."""
-    import asyncio
-
     from coscientist.core.plan import expand as expand_mod
 
     refused: list[dict] = []
@@ -1075,17 +1074,14 @@ def test_apply_pending_requires_after_task(monkeypatch):
     monkeypatch.setattr(expand_mod, "refuse_expansion", fake_refuse)
     rt = _RT()
     rt._expand_requests = {"PLAN-1": {"pending": {}, "replan_allocated_s": 1.0}}
-    out = asyncio.get_event_loop().run_until_complete(
-        expand_mod.apply_pending_expansion(rt, "PLAN-1")
-    )
+    out = await expand_mod.apply_pending_expansion(rt, "PLAN-1")
     assert out is None
     assert refused and refused[0]["detail"] == "missing_expand_after_task"
 
 
-def test_expand_plan_refuses_missing_prior_rollup(monkeypatch):
+@pytest.mark.asyncio
+async def test_expand_plan_refuses_missing_prior_rollup(monkeypatch):
     """prev is None → ExpansionRefused(missing_plan_rollup), not silent rollup='all'."""
-    import asyncio
-
     from coscientist.core.execution.domain import TaskSpec
     from coscientist.core.plan import expand as expand_mod
 
@@ -1123,22 +1119,19 @@ def test_expand_plan_refuses_missing_prior_rollup(monkeypatch):
     rt.tasks = {}
     rt.catalog = None
 
-    async def _run():
-        return await expand_mod.expand_plan(
-            rt,
-            after_task="E0",
-            added_tasks=[
-                TaskSpec(
-                    task_key="E1",
-                    title="t",
-                    goal="g",
-                    route="experiment",
-                )
-            ],
-            origin="emergent",
-        )
-
-    out = asyncio.get_event_loop().run_until_complete(_run())
+    out = await expand_mod.expand_plan(
+        rt,
+        after_task="E0",
+        added_tasks=[
+            TaskSpec(
+                task_key="E1",
+                title="t",
+                goal="g",
+                route="experiment",
+            )
+        ],
+        origin="emergent",
+    )
     assert out is None
     assert refused and refused[0]["detail"] == "missing_plan_rollup"
 

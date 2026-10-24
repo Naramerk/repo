@@ -92,7 +92,9 @@ class AttemptsMixin:
             # PR11: loop:<id> barrier — ready after until-met or LoopCapped.
             # Unknown / dropped loop never becomes ready; ``refuse_orphaned_loop_barriers``
             # SKIPPED-refuses dependents (fail-closed, no hang).
-            if str(d).startswith("loop:"):
+            from coscientist.core.plan.loop import is_loop_dep
+
+            if is_loop_dep(str(d)):
                 from coscientist.core.plan.loop import loop_is_complete, parse_loop_dep
 
                 lid = parse_loop_dep(d)

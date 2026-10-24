@@ -904,10 +904,16 @@ def evaluate_task_checks(
     # PLAN-n critic template ids are valid ONLY on core-created PLAN-n containers.
     from coscientist.core.plan.expand_critic import PLAN_N_TEMPLATE_IDS
 
+    # Bootstrap planner key is the exact constant ``PLAN`` (not a prefix match).
+    _BOOTSTRAP_PLAN_KEY = "PLAN"
+    key = task_key if task_key is not None else spec.task_key
     kind = str(task_kind) if task_kind is not None else ""
     crit_ids = {str(r.template_id) for r in refs}
-    # Core PLAN-n always carries the full typed critic id set (not a key prefix).
-    is_core_plan_n = kind == "plan" and PLAN_N_TEMPLATE_IDS.issubset(crit_ids)
+    is_core_plan_n = (
+        kind == "plan"
+        and key != _BOOTSTRAP_PLAN_KEY
+        and bool(crit_ids & PLAN_N_TEMPLATE_IDS)
+    )
 
     for i, ref in enumerate(refs):
         tmpl = by_id.get(ref.template_id)

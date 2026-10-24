@@ -140,7 +140,7 @@ def _loops_from_plans(runtime: StudyRuntime) -> list[LoopSpec]:
     return list(seen.values())
 
 def _loop_state(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
-    st = getattr(runtime, "_loop_state", None)
+    st = runtime._loop_state
     if not isinstance(st, dict):
         runtime._loop_state = {}  # noqa: SLF001
         st = runtime._loop_state  # noqa: SLF001
@@ -671,7 +671,7 @@ async def _emit_loop_completed(
     """Journal until-met completion so reopen restores status without re-eval."""
     if runtime.study is None or runtime._finalized:
         return
-    done_map = getattr(runtime, "_loop_done", None) or set()
+    done_map = runtime._loop_done if runtime._loop_done is not None else set()
     if isinstance(done_map, set) and loop.loop_id in done_map:
         return
     if loop_status(runtime, loop.loop_id) == "done":
@@ -988,7 +988,7 @@ def fold_loop_capped(runtime: Any, payload: dict[str, Any]) -> None:
     if "detail" in payload and payload["detail"] is not None:
         row["detail"] = str(payload["detail"])[:DETAIL_MAX_LEN]
     st[lid] = row
-    capped = getattr(runtime, "_loop_capped", None)
+    capped = runtime._loop_capped
     if not isinstance(capped, dict):
         runtime._loop_capped = {}
         capped = runtime._loop_capped
@@ -1030,7 +1030,7 @@ def fold_loop_completed(runtime: Any, payload: dict[str, Any]) -> None:
     row["survivors"] = payload.get("survivors")
     row["complete_reason"] = reason
     st[lid] = row
-    done = getattr(runtime, "_loop_done", None)
+    done = runtime._loop_done
     if not isinstance(done, set):
         runtime._loop_done = set()
         done = runtime._loop_done
