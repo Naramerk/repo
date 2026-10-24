@@ -50,7 +50,7 @@ results = pathlib.Path(os.environ["COSCIENTIST_RESULTS"])
 """.encode()
 
 
-CATALOG_VERSION = "0.1.0-pr17"
+CATALOG_VERSION = "1.0.0"
 
 
 def _catalog_with(*templates: dict) -> object:
@@ -84,6 +84,14 @@ def _catalog_with(*templates: dict) -> object:
                     "predicted_direction": t.get(
                         "predicted_direction", "two_sided"
                     ),
+                    "check": {
+                        **(
+                            {"check_type": "code", "allow_network": False}
+                            if isinstance(t.get("check"), dict)
+                            else {}
+                        ),
+                        **(t.get("check") if isinstance(t.get("check"), dict) else {}),
+                    },
                 }
                 for t in templates
             ],
@@ -707,7 +715,7 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(
             "check": {"check_type": "code", "kind": "exec_runs",
                 "argv": ["/bin/true"],
                 "timeout_s": 5,
-                "memory_mb": 64,},
+                "memory_mb": 64, "allow_network": False},
             "role": "validity",
         }
     )
@@ -718,7 +726,7 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0-pr17",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -781,7 +789,7 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
             "check": {"check_type": "code", "kind": "exec_runs",
                 "argv": ["/bin/true"],
                 "timeout_s": 5,
-                "memory_mb": 64,},
+                "memory_mb": 64, "allow_network": False},
             "role": "validity",
         }
     )
@@ -792,7 +800,7 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0-pr17",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -1648,7 +1656,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
                 "timeout_s": 0.25,
                 "memory_mb": 64,
                 # Mount agent payload so jail digests differ across attempts.
-                "output": "payload",},
+                "output": "payload", "allow_network": False},
             "role": "validity",
         }
     )
@@ -1665,7 +1673,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0-pr17",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -1783,7 +1791,7 @@ async def test_timeout_with_stuck_drain_charges_attempt(
                 "timeout_s": wall_s,
                 "memory_mb": 64,
                 "reap_timeout_s": host_reap_s,
-                "output_drain_join_s": host_drain_s,},
+                "output_drain_join_s": host_drain_s, "allow_network": False},
             "role": "validity",
         }
     )
@@ -1988,7 +1996,7 @@ async def test_infra_failure_does_not_charge_attempt(
             "check": {"check_type": "code", "kind": "exec_runs",
                 "argv": ["/bin/true"],
                 "timeout_s": 5,
-                "memory_mb": 64,},
+                "memory_mb": 64, "allow_network": False},
             "role": "validity",
         }
     )
@@ -2005,7 +2013,7 @@ async def test_infra_failure_does_not_charge_attempt(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0-pr17",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -2075,7 +2083,7 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
             "check": {"check_type": "code", "kind": "exec_runs",
                 "argv": ["python3", "-c", "import time; time.sleep(1e9)"],
                 "timeout_s": 0.25,
-                "memory_mb": 64,},
+                "memory_mb": 64, "allow_network": False},
             "role": "validity",
         }
     )
@@ -2092,7 +2100,7 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0-pr17",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -2142,7 +2150,7 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
             "check": {"check_type": "code", "kind": "exec_runs",
                 "argv": ["/bin/true"],
                 "timeout_s": 7.5,
-                "memory_mb": 128,},
+                "memory_mb": 128, "allow_network": False},
             "role": "validity",
         }
     )
@@ -2153,7 +2161,7 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0-pr17",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -2204,7 +2212,7 @@ def test_freeze_strips_agent_timeout_zero_point_oh_five():
             "check": {"check_type": "code", "kind": "exec_runs",
                 "argv": ["/bin/true"],
                 "timeout_s": 30.0,
-                "memory_mb": 256,},
+                "memory_mb": 256, "allow_network": False},
             "role": "validity",
         }
     )
@@ -2386,7 +2394,7 @@ def test_freeze_shared_helper_used_by_all_task_create_paths():
             "check": {"check_type": "code", "kind": "exec_runs",
                 "argv": ["/bin/true"],
                 "timeout_s": 12.0,
-                "memory_mb": 64,},
+                "memory_mb": 64, "allow_network": False},
             "role": "validity",
         }
     )
@@ -2418,13 +2426,13 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
         {
             "id": "pred_a",
             "title": "a",
-            "check": {"check_type": "code", "kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5},
+            "check": {"check_type": "code", "kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5, "allow_network": False},
             "role": "prediction",
         },
         {
             "id": "pred_b",
             "title": "b",
-            "check": {"check_type": "code", "kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5},
+            "check": {"check_type": "code", "kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5, "allow_network": False},
             "role": "prediction",
         },
     )
@@ -2436,7 +2444,7 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0-pr17",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -2547,7 +2555,7 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
         {
             "id": "pred_only",
             "title": "p",
-            "check": {"check_type": "code", "kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5},
+            "check": {"check_type": "code", "kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5, "allow_network": False},
             "role": "prediction",
         }
     )
@@ -2559,7 +2567,7 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0-pr17",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,

@@ -512,6 +512,8 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
                             "route": "experiment",
                             "depends_on": ["PLAN"],
                             "addresses": [],
+                            "required": True,
+                            "tolerate_failed_dep": False,
                         }
                     ],
                     "questions": [],
@@ -534,6 +536,8 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
                         "route": "experiment",
                         "depends_on": ["PLAN"],
                         "addresses": [],
+                        "required": True,
+                        "tolerate_failed_dep": False,
                     },
                     "state": TaskState.PENDING.value,
                     "outcome": None,

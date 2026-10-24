@@ -893,7 +893,7 @@ def test_qh_logical_id_collision_does_not_merge():
     assert snaps["X1"]["verdict"] == "survived"
     # Explicit hypothesis bind does not get the question verdict.
     snaps_h = compute_verdict_snapshots(
-        g, study_id=sid, any_experiment_done=True, refs=[{"kind": "hypothesis", "id": "X1"}]
+        g, study_id=sid, any_experiment_done=True, refs=["hypothesis:X1"]
     )
     assert snaps_h["X1"]["target_kind"] == "hypothesis"
     assert snaps_h["X1"]["verdict"] == "refuted"
@@ -1802,7 +1802,7 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         study=study,
         results=results,
         any_experiment_done=True,
-        refs=[{"kind": "hypothesis", "id": "H1"}],
+        refs=["hypothesis:H1"],
     )
     assert snaps["H1"]["verdict"] == "refuted"
     assert snaps["H1"]["note"] == "refuted; 1 supporting results were stub/partial"
@@ -1823,7 +1823,7 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         study=study_off,
         results=results,
         any_experiment_done=True,
-        refs=[{"kind": "hypothesis", "id": "H1"}],
+        refs=["hypothesis:H1"],
     )
     assert snaps_off["H1"]["verdict"] == "refuted"
     assert snaps_off["H1"]["note"] == "refuted; 1 supporting results were stub/partial"

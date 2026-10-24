@@ -27,7 +27,14 @@ def _strict_template(**overrides: object) -> dict:
         "predicts_null": False,
         "predicted_direction": "two_sided",
     }
+    check_ov = overrides.pop("check", None)
     row.update(overrides)
+    if isinstance(check_ov, dict):
+        merged = dict(row["check"])
+        merged.update(check_ov)
+        if "check_type" not in merged:
+            merged["check_type"] = "code"
+        row["check"] = merged
     return row
 
 
@@ -46,7 +53,7 @@ def _strict_catalog(**overrides: object) -> dict:
 
 def test_minimal_catalog_loads():
     cat = minimal_test_catalog()
-    assert cat.catalog_version == "0.1.0"
+    assert cat.catalog_version == "1.0.0"
     assert all(t.text_ru for t in cat.templates)
     assert isinstance(cat.sources_sha256, dict)
 
@@ -55,7 +62,7 @@ def test_unknown_kind_errors():
     with pytest.raises(CatalogError, match="unknown CodeCheck kind"):
         load_catalog(
             _strict_catalog(
-                templates=[_strict_template(check={"kind": "not_a_real_kind", "allow_network": False})],
+                templates=[_strict_template(check={"check_type": "code", "kind": "not_a_real_kind", "allow_network": False})],
             )
         )
 

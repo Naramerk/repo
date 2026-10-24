@@ -205,14 +205,23 @@ def test_infeasible_disposal_ok_without_design():
 
 
 def test_refs_require_known_prefix():
-    d = QuestionDisposal(
-        question_id="Q1",
-        disposition="infeasible",
-        reason="x",
-        refs=["zz"],  # 2 chars but no prefix
-    )
-    with pytest.raises(DisposeRejected, match="ref"):
-        validate_disposal(d, known_question_ids={"Q1"})
+    """Typed DisposeRef only — string prefixes / unknown kinds refused."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        QuestionDisposal(
+            question_id="Q1",
+            disposition="infeasible",
+            reason="x",
+            refs=["zz"],  # type: ignore[list-item]
+        )
+    with pytest.raises(ValidationError):
+        QuestionDisposal(
+            question_id="Q1",
+            disposition="infeasible",
+            reason="x",
+            refs=[{"kind": "nope", "id": "zz"}],  # type: ignore[list-item]
+        )
 
 
 def test_design_artifact_ok_ignores_meta_kind_without_journal(tmp_path):
@@ -354,7 +363,7 @@ def test_question_disposed_fold_first_wins():
             "question_id": "Q1",
             "disposition": "needs_more_data",
             "reason": "second",
-            "refs": ["evidence:e1"],
+            "refs": [{"kind": "evidence", "id": "e1"}],
             "design_artifact_id": "art_x",
         },
     )
@@ -402,7 +411,7 @@ def test_honest_terminals_stamp_verdict_for_rollup():
         "Q_nmd": {
             "disposition": "needs_more_data",
             "reason": "need RCT",
-            "refs": ["evidence:e1"],
+            "refs": [{"kind": "evidence", "id": "e1"}],
             "design_artifact_id": "art_design",
         },
         "Q_inf": {
@@ -430,7 +439,7 @@ def test_honest_terminals_stamp_verdict_for_rollup():
             "Q": {
                 "disposition": "needs_more_data",
                 "reason": "x",
-                "refs": ["evidence:e1"],
+                "refs": [{"kind": "evidence", "id": "e1"}],
                 "design_artifact_id": "missing",
             }
         },
@@ -487,7 +496,7 @@ async def test_needs_more_data_requires_design(tmp_path, clock):
             "question_id": "Q1",
             "disposition": "needs_more_data",
             "reason": "need RCT",
-            "refs": ["evidence:e1"],
+            "refs": [{"kind": "evidence", "id": "e1"}],
         }
     )
     assert got is None
@@ -586,7 +595,7 @@ async def test_disposal_unknown_question_fail_closed_empty_graph(tmp_path, clock
                     "question_id": "QX",
                     "disposition": "infeasible",
                     "reason": "spoof",
-                    "refs": ["hitl:h1"],
+                    "refs": [{"kind": "hitl", "id": "h1"}],
                 }
             ],
         ),
@@ -618,7 +627,7 @@ async def test_dispose_rejected_survives_restart(tmp_path, clock):
             "question_id": "Q1",
             "disposition": "needs_more_data",
             "reason": "need design",
-            "refs": ["evidence:e1"],
+            "refs": [{"kind": "evidence", "id": "e1"}],
         }
     )
     assert got is None
@@ -917,7 +926,7 @@ async def test_stamp_kind_e2e_replay_and_missing_meta_marks_internal_error(tmp_p
                     "question_id": "Q1",
                     "disposition": "needs_more_data",
                     "reason": "need RCT",
-                    "refs": ["evidence:e1"],
+                    "refs": [{"kind": "evidence", "id": "e1"}],
                     "design_artifact_id": art.artifact_id,
                 }
             ],

@@ -102,7 +102,7 @@ def _validate_code_check(raw: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-SUPPORTED_CATALOG_VERSIONS = frozenset({"1.0.0"})
+SUPPORTED_CATALOG_VERSIONS = frozenset({"1.0.0", "1"})
 CURRENT_CATALOG_VERSION = "1.0.0"
 
 

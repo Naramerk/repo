@@ -291,6 +291,7 @@ def test_blocker6_hitl_decided_requires_by():
             proposal_id_s="p1",
             hitl_request_id_s="h1",
             human_principal=None,
+            expect_decisions=frozenset({"accept"}),
         )
 
 
@@ -2054,7 +2055,7 @@ def test_r4_evaluate_defaults_require_experiment_key(tmp_path):
                     "rule_ids": ["R23"],
                     "method_sources": ["m"],
                     "applies_to": ["experiment"],
-                    "check": {"check_type": "code", "kind": "artifact_exists", "output": "main"},
+                    "check": {"check_type": "code", "kind": "artifact_exists", "output": "main", "allow_network": False},
                     "role": "validity",
                     "kind": "catalog",
                     "required": True,
@@ -2110,7 +2111,7 @@ def test_r4_evaluate_proposed_kind_id_mismatch_raises(tmp_path):
                     "rule_ids": ["R23"],
                     "method_sources": ["m"],
                     "applies_to": ["experiment"],
-                    "check": {"check_type": "code", "kind": "artifact_exists", "output": "main"},
+                    "check": {"check_type": "code", "kind": "artifact_exists", "output": "main", "allow_network": False},
                     "role": "prediction",
                     # kind catalog but id is proposed_check → mismatch
                     "kind": "catalog",
@@ -2209,7 +2210,7 @@ def test_r4_evaluate_proposed_predicted_direction_required(monkeypatch, tmp_path
         "role": "prediction",
         "bound_task_id": "s/E0",
         "bound_target": "Q1",
-        "check": {"check_type": "code", "kind": "artifact_exists", "output": "main"},
+        "check": {"check_type": "code", "kind": "artifact_exists", "output": "main", "allow_network": False},
         # predicted_direction deliberately absent
     }
     with pytest.raises(JournalFormatError, match="predicted_direction"):
@@ -2274,8 +2275,10 @@ def test_r4_rubric_requires_output_no_main_default(tmp_path):
                     "method_sources": ["m"],
                     "applies_to": ["experiment"],
                     "check": {
+                        "check_type": "code",
                         "kind": "rubric",
                         "output": None,
+                        "allow_network": False,
                         "rubric": {
                             "items": [
                                 {
@@ -3271,7 +3274,7 @@ def test_blocker_catalog_requires_check_type_and_version():
         "defaults": {},
     }
     with pytest.raises(CatalogError, match="catalog_version"):
-        load_catalog({**base, "catalog_version": "0.1.0"})
+        load_catalog({**base, "catalog_version": "9.9.9"})
     with pytest.raises(CatalogError, match="check_type"):
         load_catalog(
             {
@@ -3284,6 +3287,7 @@ def test_blocker_catalog_requires_check_type_and_version():
                         "rule_ids": ["R1"],
                         "method_sources": ["m"],
                         "applies_to": ["experiment"],
+                        # No check_type — key-presence inference removed.
                         "check": {
                             "kind": "artifact_exists",
                             "output": "main",

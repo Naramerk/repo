@@ -148,7 +148,7 @@ def make_study_created_payload(**kwargs: Any) -> dict[str, Any]:
         study_id=kwargs.pop("study_id", "st_seed"),
         profile=kwargs.pop("profile", "research"),
         request=kwargs.pop("request", "q"),
-        catalog_version=kwargs.pop("catalog_version", "0.1.0"),
+        catalog_version=kwargs.pop("catalog_version", "1.0.0"),
         created_at=now,
         deadline=deadline,
         **kwargs,

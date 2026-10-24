@@ -515,7 +515,7 @@ async def test_parallel_attempt_taint_puts(tmp_path: Path):
             await asyncio.sleep(0)
             art = arts.put(
                 name.encode(),
-                make_tool_ref(f"c:{name}"),
+                make_tool_ref(f"c:{name}", attempt_id="c"),
                 name=name,
                 media_type="text/plain",
             )

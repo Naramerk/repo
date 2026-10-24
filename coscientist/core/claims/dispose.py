@@ -73,7 +73,7 @@ class QuestionDisposal(BaseModel):
     question_id: str
     disposition: ExplicitDisposition
     reason: str  # required; empty str only when caller passes it explicitly
-    refs: list[DisposeRef | dict[str, Any]] = Field(default_factory=list)
+    refs: list[DisposeRef] = Field(default_factory=list)
     # Required for needs_more_data (artifact_id of experiment_design report).
     design_artifact_id: str | None = None
 
@@ -82,10 +82,8 @@ class DisposeRejected(ValueError):
     """Disposal refused (missing refs / design / unknown question)."""
 
 
-def _dump_dispose_ref(r: DisposeRef | dict[str, Any]) -> dict[str, Any]:
-    if isinstance(r, DisposeRef):
-        return r.model_dump(mode="json")
-    return dict(r)
+def _dump_dispose_ref(r: DisposeRef) -> dict[str, Any]:
+    return r.model_dump(mode="json")
 
 
 def _coerce_dispose_ref(r: object) -> DisposeRef:

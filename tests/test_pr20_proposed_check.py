@@ -2857,7 +2857,12 @@ async def test_timeout_between_hitl_decided_and_approve_fail_closed(
         assert rt._check_proposals[pid]["status"] == "proposed"
         # Simulate timeout racing before approve_check.
         await _reject(
-            rt, pid, source="timeout", reason="human_timeout", hitl_request_id_s=rid
+            rt,
+            pid,
+            source="timeout",
+            reason="human_timeout",
+            hitl_request_id_s=rid,
+            delegated=False,
         )
         assert rt._check_proposals[pid]["status"] == "proposed"
         await approve_check(rt, pid, source="api", hitl_request_id_s=rid, delegated=False)

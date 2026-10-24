@@ -181,7 +181,9 @@
           "deadline_share": null,
           "loop_id": null,
           "loop_iter": null,
-          "loop_template_key": null
+          "loop_template_key": null,
+          "required": true,
+          "tolerate_failed_dep": false
         },
         "state": "PENDING",
         "outcome": null,
