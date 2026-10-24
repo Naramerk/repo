@@ -294,7 +294,12 @@ async def _run_load(
         aid = await rt.start_attempt(key)
         await record_success(rt, aid, arts)
 
-    await rt.accept_plan([exp_spec(f"EXP-{i}") for i in range(1, 21)], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF)
+    await rt.accept_plan(
+        [exp_spec(f"EXP-{i}") for i in range(1, 21)],
+        questions=[],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
 
     async def one(i: int) -> None:
         await asyncio.sleep(random.uniform(0, 0.05))
