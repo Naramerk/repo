@@ -528,7 +528,7 @@ async def post_studies(
 
                 if force_refuse is not None:
                     # Intake-refuse path: do not forward client inputs.
-                    use_inputs: list[Any] = []
+                    use_inputs: list[dict[str, Any]] = []
                     client_input_limits = None
                 else:
                     use_inputs = list(body.inputs)
