@@ -7,18 +7,17 @@ Deadline → ``killpg`` guest process group + ``JobTimedOut`` + retryable outcom
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import multiprocessing as mp
 import os
 import signal
-import subprocess
 import threading
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -32,6 +31,16 @@ from coscientist.tools.jobs import InMemoryJobStore
 
 # One start method — spawn is safe with the join-watcher thread (no fork).
 _SPAWN_CTX = mp.get_context("spawn")
+
+
+class KillableProcess(Protocol):
+    """Minimal process surface used by guest kill (BaseProcess satisfies this)."""
+
+    def is_alive(self) -> bool: ...
+
+    def terminate(self) -> None: ...
+
+    def kill(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -157,42 +166,59 @@ def _timed_out_outcome(job_id: str, attempt_id: str, detail: str) -> CoderOutcom
     )
 
 
+def _require_nonneg_seconds(name: str, value: float) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ToolError("local", f"{name} must be a number, got {type(value).__name__}")
+    if value != value or value < 0:  # NaN or negative
+        raise ToolError("local", f"{name} must be >= 0, got {value!r}")
+    return float(value)
+
+
+def _require_positive_seconds(name: str, value: float) -> float:
+    value = _require_nonneg_seconds(name, value)
+    if value == 0:
+        raise ToolError("local", f"{name} must be > 0, got {value!r}")
+    return value
+
+
 def _pg_alive(pgid: int) -> bool:
+    """True if process group exists (PermissionError ⇒ exists but unsignable)."""
+    missing: list[BaseException] = []
+    denied: list[BaseException] = []
     try:
         os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False  # audit-ok[except_silent_return]: process group already gone
-    except PermissionError:
-        return True  # audit-ok[except_silent_return]: group exists; we lack signal rights
+    except ProcessLookupError as exc:
+        missing.append(exc)
+    except PermissionError as exc:
+        denied.append(exc)
+    if missing:
+        return False
+    if denied:
+        return True
     return True
 
 
-def _killpg(pgid: int, sig: signal.Signals) -> None:
+def _killpg(pgid: int, sig: signal.Signals) -> Literal["signaled", "gone"]:
+    """Signal process group; ``gone`` if already reaped. Other OSError → ToolError."""
+    gone: list[BaseException] = []
     try:
         os.killpg(pgid, sig)
-    except ProcessLookupError:
-        return  # audit-ok[except_silent_return]: process group already gone
+    except ProcessLookupError as exc:
+        gone.append(exc)
+    except OSError as exc:
+        raise ToolError("local", f"killpg({sig.name}) failed: {exc}") from exc
+    if gone:
+        return "gone"
+    return "signaled"
 
 
-@contextlib.contextmanager
-def _track_guest_pgid(slot: Any) -> Iterator[None]:
-    """Capture the first ``start_new_session`` Popen pid (sandbox guest group)."""
-    sp_mod = cast(Any, subprocess)
-    real_popen = sp_mod.Popen
-
-    def tracking_popen(*args: Any, **kwargs: Any) -> Any:
-        proc = real_popen(*args, **kwargs)
-        if kwargs.get("start_new_session") is True:
-            with slot.get_lock():
-                if int(slot.value) == 0:
-                    slot.value = int(proc.pid)
-        return proc
-
-    sp_mod.Popen = tracking_popen
-    try:
-        yield
-    finally:
-        sp_mod.Popen = real_popen
+def _set_guest_pgid(slot: Any, pgid: int) -> None:
+    """Dependency injected into ``run_sandbox(on_guest_started=...)`` (spawn-safe)."""
+    if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 0:
+        raise ToolError("local", f"on_guest_started pgid must be positive int, got {pgid!r}")
+    with slot.get_lock():
+        if int(slot.value) == 0:
+            slot.value = int(pgid)
 
 
 def _sandbox_worker(
@@ -205,54 +231,84 @@ def _sandbox_worker(
 ) -> None:
     """Child entry: run_sandbox; unexpected raises exit the process (parent → ToolError)."""
     try:
-        with _track_guest_pgid(guest_pgid):
-            result = run_sandbox(argv, limits=limits, inputs=inputs, env=env)
+        result = run_sandbox(
+            argv,
+            limits=limits,
+            inputs=inputs,
+            env=env,
+            on_guest_started=partial(_set_guest_pgid, guest_pgid),
+        )
         conn.send(("ok", result))
     finally:
         conn.close()
 
 
-async def _await_guest_pgid(slot: Any, *, timeout_s: float) -> int:
-    """Wait until the worker publishes the sandbox guest pgid (or timeout)."""
+async def _wait_event(event: asyncio.Event, *, timeout_s: float) -> bool:
+    """True if ``event`` is set within ``timeout_s`` (no TimeoutError swallow)."""
+    timeout_s = _require_nonneg_seconds("wait_timeout_s", timeout_s)
+    waiter = asyncio.create_task(event.wait())
+    done, pending = await asyncio.wait({waiter}, timeout=timeout_s)
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    return bool(done) and event.is_set()
+
+
+async def _await_guest_pgid(
+    slot: Any,
+    *,
+    timeout_s: float,
+    poll_interval_s: float,
+) -> int:
+    """Wait until sandbox publishes guest pgid; refuse if unpublished (fail-closed)."""
+    timeout_s = _require_nonneg_seconds("guest_pgid_timeout_s", timeout_s)
+    poll_interval_s = _require_positive_seconds("guest_pgid_poll_interval_s", poll_interval_s)
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + max(0.0, timeout_s)
+    deadline = loop.time() + timeout_s
     while True:
         value = int(slot.value)
         if value > 0:
             return value
         if loop.time() >= deadline:
-            return int(slot.value)
-        await asyncio.sleep(0.01)
+            raise ToolError(
+                "local",
+                "guest pgid not published before timeout (fail-closed)",
+            )
+        remaining = deadline - loop.time()
+        await asyncio.sleep(min(poll_interval_s, remaining))
 
 
 async def _kill_sandbox_guest(
-    proc: BaseProcess,
+    proc: KillableProcess,
     *,
     guest_pgid: int,
+    term_grace_s: float,
     reap_timeout_s: float,
     guest_done: asyncio.Event,
 ) -> bool:
     """``killpg`` guest group (sandbox ``start_new_session``), then reap worker.
 
-    SIGTERM/SIGKILL on the worker alone does not stop the guest process group.
+    Fail-closed: ``guest_pgid <= 0`` is not treated as gone — returns False.
     """
-    if guest_pgid > 0:
-        _killpg(guest_pgid, signal.SIGTERM)
+    if guest_pgid <= 0:
+        if proc.is_alive():
+            proc.terminate()
+            if not await _wait_event(guest_done, timeout_s=reap_timeout_s) and proc.is_alive():
+                proc.kill()
+                await _wait_event(guest_done, timeout_s=reap_timeout_s)
+        return False
+
+    _killpg(guest_pgid, signal.SIGTERM)
     if proc.is_alive():
         proc.terminate()
-    try:
-        await asyncio.wait_for(guest_done.wait(), timeout=reap_timeout_s)
-    except TimeoutError:
-        pass  # audit-ok[except_silent_pass]: term grace elapsed → escalate to kill
-    if guest_pgid > 0 and _pg_alive(guest_pgid):
-        _killpg(guest_pgid, signal.SIGKILL)
-    if not guest_done.is_set() and proc.is_alive():
-        proc.kill()
-    try:
-        await asyncio.wait_for(guest_done.wait(), timeout=reap_timeout_s)
-    except TimeoutError:
-        pass  # audit-ok[except_silent_pass]: kill grace elapsed → report cancel-failed
-    guest_gone = guest_pgid <= 0 or not _pg_alive(guest_pgid)
+    if not await _wait_event(guest_done, timeout_s=term_grace_s):
+        if _pg_alive(guest_pgid):
+            _killpg(guest_pgid, signal.SIGKILL)
+        if not guest_done.is_set() and proc.is_alive():
+            proc.kill()
+        await _wait_event(guest_done, timeout_s=reap_timeout_s)
+    guest_gone = not _pg_alive(guest_pgid)
     return guest_done.is_set() and guest_gone
 
 
@@ -304,6 +360,40 @@ def _start_join_watcher(proc: BaseProcess, loop: asyncio.AbstractEventLoop, done
     threading.Thread(target=_watch, name="coder-sandbox-join", daemon=True).start()
 
 
+async def _stop_guest_or_record(
+    jobs: InMemoryJobStore,
+    jid: str,
+    proc: BaseProcess,
+    guest_pgid_slot: Any,
+    guest_done: asyncio.Event,
+    *,
+    limits: SandboxLimits,
+    unpublished_reason: str,
+) -> None:
+    """Resolve pgid (fail-closed), kill guest, record cancel-failed when needed."""
+    pgid = 0
+    published: list[BaseException] = []
+    try:
+        pgid = await _await_guest_pgid(
+            guest_pgid_slot,
+            timeout_s=limits.reap_timeout_s,
+            poll_interval_s=limits.watch_poll_interval_s,
+        )
+    except ToolError as exc:
+        published.append(exc)
+    killed = await _kill_sandbox_guest(
+        proc,
+        guest_pgid=pgid,
+        term_grace_s=limits.term_grace_s,
+        reap_timeout_s=limits.reap_timeout_s,
+        guest_done=guest_done,
+    )
+    if published:
+        jobs.record_cancel_failed(jid, unpublished_reason)
+    elif not killed:
+        jobs.record_cancel_failed(jid, "guest_still_alive")
+
+
 async def run_coder_job(
     request: CoderRequest,
     *,
@@ -337,7 +427,7 @@ async def run_coder_job(
 
     wait_task = asyncio.create_task(jobs.wait(jid, until=request.deadline))
     join_task = asyncio.create_task(guest_done.wait())
-    outcome: CoderOutcome | None = None  # audit-ok[field_default]: mutable slot until try returns
+    finished_outcomes: list[CoderOutcome] = []
     try:
         finished, pending = await asyncio.wait(
             {wait_task, join_task},
@@ -353,29 +443,30 @@ async def run_coder_job(
             job = wait_task.result()
 
         if job.status == "timed_out":
-            pgid = await _await_guest_pgid(guest_pgid, timeout_s=request.limits.reap_timeout_s)
-            killed = await _kill_sandbox_guest(
+            await _stop_guest_or_record(
+                jobs,
+                jid,
                 proc,
-                guest_pgid=pgid,
-                reap_timeout_s=request.limits.reap_timeout_s,
-                guest_done=guest_done,
+                guest_pgid,
+                guest_done,
+                limits=request.limits,
+                unpublished_reason="guest_pgid_unpublished",
             )
-            if not killed:
-                jobs.record_cancel_failed(jid, "guest_still_alive")
             parent_conn.close()
             outcome = _timed_out_outcome(jid, request.attempt_id, "job_deadline")
+            finished_outcomes.append(outcome)
             return outcome
 
         if proc.is_alive():
-            pgid = await _await_guest_pgid(guest_pgid, timeout_s=request.limits.reap_timeout_s)
-            killed = await _kill_sandbox_guest(
+            await _stop_guest_or_record(
+                jobs,
+                jid,
                 proc,
-                guest_pgid=pgid,
-                reap_timeout_s=request.limits.reap_timeout_s,
-                guest_done=guest_done,
+                guest_pgid,
+                guest_done,
+                limits=request.limits,
+                unpublished_reason="guest_pgid_unpublished",
             )
-            if not killed:
-                jobs.record_cancel_failed(jid, "guest_still_alive")
             raise ToolError("local", "sandbox process still alive after wait")
 
         if not parent_conn.poll(0):
@@ -388,8 +479,8 @@ async def run_coder_job(
         if payload.status != SandboxStatus.OK:
             mapped = sandbox_status_to_coder(payload, job_id=jid, attempt_id=request.attempt_id)
             jobs.complete(jid, status="failed", artifacts=[])
-            outcome = mapped
-            return outcome
+            finished_outcomes.append(mapped)
+            return mapped
 
         registered = _register_outputs(request, payload, artifacts=artifacts)
         ids = [a.artifact_id for a in registered]
@@ -405,17 +496,20 @@ async def run_coder_job(
             artifact_ids=ids,
             detail="ok",
         )
+        finished_outcomes.append(outcome)
         return outcome
     finally:
         pgid = int(guest_pgid.value)
-        if proc.is_alive() or (pgid > 0 and _pg_alive(pgid)):
-            if pgid <= 0:
-                pgid = await _await_guest_pgid(guest_pgid, timeout_s=request.limits.reap_timeout_s)
+        still_running = proc.is_alive()
+        if not still_running and pgid > 0:
+            still_running = _pg_alive(pgid)
+        if still_running:
             await _kill_sandbox_guest(
                 proc,
                 guest_pgid=pgid,
+                term_grace_s=request.limits.term_grace_s,
                 reap_timeout_s=request.limits.reap_timeout_s,
                 guest_done=guest_done,
             )
-        if outcome is None:
+        if not finished_outcomes:
             _ensure_terminal(jobs, jid, detail="run_coder_job_exit")

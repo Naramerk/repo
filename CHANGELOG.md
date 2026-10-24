@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### C1 coder job + `run_sandbox` [M3]
-- `run_coder_job`: child process + `run_sandbox`; deadline kills guest (`terminate`/`kill`); `jobs.wait` (no `_POLL_S`); `attempt_is_closed()` at put-time; `finally` forces terminal job; `sandbox_status_to_coder` mapping tested.
+- `run_coder_job`: spawn child + `run_sandbox(on_guest_started=…)`; deadline `killpg` guest group; `jobs.wait` (poll from `SandboxLimits`); unpublished pgid → fail-closed `JobCancelFailed`; `attempt_is_closed()` at put-time; `finally` forces terminal job; `sandbox_status_to_coder` mapping tested.
 - Gorilla @75eb157: kill-after-timeout, no poll literal, no stuck `running`, live attempt-closed check, status mapping tests.
 - Gate @3c15ccd: drop non-test `# type: ignore[return-value]` — pass `SandboxResult` isolation Literals through to `put_sandbox`.
 - Gorilla @2d80a80: `killpg` guest group (not worker-only); narrow worker `except Exception` → typed `ToolError`; single `spawn` context (no fork/spawn fallback); real-guest kill test.

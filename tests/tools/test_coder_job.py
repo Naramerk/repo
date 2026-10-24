@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
+from multiprocessing.process import BaseProcess
 from pathlib import Path
 
 import pytest
@@ -50,7 +51,13 @@ def _job_id(journal: _Journal) -> str:
 
 
 def _jobs(clock: FakeClock | SystemClock, journal: _Journal) -> InMemoryJobStore:
-    return InMemoryJobStore(study_id="st1", clock=clock, journal=journal)
+    on_change = clock.on_change if isinstance(clock, FakeClock) else None
+    return InMemoryJobStore(
+        study_id="st1",
+        clock=clock,
+        journal=journal,
+        on_clock_change=on_change,
+    )
 
 
 def _open() -> bool:
@@ -94,6 +101,20 @@ def _fake_status(status: SandboxStatus, *, reason: str = "r") -> SandboxResult:
     )
 
 
+def _silent_sandbox_worker(
+    conn: object,
+    argv: list[str],
+    limits: SandboxLimits,
+    inputs: dict[str, bytes],
+    env: dict[str, str],
+    guest_pgid: object,
+) -> None:
+    """Spawn-picklable worker that never publishes pgid (fail-closed test)."""
+    import time
+
+    time.sleep(60)
+
+
 @pytest.mark.asyncio
 async def test_coder_success_registers_sha256_artifact(tmp_path: Path) -> None:
     _require_hard_bwrap()
@@ -124,10 +145,14 @@ async def test_coder_success_registers_sha256_artifact(tmp_path: Path) -> None:
     assert meta.sha256 == hashlib.sha256(b"payload-bytes\n").hexdigest()
     assert meta.producer == "sandbox"
     assert jobs.get(out.job_id).status == "succeeded"
+    jobs.close()
 
 
 @pytest.mark.asyncio
-async def test_coder_timeout_kills_guest_process_group(tmp_path: Path) -> None:
+async def test_coder_timeout_kills_guest_process_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Deadline → timed_out + real guest process group gone via killpg."""
     _require_hard_bwrap()
     clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
@@ -141,21 +166,23 @@ async def test_coder_timeout_kills_guest_process_group(tmp_path: Path) -> None:
     real_kill = coder_run._kill_sandbox_guest
 
     async def _spy_kill(
-        proc: object,
+        proc: BaseProcess,
         *,
         guest_pgid: int,
+        term_grace_s: float,
         reap_timeout_s: float,
         guest_done: asyncio.Event,
     ) -> bool:
         seen_pgid.append(guest_pgid)
         return await real_kill(
-            proc,  # type: ignore[arg-type]
+            proc,
             guest_pgid=guest_pgid,
+            term_grace_s=term_grace_s,
             reap_timeout_s=reap_timeout_s,
             guest_done=guest_done,
         )
 
-    coder_run._kill_sandbox_guest = _spy_kill  # type: ignore[assignment]
+    monkeypatch.setattr(coder_run, "_kill_sandbox_guest", _spy_kill)
     deadline = clock.now() + timedelta(seconds=2)
 
     async def _advance() -> None:
@@ -163,26 +190,23 @@ async def test_coder_timeout_kills_guest_process_group(tmp_path: Path) -> None:
         await asyncio.sleep(1.0)
         clock.advance(timedelta(seconds=3))
 
-    try:
-        adv = asyncio.create_task(_advance())
-        out = await run_coder_job(
-            CoderRequest(
-                attempt_id="att#to",
-                call_id="call_to",
-                argv=("python3", "-c", guest_script),
-                inputs={},
-                env={},
-                limits=_limits(timeout_s=60.0),
-                deadline=deadline,
-                outputs=(),
-                attempt_is_closed=_open,
-            ),
-            jobs=jobs,
-            artifacts=arts,
-        )
-        await adv
-    finally:
-        coder_run._kill_sandbox_guest = real_kill  # type: ignore[assignment]
+    adv = asyncio.create_task(_advance())
+    out = await run_coder_job(
+        CoderRequest(
+            attempt_id="att#to",
+            call_id="call_to",
+            argv=("python3", "-c", guest_script),
+            inputs={},
+            env={},
+            limits=_limits(timeout_s=60.0),
+            deadline=deadline,
+            outputs=(),
+            attempt_is_closed=_open,
+        ),
+        jobs=jobs,
+        artifacts=arts,
+    )
+    await adv
 
     assert out.status == "timed_out"
     assert out.retryable is True
@@ -191,6 +215,49 @@ async def test_coder_timeout_kills_guest_process_group(tmp_path: Path) -> None:
     assert "JobCancelled" in _types(journal)
     assert seen_pgid and seen_pgid[0] > 0, "guest pgid was never captured"
     assert not coder_run._pg_alive(seen_pgid[0]), "guest process group still alive after killpg"
+    jobs.close()
+
+
+@pytest.mark.asyncio
+async def test_coder_timeout_unpublished_pgid_is_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If sandbox never publishes pgid, cancel-failed is journaled (not guest-gone)."""
+    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
+    journal = _Journal()
+    jobs = _jobs(clock, journal)
+    arts = LocalArtifactStore(tmp_path / "cas")
+
+    monkeypatch.setattr(coder_run, "_sandbox_worker", _silent_sandbox_worker)
+    deadline = clock.now() + timedelta(seconds=1)
+
+    async def _advance() -> None:
+        await asyncio.sleep(0)
+        clock.advance(timedelta(seconds=2))
+
+    adv = asyncio.create_task(_advance())
+    out = await run_coder_job(
+        CoderRequest(
+            attempt_id="att#nopgid",
+            call_id="call_nopgid",
+            argv=("/bin/true",),
+            inputs={},
+            env={},
+            limits=_limits(timeout_s=60.0, reap_timeout_s=0.05),
+            deadline=deadline,
+            outputs=(),
+            attempt_is_closed=_open,
+        ),
+        jobs=jobs,
+        artifacts=arts,
+    )
+    await adv
+    assert out.status == "timed_out"
+    assert "JobCancelFailed" in _types(journal)
+    reasons = [e.payload["reason"] for e in journal.events if e.type == "JobCancelFailed"]
+    assert "guest_pgid_unpublished" in reasons
+    jobs.close()
 
 
 @pytest.mark.asyncio
@@ -222,6 +289,7 @@ async def test_coder_timeout_r4_wall_clock(tmp_path: Path) -> None:
     assert out.retryable is True
     assert (done - t0) <= timedelta(seconds=1, milliseconds=800)
     assert "JobTimedOut" in _types(journal)
+    jobs.close()
 
 
 @pytest.mark.asyncio
@@ -248,6 +316,7 @@ async def test_coder_refuses_late_artifacts_via_attempt_is_closed(tmp_path: Path
             artifacts=arts,
         )
     assert not job_is_live(jobs.get(_job_id(journal)).status)
+    jobs.close()
 
 
 @pytest.mark.parametrize(
@@ -260,6 +329,7 @@ async def test_coder_refuses_late_artifacts_via_attempt_is_closed(tmp_path: Path
         (SandboxStatus.NONZERO, False),
         (SandboxStatus.OUTPUT_EXCEEDED, False),
     ],
+    ids=["timeout", "unavailable", "blocked", "oom", "nonzero", "output_exceeded"],
 )
 def test_sandbox_status_mapping(status: SandboxStatus, retryable: bool) -> None:
     out = sandbox_status_to_coder(
@@ -303,6 +373,7 @@ async def test_coder_job_maps_nonzero_sandbox_status(tmp_path: Path) -> None:
     assert out.retryable is False
     assert jobs.get(out.job_id).status == "failed"
     assert out.detail.startswith("sandbox:nonzero:")
+    jobs.close()
 
 
 def test_coder_request_refuses_naive_deadline() -> None:
@@ -329,3 +400,44 @@ def test_ensure_terminal_completes_live_job() -> None:
     coder_run._ensure_terminal(jobs, jid, detail="test")
     assert jobs.get(jid).status == "failed"
     assert not job_is_live(jobs.get(jid).status)
+    jobs.close()
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [-1.0, float("nan")],
+    ids=["negative", "nan"],
+)
+def test_await_guest_pgid_refuses_bad_timeout(bad: float) -> None:
+    with pytest.raises(ToolError, match="guest_pgid_timeout_s"):
+        asyncio.run(
+            coder_run._await_guest_pgid(
+                type("S", (), {"value": 0})(),
+                timeout_s=bad,
+                poll_interval_s=0.01,
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_kill_sandbox_guest_unpublished_pgid_returns_false() -> None:
+    class _DeadProc:
+        def is_alive(self) -> bool:
+            return False
+
+        def terminate(self) -> None:
+            raise AssertionError("terminate must not run when already dead")
+
+        def kill(self) -> None:
+            raise AssertionError("kill must not run when already dead")
+
+    done = asyncio.Event()
+    done.set()
+    killed = await coder_run._kill_sandbox_guest(
+        _DeadProc(),
+        guest_pgid=0,
+        term_grace_s=0.01,
+        reap_timeout_s=0.01,
+        guest_done=done,
+    )
+    assert killed is False
