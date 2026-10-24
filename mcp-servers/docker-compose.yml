@@ -1,0 +1,34 @@
+# M1 literature MCP (DESIGN §13 / §12.2). Requires:
+#   COSCIENTIST_DEV_ROOT=/path/to/CoResearchGraph
+#   mcp-servers/papers-search.env + paper-analysis.env (from legacy .env.example)
+#
+# Container listen port (LEGACY_MCP_CONTAINER_PORT=7331): FastMCP default in
+# CoResearchGraph mcp-servers/*/Dockerfile. Host publish is per-service below.
+# Client URLs must be passed explicitly to literature_live_bundle (no code defaults).
+
+services:
+  papers-search:
+    build:
+      context: ${COSCIENTIST_DEV_ROOT:?set COSCIENTIST_DEV_ROOT to CoResearchGraph checkout}
+      dockerfile: mcp-servers/papers-search-mcp-server/Dockerfile
+    container_name: coscientist-papers-search
+    env_file: [papers-search.env]
+    environment: {PYTHONUNBUFFERED: "1"}
+    ports:
+      - target: 7331
+        published: 7331
+        protocol: tcp
+    restart: "no"
+
+  paper-analysis:
+    build:
+      context: ${COSCIENTIST_DEV_ROOT:?set COSCIENTIST_DEV_ROOT to CoResearchGraph checkout}
+      dockerfile: mcp-servers/paper-analysis-mcp-server/Dockerfile
+    container_name: coscientist-paper-analysis
+    env_file: [paper-analysis.env]
+    environment: {PYTHONUNBUFFERED: "1"}
+    ports:
+      - target: 7331
+        published: 7334
+        protocol: tcp
+    restart: "no"

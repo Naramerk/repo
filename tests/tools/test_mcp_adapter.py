@@ -405,6 +405,7 @@ def test_import_contract_allows_mcp_adapter_and_router() -> None:
     assert contract["forbidden_modules"] == ["coscientist.mcp"]
     assert set(contract["ignore_imports"]) == {
         "coscientist.tools.mcp_adapter -> coscientist.mcp.*",
+        "coscientist.tools.mcp_live -> coscientist.mcp.*",
         "coscientist.tools.router -> coscientist.mcp.*",
     }
     assert contract["unmatched_ignore_imports_alerting"] == "error"
