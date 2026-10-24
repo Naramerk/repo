@@ -81,9 +81,16 @@ def _normalize_to_template_id(key: str, checks: list[Any], criteria: list[Any]) 
 
 def _criterion_key_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any]) -> str:
     """Resolve checked_against → template_id. Requires checked_against (no sole-item inference)."""
-    checked = raw.get("checked_against")
+    from coscientist.core.events.errors import require_journal_field
+
+    checked = require_journal_field(raw, "checked_against", ctx="claim")
     if not checked:
-        raise ValueError("claim missing required checked_against")
+        from coscientist.core.events.errors import JournalFormatError
+
+        raise JournalFormatError(
+            "claim missing required checked_against",
+            field="checked_against",
+        )
     return _normalize_to_template_id(str(checked), checks, criteria)
 
 
@@ -104,10 +111,14 @@ def _criterion_status_for_claim(raw: dict[str, Any], checks: list[Any], criteria
 
 
 def _check_role(c: Any) -> str:
+    from coscientist.core.events.errors import JournalFormatError
+
     role = _check_field(c, "role")
+    if role is None:
+        raise JournalFormatError("check missing required role", field="role")
     if role in ("prediction", "validity", "unknown"):
         return str(role)
-    raise ValueError(f"unknown check role: {role!r}")
+    raise JournalFormatError(f"unknown check role: {role!r}", field="role")
 
 
 def _is_rubric_check(c: Any) -> bool:
@@ -248,6 +259,7 @@ def _effect_from_checks(
 ) -> tuple[dict[str, Any] | None, bool]:
     """Core-computed effect from CheckResult.effect (never agent detail / claims)."""
     from coscientist.core.claims.verdict import recompute_effect_provenance
+    from coscientist.core.events.errors import JournalFormatError, require_journal_field
 
     for c in checks or ():
         if _check_role(c) != "prediction":
@@ -256,14 +268,19 @@ def _effect_from_checks(
         if not isinstance(data, dict):
             continue
         try:
-            producer = data["producer"]
+            producer = require_journal_field(data, "producer", ctx="effect")
             if producer not in ("agent", "core", "sandbox"):
-                raise ValueError(f"unknown effect producer: {producer!r}")
+                raise JournalFormatError(
+                    f"unknown effect producer: {producer!r}",
+                    field="producer",
+                )
+            kind = require_journal_field(data, "kind", ctx="effect")
+            core_evaluated = require_journal_field(data, "core_evaluated", ctx="effect")
             effect: dict[str, Any] = {
                 "est": float(data["est"]) if data.get("est") is not None else None,
-                "kind": str(data.get("kind") or "point"),
+                "kind": str(kind),
                 "producer": str(producer),
-                "core_evaluated": bool(data.get("core_evaluated", False)),
+                "core_evaluated": bool(core_evaluated),
                 "produced_by_call_id": str(data.get("produced_by_call_id") or ""),
                 "artifact_id": str(data.get("artifact_id") or ""),
             }
@@ -297,7 +314,7 @@ def _effect_from_checks(
             recomputed = recompute_effect_provenance(effect, attempt_id=attempt_id)
             if recomputed is not None:
                 effect = recomputed
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, KeyError, JournalFormatError):
             continue
         used = bool(_check_field(c, "used_sesoi"))
         return effect, used
@@ -378,9 +395,14 @@ def _derive_claim_core_attrs(
     frozen = _criterion_is_frozen(graph, study_id, key)
     crit = _criterion_freeze_attrs(graph, study_id, key)
     sesoi = crit.get("sesoi")
-    uses_sesoi = bool(crit.get("uses_sesoi", False))
-    predicts_null = bool(crit.get("predicts_null", False))
-    predicted_direction = str(crit.get("predicted_direction") or "two_sided")
+    # Absent freeze stamp ⇒ criterion does not declare the flag (catalog default).
+    uses_sesoi = bool(crit["uses_sesoi"]) if "uses_sesoi" in crit else False
+    predicts_null = bool(crit["predicts_null"]) if "predicts_null" in crit else False
+    predicted_direction = (
+        str(crit["predicted_direction"])
+        if "predicted_direction" in crit
+        else "two_sided"
+    )
     pred_statuses: list[str] = []
     has_prediction_check = False
     for c in checks or ():

@@ -667,8 +667,16 @@ def _evaluate_proposed_check(
             detail="unapproved_check:unknown_proposal",
             effect={**base_effect, "exclusion_reason": "unapproved_check"},
         )
-    status = str(row.get("status") or "proposed")
-    role: CheckRole = row.get("role") if row.get("role") in ("prediction", "validity") else "unknown"  # type: ignore[assignment]
+    from coscientist.core.events.errors import JournalFormatError, require_journal_field
+
+    status = str(require_journal_field(row, "status", ctx=pid))
+    raw_role = require_journal_field(row, "role", ctx=pid)
+    if raw_role not in ("prediction", "validity", "unknown"):
+        raise JournalFormatError(
+            f"proposal missing/unknown role: {raw_role!r}",
+            field="role",
+        )
+    role: CheckRole = raw_role  # type: ignore[assignment]
     base_effect["proposal_digest"] = row.get("proposal_digest")
     base_effect["delegated"] = bool(row.get("delegated"))
     base_effect["bound_task_id"] = row.get("bound_task_id") or row.get("task_id")
@@ -831,10 +839,14 @@ def _evaluate_proposed_check(
         artifacts=artifacts,
         values=out.values,
         role=role,
-        uses_sesoi=bool(row.get("uses_sesoi")),
+        uses_sesoi=bool(row["uses_sesoi"]) if "uses_sesoi" in row else False,
         sesoi=row.get("sesoi") if row.get("sesoi") is not None else row.get("threshold"),
-        predicts_null=bool(row.get("predicts_null")),
-        predicted_direction=str(row.get("predicted_direction") or "two_sided"),
+        predicts_null=bool(row["predicts_null"]) if "predicts_null" in row else False,
+        predicted_direction=(
+            str(row["predicted_direction"])
+            if "predicted_direction" in row
+            else "two_sided"
+        ),
         attempt_id=attempt_id,
         fetched_digests=fetched_digests,
     )
@@ -904,10 +916,10 @@ def evaluate_task_checks(
         for tid in catalog.defaults.get("experiment", []):
             refs.append(RequirementRef(template_id=tid))
 
-    # plan_expansion_* markers are valid ONLY on core-created PLAN-n containers.
-    key = task_key if task_key is not None else spec.task_key
+    # plan_expansion_* markers are valid ONLY on core-created plan tasks (typed kind).
+    _ = task_key  # API compat; never classify via PLAN- prefix.
     kind = str(task_kind or "")
-    is_core_plan_n = kind == "plan" and str(key).startswith("PLAN-")
+    is_core_plan_n = kind == "plan"
 
     for i, ref in enumerate(refs):
         tmpl = by_id.get(ref.template_id)

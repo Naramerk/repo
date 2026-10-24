@@ -666,14 +666,20 @@ def report_hypothesis_verdicts(
                 legacy_claims=legacy,
             )
             # Keep PR8 snapshot fields used by bind/digest consumers.
+            from coscientist.core.events.errors import require_journal_field
+
             row.update(
                 {
-                    "ref": snap.get("ref", hid),
+                    "ref": snap["ref"] if "ref" in snap else hid,
                     "target_kind": "hypothesis",
-                    "by_literature": snap.get("by_literature", False),
-                    "by_theory": snap.get("by_theory", False),
+                    "by_literature": bool(
+                        require_journal_field(snap, "by_literature", ctx=hid)
+                    ),
+                    "by_theory": bool(
+                        require_journal_field(snap, "by_theory", ctx=hid)
+                    ),
                     "provenance": snap["provenance"],
-                    "k": snap.get("k", study.confirmations_needed),
+                    "k": snap["k"] if "k" in snap else study.confirmations_needed,
                     "supported_needed": study.supported_needed,
                     "refutations_needed": study.refutations_needed,
                     "refutation_priority": study.refutation_priority,

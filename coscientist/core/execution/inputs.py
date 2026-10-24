@@ -375,18 +375,29 @@ def claim_nodes_from_attempt(
         attrs["provenance"] = new_prov
         attrs["attempt_id"] = attempt_id
         attrs["attempt_outcome"] = attempt_outcome
-        status = core["criterion_status"]
+        try:
+            status = core["criterion_status"]
+            evidence_kind = core["evidence_kind"]
+            frozen = core["frozen"]
+            lit_own = core["lit_own_criterion"]
+            accepted = core["accepted"]
+            validity_ok = core["validity_ok"]
+            role = core["check_role"]
+        except KeyError as e:
+            drops.append(
+                {"key": agent_key, "reason": f"derived_missing:{e.args[0]}"}
+            )
+            continue
         if status not in ("met", "not_met", "unassessed"):
             raise ValueError(f"unknown criterion_status: {status!r}")
         attrs["criterion_status"] = status
-        attrs["evidence_kind"] = core["evidence_kind"]
-        attrs["frozen"] = bool(core["frozen"])
-        attrs["lit_own_criterion"] = bool(core["lit_own_criterion"])
+        attrs["evidence_kind"] = evidence_kind
+        attrs["frozen"] = bool(frozen)
+        attrs["lit_own_criterion"] = bool(lit_own)
         if "derivation_executable" in core:
             attrs["derivation_executable"] = bool(core["derivation_executable"])
-        attrs["accepted"] = bool(core["accepted"])
-        attrs["validity_ok"] = bool(core["validity_ok"])
-        role = core["check_role"]
+        attrs["accepted"] = bool(accepted)
+        attrs["validity_ok"] = bool(validity_ok)
         if role not in ("prediction", "validity", "unknown"):
             raise ValueError(f"unknown check_role: {role!r}")
         attrs["check_role"] = role
@@ -473,10 +484,12 @@ def claim_nodes_from_attempt(
                     "sesoi": attrs.get("sesoi"),
                     "uses_sesoi": attrs.get("uses_sesoi"),
                     "used_sesoi": attrs.get("used_sesoi"),
-                    "predicts_null": bool(attrs.get("predicts_null")),
-                    "predicted_direction": attrs.get(
-                        "predicted_direction", "two_sided"
-                    ),
+                    "predicts_null": bool(attrs["predicts_null"])
+                    if "predicts_null" in attrs
+                    else False,
+                    "predicted_direction": attrs["predicted_direction"]
+                    if "predicted_direction" in attrs
+                    else "two_sided",
                     "effect": (
                         dict(core["effect"])
                         if isinstance(core.get("effect"), dict)

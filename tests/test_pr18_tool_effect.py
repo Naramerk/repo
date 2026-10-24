@@ -184,6 +184,9 @@ async def _journal_attempt(
                 "task_id": f"{sid}/{task_key}",
                 "study_id": sid,
                 "provenance": "real",
+                "closed": False,
+                "charged": False,
+                "attempt_role": "agent",
                 "deadline": datetime.now(UTC).isoformat(),
                 "inputs": [],
                 "tainted_context": tainted,
@@ -424,6 +427,8 @@ def test_tainted_context_no_write_tools():
         size=0,
         uri="cas://x",
         produced_by=make_tool_ref("a:1", tool="web"),
+        role="data",
+        producer="agent",
         tainted=True,
     )
     assert context_is_tainted([art]) is True

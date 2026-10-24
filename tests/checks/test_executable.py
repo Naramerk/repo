@@ -2326,9 +2326,13 @@ def test_no_derived_call_id_fallback():
             "criterion_status": "met",
             "evidence_kind": "computational",
             "frozen": True,
+            "lit_own_criterion": False,
             "accepted": True,
+            "validity_ok": True,
             "effect": {
                 "est": 1.0,
+                "kind": "point",
+                "producer": "agent",
                 "core_evaluated": True,
                 "countable": True,
                 # intentionally no produced_by_call_id

@@ -149,8 +149,10 @@ async def _seed_open_attempt(writer: StudyWriter, attempt: object, clock: FakeCl
                 "dispatch_id": f"dispatch:{aid}",
                 "route_returned": False,
                 "closed": False,
+                "charged": False,
                 "close_reason": None,
                 "provenance": attempt.provenance,  # type: ignore[attr-defined]
+                "attempt_role": "agent",
                 "agent_output_digest": None,
                 "deadline": clock.now().isoformat(),
                 "task_id": attempt.task_id,  # type: ignore[attr-defined]

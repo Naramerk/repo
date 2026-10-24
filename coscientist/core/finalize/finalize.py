@@ -134,10 +134,15 @@ _EXPANSION_REPORT_KIND_RU: dict[str, str] = {
 
 def expansion_not_done_line(report_kind: str) -> str:
     """Report line for ExpansionRefused (DESIGN_M1 §4 — Russian wording)."""
-    return _EXPANSION_REPORT_KIND_RU.get(
-        str(report_kind or ""),
-        _EXPANSION_REPORT_KIND_RU["expansion_limit"],
-    )
+    try:
+        return _EXPANSION_REPORT_KIND_RU[str(report_kind)]
+    except KeyError as e:
+        from coscientist.core.events.errors import JournalFormatError
+
+        raise JournalFormatError(
+            f"unknown ExpansionRefused report_kind: {report_kind!r}",
+            field="report_kind",
+        ) from e
 
 
 # Guest sandbox timeout exhaustion (PR17) — Russian report lines.
@@ -217,15 +222,29 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
                 p = ev.payload or {}
                 rk = p.get("report_kind")
                 if rk is None:
-                    # Legacy / #38 LoopCapped path: reason enum only (no detail heuristics).
-                    reason = str(p.get("reason") or "")
-                    rk = {
-                        "invalid": "invalid",
-                        "invalid_hitl": "invalid",
-                        "has_refutation": "has_refutation",
-                        "critic_rejected": "critic_rejected",
-                        "expansion_limit": "expansion_limit",
-                    }.get(reason, "expansion_limit")
+                    # #38 LoopCapped / older writers: map reason enum only.
+                    from coscientist.core.events.errors import JournalFormatError
+
+                    reason = p.get("reason")
+                    if reason is None:
+                        raise JournalFormatError(
+                            "ExpansionRefused missing report_kind and reason",
+                            field="report_kind",
+                        )
+                    try:
+                        rk = {
+                            "invalid": "invalid",
+                            "invalid_hitl": "invalid",
+                            "has_refutation": "has_refutation",
+                            "critic_rejected": "critic_rejected",
+                            "expansion_limit": "expansion_limit",
+                            "foreach_error": "foreach_error",
+                        }[str(reason)]
+                    except KeyError as e:
+                        raise JournalFormatError(
+                            f"ExpansionRefused unknown reason: {reason!r}",
+                            field="reason",
+                        ) from e
                 line = expansion_not_done_line(str(rk))
             if line not in seen:
                 seen.append(line)

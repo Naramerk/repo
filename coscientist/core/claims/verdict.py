@@ -647,7 +647,12 @@ def recompute_effect_provenance(
         if aid:
             out["artifact_id"] = str(aid)
     if producer not in ("agent", "core", "sandbox"):
-        raise ValueError(f"effect missing/unknown producer: {producer!r}")
+        from coscientist.core.events.errors import JournalFormatError
+
+        raise JournalFormatError(
+            f"effect missing/unknown producer: {producer!r}",
+            field="producer",
+        )
     out["producer"] = producer
     if net_isolation in ("hard", "soft", "none"):
         out["net_isolation"] = net_isolation

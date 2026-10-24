@@ -122,7 +122,7 @@ class LocalProjectMixin:
             self._intake_refusal = IntakeRefuse(
                 kind=RefusalKind(p["kind"]),
                 reason=str(p.get("reason") or ""),
-                classifier_error=bool(p.get("classifier_error", False)),
+                classifier_error=bool(p["classifier_error"]) if "classifier_error" in p else False,
             )
         elif ev.type == "BudgetDebited":
             spent = Decimal(str(p.get("spent_rub") or 0))
@@ -139,9 +139,12 @@ class LocalProjectMixin:
 
             fold_budget_shares_adjusted(self, p)
         elif ev.type == "BudgetExceeded":
-            if str(p.get("scope") or "study") == "study":
+            from coscientist.core.events.errors import require_journal_field
+
+            scope = str(require_journal_field(p, "scope", ctx="BudgetExceeded"))
+            if scope == "study":
                 self._budget_exceeded = True
-            elif str(p.get("scope") or "") == "task":
+            elif scope == "task":
                 # Task-level exceed is folded via TaskDone(budget); flag unused.
                 pass
         elif ev.type == "PlanAccepted":
@@ -354,6 +357,16 @@ class LocalProjectMixin:
                 raise JournalFormatError(
                     "AttemptStarted missing required provenance",
                     field="provenance",
+                )
+            if "charged" not in row:
+                raise JournalFormatError(
+                    "AttemptStarted missing required charged",
+                    field="charged",
+                )
+            if "closed" not in row:
+                raise JournalFormatError(
+                    "AttemptStarted missing required closed",
+                    field="closed",
                 )
             if getattr(ev, "seq", None) is not None:
                 row["_seq"] = ev.seq

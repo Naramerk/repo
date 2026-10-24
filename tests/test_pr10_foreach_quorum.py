@@ -509,8 +509,10 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                     "dispatch_id": f"dispatch:{aid}",
                     "route_returned": False,
                     "closed": False,
+                    "charged": False,
                     "close_reason": None,
                     "provenance": "real",
+                    "attempt_role": "agent",
                     "agent_output_digest": None,
                     "deadline": (now + timedelta(seconds=60)).isoformat(),
                     "task_id": e0_tid,
@@ -529,6 +531,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                 payload={
                     "attempt_id": aid,
                     "closed": True,
+                    "charged": True,
                     "close_reason": CloseReason.RESULT.value,
                     "task_id": e0_tid,
                 },

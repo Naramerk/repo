@@ -504,13 +504,15 @@ def runtime_claim_from_node(
                 sesoi = None
         uses_sesoi = _coerce_bool(attrs.get("uses_sesoi"))
         used_sesoi = _coerce_bool(attrs.get("used_sesoi"))
-        predicts_null = bool(attrs.get("predicts_null", False))
+        predicts_null_b = _coerce_bool(attrs.get("predicts_null"))
+        predicts_null = False if predicts_null_b is None else predicts_null_b
         pd_raw = attrs.get("predicted_direction")
-        predicted_direction = (
-            str(pd_raw)
-            if pd_raw in ("positive", "negative", "two_sided")
-            else "two_sided"
-        )
+        if pd_raw is None:
+            predicted_direction = "two_sided"
+        elif pd_raw in ("positive", "negative", "two_sided"):
+            predicted_direction = str(pd_raw)
+        else:
+            return None, "bad_predicted_direction"
         raw_digests = attrs.get("data_digests")
         data_digests: list[str] | None
         if isinstance(raw_digests, list):
@@ -574,7 +576,7 @@ def runtime_claim_from_node(
 
         target = _coerce_str(attrs.get("target"), allow_empty=True) or ""
         about = []
-        target_kind = "question"
+        target_kind: str
         if graph is not None:
             about = [e for e in graph.edges_from(node.node_id) if e.kind == "about"]
             if len(about) != 1:
@@ -591,6 +593,11 @@ def runtime_claim_from_node(
                 target = _logical_id_from_node(dst, study_id, "hypothesis")
             else:
                 return None, "about_dst_kind"
+        else:
+            tk = _coerce_str(attrs.get("target_kind"))
+            if tk not in ("question", "hypothesis"):
+                return None, "bad_target_kind"
+            target_kind = tk
 
         # PR9/C10: superseded targets (and criteria) are excluded from k.
         if graph is not None and exclusion_reason is None:

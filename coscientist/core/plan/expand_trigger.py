@@ -106,20 +106,37 @@ def expansion_already_handled(runtime: StudyRuntime, after_task: str) -> bool:
     return False
 
 
-def expansion_report_kind(reason: str, detail: str) -> str:
-    """Typed report_kind for ExpansionRefused (write-time classification)."""
-    r, d = str(reason or ""), str(detail or "")
-    if d.startswith("foreach_"):
-        if "assign_keys" in d or "exception" in d:
-            return "foreach_error"
-        return "invalid"
-    if r in ("invalid", "invalid_hitl") or d.startswith("invalid"):
-        return "invalid"
-    if r == "has_refutation":
-        return "has_refutation"
-    if r == "critic_rejected":
-        return "critic_rejected"
-    return "expansion_limit"
+_REASON_TO_REPORT_KIND: dict[str, str] = {
+    "invalid": "invalid",
+    "invalid_hitl": "invalid",
+    "has_refutation": "has_refutation",
+    "critic_rejected": "critic_rejected",
+    "expansion_limit": "expansion_limit",
+    "foreach_error": "foreach_error",
+}
+
+
+def expansion_report_kind(reason: str, *, report_kind: str | None = None) -> str:
+    """Typed report_kind for ExpansionRefused (no detail/prefix heuristics)."""
+    if report_kind is not None:
+        if report_kind not in _REASON_TO_REPORT_KIND.values():
+            from coscientist.core.events.errors import JournalFormatError
+
+            raise JournalFormatError(
+                f"unknown ExpansionRefused report_kind: {report_kind!r}",
+                field="report_kind",
+            )
+        return report_kind
+    r = str(reason)
+    try:
+        return _REASON_TO_REPORT_KIND[r]
+    except KeyError as e:
+        from coscientist.core.events.errors import JournalFormatError
+
+        raise JournalFormatError(
+            f"unknown ExpansionRefused reason: {r!r}",
+            field="reason",
+        ) from e
 
 
 async def refuse_expansion(
@@ -129,12 +146,13 @@ async def refuse_expansion(
     reason: str,
     detail: str,
     plan_key: str | None = None,
+    report_kind: str | None = None,
 ) -> None:
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
-    report_kind = expansion_report_kind(reason, detail)
+    report_kind = expansion_report_kind(reason, report_kind=report_kind)
     # Deterministic idem per PLAN-n (same key on live path and recover).
     if plan_key:
         idem_key = make_idem("ExpansionRefused", sid, plan_key, reason)

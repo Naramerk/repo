@@ -547,6 +547,7 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
                     "dispatch_id": f"dispatch:{aid}",
                     "route_returned": False,
                     "closed": False,
+                    "charged": False,
                     "close_reason": None,
                     "provenance": "real",
                     "attempt_role": "agent",

@@ -561,7 +561,10 @@ class LifecycleMixin:
             qnid = question_node_id(sid, q.id)
             pn = question_node_id(sid, str(parent))
             eid = f"decomposes:{qnid}:{pn}"
-            origin = getattr(q, "origin", None) or "explicit"
+            origin = getattr(q, "origin", None)
+            edge_attrs: dict[str, Any] = {}
+            if origin is not None:
+                edge_attrs["origin"] = origin
             events.append(
                 EventEnvelope(
                     study_id=sid,
@@ -574,7 +577,7 @@ class LifecycleMixin:
                         study_id=sid,
                         src_id=qnid,
                         dst_id=pn,
-                        attrs={"origin": origin},
+                        attrs=edge_attrs,
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,

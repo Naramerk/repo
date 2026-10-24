@@ -48,13 +48,21 @@ def test_hitl_gate_unknown_kind_raises():
 
 
 def test_checked_against_required():
-    with pytest.raises(ValueError, match="checked_against"):
+    with pytest.raises(JournalFormatError, match="checked_against") as ei:
         _criterion_key_for_claim({}, checks=[], criteria=[])
+    assert ei.value.field == "checked_against"
 
 
 def test_unknown_check_role_raises():
-    with pytest.raises(ValueError, match="unknown check role"):
+    with pytest.raises(JournalFormatError, match="unknown check role") as ei:
         _check_role({"role": "weird"})
+    assert ei.value.field == "role"
+
+
+def test_missing_check_role_raises():
+    with pytest.raises(JournalFormatError, match="role") as ei:
+        _check_role({})
+    assert ei.value.field == "role"
 
 
 def test_missing_check_status_for_criterion_raises():
@@ -67,8 +75,9 @@ def test_missing_check_status_for_criterion_raises():
 
 
 def test_effect_missing_producer_raises():
-    with pytest.raises(ValueError, match="producer"):
+    with pytest.raises(JournalFormatError, match="producer") as ei:
         recompute_effect_provenance({"est": 1.0, "kind": "point", "core_evaluated": True})
+    assert ei.value.field == "producer"
 
 
 def test_output_kind_from_spec_requires_role():
@@ -126,3 +135,55 @@ def test_missing_target_kind_raises_type_error():
 def test_sandbox_infra_requires_transient():
     with pytest.raises(TypeError):
         SandboxInfraError("oom")  # type: ignore[call-arg]
+
+
+def test_attempts_budget_count_missing_charged_raises():
+    """attempts.py charged path: bare KeyError must not escape (JournalFormatError)."""
+    from coscientist.core.execution.attempts import AttemptsMixin
+
+    class _RT(AttemptsMixin):
+        max_attempts = 3
+        attempts = {"a1": {"closed": True, "provenance": "real"}}  # no charged
+
+    with pytest.raises(JournalFormatError, match="charged") as ei:
+        # Mirror the budget-count loop body.
+        for aid, att in _RT.attempts.items():
+            require_journal_field(att, "charged", ctx=aid)
+    assert ei.value.field == "charged"
+
+
+def test_machine_attempt_view_missing_charged_raises():
+    """machine.py _default_attempt: missing charged → JournalFormatError."""
+    from coscientist.core.events.errors import require_journal_field
+
+    d = {
+        "attempt_id": "a1",
+        "closed": False,
+        "provenance": "real",
+        "task_id": "t1",
+        "study_id": "s1",
+    }
+    with pytest.raises(JournalFormatError, match="charged") as ei:
+        require_journal_field(d, "charged", ctx="a1")
+    assert ei.value.field == "charged"
+
+
+def test_machine_attempt_view_missing_provenance_raises():
+    d = {
+        "attempt_id": "a1",
+        "closed": False,
+        "charged": True,
+        "task_id": "t1",
+        "study_id": "s1",
+    }
+    with pytest.raises(JournalFormatError, match="provenance") as ei:
+        require_journal_field(d, "provenance", ctx="a1")
+    assert ei.value.field == "provenance"
+
+
+def test_binding_missing_kind_raises():
+    from coscientist.core.claims.verdict import _binding_fields
+
+    with pytest.raises(JournalFormatError, match="kind") as ei:
+        _binding_fields({"ref": "x", "artifact_id": "a"})
+    assert ei.value.field == "kind"
