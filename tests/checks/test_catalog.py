@@ -62,7 +62,15 @@ def test_unknown_kind_errors():
     with pytest.raises(CatalogError, match="unknown CodeCheck kind"):
         load_catalog(
             _strict_catalog(
-                templates=[_strict_template(check={"check_type": "code", "kind": "not_a_real_kind", "allow_network": False})],
+                templates=[
+                    _strict_template(
+                        check={
+                            "check_type": "code",
+                            "kind": "not_a_real_kind",
+                            "allow_network": False,
+                        }
+                    )
+                ],
             )
         )
 

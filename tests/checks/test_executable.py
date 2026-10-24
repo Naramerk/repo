@@ -2426,13 +2426,25 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
         {
             "id": "pred_a",
             "title": "a",
-            "check": {"check_type": "code", "kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5, "allow_network": False},
+            "check": {
+                "check_type": "code",
+                "kind": "exec_runs",
+                "argv": ["/bin/true"],
+                "timeout_s": 5,
+                "allow_network": False,
+            },
             "role": "prediction",
         },
         {
             "id": "pred_b",
             "title": "b",
-            "check": {"check_type": "code", "kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5, "allow_network": False},
+            "check": {
+                "check_type": "code",
+                "kind": "exec_runs",
+                "argv": ["/bin/true"],
+                "timeout_s": 5,
+                "allow_network": False,
+            },
             "role": "prediction",
         },
     )
@@ -2555,7 +2567,13 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
         {
             "id": "pred_only",
             "title": "p",
-            "check": {"check_type": "code", "kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5, "allow_network": False},
+            "check": {
+                "check_type": "code",
+                "kind": "exec_runs",
+                "argv": ["/bin/true"],
+                "timeout_s": 5,
+                "allow_network": False,
+            },
             "role": "prediction",
         }
     )

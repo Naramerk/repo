@@ -116,7 +116,12 @@ def _catalog_quote() -> object:
                     "rule_ids": ["R11"],
                     "method_sources": ["test"],
                     "applies_to": ["experiment"],
-                    "check": {"check_type": "code", "kind": "quote_in_source", "output": "quote", "allow_network": False},
+                    "check": {
+                        "check_type": "code",
+                        "kind": "quote_in_source",
+                        "output": "quote",
+                        "allow_network": False,
+                    },
                     "role": "validity",
                     "kind": "catalog",
                     "required": True,

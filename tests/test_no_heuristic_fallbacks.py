@@ -2055,7 +2055,12 @@ def test_r4_evaluate_defaults_require_experiment_key(tmp_path):
                     "rule_ids": ["R23"],
                     "method_sources": ["m"],
                     "applies_to": ["experiment"],
-                    "check": {"check_type": "code", "kind": "artifact_exists", "output": "main", "allow_network": False},
+                    "check": {
+                        "check_type": "code",
+                        "kind": "artifact_exists",
+                        "output": "main",
+                        "allow_network": False,
+                    },
                     "role": "validity",
                     "kind": "catalog",
                     "required": True,
@@ -2111,7 +2116,12 @@ def test_r4_evaluate_proposed_kind_id_mismatch_raises(tmp_path):
                     "rule_ids": ["R23"],
                     "method_sources": ["m"],
                     "applies_to": ["experiment"],
-                    "check": {"check_type": "code", "kind": "artifact_exists", "output": "main", "allow_network": False},
+                    "check": {
+                        "check_type": "code",
+                        "kind": "artifact_exists",
+                        "output": "main",
+                        "allow_network": False,
+                    },
                     "role": "prediction",
                     # kind catalog but id is proposed_check → mismatch
                     "kind": "catalog",
