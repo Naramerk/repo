@@ -66,7 +66,7 @@ async def test_core_recover_rejects_open_hitl_journal(tmp_path, clock):
     exp = await open_runtime(
         root, "st_hitl", clock=clock, runtime_cls=ExpStudyRuntime, owner=owner
     )
-    core = CoreStudyRuntime(exp.store, exp.writer, clock=clock, owner=exp.owner)
+    core = CoreStudyRuntime(exp.store, exp.writer, clock=clock, owner=exp.owner, max_attempts=3)
     for ev in await exp.store.read_all():
         core._project_local(ev)  # noqa: SLF001
     with pytest.raises(HitlUnsupported, match="open HITL"):

@@ -523,7 +523,7 @@ async def test_budget_hitl_shares_refused(tmp_path, clock):
     assert rt.tasks[task_id(rt.study.study_id, "E0")].spec.budget_share == pytest.approx(
         0.5
     )
-    await rt.cancel_study()
+    await rt.cancel_study(by="user")
     await rt.tick()
     fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
     assert BUDGET_SHARES_REFUSED_LINE in (fin.payload.get("contributing_reasons") or [])
@@ -643,7 +643,7 @@ async def test_zero_pool_refuses_start(tmp_path, clock):
         e.type == "AttemptStarted" and e.payload.get("task_id") == tid for e in events
     )
     # Study still closes with a report (StudyFinalized invariant).
-    await rt.cancel_study()
+    await rt.cancel_study(by="user")
     await rt.tick()
     fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
     assert TASK_BUDGET_EXHAUSTED_LINE in (fin.payload.get("contributing_reasons") or [])
@@ -695,7 +695,7 @@ async def test_task_budget_report_line(tmp_path, clock):
     tid = task_id(rt.study.study_id, "E0")
     cap = Decimal(str(rt.attempts[aid]["allocated_budget_rub"]))
     await rt.record_budget_debit(spent_rub=cap + Decimal("1"), request_id="x", task_id=tid)
-    await rt.cancel_study()
+    await rt.cancel_study(by="user")
     await rt.tick()
     events = await rt.store.read_all()
     fin = next(e for e in events if e.type == "StudyFinalized")
@@ -1015,7 +1015,7 @@ async def test_single_attempt_budget_overrun(tmp_path, clock):
     assert done.payload.get("budget_overrun") is True
     assert done.payload.get("detail") != "budget_overrun"
     assert done.payload.get("outcome") == TaskOutcome.SUCCESS.value
-    await rt.cancel_study()
+    await rt.cancel_study(by="user")
     await rt.tick()
     fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
     reasons = fin.payload.get("contributing_reasons") or []
@@ -1081,7 +1081,7 @@ async def test_zero_share_retry_fire_does_not_crash(tmp_path, clock):
     await rt.tick()  # must not raise
     assert rt.tasks[tid].state == TaskState.DONE
     assert rt.tasks[tid].reason == TaskReason.BUDGET
-    await rt.cancel_study()
+    await rt.cancel_study(by="user")
     await rt.tick()
     assert any(e.type == "StudyFinalized" for e in await rt.store.read_all())
     await close_runtime(rt)

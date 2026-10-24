@@ -17,7 +17,7 @@ from typing import Any
 from coscientist.core.claims.graph import GraphStore, KindRegistry, default_execution_registry
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.clock import Clock, SystemClock
-from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.errors import JournalFormatError, LeaseLost
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.schema_versions import (
     ATTEMPT_CLOSED_SCHEMA_VERSION,
@@ -42,6 +42,10 @@ from coscientist.core.plan.cancel import cancel_study as _cancel_study
 from coscientist.core.plan.intake import IntakeRefuse
 
 
+# Charged-attempt cap before FAILED (DESIGN §3.3); not a StudyConfig field.
+DEFAULT_MAX_ATTEMPTS = 3
+
+
 class StudyRuntime(LocalProjectMixin, AttemptsMixin):
     """In-process owner of one study: store, writer, tasks, timers.
 
@@ -56,11 +60,13 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         *,
         clock: Clock | None = None,
         registry: KindRegistry | None = None,
-        max_attempts: int = 3,
+        max_attempts: int,
         owner: str,
     ) -> None:
         if not owner:
             raise ValueError("lease owner is required")
+        if type(max_attempts) is not int or max_attempts < 1:
+            raise ValueError(f"max_attempts must be int >= 1, got {max_attempts!r}")
         self.store = store
         self.writer = writer
         self.clock = clock or SystemClock()
@@ -69,60 +75,61 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self.max_attempts = max_attempts
         self.owner = owner
         self.study: Study | None = None
-        self.tasks: dict[str, Task] = {}
-        self.attempts: dict[str, dict[str, Any]] = {}
-        self.results: dict[str, dict[str, Any]] = {}
-        self.plans: dict[str, dict[str, Any]] = {}
-        self._attempt_tasks: dict[str, asyncio.Task[Any]] = {}
+        # Fresh runtime bags (structural empty — no folded state yet).
+        self.tasks = {}
+        self.attempts = {}
+        self.results = {}
+        self.plans = {}
+        self._attempt_tasks = {}
         self._lease_lost = False
         self.executor: Any | None = None
         self.catalog: Any | None = None
         self.artifacts: Any | None = None
-        self.dep_outputs: dict[str, dict[str, str]] = {}
-        self.dep_provenance: dict[str, Provenance] = {}
-        self.verdict_snapshots: dict[str, dict[str, Any]] = {}
-        self.hypothesis_verdicts: dict[str, dict[str, Any]] = {}
-        self._retry_at: dict[str, datetime] = {}
+        self.dep_outputs = {}
+        self.dep_provenance = {}
+        self.verdict_snapshots = {}
+        self.hypothesis_verdicts = {}
+        self._retry_at = {}
         self._finalized = False
         # True while finalize_loop_internal_error closes open work —
         # nested _append(TaskDone) must not re-enter expand/foreach/loop hooks.
         self._finalizing = False
-        self.question_disposals: dict[str, dict] = {}
+        self.question_disposals = {}
         # PR15: ArtifactRegistered(stamped) → artifact_id → kind (journal authority).
-        self.artifact_kinds: dict[str, str] = {}
+        self.artifact_kinds = {}
         # PR15: folded QuestionDisposeRejected rows (also in contributing_reasons).
-        self._disposal_rejects: list[dict] = []
+        self._disposal_rejects = []
         # PR15: stamped kind with missing meta on replay (tainted / internal_error).
-        self._stamp_meta_missing: list[dict] = []
+        self._stamp_meta_missing = []
         # Legacy journals with a second StudyFinalized (I3 breach) → taint mark.
-        self._duplicate_study_finalized: list[dict] = []
-        self._pending_kind_stamps: list[tuple[str, str]] = []
+        self._duplicate_study_finalized = []
+        self._pending_kind_stamps = []
         self._study_cancelled = False
         self._budget_exceeded = False
         self._intake_refusal: IntakeRefuse | None = None
         self._study_spent_rub = Decimal("0")
         # PR12: per-task budget_share caps / spend (folded from AttemptStarted / Debit).
-        self._task_budget_alloc: dict[str, Decimal] = {}
-        self._task_spent_rub: dict[str, Decimal] = {}
+        self._task_budget_alloc = {}
+        self._task_spent_rub = {}
         # PR9 expansion accounting (folded from PlanExpanded / ExpansionRefused).
         self._agent_expansions = 0
         self._human_expansions = 0
         self._replan_used_s = 0.0
-        self._expand_pending: set[str] = set()
-        self._expand_requests: dict[str, dict[str, Any]] = {}
-        self._expansion_refusals: list[dict[str, Any]] = []
-        self._hitl_decisions: dict[str, dict[str, Any]] = {}
-        self._hitl_requests: dict[str, dict[str, Any]] = {}
-        self._hitl_expand_used: set[str] = set()
+        self._expand_pending = set()
+        self._expand_requests = {}
+        self._expansion_refusals = []
+        self._hitl_decisions = {}
+        self._hitl_requests = {}
+        self._hitl_expand_used = set()
         # PR10: foreach_template → concrete EXP keys (folded from PlanExpanded).
-        self._foreach_children: dict[str, list[str]] = {}
+        self._foreach_children = {}
         # PR11: LoopSpec runtime (folded from PlanExpanded(loop) / LoopCapped).
-        self._loop_state: dict[str, dict[str, Any]] = {}
-        self._loop_capped: dict[str, dict[str, Any]] = {}
-        self._loop_done: set[str] = set()
+        self._loop_state = {}
+        self._loop_capped = {}
+        self._loop_done = set()
         # PR20: CheckProposed / Approved / Rejected (folded from journal).
-        self._check_proposals: dict[str, dict[str, Any]] = {}
-        self._observations: list[dict[str, Any]] = []
+        self._check_proposals = {}
+        self._observations = []
 
     def bind_executor(self, executor: Any) -> Any:
         """Wire production ``graph`` into Executor (laundering + about edges)."""
@@ -177,7 +184,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             get_graph=lambda: self.graph,
             get_results=lambda: self.results,
             get_artifact_kinds=lambda: self.artifact_kinds,
-            get_proposals=lambda: getattr(self, "_check_proposals", {}) or {},
+            get_proposals=lambda: self._check_proposals,
             max_attempts=self.max_attempts,
             on_budget_debit=make_budget_debit_cb(self),
         )
@@ -186,9 +193,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self.artifacts = artifacts
         self.catalog = catalog
         # Fold may have deferred kind stamps (open_runtime projects before bind).
-        flush = getattr(self, "_flush_pending_kind_stamps", None)
-        if callable(flush):
-            flush()
+        self._flush_pending_kind_stamps()
         self.bind_executor(ex)
         # Executor writes via writer (not StudyRuntime._append); wrap to run H-g.
         orig_append = ex._append
@@ -209,12 +214,9 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 if ev.type != "TaskDone":
                     continue
                 t = self.tasks.get(ev.entity_key)
-                reason = getattr(t, "reason", None) if t is not None else None
-                rv = getattr(reason, "value", reason)
-                if rv == TaskReason.SUPERSEDED.value:
+                if t is not None and t.reason == TaskReason.SUPERSEDED:
                     # Foreach template: expand_after only; always advance loops.
-                    kids = getattr(self, "_foreach_children", None) or {}
-                    if t is not None and t.spec.task_key in kids:
+                    if t.spec.task_key in self._foreach_children:
                         await maybe_expand_after_task_done(self, ev.entity_key)
                     await maybe_loop_after_task_done(self, ev.entity_key)
                     continue
@@ -236,7 +238,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             self._lease_lost = True
             raise
         # Project in durable append order (no ``asyncio.sleep(0)`` — see Executor._append).
-        done_ids: list[str] = []
+        done_ids = []
         for ev in stored:
             self._project_local(ev)
             if ev.type == "TaskDone":
@@ -257,11 +259,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 # Foreach template SUPERSEDED counts as done for expand_after
                 # (consistent with REFUSED).
                 t = self.tasks.get(tid)
-                reason = getattr(t, "reason", None) if t is not None else None
-                rv = getattr(reason, "value", reason)
-                if rv == TaskReason.SUPERSEDED.value:
-                    kids = getattr(self, "_foreach_children", None) or {}
-                    if t is not None and t.spec.task_key in kids:
+                if t is not None and t.reason == TaskReason.SUPERSEDED:
+                    if t.spec.task_key in self._foreach_children:
                         await maybe_expand_after_task_done(self, tid)
                     await maybe_loop_after_task_done(self, tid)
                     continue
@@ -276,8 +275,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         if self.plans:
             from coscientist.core.plan.loop import capped_scope_questions
 
-            arts = getattr(self, "artifacts", None)
-            lookup = getattr(arts, "get_meta", None) if arts is not None else None
+            arts = self.artifacts
+            lookup = arts.get_meta if arts is not None else None
             qdisp = dispositions(
                 tasks=self.tasks,
                 plans=self.plans,
@@ -286,8 +285,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 results=self.results,
                 artifact_lookup=lookup if callable(lookup) else None,
                 loop_capped_questions=capped_scope_questions(self),
-                question_disposals=getattr(self, "question_disposals", None),
-                journal_kinds=getattr(self, "artifact_kinds", None),
+                question_disposals=self.question_disposals,
+                journal_kinds=self.artifact_kinds,
             )
         ed = self.study.effective_deadline() if self.study else None
         ftypes = None
@@ -306,9 +305,15 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             question_final_types=ftypes,
         )
 
+    def _attempt_row(self, aid: str) -> dict[str, Any]:
+        row = self.attempts.get(aid)
+        if row is None:
+            raise JournalFormatError(f"attempt row missing: {aid!r}")
+        return row
+
     def invariant_open_attempts(self) -> bool:
         for t in self.tasks.values():
-            open_n = sum(1 for a in t.attempts if not self.attempts.get(a, {}).get("closed"))
+            open_n = sum(1 for a in t.attempts if not self._attempt_row(a)["closed"])
             if open_n > 1:
                 return False
         return True
@@ -321,7 +326,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             if t.deadline > ed:
                 return False
             for a in t.attempts:
-                ad = self.attempts.get(a, {}).get("deadline")
+                ad = self._attempt_row(a).get("deadline")
                 if ad is None:
                     continue
                 if isinstance(ad, str):
@@ -330,19 +335,19 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                     return False
         return True
 
-    async def ensure_lease(self, ttl_s: float = 30.0) -> None:
+    async def ensure_lease(self, ttl_s: float | None = None) -> None:
         if self._lease_lost:
             raise LeaseLost("lease previously lost")
         try:
             if self.store.epoch is None:
                 raise LeaseLost("no lease epoch set")
-            await self.store.renew_lease(self.owner, self.store.epoch, ttl_s=ttl_s)
+            ttl = self.store.lease_ttl_s if ttl_s is None else ttl_s
+            await self.store.renew_lease(self.owner, self.store.epoch, ttl_s=ttl)
         except LeaseLost:
             self._lease_lost = True
             raise
 
-    async def cancel_study(self, by: str = "user") -> None:
-        # Default by="user" is the public StudyRuntime API; cancel_study module requires by=.
+    async def cancel_study(self, by: str) -> None:
         await _cancel_study(self, by=by)
 
     async def note_budget_exceeded(self) -> None:
@@ -379,10 +384,12 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         payload: dict[str, Any] = {
             "spent_rub": str(spent),
             "request_id": request_id,
-            **(extra or {}),
         }
+        if extra is not None:
+            payload.update(extra)
         if task_id:
             payload["task_id"] = task_id
+        actual_rub = payload["actual_rub"] if "actual_rub" in payload else spent
         await self._append(
             [
                 EventEnvelope(
@@ -393,7 +400,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                         "BudgetDebited",
                         request_id,
                         str(spent),
-                        str(payload.get("actual_rub", spent)),
+                        str(actual_rub),
                     ),
                     payload=payload,
                     ts=self.clock.now(),
@@ -432,7 +439,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         A single ``TaskDone(..., reason=budget)`` from a costly/HITL route does
         **not** close the study — that is a task-level skip only.
         """
-        return bool(self._budget_exceeded)
+        return self._budget_exceeded
 
     async def tick(self) -> None:
         """Fence lease, P5 for deadline<ed, then finalize triggers, retries.
@@ -470,7 +477,9 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         if now < ed and not self._budget_exceeded and not self._study_cancelled:
             await self._skip_unavailable_dep_children()
 
-        all_done = bool(self.tasks) and all(t.state == TaskState.DONE for t in self.tasks.values())
+        all_done = len(self.tasks) > 0 and all(
+            t.state == TaskState.DONE for t in self.tasks.values()
+        )
         trigger = pick_finalize_trigger(
             cancelled=self._study_cancelled,
             budget=self._budget_trigger_active(),
@@ -502,16 +511,17 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             await self._append(events)
 
     async def _apply_p5(self, now: datetime, ed: datetime) -> None:
-        assert self.study is not None
+        if self.study is None:
+            raise RuntimeError("P5 requires an open study")
         sid = self.study.study_id
         for task in list(self.tasks.values()):
             if task.state == TaskState.DONE:
                 continue
             if not (now > task.deadline and task.deadline < ed):
                 continue
-            events: list[EventEnvelope] = []
+            events = []
             for aid in task.attempts:
-                if not self.attempts.get(aid, {}).get("closed"):
+                if not self._attempt_row(aid)["closed"]:
                     events.append(
                         EventEnvelope(
                             study_id=sid,
@@ -566,11 +576,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 continue
             open_atts = []
             for a in task.attempts:
-                row = self.attempts.get(a)
-                if row is None:
-                    from coscientist.core.events.errors import JournalFormatError
-                    raise JournalFormatError(f"attempt row missing: {a!r}")
-                if not row.get("closed"):
+                row = self._attempt_row(a)
+                if not row["closed"]:
                     open_atts.append(a)
             if open_atts:
                 self._retry_at.pop(tid, None)

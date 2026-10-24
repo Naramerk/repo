@@ -18,7 +18,11 @@ from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.hitl_guard import reject_open_hitl_if_unsupported
-from coscientist.core.execution.machine import StudyRuntime, new_owner
+from coscientist.core.execution.machine import (
+    DEFAULT_MAX_ATTEMPTS,
+    StudyRuntime,
+    new_owner,
+)
 from coscientist.core.execution.tool_loader import ensure_core_tools_ready
 
 log = logging.getLogger(__name__)
@@ -112,6 +116,7 @@ async def open_runtime(
             clock=clock,
             registry=registry or default_execution_registry(),
             owner=owner,
+            max_attempts=DEFAULT_MAX_ATTEMPTS,
         )
         for ev in events:
             rt._project_local(ev)  # noqa: SLF001
