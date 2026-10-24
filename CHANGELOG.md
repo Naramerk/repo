@@ -150,6 +150,8 @@ schema gate.
   `AttemptUnrecorded` (provenance excluded). `CATALOG_VERSION: Final[int]` from
   HISTORY; `attempt_get` accepts `Mapping|BaseModel` only.
 
+### TOOL-GAP G3 (#65) [M1]: catalog + exact ``ToolResolved``; registers ``ToolResolved`` into fail-closed payload schema gate. [DESIGN §6.3](docs/DESIGN.md#63-маршрутизация-и-alembic-fallback) / [CAPABILITIES #8](docs/CAPABILITIES.md#cap-8). Depends: payload-schemas PR.
+
 ### Docs — #16/#17 handoff ([report-s3.md](docs/handoff/report-s3.md))
 - Queue issues [#117](https://github.com/Naramerk/repo/issues/117)–[#128](https://github.com/Naramerk/repo/issues/128); `nir.py` body = core `render_markdown_report`; Depends-only ordering.
 - [CAPABILITIES.md](docs/CAPABILITIES.md) #16/#17; [DESIGN.md](docs/DESIGN.md) §9–§11 / §10; [DESIGN_M1.md](docs/DESIGN_M1.md) I1.

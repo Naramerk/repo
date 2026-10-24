@@ -12,6 +12,8 @@ ATTEMPT_STARTED_SCHEMA_VERSION = 11
 # ArtifactRegistered payload (CAS uri + optional client source_uri).
 ARTIFACT_REGISTERED_SCHEMA_VERSION = 1
 
+TOOL_RESOLVED_SCHEMA_VERSION = 1
+
 # InputBinding digest formula version (PR19 JCS rows). Absent/old → drift unknown.
 INPUTS_DIGEST_VERSION = 1
 
