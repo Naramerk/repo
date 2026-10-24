@@ -431,7 +431,7 @@ def _derive_claim_core_attrs(
     timeout_kind: str | None = None
     refute_unresolved = False
     timeout_checks = [c for c in (checks or ()) if check_is_guest_timeout(c)]
-    claim_outcome: str | None
+    claim_outcome: str
     validity_s: str
     if timeout_checks:
         # Guest timeout is never a counting outcome (not k_ref / not k_sup).
@@ -455,7 +455,7 @@ def _derive_claim_core_attrs(
             "refute_unresolved": refute_unresolved,
         }
     else:
-        validity_s, claim_outcome, _ = classify_outcome(
+        validity_s, raw_outcome, _ = classify_outcome(
             validity_ok=validity_ok,
             prediction_statuses=pred_statuses,
             predicts_null=predicts_null,
@@ -463,6 +463,12 @@ def _derive_claim_core_attrs(
             effect=effect,
             r17_ok=True,  # R17 runtime metadata still deferred (PR8)
         )
+        # Always stamp a concrete claim_outcome — never omit / never rely on
+        # inputs.py criterion_status→outcome map. Invalid → indeterminate.
+        if raw_outcome in ("consistent", "inconsistent", "indeterminate"):
+            claim_outcome = raw_outcome
+        else:
+            claim_outcome = "indeterminate"
     if validity_s == "invalid":
         validity_ok = False
         if exclusion_reason is None:
@@ -564,8 +570,8 @@ def _derive_claim_core_attrs(
         "validity_ok": validity_ok,
         "validity": validity_s,
         "check_role": role,
-        # Omit claim_outcome when None so inputs derives from criterion_status.
-        # Never write deprecated attrs "outcome" alias.
+        # Always concrete — inputs must never invent from criterion_status.
+        "claim_outcome": claim_outcome,
         "severe": severe,
         "independence_key": indep,
         "experiment_id": exp_id,
@@ -579,8 +585,6 @@ def _derive_claim_core_attrs(
         "study_id": study_id,
         "derivation_executable": der_exec,
     }
-    if claim_outcome is not None:
-        out["claim_outcome"] = claim_outcome
     if indep_notes:
         out["independence_notes"] = list(indep_notes)
     if isinstance(sesoi, float):

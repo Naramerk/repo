@@ -34,7 +34,7 @@ from coscientist.core.plan.loop_predicates import (
     scope_fingerprint,
     validate_loop_predicate,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import make_test_study, default_test_hitl_policy, attach_executor, close_runtime, open_runtime
 
 
 def _body(key: str = "BODY", *, depends_on: list[str] | None = None) -> list[TaskSpec]:
@@ -944,12 +944,12 @@ def test_survivors_le_real_graph_scope_filter():
 
     class RT:
         def __init__(self):
-            self.study = Study(
+            self.study = make_test_study(
                 study_id=sid,
                 profile="research",
                 request="q",
                 catalog_version="0.1.0",
-                hitl_policy=HitlPolicy(),
+                hitl_policy=default_test_hitl_policy(),
                 deadline=now,
                 created_at=now,
                 refutations_needed=1,

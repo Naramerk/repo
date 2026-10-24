@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from coscientist.core.claims.reasons import RefusalKind
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import Conflict, LeaseLost
-from coscientist.core.execution.domain import Budget, HitlPolicy
+from coscientist.core.execution.domain import Budget, HitlPolicy, StudyConfig
 from coscientist.core.execution.input_limits import (
     InputLimits,
     default_input_limits,
@@ -37,17 +37,21 @@ _STALE_RESERVATION_S = 60.0
 
 
 class CreateStudyBody(BaseModel):
-    """Request body for ``POST /studies``."""
+    """Request body for ``POST /studies``.
+
+    ``config`` (StudyConfig) and ``hitl_policy`` are required — no silent
+    domain-number or HITL-timeout defaults in core ``create_study``.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     profile: str = "research"
     request: str
     catalog_version: str = "test"
-    hitl_policy: HitlPolicy | None = None
-    deadline: datetime | None = None
+    config: StudyConfig
+    hitl_policy: HitlPolicy
+    deadline: datetime
     budget: Budget | None = None
-    finalize_reserve_s: int = 30
     # PR19 / DESIGN_M1 §9: user blobs → CAS before SPEC; as_of for time-sensitive Qs.
     # Profile owns InputLimits; client may only LOWER via this optional dict.
     inputs: list[dict[str, Any]] = []
@@ -350,7 +354,41 @@ async def post_studies(
     if parsed[0] is None:
         refuse_kind, refuse_reason = parsed[1]
         # Minimal body so idempotency digest + create_study still run.
-        body = CreateStudyBody(request="invalid", inputs=[])
+        # Domain numbers / HITL gates still explicit (no core silent defaults).
+        from datetime import UTC, timedelta
+
+        from coscientist.core.execution.domain import GateConfig
+
+        _refuse_now = datetime.now(UTC)
+        body = CreateStudyBody(
+            request="invalid",
+            inputs=[],
+            config=StudyConfig(
+                finalize_reserve_s=30,
+                confirmations_needed=1,
+                refutations_needed=1,
+                refutation_priority=False,
+                supported_needed=2,
+                aggregate="count",
+                evalue_alpha=0.05,
+                max_expansions=2,
+                max_human_expansions=10,
+                replan_reserve=0.1,
+                max_tasks=64,
+                max_depth=8,
+                plan_timeout_s=600,
+                max_foreach_children=32,
+                max_loop_iter=8,
+                max_task_budget_share=1.0,
+                max_proposals=3,
+            ),
+            hitl_policy=HitlPolicy(
+                gates={
+                    "spec_approval": GateConfig(timeout_s=120, on_timeout="delegate"),
+                }
+            ),
+            deadline=_refuse_now + timedelta(hours=2),
+        )
     else:
         body, _effective = parsed
         _ = _effective  # validated; create_study re-merges client vs profile
@@ -416,10 +454,10 @@ async def post_studies(
                     profile=body.profile,
                     request=(body.request or "invalid").strip() or "invalid",
                     catalog_version=body.catalog_version,
+                    config=body.config,
                     hitl_policy=body.hitl_policy,
                     deadline=body.deadline,
                     budget=body.budget,
-                    finalize_reserve_s=body.finalize_reserve_s,
                     sid=sid,
                     inputs=use_inputs,
                     as_of=body.as_of,

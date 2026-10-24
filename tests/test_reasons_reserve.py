@@ -25,7 +25,11 @@ from coscientist.core.execution.domain import (
     TaskState,
 )
 from coscientist.core.finalize.study_view import study_view
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import (
+    close_runtime,
+    make_study_created_payload,
+    open_runtime,
+)
 
 # Legacy reason strings from §0.1 that map to TaskReason / CloseReason.
 _TASK_REASON_STRINGS = [
@@ -279,7 +283,6 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
     from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.events.store import SqliteEventStore
     from coscientist.core.execution.domain import (
-        HitlPolicy,
         PlanRole,
         TaskKind,
         TaskSpec,
@@ -295,18 +298,16 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
     # Keep under default lease TTL (30s) so clock.advance for tick does not expire the lease.
     dl = now + timedelta(seconds=20)
     # Zero-reserve journal: task deadlines equal study.deadline.
-    study_payload = {
-        "study_id": sid,
-        "profile": "research",
-        "request": "legacy",
-        "catalog_version": "0.1.0",
-        "hitl_policy": HitlPolicy().model_dump(mode="json"),
-        "deadline": dl.isoformat(),
-        "created_at": now.isoformat(),
-        "parent_study_id": None,
-        "budget": None,
-        "finalize_reserve_s": 0,
-    }
+    study_payload = make_study_created_payload(
+        study_id=sid,
+        profile="research",
+        request="legacy",
+        catalog_version="0.1.0",
+        created_at=now,
+        deadline=dl,
+        finalize_reserve_s=0,
+        budget=None,
+    )
     spec = TaskSpec(task_key="SPEC", title="SPEC", goal="SPEC", route="spec")
     task_payload = {
         "task_id": f"{sid}/SPEC",

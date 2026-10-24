@@ -16,7 +16,7 @@ from coscientist.core.finalize.finalize_nodes import (
     conclusion_id_for_study,
     conclusion_ids_for,
 )
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import close_runtime, make_study_created_payload, open_runtime
 from tests.test_finalize import _boot, _fin, _skip_all, _spec
 
 
@@ -482,16 +482,15 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
                 type="StudyCreated",
                 entity_key=sid,
                 idem_key=make_idem("StudyCreated", sid),
-                payload={
-                    "study_id": sid,
-                    "profile": "research",
-                    "request": "legacy",
-                    "catalog_version": "0.1.0",
-                    "hitl_policy": HitlPolicy().model_dump(mode="json"),
-                    "deadline": dl.isoformat(),
-                    "created_at": now.isoformat(),
-                    "finalize_reserve_s": 5,
-                },
+                payload=make_study_created_payload(
+                    study_id=sid,
+                    profile="research",
+                    request="legacy",
+                    catalog_version="0.1.0",
+                    created_at=now,
+                    deadline=dl,
+                    finalize_reserve_s=5,
+                ),
                 ts=now,
                 schema_version=1,
 ),

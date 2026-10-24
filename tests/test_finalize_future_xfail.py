@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 import pytest
 
 from coscientist.core.execution.domain import (
+from tests.helpers import make_test_study
     HitlPolicy,
     PlanRole,
     Study,
@@ -123,12 +124,12 @@ def test_question_disposition_computed_from_verdict():
         deadline=now,
         plan_role=PlanRole.NONE,
 )
-    study = Study(
+    study = make_test_study(
         study_id=sid,
         profile="research",
         request="q",
         catalog_version="0.1.0",
-        hitl_policy=HitlPolicy(),
+        hitl_policy=default_test_hitl_policy(),
         deadline=now,
         created_at=now,
     )

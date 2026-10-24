@@ -174,47 +174,27 @@ HitlGateKind = Literal[
 
 
 class GateConfig(Frozen):
-    """Per-gate HITL config (DESIGN §7.3 / RESEARCH_MODEL §5.2)."""
+    """Per-gate HITL config (DESIGN §7.3 / RESEARCH_MODEL §5.2).
 
+    ``timeout_s`` and ``on_timeout`` are required — no invented 120/180/1800
+    or silent ``delegate`` vs ``fail``. Callers (StudyConfig / HitlPolicy
+    construction / tests) must pass concrete values.
+    """
+
+    timeout_s: int = Field(ge=1)
+    on_timeout: OnTimeout
     enabled: bool = True
-    timeout_s: int = 1800
-    # costly_or_nonreal defaults to fail; others to delegate (via HitlPolicy.gate).
-    on_timeout: OnTimeout = "delegate"
-
-
-def _default_gates() -> dict[str, GateConfig]:
-    return {
-        "spec_approval": GateConfig(timeout_s=120, on_timeout="delegate"),
-        "plan": GateConfig(timeout_s=180, on_timeout="delegate"),
-        "plan_approval": GateConfig(timeout_s=180, on_timeout="delegate"),
-        "plan_expansion": GateConfig(timeout_s=180, on_timeout="delegate"),
-        "hypotheses": GateConfig(timeout_s=1800, on_timeout="delegate"),
-        "costly_or_nonreal": GateConfig(timeout_s=1800, on_timeout="fail"),
-        "report": GateConfig(timeout_s=1800, on_timeout="delegate"),
-        "result_acceptance": GateConfig(timeout_s=1800, on_timeout="delegate"),
-        "skip_task": GateConfig(timeout_s=1800, on_timeout="delegate"),
-        "budget": GateConfig(timeout_s=1800, on_timeout="delegate"),
-        # Headless default decision is deny (HitlPolicy.defaults); gate itself stays enabled.
-        "side_effect": GateConfig(timeout_s=1800, on_timeout="fail"),
-        # PR20: HITL timeout ≡ reject (DESIGN_M1 §16); never auto-approve.
-        "proposed_check": GateConfig(timeout_s=1800, on_timeout="fail"),
-    }
 
 
 class HitlPolicy(Frozen):
+    """HITL policy. ``gates`` is required — no ``_default_gates`` inventing timeouts."""
+
+    gates: dict[str, GateConfig]
     mode: Literal["interactive", "auto", "headless"] = "headless"
-    gates: dict[str, GateConfig] = Field(default_factory=_default_gates)
-    # Legacy flat map kept for callers/tests; gate() prefers gates then these.
-    timeout_s: dict[str, int] = Field(
-        default_factory=lambda: {
-            "spec_approval": 120,
-            "plan_approval": 180,
-            "result_acceptance": 1800,
-            "skip_task": 1800,
-        }
-    )
-    # Policy-level default for gates not listed; costly_or_nonreal still defaults to fail.
-    on_timeout: OnTimeout = "delegate"
+    # Legacy flat map (optional); gate() uses ``gates`` only.
+    timeout_s: dict[str, int] = Field(default_factory=dict)
+    # Policy-level fallback unused when every gate sets on_timeout explicitly.
+    on_timeout: OnTimeout | None = None
     defaults: dict[str, str] = Field(
         default_factory=lambda: {
             "plan_approval": "human_timeout",
@@ -452,6 +432,31 @@ def validate_budget_for_create(budget: Budget | None) -> None:
         raise ValueError("delegated_costly must be <= max_cost_rub")
 
 
+class StudyConfig(Frozen):
+    """Domain numbers fixed at study create — no silent Field defaults.
+
+    Pass explicitly to ``create_study`` / ``Study`` (or via this typed config).
+    """
+
+    finalize_reserve_s: int = Field(ge=0)
+    confirmations_needed: int = Field(ge=1)
+    refutations_needed: int = Field(ge=1)  # k_ref
+    refutation_priority: bool
+    supported_needed: int = Field(ge=2)
+    aggregate: Literal["count"]
+    evalue_alpha: float = Field(gt=0.0, le=1.0)
+    max_expansions: int = Field(ge=0)
+    max_human_expansions: int = Field(ge=0)
+    replan_reserve: float = Field(ge=0.0, le=1.0)
+    max_tasks: int = Field(ge=1)
+    max_depth: int = Field(ge=1)  # decomposes depth (DESIGN_M1 §4 / §10)
+    plan_timeout_s: int = Field(ge=1)
+    max_foreach_children: int = Field(ge=1)
+    max_loop_iter: int = Field(ge=1)
+    max_task_budget_share: float = Field(ge=0.0, le=1.0)
+    max_proposals: int = Field(ge=0)
+
+
 class Study(Frozen):
     study_id: str
     profile: str
@@ -460,40 +465,31 @@ class Study(Frozen):
     hitl_policy: HitlPolicy
     deadline: datetime
     created_at: datetime
+    # Domain numbers — required (see StudyConfig); no invented alpha/max_tasks/…
+    finalize_reserve_s: int = Field(ge=0)
+    confirmations_needed: int = Field(ge=1)
+    refutations_needed: int = Field(ge=1)  # k_ref
+    refutation_priority: bool
+    supported_needed: int = Field(ge=2)
+    aggregate: Literal["count"]
+    evalue_alpha: float = Field(gt=0.0, le=1.0)
+    max_expansions: int = Field(ge=0)
+    max_human_expansions: int = Field(ge=0)
+    replan_reserve: float = Field(ge=0.0, le=1.0)
+    max_tasks: int = Field(ge=1)
+    max_depth: int = Field(ge=1)  # decomposes depth (DESIGN_M1 §4 / §10)
+    plan_timeout_s: int = Field(ge=1)
+    max_foreach_children: int = Field(ge=1)
+    max_loop_iter: int = Field(ge=1)
+    max_task_budget_share: float = Field(ge=0.0, le=1.0)
+    max_proposals: int = Field(ge=0)
     parent_study_id: str | None = None
     budget: Budget | None = None
-    finalize_reserve_s: int = Field(default=30, ge=0)
-    # PR 6 / DESIGN_M1 §3: fixed at create (like catalog_version); change only via fork.
-    # PR8: confirmations_needed is snapshot ``k`` (digest / bind); not the severe gate.
-    confirmations_needed: int = Field(default=1, ge=1)
-    refutations_needed: int = Field(default=1, ge=1)  # k_ref
-    refutation_priority: bool = False
-    # PR8b: severe-support threshold (|con| ≥ supported_needed with capable refute).
-    supported_needed: int = Field(default=2, ge=2)
-    # M1: count only; e-value aggregation deferred (rejected at StudyCreated).
-    aggregate: Literal["count"] = "count"
-    evalue_alpha: float = Field(default=0.05, gt=0.0, le=1.0)
-    # PR9: plan expansion quotas + replan time reserve (DESIGN_M1 §4–5).
-    # max_expansions replaces profile max_replans (migration: value = max_replans).
-    max_expansions: int = Field(default=2, ge=0)
-    max_human_expansions: int = Field(default=10, ge=0)
-    replan_reserve: float = Field(default=0.1, ge=0.0, le=1.0)
-    max_tasks: int = Field(default=64, ge=1)
-    max_depth: int = Field(default=8, ge=1)  # decomposes depth (DESIGN_M1 §4 / §10)
-    plan_timeout_s: int = Field(default=600, ge=1)
-    # PR10: cap foreach children; excess → report limitation (sorted order kept).
-    max_foreach_children: int = Field(default=32, ge=1)
-    # PR11: hard ceiling for LoopSpec.max_iter (PlanValidator enforces ≤ this).
-    max_loop_iter: int = Field(default=8, ge=1)
-    # PR12: plan critic — no single task may claim more than this budget_share.
-    max_task_budget_share: float = Field(default=1.0, ge=0.0, le=1.0)
     # PR19 / DESIGN_M1 §9: time-sensitive questions; shown in the report when set.
     as_of: datetime | None = None
     # Task-data artifact ids from inputs[] before SPEC (role=data, producer=user).
     # Not quote_in_source sources (PR14 SourceFetched / put_fetched only).
     user_input_ids: list[str] = Field(default_factory=list)
-    # PR20: max agent CheckProposed per study (default 3); excess → proposal_quota.
-    max_proposals: int = Field(default=3, ge=0)
 
     def effective_deadline(self) -> datetime:
         """Last instant usable by tasks/attempts/HITL (deadline − finalize reserve)."""

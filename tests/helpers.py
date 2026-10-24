@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -12,12 +13,172 @@ from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_r
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
+    GateConfig,
+    HitlPolicy,
     RequirementRef,
+    Study,
+    StudyConfig,
     TaskSpec,
 )
 from coscientist.core.execution.executor import Executor
 from coscientist.core.execution.runtime_factory import close_runtime as close_runtime
 from coscientist.core.execution.runtime_factory import open_runtime as _open_runtime_core
+
+# Explicit test domain numbers (former Study Field defaults — never silent in core).
+_TEST_STUDY_CONFIG_KW: dict[str, Any] = {
+    "finalize_reserve_s": 30,
+    "confirmations_needed": 1,
+    "refutations_needed": 1,
+    "refutation_priority": False,
+    "supported_needed": 2,
+    "aggregate": "count",
+    "evalue_alpha": 0.05,
+    "max_expansions": 2,
+    "max_human_expansions": 10,
+    "replan_reserve": 0.1,
+    "max_tasks": 64,
+    "max_depth": 8,
+    "plan_timeout_s": 600,
+    "max_foreach_children": 32,
+    "max_loop_iter": 8,
+    "max_task_budget_share": 1.0,
+    "max_proposals": 3,
+}
+
+_STUDY_CONFIG_KEYS = frozenset(_TEST_STUDY_CONFIG_KW)
+
+# Explicit HITL gate timeouts (former _default_gates) — tests only.
+_TEST_HITL_GATES: dict[str, GateConfig] = {
+    "spec_approval": GateConfig(timeout_s=120, on_timeout="delegate"),
+    "plan": GateConfig(timeout_s=180, on_timeout="delegate"),
+    "plan_approval": GateConfig(timeout_s=180, on_timeout="delegate"),
+    "plan_expansion": GateConfig(timeout_s=180, on_timeout="delegate"),
+    "hypotheses": GateConfig(timeout_s=1800, on_timeout="delegate"),
+    "costly_or_nonreal": GateConfig(timeout_s=1800, on_timeout="fail"),
+    "report": GateConfig(timeout_s=1800, on_timeout="delegate"),
+    "result_acceptance": GateConfig(timeout_s=1800, on_timeout="delegate"),
+    "skip_task": GateConfig(timeout_s=1800, on_timeout="delegate"),
+    "budget": GateConfig(timeout_s=1800, on_timeout="delegate"),
+    "side_effect": GateConfig(timeout_s=1800, on_timeout="fail"),
+    "proposed_check": GateConfig(timeout_s=1800, on_timeout="fail"),
+}
+
+
+def default_test_study_config(**overrides: Any) -> StudyConfig:
+    """Typed StudyConfig with explicit test values (no core Field defaults)."""
+    kw = dict(_TEST_STUDY_CONFIG_KW)
+    kw.update(overrides)
+    return StudyConfig(**kw)
+
+
+def default_test_hitl_policy(
+    *,
+    mode: str = "headless",
+    gates: dict[str, GateConfig] | None = None,
+    **overrides: Any,
+) -> HitlPolicy:
+    """HitlPolicy with explicit gate timeouts (no ``_default_gates``)."""
+    return HitlPolicy(
+        mode=mode,  # type: ignore[arg-type]
+        gates=dict(gates) if gates is not None else dict(_TEST_HITL_GATES),
+        **overrides,
+    )
+
+
+def make_create_study_body(**kwargs: Any) -> Any:
+    """``CreateStudyBody`` with explicit test config / HITL / deadline."""
+    from datetime import UTC, datetime, timedelta
+
+    from coscientist.api.studies import CreateStudyBody
+
+    if "config" not in kwargs:
+        kwargs["config"] = default_test_study_config()
+    if "hitl_policy" not in kwargs:
+        kwargs["hitl_policy"] = default_test_hitl_policy()
+    if "deadline" not in kwargs:
+        kwargs["deadline"] = datetime.now(UTC) + timedelta(hours=2)
+    if "request" not in kwargs:
+        kwargs["request"] = "test request"
+    return CreateStudyBody(**kwargs)
+
+
+def make_create_study_body_dict(**kwargs: Any) -> dict[str, Any]:
+    """JSON-ready dict for ``parse_create_study_body`` / ``post_studies`` raw bodies."""
+    return make_create_study_body(**kwargs).model_dump(mode="json")
+
+
+def make_study_created_payload(**kwargs: Any) -> dict[str, Any]:
+    """Full StudyCreated JSON payload with explicit domain numbers (journal seeds)."""
+    from datetime import UTC, datetime, timedelta
+
+    now = kwargs.pop("created_at", None) or datetime.now(UTC)
+    deadline = kwargs.pop("deadline", None) or (now + timedelta(hours=2))
+    study = make_test_study(
+        study_id=kwargs.pop("study_id", "st_seed"),
+        profile=kwargs.pop("profile", "research"),
+        request=kwargs.pop("request", "q"),
+        catalog_version=kwargs.pop("catalog_version", "0.1.0"),
+        created_at=now,
+        deadline=deadline,
+        **kwargs,
+    )
+    return study.model_dump(mode="json")
+
+
+def make_test_study(**kwargs: Any) -> Study:
+    """Build a ``Study`` with explicit test domain numbers + required identity fields."""
+    cfg = default_test_study_config()
+    fields = cfg.model_dump()
+    hitl = kwargs.pop("hitl_policy", None) or default_test_hitl_policy()
+    for k in list(kwargs):
+        if k in _STUDY_CONFIG_KEYS:
+            fields[k] = kwargs.pop(k)
+    return Study(hitl_policy=hitl, **fields, **kwargs)
+
+
+def _merge_study_config(kwargs: dict[str, Any]) -> StudyConfig:
+    config = kwargs.pop("config", None)
+    flat = {k: kwargs.pop(k) for k in list(kwargs) if k in _STUDY_CONFIG_KEYS}
+    if config is None:
+        return default_test_study_config(**flat)
+    if flat:
+        return config.model_copy(update=flat)
+    return config
+
+
+async def create_study(rt: Any, **kwargs: Any) -> str:
+    """Test-facing create_study: injects explicit StudyConfig / HitlPolicy.
+
+    Callers may still pass flat domain kwargs (``finalize_reserve_s=…``); those
+    override the typed test config. ``deadline`` and ``hitl_policy`` may be
+    omitted — helpers supply explicit test values (never core silent defaults).
+    """
+    clock = getattr(rt, "clock", None)
+    now = clock.now() if clock is not None else datetime.now()
+    if kwargs.get("deadline") is None:
+        kwargs["deadline"] = now + timedelta(hours=2)
+    if kwargs.get("hitl_policy") is None:
+        kwargs["hitl_policy"] = default_test_hitl_policy()
+    kwargs["config"] = _merge_study_config(kwargs)
+    return await rt.create_study(**kwargs)
+
+
+def _wrap_create_study(rt: Any) -> Any:
+    """Bind test create_study so ``rt.create_study(**kw)`` stays ergonomic."""
+    orig = rt.create_study
+
+    async def _bound(**kwargs: Any) -> str:
+        clock = getattr(rt, "clock", None)
+        now = clock.now() if clock is not None else datetime.now()
+        if kwargs.get("deadline") is None:
+            kwargs["deadline"] = now + timedelta(hours=2)
+        if kwargs.get("hitl_policy") is None:
+            kwargs["hitl_policy"] = default_test_hitl_policy()
+        kwargs["config"] = _merge_study_config(kwargs)
+        return await orig(**kwargs)
+
+    rt.create_study = _bound  # type: ignore[method-assign]
+    return rt
 
 
 async def open_runtime(
@@ -32,16 +193,18 @@ async def open_runtime(
     Production ``coscientist.core.execution.runtime_factory.open_runtime`` requires
     ``catalog=`` explicitly and never imports this helper. Defaults to the
     API StudyRuntime (lifecycle mixin) so ``create_study`` is available.
+    Wraps ``create_study`` with explicit test StudyConfig / HitlPolicy.
     """
     # ``runtime_cls=None`` must not bypass the API runtime (setdefault skips None).
     if kwargs.get("runtime_cls") is None:
         kwargs["runtime_cls"] = ApiStudyRuntime
-    return await _open_runtime_core(
+    rt = await _open_runtime_core(
         data_root,
         study_id,
         catalog=catalog if catalog is not None else minimal_test_catalog(),
         **kwargs,
     )
+    return _wrap_create_study(rt)
 
 
 async def open_runtime_experimental(
@@ -56,12 +219,13 @@ async def open_runtime_experimental(
         open_runtime as _open_exp,
     )
 
-    return await _open_exp(
+    rt = await _open_exp(
         data_root,
         study_id,
         catalog=catalog if catalog is not None else minimal_test_catalog(),
         **kwargs,
     )
+    return _wrap_create_study(rt)
 
 
 class RuntimeLike(Protocol):

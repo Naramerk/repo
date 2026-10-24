@@ -37,7 +37,7 @@ from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
 from coscientist.core.finalize.minimal_report import MAX_BYTES, build_minimal_report
 from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.question_tasks import question_tasks, questions_from_spec_output
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
+from tests.helpers import default_test_hitl_policy, attach_executor, close_runtime, open_runtime, record_success
 
 _TS = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
 
@@ -498,25 +498,18 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
     await store.acquire_lease("seed")
     now = clock.now()
     # Raw journal row (pre-create_study check): looser delegated_costly than max_cost_rub.
-    payload = {
-        "study_id": sid,
-        "profile": "research",
-        "request": "q",
-        "catalog_version": "0.1.0",
-        "hitl_policy": HitlPolicy().model_dump(mode="json"),
-        "deadline": (now + timedelta(seconds=60)).isoformat(),
-        "created_at": now.isoformat(),
-        "parent_study_id": None,
-        "budget": {
-            "max_llm_calls": 100,
-            "max_tokens": 1_000_000,
-            "max_cost_rub": "50",
-            "max_tool_calls": 500,
-            "deadline": None,
-            "delegated_costly": "999",
-        },
-        "finalize_reserve_s": 5,
-    }
+    from tests.helpers import make_study_created_payload
+
+    payload = make_study_created_payload(
+        study_id=sid,
+        created_at=now,
+        deadline=now + timedelta(seconds=60),
+        finalize_reserve_s=5,
+        budget=Budget(
+            max_cost_rub=Decimal("50"),
+            delegated_costly=Decimal("999"),
+        ),
+    )
     # Pin: fold path uses the same Study.model_validate as local_project.
     folded = Study.model_validate(payload)
     assert folded.budget is not None

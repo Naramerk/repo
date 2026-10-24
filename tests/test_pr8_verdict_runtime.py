@@ -38,7 +38,7 @@ from coscientist.core.execution.inputs import (
     collect_bindable_claims,
     verdict_binding_digest,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import make_test_study, default_test_hitl_policy, attach_executor, close_runtime, open_runtime
 from tests.test_inputs import _task
 
 _DERIVED_OK = {
@@ -256,12 +256,12 @@ def test_garbage_attrs_dropped_not_raised():
     )
     assert rc is None
     assert reason == "bad_confirming_evidence_ids"
-    study = Study(
+    study = make_test_study(
         study_id=sid,
         profile="research",
         request="q",
         catalog_version="0.1.0",
-        hitl_policy=HitlPolicy(),
+        hitl_policy=default_test_hitl_policy(),
         deadline=datetime(2026, 1, 2, tzinfo=UTC),
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
@@ -714,12 +714,12 @@ def test_dispositions_from_verdict_counting_claims():
         deadline=now,
         plan_role=PlanRole.NONE,
 )
-    study = Study(
+    study = make_test_study(
         study_id=sid,
         profile="research",
         request="q",
         catalog_version="0.1.0",
-        hitl_policy=HitlPolicy(),
+        hitl_policy=default_test_hitl_policy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
         confirmations_needed=1,
@@ -1491,12 +1491,12 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
     )
     assert drops_b == []
     _apply_events(g, evs_b)
-    study = Study(
+    study = make_test_study(
         study_id=sid,
         profile="research",
         request="q",
         catalog_version="0.1.0",
-        hitl_policy=HitlPolicy(),
+        hitl_policy=default_test_hitl_policy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
         confirmations_needed=3,
@@ -1564,12 +1564,12 @@ def test_unknown_role_exclusion_never_forces_verdict():
     )
     assert drops == []
     _apply_events(g, evs)
-    study = Study(
+    study = make_test_study(
         study_id=sid,
         profile="research",
         request="q",
         catalog_version="0.1.0",
-        hitl_policy=HitlPolicy(),
+        hitl_policy=default_test_hitl_policy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
         confirmations_needed=1,
@@ -1615,12 +1615,12 @@ def test_validity_only_evidence_inconclusive():
     )
     assert drops == []
     _apply_events(g, evs)
-    study = Study(
+    study = make_test_study(
         study_id=sid,
         profile="research",
         request="q",
         catalog_version="0.1.0",
-        hitl_policy=HitlPolicy(),
+        hitl_policy=default_test_hitl_policy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
         confirmations_needed=1,
@@ -1759,12 +1759,12 @@ def test_priority_refuted_stub_support_note_in_report_payload():
     )
     assert drops_ref == []
     _apply_events(g, evs_ref)
-    study = Study(
+    study = make_test_study(
         study_id=sid,
         profile="research",
         request="q",
         catalog_version="0.1.0",
-        hitl_policy=HitlPolicy(),
+        hitl_policy=default_test_hitl_policy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
         confirmations_needed=1,

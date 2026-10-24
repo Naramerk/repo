@@ -2910,3 +2910,177 @@ def test_runtime_factory_uses_direct_task_state():
     open_t = SimpleNamespace(state=TaskState.PENDING, task_id="s/E1")
     skipped = [t for t in [done, open_t] if t.state != TaskState.DONE]
     assert [t.task_id for t in skipped] == ["s/E1"]
+
+
+# --- C4: Study / HitlPolicy / create_study require explicit domain numbers ---
+
+
+def test_c4_study_config_missing_fields_validation_error():
+    from pydantic import ValidationError
+
+    from coscientist.core.execution.domain import StudyConfig
+
+    with pytest.raises(ValidationError):
+        StudyConfig()  # type: ignore[call-arg]
+
+
+def test_c4_study_missing_domain_fields_validation_error():
+    from datetime import UTC, datetime
+
+    from pydantic import ValidationError
+
+    from coscientist.core.execution.domain import Study
+
+    with pytest.raises(ValidationError):
+        Study(
+            study_id="s",
+            profile="p",
+            request="r",
+            catalog_version="1",
+            hitl_policy=default_test_hitl_policy(),
+            deadline=datetime.now(UTC),
+            created_at=datetime.now(UTC),
+        )
+
+
+def test_c4_hitl_policy_requires_gates_no_default_timeouts():
+    import inspect
+
+    from pydantic import ValidationError
+
+    from coscientist.core.execution import domain as domain_mod
+    from coscientist.core.execution.domain import GateConfig, HitlPolicy
+
+    assert not hasattr(domain_mod, "_default_gates")
+    with pytest.raises(ValidationError):
+        HitlPolicy()  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        GateConfig(timeout_s=120)  # type: ignore[call-arg]
+    # No function that invents gate timeouts (docstring may mention the name).
+    assert not any(
+        isinstance(v, type(lambda: None)) and n == "_default_gates"
+        for n, v in vars(domain_mod).items()
+    )
+    mod_src = inspect.getsource(domain_mod)
+    assert "def _default_gates" not in mod_src
+    assert "GateConfig(timeout_s=120" not in mod_src
+    assert "GateConfig(timeout_s=1800" not in mod_src
+
+
+@pytest.mark.asyncio
+async def test_c4_create_study_requires_config_hitl_deadline_typeerror():
+    from datetime import UTC, datetime, timedelta
+
+    from coscientist.core.plan.lifecycle import LifecycleMixin
+    from tests.helpers import default_test_hitl_policy, default_test_study_config
+
+    class _LC(LifecycleMixin):
+        def __init__(self) -> None:
+            self.store = SimpleNamespace(study_id=None)
+            self.clock = SimpleNamespace(now=lambda: datetime.now(UTC))
+
+    with pytest.raises(TypeError, match="StudyConfig"):
+        await _LC().create_study(
+            profile="p",
+            request="r",
+            catalog_version="1",
+            config=None,  # type: ignore[arg-type]
+            hitl_policy=default_test_hitl_policy(),
+            deadline=datetime.now(UTC) + timedelta(hours=1),
+        )
+    with pytest.raises(TypeError, match="HitlPolicy"):
+        await _LC().create_study(
+            profile="p",
+            request="r",
+            catalog_version="1",
+            config=default_test_study_config(),
+            hitl_policy=None,  # type: ignore[arg-type]
+            deadline=datetime.now(UTC) + timedelta(hours=1),
+        )
+
+
+# --- C5: claim_outcome required; no criterion_status → outcome map ---
+
+
+def test_c5_inputs_missing_claim_outcome_raises_no_silent_map():
+    from datetime import UTC, datetime
+
+    from coscientist.core.claims.graph import GraphNode, GraphStore, default_execution_registry
+    from coscientist.core.events.ids import question_node_id
+    from coscientist.core.execution.inputs import claim_nodes_from_attempt
+
+    g = GraphStore(default_execution_registry())
+    qid = "Q1"
+    nid = question_node_id("s", qid)
+    g.upsert_node(
+        GraphNode(
+            node_id=nid,
+            kind="question",
+            study_id="s",
+            ref_id=qid,
+            attrs={},
+            created_at=datetime.now(UTC),
+        )
+    )
+
+    def derive_without_outcome(raw, ok):
+        return {
+            "criterion_status": "met",
+            "evidence_kind": "computational",
+            "frozen": True,
+            "lit_own_criterion": False,
+            "accepted": True,
+            "validity_ok": True,
+            "check_role": "prediction",
+            # claim_outcome intentionally omitted — must not map from criterion_status
+            "predicted_direction": "two_sided",
+            "predicts_null": False,
+        }
+
+    with pytest.raises(JournalFormatError, match="claim_outcome required"):
+        claim_nodes_from_attempt(
+            study_id="s",
+            attempt_id="s/E0#1",
+            provenance="real",
+            claims=[{"id": "c1", "text": "t", "target": qid}],
+            now=datetime.now(UTC),
+            graph=g,
+            attempt_outcome="SUCCESS",
+            infra_failure=False,
+            derive_attrs=derive_without_outcome,
+        )
+
+
+def test_c5_inputs_source_has_no_criterion_status_map():
+    import inspect
+
+    from coscientist.core.execution import inputs as inputs_mod
+
+    src = inspect.getsource(inputs_mod.claim_nodes_from_attempt)
+    assert '"met": "consistent"' not in src
+    assert "cannot derive outcome" not in src
+
+
+def test_c5_derive_claim_core_attrs_always_sets_claim_outcome():
+    from coscientist.core.execution.domain import TaskOutcome
+    from coscientist.core.execution.executor import _derive_claim_core_attrs
+
+    task = SimpleNamespace(
+        task_id="s/E0",
+        spec=SimpleNamespace(
+            method=None,
+            criteria=[],
+            route="experiment",
+        ),
+    )
+    out = _derive_claim_core_attrs(
+        task,
+        TaskOutcome.SUCCESS,
+        raw={"id": "c1", "text": "t", "target": "Q1"},
+        checks=[],
+        graph=None,
+        study_id="s",
+        validated=True,
+    )
+    assert "claim_outcome" in out
+    assert out["claim_outcome"] in ("consistent", "inconsistent", "indeterminate")

@@ -35,6 +35,7 @@ from coscientist.core.execution.domain import (
     QuestionSpec,
     Route,
     Study,
+    StudyConfig,
     Task,
     TaskKind,
     TaskOutcome,
@@ -69,28 +70,12 @@ class LifecycleMixin:
         profile: str,
         request: str,
         catalog_version: str,
-        hitl_policy: HitlPolicy | None = None,
-        deadline: datetime | None = None,
+        config: StudyConfig,
+        hitl_policy: HitlPolicy,
+        deadline: datetime,
         parent_study_id: str | None = None,
         sid: str | None = None,
         budget: Budget | None = None,
-        finalize_reserve_s: int = 30,
-        confirmations_needed: int = 1,
-        refutations_needed: int = 1,
-        refutation_priority: bool = False,
-        supported_needed: int = 2,
-        aggregate: str = "count",
-        evalue_alpha: float = 0.05,
-        max_expansions: int = 2,
-        max_human_expansions: int = 10,
-        replan_reserve: float = 0.1,
-        max_tasks: int = 64,
-        max_depth: int = 8,
-        plan_timeout_s: int = 600,
-        max_foreach_children: int = 32,
-        max_loop_iter: int = 8,
-        max_task_budget_share: float = 1.0,
-        max_proposals: int = 3,
         inputs: list[Any] | None = None,
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,
@@ -100,9 +85,44 @@ class LifecycleMixin:
         intake_refuse: IntakeRefuse | None = None,
         user_put_capability: Any | None = None,
     ) -> str:
+        """Create a study. Domain numbers come only from ``config`` / ``hitl_policy``.
+
+        No silent defaults for alpha / max_tasks / HITL timeouts — callers
+        (API body or ``tests.helpers``) must pass a typed ``StudyConfig`` and
+        an explicit ``HitlPolicy`` with concrete gate timeouts.
+        """
+        if not isinstance(config, StudyConfig):
+            raise TypeError(
+                f"create_study requires StudyConfig, got {type(config).__name__}"
+            )
+        if not isinstance(hitl_policy, HitlPolicy):
+            raise TypeError(
+                f"create_study requires HitlPolicy, got {type(hitl_policy).__name__}"
+            )
+        if not isinstance(deadline, datetime):
+            raise TypeError(
+                f"create_study requires datetime deadline, got {type(deadline).__name__}"
+            )
         sid = sid or self.store.study_id or study_id()
         now = self.clock.now()
-        dl = deadline or (now + timedelta(hours=2))
+        dl = deadline
+        finalize_reserve_s = int(config.finalize_reserve_s)
+        confirmations_needed = int(config.confirmations_needed)
+        refutations_needed = int(config.refutations_needed)
+        refutation_priority = bool(config.refutation_priority)
+        supported_needed = int(config.supported_needed)
+        aggregate = config.aggregate
+        evalue_alpha = float(config.evalue_alpha)
+        max_expansions = int(config.max_expansions)
+        max_human_expansions = int(config.max_human_expansions)
+        replan_reserve = float(config.replan_reserve)
+        max_tasks = int(config.max_tasks)
+        max_depth = int(config.max_depth)
+        plan_timeout_s = int(config.plan_timeout_s)
+        max_foreach_children = int(config.max_foreach_children)
+        max_loop_iter = int(config.max_loop_iter)
+        max_task_budget_share = float(config.max_task_budget_share)
+        max_proposals = int(config.max_proposals)
         if finalize_reserve_s < 0:
             raise ValueError(f"finalize_reserve_s must be >= 0, got {finalize_reserve_s}")
         if confirmations_needed < 1:
@@ -221,7 +241,7 @@ class LifecycleMixin:
             profile=profile,
             request=request,
             catalog_version=catalog_version,
-            hitl_policy=hitl_policy or HitlPolicy(),
+            hitl_policy=hitl_policy,
             deadline=dl,
             created_at=now,
             parent_study_id=parent_study_id,
@@ -297,7 +317,7 @@ class LifecycleMixin:
             # Via module attr so tests can monkeypatch finalize.finalize.
             await finalize_mod.finalize(self, trigger="intake")  # type: ignore[arg-type]
             return sid
-        plan_deadline = min(now + timedelta(seconds=600), effective)
+        plan_deadline = min(now + timedelta(seconds=plan_timeout_s), effective)
         for key, kind in STAGE_KEYS:
             if kind == TaskKind.REPORT:
                 deps = ["PLAN"]
@@ -430,7 +450,7 @@ class LifecycleMixin:
             loop_specs = validate_loop_specs(
                 raw_loops,
                 known_keys=known_keys,
-                max_loop_iter=int(getattr(self.study, "max_loop_iter", 8) or 8),
+                max_loop_iter=int(self.study.max_loop_iter),
                 known_questions=set(known_texts),
                 known_hypotheses=known_hyps,
             )
@@ -452,8 +472,8 @@ class LifecycleMixin:
                 catalog=catalog,
                 subquestions=named_subs,
                 rollup=rollup,
-                max_depth=int(getattr(self.study, "max_depth", 8) or 8),
-                max_tasks=int(getattr(self.study, "max_tasks", 64) or 64),
+                max_depth=int(self.study.max_depth),
+                max_tasks=int(self.study.max_tasks),
             )
             assert_decomposes_acyclic(parent_map_from_questions(questions))
             loop_ids = {ls.loop_id for ls in loop_specs}

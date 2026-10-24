@@ -1214,17 +1214,20 @@ async def test_missing_artifact_store_refuses_user_inputs(
 
 def test_api_parse_rejects_raised_limits_as_input_invalid():
     from coscientist.api.studies import parse_create_study_body
+    from tests.helpers import make_create_study_body_dict
 
     profile = InputLimits(max_bytes=1000, max_wire_bytes=10_000)
     parsed = parse_create_study_body(
-        {"request": "q", "input_limits": {"max_bytes": 500}},
+        make_create_study_body_dict(request="q", input_limits={"max_bytes": 500}),
         profile_limits=profile,
     )
     assert parsed[0] is not None
     body, lim = parsed
     assert lim.max_bytes == 500
     none, bad = parse_create_study_body(
-        {"request": "q", "input_limits": {"max_bytes": 10**12}},
+        make_create_study_body_dict(
+            request="q", input_limits={"max_bytes": 10**12}
+        ),
         profile_limits=profile,
     )
     assert none is None and bad[0] == RefusalKind.INPUT_INVALID
@@ -1362,10 +1365,12 @@ async def test_api_corrupt_deflate_study_finalized_not_500(tmp_path, catalog):
 
     from coscientist.api.studies import post_studies
 
+    from tests.helpers import make_create_study_body_dict
+
     data = _corrupt_deflate_zip()
-    body = {
-        "request": "analyse corrupt zip",
-        "inputs": [
+    body = make_create_study_body_dict(
+        request="analyse corrupt zip",
+        inputs=[
             {
                 "name": "c.zip",
                 "content": base64.b64encode(data).decode(),
@@ -1373,7 +1378,7 @@ async def test_api_corrupt_deflate_study_finalized_not_500(tmp_path, catalog):
                 "media_type": "application/zip",
             }
         ],
-    }
+    )
     out = await post_studies(
         tmp_path,
         body,
@@ -1787,11 +1792,13 @@ async def test_api_zip_member_errors_study_finalized_not_500(tmp_path, catalog):
 
     from coscientist.api.studies import post_studies
 
+    from tests.helpers import make_create_study_body_dict
+
     for factory in (_zip_encrypted, _zip_method_99, _zip_corrupt_bzip2_member):
         data = factory()
-        body = {
-            "request": "analyse bad zip",
-            "inputs": [
+        body = make_create_study_body_dict(
+            request="analyse bad zip",
+            inputs=[
                 {
                     "name": "bad.zip",
                     "content": base64.b64encode(data).decode(),
@@ -1799,7 +1806,7 @@ async def test_api_zip_member_errors_study_finalized_not_500(tmp_path, catalog):
                     "media_type": "application/zip",
                 }
             ],
-        }
+        )
         out = await post_studies(
             tmp_path,
             body,

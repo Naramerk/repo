@@ -408,30 +408,23 @@ def claim_nodes_from_attempt(
             "pointer_empty",
         ):
             attrs["exclusion_reason"] = excl
-        # Sole outcome key is claim_outcome (no outcome alias dual-lookup).
-        if "claim_outcome" in core:
-            oc = core["claim_outcome"]
-            if oc is None or oc not in ("consistent", "inconsistent", "indeterminate"):
-                raise JournalFormatError(
-                    "claim claim_outcome required "
-                    f"(consistent|inconsistent|indeterminate), got {oc!r}"
-                )
-        elif "outcome" in core:
+        # Sole outcome key is claim_outcome — never invent from criterion_status.
+        if "outcome" in core and "claim_outcome" not in core:
             raise JournalFormatError(
                 "claim core uses deprecated 'outcome'; require 'claim_outcome'"
             )
-        else:
-            # Derive from required criterion_status when claim_outcome absent.
-            status = str(attrs["criterion_status"])
-            oc = {
-                "met": "consistent",
-                "not_met": "inconsistent",
-                "unassessed": "indeterminate",
-            }.get(status)
-            if oc is None:
-                raise JournalFormatError(
-                    f"claim criterion_status cannot derive outcome: {status!r}"
-                )
+        if "claim_outcome" not in core:
+            raise JournalFormatError(
+                "claim claim_outcome required "
+                "(consistent|inconsistent|indeterminate); "
+                "do not derive from criterion_status"
+            )
+        oc = core["claim_outcome"]
+        if oc is None or oc not in ("consistent", "inconsistent", "indeterminate"):
+            raise JournalFormatError(
+                "claim claim_outcome required "
+                f"(consistent|inconsistent|indeterminate), got {oc!r}"
+            )
         attrs["claim_outcome"] = oc
         # sesoi only from core (catalog-frozen criterion) — never stamp 0.0 freely.
         for num_key in ("p_value", "power", "sesoi", "alpha"):
