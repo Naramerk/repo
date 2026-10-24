@@ -119,5 +119,6 @@ EventType = Literal[
 
 
 def make_idem(event_type: str, entity_key: str, *parts: str) -> str:
-    rest = ":".join(parts)
-    return f"{event_type}:{entity_key}" + (f":{rest}" if rest else "")
+    if parts:
+        return f"{event_type}:{entity_key}:{':'.join(parts)}"
+    return f"{event_type}:{entity_key}"

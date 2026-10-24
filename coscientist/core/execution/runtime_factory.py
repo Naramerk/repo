@@ -31,7 +31,7 @@ async def open_runtime(
     owner: str | None = None,
     clock: Clock | None = None,
     registry: KindRegistry | None = None,
-    acquire: bool = True,
+    acquire: bool | None = None,
     runtime_cls: type[StudyRuntime] | None = None,
     artifacts: Any | None = None,
 ) -> StudyRuntime:
@@ -57,6 +57,12 @@ async def open_runtime(
     """
     if catalog is None:
         raise TypeError("open_runtime requires catalog= (no test-catalog fallback)")
+    if acquire is None:
+        do_acquire = True  # audit-ok: open_runtime default is acquire lease (platform open path)
+    else:
+        do_acquire = acquire
+    if type(do_acquire) is not bool:
+        raise TypeError(f"acquire must be bool, got {type(do_acquire).__name__}")
     cls = runtime_cls or StudyRuntime
     clock = clock or SystemClock()
     owner = owner or new_owner()
@@ -67,10 +73,10 @@ async def open_runtime(
     # Fast path: refuse before taking the lease when the journal is already dirty.
     try:
         reject_open_hitl_if_unsupported(cls, await store.read_all())
-    except BaseException:
+    except BaseException:  # audit-ok: cleanup must run on CancelledError too
         try:
             await store.close()
-        except BaseException:
+        except BaseException:  # audit-ok: never mask original; log close failure
             log.warning("store.close failed during pre-lease cleanup", exc_info=True)
         raise
 
@@ -79,7 +85,7 @@ async def open_runtime(
     # Only release leases this open_runtime call actually acquired (not seeded nonce).
     acquired_here = False
     try:
-        if acquire:
+        if do_acquire:
             task = asyncio.create_task(store.acquire_lease(owner))
             try:
                 await asyncio.shield(task)
@@ -88,9 +94,9 @@ async def open_runtime(
                 # Wait for the worker thread; it may have committed before cancel.
                 try:
                     await task
-                except BaseException:
+                except BaseException:  # audit-ok: drain acquire task; re-raise CancelledError
                     pass
-                acquired_here = store.owner == owner and bool(store.owner_nonce)
+                acquired_here = store.owner == owner and store.owner_nonce is not None
                 raise
 
         # Authoritative read under the lease — never rebuild from the pre-lease snapshot.
@@ -170,31 +176,31 @@ async def open_runtime(
         ensure_core_tools_ready()
         # Open (and finalize) may journal FetchIntegrityRaised; executor reads must not.
         # Never append after StudyFinalized (store would raise StudyClosedError).
-        if not getattr(rt, "_finalized", False):
+        if not rt._finalized:
             try:
                 from coscientist.core.execution.source_fetch import reconcile_fetch_integrity
 
                 await reconcile_fetch_integrity(writer)
             except LeaseLost:
                 raise
-            except Exception:  # noqa: BLE001 — open must stay total
+            except Exception:  # audit-ok: open must stay total; log reconcile failure
                 log.warning("reconcile_fetch_integrity on open failed", exc_info=True)
         return rt
-    except BaseException:
+    except BaseException:  # audit-ok: cleanup must run on CancelledError too
         # Stop the writer first so in-flight appends cannot race release.
         if writer_started and writer is not None:
             try:
                 await writer.stop()
-            except BaseException:
+            except BaseException:  # audit-ok: never mask original on cleanup
                 log.warning("writer.stop failed during open_runtime cleanup", exc_info=True)
         if acquired_here and store.epoch is not None:
             try:
                 await store.release_lease(owner, store.epoch)
-            except BaseException:
+            except BaseException:  # audit-ok: never mask original on cleanup
                 log.warning("release_lease failed during open_runtime cleanup", exc_info=True)
         try:
             await store.close()
-        except BaseException:
+        except BaseException:  # audit-ok: never mask original on cleanup
             log.warning("store.close failed during open_runtime cleanup", exc_info=True)
         raise
 

@@ -564,7 +564,7 @@ def evaluate_code_check(
             "metric_on_holdout",
             "reproducible_rerun",
         ):
-            raise SandboxInfraError(f"sandbox_unavailable:host_io:{e.__class__.__name__}") from e
+            raise SandboxInfraError(f"sandbox_unavailable:host_io:{e.__class__.__name__}", transient=False) from e
         return CheckResult(
             check_id=check_id,
             template_id=template_id,

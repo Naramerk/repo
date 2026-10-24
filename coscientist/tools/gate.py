@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.execution.domain import HitlPolicy
 
 SideEffectDecision = Literal["deny", "allow", "ask"]
@@ -19,9 +20,17 @@ def side_effect_decision(policy: HitlPolicy) -> SideEffectDecision:
     gate = policy.gate("side_effect")
     if gate is None or not gate.enabled:
         return "deny"
-    raw = str(policy.defaults.get("side_effect", "deny")).lower()
+    if "side_effect" not in policy.defaults:
+        raise JournalFormatError("HitlPolicy.defaults missing required side_effect")
+    raw = policy.defaults["side_effect"]
+    if not isinstance(raw, str):
+        raise JournalFormatError(
+            f"HitlPolicy.defaults[side_effect] must be str, got {type(raw).__name__}"
+        )
     if raw not in ("deny", "allow", "ask"):
-        raw = "deny"
+        raise JournalFormatError(
+            f"HitlPolicy.defaults[side_effect] invalid: {raw!r}"
+        )
     decision: SideEffectDecision = raw  # type: ignore[assignment]
     if decision == "ask" and policy.mode in ("headless", "auto"):
         return "deny"

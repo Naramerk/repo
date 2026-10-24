@@ -20,11 +20,25 @@ class CostlyEffect(str, Enum):
     SKIPPED_CRITIC_REJECTED = "SKIPPED(critic_rejected)"
 
 
+def _require_float(value: object, *, what: str) -> float:
+    if type(value) is not float and type(value) is not int:
+        raise TypeError(f"{what} must be int|float, got {type(value).__name__}")
+    return float(value)  # audit-ok: coerce after exact int|float type gate
+
+
+def _require_bool(value: object, *, what: str) -> bool:
+    if type(value) is not bool:
+        raise TypeError(f"{what} must be bool, got {type(value).__name__}")
+    return value
+
+
 class DelegatedBudget:
     """Budget(delegated_costly), ₽: stateful counter; actual spend is debited after each attempt."""
 
     def __init__(self, limit_rub: float) -> None:
-        self.limit_rub, self.spent_rub, self.blocked = float(limit_rub), 0.0, False
+        self.limit_rub = _require_float(limit_rub, what="limit_rub")
+        self.spent_rub = 0.0
+        self.blocked = False
 
     @property
     def remaining_rub(self) -> float:
@@ -52,18 +66,24 @@ class DelegatedBudget:
 
     @classmethod
     def from_state(cls, state: dict[str, Any]) -> DelegatedBudget:
+        if "limit_rub" not in state:
+            raise KeyError("DelegatedBudget state missing limit_rub")
         b = cls(state["limit_rub"])
-        b.spent_rub = float(state.get("spent_rub") or 0.0)
-        b.blocked = bool(state.get("blocked"))
+        if "spent_rub" not in state:
+            raise KeyError("DelegatedBudget state missing spent_rub")
+        if "blocked" not in state:
+            raise KeyError("DelegatedBudget state missing blocked")
+        b.spent_rub = _require_float(state["spent_rub"], what="spent_rub")
+        b.blocked = _require_bool(state["blocked"], what="blocked")
         return b
 
 
 def costly_gate(
     mode: str,
     answer: str | None,
-    cost_estimate_rub: float = 0.0,
-    budget: DelegatedBudget | None = None,
-    critic_accepts: bool = True,
+    cost_estimate_rub: float,
+    budget: DelegatedBudget | None,
+    critic_accepts: bool,
 ) -> tuple[CostlyEffect, dict[str, Any]]:
     """HITL gate costly_or_nonreal. answer: approve | reject | delegate | None (timeout).
 
@@ -73,6 +93,14 @@ def costly_gate(
 
     Returns ``(CostlyEffect, event_dict)``. Unknown outcomes raise.
     """
+    if type(cost_estimate_rub) is not float and type(cost_estimate_rub) is not int:
+        raise TypeError(
+            f"cost_estimate_rub must be int|float, got {type(cost_estimate_rub).__name__}"
+        )
+    if type(critic_accepts) is not bool:
+        raise TypeError(
+            f"critic_accepts must be bool, got {type(critic_accepts).__name__}"
+        )
     if answer in ("approve", "reject"):
         eff = (
             CostlyEffect.RUN
@@ -87,7 +115,12 @@ def costly_gate(
         }
     if mode not in ("fail", "delegate_capped", "delegate"):
         raise ValueError(mode)
-    delegated_by = "human" if answer == "delegate" else "timeout"
+    if answer == "delegate":
+        delegated_by = "human"
+    elif answer is None:
+        delegated_by = "timeout"
+    else:
+        raise ValueError(f"costly_gate unexpected answer={answer!r}")
     if mode == "fail" and answer is None:
         return (
             CostlyEffect.FAILED_HUMAN_TIMEOUT,
@@ -99,7 +132,10 @@ def costly_gate(
             },
         )
     if mode != "delegate":
-        why = "нет бюджета" if budget is None else budget.refuse_reason(cost_estimate_rub)
+        if budget is None:
+            why = "нет бюджета"
+        else:
+            why = budget.refuse_reason(cost_estimate_rub)
         if why:
             ev = {
                 "decided_by": None,

@@ -11,7 +11,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
-from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.errors import JournalFormatError, LeaseLost
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import task_id
 from coscientist.core.events.schema_versions import (
@@ -103,8 +103,8 @@ def parse_plan_n_expansion(
         return None, "malformed_planner_output"
     try:
         req = ExpansionRequest.model_validate(raw)
-    except Exception as e:  # noqa: BLE001 — schema gate
-        return None, f"malformed_planner_output:{type(e).__name__}"
+    except Exception as e:  # audit-ok: pydantic validate → typed refuse detail (never invent request)
+        return None, f"malformed_planner_output:{type(e).__name__}"  # audit-ok: refuse detail, not silent invent
     if not req.tasks:
         return None, "empty_planner_expansion"
     return req, None
@@ -172,21 +172,38 @@ def _agent_quota_ok(runtime: StudyRuntime) -> bool:
     study = runtime.study
     if study is None:
         return False
-    return int(runtime._agent_expansions) < int(study.max_expansions)
+    expansions = runtime._agent_expansions
+    max_exp = study.max_expansions
+    if type(expansions) is not int or type(max_exp) is not int:
+        raise JournalFormatError(
+            "agent_expansions/max_expansions must be exact int "
+            f"(got {type(expansions).__name__}/{type(max_exp).__name__})"
+        )
+    return expansions < max_exp
 
 def _replan_allocate_s(runtime: StudyRuntime) -> float:
     study = runtime.study
     if study is None:
         return 0.0
     now = runtime.clock.now()
-    used = float(runtime._replan_used_s)
-    budget = study.replan_budget_s() - used
+    used = runtime._replan_used_s
+    if type(used) is not float and type(used) is not int:
+        raise JournalFormatError(
+            f"_replan_used_s must be int|float, got {type(used).__name__}"
+        )
+    used_f = float(used)  # audit-ok: coerce after int|float type gate
+    budget = study.replan_budget_s() - used_f
     ed = study.effective_deadline()
     time_left = (ed - now).total_seconds()
     # Refuse negative budgets/time rather than clamping to 0 (fail-closed).
     if budget < 0.0 or time_left < 0.0:
         return 0.0
-    return min(float(study.plan_timeout_s), budget, time_left)
+    timeout = study.plan_timeout_s
+    if type(timeout) is not float and type(timeout) is not int:
+        raise JournalFormatError(
+            f"plan_timeout_s must be int|float, got {type(timeout).__name__}"
+        )
+    return min(float(timeout), budget, time_left)  # audit-ok: coerce after type gate
 
 async def ensure_plan_n_task(
     runtime: StudyRuntime,
@@ -208,7 +225,12 @@ async def ensure_plan_n_task(
     existing_plan_n = sum(
         1 for t in runtime.tasks.values() if task_is_plan_n(t)
     )
-    n = int(runtime._agent_expansions) + existing_plan_n + 1
+    expansions = runtime._agent_expansions
+    if type(expansions) is not int:
+        raise JournalFormatError(
+            f"_agent_expansions must be exact int, got {type(expansions).__name__}"
+        )
+    n = expansions + existing_plan_n + 1
     key = f"PLAN-{n}"
     tid = task_id(sid, key)
     if tid in runtime.tasks:
@@ -275,14 +297,14 @@ async def maybe_expand_after_task_done(runtime: StudyRuntime, task_id_full: str)
         return await _maybe_expand(runtime, task_id_full)
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001 — MJ-c: no silent loss
+    except Exception as e:  # audit-ok: MJ-c expand must not raise out of record/tick; refuse instead
         await refuse_expansion(
             runtime,
             after,
             reason="invalid",
             detail=f"expand_exception:{type(e).__name__}"[:DETAIL_MAX_LEN],
         )
-        return None
+        return None  # audit-ok: paired with refuse_expansion above (MJ-c total path)
 
 async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
     if runtime.study is None or runtime._finalized:
@@ -369,26 +391,27 @@ async def _prevalidate_request(runtime: StudyRuntime, req: ExpansionRequest) -> 
     if isinstance(keyed, str):
         return keyed
     prev = active_plan_blob(runtime)
-    prev_tasks = (
-        [
+    if prev is None:
+        prev_tasks = []  # audit-ok: structural empty = no prior plan (absent)
+        known = {}  # audit-ok: structural empty = no prior questions (absent)
+    else:
+        prev_tasks = [
             TaskSpec.model_validate(t) if isinstance(t, dict) else t
             for t in prev["tasks"]
         ]
-        if prev is not None
-        else []
-    )
-    known: dict[str, str] = {}
-    if prev is not None:
+        known = {}
         for q in prev["questions"]:
             if isinstance(q, dict):
                 if "id" not in q:
                     return "plan_question_missing_id"
-                qid = str(q["id"])
+                qid = q["id"]
+                if not isinstance(qid, str) or not qid:
+                    return "plan_question_id_must_be_nonempty_str"
                 if "text" not in q or not isinstance(q["text"], str):
                     return f"missing_question_text:{qid}"
                 known[qid] = q["text"]
             else:
-                known[str(q.id)] = q.text
+                known[q.id] = q.text
     known.update({q.id: q.text for q in req.questions})
     # Propagate MaxDepthExceeded — caller maps to ExpansionRefused(expansion_limit).
     return validate_expansion(
@@ -481,7 +504,7 @@ async def resume_pending_expansions(runtime: StudyRuntime) -> int:
         if expansion_already_handled(runtime, tkey):
             continue
         req = result_expansion_request(runtime, tid)
-        needs = (req is not None and bool(req.tasks)) or tkey in expand_after_keys(runtime)
+        needs = (req is not None and len(req.tasks) > 0) or tkey in expand_after_keys(runtime)
         if not needs:
             continue
         await maybe_expand_after_task_done(runtime, tid)

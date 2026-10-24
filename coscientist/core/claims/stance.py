@@ -9,7 +9,8 @@ from coscientist.core.events.errors import JournalFormatError
 STANCE = {"met": "supports", "not_met": "refutes", "unassessed": "inconclusive"}
 
 TestsIntent = Literal["confirm", "refute"]
-DEFAULT_TESTS_INTENT: TestsIntent = "confirm"
+# Named export for callers that pass intent= explicitly. Not a silent model field default.
+DEFAULT_TESTS_INTENT = "confirm"
 
 
 def claim_stance(criterion_status: str) -> Literal["supports", "refutes", "inconclusive"]:

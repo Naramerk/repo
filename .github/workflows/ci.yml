@@ -71,6 +71,10 @@ jobs:
       - run: python scripts/gen_model_tables.py --check
       - run: mypy coscientist
       - run: lint-imports
+      # Fail-closed heuristics gate on modules touched vs main (CORE_HEURISTICS_AUDIT.md).
+      # Suppress only with an on-line ``audit-ok: <reason>`` marker.
+      - name: audit heuristics (touched vs main)
+        run: PYTHONPATH=. python scripts/audit_heuristics.py --vs-main --by-rule
       # PYTHONPATH=. so ``import coscientist`` works without an editable install
       # (``python scripts/...`` otherwise puts only ``scripts/`` on sys.path).
       - run: PYTHONPATH=. python scripts/gen_reclassified_fetch_old_journal.py --check

@@ -342,6 +342,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             raise
 
     async def cancel_study(self, by: str = "user") -> None:
+        # Default by="user" is the public StudyRuntime API; cancel_study module requires by=.
         await _cancel_study(self, by=by)
 
     async def note_budget_exceeded(self) -> None:

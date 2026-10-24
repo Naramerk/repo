@@ -40,6 +40,7 @@ from coscientist.core.plan.share_alloc import (
 )
 from coscientist.experimental.costly import CostlyEffect, costly_gate
 from coscientist.experimental.hitl_costly import _decision_for_effect, _skip_reason
+from tests.helpers import make_test_study, default_test_hitl_policy
 
 
 class _RT:
@@ -423,7 +424,7 @@ def test_blocker9_accepted_ok():
 
 
 def test_blocker10_costly_gate_returns_enum():
-    eff, ev = costly_gate("fail", "approve", 0.0, None)
+    eff, ev = costly_gate("fail", "approve", 0.0, None, critic_accepts=True)
     assert eff is CostlyEffect.RUN
     assert ev["decided_by"] == "human"
 
@@ -449,12 +450,12 @@ def test_blocker11_shares_direct_access_for_plan_key():
 
     from coscientist.core.execution.domain import Budget, HitlPolicy, Study, TaskSpec
 
-    study = Study(
+    study = make_test_study(
         study_id="s",
         profile="t",
         request="q",
         catalog_version="1",
-        hitl_policy=HitlPolicy(),
+        hitl_policy=default_test_hitl_policy(),
         created_at=datetime.now(timezone.utc),
         deadline=datetime(2099, 1, 1, tzinfo=timezone.utc),
         budget=Budget(max_cost_rub=Decimal("100")),
@@ -1278,18 +1279,18 @@ def test_loop_state_non_dict_raises():
 def test_hitl_policy_gate_unknown_kind_returns_none():
     from coscientist.core.execution.domain import HitlPolicy
 
-    assert HitlPolicy().gate("not_a_real_gate") is None
+    assert default_test_hitl_policy().gate("not_a_real_gate") is None
 
 
 def test_hitl_policy_gate_plan_plan_approval_alias_removed():
     """gate('plan') must not resolve a plan_approval-only map (and vice versa)."""
     from coscientist.core.execution.domain import GateConfig, HitlPolicy
 
-    only_approval = HitlPolicy(gates={"plan_approval": GateConfig(timeout_s=42)})
+    only_approval = HitlPolicy(gates={"plan_approval": GateConfig(timeout_s=42, on_timeout="delegate")})
     assert only_approval.gate("plan_approval") is not None
     assert only_approval.gate("plan") is None
 
-    only_plan = HitlPolicy(gates={"plan": GateConfig(timeout_s=42)})
+    only_plan = HitlPolicy(gates={"plan": GateConfig(timeout_s=42, on_timeout="delegate")})
     assert only_plan.gate("plan") is not None
     assert only_plan.gate("plan_approval") is None
 
@@ -1345,7 +1346,7 @@ async def test_open_hitl_plan_requires_expand_after_task():
             self.study = SimpleNamespace(
                 study_id="s",
                 hitl_policy=HitlPolicy(
-                    gates={"plan_approval": GateConfig(timeout_s=60)}
+                    gates={"plan_approval": GateConfig(timeout_s=60, on_timeout="delegate")}
                 ),
                 effective_deadline=lambda: now + timedelta(hours=1),
             )
@@ -1661,12 +1662,12 @@ def test_replan_budget_negative_span_raises():
     from coscientist.core.execution.domain import HitlPolicy, Study
 
     now = datetime.now(UTC)
-    s = Study(
+    s = make_test_study(
         study_id="s",
         profile="p",
         request="r",
         catalog_version="1",
-        hitl_policy=HitlPolicy(),
+        hitl_policy=default_test_hitl_policy(),
         deadline=now - timedelta(seconds=10),
         created_at=now,
         finalize_reserve_s=0,

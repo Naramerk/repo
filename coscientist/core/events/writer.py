@@ -30,7 +30,7 @@ class StudyWriter:
         # SourceFetched fold cache (PR14) — study-scoped; typed Any to avoid
         # circular import with source_fetch.SourceFetchIndex.
         self.source_fetch_idx: Any | None = None
-        self.source_fetch_seq: int = 0
+        self.source_fetch_seq = 0
 
     @property
     def depth(self) -> int:
@@ -71,7 +71,7 @@ class StudyWriter:
                 result = await item.coro_factory()
                 if not item.future.done():
                     item.future.set_result(result)
-            except Exception as e:
+            except Exception as e:  # audit-ok: queue worker must set_exception so waiters see all failures
                 if not item.future.done():
                     item.future.set_exception(e)
             finally:
@@ -109,7 +109,7 @@ class StudyWriter:
         _source_fetched_cap_id: str | None = None,
     ) -> list[StoredEvent]:
         for ev in events:
-            if getattr(ev, "type", None) == "SourceFetched":
+            if ev.type == "SourceFetched":
                 # Capability id required; store takes the effects write permit.
                 from coscientist.core.events.errors import ArtifactRejected
 

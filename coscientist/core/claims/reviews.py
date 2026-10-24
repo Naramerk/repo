@@ -58,8 +58,17 @@ def review_key(
     """
     if not task_id or not attempt_id or not output_digest:
         raise ValueError("review_key requires non-empty task_id, attempt_id, output_digest")
+    for name, raw in (
+        ("task_id", task_id),
+        ("attempt_id", attempt_id),
+        ("check_id", check_id),
+        ("item_id", item_id),
+        ("output_digest", output_digest),
+    ):
+        if not isinstance(raw, str):
+            raise TypeError(f"review_key {name} must be str, got {type(raw).__name__}")
     return json.dumps(
-        [str(task_id), str(attempt_id), str(check_id), str(item_id), str(output_digest)],
+        [task_id, attempt_id, check_id, item_id, output_digest],
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -68,16 +77,23 @@ def parse_review_key(key: str) -> dict[str, str] | None:
     try:
         parts = json.loads(key)
     except (TypeError, json.JSONDecodeError):
-        return None
+        return None  # audit-ok: malformed key = absent (caller treats as unknown)
     if not isinstance(parts, list) or len(parts) != 5:
         return None
-    return {
-        "task_id": str(parts[0]),
-        "attempt_id": str(parts[1]),
-        "check_id": str(parts[2]),
-        "item_id": str(parts[3]),
-        "output_digest": str(parts[4]),
-    }
+    out = {}
+    for name, raw in (
+        ("task_id", parts[0]),
+        ("attempt_id", parts[1]),
+        ("check_id", parts[2]),
+        ("item_id", parts[3]),
+        ("output_digest", parts[4]),
+    ):
+        if not isinstance(raw, str):
+            raise JournalFormatError(
+                f"review_key field {name} must be str, got {type(raw).__name__}"
+            )
+        out[name] = raw
+    return out
 
 def plan_refused_idem(study_id: str, detail: str) -> str:
     """Idem key for PlanRefused: sid + sha256(**full** detail)."""
@@ -99,7 +115,12 @@ def resolve_review_status(
         return ReqStatus.UNASSESSED, prior_retries + 1, failure_kind
     if status is None:
         raise ValueError("record_review requires status or failure_kind")
-    st = status if isinstance(status, ReqStatus) else ReqStatus(str(status))
+    if isinstance(status, ReqStatus):
+        st = status
+    elif isinstance(status, str):
+        st = ReqStatus(status)
+    else:
+        raise TypeError(f"status must be ReqStatus|str, got {type(status).__name__}")
     return st, prior_retries, None
 
 def review_scheduled_events(
@@ -112,7 +133,7 @@ def review_scheduled_events(
     now: Any,
 ) -> list[EventEnvelope]:
     """Emit ReviewScheduled per pending/unassessed judge item (and whole ReviewChecks)."""
-    events: list[EventEnvelope] = []
+    events = []
     seen: set[str] = set()
     for c in checks:
         effect = c.effect
@@ -146,11 +167,20 @@ def review_scheduled_events(
                 st_s = st.value if isinstance(st, ReqStatus) else st
                 if st_s != ReqStatus.PENDING.value and item_id not in pending:
                     continue
+                check_id = c.check_id
+                if not isinstance(check_id, str):
+                    raise JournalFormatError(
+                        f"check_id must be str, got {type(check_id).__name__}"
+                    )
+                if not isinstance(item_id, str):
+                    raise JournalFormatError(
+                        f"item_id must be str, got {type(item_id).__name__}"
+                    )
                 key = review_key(
                     task_id=task_id,
                     attempt_id=attempt_id,
-                    check_id=str(c.check_id),
-                    item_id=str(item_id),
+                    check_id=check_id,
+                    item_id=item_id,
                     output_digest=output_digest,
                 )
                 if key in seen:
@@ -164,8 +194,8 @@ def review_scheduled_events(
                         idem_key=make_idem("ReviewScheduled", attempt_id, key),
                         payload={
                             "review_key": key,
-                            "check_id": str(c.check_id),
-                            "item_id": str(item_id),
+                            "check_id": check_id,
+                            "item_id": item_id,
                             "attempt_id": attempt_id,
                             "task_id": task_id,
                             "output_digest": output_digest,
@@ -178,17 +208,22 @@ def review_scheduled_events(
                         },
                         ts=now,
                         schema_version=writer_schema_version('ReviewScheduled'),
-)
+                    )
                 )
             continue
         if not c.is_code and c.status in (
             ReqStatus.UNASSESSED,
             ReqStatus.PENDING,
         ):
+            check_id = c.check_id
+            if not isinstance(check_id, str):
+                raise JournalFormatError(
+                    f"check_id must be str, got {type(check_id).__name__}"
+                )
             key = review_key(
                 task_id=task_id,
                 attempt_id=attempt_id,
-                check_id=str(c.check_id),
+                check_id=check_id,
                 item_id="",
                 output_digest=output_digest,
             )
@@ -203,7 +238,7 @@ def review_scheduled_events(
                     idem_key=make_idem("ReviewScheduled", attempt_id, key),
                     payload={
                         "review_key": key,
-                        "check_id": str(c.check_id),
+                        "check_id": check_id,
                         "item_id": "",
                         "attempt_id": attempt_id,
                         "task_id": task_id,
@@ -212,7 +247,7 @@ def review_scheduled_events(
                     },
                     ts=now,
                     schema_version=writer_schema_version('ReviewScheduled'),
-)
+                )
             )
     return events
 
@@ -250,11 +285,11 @@ def rebuild_judge_state(
     Only judge-path events: ``ResultPending``, ``ReviewRecorded``,
     ``ResultRecorded``, ``AttemptClosed``. ``RouteReturned`` is ignored.
     """
-    review_statuses: dict[str, ReqStatus] = {}
-    judge_retry: dict[str, int] = {}
-    failure_kinds: dict[str, str] = {}
-    pending_digests: dict[str, str] = {}
-    closed: set[str] = set()
+    review_statuses = {}
+    judge_retry = {}
+    failure_kinds = {}
+    pending_digests = {}
+    closed = set()
 
     for ev in events:
         if not isinstance(ev, EventEnvelope):
@@ -291,10 +326,9 @@ def rebuild_judge_state(
                     )
             retry = p.get("retry")
             if retry is not None:
-                try:
-                    judge_retry[key] = int(retry)
-                except (TypeError, ValueError) as e:
-                    raise JudgePendingCorrupt(f"retry_corrupt:{key}:{retry!r}") from e
+                if type(retry) is not int:
+                    raise JudgePendingCorrupt(f"retry_corrupt:{key}:{retry!r}")
+                judge_retry[key] = retry
             fk = p.get("failure_kind")
             if fk is not None:
                 if not isinstance(fk, str) or not fk:
@@ -310,8 +344,8 @@ def rebuild_judge_state(
             closed.add(aid)
             pending_digests.pop(aid, None)
 
-    pending_outputs: dict[str, AgentTaskOutput] = {}
-    digests: dict[str, str] = {}
+    pending_outputs = {}
+    digests = {}
     for aid, dig in pending_digests.items():
         if aid in closed:
             continue
@@ -325,8 +359,12 @@ def apply_judge_journal(executor: Any, events: list[Any]) -> None:
     Raises ``JudgePendingCorrupt`` when a pending digest cannot be loaded —
     callers must finalize the study as an honest internal error (no hang).
     """
+    try:
+        artifacts = executor.artifacts
+    except AttributeError:
+        artifacts = None
     statuses, retries, kinds, pending, digests = rebuild_judge_state(
-        events, artifacts=getattr(executor, "artifacts", None)
+        events, artifacts=artifacts
     )
     executor.review_statuses = statuses
     executor.judge_retry = retries

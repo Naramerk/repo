@@ -45,7 +45,7 @@ def plan_graph_events(
     delegated_by: DelegatedBy,
     now: Any,
 ) -> list[EventEnvelope]:
-    events: list[EventEnvelope] = []
+    events = []
     pnid = plan_node_id(sid, pid)
     attrs: dict[str, Any] = {"revision": new_rev, "origin": origin}
     if delegated_by:
@@ -115,15 +115,19 @@ def plan_graph_events(
 
 def _decomposes_parent_map(runtime: StudyRuntime) -> dict[str, str | None]:
     """Existing decomposes edges as question_id → parent_id (plus known roots)."""
-    parent_of: dict[str, str | None] = {}
+    parent_of = {}
 
     def _qid(node_id: str, node: Any) -> str:
         if node is None:
             raise ValueError(f"decomposes node missing for {node_id!r}")
         ref = node.ref_id
-        if not ref:
-            raise ValueError(f"question node {node_id!r} missing required ref_id")
-        return str(ref)
+        if not isinstance(ref, str) or not ref:
+            raise ValueError(f"question node {node_id!r} missing required ref_id str")
+        return ref
+
+    def _ensure_root(qid: str) -> None:
+        if qid not in parent_of:
+            parent_of[qid] = None  # audit-ok: structural None = root (no parent edge)
 
     for e in runtime.graph.all_edges():
         if e.kind != "decomposes":
@@ -131,12 +135,12 @@ def _decomposes_parent_map(runtime: StudyRuntime) -> dict[str, str | None]:
         child = _qid(e.src_id, runtime.graph.get_node(e.src_id))
         parent = _qid(e.dst_id, runtime.graph.get_node(e.dst_id))
         parent_of[child] = parent
-        parent_of.setdefault(parent, None)
+        _ensure_root(parent)
     for n in runtime.graph.nodes_by_kind("question"):
-        qid = str(n.ref_id)
-        if not qid:
-            raise ValueError(f"question node {n.node_id!r} missing required ref_id")
-        parent_of.setdefault(qid, None)
+        qid = n.ref_id
+        if not isinstance(qid, str) or not qid:
+            raise ValueError(f"question node {n.node_id!r} missing required ref_id str")
+        _ensure_root(qid)
     return parent_of
 
 def question_graph_events(
@@ -149,7 +153,7 @@ def question_graph_events(
     known_texts: dict[str, str],
     now: Any,
 ) -> list[EventEnvelope]:
-    events: list[EventEnvelope] = []
+    events = []
     from coscientist.core.plan.decomposes import assert_decomposes_acyclic
 
     # Full tree (existing edges + edges in this batch) — not just the new self-pair.
@@ -176,17 +180,31 @@ def question_graph_events(
                 schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                 )
         )
-        parent = getattr(q, "parent_id", None)
+        parent = q.parent_id
         if parent:
             # Acyclicity on every decomposes write (DESIGN_M1 §10).
-            q_origin = getattr(q, "origin", None)
-            edge_origin = (
-                q_origin if q_origin in ("explicit", "implicit", "emergent") else "emergent"
-            )
-            parent_of[q.id] = str(parent)
-            parent_of.setdefault(str(parent), None)
+            q_origin = q.origin
+            if q_origin is None:
+                raise JournalFormatError(
+                    f"question {q.id!r} with parent_id requires origin"
+                )
+            if isinstance(q_origin, str):
+                edge_origin = q_origin
+            else:
+                edge_origin = q_origin.value
+            if edge_origin not in ("explicit", "implicit", "emergent"):
+                raise JournalFormatError(
+                    f"question {q.id!r} invalid origin {edge_origin!r}"
+                )
+            if not isinstance(parent, str) or not parent:
+                raise JournalFormatError(
+                    f"question {q.id!r} parent_id must be nonempty str"
+                )
+            parent_of[q.id] = parent
+            if parent not in parent_of:
+                parent_of[parent] = None  # audit-ok: structural None = root (absent parent)
             assert_decomposes_acyclic(parent_of)
-            pn = question_node_id(sid, str(parent))
+            pn = question_node_id(sid, parent)
             eid = f"decomposes:{qnid}:{pn}"
             events.append(
                 EventEnvelope(
@@ -278,30 +296,45 @@ def skip_superseded_task_events(
     superseded_tasks: list[str],
     now: Any,
 ) -> list[EventEnvelope]:
-    events: list[EventEnvelope] = []
+    events = []
     for tkey in superseded_tasks:
         tid = task_id(sid, tkey)
         task = runtime.tasks.get(tid)
         if task is None or task.state == TaskState.DONE:
             continue
         for aid in task.attempts:
-            if not runtime.attempts.get(aid, {}).get("closed"):
-                events.append(
-                    EventEnvelope(
-                        study_id=sid,
-                        type="AttemptClosed",
-                        entity_key=aid,
-                        idem_key=make_idem("AttemptClosed", aid, CloseReason.CANCELLED.value),
-                        payload={
-                            "attempt_id": aid,
-                            "closed": True,
-                            "close_reason": CloseReason.CANCELLED.value,
-                            "task_id": tid,
-                        },
-                        ts=now,
-                        schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
-)
+            attempt = runtime.attempts.get(aid)
+            if attempt is None:
+                raise JournalFormatError(
+                    f"attempt {aid!r} missing from runtime.attempts"
                 )
+            if "closed" not in attempt:
+                raise JournalFormatError(
+                    f"attempt {aid!r} missing required closed field"
+                )
+            closed = attempt["closed"]
+            if not isinstance(closed, bool):
+                raise JournalFormatError(
+                    f"attempt {aid!r} closed must be bool, got {type(closed).__name__}"
+                )
+            if closed:
+                continue
+            events.append(
+                EventEnvelope(
+                    study_id=sid,
+                    type="AttemptClosed",
+                    entity_key=aid,
+                    idem_key=make_idem("AttemptClosed", aid, CloseReason.CANCELLED.value),
+                    payload={
+                        "attempt_id": aid,
+                        "closed": True,
+                        "close_reason": CloseReason.CANCELLED.value,
+                        "task_id": tid,
+                    },
+                    ts=now,
+                    schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
+                )
+            )
         events.append(
             EventEnvelope(
                 study_id=sid,

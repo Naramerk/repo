@@ -43,7 +43,13 @@ from coscientist.core.plan.shares import (
     validate_deadline_shares,
     validate_plan_shares,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime, open_runtime_experimental
+from tests.helpers import (
+    attach_executor,
+    close_runtime,
+    default_test_hitl_policy,
+    open_runtime,
+    open_runtime_experimental,
+)
 
 
 def _exp(key: str, *, depends_on: list[str] | None = None, **kw) -> TaskSpec:
@@ -427,7 +433,7 @@ async def _boot_hitl_budget(tmp_path, clock, sid: str):
         finalize_reserve_s=30,
         sid=sid,
         replan_reserve=0.0,
-        hitl_policy=HitlPolicy(mode="interactive"),
+        hitl_policy=default_test_hitl_policy(mode="interactive"),
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -782,7 +788,7 @@ async def test_debit_cost_rub_on_every_result_path(tmp_path, clock, monkeypatch,
         monkeypatch.setattr(
             "coscientist.core.execution.executor.evaluate_task_checks",
             lambda *a, **k: (_ for _ in ()).throw(
-                SandboxInfraError("sandbox_unavailable:host")
+                SandboxInfraError("sandbox_unavailable:host", transient=False)
             ),
         )
     elif path == "core_bug":

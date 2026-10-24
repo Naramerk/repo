@@ -21,7 +21,8 @@ Upcaster = Callable[[dict[str, Any]], dict[str, Any]]
 DictRowMutator = Callable[[dict[str, Any]], dict[str, Any]]
 
 # type -> version -> function that upgrades payload from version to version+1
-UPCASTERS: dict[str, dict[int, Upcaster]] = {}
+UPCASTERS: dict[str, dict[int, Upcaster]]
+UPCASTERS = {}
 
 
 def register_upcaster(event_type: str, from_version: int, fn: Upcaster) -> None:
@@ -31,7 +32,10 @@ def register_upcaster(event_type: str, from_version: int, fn: Upcaster) -> None:
             f"register_upcaster {event_type!r}: from_version must be int >= 1, "
             f"got {from_version!r}"
         )
-    bucket = UPCASTERS.setdefault(event_type, {})
+    bucket = UPCASTERS.get(event_type)
+    if bucket is None:
+        bucket = {}
+        UPCASTERS[event_type] = bucket
     if from_version in bucket:
         raise ValueError(
             f"duplicate upcaster for {event_type!r} from_version={from_version}"
@@ -98,7 +102,7 @@ def map_spec_dict_list(
     rows = out.get(field)
     if not isinstance(rows, list):
         return out
-    rewritten: list[Any] = []
+    rewritten = []
     for item in rows:
         if isinstance(item, dict):
             rewritten.append(mutate(dict(item)))
@@ -154,7 +158,9 @@ def upcast(
         )
 
     data = dict(payload)
-    bucket = UPCASTERS.get(event_type) or {}
+    bucket = UPCASTERS.get(event_type)
+    if bucket is None:
+        bucket = {}
     while version < writer:
         fn = bucket.get(version)
         if fn is None:

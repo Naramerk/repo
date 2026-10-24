@@ -103,26 +103,27 @@ def critic_gate(
             if tmpl.kind == TemplateKind.PLAN_N_CRITIC:
                 return f"forbidden_plan_expansion_marker:{spec.task_key}"
     prev = active_plan_blob(runtime)
-    prev_tasks = (
-        [
+    if prev is None:
+        prev_tasks = []  # audit-ok: structural empty = no prior plan (absent)
+        known = {}  # audit-ok: structural empty = no prior questions (absent)
+    else:
+        prev_tasks = [
             TaskSpec.model_validate(t) if isinstance(t, dict) else t
             for t in prev["tasks"]
         ]
-        if prev is not None
-        else []
-    )
-    known: dict[str, str] = {}
-    if prev is not None:
+        known = {}
         for q in prev["questions"]:
             if isinstance(q, dict):
                 if "id" not in q:
                     return "plan_question_missing_id"
-                qid = str(q["id"])
+                qid = q["id"]
+                if not isinstance(qid, str) or not qid:
+                    return "plan_question_id_must_be_nonempty_str"
                 if "text" not in q or not isinstance(q["text"], str):
                     return f"missing_question_text:{qid}"
                 known[qid] = q["text"]
             else:
-                known[str(q.id)] = q.text
+                known[q.id] = q.text
     known.update({q.id: q.text for q in req.questions})
     # PR12: agents cannot raise their own budget_share (before Σ validation).
     from coscientist.core.plan.shares import agent_raises_budget_share
@@ -147,7 +148,14 @@ def critic_gate(
     )
     if err is not None:
         return err
-    if int(runtime._agent_expansions) >= int(study.max_expansions):
+    expansions = runtime._agent_expansions
+    max_exp = study.max_expansions
+    if type(expansions) is not int or type(max_exp) is not int:
+        raise JournalFormatError(
+            "agent_expansions/max_expansions must be exact int "
+            f"(got {type(expansions).__name__}/{type(max_exp).__name__})"
+        )
+    if expansions >= max_exp:
         return "agent_quota"
     # No refutation escape (MJ-b).
     for s in req.superseded_questions:

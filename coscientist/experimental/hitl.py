@@ -452,7 +452,7 @@ class HitlForkMixin(CostlyHitlMixin):
 
     async def _hitl_timeout(self, h: HitlRequest) -> None:
         if h.kind == "costly_or_nonreal":
-            await self._apply_costly_or_nonreal(h, answer=None)
+            await self._apply_costly_or_nonreal(h, answer=None, critic_accepts=True)
             return
         # PR20: HITL timeout on proposed_check ≡ reject (StudyFinalized still runs).
         # Must take the same per-proposal lock as answer_hitl — otherwise timeout can

@@ -14,7 +14,7 @@ import pytest
 ])
 def test_costly_gate_modes(impl, mode, answer, cost, limit, effect, by, msg):
     budget = None if limit is None else impl.DelegatedBudget(limit)
-    eff, ev = impl.costly_gate(mode, answer, cost, budget)
+    eff, ev = impl.costly_gate(mode, answer, cost, budget, critic_accepts=True)
     assert eff == effect and ev["decided_by"] == by and ev["reason"]
     assert ev.get("human_message") == msg
     if eff == "RUN" and by == "critic":
@@ -25,18 +25,18 @@ def test_costly_gate_modes(impl, mode, answer, cost, limit, effect, by, msg):
 
 def test_delegated_budget_counter(impl):
     b = impl.DelegatedBudget(1000)
-    eff, ev = impl.costly_gate("fail", "delegate", 400, b)
+    eff, ev = impl.costly_gate("fail", "delegate", 400, b, critic_accepts=True)
     assert eff == "RUN" and ev["delegated_by"] == "human"
     impl.settle(ev, b, 300)                                          # actual debited, not estimate
     assert (b.spent_rub, b.remaining_rub, ev["spent_rub"]) == (300, 700, 300)
-    eff, ev = impl.costly_gate("fail", "delegate", 800, b)
+    eff, ev = impl.costly_gate("fail", "delegate", 800, b, critic_accepts=True)
     assert eff == "WAIT" and ev["human_message"] == "превышает остаток"
-    eff, ev = impl.costly_gate("fail", "delegate", 200, b)
+    eff, ev = impl.costly_gate("fail", "delegate", 200, b, critic_accepts=True)
     impl.settle(ev, b, 350)                                          # overspend: actual > estimate
     assert b.blocked and b.remaining_rub == 350
-    eff, ev = impl.costly_gate("fail", "delegate", 10, b)
+    eff, ev = impl.costly_gate("fail", "delegate", 10, b, critic_accepts=True)
     assert eff == "WAIT" and ev["reason"] == "delegation_disabled" and "перерасход" in ev["human_message"]
-    assert impl.costly_gate("fail", None, 10, b)[0] == "FAILED(human_timeout)"
+    assert impl.costly_gate("fail", None, 10, b, critic_accepts=True)[0] == "FAILED(human_timeout)"
 
 
 @pytest.mark.asyncio

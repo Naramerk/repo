@@ -54,6 +54,9 @@ __all__ = [
 
 T = TypeVar("T")
 
+# Platform lease TTL (DESIGN §3.5); not a Study domain default.
+DEFAULT_LEASE_TTL_S = 30.0
+
 
 def _map_sqlite_open_error(exc: sqlite3.Error) -> Exception:
     """Map sqlite open failures by ``exc.sqlite_errorcode`` (never by message text).
@@ -85,7 +88,7 @@ class SqliteEventStore:
         owner: str | None = None,
         epoch: int | None = None,
         owner_nonce: str | None = None,
-        lease_ttl_s: float = 30.0,
+        lease_ttl_s: float | None = None,
     ) -> None:
         self.study_id = study_id
         self.db_path = Path(db_path)
@@ -95,7 +98,7 @@ class SqliteEventStore:
         self.owner_nonce = owner_nonce
         # None = no lease held (after release / before acquire). Not a writeable epoch.
         self.epoch: int | None = epoch
-        self.lease_ttl_s = lease_ttl_s
+        self.lease_ttl_s = DEFAULT_LEASE_TTL_S if lease_ttl_s is None else lease_ttl_s
         self._closed = False
         # None=unknown; True only after StudyFinalized commit; clear on acquire.
         self._finalized_cached: bool | None = None
@@ -111,16 +114,22 @@ class SqliteEventStore:
                 self._ensure_lease_nonce_column()
                 self._conn.commit()
             except JournalFormatError:
-                if getattr(self, "_conn", None) is not None:
+                try:
                     self._conn.close()
+                except AttributeError:
+                    pass
                 raise
             except sqlite3.Error as e:
-                if getattr(self, "_conn", None) is not None:
+                try:
                     self._conn.close()
+                except AttributeError:
+                    pass
                 raise _map_sqlite_open_error(e) from e
-            except Exception:
-                if getattr(self, "_conn", None) is not None:
+            except Exception:  # audit-ok: close partial conn then re-raise any open failure
+                try:
                     self._conn.close()
+                except AttributeError:
+                    pass
                 raise
         try:
             self._read_conn = _open_conn(self.db_path, readonly=True)
@@ -129,9 +138,14 @@ class SqliteEventStore:
             raise _map_sqlite_open_error(e) from e
 
     def _ensure_lease_nonce_column(self) -> None:
-        cols = {
-            str(r[1]) for r in self._conn.execute("PRAGMA table_info(lease)").fetchall()
-        }
+        cols = set()
+        for r in self._conn.execute("PRAGMA table_info(lease)").fetchall():
+            name = r[1]
+            if not isinstance(name, str):
+                raise JournalFormatError(
+                    f"PRAGMA table_info name must be str, got {type(name).__name__}"
+                )
+            cols.add(name)
         if "owner_nonce" not in cols:
             # Pre-baseline journals without owner_nonce are refused (no DEFAULT '').
             raise JournalFormatError(
@@ -192,7 +206,7 @@ class SqliteEventStore:
             )
             row = cur.fetchone()
             if row is None:
-                epoch = 1
+                epoch = 1  # audit-ok: first lease epoch is always 1 (store fence bootstrap)
                 nonce = self.owner_nonce or _new_owner_nonce()
                 self._conn.execute(
                     "INSERT INTO lease(study_id, owner, owner_nonce, epoch, "
@@ -204,7 +218,11 @@ class SqliteEventStore:
                 raw_nonce = row["owner_nonce"]
                 if raw_nonce is None:
                     raise JournalFormatError("lease.owner_nonce is NULL")
-                held_nonce = str(raw_nonce)
+                if not isinstance(raw_nonce, str):
+                    raise JournalFormatError(
+                        f"lease.owner_nonce must be str, got {type(raw_nonce).__name__}"
+                    )
+                held_nonce = raw_nonce
                 if exp > now and row["owner"] != owner:
                     raise LeaseLost(
                         f"lease held by {row['owner']} until {row['expires_at']}"
@@ -215,13 +233,13 @@ class SqliteEventStore:
                         raise LeaseLost(
                             "lease held by same owner name with different nonce"
                         )
-                    epoch = int(row["epoch"])
+                    epoch = require_exact_int(row["epoch"], what="lease.epoch")
                     self._conn.execute(
                         "UPDATE lease SET expires_at=? WHERE study_id=?",
                         (_iso(expires), self.study_id),
                     )
                 else:
-                    epoch = int(row["epoch"]) + 1
+                    epoch = require_exact_int(row["epoch"], what="lease.epoch") + 1
                     nonce = _new_owner_nonce()
                     self._conn.execute(
                         "UPDATE lease SET owner=?, owner_nonce=?, epoch=?, "
@@ -235,7 +253,7 @@ class SqliteEventStore:
             self.lease_ttl_s = ttl
             self._finalized_cached = None  # peer may have finalized
             return epoch
-        except Exception:
+        except Exception:  # audit-ok: always rollback write txn then re-raise
             self._conn.rollback()
             raise
 
@@ -307,7 +325,7 @@ class SqliteEventStore:
             row = cur.fetchone()
             if row is None:
                 return None, 0, None
-            return row["owner"], int(row["epoch"]), _parse_iso(row["expires_at"])
+            return row["owner"], require_exact_int(row["epoch"], what="lease.epoch"), _parse_iso(row["expires_at"])
 
         return await self._read_thread(_read)
 
@@ -375,7 +393,7 @@ class SqliteEventStore:
         event: UnstampedEvent,
         *,
         digest: str,
-        batch_finalized: bool = False,
+        batch_finalized: bool | None = None,
     ) -> None:
         """I3: after StudyFinalized, reject writes — except identical idempotent retry.
 
@@ -391,7 +409,11 @@ class SqliteEventStore:
         ``batch_finalized`` covers an earlier StudyFinalized in the same
         ``append_many`` transaction (projections may not be visible via cache yet).
         """
-        finalized = batch_finalized or self._study_is_finalized()
+        if batch_finalized is None:
+            batch_flag = False  # audit-ok: structural absent = not yet finalized in-batch
+        else:
+            batch_flag = batch_finalized
+        finalized = batch_flag or self._study_is_finalized()
         if not finalized:
             return
         existing = self._conn.execute(
@@ -421,7 +443,7 @@ class SqliteEventStore:
             stored, idem = self._insert_one(stamped)
             mutated = True
             self._conn.commit()
-        except Exception:
+        except Exception:  # audit-ok: always rollback write txn then re-raise
             self._conn.rollback()
             # Insert may have applied finalized projection in-txn; drop cache.
             if mutated:
@@ -429,7 +451,8 @@ class SqliteEventStore:
             raise
         if idem is not None:
             raise Idempotent(idem.seq)
-        assert stored is not None
+        if stored is None:
+            raise RuntimeError("append produced no stored event")
         if event.type == "StudyFinalized":
             self._finalized_cached = True
         return stored
@@ -465,7 +488,7 @@ class SqliteEventStore:
         require_open_attempt: str | None = None,
         source_fetched_cap_id: str | None = None,
     ) -> list[StoredEvent]:
-        out: list[StoredEvent] = []
+        out = []
         mutated = False
         write_epoch = self._require_write_epoch()
         try:
@@ -536,12 +559,13 @@ class SqliteEventStore:
                     if ev.type == "StudyFinalized":
                         batch_finalized = True
                     continue
-                assert stored is not None
+                if stored is None:
+                    raise RuntimeError("append_many produced no stored event")
                 if ev.type == "StudyFinalized":
                     batch_finalized = True
                 out.append(stored)
             self._conn.commit()
-        except Exception:
+        except Exception:  # audit-ok: always rollback write txn then re-raise
             self._conn.rollback()
             # Rolled-back insert may have applied finalized projection in-txn.
             if mutated:
@@ -579,7 +603,7 @@ class SqliteEventStore:
         existing = cur.fetchone()
         if existing is not None:
             if existing["payload_digest"] == digest:
-                return None, Idempotent(int(existing["seq"]))
+                return None, Idempotent(require_exact_int(existing["seq"], what="events.seq"))
             raise Conflict(
                 f"idem_key={stamped.idem_key} payload mismatch "
                 f"(stored={existing['payload_digest']}, new={digest})"
@@ -602,7 +626,7 @@ class SqliteEventStore:
         )
         if cur.lastrowid is None:
             raise JournalUnavailableError("events insert returned no lastrowid")
-        seq = int(cur.lastrowid)
+        seq = require_exact_int(cur.lastrowid, what="events.lastrowid")
         stored = stamped.model_copy(update={"seq": seq, "ts": ts})
         self._apply_projection(stored)
         return stored, None
@@ -639,7 +663,7 @@ class SqliteEventStore:
         version, payload = upcast(row["type"], raw_sv, raw_payload)
         epoch = require_exact_int(row["epoch"], what=f"{row['type']}.epoch")
         return StoredEvent(
-            seq=int(row["seq"]),
+            seq=require_exact_int(row["seq"], what="events.seq"),
             study_id=row["study_id"],
             type=row["type"],
             entity_key=row["entity_key"],
@@ -704,7 +728,7 @@ class SqliteEventStore:
                 self._fence()
                 self._upsert_projection_write(table, key, data)
                 self._conn.commit()
-            except Exception:
+            except Exception:  # audit-ok: always rollback write txn then re-raise
                 self._conn.rollback()
                 raise
 

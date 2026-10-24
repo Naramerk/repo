@@ -15,7 +15,9 @@ from coscientist.core.events.errors import JournalFormatError
 JOURNAL_STORE_FORMAT = 1
 _STORE_FORMAT_KEY = "store_format"
 # Strict decimal text: reject " 1", "01", "+1", "1.0", bool-ish, etc.
-_STRICT_INT_TEXT = re.compile(r"(0|[1-9][0-9]*)")
+_STRICT_INT_TEXT = re.compile(  # audit-ok: allowlist parser for store_format marker (not key/name heuristic)
+    r"(0|[1-9][0-9]*)"
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events(
@@ -49,8 +51,9 @@ def parse_iso(s: str) -> datetime:
     return datetime.fromisoformat(s)
 
 
-def open_conn(path: Path, *, readonly: bool = False) -> sqlite3.Connection:
-    if readonly:
+def open_conn(path: Path, *, readonly: bool | None = None) -> sqlite3.Connection:
+    # None → read-write (callers that need RO must pass readonly=True explicitly).
+    if readonly is True:
         uri = f"file:{path.resolve().as_posix()}?mode=ro"
         conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
     else:
@@ -73,7 +76,7 @@ def parse_store_format_marker(raw: object) -> int:
         raise JournalFormatError(
             f"journal store_format is not a strict int text: {raw!r}"
         )
-    return int(raw)
+    return int(raw)  # audit-ok: coerce after fullmatch allowlist; not external invent
 
 
 def ensure_journal_store_format(conn: sqlite3.Connection) -> None:

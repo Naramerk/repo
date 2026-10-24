@@ -33,7 +33,7 @@ def _make_issued_registry() -> tuple[
     Any, Any, Any
 ]:
     """Closure-cell registry — not a module attribute named ``_issued``."""
-    data: dict[str, str] = {}
+    data = {}
 
     def put(nonce: str, token: str) -> None:
         data[nonce] = token
@@ -90,19 +90,21 @@ def put_user(
     name: str,
     media_type: str,
     schema_ref: str | None = None,
-    role: str = "data",
-    attempt_closed: bool = False,
+    attempt_closed: bool,
 ) -> Artifact:
     """Store user study **task data** (``producer=user``, forced ``role=data``).
 
     Requires a live ``UserPutCapability`` and no attempt frame (no taint
     laundering). Quote sources use ``put_fetched`` / ``SourceFetched`` only.
     """
+    if type(attempt_closed) is not bool:
+        raise TypeError(
+            f"attempt_closed must be bool, got {type(attempt_closed).__name__}"
+        )
     if not verify_user_put_capability(capability):
         raise ArtifactRejected("user_put_capability_required")
     if attempt_active():
         raise ArtifactRejected("put_user_requires_ingest_scope")
-    _ = role  # forced data — client must not pick paper/figure
     return store._store(
         content,
         produced_by,
@@ -150,26 +152,54 @@ def register_user_input_artifacts(
             "user_put_capability_required",
             kind=RefusalKind.INPUT_INVALID,
         )
-    assert isinstance(capability, UserPutCapability)
-    if artifacts is None or not hasattr(artifacts, "_store"):
+    if type(capability) is not UserPutCapability:
+        raise UserInputRegistrationError(
+            "user_put_capability_required",
+            kind=RefusalKind.INPUT_INVALID,
+        )
+    if artifacts is None:
         raise UserInputRegistrationError(
             "artifact_store_unavailable",
             kind=RefusalKind.INPUT_INVALID,
         )
-    ids: list[str] = []
-    events: list[Any] = []
+    try:
+        store_fn = artifacts._store
+    except AttributeError as e:
+        raise UserInputRegistrationError(
+            "artifact_store_unavailable",
+            kind=RefusalKind.INPUT_INVALID,
+        ) from e
+    if not callable(store_fn):
+        raise UserInputRegistrationError(
+            "artifact_store_unavailable",
+            kind=RefusalKind.INPUT_INVALID,
+        )
+    ids = []
+    events = []
     for i, raw in enumerate(inputs):
         try:
             inp = coerce_user_input(raw)
             data = decode_user_content(inp)
-        except Exception as e:  # noqa: BLE001 — decode/validate → refuse
-            name = getattr(raw, "name", None) or (
-                raw.get("name") if isinstance(raw, dict) else f"idx{i}"
-            )
+        except (TypeError, ValueError, KeyError, AttributeError) as e:
+            if isinstance(raw, dict):
+                if "name" not in raw:
+                    name = f"idx{i}"
+                else:
+                    name = raw["name"]
+            else:
+                try:
+                    name = raw.name
+                except AttributeError:
+                    name = f"idx{i}"
             raise UserInputRegistrationError(
                 f"decode_error:{type(e).__name__}:{name}",
                 kind=RefusalKind.INPUT_INVALID,
             ) from e
+        if not inp.media_type:
+            raise UserInputRegistrationError(
+                f"media_type_required:{inp.name}",
+                kind=RefusalKind.INPUT_INVALID,
+            )
         ref = make_tool_ref(
             call_id=f"user-input:{study_id}:{i}:{inp.name}",
             tool="user_input",
@@ -182,10 +212,10 @@ def register_user_input_artifacts(
                 ref,
                 capability=capability,
                 name=inp.name,
-                media_type=inp.media_type or "application/octet-stream",
-                role="data",
+                media_type=inp.media_type,
+                attempt_closed=False,
             )
-        except Exception as e:  # noqa: BLE001 — store deny/IO → refuse
+        except (ArtifactRejected, OSError, TypeError, ValueError) as e:
             raise UserInputRegistrationError(
                 f"put_user_failed:{type(e).__name__}:{inp.name}",
                 kind=RefusalKind.INPUT_INVALID,

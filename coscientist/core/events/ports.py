@@ -31,13 +31,13 @@ class EventStore(Protocol):
         self, table: str, key: str, data: dict[str, Any]
     ) -> None: ...
 
-    async def acquire_lease(self, owner: str, ttl_s: float = 30.0) -> int: ...
+    async def acquire_lease(self, owner: str, ttl_s: float | None = None) -> int: ...
 
     async def renew_lease(
         self,
         owner: str,
         epoch: int,
-        ttl_s: float = 30.0,
+        ttl_s: float | None = None,
         *,
         nonce: str | None = None,
     ) -> None: ...

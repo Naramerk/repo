@@ -44,11 +44,13 @@ class AttemptClosedError(CoreError):
 class StudyClosedError(CoreError):
     """Study is finalized; further journal writes are rejected (I3)."""
 
-    def __init__(self, study_id: str, event_type: str = ""):
+    def __init__(self, study_id: str, event_type: str):
+        if not isinstance(event_type, str) or not event_type:
+            raise ValueError("StudyClosedError requires non-empty event_type")
         self.study_id = study_id
         self.event_type = event_type
         super().__init__(
-            f"study {study_id} is finalized; rejecting {event_type or 'write'}"
+            f"study {study_id} is finalized; rejecting {event_type}"
         )
 
 
@@ -83,9 +85,9 @@ class FetchToolReclassified(CoreError):
     study can still finalize with ``internal_error`` in the report.
     """
 
-    def __init__(self, tool: str, call_id: str = ""):
+    def __init__(self, tool: str, call_id: str | None = None):
         self.tool = tool
-        self.call_id = call_id
+        self.call_id = "" if call_id is None else call_id  # audit-ok: structural empty = no call_id
         super().__init__(
             f"AttemptTainted tool={tool!r} journaled is_fetch=True but current "
             f"registry has is_fetch=False (reclassified)"
@@ -103,9 +105,13 @@ class SandboxInfraError(CoreError):
     never inferred from ``reason`` substrings).
     """
 
-    def __init__(self, reason: str, *, transient: bool = False):
+    def __init__(self, reason: str, *, transient: bool):
+        if not isinstance(transient, bool):
+            raise TypeError(
+                f"SandboxInfraError.transient must be bool, got {type(transient).__name__}"
+            )
         self.reason = reason
-        self.transient = bool(transient)
+        self.transient = transient
         super().__init__(reason)
 
 

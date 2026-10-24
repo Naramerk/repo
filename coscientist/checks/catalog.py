@@ -70,6 +70,23 @@ def _require_template_str(t: dict[str, Any], key: str, tid: object) -> str:
     return v.strip()
 
 
+def _require_list(data: dict[str, Any], key: str, *, where: str) -> list[Any]:
+    if key not in data:
+        raise CatalogError(f"{where}:{key}_required")
+    v = data[key]
+    if not isinstance(v, list):
+        raise CatalogError(f"{where}:{key}_must_be_list_got_{type(v).__name__}")
+    return v
+
+
+def _optional_float(raw: object, *, what: str) -> float | None:
+    if raw is None:
+        return None
+    if type(raw) is bool or not isinstance(raw, (int, float)):
+        raise CatalogError(f"{what}_must_be_numeric_got_{type(raw).__name__}")
+    return float(raw)  # audit-ok: coerce after int|float type gate (bool rejected)
+
+
 def _migrate_code_check(raw: dict[str, Any]) -> dict[str, Any]:
     """Upcast legacy CodeCheck fields (holdout_output → holdout required)."""
     out = dict(raw)
@@ -105,19 +122,34 @@ def load_catalog(
 ) -> Catalog:
     if isinstance(data, (str, Path)):
         data = json.loads(Path(data).read_text(encoding="utf-8"))
-    assert isinstance(data, dict)
+    if not isinstance(data, dict):
+        raise CatalogError(
+            f"catalog root must be object, got {type(data).__name__}"
+        )
 
-    rules = [RuleRef.model_validate(r) for r in data.get("rules", [])]
-    templates: list[RequirementTemplate] = []
-    for t in data.get("templates", []):
+    rules = [
+        RuleRef.model_validate(r)
+        for r in _require_list(data, "rules", where="catalog_meta_v1")
+    ]
+    templates = []
+    for t in _require_list(data, "templates", where="catalog_meta_v1"):
+        if not isinstance(t, dict):
+            raise CatalogError("catalog_template_v1:entry_must_be_object")
         if not t.get("text_ru"):
             raise CatalogError(f"template {t.get('id')!r} missing text_ru")
-        if not t.get("method_sources") and not t.get("rule_ids"):
+        tid = t.get("id")
+        method_sources = _require_list(
+            t, "method_sources", where=f"catalog_template_v1:{tid}"
+        )
+        rule_ids = _require_list(t, "rule_ids", where=f"catalog_template_v1:{tid}")
+        if not method_sources and not rule_ids:
             raise CatalogError(
-                f"template {t.get('id')!r} needs method_sources or rule_ids"
+                f"template {tid!r} needs method_sources or rule_ids"
             )
         check = _parse_check(t["check"])
-        applies = list(t.get("applies_to", []))
+        applies = list(
+            _require_list(t, "applies_to", where=f"catalog_template_v1:{tid}")
+        )
         if kind_registry is not None:
             for k in applies:
                 try:
@@ -127,9 +159,8 @@ def load_catalog(
         role = t.get("role")
         if role not in ("prediction", "validity"):
             raise CatalogError(
-                f"template {t.get('id')!r} needs role prediction|validity, got {role!r}"
+                f"template {tid!r} needs role prediction|validity, got {role!r}"
             )
-        tid = t.get("id")
         uses_sesoi = _require_template_bool(t, "uses_sesoi", tid)
         predicts_null = _require_template_bool(t, "predicts_null", tid)
         required = _require_template_bool(t, "required", tid)
@@ -139,22 +170,18 @@ def load_catalog(
             raise CatalogError(
                 f"catalog_template_v1:{tid}:predicted_direction_required_got_{direction!r}"
             )
-        sesoi = t.get("sesoi")
-        sesoi_min = t.get("sesoi_min")
-        sesoi_max = t.get("sesoi_max")
         if "min_power" in t:
             raise CatalogError(
                 f"template {tid!r}: min_power is not supported in M1 "
                 "(deferred until the core computes power)"
             )
-        try:
-            sesoi_f = float(sesoi) if sesoi is not None else None
-            sesoi_min_f = float(sesoi_min) if sesoi_min is not None else None
-            sesoi_max_f = float(sesoi_max) if sesoi_max is not None else None
-        except (TypeError, ValueError) as e:
-            raise CatalogError(
-                f"template {tid!r}: sesoi bounds must be numeric"
-            ) from e
+        sesoi_f = _optional_float(t.get("sesoi"), what=f"template {tid!r}:sesoi")
+        sesoi_min_f = _optional_float(
+            t.get("sesoi_min"), what=f"template {tid!r}:sesoi_min"
+        )
+        sesoi_max_f = _optional_float(
+            t.get("sesoi_max"), what=f"template {tid!r}:sesoi_max"
+        )
         if uses_sesoi:
             if sesoi_f is None:
                 raise CatalogError(
@@ -190,8 +217,8 @@ def load_catalog(
                 id=t["id"],
                 title=t["title"],
                 text_ru=t["text_ru"],
-                method_sources=list(t.get("method_sources", [])),
-                rule_ids=list(t.get("rule_ids", [])),
+                method_sources=list(method_sources),
+                rule_ids=list(rule_ids),
                 applies_to=applies,
                 check=check,
                 role=role,

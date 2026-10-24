@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from coscientist.core.claims.reasons import CloseReason, TaskReason
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.schema_versions import (
     ATTEMPT_CLOSED_SCHEMA_VERSION,
@@ -17,8 +18,11 @@ from coscientist.core.finalize import finalize as finalize_mod
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
-async def cancel_study(runtime: StudyRuntime, by: str = "user") -> None:
+
+async def cancel_study(runtime: StudyRuntime, by: str) -> None:
     """Emit StudyCancelled, close open work as cancelled, then finalize(trigger=cancel)."""
+    if not isinstance(by, str) or not by:
+        raise ValueError("cancel_study requires non-empty by=")
     if runtime.study is None or finalize_mod.is_finalized(runtime):
         return
     sid = runtime.study.study_id
@@ -32,7 +36,7 @@ async def cancel_study(runtime: StudyRuntime, by: str = "user") -> None:
             payload={"study_id": sid, "by": by, "at": now.isoformat()},
             ts=now,
             schema_version=STUDY_CANCELLED_SCHEMA_VERSION,
-)
+        )
     ]
     events.extend(
         _close_open_work(
@@ -44,40 +48,57 @@ async def cancel_study(runtime: StudyRuntime, by: str = "user") -> None:
     # Module attribute — tests patch ``finalize_mod.finalize`` reliably.
     await finalize_mod.finalize(runtime, trigger="cancel")
 
+
 def _close_open_work(
     runtime: Any,
     *,
     reason: TaskReason,
     close: CloseReason,
 ) -> list[EventEnvelope]:
-    assert runtime.study is not None
+    if runtime.study is None:
+        raise RuntimeError("cancel_study close_open_work requires runtime.study")
     sid = runtime.study.study_id
     now = runtime.clock.now()
-    events: list[EventEnvelope] = []
+    events = []
     for task in list(runtime.tasks.values()):
         if task.state == TaskState.DONE:
             continue
         for aid in task.attempts:
-            if not runtime.attempts.get(aid, {}).get("closed"):
-                events.append(
-                    EventEnvelope(
-                        study_id=sid,
-                        type="AttemptClosed",
-                        entity_key=aid,
-                        idem_key=make_idem("AttemptClosed", aid, close.value),
-                        payload={
-                            "attempt_id": aid,
-                            "closed": True,
-                            "close_reason": close.value,
-                            "task_id": task.task_id,
-                        },
-                        ts=now,
-                        schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
-)
+            attempt = runtime.attempts.get(aid)
+            if attempt is None:
+                raise JournalFormatError(
+                    f"attempt {aid!r} missing from runtime.attempts"
                 )
-                t = runtime._attempt_tasks.pop(aid, None)  # noqa: SLF001
-                if t:
-                    t.cancel()
+            if "closed" not in attempt:
+                raise JournalFormatError(
+                    f"attempt {aid!r} missing required closed field"
+                )
+            closed = attempt["closed"]
+            if not isinstance(closed, bool):
+                raise JournalFormatError(
+                    f"attempt {aid!r} closed must be bool, got {type(closed).__name__}"
+                )
+            if closed:
+                continue
+            events.append(
+                EventEnvelope(
+                    study_id=sid,
+                    type="AttemptClosed",
+                    entity_key=aid,
+                    idem_key=make_idem("AttemptClosed", aid, close.value),
+                    payload={
+                        "attempt_id": aid,
+                        "closed": True,
+                        "close_reason": close.value,
+                        "task_id": task.task_id,
+                    },
+                    ts=now,
+                    schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
+                )
+            )
+            t = runtime._attempt_tasks.pop(aid, None)  # noqa: SLF001
+            if t:
+                t.cancel()
         events.append(
             EventEnvelope(
                 study_id=sid,
@@ -91,6 +112,6 @@ def _close_open_work(
                 },
                 ts=now,
                 schema_version=TASK_DONE_SCHEMA_VERSION,
-)
+            )
         )
     return events

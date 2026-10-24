@@ -129,7 +129,7 @@ def test_put_user_is_task_data_not_paper(tmp_path):
             capability=cap,
             name="data.csv",
             media_type="text/csv",
-            role="paper",  # ignored — forced data
+            attempt_closed=False,
         )
 
     art = _with_user_put(_run)
@@ -150,6 +150,7 @@ def test_put_user_denied_without_capability(tmp_path):
             capability=object(),  # type: ignore[arg-type]
             name="x",
             media_type="text/plain",
+            attempt_closed=False,
         )
 
 
@@ -237,6 +238,7 @@ def test_put_user_denied_when_attempt_active(tmp_path):
                     capability=cap,
                     name="x",
                     media_type="text/plain",
+                    attempt_closed=False,
                 )
         finally:
             release_user_put_capability(cap)
@@ -577,6 +579,7 @@ def test_snapshot_bindings_uses_cas_sha(tmp_path):
             capability=cap,
             name="n",
             media_type="text/plain",
+            attempt_closed=False,
         )
     )
     b = InputBinding(

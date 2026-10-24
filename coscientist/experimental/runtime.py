@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import EventEnvelope, StoredEvent
 from coscientist.core.execution.domain import HitlRequest
 from coscientist.core.finalize.study_view import study_view
@@ -23,11 +24,11 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.hitl: dict[str, HitlRequest] = {}
+        self.hitl = {}
         self._delegated_costly_spent: Decimal = Decimal("0")
         self.delegated_budget: DelegatedBudget | None = None
-        self._pending_costly_events: dict[str, dict[str, Any]] = {}
-        self._hitl_notices: list[dict[str, Any]] = []
+        self._pending_costly_events = {}
+        self._hitl_notices = []
 
     def _project_local(self, ev: EventEnvelope | StoredEvent) -> None:
         p = ev.payload
@@ -35,14 +36,20 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
             super()._project_local(ev)
             if self.study and self.study.budget and self.study.budget.delegated_costly is not None:
                 self.delegated_budget = DelegatedBudget(
-                    float(self.study.budget.delegated_costly)
+                    self.study.budget.delegated_costly
                 )
             return
         if ev.type == "BudgetDebited":
             super()._project_local(ev)  # study spent for BudgetExceeded
             if p.get("budget"):
                 self.delegated_budget = DelegatedBudget.from_state(p["budget"])
-            spent = Decimal(str(p.get("spent_rub") or 0))
+            if "spent_rub" not in p:
+                raise JournalFormatError("BudgetDebited missing spent_rub")
+            raw_spent = p["spent_rub"]
+            if type(raw_spent) is float:
+                spent = Decimal(str(raw_spent))  # audit-ok: float→Decimal via str (stdlib exactness)
+            else:
+                spent = Decimal(raw_spent)
             if spent > 0:
                 self._delegated_costly_spent += spent
             return
@@ -61,9 +68,14 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
                 h = self.hitl.get(p["request_id"])
                 if h:
                     self.hitl[p["request_id"]] = h.model_copy(update={"open": False})
-            spent = Decimal(str(p.get("spent_rub") or 0))
-            if spent > 0:
-                self._delegated_costly_spent += spent
+            if "spent_rub" in p:
+                raw_spent = p["spent_rub"]
+                if type(raw_spent) is float:
+                    spent = Decimal(str(raw_spent))  # audit-ok: float→Decimal via str (stdlib exactness)
+                else:
+                    spent = Decimal(raw_spent)
+                if spent > 0:
+                    self._delegated_costly_spent += spent
             # Core fold: _hitl_decisions + close _hitl_requests (HitlDecided).
             # HitlTimedOut has no core fold — experimental UI state only.
             if ev.type == "HitlDecided":
@@ -83,18 +95,41 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
         from coscientist.core.claims.dispositions import dispositions
 
         open_hitl = sum(1 for h in self.hitl.values() if h.open)
-        arts = getattr(self, "artifacts", None)
-        lookup = getattr(arts, "get_meta", None) if arts is not None else None
+        # Prefer direct attribute; AttributeError → no lookup (structural absent).
+        try:
+            arts = self.artifacts
+        except AttributeError:
+            arts = None
+        try:
+            lookup = arts.get_meta if arts is not None else None
+        except AttributeError:
+            lookup = None
+        try:
+            results = self.results
+        except AttributeError:
+            results = None
+        try:
+            graph = self.graph
+        except AttributeError:
+            graph = None
+        try:
+            question_disposals = self.question_disposals
+        except AttributeError:
+            question_disposals = None
+        try:
+            journal_kinds = self.artifact_kinds
+        except AttributeError:
+            journal_kinds = None
         qdisp = (
             dispositions(
                 tasks=self.tasks,
                 plans=self.plans,
-                graph=getattr(self, "graph", None),
+                graph=graph,
                 study=self.study,
-                results=getattr(self, "results", None),
+                results=results,
                 artifact_lookup=lookup if callable(lookup) else None,
-                question_disposals=getattr(self, "question_disposals", None),
-                journal_kinds=getattr(self, "artifact_kinds", None),
+                question_disposals=question_disposals,
+                journal_kinds=journal_kinds,
             )
             if self.plans
             else None

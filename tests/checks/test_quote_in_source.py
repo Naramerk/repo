@@ -51,7 +51,7 @@ from coscientist.tools.effects import (
     _mint_fetch_capability_for_tests,
     invoke_tool,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
+from tests.helpers import default_test_hitl_policy, attach_executor, close_runtime, open_runtime, record_success
 
 
 def _cap(
@@ -509,7 +509,7 @@ def test_put_user_source_rejected(tmp_path: Path):
             capability=cap,
             name="u.txt",
             media_type="text/plain",
-            role="paper",  # forced to data; still not a quote source
+            attempt_closed=False,
         )
     finally:
         release_user_put_capability(cap)
@@ -753,7 +753,7 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
         study_id=sid,
         task_key="LIT-0",
         attempt_id=aid,
-        hitl_policy=HitlPolicy(),
+        hitl_policy=default_test_hitl_policy(),
         call_seq=1,
     )
     agent_url = "https://agent-supplied.example/ignored"
@@ -831,7 +831,7 @@ async def test_invoke_tool_non_fetch_read_rejected(
         study_id=sid,
         task_key="LIT",
         attempt_id="att_nf",
-        hitl_policy=HitlPolicy(),
+        hitl_policy=default_test_hitl_policy(),
         call_seq=1,
     )
     await invoke_tool(
@@ -1212,7 +1212,7 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
         study_id=sid,
         task_key="LIT-0",
         attempt_id=aid,
-        hitl_policy=HitlPolicy(),
+        hitl_policy=default_test_hitl_policy(),
         call_seq=1,
     )
     out = await invoke_tool(
@@ -1236,7 +1236,7 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
         study_id=sid,
         task_key="LIT-0",
         attempt_id=aid,
-        hitl_policy=HitlPolicy(),
+        hitl_policy=default_test_hitl_policy(),
         call_seq=2,
     )
     with pytest.raises(ToolError, match="tainted context"):
@@ -1356,7 +1356,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
             study_id=sid,
             task_key="LIT-0",
             attempt_id=aid,
-            hitl_policy=HitlPolicy(),
+            hitl_policy=default_test_hitl_policy(),
             call_seq=1,
         ),
         writer=rt.writer,
@@ -1391,7 +1391,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
                 study_id=sid,
                 task_key="LIT-0",
                 attempt_id=aid,
-                hitl_policy=HitlPolicy(),
+                hitl_policy=default_test_hitl_policy(),
                 call_seq=2,
             ),
             writer=rt2.writer,
@@ -1546,7 +1546,7 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
                 study_id=sid,
                 task_key="LIT-0",
                 attempt_id=aid,
-                hitl_policy=HitlPolicy(),
+                hitl_policy=default_test_hitl_policy(),
                 call_seq=1,
             ),
             writer=rt.writer,
@@ -1575,7 +1575,7 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
                 study_id=sid,
                 task_key="LIT-0",
                 attempt_id=aid,
-                hitl_policy=HitlPolicy(),
+                hitl_policy=default_test_hitl_policy(),
                 call_seq=2,
             ),
             writer=rt.writer,
@@ -1688,7 +1688,7 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
             study_id=sid,
             task_key="LIT-0",
             attempt_id=aid,
-            hitl_policy=HitlPolicy(),
+            hitl_policy=default_test_hitl_policy(),
             call_seq=1,
         ),
         writer=rt.writer,
@@ -1781,7 +1781,7 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
             study_id=sid,
             task_key="LIT-0",
             attempt_id=aid,
-            hitl_policy=HitlPolicy(),
+            hitl_policy=default_test_hitl_policy(),
             call_seq=1,
         ),
         writer=rt.writer,
@@ -1937,7 +1937,7 @@ async def test_append_failure_on_second_digest_clears_permits(
                 study_id=sid,
                 task_key="LIT-0",
                 attempt_id=aid,
-                hitl_policy=HitlPolicy(),
+                hitl_policy=default_test_hitl_policy(),
                 call_seq=1,
             ),
             writer=rt.writer,
