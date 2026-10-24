@@ -127,12 +127,11 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "agents, api, tools, llm must not import coscientist.mcp"
+name = "agents, api, llm must not import coscientist.mcp (tools may: mcp_adapter)"
 type = "forbidden"
 source_modules = [
   "coscientist.agents",
   "coscientist.api",
-  "coscientist.tools",
   "coscientist.llm",
 ]
 forbidden_modules = ["coscientist.mcp"]
@@ -367,6 +366,7 @@ source_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
+  "coscientist.tools.mcp_adapter",
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.taint",
 ]
@@ -520,6 +520,7 @@ source_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
+  "coscientist.tools.mcp_adapter",
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.taint",
 ]
@@ -667,6 +668,7 @@ source_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
+  "coscientist.tools.mcp_adapter",
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.taint",
 ]
