@@ -733,8 +733,10 @@ def _evaluate_proposed_check(
     role: CheckRole = raw_role  # type: ignore[assignment]
     base_effect["proposal_digest"] = row.get("proposal_digest")
     base_effect["delegated"] = bool(row.get("delegated"))
-    base_effect["bound_task_id"] = row.get("bound_task_id") or row.get("task_id")
-    base_effect["bound_target"] = row.get("bound_target") or row.get("target")
+    if "bound_task_id" in row:
+        base_effect["bound_task_id"] = row["bound_task_id"]
+    if "bound_target" in row:
+        base_effect["bound_target"] = row["bound_target"]
     # Target must be on the RequirementRef (params); no fallback to bound_target.
     eval_target = params.get("target")
     prereg_err = assert_proposal_preregistered_for_eval(

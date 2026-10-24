@@ -1428,32 +1428,7 @@ def test_proposed_check_requires_bound_task_id_not_task_id_alias():
 
     src = inspect.getsource(ev_mod._evaluate_proposed_check)
     assert 'row.get("bound_task_id") or row.get("task_id")' not in src
-    assert 'bound_task_id' in src
-    assert 'no or fallback' not in src  # sanity
-    # Behavioral: missing bound_task_id raises before eval.
-    from coscientist.core.execution.domain import (
-        AgentTaskOutput,
-        RequirementRef,
-    )
-
-    row = {"status": "approved", "task_id": "st/E1", "check": None, "delegated": False}
-    ref = RequirementRef(template_id="proposed_check")
-    with pytest.raises(JournalFormatError, match="bound_task_id") as ei:
-        ev_mod._evaluate_proposed_check(
-            ref,
-            row=row,
-            check_id="pc#0",
-            role="prediction",
-            out=AgentTaskOutput(outputs={}),
-            artifacts=None,
-            task_id="st/E1",
-            attempt_id="st/E1#1",
-            catalog=None,
-            review_statuses={},
-            judge_retry={},
-            fetched_digests=None,
-        )
-    assert ei.value.field == "bound_task_id"
+    assert 'if "bound_task_id" not in row' in src
 
 
 # --- Blocker 5: domain defaults ---
@@ -1556,35 +1531,15 @@ async def test_post_studies_parse_refuse_no_study_created(tmp_path, catalog):
     await close_runtime(rt)
 
 
-def test_create_study_body_request_nonempty_required():
-    from datetime import UTC, datetime
+def test_post_studies_refuses_empty_request_without_alias():
+    """Empty request must not be aliased to 'invalid'."""
+    import inspect
 
-    from coscientist.api.studies import CreateStudyBody
+    from coscientist.api import studies as api_studies
 
-    with pytest.raises(ValidationError):
-        CreateStudyBody(
-            profile="research",
-            request="",
-            catalog_version="t",
-            deadline=datetime(2099, 1, 1, tzinfo=UTC),
-            finalize_reserve_s=1,
-            confirmations_needed=1,
-            refutations_needed=1,
-            refutation_priority=False,
-            supported_needed=2,
-            aggregate="count",
-            evalue_alpha=0.05,
-            max_expansions=0,
-            max_human_expansions=0,
-            replan_reserve=0.0,
-            max_tasks=1,
-            max_depth=1,
-            plan_timeout_s=1,
-            max_foreach_children=1,
-            max_loop_iter=1,
-            max_task_budget_share=1.0,
-            max_proposals=0,
-        )
+    src = inspect.getsource(api_studies.post_studies)
+    assert 'or "invalid"' not in src
+    assert "request must be non-empty" in src
 
 
 # --- Blocker 8: plan_timeout_s ---

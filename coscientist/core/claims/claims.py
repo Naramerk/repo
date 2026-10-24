@@ -125,7 +125,7 @@ class RuntimeClaim:
     criterion_template_ids: list[str] | None = None
     study_id: str = ""
     effect: dict[str, Any] | None = None
-    validity: str | None = None  # valid|invalid (mirrors validity_ok)
+    validity: str | None = "valid"  # valid|invalid (mirrors validity_ok); required when validity_ok
     # Guest sandbox timeout closed a refute-role check without a decisive outcome.
     refute_unresolved: bool = False
     timeout_kind: str | None = None  # idle_timeout|cpu_timeout|wall_timeout

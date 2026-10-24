@@ -78,6 +78,7 @@ class Claim:
     confirming_evidence_ids: frozenset | None = None
     threshold_source_evidence_ids: frozenset | None = None
     validity_ok: bool = True
+    validity: str = "valid"
     claim_outcome: str | None = None
     severe: bool | None = None
     independence_key: str = ""
@@ -105,6 +106,10 @@ class Claim:
             )
         if not self.independence_key:
             self.independence_key = self.experiment_id or self.attempt_id
+        if self.validity_ok is False:
+            self.validity = "invalid"
+        elif self.validity not in ("valid", "invalid"):
+            self.validity = "valid"
         if self.claim_outcome is None and self.validity_ok:
             self.claim_outcome = {
                 "met": "consistent",

@@ -704,6 +704,11 @@ def effective_validity(claim: Any) -> ClaimValidity:
         )
     if stored in ("valid", "invalid"):
         return stored  # type: ignore[return-value]
+    if stored is None or stored == "":
+        raise JournalFormatError(
+            "claim missing required validity after validity_ok",
+            field="validity",
+        )
     raise JournalFormatError(
         f"invalid claim validity: {stored!r}",
         field="validity",

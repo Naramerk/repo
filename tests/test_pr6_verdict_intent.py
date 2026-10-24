@@ -114,8 +114,7 @@ def test_priority_refuted_not_capped_by_stub_supports(impl):
         [stub_sup, real_ref],
         True,
         refutations_needed=1,
-        refutation_priority=True,
-    )
+        refutation_priority=True, k=1, supported_needed=2)
     assert note == "refuted; 1 supporting results were stub/partial"
     # Note also when priority=False (excluded stubs still reported).
     assert (
@@ -123,8 +122,7 @@ def test_priority_refuted_not_capped_by_stub_supports(impl):
             [stub_sup, real_ref],
             True,
             refutations_needed=1,
-            refutation_priority=False,
-        )
+            refutation_priority=False, k=1, supported_needed=2)
         == "refuted; 1 supporting results were stub/partial"
     )
 

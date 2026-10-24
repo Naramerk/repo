@@ -629,9 +629,26 @@ class LocalProjectMixin:
             self.verdict_snapshots.pop(f"hypothesis:{key}", None)
 
     def _fold_finalized_graph(self, study_id: str, payload: dict[str, Any], *, created_at: datetime) -> None:
+        from coscientist.core.events.ids import study_node_id
         from coscientist.core.finalize.finalize_nodes import graph_rows_from_finalized
 
         nodes, edges = graph_rows_from_finalized(study_id, payload, created_at=created_at)
+        # Parse-refuse journals StudyRefused without StudyCreated — still need the
+        # study node so conclusion→study edges from graph_rows_from_finalized bind.
+        study_n = study_node_id(study_id)
+        if self.graph.get_node(study_n) is None and study_n not in nodes:
+            nodes[study_n] = {
+                "node_id": study_n,
+                "kind": "study",
+                "study_id": study_id,
+                "ref_id": study_id,
+                "attrs": {},
+                "created_at": (
+                    created_at.isoformat()
+                    if isinstance(created_at, datetime)
+                    else str(created_at)
+                ),
+            }
         for row in nodes.values():
             incoming = GraphNode.model_validate(row)
             existing = self.graph.get_node(incoming.node_id)

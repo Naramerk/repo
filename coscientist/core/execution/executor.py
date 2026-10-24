@@ -459,6 +459,12 @@ def _derive_claim_core_attrs(
                     field="status",
                 )
             pred_statuses.append(str(st))
+    # Criterion status already folds check results; mirror into classify_outcome
+    # when this claim has no prediction-role check rows (validity-only / empty).
+    if not pred_statuses and status in ("met", "not_met", "unassessed"):
+        pred_statuses = [
+            "PASSED" if status == "met" else ("FAILED" if status == "not_met" else "")
+        ]
     # Effect from CheckResult.effect only — never agent detail / claim attrs.
     effect, used_sesoi = _effect_from_checks(list(checks or []), attempt_id=attempt_id)
     from coscientist.checks.kinds._util import check_is_guest_timeout
