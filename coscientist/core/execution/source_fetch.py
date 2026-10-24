@@ -23,7 +23,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from coscientist.core.events.errors import ArtifactRejected, FetchToolReclassified
+from coscientist.core.events.errors import (
+    ArtifactRejected,
+    FetchToolReclassified,
+    JournalFormatError,
+)
 from coscientist.core.events.events import (
     EventEnvelope,
     StoredEvent,
@@ -49,6 +53,12 @@ _assert_impl: AssertFetchCap | None = None
 _take_write_permit_impl: TakeWritePermit | None = None
 _release_write_permit_impl: ReleaseWritePermit | None = None
 
+# put_fetched name/media/role when caller omits (fetch tool contract).
+_DEFAULT_FETCH_NAME = "source.txt"
+_DEFAULT_FETCH_MEDIA_TYPE = "text/plain"
+_DEFAULT_FETCH_ROLE = "paper"
+
+
 def register_fetch_capability_verifier(
     verify_fn: VerifyFetchCap,
     *,
@@ -68,6 +78,7 @@ def register_fetch_capability_verifier(
     if release_write_permit_fn is not None:
         _release_write_permit_impl = release_write_permit_fn
 
+
 def take_source_fetched_write_permit(
     cap_id: str,
     *,
@@ -82,17 +93,20 @@ def take_source_fetched_write_permit(
         cap_id, tool=tool, call_id=call_id, study_id=study_id
     )
 
+
 def release_source_fetched_write_permit(cap_id: str) -> None:
     """Drop a write permit without journaling (append failed after verify)."""
     if _release_write_permit_impl is None:
         raise ArtifactRejected("fetch_capability_required")
     _release_write_permit_impl(cap_id)
 
+
 @dataclass(frozen=True, slots=True)
 class FetchCapability:
     """Opaque capability handle — only an id; binding lives in effects registry."""
 
     id: str
+
 
 def verify_fetch_capability(
     capability: Any,
@@ -113,6 +127,7 @@ def verify_fetch_capability(
         attempt_id=attempt_id,
     )
 
+
 def assert_fetch_capability_bound(
     capability: Any,
     *,
@@ -132,12 +147,47 @@ def assert_fetch_capability_bound(
         attempt_id=attempt_id,
     )
 
+
+def _optional_payload_str(payload: dict[str, Any], key: str) -> str:
+    """Return payload[key] when a non-empty str; else empty (shape check fail)."""
+    raw = payload.get(key)
+    if raw is None:
+        return ""  # audit-ok: structural absent payload field = empty (shape fail)
+    if not isinstance(raw, str):
+        return ""  # audit-ok: non-str payload field = empty (shape fail)
+    return raw
+
+
+def _event_seq(ev: Any) -> int:
+    seq = ev.seq
+    if seq is None:
+        return 0  # audit-ok: unstamped event seq absent = 0 (before stamp)
+    if type(seq) is bool or not isinstance(seq, int):
+        raise JournalFormatError(f"event seq must be int|None, got {type(seq).__name__}")
+    return seq
+
+
+def _writer_fetch_seq(writer: StudyWriter) -> int:
+    raw = writer.source_fetch_seq
+    if raw is None:
+        return 0  # audit-ok: structural absent cache seq = 0
+    if type(raw) is bool or not isinstance(raw, int):
+        raise JournalFormatError(
+            f"source_fetch_seq must be int|None, got {type(raw).__name__}"
+        )
+    return raw
+
+
 def task_needs_source_fetch(catalog: Catalog, spec: TaskSpec) -> bool:
     """True when evaluating this task may run ``quote_in_source`` (avoid journal scan)."""
     by_id = {t.id: t for t in catalog.templates}
     refs = list(spec.criteria)
     if not refs:
-        for tid in catalog.defaults.get("experiment", []):
+        if "experiment" not in catalog.defaults:
+            raise JournalFormatError(
+                "catalog.defaults missing required key 'experiment'"
+            )
+        for tid in catalog.defaults["experiment"]:
             refs.append(RequirementRef(template_id=tid))
     for ref in refs:
         tmpl = by_id.get(ref.template_id)
@@ -148,17 +198,19 @@ def task_needs_source_fetch(catalog: Catalog, spec: TaskSpec) -> bool:
             return True
     return False
 
+
 def _attempt_id_from_call_id(call_id: str) -> str:
     """``call_id`` is ``{attempt_id}:{call_seq}`` — split on the last colon."""
     if ":" not in call_id:
         return call_id
-    return call_id.rsplit(":", 1)[0]
+    return call_id.rsplit(":", 1)[0]  # audit-ok: structured call_id allowlist parse
+
 
 def source_fetched_payload_ok(payload: dict[str, Any]) -> bool:
     """True when SourceFetched payload has the fetch ToolCall shape fields."""
-    call_id = str(payload.get("call_id") or "")
-    tool = str(payload.get("tool") or "")
-    digest = str(payload.get("digest") or "")
+    call_id = _optional_payload_str(payload, "call_id")
+    tool = _optional_payload_str(payload, "tool")
+    digest = _optional_payload_str(payload, "digest")
     url = payload.get("url")
     if not call_id or ":" not in call_id:
         return False
@@ -168,6 +220,7 @@ def source_fetched_payload_ok(payload: dict[str, Any]) -> bool:
         return False
     return True
 
+
 def source_fetched_paired_with_fetch_call(
     payload: dict[str, Any],
     fetch_calls: dict[str, str],
@@ -175,9 +228,10 @@ def source_fetched_paired_with_fetch_call(
     """True when payload shape is ok and ``call_id`` maps to the same tool."""
     if not source_fetched_payload_ok(payload):
         return False
-    call_id = str(payload.get("call_id") or "")
-    tool = str(payload.get("tool") or "")
+    call_id = _optional_payload_str(payload, "call_id")
+    tool = _optional_payload_str(payload, "tool")
     return fetch_calls.get(call_id) == tool
+
 
 @dataclass
 class SourceFetchIndex:
@@ -211,11 +265,13 @@ class SourceFetchIndex:
     def note(self, payload: dict[str, Any]) -> None:
         if not source_fetched_paired_with_fetch_call(payload, self.fetch_calls):
             return
-        digest = str(payload.get("digest") or "")
-        call_id = str(payload.get("call_id") or "")
+        digest = _optional_payload_str(payload, "digest")
+        call_id = _optional_payload_str(payload, "call_id")
         attempt_id = _attempt_id_from_call_id(call_id)
         self.by_digest[digest] = dict(payload)
-        self.by_attempt.setdefault(attempt_id, set()).add(digest)
+        if attempt_id not in self.by_attempt:
+            self.by_attempt[attempt_id] = set()
+        self.by_attempt[attempt_id].add(digest)
 
     def has(self, digest: str) -> bool:
         return digest in self.by_digest
@@ -227,7 +283,11 @@ class SourceFetchIndex:
     def digests_for_attempt(self, attempt_id: str) -> frozenset[str]:
         if not attempt_id:
             return frozenset()
-        return frozenset(self.by_attempt.get(attempt_id, ()))
+        bag = self.by_attempt.get(attempt_id)
+        if bag is None:
+            return frozenset()
+        return frozenset(bag)
+
 
 def note_fetch_call_from_attempt_tainted(payload: dict[str, Any]) -> tuple[str, str] | None:
     """Resolve a fetch-call marker from ``AttemptTainted`` payload.
@@ -238,12 +298,13 @@ def note_fetch_call_from_attempt_tainted(payload: dict[str, Any]) -> tuple[str, 
     ``FetchToolReclassified`` (domain) — callers must catch, skip counting, and
     journal ``FetchIntegrityRaised`` so open/finalize stay possible.
     """
-    if str(payload.get("reason") or "") != "source_fetch":
+    if _optional_payload_str(payload, "reason") != "source_fetch":
         return None
-    if not bool(payload.get("is_fetch")):
+    is_fetch = payload.get("is_fetch")
+    if is_fetch is not True:
         return None
-    tool = str(payload.get("tool") or "")
-    call_id = str(payload.get("call_id") or "")
+    tool = _optional_payload_str(payload, "tool")
+    call_id = _optional_payload_str(payload, "call_id")
     if not tool or not call_id:
         return None
     from coscientist.core.execution.tool_registry import get_registered
@@ -253,6 +314,7 @@ def note_fetch_call_from_attempt_tainted(payload: dict[str, Any]) -> tuple[str, 
         raise FetchToolReclassified(tool, call_id)
     # Unregistered (renamed away) or still is_fetch — trust journaled identity.
     return call_id, tool
+
 
 def apply_source_fetch_events(
     idx: SourceFetchIndex, events: list[Any]
@@ -264,11 +326,13 @@ def apply_source_fetch_events(
     """
     max_seq = 0
     for ev in events:
-        seq = int(getattr(ev, "seq", 0) or 0)
+        seq = _event_seq(ev)
         if seq > max_seq:
             max_seq = seq
-        t = getattr(ev, "type", None)
-        p = getattr(ev, "payload", None) or {}
+        t = ev.type
+        p = ev.payload
+        if p is None:
+            continue
         if not isinstance(p, dict):
             continue
         if t == "AttemptTainted":
@@ -284,10 +348,12 @@ def apply_source_fetch_events(
             idx.note(p)
     return max_seq
 
+
 def load_source_fetch_index(events: list[Any]) -> SourceFetchIndex:
     idx = SourceFetchIndex()
     apply_source_fetch_events(idx, events)
     return idx
+
 
 async def journal_fetch_integrity_raised(
     writer: StudyWriter,
@@ -299,13 +365,13 @@ async def journal_fetch_integrity_raised(
     """Append idempotent ``FetchIntegrityRaised`` for each reclassified call."""
     from coscientist.core.events.errors import Idempotent
 
-    out: list[StoredEvent] = []
+    out = []
     for issue in issues:
-        tool = str(issue.get("tool") or "")
-        call_id = str(issue.get("call_id") or "")
+        tool = _optional_payload_str(issue, "tool")
+        call_id = _optional_payload_str(issue, "call_id")
         if not tool and not call_id:
             continue
-        entity = call_id or tool
+        entity = call_id if call_id else tool
         ev = EventEnvelope(
             study_id=study_id,
             type="FetchIntegrityRaised",
@@ -325,12 +391,13 @@ async def journal_fetch_integrity_raised(
         except Idempotent:
             continue
         out.append(stored)
-        seq = int(getattr(stored, "seq", 0) or 0)
-        if seq > int(writer.source_fetch_seq or 0):
+        seq = _event_seq(stored)
+        if seq > _writer_fetch_seq(writer):
             writer.source_fetch_seq = seq
         if on_event is not None:
             on_event(stored)
     return out
+
 
 async def reconcile_fetch_integrity(writer: StudyWriter) -> SourceFetchIndex:
     """Fold journal, journal any reclassified markers, return index (uncounted).
@@ -338,26 +405,31 @@ async def reconcile_fetch_integrity(writer: StudyWriter) -> SourceFetchIndex:
     Does **not** append when the study is already finalized — ``FetchIntegrityRaised``
     must not land after ``StudyFinalized``.
     """
-    store = getattr(writer, "store", None)
-    if store is None or not hasattr(store, "read_all"):
+    store = writer.store
+    if store is None:
         return SourceFetchIndex()
     events = await store.read_all()
     idx = SourceFetchIndex()
     apply_source_fetch_events(idx, events)
     study_id = ""
     if events:
-        study_id = str(getattr(events[0], "study_id", "") or "")
+        study_id = events[0].study_id
+        if not isinstance(study_id, str):
+            raise JournalFormatError(
+                f"event study_id must be str, got {type(study_id).__name__}"
+            )
     if not study_id:
-        study = getattr(getattr(writer, "store", None), "study_id", None)
-        study_id = str(study or "")
-    finalized = any(getattr(e, "type", None) == "StudyFinalized" for e in events)
+        study_id = store.study_id
+        if not isinstance(study_id, str):
+            raise JournalFormatError(
+                f"store.study_id must be str, got {type(study_id).__name__}"
+            )
+    finalized = any(e.type == "StudyFinalized" for e in events)
     if finalized:
         # Fold only — never journal past StudyFinalized.
         writer.source_fetch_idx = idx
         if events:
-            writer.source_fetch_seq = max(
-                int(getattr(e, "seq", 0) or 0) for e in events
-            )
+            writer.source_fetch_seq = max(_event_seq(e) for e in events)
         return idx
     if idx.reclassified and study_id:
         await journal_fetch_integrity_raised(
@@ -369,31 +441,29 @@ async def reconcile_fetch_integrity(writer: StudyWriter) -> SourceFetchIndex:
         return await load_source_fetch_index_from_writer(writer)
     writer.source_fetch_idx = idx
     if events:
-        writer.source_fetch_seq = max(
-            int(getattr(e, "seq", 0) or 0) for e in events
-        )
+        writer.source_fetch_seq = max(_event_seq(e) for e in events)
     return idx
+
 
 async def load_source_fetch_index_from_writer(writer: StudyWriter) -> SourceFetchIndex:
     """Incremental fold cached on the writer (O(Δ) after first load)."""
-    store = getattr(writer, "store", None)
+    store = writer.store
     idx: SourceFetchIndex | None = writer.source_fetch_idx
-    after = int(writer.source_fetch_seq or 0)
-    if store is None or not hasattr(store, "read_all"):
-        return idx or SourceFetchIndex()
+    after = _writer_fetch_seq(writer)
+    if store is None:
+        if idx is None:
+            return SourceFetchIndex()
+        return idx
     if idx is None:
         idx = SourceFetchIndex()
         events = await store.read_all()
         after = apply_source_fetch_events(idx, events)
     else:
-        if hasattr(store, "read_after"):
+        read_after = getattr(type(store), "read_after", None)
+        if callable(read_after):
             events = await store.read_after(after)
         else:
-            events = [
-                e
-                for e in await store.read_all()
-                if int(getattr(e, "seq", 0) or 0) > after
-            ]
+            events = [e for e in await store.read_all() if _event_seq(e) > after]
         n = apply_source_fetch_events(idx, events)
         if n > after:
             after = n
@@ -403,14 +473,16 @@ async def load_source_fetch_index_from_writer(writer: StudyWriter) -> SourceFetc
     # ``reconcile_fetch_integrity`` on open/finalize.
     return idx
 
+
 def _cache_note_fetch(writer: StudyWriter, ev: StoredEvent | UnstampedEvent) -> None:
     idx = writer.source_fetch_idx
     if idx is None:
         return
     apply_source_fetch_events(idx, [ev])
-    seq = int(getattr(ev, "seq", 0) or 0)
-    if seq > int(writer.source_fetch_seq or 0):
+    seq = _event_seq(ev)
+    if seq > _writer_fetch_seq(writer):
         writer.source_fetch_seq = seq
+
 
 async def append_source_fetched(
     writer: StudyWriter,
@@ -449,13 +521,14 @@ async def append_source_fetched(
     # verify granted a write permit — release it if append fails so it never leaks.
     try:
         stored = await writer.append(ev, _source_fetched_cap_id=capability.id)
-    except BaseException:
+    except BaseException:  # audit-ok: release write permit then re-raise any append failure
         release_source_fetched_write_permit(capability.id)
         raise
     _cache_note_fetch(writer, stored)
     if on_event is not None:
         on_event(stored)
     return stored
+
 
 async def store_fetched_source(
     writer: StudyWriter,
@@ -467,9 +540,9 @@ async def store_fetched_source(
     tool: str,
     url: str,
     capability: FetchCapability,
-    name: str = "source.txt",
-    media_type: str = "text/plain",
-    role: str = "paper",
+    name: str = _DEFAULT_FETCH_NAME,
+    media_type: str = _DEFAULT_FETCH_MEDIA_TYPE,
+    role: str = _DEFAULT_FETCH_ROLE,
     on_event: Any | None = None,
 ) -> Any:
     """``put_fetched`` + ``SourceFetched`` — executor-path only (capability required).
