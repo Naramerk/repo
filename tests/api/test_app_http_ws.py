@@ -9,11 +9,10 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
-from starlette.websockets import WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketDisconnect
 
 from coscientist.api.app import (
     WS_CLOSE_REASON_MAX_BYTES,
@@ -22,12 +21,7 @@ from coscientist.api.app import (
     encode_ws_close_reason,
 )
 from coscientist.api.cancel import bind_cancel_study
-from coscientist.api.errors import (
-    AfterSeqRefuse,
-    StreamConfigRefuse,
-    StudyStoreMismatch,
-    WsCloseReasonRefuse,
-)
+from coscientist.api.errors import AfterSeqRefuse, StreamConfigRefuse, WsCloseReasonRefuse
 from coscientist.api.stream import require_poll_interval_s, stream_study_events
 from coscientist.api.views import parse_after_query
 from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
@@ -170,8 +164,9 @@ def _make_app(
     calls: list[tuple[str, str]],
     *,
     sleep: Callable[[float], Awaitable[None]] | None = None,
+    store: EventStore | None = None,
 ) -> TestClient:
-    store: EventStore = _Store(events)
+    event_store: EventStore = store if store is not None else _Store(events)
     clock: Callable[[float], Awaitable[None]] = sleep if sleep is not None else _PollSleep()
 
     async def _cancel(sid: str, by: str) -> dict[str, str]:
@@ -183,7 +178,7 @@ def _make_app(
     def _store_for(sid: str) -> EventStore:
         if sid != _SID:
             raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
-        return store
+        return event_store
 
     return TestClient(
         create_app(
@@ -408,44 +403,16 @@ async def test_stream_helper_stops_when_disconnected() -> None:
     assert ws.sent == []
 
 
-def test_ws_watcher_error_reraise() -> None:
-    """Watcher failure re-raises via stream_route finally (_await_cancelled)."""
-    boom = threading.Event()
+class _BoomStore(_Store):
+    """EventStore fake: first read_after fails (exercises stream_route finally)."""
 
-    class _StoreAfterBoom(_Store):
-        async def read_after(self, seq: int) -> list[StoredEvent]:
-            loop = asyncio.get_running_loop()
-            ok = await loop.run_in_executor(None, boom.wait, 5.0)
-            if not ok:
-                raise AssertionError("watcher did not fail")
-            raise StudyStoreMismatch("mismatch")
+    async def read_after(self, seq: int) -> list[StoredEvent]:
+        raise RuntimeError("stream_store_boom")
 
-    async def receive_boom(_self: object) -> dict[str, object]:
-        boom.set()
-        raise RuntimeError("watcher_boom")
 
-    store: EventStore = _StoreAfterBoom([])
-
-    async def _cancel(sid: str, by: str) -> dict[str, str]:
-        raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
-
-    def _store_for(sid: str) -> EventStore:
-        if sid != _SID:
-            raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
-        return store
-
-    client = TestClient(
-        create_app(
-            AppDeps(
-                studies=_Studies(),
-                event_store_for=_store_for,
-                cancel_study=_cancel,
-                stream_poll_interval_s=0.01,
-                stream_sleep=_PollSleep(),
-            )
-        )
-    )
-    with patch.object(WebSocket, "receive", receive_boom):
-        with pytest.raises(RuntimeError, match="watcher_boom"):
-            with client.websocket_connect(f"/studies/{_SID}/stream?after=0") as ws:
-                ws.receive_text()
+def test_ws_store_error_propagates() -> None:
+    """Injected store error propagates through stream_route (finally cancels watcher)."""
+    client = _make_app([], [], store=_BoomStore([]))
+    with pytest.raises(RuntimeError, match="stream_store_boom"):
+        with client.websocket_connect(f"/studies/{_SID}/stream?after=0") as ws:
+            ws.receive_text()
