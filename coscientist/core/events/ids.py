@@ -32,23 +32,14 @@ def is_study_id(value: str) -> bool:
 
 
 def study_id() -> str:
-    """``st_`` + 27 hex (11 ms + 16 rand). Must satisfy ``is_study_id``."""
-    body = _ulid_like()
-    if len(body) != _STUDY_ULID_HEX_LEN:
-        raise RuntimeError(f"study_id body length {len(body)} != {_STUDY_ULID_HEX_LEN}")
-    sid = f"st_{body}"
-    if not is_study_id(sid):
-        raise RuntimeError("study_id() drifted from STUDY_ID_RE")
-    return sid
+    """``st_`` + body from ``_ulid_like`` (same lengths as ``STUDY_ID_RE``)."""
+    return f"st_{_ulid_like()}"
 
 
 def study_id_from_idempotency_key(key: str) -> str:
     """Deterministic ``st_idem_<24 hex>`` from the client Idempotency-Key."""
     digest = sha256_hex(f"Idempotency-Key:{key}")
-    sid = f"st_idem_{digest[:_IDEM_STUDY_HEX_LEN]}"
-    if not is_study_id(sid):
-        raise RuntimeError("study_id_from_idempotency_key drifted from STUDY_ID_RE")
-    return sid
+    return f"st_idem_{digest[:_IDEM_STUDY_HEX_LEN]}"
 
 
 def task_id(study: str, task_key: str) -> str:

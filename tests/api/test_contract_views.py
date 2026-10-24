@@ -28,13 +28,13 @@ from coscientist.api.views import (
     require_study_id,
 )
 from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
-from coscientist.core.events.events import EventType, StoredEvent
+from coscientist.core.events.events import EventType, StoredEvent, UnstampedEvent
 from coscientist.core.events.ids import (
     is_study_id,
     study_id,
     study_id_from_idempotency_key,
 )
-from coscientist.core.events.ports import StudyService
+from coscientist.core.events.ports import EventStore, StudyService
 from coscientist.core.execution.domain import StudyView
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 
@@ -58,18 +58,68 @@ class _FakeStudyService:
 
 
 class _FakeEventStore:
-    """EventStore double exposing ``read_after`` + ``study_id``."""
+    """EventStore double for ``list_study_events`` (full Protocol surface)."""
 
-    owner = None
-    epoch = 0
-    owner_nonce = None
+    study_id: str
+    owner: str | None
+    epoch: int
+    owner_nonce: str | None
 
     def __init__(self, study_id: str, events: list[StoredEvent]) -> None:
         self.study_id = study_id
+        self.owner = None
+        self.epoch = 0
+        self.owner_nonce = None
         self._events = events
+
+    async def append(self, event: UnstampedEvent) -> StoredEvent:
+        raise NotImplementedError("append")
+
+    async def append_many(self, events: list[UnstampedEvent]) -> list[StoredEvent]:
+        raise NotImplementedError("append_many")
+
+    async def read_all(self) -> list[StoredEvent]:
+        raise NotImplementedError("read_all")
 
     async def read_after(self, seq: int) -> list[StoredEvent]:
         return [e for e in self._events if e.seq is not None and e.seq > seq]
+
+    async def get_projection(self, table: str) -> list[dict[str, Any]]:
+        raise NotImplementedError("get_projection")
+
+    async def get_row(self, table: str, key: str) -> dict[str, Any] | None:
+        raise NotImplementedError("get_row")
+
+    async def upsert_projection(self, table: str, key: str, data: dict[str, Any]) -> None:
+        raise NotImplementedError("upsert_projection")
+
+    async def acquire_lease(self, owner: str, ttl_s: float = 30.0) -> int:
+        raise NotImplementedError("acquire_lease")
+
+    async def renew_lease(
+        self,
+        owner: str,
+        epoch: int,
+        ttl_s: float = 30.0,
+        *,
+        nonce: str | None = None,
+    ) -> None:
+        raise NotImplementedError("renew_lease")
+
+    async def release_lease(
+        self,
+        owner: str,
+        epoch: int,
+        *,
+        nonce: str | None = None,
+    ) -> None:
+        raise NotImplementedError("release_lease")
+
+    async def current_lease(self) -> tuple[str | None, int, datetime | None]:
+        raise NotImplementedError("current_lease")
+
+    async def close(self) -> None:
+        return None
 
 
 def _ts() -> datetime:
@@ -81,7 +131,7 @@ def _stored(
     seq: int,
     typ: EventType = "StudyCreated",
     study_id: str = _SID,
-    payload: dict[str, Any] | None = None,
+    payload: dict[str, Any],
 ) -> StoredEvent:
     return StoredEvent.model_validate(
         {
@@ -90,7 +140,7 @@ def _stored(
             "type": typ,
             "entity_key": study_id,
             "idem_key": f"{typ}:{study_id}",
-            "payload": payload if payload is not None else {"study_id": study_id},
+            "payload": payload,
             "ts": _ts(),
             "schema_version": 1,
             "epoch": 1,
@@ -99,55 +149,47 @@ def _stored(
     )
 
 
-def test_require_study_id_accepts_core_generators() -> None:
+def _row(
+    seq: int,
+    *,
+    typ: EventType = "StudyCreated",
+    study_id: str = _SID,
+) -> StoredEvent:
+    return _stored(seq=seq, typ=typ, study_id=study_id, payload={"study_id": study_id})
+
+
+def test_require_study_id_accepts_study_id_generator() -> None:
     sid = study_id()
-    idem = study_id_from_idempotency_key("contract-key")
     assert is_study_id(sid)
-    assert is_study_id(idem)
     assert require_study_id(sid) == sid
+
+
+def test_require_study_id_accepts_idempotency_generator() -> None:
+    idem = study_id_from_idempotency_key("contract-key")
+    assert is_study_id(idem)
     assert require_study_id(idem) == idem
 
 
-def test_study_id_generator_refuses_body_length_drift(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("coscientist.core.events.ids._ulid_like", lambda: "ab")
-    with pytest.raises(RuntimeError, match="study_id body length"):
-        study_id()
-
-
-def test_study_id_generator_refuses_regex_drift(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("coscientist.core.events.ids.is_study_id", lambda _v: False)
-    with pytest.raises(RuntimeError, match="study_id\\(\\) drifted from STUDY_ID_RE"):
-        study_id()
-
-
-def test_idem_study_id_generator_refuses_regex_drift(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("coscientist.core.events.ids.is_study_id", lambda _v: False)
-    with pytest.raises(RuntimeError, match="study_id_from_idempotency_key drifted from STUDY_ID_RE"):
-        study_id_from_idempotency_key("contract-key")
-
-
 @pytest.mark.parametrize(
-    "bad",
+    ("bad", "match"),
     [
-        None,
-        1,
-        True,
-        "",
-        "  ",
-        " st",
-        "st ",
-        "\tst",
-        "../x",
-        "/abs",
-        "a/b",
-        "st_foo/bar",
-        "st_foo\\bar",
-        "not_st_prefix",
-        "st_abc",
-        "st_" + "a" * 26,
-        "st_idem_" + "a" * 23,
+        (None, r"study_id must be str"),
+        (1, r"study_id must be str"),
+        (True, r"study_id must be str"),
+        ("", "study_id_empty_or_whitespace"),
+        ("  ", "study_id_empty_or_whitespace"),
+        (" st", "study_id_empty_or_whitespace"),
+        ("st ", "study_id_empty_or_whitespace"),
+        ("\tst", "study_id_empty_or_whitespace"),
+        ("../x", "study_id_format"),
+        ("/abs", "study_id_format"),
+        ("a/b", "study_id_format"),
+        ("st_foo/bar", "study_id_format"),
+        ("st_foo\\bar", "study_id_format"),
+        ("not_st_prefix", "study_id_format"),
+        ("st_abc", "study_id_format"),
+        ("st_" + "a" * 26, "study_id_format"),
+        ("st_idem_" + "a" * 23, "study_id_format"),
     ],
     ids=[
         "none",
@@ -169,14 +211,14 @@ def test_idem_study_id_generator_refuses_regex_drift(
         "short_idem",
     ],
 )
-def test_require_study_id_refuses(bad: object) -> None:
-    with pytest.raises(StudyIdRefuse, match="study_id"):
+def test_require_study_id_refuses(bad: object, match: str) -> None:
+    with pytest.raises(StudyIdRefuse, match=match):
         require_study_id(bad)
 
 
-def test_require_after_seq_accepts_zero_and_positive() -> None:
-    assert require_after_seq(0) == 0
-    assert require_after_seq(3) == 3
+@pytest.mark.parametrize("after", [0, 3], ids=["zero", "three"])
+def test_require_after_seq_accepts(after: int) -> None:
+    assert require_after_seq(after) == after
 
 
 @pytest.mark.parametrize(
@@ -210,11 +252,11 @@ def test_get_study_refuses_bad_id_before_service() -> None:
         def study_view(self, study_id: str) -> StudyView:
             raise AssertionError("service must not be called")
 
-    with pytest.raises(StudyIdRefuse, match="study_id"):
+    with pytest.raises(StudyIdRefuse, match="study_id_empty_or_whitespace"):
         get_study(_Boom({}), "")
 
 
-def test_data_root_study_service_not_found_and_view(tmp_path: Path) -> None:
+def _create_study(tmp_path: Path) -> str:
     catalog = minimal_test_catalog()
 
     async def _create() -> str:
@@ -230,33 +272,50 @@ def test_data_root_study_service_not_found_and_view(tmp_path: Path) -> None:
         )
         return out["study_id"]
 
-    sid = asyncio.run(_create())
-    svc = DataRootStudyService(tmp_path, catalog=catalog)
-    view = svc.study_view(sid)
+    return asyncio.run(_create())
+
+
+def test_data_root_study_service_view(tmp_path: Path) -> None:
+    sid = _create_study(tmp_path)
+    view = DataRootStudyService(tmp_path, catalog=minimal_test_catalog()).study_view(sid)
     assert view.phase == "running"
+
+
+def test_data_root_study_service_not_found(tmp_path: Path) -> None:
+    svc = DataRootStudyService(tmp_path, catalog=minimal_test_catalog())
     with pytest.raises(StudyNotFound, match=STUDY_NOT_FOUND_REASON) as ei:
         svc.study_view(_SID_MISSING)
     assert ei.value.study_id == _SID_MISSING
-    assert get_study(svc, sid) == view
 
 
-def test_data_root_study_service_path_traversal_and_no_mkdir(tmp_path: Path) -> None:
-    catalog = minimal_test_catalog()
-    svc = DataRootStudyService(tmp_path, catalog=catalog)
+def test_data_root_study_service_get_study_matches_view(tmp_path: Path) -> None:
+    sid = _create_study(tmp_path)
+    svc = DataRootStudyService(tmp_path, catalog=minimal_test_catalog())
+    assert get_study(svc, sid) == svc.study_view(sid)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["../x", "/abs", "a/b"],
+    ids=["dotdot", "abs", "slash"],
+)
+def test_data_root_study_service_path_traversal(tmp_path: Path, bad: str) -> None:
+    svc = DataRootStudyService(tmp_path, catalog=minimal_test_catalog())
+    with pytest.raises(StudyIdRefuse, match="study_id_format"):
+        svc.study_view(bad)
+
+
+def test_data_root_study_service_missing_does_not_mkdir(tmp_path: Path) -> None:
+    svc = DataRootStudyService(tmp_path, catalog=minimal_test_catalog())
     before = set(tmp_path.rglob("*"))
-    for bad in ("../x", "/abs", "a/b"):
-        with pytest.raises(StudyIdRefuse, match="study_id"):
-            svc.study_view(bad)
     with pytest.raises(StudyNotFound, match=STUDY_NOT_FOUND_REASON):
         svc.study_view(_SID_MISSING)
-    after = set(tmp_path.rglob("*"))
-    assert before == after
+    assert set(tmp_path.rglob("*")) == before
     assert not (tmp_path / _SID_MISSING).exists()
 
 
 def test_data_root_study_service_refuses_under_running_loop(tmp_path: Path) -> None:
-    catalog = minimal_test_catalog()
-    svc = DataRootStudyService(tmp_path, catalog=catalog)
+    svc = DataRootStudyService(tmp_path, catalog=minimal_test_catalog())
 
     async def _under_loop() -> None:
         with pytest.raises(StudyViewLoopRefuse, match="study_view_requires_no_running_event_loop"):
@@ -265,54 +324,58 @@ def test_data_root_study_service_refuses_under_running_loop(tmp_path: Path) -> N
     asyncio.run(_under_loop())
 
 
+@pytest.mark.parametrize(
+    ("after", "want"),
+    [(0, [1, 2, 3]), (1, [2, 3]), (3, [])],
+    ids=["all", "mid", "empty"],
+)
 @pytest.mark.asyncio
-async def test_list_study_events_after_filters() -> None:
-    store = _FakeEventStore(
-        _SID,
-        [_stored(seq=1), _stored(seq=2, typ="TaskCreated"), _stored(seq=3)],
-    )
-    all_rows = await list_study_events(store, study_id=_SID, after=0)
-    assert [e.seq for e in all_rows] == [1, 2, 3]
-    mid = await list_study_events(store, study_id=_SID, after=1)
-    assert [e.seq for e in mid] == [2, 3]
-    empty = await list_study_events(store, study_id=_SID, after=3)
-    assert empty == []
+async def test_list_study_events_after_filters(after: int, want: list[int]) -> None:
+    store: EventStore = _FakeEventStore(_SID, [_row(1), _row(2, typ="TaskCreated"), _row(3)])
+    rows = await list_study_events(store, study_id=_SID, after=after)
+    assert [e.seq for e in rows] == want
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [True, -1],
+    ids=["bool", "neg"],
+)
 @pytest.mark.asyncio
-async def test_list_study_events_refuses_bad_after() -> None:
-    store = _FakeEventStore(_SID, [])
+async def test_list_study_events_refuses_bad_after(bad: object) -> None:
+    store: EventStore = _FakeEventStore(_SID, [])
     with pytest.raises(AfterSeqRefuse, match="after_must_be_"):
-        await list_study_events(store, study_id=_SID, after=True)
-    with pytest.raises(AfterSeqRefuse, match="after_must_be_"):
-        await list_study_events(store, study_id=_SID, after=-1)
+        await list_study_events(store, study_id=_SID, after=bad)
 
 
 @pytest.mark.asyncio
 async def test_list_study_events_refuses_foreign_store() -> None:
-    store = _FakeEventStore(_SID_OTHER, [_stored(seq=1, study_id=_SID_OTHER)])
+    store: EventStore = _FakeEventStore(_SID_OTHER, [_row(1, study_id=_SID_OTHER)])
     with pytest.raises(StudyStoreMismatch, match="store_study_id_mismatch"):
         await list_study_events(store, study_id=_SID, after=0)
 
 
 @pytest.mark.asyncio
 async def test_list_study_events_refuses_event_study_id_mismatch() -> None:
-    store = _FakeEventStore(_SID, [_stored(seq=1, study_id=_SID_FOREIGN)])
+    store: EventStore = _FakeEventStore(_SID, [_row(1, study_id=_SID_FOREIGN)])
     with pytest.raises(StudyStoreMismatch, match="event_study_id_mismatch"):
         await list_study_events(store, study_id=_SID, after=0)
 
 
 def test_event_to_wire_round_trip_fields() -> None:
-    row = _stored(seq=7, typ="StudyCancelled", payload={"study_id": _SID, "by": "user"})
+    row = _stored(
+        seq=7,
+        typ="StudyCancelled",
+        payload={"study_id": _SID, "by": "user"},
+    )
     wire = event_to_wire(row)
-    assert isinstance(wire, EventWire)
     assert wire.seq == 7
     assert wire.type == "StudyCancelled"
     assert wire.payload == {"study_id": _SID, "by": "user"}
     assert wire.payload_digest == "a" * 64
     dumped = wire.model_dump(mode="json")
     assert dumped["seq"] == 7
-    assert "ts" in dumped
+    assert dumped["ts"] == "2026-10-24T12:00:00Z"
 
 
 def test_event_to_wire_payload_is_copy() -> None:
@@ -325,22 +388,20 @@ def test_event_to_wire_payload_is_copy() -> None:
 
 
 def test_event_to_wire_refuses_missing_seq() -> None:
-    row = _stored(seq=1)
+    row = _row(1)
     bad = row.model_copy(update={"seq": None})
     with pytest.raises(EventWireRefuse, match="event_wire_validate"):
         event_to_wire(bad)
 
 
 def test_event_to_wire_refuses_non_positive_seq() -> None:
-    row = _stored(seq=1)
     with pytest.raises(EventWireRefuse, match="event_wire_validate"):
-        event_to_wire(row.model_copy(update={"seq": 0}))
+        event_to_wire(_row(1).model_copy(update={"seq": 0}))
 
 
 def test_event_to_wire_refuses_empty_digest() -> None:
-    row = _stored(seq=1)
     with pytest.raises(EventWireRefuse, match="event_wire_validate"):
-        event_to_wire(row.model_copy(update={"payload_digest": ""}))
+        event_to_wire(_row(1).model_copy(update={"payload_digest": ""}))
 
 
 def test_event_wire_forbids_extra_fields() -> None:
