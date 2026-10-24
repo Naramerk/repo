@@ -5,8 +5,18 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Protocol
 
+from coscientist.core.events.errors import StudyNotFound
 from coscientist.core.events.events import StoredEvent, UnstampedEvent
 from coscientist.core.execution.domain import Artifact, StudyView
+
+# Re-export for StudyService callers (typed missing-study contract).
+__all__ = [
+    "AgentPort",
+    "ArtifactStore",
+    "EventStore",
+    "StudyNotFound",
+    "StudyService",
+]
 
 
 class EventStore(Protocol):
@@ -70,4 +80,10 @@ class AgentPort(Protocol):
 
 
 class StudyService(Protocol):
-    def study_view(self, study_id: str) -> StudyView: ...
+    def study_view(self, study_id: str) -> StudyView:
+        """Return the study projection for ``study_id``.
+
+        Raises:
+            StudyNotFound: no journal / study exists for ``study_id``.
+        """
+        ...

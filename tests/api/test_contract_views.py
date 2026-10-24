@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -12,8 +14,10 @@ from coscientist.api.errors import (
     AfterSeqRefuse,
     EventWireRefuse,
     StudyIdRefuse,
-    StudyNotFound,
+    StudyStoreMismatch,
 )
+from coscientist.api.studies import CreateStudyBody, post_studies
+from coscientist.api.study_service import DataRootStudyService
 from coscientist.api.views import (
     EventWire,
     event_to_wire,
@@ -22,8 +26,11 @@ from coscientist.api.views import (
     require_after_seq,
     require_study_id,
 )
-from coscientist.core.events.events import StoredEvent
+from coscientist.core.events.errors import StudyNotFound
+from coscientist.core.events.events import EventType, StoredEvent
+from coscientist.core.events.ports import StudyService
 from coscientist.core.execution.domain import StudyView
+from tests.checks.minimal_test_catalog import minimal_test_catalog
 
 
 class _FakeStudyService:
@@ -39,14 +46,14 @@ class _FakeStudyService:
 
 
 class _FakeEventStore:
-    """EventStore double exposing only ``read_after`` (list_study_events contract)."""
+    """EventStore double exposing ``read_after`` + ``study_id``."""
 
-    study_id = "st_fake"
     owner = None
     epoch = 0
     owner_nonce = None
 
-    def __init__(self, events: list[StoredEvent]) -> None:
+    def __init__(self, study_id: str, events: list[StoredEvent]) -> None:
+        self.study_id = study_id
         self._events = events
 
     async def read_after(self, seq: int) -> list[StoredEvent]:
@@ -60,20 +67,23 @@ def _ts() -> datetime:
 def _stored(
     *,
     seq: int,
-    typ: str = "StudyCreated",
+    typ: EventType = "StudyCreated",
+    study_id: str = "st_fake",
     payload: dict[str, Any] | None = None,
 ) -> StoredEvent:
-    return StoredEvent(
-        seq=seq,
-        study_id="st_fake",
-        type=typ,  # type: ignore[arg-type]
-        entity_key="st_fake",
-        idem_key=f"{typ}:st_fake",
-        payload=payload if payload is not None else {"study_id": "st_fake"},
-        ts=_ts(),
-        schema_version=1,
-        epoch=1,
-        payload_digest="a" * 64,
+    return StoredEvent.model_validate(
+        {
+            "seq": seq,
+            "study_id": study_id,
+            "type": typ,
+            "entity_key": study_id,
+            "idem_key": f"{typ}:{study_id}",
+            "payload": payload if payload is not None else {"study_id": study_id},
+            "ts": _ts(),
+            "schema_version": 1,
+            "epoch": 1,
+            "payload_digest": "a" * 64,
+        }
     )
 
 
@@ -106,7 +116,7 @@ def test_require_after_seq_refuses(bad: object) -> None:
 
 def test_get_study_returns_view() -> None:
     view = StudyView(phase="running", progress=0.25, awaiting_human=False)
-    svc = _FakeStudyService({"st_1": view})
+    svc: StudyService = _FakeStudyService({"st_1": view})
     got = get_study(svc, "st_1")
     assert got == view
     assert got.phase == "running"
@@ -114,43 +124,88 @@ def test_get_study_returns_view() -> None:
 
 
 def test_get_study_not_found() -> None:
-    svc = _FakeStudyService({})
+    svc: StudyService = _FakeStudyService({})
     with pytest.raises(StudyNotFound) as ei:
         get_study(svc, "st_missing")
     assert ei.value.study_id == "st_missing"
 
 
 def test_get_study_refuses_bad_id_before_service() -> None:
-    class _Boom:
+    class _Boom(_FakeStudyService):
         def study_view(self, study_id: str) -> StudyView:
             raise AssertionError("service must not be called")
 
     with pytest.raises(StudyIdRefuse):
-        get_study(_Boom(), "")  # type: ignore[arg-type]
+        get_study(_Boom({}), "")
+
+
+def test_data_root_study_service_not_found_and_view(tmp_path: Path) -> None:
+    catalog = minimal_test_catalog()
+
+    async def _create() -> str:
+        out = await post_studies(
+            tmp_path,
+            CreateStudyBody(
+                request="real svc",
+                profile="research",
+                catalog_version=3,
+                require_hypotheses=False,
+            ),
+            catalog=catalog,
+        )
+        return out["study_id"]
+
+    sid = asyncio.run(_create())
+    svc = DataRootStudyService(tmp_path, catalog=catalog)
+    view = svc.study_view(sid)
+    assert view.phase in ("running", "finalizing", "closed")
+    with pytest.raises(StudyNotFound) as ei:
+        svc.study_view("st_missing")
+    assert ei.value.study_id == "st_missing"
+    assert get_study(svc, sid) == view
 
 
 @pytest.mark.asyncio
 async def test_list_study_events_after_filters() -> None:
-    store = _FakeEventStore([_stored(seq=1), _stored(seq=2, typ="TaskCreated"), _stored(seq=3)])
-    all_rows = await list_study_events(store, after=0)
+    store = _FakeEventStore(
+        "st_fake",
+        [_stored(seq=1), _stored(seq=2, typ="TaskCreated"), _stored(seq=3)],
+    )
+    all_rows = await list_study_events(store, study_id="st_fake", after=0)
     assert [e.seq for e in all_rows] == [1, 2, 3]
-    mid = await list_study_events(store, after=1)
+    mid = await list_study_events(store, study_id="st_fake", after=1)
     assert [e.seq for e in mid] == [2, 3]
-    empty = await list_study_events(store, after=3)
+    empty = await list_study_events(store, study_id="st_fake", after=3)
     assert empty == []
 
 
 @pytest.mark.asyncio
 async def test_list_study_events_refuses_bad_after() -> None:
-    store = _FakeEventStore([])
+    store = _FakeEventStore("st_fake", [])
     with pytest.raises(AfterSeqRefuse):
-        await list_study_events(store, after=True)
+        await list_study_events(store, study_id="st_fake", after=True)
     with pytest.raises(AfterSeqRefuse):
-        await list_study_events(store, after=-1)
+        await list_study_events(store, study_id="st_fake", after=-1)
+
+
+@pytest.mark.asyncio
+async def test_list_study_events_refuses_foreign_store() -> None:
+    store = _FakeEventStore("st_other", [_stored(seq=1, study_id="st_other")])
+    with pytest.raises(StudyStoreMismatch):
+        await list_study_events(store, study_id="st_fake", after=0)
+
+
+@pytest.mark.asyncio
+async def test_list_study_events_refuses_event_study_id_mismatch() -> None:
+    store = _FakeEventStore("st_fake", [_stored(seq=1, study_id="st_foreign")])
+    with pytest.raises(StudyStoreMismatch):
+        await list_study_events(store, study_id="st_fake", after=0)
 
 
 def test_event_to_wire_round_trip_fields() -> None:
-    row = _stored(seq=7, typ="StudyCancelled", payload={"study_id": "st_fake", "by": "user"})
+    row = _stored(
+        seq=7, typ="StudyCancelled", payload={"study_id": "st_fake", "by": "user"}
+    )
     wire = event_to_wire(row)
     assert isinstance(wire, EventWire)
     assert wire.seq == 7
@@ -160,6 +215,15 @@ def test_event_to_wire_round_trip_fields() -> None:
     dumped = wire.model_dump(mode="json")
     assert dumped["seq"] == 7
     assert "ts" in dumped
+
+
+def test_event_to_wire_payload_is_copy() -> None:
+    payload = {"study_id": "st_fake", "n": 1}
+    row = _stored(seq=1, payload=payload)
+    wire = event_to_wire(row)
+    wire.payload["n"] = 99
+    assert row.payload["n"] == 1
+    assert payload["n"] == 1
 
 
 def test_event_to_wire_refuses_missing_seq() -> None:
@@ -183,16 +247,18 @@ def test_event_to_wire_refuses_empty_digest() -> None:
 
 def test_event_wire_forbids_extra_fields() -> None:
     with pytest.raises(ValidationError):
-        EventWire(
-            seq=1,
-            study_id="st",
-            type="StudyCreated",
-            entity_key="st",
-            idem_key="x",
-            payload={},
-            ts=_ts(),
-            schema_version=1,
-            epoch=1,
-            payload_digest="a" * 64,
-            extra_field=True,  # type: ignore[call-arg]
+        EventWire.model_validate(
+            {
+                "seq": 1,
+                "study_id": "st",
+                "type": "StudyCreated",
+                "entity_key": "st",
+                "idem_key": "x",
+                "payload": {},
+                "ts": _ts(),
+                "schema_version": 1,
+                "epoch": 1,
+                "payload_digest": "a" * 64,
+                "extra_field": True,
+            }
         )

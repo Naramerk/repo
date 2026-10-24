@@ -3,13 +3,11 @@
 ## Unreleased
 
 ### M5 API — GET study view + events contract
-- `coscientist.api.views`: `get_study(StudyService, study_id) → StudyView` and
-  `list_study_events(EventStore, after=) → list[EventWire]` (DESIGN §9).
-- Injected ports only (`StudyService` / `EventStore` on main); no `ports.py` change.
-- Typed refusals: `StudyIdRefuse`, `StudyNotFound`, `AfterSeqRefuse`, `EventWireRefuse`.
-- Contract tests with fakes: `tests/api/test_contract_views.py`.
-- [CAP #19](docs/CAPABILITIES.md?plain=1#L28) / [#21](docs/CAPABILITIES.md?plain=1#L30) prep
-  (A2A stream reuses `EventStore.read_after`).
+- `get_study` / `list_study_events(study_id=)`; store/wire `study_id` match or
+  `StudyStoreMismatch`. `EventWire` via `model_validate` (`seq` ge=1).
+- Core `StudyNotFound` on `StudyService` port; `DataRootStudyService` real adapter.
+- Contract tests (fakes + data-root); payload copy locked.
+- [CAP #19](docs/CAPABILITIES.md?plain=1#L28) / [#21](docs/CAPABILITIES.md?plain=1#L30) prep.
 
 ### [M2] Critic + reviewer typed outs + builtin prompts
 - `CriticVerdict` / `CriticIssue` (`coscientist.agents.critic`) and `ReviewVerdict` /

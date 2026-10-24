@@ -6,8 +6,10 @@ from coscientist.api.errors import (
     EventWireRefuse,
     StudyIdRefuse,
     StudyNotFound,
+    StudyStoreMismatch,
 )
 from coscientist.api.studies import CreateStudyBody, post_studies
+from coscientist.api.study_service import DataRootStudyService
 from coscientist.api.views import (
     EventWire,
     event_to_wire,
@@ -21,10 +23,12 @@ __all__ = [
     "AfterSeqRefuse",
     "ApiRefuse",
     "CreateStudyBody",
+    "DataRootStudyService",
     "EventWire",
     "EventWireRefuse",
     "StudyIdRefuse",
     "StudyNotFound",
+    "StudyStoreMismatch",
     "event_to_wire",
     "get_study",
     "list_study_events",

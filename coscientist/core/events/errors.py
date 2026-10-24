@@ -68,6 +68,15 @@ class StudyClosedError(CoreError):
         )
 
 
+class StudyNotFound(CoreError):
+    """No study journal / projection for ``study_id`` (StudyService contract)."""
+
+    def __init__(self, study_id: str, *, reason: str = "study_not_found") -> None:
+        self.study_id = study_id
+        self.reason = reason
+        super().__init__(reason)
+
+
 def reject_write_after_finalized(finalized: bool, event_type: str) -> str | None:
     """Return ``StudyClosedError`` name when a post-finalize write must be rejected."""
     if finalized and event_type != "StudyFinalized":
