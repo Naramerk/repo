@@ -37,11 +37,11 @@ def _task_provenance(
         att = attempts[aid]
         if not att.get("closed"):
             continue
-        if "provenance" not in att:
-            raise MinimalReportRefuse(
-                f"task {task.spec.task_key!r}: closed attempt provenance required"
-            )
-        prov = str(att["provenance"])
+        # Pre-R16a: missing provenance on a closed attempt means real.
+        if "provenance" in att:
+            prov = str(att["provenance"])
+        else:
+            prov = "real"
         if prov not in VALID_PROVENANCE:
             raise MinimalReportRefuse(
                 f"task {task.spec.task_key!r}: unknown provenance {prov!r}"
