@@ -247,6 +247,8 @@ type = "forbidden"
 # Completeness checked by tests/test_ingest_gate_contracts.py against the filesystem.
 source_modules = [
   "coscientist.agents",
+  "coscientist.agents.prompts",
+  "coscientist.agents.prompts.registry",
   "coscientist.agents.research_spec",
   "coscientist.api",
   "coscientist.api.runtime",
@@ -402,6 +404,8 @@ type = "forbidden"
 # Completeness of source list: tests/test_ingest_gate_contracts.py.
 source_modules = [
   "coscientist.agents",
+  "coscientist.agents.prompts",
+  "coscientist.agents.prompts.registry",
   "coscientist.agents.research_spec",
   "coscientist.api",
   "coscientist.api.studies",
@@ -549,6 +553,8 @@ name = "_attempt_frame only via executor (+ ingest read)"
 type = "forbidden"
 source_modules = [
   "coscientist.agents",
+  "coscientist.agents.prompts",
+  "coscientist.agents.prompts.registry",
   "coscientist.agents.research_spec",
   "coscientist.api",
   "coscientist.api.runtime",
