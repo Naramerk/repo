@@ -1,6 +1,7 @@
 """Strict graph_schema.yaml parsing via public registry_from_mapping."""
-
 from __future__ import annotations
+
+from datetime import datetime
 
 import pytest
 
@@ -9,9 +10,12 @@ from coscientist.core.claims.graph import (
     GraphSchemaError,
     KindRegistry,
     KindSpec,
+    parse_attr_type,
+    parse_aware_datetime,
     registry_from_mapping,
     registry_from_schema,
     schema_mapping_from_text,
+    validate_attr_value,
 )
 from coscientist.schema import GRAPH_SCHEMA_VERSION
 
@@ -23,17 +27,16 @@ _ASKS = {"name": "asks", "pairs": [["study", "question"]], "card": {"out": "1..n
 def _s(**kw):
     nodes, edges = kw.pop("nodes", [_ST, _Q]), kw.pop("edges", [_ASKS])
     return {"version": kw.pop("version", GRAPH_SCHEMA_VERSION), "nodes": nodes, "edges": edges, **kw}
-def _f(**kw):
-    return {"name": "a", "type": "str", "required": True, **kw}
-def _nf(*fields):
-    return _s(nodes=[{**_Q, "fields": list(fields)}, _ST])
+def _f(**kw): return {"name": "a", "type": "str", "required": True, **kw}
+def _nf(*fields): return _s(nodes=[{**_Q, "fields": list(fields)}, _ST])
+def _pt(s): return parse_attr_type(s, ctx="t")
 def test_schema_question_default_verdict():
     assert registry_from_schema().require_node_kind("question").fields[-1].default == AttrDefault(value="verdict")
 def test_null_default_allowed():
     gap = {"name": "gap", "type": "str", "required": False, "default": None}
     assert registry_from_mapping(_nf(gap)).require_node_kind("question").fields[0].default == AttrDefault(value=None)
 def test_duplicate_edge_registration():
-    spec = KindSpec(kind="e", layer="research", schema_ref=None, description="e", prefix=None, fields=())
+    spec = KindSpec(kind="e", description="e", fields=())
     reg = KindRegistry()
     reg.register_edge(spec)
     with pytest.raises(ValueError, match="already registered"):
@@ -67,3 +70,14 @@ _R = [
 def test_refuse(data, match):
     with pytest.raises(GraphSchemaError, match=match):
         registry_from_mapping(data)
+@pytest.mark.parametrize("call,match", [
+    (lambda: parse_aware_datetime(datetime(2026, 1, 1), ctx="c"), "expected aware datetime"),
+    (lambda: parse_aware_datetime(1, ctx="c"), "got int"),
+    (lambda: parse_aware_datetime("2026-13-45T99:99:99Z", ctx="c"), "invalid aware datetime"),
+    (lambda: validate_attr_value(_pt("str"), None, null_ok=False, ctx="c"), "null not allowed"),
+    (lambda: validate_attr_value(_pt("list(str)"), "x", null_ok=False, ctx="c"), "expected list"),
+    (lambda: validate_attr_value(_pt("int"), "x", null_ok=False, ctx="c"), "incompatible"),
+])
+def test_parse_validate_raises(call, match):
+    with pytest.raises(GraphSchemaError, match=match):
+        call()

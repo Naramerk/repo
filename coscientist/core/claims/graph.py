@@ -25,7 +25,6 @@ _CARD_KEYS = frozenset({"out", "in", "out_by_src"})
 SimpleTag = Literal["str", "int", "bool", "float", "datetime", "digest"]
 _SIMPLE_TAGS = frozenset(get_args(SimpleTag))
 
-
 class Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -58,10 +57,10 @@ class AttrFieldSpec(Frozen):
     default: AttrDefault | None
 class KindSpec(Frozen):
     kind: str
-    layer: str
-    schema_ref: str | None
-    description: str
-    prefix: str | None
+    layer: str = "research"
+    schema_ref: str | None = None
+    description: str = ""
+    prefix: str | None = None
     fields: tuple[AttrFieldSpec, ...]
 
 
@@ -258,10 +257,6 @@ def attr_value_ok(t: AttrType, value: Any, *, null_ok: bool) -> bool:
             return type(value) is bool
         if tag == "float":
             return type(value) is float
-        if tag == "datetime":
-            if isinstance(value, datetime):
-                return value.tzinfo is not None
-            return isinstance(value, str)
         return False
     if isinstance(t, AttrEnum):
         return isinstance(value, str) and value in t.enum_values
@@ -385,5 +380,4 @@ def registry_from_schema() -> KindRegistry:
     return registry_from_mapping(load_schema())
 def default_execution_registry() -> KindRegistry:
     return registry_from_schema().copy()
-
 AttrList.model_rebuild()
