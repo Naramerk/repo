@@ -517,6 +517,19 @@ class HitlForkMixin(CostlyHitlMixin):
         pnid = plan_node_id(sid, pid)
         existing = graph.get_node(pnid)
         attrs = dict((existing.attrs if existing is not None else None) or {})
+        # KindSpec requires revision + Need objs; accept_plan may not have
+        # written a plan GraphNode yet — fill from plan blob or explicit stub.
+        _need_stub = {"needed": False, "reason": "hitl_delegate"}
+        if "revision" not in attrs:
+            attrs["revision"] = int(prev.get("revision") or 1)
+        for need_key in ("hypotheses", "literature"):
+            cur = attrs.get(need_key)
+            if isinstance(cur, dict):
+                continue
+            from_blob = prev.get(need_key)
+            attrs[need_key] = (
+                dict(from_blob) if isinstance(from_blob, dict) else dict(_need_stub)
+            )
         attrs["delegated_by"] = delegated_by
         attrs["approved_by"] = "critic"
         now = self.clock.now()

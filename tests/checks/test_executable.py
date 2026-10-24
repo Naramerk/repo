@@ -3291,7 +3291,7 @@ def test_no_derived_call_id_fallback():
         attempt_id=f"{sid}/E1#1",
         attempt_outcome="SUCCESS",
         provenance="real",
-        claims=[{"id": "C1", "target": "Q1"}],
+        claims=[{"id": "C1", "target": "Q1", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived={
@@ -3299,6 +3299,7 @@ def test_no_derived_call_id_fallback():
             "evidence_kind": "computational",
             "frozen": True,
             "accepted": True,
+            "checked_against": "value_match",
             "effect": {
                 "est": 1.0,
                 "core_evaluated": True,

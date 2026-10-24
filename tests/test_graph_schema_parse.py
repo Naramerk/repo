@@ -45,7 +45,9 @@ def _pt(s):
 
 
 def test_schema_question_default_verdict():
-    assert registry_from_schema().require_node_kind("question").fields[-1].default == AttrDefault(value="verdict")
+    fields = registry_from_schema().require_node_kind("question").fields
+    by_name = {f.name: f for f in fields}
+    assert by_name["final_type"].default == AttrDefault(value="verdict")
 
 
 def test_null_default_allowed():

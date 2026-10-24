@@ -68,7 +68,7 @@ def test_question_disposition_computed_from_verdict():
         study_id=sid,
         attempt_id=aid,
         provenance="real",
-        claims=[{"id": "C1", "target": "Q1"}],
+        claims=[{"id": "C1", "target": "Q1", "checked_against": "value_match"}],
         now=now,
         graph=g,
         derived={
@@ -77,6 +77,7 @@ def test_question_disposition_computed_from_verdict():
             "frozen": True,
             "lit_own_criterion": False,
             "accepted": True,
+            "checked_against": "value_match",
             "artifact_id": "A1",
             "sesoi": 0.5,
             "uses_sesoi": True,

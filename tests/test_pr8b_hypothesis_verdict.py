@@ -2321,6 +2321,8 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(tmp_path, clock
                         "attempt_id": aid,
                         "attempt_outcome": "SUCCESS",
                         "target": "Q1",
+                        "checked_against": "artifact_present",
+                        "stance": "supports",
                         "accepted": True,
                         "criterion_status": "met",
                         "claim_outcome": "consistent",
