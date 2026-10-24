@@ -17,7 +17,6 @@ from typing import Any
 import pytest
 
 from coscientist.api.studies import (
-    CreateStudyBody,
     _idem_path,
     _request_digest,
     _write_owner_sidecar,

@@ -105,7 +105,7 @@ def critic_gate(
     prev = active_plan_blob(runtime)
     if prev is None:
         prev_tasks = []  # audit-ok: structural empty = no prior plan (absent)
-        known = {}  # audit-ok: structural empty = no prior questions (absent)
+        known: dict[str, Any] = {}  # audit-ok: structural empty = no prior questions (absent)
     else:
         prev_tasks = [
             TaskSpec.model_validate(t) if isinstance(t, dict) else t

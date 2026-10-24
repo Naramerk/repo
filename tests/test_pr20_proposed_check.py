@@ -34,7 +34,6 @@ from coscientist.core.execution.domain import (
     ArtifactHandle,
     CheckProposal,
     CodeCheck,
-    HitlPolicy,
     QuestionSpec,
     RejectedTemplateNote,
     ReqStatus,

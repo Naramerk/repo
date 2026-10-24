@@ -470,7 +470,6 @@ async def materialize_loop_iter(
         )
         return None
 
-    from coscientist.core.events.upcasters import require_exact_int
     from coscientist.core.plan.expand_validate import task_kind_for_route
 
     prev = active_plan_blob(runtime)

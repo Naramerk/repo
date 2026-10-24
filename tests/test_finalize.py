@@ -37,7 +37,7 @@ from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
 from coscientist.core.finalize.minimal_report import MAX_BYTES, build_minimal_report
 from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.question_tasks import question_tasks, questions_from_spec_output
-from tests.helpers import default_test_hitl_policy, attach_executor, close_runtime, open_runtime, record_success
+from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
 _TS = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
 
@@ -489,7 +489,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
     from decimal import Decimal
 
     from coscientist.core.events.store import SqliteEventStore
-    from coscientist.core.execution.domain import Budget, HitlPolicy, Study
+    from coscientist.core.execution.domain import Budget, Study
 
     sid = "st_bg_old_ratio"
     root = tmp_path / sid

@@ -2,46 +2,6 @@
 
 from __future__ import annotations
 
-def _or_empty_str(value: object) -> str:
-    if value is None:
-        return ""  # audit-ok: structural absent → empty str
-    if not isinstance(value, str):
-        return str(value)  # audit-ok: coerce after None gate for wire display
-    return value
-
-
-def _or_zero_int(value: object) -> int:
-    if value is None:
-        return 0  # audit-ok: structural absent → 0
-    if type(value) is bool or not isinstance(value, int):
-        raise TypeError(f"expected int|None, got {type(value).__name__}")
-    return value
-
-
-
-_DEFAULT_MIN_PLAN_COST = 0
-_DEFAULT_ROLLUP = "all"
-_DEFAULT_REVISION = 1
-_EMPTY_LIST = []
-_EMPTY_DICT = {}
-_CRITERION_ALPHA = 0.05
-
-
-def _or_empty_list(value: object) -> list:
-    if value is None:
-        return []  # audit-ok: structural absent → empty list
-    if isinstance(value, list):
-        return value
-    return list(value)  # type: ignore[arg-type]
-
-
-def _or_empty_dict(value: object) -> dict:
-    if value is None:
-        return {}  # audit-ok: structural absent → empty dict
-    if isinstance(value, dict):
-        return value
-    raise TypeError(f"expected dict|None, got {type(value).__name__}")
-
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -87,6 +47,49 @@ from coscientist.core.execution.inputs import validate_input_specs, validate_pla
 from coscientist.core.plan.intake import IntakeAccept, IntakeRefuse, SafetyPort, intake
 from coscientist.core.plan.question_tasks import questions_from_spec_output
 
+
+def _or_empty_str(value: object) -> str:
+    if value is None:
+        return ""  # audit-ok: structural absent → empty str
+    if not isinstance(value, str):
+        return str(value)  # audit-ok: coerce after None gate for wire display
+    return value
+
+
+def _or_zero_int(value: object) -> int:
+    if value is None:
+        return 0  # audit-ok: structural absent → 0
+    if type(value) is bool or not isinstance(value, int):
+        raise TypeError(f"expected int|None, got {type(value).__name__}")
+    return value
+
+
+_DEFAULT_MIN_PLAN_COST = 0
+_DEFAULT_ROLLUP = "all"
+_DEFAULT_REVISION = 1
+_EMPTY_LIST: list[Any] = []  # audit-ok: structural empty sentinel (not Study domain invent)
+_EMPTY_DICT: dict[str, Any] = {}  # audit-ok: structural empty sentinel (not Study domain invent)
+_CRITERION_ALPHA = 0.05
+
+
+def _or_empty_list(value: object) -> list[Any]:
+    if value is None:
+        return []  # audit-ok: structural absent → empty list
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    raise TypeError(f"expected list|tuple|None, got {type(value).__name__}")
+
+
+def _or_empty_dict(value: object) -> dict:
+    if value is None:
+        return {}  # audit-ok: structural absent → empty dict
+    if isinstance(value, dict):
+        return value
+    raise TypeError(f"expected dict|None, got {type(value).__name__}")
+
+
 # Infra / fencing — must not be swallowed by intake fail-closed refuse.
 _INTAKE_RERAISE = (LeaseLost, CASUnavailable, Conflict, SandboxInfraError)
 
@@ -99,6 +102,11 @@ class LifecycleMixin:
     clock: Clock
     study: Study | None
     tasks: dict[str, Task]
+    plans: dict[str, dict[str, Any]]
+    graph: Any
+    catalog: Any
+    artifacts: Any
+    executor: Any
     _intake_refusal: IntakeRefuse | None
 
     async def _append(self, events: list[EventEnvelope]) -> None:

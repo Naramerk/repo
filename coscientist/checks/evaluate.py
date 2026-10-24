@@ -37,7 +37,6 @@ from coscientist.core.execution.domain import (
 )
 
 
-
 def _as_float(value: object, *, what: str) -> float:
     if type(value) is bool or not isinstance(value, (int, float)):
         raise JournalFormatError(f"{what} must be numeric, got {type(value).__name__}")
@@ -435,7 +434,8 @@ def evaluate_code_check(
                             **prov,
                         }
                         used_sesoi = True
-                        s = _as_float(sesoi, what="sesoi"); ok = (-s) < ci["ci_low"] and ci["ci_high"] < s
+                        s = _as_float(sesoi, what="sesoi")
+                        ok = (-s) < ci["ci_low"] and ci["ci_high"] < s
                     else:
                         # No CI → not a TOST result; equivalence not assessable.
                         used_sesoi = False

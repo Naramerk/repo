@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from contextvars import ContextVar
 from typing import Any
 
@@ -130,7 +131,9 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         _put(proj, "attempts", event.entity_key, dict(p))
         task = _get(proj, "tasks", p["task_id"])
         if task is not None:
-            attempts = list(task["attempts"]) if "attempts" in task else []  # audit-ok: structural empty = no attempts yet
+            attempts = (
+                list(task["attempts"]) if "attempts" in task else []  # audit-ok: structural empty = no attempts
+            )
             if event.entity_key not in attempts:
                 attempts.append(event.entity_key)
             task = {
@@ -313,9 +316,15 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
                 raise TypeError(f"call_id must be str, got {type(raw_cid).__name__}")
             call_id = raw_cid
         paired = _get(proj, "fetch_calls", call_id) if call_id else None
-        fetch_calls = (
-            ({call_id: paired["tool"]} if paired is not None and "tool" in paired and isinstance(paired["tool"], str) else {})  # audit-ok: structural empty = no paired tool
-        )
+        # audit-ok: structural empty = no paired tool
+        if (
+            paired is not None
+            and "tool" in paired
+            and isinstance(paired["tool"], str)
+        ):
+            fetch_calls = {call_id: paired["tool"]}
+        else:
+            fetch_calls = {}
         if not source_fetched_paired_with_fetch_call(payload, fetch_calls):
             return
         if "digest" not in payload or payload["digest"] is None:
@@ -409,7 +418,7 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
             },
         )
 
-def fold_events(events: list[EventEnvelope]) -> ProjectionMap:
+def fold_events(events: Sequence[EventEnvelope]) -> ProjectionMap:
     proj: ProjectionMap = {}  # audit-ok: structural empty = new projection map
     for ev in events:
         apply_to_map(proj, ev)

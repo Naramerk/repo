@@ -2,74 +2,12 @@
 
 from __future__ import annotations
 
-def _or_empty_str(value: object) -> str:
-    if value is None:
-        return ""  # audit-ok: structural absent → empty str
-    if not isinstance(value, str):
-        return str(value)  # audit-ok: coerce after None gate for wire display
-    return value
-
-
-def _or_zero_int(value: object) -> int:
-    if value is None:
-        return 0  # audit-ok: structural absent → 0
-    if type(value) is bool or not isinstance(value, int):
-        raise TypeError(f"expected int|None, got {type(value).__name__}")
-    return value
-
-
 import asyncio
 import logging
 from collections.abc import Mapping
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any
-
-_DEFAULT_MAX_ATTEMPTS = 3
-_DEFAULT_TRUE = True
-_DEFAULT_FALSE = False
-_DEFAULT_EVENT_TYPE = "CatalogErrorRaised"
-_DEFAULT_RESULT_CLASS = "infra"
-_DEFAULT_KIND_POINT = "point"
-_DEFAULT_PRODUCER_AGENT = "agent"
-_EMPTY_TUPLE = ()
-
-
-def _or_empty_list(value: object) -> list:
-    if value is None:
-        return []  # audit-ok: structural absent → empty list
-    if isinstance(value, list):
-        return value
-    return list(value)  # type: ignore[arg-type]
-
-
-def _or_empty_dict(value: object) -> dict:
-    if value is None:
-        return {}  # audit-ok: structural absent → empty dict
-    if isinstance(value, dict):
-        return value
-    raise TypeError(f"expected dict|None, got {type(value).__name__}")
-
-
-def _or_empty_tuple(value: object) -> tuple:
-    if value is None:
-        return ()  # audit-ok: structural absent → empty tuple
-    if isinstance(value, tuple):
-        return value
-    return tuple(value)  # type: ignore[arg-type]
-
-
-def _attempt_get(attempt: Any, name: str) -> Any:
-    if isinstance(attempt, dict):
-        return attempt.get(name)
-    return getattr(attempt, name)
-
-
-def _attempt_req(attempt: Any, name: str) -> Any:
-    if isinstance(attempt, dict):
-        return attempt[name]
-    return getattr(attempt, name)
-
 
 from coscientist.checks.evaluate import evaluate_task_checks, role_from_catalog
 from coscientist.core.claims.reasons import CloseReason, TaskReason
@@ -110,6 +48,77 @@ from coscientist.core.execution.domain import (
 )
 from coscientist.core.execution.inputs import claim_nodes_from_attempt
 from coscientist.core.execution.outcome import compute_outcome
+
+
+def _or_empty_str(value: object) -> str:
+    if value is None:
+        return ""  # audit-ok: structural absent → empty str
+    if not isinstance(value, str):
+        return str(value)  # audit-ok: coerce after None gate for wire display
+    return value
+
+
+def _or_zero_int(value: object) -> int:
+    if value is None:
+        return 0  # audit-ok: structural absent → 0
+    if type(value) is bool or not isinstance(value, int):
+        raise TypeError(f"expected int|None, got {type(value).__name__}")
+    return value
+
+
+_DEFAULT_MAX_ATTEMPTS = 3
+_DEFAULT_TRUE = True
+_DEFAULT_FALSE = False
+_DEFAULT_EVENT_TYPE = "CatalogErrorRaised"
+_DEFAULT_RESULT_CLASS = "infra"
+_DEFAULT_KIND_POINT = "point"
+_DEFAULT_PRODUCER_AGENT = "agent"
+_EMPTY_TUPLE = ()
+
+
+def _or_empty_list(value: object) -> list[Any]:
+    if value is None:
+        return []  # audit-ok: structural absent → empty list
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    raise TypeError(f"expected list|tuple|None, got {type(value).__name__}")
+
+
+def _or_empty_dict(value: object) -> dict:
+    if value is None:
+        return {}  # audit-ok: structural absent → empty dict
+    if isinstance(value, dict):
+        return value
+    raise TypeError(f"expected dict|None, got {type(value).__name__}")
+
+
+def _or_empty_tuple(value: object) -> tuple:
+    if value is None:
+        return ()  # audit-ok: structural absent → empty tuple
+    if isinstance(value, tuple):
+        return value
+    return tuple(value)  # type: ignore[arg-type]
+
+
+def _attempt_get(attempt: Any, name: str) -> Any:
+    """Optional attempt flag: missing → None (only explicit True counts for taint)."""
+    if isinstance(attempt, dict):
+        # audit-ok: optional flag; absent ≢ False invent for security path —
+        # caller uses `is True`
+        return attempt.get(name)
+    try:
+        return getattr(attempt, name)
+    except AttributeError:
+        return None  # audit-ok: duck-typed attempt stubs; journaled attempts carry the field
+
+
+def _attempt_req(attempt: Any, name: str) -> Any:
+    if isinstance(attempt, dict):
+        return attempt[name]
+    return getattr(attempt, name)
+
 
 log = logging.getLogger(__name__)
 
@@ -629,7 +638,9 @@ def _derive_claim_core_attrs(
             "severe": None,  # never pre-trust
             "refute_capable": None,
             "intent": "refute",  # probe capability gate only
-            "check_role": ("prediction" if has_prediction_check else role),  # audit-ok: role from prediction check presence
+            "check_role": (
+                "prediction" if has_prediction_check else role  # audit-ok: role from prediction check presence
+            ),
             "criterion_frozen_at_seq": None,
             "first_cited_evidence_seq": None,
         },
@@ -731,14 +742,15 @@ class Executor:
         self.get_attempt = get_attempt
         self.get_task = get_task
         self.on_events = on_events  # callback after successful append (project local)
-        self.review_statuses = review_statuses
-        if self.review_statuses is None:
-            self.review_statuses = {}  # audit-ok: structural absent → empty container
+        if review_statuses is None:
+            review_statuses = {}  # audit-ok: structural absent → empty container
+        self.review_statuses: dict[str, ReqStatus] = review_statuses
         # PR13: journaled judge state (rebuilt via apply_judge_journal on reopen).
         self.judge_retry: dict[str, int] = {}  # audit-ok: structural empty = judge retry counts
         self.failure_kinds: dict[str, str] = {}  # audit-ok: structural empty = failure kind map
         self._pending_outputs: dict[str, AgentTaskOutput] = {}  # audit-ok: structural empty = pending outputs
         self._output_digests: dict[str, str] = {}  # audit-ok: structural empty = output digests
+        self._runtime_attempts: dict[str, Any] | None = None
         self.get_graph = get_graph
         self.get_results = get_results
         # PR15: folded ArtifactRegistered(stamped) kinds (never trust meta alone).
@@ -981,7 +993,9 @@ class Executor:
         if timeout_checks:
             provenance = _provenance(self.get_attempt(attempt_id))
             kinds = [
-                _or_empty_str(_or_empty_dict(c.effect).get('timeout_kind')) for c in timeout_checks if isinstance(c.effect, dict)
+                _or_empty_str(_or_empty_dict(c.effect).get("timeout_kind"))
+                for c in timeout_checks
+                if isinstance(c.effect, dict)
             ]
 
             # Structural: ≥2 prediction/refute-role timeouts on this TASK

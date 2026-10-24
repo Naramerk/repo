@@ -40,7 +40,7 @@ from coscientist.core.plan.share_alloc import (
 )
 from coscientist.experimental.costly import CostlyEffect, costly_gate
 from coscientist.experimental.hitl_costly import _decision_for_effect, _skip_reason
-from tests.helpers import make_test_study, default_test_hitl_policy
+from tests.helpers import default_test_hitl_policy, make_test_study
 
 
 class _RT:
@@ -448,7 +448,7 @@ def test_blocker10_decision_unknown_effect_raises():
 def test_blocker11_shares_direct_access_for_plan_key():
     from datetime import datetime, timezone
 
-    from coscientist.core.execution.domain import Budget, HitlPolicy, Study, TaskSpec
+    from coscientist.core.execution.domain import Budget, TaskSpec
 
     study = make_test_study(
         study_id="s",
@@ -1276,7 +1276,6 @@ def test_loop_state_non_dict_raises():
 
 
 def test_hitl_policy_gate_unknown_kind_returns_none():
-    from coscientist.core.execution.domain import HitlPolicy
 
     assert default_test_hitl_policy().gate("not_a_real_gate") is None
 
@@ -1663,7 +1662,6 @@ def test_reviews_pending_excludes_unassessed_alias():
 def test_replan_budget_negative_span_raises():
     from datetime import UTC, datetime, timedelta
 
-    from coscientist.core.execution.domain import HitlPolicy, Study
 
     now = datetime.now(UTC)
     s = make_test_study(

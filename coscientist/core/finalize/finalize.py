@@ -2,43 +2,6 @@
 
 from __future__ import annotations
 
-def _or_empty_str(value: object) -> str:
-    if value is None:
-        return ""  # audit-ok: structural absent → empty str
-    if not isinstance(value, str):
-        return str(value)  # audit-ok: coerce after None gate for wire display
-    return value
-
-
-def _or_zero_int(value: object) -> int:
-    if value is None:
-        return 0  # audit-ok: structural absent → 0
-    if type(value) is bool or not isinstance(value, int):
-        raise TypeError(f"expected int|None, got {type(value).__name__}")
-    return value
-
-
-
-_DEFAULT_FALSE = False
-_DEFAULT_CONTRIB_LIMIT = 10
-_UNKNOWN_TOOL = "?"
-
-
-def _or_empty_list(value: object) -> list:
-    if value is None:
-        return []  # audit-ok: custom_checks isolate → empty list  # audit-ok: structural absent → empty list
-    if isinstance(value, list):
-        return value
-    return list(value)  # type: ignore[arg-type]
-
-
-def _or_empty_dict(value: object) -> dict:
-    if value is None:
-        return {}  # audit-ok: structural absent → empty dict
-    if isinstance(value, dict):
-        return value
-    raise TypeError(f"expected dict|None, got {type(value).__name__}")
-
 import logging
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal
@@ -62,6 +25,46 @@ from coscientist.core.execution.domain import Task, TaskOutcome, TaskState
 from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
 from coscientist.core.finalize.minimal_report import build_minimal_report, render_markdown_report
 from coscientist.core.finalize.study_view import study_view
+
+
+def _or_empty_str(value: object) -> str:
+    if value is None:
+        return ""  # audit-ok: structural absent → empty str
+    if not isinstance(value, str):
+        return str(value)  # audit-ok: coerce after None gate for wire display
+    return value
+
+
+def _or_zero_int(value: object) -> int:
+    if value is None:
+        return 0  # audit-ok: structural absent → 0
+    if type(value) is bool or not isinstance(value, int):
+        raise TypeError(f"expected int|None, got {type(value).__name__}")
+    return value
+
+
+_DEFAULT_FALSE = False
+_DEFAULT_CONTRIB_LIMIT = 10
+_UNKNOWN_TOOL = "?"
+
+
+def _or_empty_list(value: object) -> list[Any]:
+    if value is None:
+        return []  # audit-ok: structural absent → empty list
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    raise TypeError(f"expected list|tuple|None, got {type(value).__name__}")
+
+
+def _or_empty_dict(value: object) -> dict:
+    if value is None:
+        return {}  # audit-ok: structural absent → empty dict
+    if isinstance(value, dict):
+        return value
+    raise TypeError(f"expected dict|None, got {type(value).__name__}")
+
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
@@ -684,7 +687,8 @@ async def _build_rich_payload(
         if ev.type == "JudgeCasCorrupt":
             line = _or_empty_dict(ev.payload).get("report_line")
             if line is None:
-                line = "не выполнено: внутренняя ошибка (judge CAS)"  # audit-ok: structural absent JudgeCasCorrupt.report_line
+                # audit-ok: structural absent JudgeCasCorrupt.report_line
+                line = "не выполнено: внутренняя ошибка (judge CAS)"
             if line not in contrib:
                 contrib.append(_or_empty_str(line))
     # Upcaster-coerced unknown final_type → report line on plan questions.

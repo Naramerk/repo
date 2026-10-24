@@ -34,7 +34,7 @@ from coscientist.core.plan.loop_predicates import (
     scope_fingerprint,
     validate_loop_predicate,
 )
-from tests.helpers import make_test_study, default_test_hitl_policy, attach_executor, close_runtime, open_runtime
+from tests.helpers import attach_executor, close_runtime, default_test_hitl_policy, make_test_study, open_runtime
 
 
 def _body(key: str = "BODY", *, depends_on: list[str] | None = None) -> list[TaskSpec]:
@@ -935,7 +935,6 @@ def test_survivors_le_real_graph_scope_filter():
     from datetime import datetime, timezone
 
     from coscientist.core.claims.graph import GraphStore, default_execution_registry
-    from coscientist.core.execution.domain import HitlPolicy, Study
 
     now = datetime.now(timezone.utc)
     loop_key = "EXP-LOOP"

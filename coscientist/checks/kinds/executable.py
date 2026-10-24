@@ -33,7 +33,6 @@ from coscientist.checks.kinds._util import (
     soft_note,
     store_log,
 )
-from coscientist.core.events.upcasters import require_exact_int
 from coscientist.checks.sandbox import (
     SandboxStatus,
     limits_from_check,
@@ -42,6 +41,7 @@ from coscientist.checks.sandbox import (
 )
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import CatalogError, JournalFormatError, SandboxInfraError
+from coscientist.core.events.upcasters import require_exact_int
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.domain import (
     AgentTaskOutput,

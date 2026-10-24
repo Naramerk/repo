@@ -33,9 +33,7 @@ AUDIT_OK_RE = re.compile(r"audit-ok\s*:", re.IGNORECASE)
 _DOMAIN_NUMBERS = frozenset(
     {
         0,
-        0.0,
         1,
-        1.0,
         2,
         3,
         8,
@@ -307,9 +305,9 @@ class HeuristicVisitor(ast.NodeVisitor):
         args = node.args
         defaults = list(args.defaults)
         if defaults:
-            for arg, default in zip(args.args[-len(defaults) :], defaults):
+            for arg, default in zip(args.args[-len(defaults) :], defaults, strict=True):
                 self._flag_param_default(arg.arg, default)
-        for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+        for arg, default in zip(args.kwonlyargs, args.kw_defaults, strict=True):
             if default is not None:
                 self._flag_param_default(arg.arg, default)
 

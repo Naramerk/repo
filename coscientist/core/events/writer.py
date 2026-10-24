@@ -31,6 +31,11 @@ class StudyWriter:
         # circular import with source_fetch.SourceFetchIndex.
         self.source_fetch_idx: Any | None = None
         self.source_fetch_seq = 0
+        # PR18 effect/taint fold caches (attached by tools.effects; optional).
+        self._pr18_effect_idx: Any | None = None
+        self._pr18_effect_seq: int = 0  # audit-ok: structural zero = effect fold seq unset
+        self._pr18_taint_by_attempt: dict[str, bool] | None = None
+        self._pr18_taint_seq: int = 0  # audit-ok: structural zero = taint fold seq unset
 
     @property
     def depth(self) -> int:

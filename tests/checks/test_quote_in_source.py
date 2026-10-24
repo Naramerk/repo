@@ -31,7 +31,6 @@ from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     CodeCheck,
-    HitlPolicy,
     Outcome,
     PlanRole,
     ReqStatus,
@@ -51,7 +50,7 @@ from coscientist.tools.effects import (
     _mint_fetch_capability_for_tests,
     invoke_tool,
 )
-from tests.helpers import default_test_hitl_policy, attach_executor, close_runtime, open_runtime, record_success
+from tests.helpers import attach_executor, close_runtime, default_test_hitl_policy, open_runtime, record_success
 
 
 def _cap(

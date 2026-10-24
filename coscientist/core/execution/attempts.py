@@ -8,6 +8,7 @@ from typing import Any
 
 from coscientist.core.claims.claims import compute_verdict_snapshots
 from coscientist.core.claims.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import attempt_id, task_id
 from coscientist.core.events.schema_versions import (
@@ -88,10 +89,17 @@ class AttemptsMixin:
     study: Any
     tasks: dict[str, Task]
     attempts: dict[str, dict[str, Any]]
+    results: dict[str, dict[str, Any]]
+    plans: dict[str, dict[str, Any]]
+    graph: Any
+    artifacts: Any
+    executor: Any
     clock: Any
     max_attempts: int
     dep_outputs: dict[str, dict[str, str]]
     dep_provenance: dict[str, Provenance]
+    verdict_snapshots: dict[str, dict[str, Any]]
+    _foreach_children: dict[str, list[str]]
     _attempt_tasks: dict[str, asyncio.Task[Any]]
     _lease_lost: bool
     _retry_at: dict[str, datetime]
@@ -287,7 +295,6 @@ class AttemptsMixin:
             raise RuntimeError("already has open attempt")
         # Only charged attempts consume the retry budget (infra does not charge).
         # Sequence ``n`` is always len+1 so uncharged retries keep unique attempt ids.
-        from coscientist.core.events.errors import JournalFormatError
 
         charged = 0
         for aid in task.attempts:
@@ -439,7 +446,9 @@ class AttemptsMixin:
             kids = children_map
             reason = e.reason
             if not isinstance(reason, str):
-                raise TypeError(f"InputUnavailable.reason must be str, got {type(reason).__name__}")
+                raise TypeError(
+                    f"InputUnavailable.reason must be str, got {type(reason).__name__}"
+                ) from e
             if any(i.from_task in kids and not kids[i.from_task] for i in task.spec.inputs):
                 detail = "foreach_empty"
             elif reason == "foreach_quorum_gt_children":
@@ -667,7 +676,6 @@ class AttemptsMixin:
             )
         ]
         # Budget uses charged attempts (required stamped field on every attempt row).
-        from coscientist.core.events.errors import JournalFormatError
 
         charged = 0
         for a in task.attempts:
@@ -713,7 +721,6 @@ class AttemptsMixin:
 
     def _provenance_for_retry(self, tid: str) -> Provenance:
         """Last closed attempt's provenance (survives crash/reopen via the journal)."""
-        from coscientist.core.events.errors import JournalFormatError
 
         task = self.tasks.get(tid)
         if task is None:

@@ -5,9 +5,10 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
+from pydantic import ValidationError
+
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.errors import JournalFormatError, LeaseLost
-from coscientist.core.events.upcasters import require_exact_int
 from coscientist.core.events.events import (
     EventEnvelope,
     make_idem,
@@ -17,6 +18,7 @@ from coscientist.core.events.schema_versions import (
     PLAN_EXPANDED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
 )
+from coscientist.core.events.upcasters import require_exact_int
 from coscientist.core.execution.domain import (
     ForEachSpec,
     InputSpec,

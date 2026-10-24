@@ -46,6 +46,7 @@ def _as_float(value: object, *, what: str) -> float:
 
 def _as_decimal(value: object, *, what: str):
     from decimal import Decimal
+
     from coscientist.core.events.errors import JournalFormatError
     if isinstance(value, Decimal):
         return value
@@ -87,6 +88,11 @@ class LocalProjectMixin:
     _loop_done: set[str]
     question_disposals: dict[str, dict[str, Any]]
     artifact_kinds: dict[str, str]
+    artifacts: Any
+    dep_outputs: dict[str, dict[str, str]]
+    dep_provenance: dict[str, Any]
+    _task_spent_rub: dict[str, Decimal]
+    _task_budget_alloc: dict[str, Decimal]
     _disposal_rejects: list[dict[str, Any]]
     _stamp_meta_missing: list[dict[str, Any]]
     _duplicate_study_finalized: list[dict[str, Any]]

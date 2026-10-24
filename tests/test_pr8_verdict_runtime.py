@@ -19,12 +19,10 @@ from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import claim_node_id, question_node_id
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
-    HitlPolicy,
     InputSpec,
     PlanRole,
     QuestionSpec,
     RequirementRef,
-    Study,
     Task,
     TaskKind,
     TaskOutcome,
@@ -38,7 +36,7 @@ from coscientist.core.execution.inputs import (
     collect_bindable_claims,
     verdict_binding_digest,
 )
-from tests.helpers import make_test_study, default_test_hitl_policy, attach_executor, close_runtime, open_runtime
+from tests.helpers import attach_executor, close_runtime, default_test_hitl_policy, make_test_study, open_runtime
 from tests.test_inputs import _task
 
 _DERIVED_OK = {
@@ -1429,7 +1427,6 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
         excluded_claims_report,
     )
     from coscientist.core.claims.rules import verdict
-    from coscientist.core.execution.domain import Study
 
     valid = [
         RuntimeClaim(
@@ -1553,7 +1550,6 @@ def test_unknown_role_exclusion_never_forces_verdict():
         compute_verdict_snapshots,
         excluded_claims_report,
     )
-    from coscientist.core.execution.domain import Study
 
     bad = RuntimeClaim(
         criterion_status="unassessed",
@@ -1625,7 +1621,6 @@ def test_unknown_role_exclusion_never_forces_verdict():
 def test_validity_only_evidence_inconclusive():
     """A validity failure as the only evidence → inconclusive (validity_failed)."""
     from coscientist.core.claims.claims import RuntimeClaim, compute_verdict_snapshots
-    from coscientist.core.execution.domain import Study
 
     g = GraphStore(default_execution_registry())
     sid = "st_val_only"

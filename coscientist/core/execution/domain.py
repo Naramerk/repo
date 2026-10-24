@@ -176,7 +176,7 @@ HitlGateKind = Literal[
 
 # Named schema/wire defaults (not StudyConfig domain numbers).
 _DEFAULT_TRUE = True
-_DEFAULT_STR_HEADLESS = 'headless'
+_DEFAULT_STR_HEADLESS: Literal["headless"] = "headless"  # audit-ok: named schema/wire default
 DEFAULT_HITL_DECISION_DEFAULTS: dict[str, str] = {
     "plan_approval": "human_timeout",
     "result_acceptance": "accept_computed",
@@ -184,20 +184,20 @@ DEFAULT_HITL_DECISION_DEFAULTS: dict[str, str] = {
     "side_effect": "deny",
     "proposed_check": "reject",
 }
-_DEFAULT_EMPTY_STR = ''
-_DEFAULT_STR_FORBID = 'forbid'
-_DEFAULT_STR_ARTIFACT = 'artifact'
-_DEFAULT_STR_SELECTED = 'selected'
-_DEFAULT_STR_VERDICT = 'verdict'
+_DEFAULT_EMPTY_STR = ""
+_DEFAULT_STR_FORBID: Literal["forbid"] = "forbid"  # audit-ok: named schema/wire default
+_DEFAULT_STR_ARTIFACT: Literal["artifact"] = "artifact"  # audit-ok: named schema/wire default
+_DEFAULT_STR_SELECTED: Literal["selected"] = "selected"  # audit-ok: named schema/wire default
+_DEFAULT_STR_VERDICT: Literal["verdict"] = "verdict"  # audit-ok: named schema/wire default
 _DEFAULT_FALSE = False
 _DEFAULT_INT_100 = 100
 _DEFAULT_INT_1000000 = 1000000
 _DEFAULT_INT_500 = 500
-_DEFAULT_STR_ALL = 'all'
-_DEFAULT_STR_AGENT = 'agent'
-_DEFAULT_STR_1 = '1'
-_DEFAULT_STR_TWO_SIDED = 'two_sided'
-_DEFAULT_STR_QUESTION = 'question'
+_DEFAULT_STR_ALL: Literal["all"] = "all"  # audit-ok: named schema/wire default
+_DEFAULT_STR_AGENT: Literal["agent"] = "agent"  # audit-ok: named schema/wire default
+_DEFAULT_STR_1 = "1"
+_DEFAULT_STR_TWO_SIDED: Literal["two_sided"] = "two_sided"  # audit-ok: named schema/wire default
+_DEFAULT_STR_QUESTION: Literal["question"] = "question"  # audit-ok: named schema/wire default
 
 class GateConfig(Frozen):
     """Per-gate HITL config (DESIGN §7.3 / RESEARCH_MODEL §5.2).

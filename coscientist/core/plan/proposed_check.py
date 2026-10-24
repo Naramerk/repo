@@ -23,58 +23,10 @@ Unicode / digests:
 
 from __future__ import annotations
 
-def _or_empty_str(value: object) -> str:
-    if value is None:
-        return ""  # audit-ok: structural absent → empty str
-    if not isinstance(value, str):
-        return str(value)  # audit-ok: coerce after None gate for wire display
-    return value
-
-
-def _or_zero_int(value: object) -> int:
-    if value is None:
-        return 0  # audit-ok: structural absent → 0
-    if type(value) is bool or not isinstance(value, int):
-        raise TypeError(f"expected int|None, got {type(value).__name__}")
-    return value
-
-
 import asyncio
 import math
 import unicodedata
 from contextlib import asynccontextmanager
-
-_DEFAULT_TRUE = True
-_DEFAULT_FALSE = False
-_DEFAULT_TARGET_KIND = "question"
-_DEFAULT_PREDICTED_DIRECTION = "two_sided"
-_DEFAULT_APPROVAL_SOURCE = "hitl"
-_DEFAULT_REJECT_REASON = "rejected"
-_DEFAULT_REVIEWER_REASON = "reviewer_decision"
-_MISSING_BOUND = "bound_*"
-
-
-def _or_empty_list(value: object) -> list:
-    if value is None:
-        return []  # audit-ok: structural absent → empty list
-    if isinstance(value, list):
-        return value
-    return list(value)  # type: ignore[arg-type]
-
-
-def _or_empty_dict(value: object) -> dict:
-    if value is None:
-        return {}  # audit-ok: structural absent → empty dict
-    if isinstance(value, dict):
-        return value
-    raise TypeError(f"expected dict|None, got {type(value).__name__}")
-
-
-def _payload_str(d: dict, key: str) -> str:
-    if key not in d:
-        raise KeyError(key)
-    return _or_empty_str(d[key])
-
 from datetime import timedelta
 from typing import Any, AsyncIterator, Literal, Mapping
 
@@ -109,6 +61,57 @@ from coscientist.core.execution.domain import (
     RequirementRef,
     TaskOutcome,
 )
+
+
+def _or_empty_str(value: object) -> str:
+    if value is None:
+        return ""  # audit-ok: structural absent → empty str
+    if not isinstance(value, str):
+        return str(value)  # audit-ok: coerce after None gate for wire display
+    return value
+
+
+def _or_zero_int(value: object) -> int:
+    if value is None:
+        return 0  # audit-ok: structural absent → 0
+    if type(value) is bool or not isinstance(value, int):
+        raise TypeError(f"expected int|None, got {type(value).__name__}")
+    return value
+
+
+_DEFAULT_TRUE = True
+_DEFAULT_FALSE = False
+_DEFAULT_TARGET_KIND: Literal["question"] = "question"  # audit-ok: named schema/wire default (not Study domain invent)
+_DEFAULT_PREDICTED_DIRECTION = "two_sided"
+_DEFAULT_APPROVAL_SOURCE = "hitl"
+_DEFAULT_REJECT_REASON = "rejected"
+_DEFAULT_REVIEWER_REASON = "reviewer_decision"
+_MISSING_BOUND = "bound_*"
+
+
+def _or_empty_list(value: object) -> list[Any]:
+    if value is None:
+        return []  # audit-ok: structural absent → empty list
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    raise TypeError(f"expected list|tuple|None, got {type(value).__name__}")
+
+
+def _or_empty_dict(value: object) -> dict:
+    if value is None:
+        return {}  # audit-ok: structural absent → empty dict
+    if isinstance(value, dict):
+        return value
+    raise TypeError(f"expected dict|None, got {type(value).__name__}")
+
+
+def _payload_str(d: Mapping[str, Any], key: str) -> str:
+    if key not in d:
+        raise KeyError(key)
+    return _or_empty_str(d[key])
+
 
 ProposalStatus = Literal["proposed", "approved", "rejected"]
 ApprovalSource = Literal["hitl", "api", "reviewer"]
@@ -229,10 +232,17 @@ def _proposals_map(runtime: Any) -> dict[str, dict[str, Any]]:
     return m
 
 def _reviews_map(runtime: Any) -> dict[str, dict[str, Any]]:
-    m = runtime._proposed_check_reviews
-    if not isinstance(m, dict):
-        runtime._proposed_check_reviews = {}
+    try:
         m = runtime._proposed_check_reviews
+    except AttributeError:
+        m = None
+    if m is None:
+        runtime._proposed_check_reviews = {}  # audit-ok: lazy fold map init ≡ absent
+        m = runtime._proposed_check_reviews
+    elif not isinstance(m, dict):
+        raise JournalFormatError(
+            f"_proposed_check_reviews must be dict, got {type(m).__name__}"
+        )
     return m
 
 def proposal_count(runtime: Any) -> int:

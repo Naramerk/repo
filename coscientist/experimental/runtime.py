@@ -28,7 +28,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
         self._delegated_costly_spent: Decimal = Decimal("0")
         self.delegated_budget: DelegatedBudget | None = None
         self._pending_costly_events = {}
-        self._hitl_notices = []
+        self._hitl_notices: list[dict[str, Any]] = []  # audit-ok: structural empty = no hitl notices yet
 
     def _project_local(self, ev: EventEnvelope | StoredEvent) -> None:
         p = ev.payload

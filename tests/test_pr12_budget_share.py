@@ -20,7 +20,6 @@ from coscientist.core.execution.domain import (
     Budget,
     ExpansionRequest,
     ForEachSpec,
-    HitlPolicy,
     QuestionSpec,
     RequirementRef,
     TaskOutcome,

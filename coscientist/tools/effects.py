@@ -13,6 +13,32 @@ Read tools are not journaled. Write / external_effect keys include
 
 from __future__ import annotations
 
+import json
+import secrets
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any
+
+from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.events.events import (
+    EventEnvelope,
+    StoredEvent,
+    UnstampedEvent,
+    make_idem,
+)
+from coscientist.core.events.upcasters import writer_schema_version
+from coscientist.core.events.writer import StudyWriter
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.execution.source_fetch import (
+    FetchCapability,
+    register_fetch_capability_verifier,
+)
+from coscientist.core.execution.taint import mark_attempt_tainted
+from coscientist.core.execution.tool_registry import resolve_effect, resolve_spec
+from coscientist.tools.contract import CallCtx, Tool, ToolError, ToolOutput
+from coscientist.tools.gate import side_effect_allowed
+
 _TEST_STUDY_ID = "st_test"
 _EFFECT_EVENT_SCHEMA_VERSION = 1
 
@@ -47,32 +73,6 @@ def _or_zero_int(value: object) -> int:
     return value
 
 
-import json
-import secrets
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from typing import Any
-
-from coscientist.core.events.digest import canonical_json, sha256_hex
-from coscientist.core.events.errors import ArtifactRejected
-from coscientist.core.events.events import (
-    EventEnvelope,
-    StoredEvent,
-    UnstampedEvent,
-    make_idem,
-)
-from coscientist.core.events.upcasters import writer_schema_version
-from coscientist.core.events.writer import StudyWriter
-from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
-from coscientist.core.execution.source_fetch import (
-    FetchCapability,
-    register_fetch_capability_verifier,
-)
-from coscientist.core.execution.taint import mark_attempt_tainted
-from coscientist.core.execution.tool_registry import resolve_effect, resolve_spec
-from coscientist.tools.contract import CallCtx, Tool, ToolError, ToolOutput
-from coscientist.tools.gate import side_effect_allowed
-
 # Issued capability registry — private to this module (AST + import-linter).
 # FetchCapability is an opaque id; binding fields live only here.
 
@@ -85,10 +85,10 @@ class _IssuedFetchCap:
     attempt_id: str
 
 
-_ISSUED_FETCH_CAPS = {}
+_ISSUED_FETCH_CAPS: dict[str, Any] = {}  # audit-ok: structural empty = no issued fetch caps yet
 # After verify consumes an issued id, a one-shot write permit for SourceFetched
 # remains until store/writer takes it (bound to the same capability id).
-_SOURCE_FETCHED_WRITE_PERMITS = {}
+_SOURCE_FETCHED_WRITE_PERMITS: dict[str, Any] = {}  # audit-ok: structural empty = no write permits yet
 
 
 def _mint_fetch_capability(

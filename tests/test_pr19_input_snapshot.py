@@ -1364,7 +1364,6 @@ async def test_api_corrupt_deflate_study_finalized_not_500(tmp_path, catalog):
     import base64
 
     from coscientist.api.studies import post_studies
-
     from tests.helpers import make_create_study_body_dict
 
     data = _corrupt_deflate_zip()
@@ -1791,7 +1790,6 @@ async def test_api_zip_member_errors_study_finalized_not_500(tmp_path, catalog):
     import base64
 
     from coscientist.api.studies import post_studies
-
     from tests.helpers import make_create_study_body_dict
 
     for factory in (_zip_encrypted, _zip_method_99, _zip_corrupt_bzip2_member):

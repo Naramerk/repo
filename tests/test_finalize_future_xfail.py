@@ -11,16 +11,14 @@ from datetime import UTC, datetime
 import pytest
 
 from coscientist.core.execution.domain import (
-    HitlPolicy,
     PlanRole,
-    Study,
     Task,
     TaskKind,
     TaskOutcome,
     TaskSpec,
     TaskState,
 )
-from tests.helpers import make_test_study
+from tests.helpers import default_test_hitl_policy, make_test_study
 
 
 @pytest.mark.xfail(

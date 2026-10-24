@@ -9,7 +9,7 @@ import pytest
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.execution.artifacts import LocalArtifactStore
-from coscientist.core.execution.domain import HitlPolicy, QuestionSpec, TaskKind, TaskState
+from coscientist.core.execution.domain import QuestionSpec, TaskKind, TaskState
 from coscientist.core.finalize.finalize import last_resort_payload
 from coscientist.core.finalize.finalize_nodes import (
     conclusion_id_for_question,

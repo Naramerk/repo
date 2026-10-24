@@ -8,7 +8,6 @@ Finalizer/cancel in finalize/cancel. HITL / costly / fork / report are
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -28,7 +27,7 @@ from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.attempts import AttemptsMixin
-from coscientist.core.execution.domain import Provenance, Study, Task, TaskOutcome, TaskState
+from coscientist.core.execution.domain import Study, TaskOutcome, TaskState
 from coscientist.core.execution.local_project import LocalProjectMixin
 from coscientist.core.finalize.finalize import (
     FinalizeTrigger,
@@ -40,7 +39,6 @@ from coscientist.core.finalize.finalize import (
 from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.cancel import cancel_study as _cancel_study
 from coscientist.core.plan.intake import IntakeRefuse
-
 
 # Charged-attempt cap before FAILED (DESIGN §3.3); not a StudyConfig field.
 DEFAULT_MAX_ATTEMPTS = 3
@@ -128,8 +126,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self._loop_capped = {}
         self._loop_done = set()
         # PR20: CheckProposed / Approved / Rejected (folded from journal).
-        self._check_proposals = {}
-        self._observations = []
+        self._check_proposals: dict[str, Any] = {}  # audit-ok: structural empty = no check proposals yet
+        self._observations: list[Any] = []  # audit-ok: structural empty = no observations yet
 
     def bind_executor(self, executor: Any) -> Any:
         """Wire production ``graph`` into Executor (laundering + about edges)."""

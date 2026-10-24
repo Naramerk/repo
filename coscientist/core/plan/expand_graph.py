@@ -115,7 +115,7 @@ def plan_graph_events(
 
 def _decomposes_parent_map(runtime: StudyRuntime) -> dict[str, str | None]:
     """Existing decomposes edges as question_id → parent_id (plus known roots)."""
-    parent_of = {}
+    parent_of: dict[str, str | None] = {}  # audit-ok: structural empty = collecting decomposes parents
 
     def _qid(node_id: str, node: Any) -> str:
         if node is None:

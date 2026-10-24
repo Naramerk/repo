@@ -322,7 +322,7 @@ def claim_nodes_from_attempt(
     all claims. Scientific FAILED/PARTIAL (criteria not met) **keep** claims so
     ``not_met`` can refute (graph_schema invariant 10).
     """
-    drops = []
+    drops: list[dict[str, str]] = []  # audit-ok: structural empty = collecting drop records
     if infra_failure:
         return [], drops
     if provenance not in VALID_PROVENANCE:
@@ -801,8 +801,8 @@ def collect_bindable_claims(
     Skips claims whose producing attempt is an **infra** failure; scientific
     FAILED (criteria not met) remains bindable.
     """
-    known = set()
-    claim_provenance = {}
+    known: set[str] = set()
+    claim_provenance: dict[str, Provenance] = {}  # audit-ok: structural empty = collecting claim provenance
     if graph is None:
         return known, claim_provenance
     try:

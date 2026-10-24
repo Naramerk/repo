@@ -132,6 +132,7 @@ def costly_gate(
             },
         )
     if mode != "delegate":
+        why: str | None
         if budget is None:
             why = "нет бюджета"
         else:

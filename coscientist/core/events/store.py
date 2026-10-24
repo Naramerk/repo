@@ -222,6 +222,10 @@ class SqliteEventStore:
                     raise JournalFormatError(
                         f"lease.owner_nonce must be str, got {type(raw_nonce).__name__}"
                     )
+                if not raw_nonce:
+                    raise JournalFormatError(
+                        "lease.owner_nonce empty (pre-baseline journal unsupported)"
+                    )
                 held_nonce = raw_nonce
                 if exp > now and row["owner"] != owner:
                     raise LeaseLost(
