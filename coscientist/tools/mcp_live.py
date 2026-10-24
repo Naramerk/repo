@@ -16,6 +16,7 @@ from coscientist.mcp.config import (
     McpClientConfig,
     McpServers,
     StreamableHttpServerConfig,
+    unique_mcp_server_names,
 )
 from coscientist.mcp.errors import McpConfigError
 from coscientist.mcp.runtime import AsyncSleep, AsyncWaitFor, Clock
@@ -46,38 +47,22 @@ class McpLiveError(Exception):
     """Fail-closed live-bundle / literature-endpoint error."""
 
 
-class LiveHttpServer(BaseModel):
-    """One streamable-HTTP MCP server (docker-compose service endpoint)."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-
-    name: Identifier
-    url: str = Field(min_length=1)
-    api_key_env: Identifier | None
-    tools: dict[str, McpToolProfile] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def _url_and_tools(self) -> LiveHttpServer:
-        if any(ch.isspace() for ch in self.url):
-            raise ValueError(f"url must not contain whitespace: {self.url!r}")
-        for tool_name in self.tools:
-            if not tool_name or any(ch.isspace() for ch in tool_name):
-                raise ValueError(f"invalid tool name: {tool_name!r}")
-        return self
-
-
 class LiveMcpBundleConfig(BaseModel):
-    """Explicit HTTP servers + tool profiles for a live ToolRouter open."""
+    """Paired ``StreamableHttpServerConfig`` + ``McpServerRoute`` (same names, same order)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    servers: tuple[LiveHttpServer, ...] = Field(min_length=1)
+    http_servers: tuple[StreamableHttpServerConfig, ...] = Field(min_length=1)
+    routes: tuple[McpServerRoute, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def _unique(self) -> LiveMcpBundleConfig:
-        names = [s.name for s in self.servers]
-        if len(names) != len(set(names)):
-            raise ValueError(f"duplicate LiveHttpServer.name: {names}")
+    def _align(self) -> LiveMcpBundleConfig:
+        unique_mcp_server_names(self.http_servers)
+        ToolRouterConfig(servers=self.routes)  # unique server_name + tool ids
+        http_names = [s.name for s in self.http_servers]
+        route_names = [r.server_name for r in self.routes]
+        if http_names != route_names:
+            raise ValueError(f"http_servers/routes names diverge: http={http_names} routes={route_names}")
         return self
 
 
@@ -101,21 +86,22 @@ class McpToolRouterBundle(BaseModel):
 
 
 def streamable_servers(bundle: LiveMcpBundleConfig) -> McpServers:
-    return tuple(
-        StreamableHttpServerConfig(
-            transport="streamable_http",
-            name=s.name,
-            url=s.url,
-            api_key_env=s.api_key_env,
-        )
-        for s in bundle.servers
-    )
+    return bundle.http_servers
 
 
 def router_config(bundle: LiveMcpBundleConfig) -> ToolRouterConfig:
-    return ToolRouterConfig(
-        servers=tuple(McpServerRoute(server_name=s.name, tools=dict(s.tools)) for s in bundle.servers)
-    )
+    return ToolRouterConfig(servers=bundle.routes)
+
+
+def _require_exact_tools(
+    label: str,
+    tools: Mapping[str, McpToolProfile],
+    expected: frozenset[str],
+) -> dict[str, McpToolProfile]:
+    got = dict(tools)
+    if set(got) != expected:
+        raise McpLiveError(f"{label} tools must be exactly {sorted(expected)}; got {sorted(got)}")
+    return got
 
 
 def literature_live_bundle(
@@ -128,26 +114,27 @@ def literature_live_bundle(
     paper_analysis_tools: Mapping[str, McpToolProfile],
 ) -> LiveMcpBundleConfig:
     """``papers-search`` + ``paper-analysis`` with exact legacy tool sets."""
-    ps, pa = dict(papers_search_tools), dict(paper_analysis_tools)
-    if set(ps) != PAPERS_SEARCH_TOOLS:
-        raise McpLiveError(f"papers-search tools must be exactly {sorted(PAPERS_SEARCH_TOOLS)}; got {sorted(ps)}")
-    if set(pa) != PAPER_ANALYSIS_TOOLS:
-        raise McpLiveError(f"paper-analysis tools must be exactly {sorted(PAPER_ANALYSIS_TOOLS)}; got {sorted(pa)}")
+    ps = _require_exact_tools("papers-search", papers_search_tools, PAPERS_SEARCH_TOOLS)
+    pa = _require_exact_tools("paper-analysis", paper_analysis_tools, PAPER_ANALYSIS_TOOLS)
     return LiveMcpBundleConfig(
-        servers=(
-            LiveHttpServer(
+        http_servers=(
+            StreamableHttpServerConfig(
+                transport="streamable_http",
                 name=MCP_SERVER_PAPERS_SEARCH,
                 url=papers_search_url,
                 api_key_env=papers_search_api_key_env,
-                tools=ps,
             ),
-            LiveHttpServer(
+            StreamableHttpServerConfig(
+                transport="streamable_http",
                 name=MCP_SERVER_PAPER_ANALYSIS,
                 url=paper_analysis_url,
                 api_key_env=paper_analysis_api_key_env,
-                tools=pa,
             ),
-        )
+        ),
+        routes=(
+            McpServerRoute(server_name=MCP_SERVER_PAPERS_SEARCH, tools=ps),
+            McpServerRoute(server_name=MCP_SERVER_PAPER_ANALYSIS, tools=pa),
+        ),
     )
 
 
@@ -165,10 +152,13 @@ async def open_tool_router(
     clock: Clock,
     sleep: AsyncSleep,
     wait_for: AsyncWaitFor,
-    file_fetcher: FileFetcher | None = None,
-    http_transport: HttpTransport | None = None,
+    file_fetcher: FileFetcher | None,
+    http_transport: HttpTransport | None,
 ) -> tuple[McpClient, ToolRouter]:
-    """Build client, ``ToolRouter.open``; caller owns ``router.aclose``."""
+    """Build client, ``ToolRouter.open``; caller owns ``router.aclose``.
+
+    ``file_fetcher`` and ``http_transport`` are explicit (pass ``None`` when unused).
+    """
     try:
         client = McpClient(
             bundle.client,
@@ -181,5 +171,9 @@ async def open_tool_router(
     except McpConfigError as exc:
         raise ToolRouterError(f"failed to build McpClient: {exc}") from exc
     router = ToolRouter(bundle.router)
-    await router.open(client)
+    try:
+        await router.open(client)
+    except (ToolRouterError, OSError, TimeoutError):
+        await router.aclose()
+        raise
     return client, router
