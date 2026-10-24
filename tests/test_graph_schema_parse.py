@@ -56,7 +56,7 @@ def test_null_default_allowed():
 
 
 def test_duplicate_edge_registration():
-    spec = KindSpec(kind="e", description="e", fields=())
+    spec = KindSpec(kind="e", description="e", fields=(), discriminator=None)
     reg = KindRegistry()
     reg.register_edge(spec)
     with pytest.raises(ValueError, match="already registered"):

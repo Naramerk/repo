@@ -97,7 +97,8 @@ class KindSpec(Frozen):
     description: str = ""
     prefix: str | None = None
     fields: tuple[AttrFieldSpec, ...]
-    discriminator: str | None = None  # audit-ok[field_default]: None when kind has no variants arm
+    # No default: parser/tests pass None explicitly when kind has no variants.
+    discriminator: str | None
     variants: tuple[KindVariant, ...] = ()
 
 
@@ -554,6 +555,7 @@ def registry_from_mapping(data: dict[str, Any]) -> KindRegistry:
                 prefix=None,
                 fields=edge_fields,
                 description=_card_desc(_req(e, "card", ctx=ctx), ctx=ctx),
+                discriminator=None,
             ),
             pairs=pairs,
         )

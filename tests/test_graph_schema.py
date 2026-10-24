@@ -76,6 +76,40 @@ def test_pydantic_models_generate():
     ann = m["claim"].model_fields["target"].metadata
     assert any(isinstance(a, g.RefTo) and a.kinds == ("hypothesis", "question") for a in ann)
     assert g.py_type("datetime") is datetime
+    # Discriminated criterion: code/review require metric/op/target (runtime KindSpec).
+    code = m["criterion"](check="code", metric="n", op=">=", target="1")
+    assert code.check == "code" and code.metric == "n"
+    review = m["criterion"](check="review", metric="q", op="==", target="ok")
+    assert review.check == "review"
+
+
+@pytest.mark.parametrize(
+    "payload,match",
+    [
+        ({"check": "code"}, "metric"),
+        ({"check": "code", "metric": "n"}, "op"),
+        ({"check": "code", "metric": "n", "op": ">="}, "target"),
+        ({"check": "review"}, "metric"),
+        ({"check": "review", "metric": "q", "op": "=="}, "target"),
+        ({"check": "rubric", "affects_stance": True}, "metric"),
+        ({"check": "rubric", "affects_stance": False}, "rubric_digest"),
+        ({"check": "rubric"}, "no_variant_match"),
+    ],
+    ids=[
+        "code_missing_metric",
+        "code_missing_op",
+        "code_missing_target",
+        "review_missing_metric",
+        "review_missing_target",
+        "rubric_stance_true_missing_metric",
+        "rubric_stance_false_missing_digest",
+        "rubric_missing_affects_stance",
+    ],
+)
+def test_criterion_role_model_requires_variant_fields(payload, match):
+    """Role models must not weaken KindSpec: missing metric/op/target refuse for code/review."""
+    with pytest.raises(pydantic.ValidationError, match=match):
+        g.models(S)["criterion"](**payload)
 
 
 def _design_fields(cls):

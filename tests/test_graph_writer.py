@@ -124,7 +124,17 @@ def test_node_refuses(reg, kwargs, match):
 
 def test_attrs_on_fieldless_kind_refused():
     reg = KindRegistry()
-    reg.register_node(KindSpec(kind="bare", layer="research", schema_ref=None, description="b", prefix="B", fields=()))
+    reg.register_node(
+        KindSpec(
+            kind="bare",
+            layer="research",
+            schema_ref=None,
+            description="b",
+            prefix="B",
+            fields=(),
+            discriminator=None,
+        )
+    )
     node = GraphNode(node_id="n", kind="bare", study_id="st1", attrs={"x": 1})
     with pytest.raises(GraphWriterError, match="has no schema fields but attrs"):
         graph_node_upserted(**_nkw(reg, node=node))

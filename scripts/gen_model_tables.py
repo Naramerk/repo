@@ -109,38 +109,135 @@ def py_type(t):
     raise ValueError(t)
 
 
+def _fields_list(node_or_variant: dict) -> list:
+    fields = node_or_variant.get("fields")
+    if fields is None:
+        return []
+    if not isinstance(fields, list):
+        raise TypeError(f"fields must be a list, got {type(fields).__name__}")
+    return fields
+
+
+def _match_tag(match: dict) -> str:
+    return "|".join(f"{k}={v!r}" for k, v in match.items())
+
+
+def _literal_type(value: object):
+    if type(value) is bool or type(value) is int or type(value) is str:
+        return Literal[value]
+    raise TypeError(f"unsupported match value type: {type(value).__name__}")
+
+
+def _field_spec(fields: list, *, match: dict | None = None) -> dict:
+    """Build create_model field map; ``match`` locks discriminator keys to Literals."""
+    by_name: dict = {}
+    for f in fields:
+        if f.get("computed"):
+            continue
+        by_name[f["name"]] = dict(f)
+    if match is not None:
+        for key, value in match.items():
+            prev = by_name.get(key)
+            by_name[key] = {
+                "name": key,
+                "type": prev["type"] if prev is not None else "str",
+                "required": True,
+                "_literal": value,
+            }
+    spec: dict = {}
+    for f in by_name.values():
+        if "_literal" in f:
+            t = _literal_type(f["_literal"])
+        else:
+            t = py_type(f["type"])
+        spec[f["name"]] = (t, ...) if f["required"] else (Optional[t], None)
+    return spec
+
+
+def _role_model(name: str, cfg, fields: list, *, match: dict | None = None):
+    from pydantic import create_model
+
+    return create_model(name, __config__=cfg, **_field_spec(fields, match=match))
+
+
+def _variant_union(kind: str, node: dict, cfg):
+    """Discriminated union: one frozen model per schema variant (requiredness preserved)."""
+    from typing import Annotated, Any, Union
+
+    from pydantic import Discriminator, Tag, TypeAdapter
+
+    common = _fields_list(node)
+    variants = node.get("variants")
+    if not isinstance(variants, list) or not variants:
+        raise ValueError(f"{kind}: variants must be a non-empty list")
+    arms: list = []
+    tags: list[str] = []
+    for i, variant in enumerate(variants):
+        match = variant.get("match")
+        if not isinstance(match, dict) or not match:
+            raise ValueError(f"{kind} variant[{i}]: match must be a non-empty mapping")
+        tag = _match_tag(match)
+        if tag in tags:
+            raise ValueError(f"{kind}: duplicate variant match {tag}")
+        tags.append(tag)
+        merged = list(common) + _fields_list(variant)
+        arm_name = f"{kind.title()}V{i}"
+        arm = _role_model(arm_name, cfg, merged, match=match)
+        arms.append(Annotated[arm, Tag(tag)])
+
+    def _disc(value: Any) -> str:
+        if isinstance(value, dict):
+            data = value
+        elif hasattr(value, "model_dump"):
+            data = value.model_dump()
+        else:
+            return f"{kind}:undiscriminable"
+        for variant in variants:
+            match = variant["match"]
+            if all(data.get(k) == val for k, val in match.items()):
+                return _match_tag(match)
+        # Unknown tag → TypeAdapter ValidationError (fail-closed; no default arm).
+        return f"{kind}:no_variant_match"
+
+    union_type: object = arms[0]
+    for arm in arms[1:]:
+        union_type = Union[union_type, arm]
+    union = Annotated[union_type, Discriminator(_disc)]
+    adapter = TypeAdapter(union)
+
+    class _RoleUnion:
+        """Callable role-input validator mirroring a single create_model class."""
+
+        def __call__(self, **data: object):
+            return adapter.validate_python(data)
+
+        def model_validate(self, data: object):
+            return adapter.validate_python(data)
+
+    return _RoleUnion()
+
+
 def models(s=None):
-    """Role-input models: frozen, extra='forbid'; computed fields are excluded (passing them is an error)."""
-    from pydantic import ConfigDict, create_model
+    """Role-input models: frozen, extra='forbid'; computed fields are excluded (passing them is an error).
+
+    Kinds with schema ``variants`` become a discriminated union (one arm per
+    variant) so requiredness matches runtime KindSpec — e.g. criterion
+    check=code|review requires metric/op/target; rubric arms follow the schema.
+    """
+    from pydantic import ConfigDict
 
     s = s or load()
     cfg = ConfigDict(frozen=True, extra="forbid")
     out = {}
     for n in s["nodes"]:
-        by_name: dict = {}
-        for f in n.get("fields") or []:
-            if f.get("computed"):
-                continue
-            by_name[f["name"]] = dict(f)
-        for v in n.get("variants") or []:
-            for f in v.get("fields") or []:
-                if f.get("computed"):
-                    continue
-                name = f["name"]
-                if name in by_name:
-                    prev = by_name[name]
-                    by_name[name] = {
-                        **f,
-                        "required": bool(prev.get("required")) and bool(f.get("required")),
-                    }
-                else:
-                    # Variant-only fields are not always present → optional on role models.
-                    by_name[name] = {**f, "required": False}
-        spec = {}
-        for f in by_name.values():
-            t = py_type(f["type"])
-            spec[f["name"]] = (t, ...) if f["required"] else (Optional[t], None)
-        out[n["kind"]] = create_model(n["kind"].title(), __config__=cfg, **spec)
+        kind = n["kind"]
+        variants = n.get("variants")
+        if variants is None:
+            out[kind] = _role_model(kind.title(), cfg, _fields_list(n))
+        elif isinstance(variants, list) and variants:
+            out[kind] = _variant_union(kind, n, cfg)
+        else:
+            raise ValueError(f"{kind}: variants must be a non-empty list when present")
     return out
 
 
