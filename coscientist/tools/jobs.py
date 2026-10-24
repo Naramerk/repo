@@ -25,6 +25,7 @@ from coscientist.core.events.job_events import (
     JobSubmittedPayload,
     JobTimedOutPayload,
     deadline_to_wire,
+    job_cancel_refused,
     job_is_live,
     job_is_terminal,
 )
@@ -181,13 +182,9 @@ class InMemoryJobStore:
             if waiter is None:
                 waiter = asyncio.Event()
                 self._waiters[job_id] = waiter
+            # Pure event wait — no wall-clock poll. Woken by complete/cancel/tick.
+            await waiter.wait()
             waiter.clear()
-            wake = asyncio.create_task(waiter.wait())
-            _done, pending = await asyncio.wait({wake}, timeout=0.05)
-            for task in pending:
-                task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
 
     def cancel(self, job_id: str) -> None:
         job = self.get(job_id)
@@ -203,7 +200,7 @@ class InMemoryJobStore:
                 make_idem("JobCancelFailed", job_id, "cancel_already_recorded"),
             )
             return
-        if job.status in ("succeeded", "failed", "cancelled"):
+        if job_cancel_refused(job.status):
             self._emit(
                 "JobCancelFailed",
                 job_id,
@@ -221,21 +218,15 @@ class InMemoryJobStore:
         self._emit(
             "JobCancelled",
             job_id,
-            JobCancelledPayload(job_id=job_id, attempt_id=job.attempt_id).model_dump(
-                mode="json"
-            ),
+            JobCancelledPayload(job_id=job_id, attempt_id=job.attempt_id).model_dump(mode="json"),
             make_idem("JobCancelled", job_id),
         )
         self._wake(job_id)
 
     def tick(self) -> None:
-        """Close live jobs past deadline (study tick / wait)."""
+        """Close live jobs past deadline (study tick / wait entry)."""
         now = self._clock.now()
-        overdue = [
-            jid
-            for jid, job in list(self._jobs.items())
-            if job_is_live(job.status) and now >= job.deadline
-        ]
+        overdue = [jid for jid, job in list(self._jobs.items()) if job_is_live(job.status) and now >= job.deadline]
         for jid in overdue:
             self._apply_timeout(jid)
 
@@ -260,9 +251,7 @@ class InMemoryJobStore:
         self._emit(
             "JobStatusChanged",
             job_id,
-            JobStatusChangedPayload(
-                job_id=job_id, attempt_id=job.attempt_id, status=status
-            ).model_dump(mode="json"),
+            JobStatusChangedPayload(job_id=job_id, attempt_id=job.attempt_id, status=status).model_dump(mode="json"),
             make_idem("JobStatusChanged", job_id, status),
         )
         self._wake(job_id)
@@ -304,9 +293,9 @@ class InMemoryJobStore:
             self._emit(
                 "JobStatusChanged",
                 job_id,
-                JobStatusChangedPayload(
-                    job_id=job_id, attempt_id=job.attempt_id, status=status
-                ).model_dump(mode="json"),
+                JobStatusChangedPayload(job_id=job_id, attempt_id=job.attempt_id, status=status).model_dump(
+                    mode="json"
+                ),
                 make_idem("JobStatusChanged", job_id, status),
             )
         self._wake(job_id)

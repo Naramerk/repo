@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### G6 JobStore + Job* events [M3]
+- Macaque @37452dc: `ruff format`; event-only `wait` (no 0.05 poll); `job_cancel_refused`; `deadline_to_wire`→UTC; raise/payload tests.
+
 - `coscientist.tools.jobs`: `Job` / `JobStore` Protocol + journaled `InMemoryJobStore` (DESIGN §6.4).
 - FakeClock `on_change` + unsubscribe; JobStore takes explicit `on_clock_change` (core `Clock` stays `now()`-only); `close()` unsubscribes.
 - Job payloads / `JobEventType` (nested into `EventType`) / `require_aware_datetime` / `require_nonblank` in `core.events.job_events`.
