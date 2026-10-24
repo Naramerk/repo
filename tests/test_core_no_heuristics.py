@@ -1755,7 +1755,9 @@ def test_artifact_belongs_to_attempt_no_startswith():
     from coscientist.checks.evaluate import artifact_belongs_to_attempt
 
     src = inspect.getsource(ev_mod.artifact_belongs_to_attempt)
-    assert "startswith" not in src
+    # Docstring may mention the forbidden heuristic; body must not call it.
+    assert ".startswith(" not in src
+    assert "startswith(f" not in src
 
     aid = "st/E1#1"
     # Suffix-only call_id without stamped attempt_id is not authority.

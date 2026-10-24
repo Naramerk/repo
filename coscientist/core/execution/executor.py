@@ -291,6 +291,10 @@ def _effect_from_checks(
         data = _check_field(c, "effect")
         if not isinstance(data, dict):
             continue
+        # Exclusion-only stamps (e.g. unapproved proposed_check) are not numeric
+        # prediction effects — claim derive already read exclusion_reason above.
+        if data.get("exclusion_reason"):
+            continue
         try:
             producer = require_journal_field(data, "producer", ctx="effect")
             if producer not in ("agent", "core", "sandbox"):
