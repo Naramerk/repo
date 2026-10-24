@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TypeVar
+from typing import Any, Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -23,12 +23,24 @@ from coscientist.agents.schemas import (
     ToolCallRef,
 )
 from coscientist.core.events.clock import Clock
-from coscientist.core.execution.domain import Budget
+from coscientist.core.execution.domain import Budget, HitlPolicy
 from coscientist.llm.client import LlmClient
 from coscientist.llm.types import ChatMessage, JsonSchemaResponseFormat, StructuredLlmRequest, Usage
-from coscientist.tools.resolve import NamedTool, ToolNeed, ToolRouter, call_via_router
+from coscientist.tools.router import CallCtx, ToolNeed, ToolRouter
 
 _T = TypeVar("_T", bound=BaseModel)
+
+
+class _ToolSpecName(Protocol):
+    @property
+    def name(self) -> str: ...
+
+
+class NamedTool(Protocol):
+    """Allow-list entry for ``run`` (DESIGN §7.2 ``tools: list[Tool]``; no contract import)."""
+
+    @property
+    def spec(self) -> _ToolSpecName: ...
 
 _ROLE_PLANNER = "planner"
 _ROLE_EXECUTOR = "executor-route"
@@ -63,8 +75,8 @@ def _tool_names(tools: Sequence[NamedTool]) -> frozenset[str]:
     return frozenset(names)
 
 
-def _args_mapping(args: tuple[ToolArg, ...]) -> dict[str, object]:
-    out: dict[str, object] = {}
+def _args_mapping(args: tuple[ToolArg, ...]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
     for arg in args:
         try:
             out[arg.key] = json.loads(arg.value_json)
@@ -107,7 +119,8 @@ class LlmAgentAdapter:
     """Implements ``core.events.ports.AgentPort`` without editing ports.py.
 
     ``role_models`` maps role → provider model id (from profile; required, no fallback).
-    Tool calls go through ``call_via_router`` (fake in tests; MCP = G7).
+    Tool calls use ``tools.router.ToolRouter`` (MCP #139): ``resolve`` then
+    ``call(server_name, tool_name, args, ctx)`` — no parallel Protocol / call_via_router.
     System prompts come from ``PromptRegistry`` via ``role_prompts`` (CAP #27).
     ``clock`` supplies wall time for ``Budget.deadline`` enforcement (DESIGN §7.4).
     """
@@ -226,26 +239,39 @@ class LlmAgentAdapter:
                 raise AgentError(f"tool {hint!r} not in AgentPort.tools allow-list")
             planned: PlannedToolCall = args_by_name[hint]
             resolution = self._router.resolve(ToolNeed(kind="by_name", value=hint))
-            if resolution.status != "tool_found" or resolution.tool_name is None:
+            if (
+                resolution.status != "tool_found"
+                or resolution.server_name is None
+                or resolution.tool_name is None
+            ):
                 raise AgentError(
                     f"tool resolve for {hint!r} refused: status={resolution.status!r} "
                     "(fail-closed; only tool_found may proceed)"
                 )
-            result = await call_via_router(
-                self._router,
-                resolution.tool_name,
-                _args_mapping(planned.args),
+            ctx = CallCtx(
                 study_id=route_in.study_id,
                 task_key=route_in.task.task_key,
                 attempt_id=route_in.attempt_id,
+                hitl_policy=HitlPolicy(),
+            )
+            tool_out = await self._router.call(
+                resolution.server_name,
+                resolution.tool_name,
+                _args_mapping(planned.args),
+                ctx,
             )
             try:
-                result_json = json.dumps(dict(result), ensure_ascii=False, separators=(",", ":"))
+                result_json = json.dumps(
+                    tool_out.data,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
             except (TypeError, ValueError) as exc:
                 raise AgentError(f"tool {hint!r} result is not JSON-serializable: {exc}") from exc
+            bound_name = f"{resolution.server_name}:{resolution.tool_name}"
             refs.append(
                 ToolCallRef(
-                    tool_name=resolution.tool_name,
+                    tool_name=bound_name,
                     resolution_status=resolution.status,
                     args=planned.args,
                     result_json=result_json,

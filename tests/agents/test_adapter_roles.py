@@ -1,10 +1,12 @@
-"""Fake LLM + FakeToolRouter for planner / executor-route (no network, no keys)."""
+"""Fake LLM + concrete MCP ToolRouter for planner / executor-route (no real keys)."""
 
 from __future__ import annotations
 
 import json
 import random
-from collections.abc import Mapping
+import sys
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -37,16 +39,23 @@ from coscientist.core.events.clock import FakeClock
 from coscientist.core.execution.domain import Budget, Need
 from coscientist.llm.client import LlmClient
 from coscientist.llm.transport import TransportResponse
+from coscientist.mcp.config import StdioServerConfig
 from coscientist.tools.contract import CallCtx, ToolOutput, ToolSpec
-from coscientist.tools.resolve import Resolution, ToolNeed
+from coscientist.tools.mcp_adapter import McpToolProfile
+from coscientist.tools.router import McpServerRoute, ToolRouter, ToolRouterConfig
 from tests.llm.test_client import FakeClock as LlmFakeClock
 from tests.llm.test_client import _config, _ok_body
+from tests.mcp.conftest import make_client, make_config
+from tests.mcp.fake_server import FakeStdioServer
 
 _ROLE_PROMPTS = {
     "planner": ROLE_PLANNER_REF,
     "executor-route": ROLE_EXECUTOR_REF,
     "tz_spec": ROLE_TZ_SPEC_REF,
 }
+
+_SERVER = "agent-tools"
+_TOOL = "dataset_overview"
 
 
 def _budget(
@@ -71,35 +80,91 @@ class _NamedTool:
 
     async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
         del args, ctx
-        raise AssertionError("NamedTool.call must not be invoked; use ToolRouter")
+        raise AssertionError("NamedTool.call must not be invoked; use ToolRouter.call")
 
 
 def _named_tools(*names: str) -> list[_NamedTool]:
     return [_NamedTool(ToolSpec(name=n)) for n in names]
 
 
-class FakeToolRouter:
-    def __init__(self, *, tools: Mapping[str, Mapping[str, Any]]) -> None:
-        self.tools = dict(tools)
-        self.calls: list[tuple[str, Mapping[str, Any]]] = []
+def _tool_profile() -> McpToolProfile:
+    return McpToolProfile(effect="read", is_fetch=False, idempotent=True, max_retries=0)
 
-    def resolve(self, need: ToolNeed) -> Resolution:
-        if need.kind == "by_name" and need.value in self.tools:
-            return Resolution(status="tool_found", tool_name=need.value)
-        return Resolution(status="tool_missing", tool_name=None)
 
-    async def call(
-        self,
-        tool_name: str,
-        args: Mapping[str, Any],
-        *,
-        study_id: str,
-        task_key: str,
-        attempt_id: str,
-    ) -> Mapping[str, Any]:
-        del study_id, task_key, attempt_id
-        self.calls.append((tool_name, dict(args)))
-        return dict(self.tools[tool_name])
+def _idle_router(*, tool: str = _TOOL) -> ToolRouter:
+    """Configured but not opened — ``resolve`` → tool_missing (fail-closed)."""
+    return ToolRouter(
+        ToolRouterConfig(
+            servers=(McpServerRoute(server_name=_SERVER, tools={tool: _tool_profile()}),)
+        )
+    )
+
+
+class _NoFetch:
+    async def fetch(self, url: str, *, max_bytes: int, timeout_s: float) -> bytes:
+        raise AssertionError("no fetch")
+
+
+def _dataset_handler(method: str, params: dict[str, Any] | None) -> dict[str, Any] | None:
+    if method == "initialize":
+        assert params is not None
+        return {
+            "protocolVersion": params["protocolVersion"],
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "fake", "version": "0.0.1"},
+        }
+    if method == "notifications/initialized":
+        return None
+    if method == "tools/list":
+        return {
+            "tools": [
+                {
+                    "name": _TOOL,
+                    "description": "dataset overview",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"limit": {"type": "integer"}},
+                    },
+                }
+            ]
+        }
+    if method == "tools/call":
+        assert params is not None
+        return {
+            "content": [{"type": "text", "text": json.dumps({"rows": 2})}],
+            "isError": False,
+        }
+    raise AssertionError(f"unexpected method {method}")
+
+
+@asynccontextmanager
+async def _bound_router(
+    handler: Any = _dataset_handler,
+    *,
+    tool: str = _TOOL,
+) -> AsyncIterator[ToolRouter]:
+    router = _idle_router(tool=tool)
+    client = make_client(
+        make_config(
+            servers=(
+                StdioServerConfig(
+                    transport="stdio",
+                    name=_SERVER,
+                    command=sys.executable,
+                    args=("-c", "pass"),
+                    env_keys=(),
+                ),
+            )
+        ),
+        file_fetcher=_NoFetch(),
+    )
+    async with FakeStdioServer(handler) as server:
+        session = await client.connect_memory(_SERVER, server.client)
+        await router.attach_session(session, server_name=_SERVER)
+        try:
+            yield router
+        finally:
+            await router.aclose()
 
 
 class CassetteTransport:
@@ -238,7 +303,7 @@ def _client(bodies: list[bytes], *, monkeypatch: pytest.MonkeyPatch) -> LlmClien
 def _adapter(
     client: LlmClient,
     *,
-    router: FakeToolRouter | None = None,
+    router: ToolRouter | None = None,
     role_models: Mapping[str, str] | None = None,
     role_prompts: Mapping[str, PromptRef] | None = None,
     clock: FakeClock | None = None,
@@ -252,7 +317,7 @@ def _adapter(
     else:
         prompts_map = dict(role_prompts)
     if router is None:
-        tool_router: FakeToolRouter = FakeToolRouter(tools={})
+        tool_router: ToolRouter = _idle_router()
     else:
         tool_router = router
     if clock is None:
@@ -298,17 +363,31 @@ async def test_executor_route_uses_tool_router_and_passes_args(
         [_ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=5, completion_tokens=3)],
         monkeypatch=monkeypatch,
     )
-    router = FakeToolRouter(tools={"dataset_overview": {"rows": 2}})
-    adapter = _adapter(client, router=router)
-    run = await adapter.run(
-        "executor-route",
-        _route_in(),
-        _named_tools("dataset_overview"),
-        _budget(),
-    )
-    assert router.calls == [("dataset_overview", {"limit": 2})]
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+    async with _bound_router() as router:
+        orig_call = router.call
+
+        async def _track(
+            server_name: str,
+            tool_name: str,
+            args: dict[str, Any],
+            ctx: CallCtx,
+        ) -> ToolOutput:
+            calls.append((server_name, tool_name, dict(args)))
+            return await orig_call(server_name, tool_name, args, ctx)
+
+        monkeypatch.setattr(router, "call", _track)
+        adapter = _adapter(client, router=router)
+        run = await adapter.run(
+            "executor-route",
+            _route_in(),
+            _named_tools("dataset_overview"),
+            _budget(),
+        )
+    assert calls == [(_SERVER, _TOOL, {"limit": 2})]
     assert run.tool_calls[0].resolution_status == "tool_found"
-    assert run.tool_calls[0].result_json == '{"rows":2}'
+    assert run.tool_calls[0].tool_name == f"{_SERVER}:{_TOOL}"
+    assert "rows" in run.tool_calls[0].result_json
     assert run.error is None
     assert isinstance(run.output, ExecutorRouteOut)
     assert run.usage.prompt_tokens == 5
@@ -374,7 +453,7 @@ def test_role_prompts_missing_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         LlmAgentAdapter(
             _client([], monkeypatch=monkeypatch),
             role_models={"planner": "m", "executor-route": "m", "tz_spec": "m"},
-            tool_router=FakeToolRouter(tools={}),
+            tool_router=_idle_router(),
             prompts=role_prompt_registry(),
             role_prompts={"planner": ROLE_PLANNER_REF, "executor-route": ROLE_EXECUTOR_REF},
             clock=FakeClock(),
@@ -391,7 +470,7 @@ def test_role_prompts_non_prompt_ref_raises(monkeypatch: pytest.MonkeyPatch) -> 
         LlmAgentAdapter(
             _client([], monkeypatch=monkeypatch),
             role_models={"planner": "m", "executor-route": "m", "tz_spec": "m"},
-            tool_router=FakeToolRouter(tools={}),
+            tool_router=_idle_router(),
             prompts=role_prompt_registry(),
             role_prompts=bad_prompts,  # runtime refuse: values must be PromptRef
             clock=FakeClock(),
@@ -450,7 +529,7 @@ async def test_wrong_basemodel_input_raises(monkeypatch: pytest.MonkeyPatch) -> 
 async def test_tool_missing_is_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _adapter(
         _client([], monkeypatch=monkeypatch),
-        router=FakeToolRouter(tools={}),
+        router=_idle_router(),
     )
     with pytest.raises(AgentError, match="fail-closed"):
         await adapter.run(
@@ -512,25 +591,20 @@ async def test_tools_missing_spec_name_raises(monkeypatch: pytest.MonkeyPatch) -
 
 @pytest.mark.asyncio
 async def test_tool_arg_invalid_json_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = _adapter(
-        _client([], monkeypatch=monkeypatch),
-        router=FakeToolRouter(tools={"dataset_overview": {"ok": True}}),
-    )
-    with pytest.raises(AgentError, match="value_json is not valid JSON"):
-        await adapter.run(
-            "executor-route",
-            _route_in(args=(ToolArg(key="limit", value_json="not-json"),)),
-            _named_tools("dataset_overview"),
-            _budget(),
-        )
+    async with _bound_router() as router:
+        adapter = _adapter(_client([], monkeypatch=monkeypatch), router=router)
+        with pytest.raises(AgentError, match="value_json is not valid JSON"):
+            await adapter.run(
+                "executor-route",
+                _route_in(args=(ToolArg(key="limit", value_json="not-json"),)),
+                _named_tools("dataset_overview"),
+                _budget(),
+            )
 
 
 @pytest.mark.asyncio
 async def test_tool_not_in_allow_list_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = _adapter(
-        _client([], monkeypatch=monkeypatch),
-        router=FakeToolRouter(tools={"dataset_overview": {"ok": True}}),
-    )
+    adapter = _adapter(_client([], monkeypatch=monkeypatch), router=_idle_router())
     with pytest.raises(AgentError, match="allow-list"):
         await adapter.run(
             "executor-route",
@@ -542,10 +616,7 @@ async def test_tool_not_in_allow_list_raises(monkeypatch: pytest.MonkeyPatch) ->
 
 @pytest.mark.asyncio
 async def test_empty_allow_list_with_tools_hint_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = _adapter(
-        _client([], monkeypatch=monkeypatch),
-        router=FakeToolRouter(tools={"dataset_overview": {"ok": True}}),
-    )
+    adapter = _adapter(_client([], monkeypatch=monkeypatch), router=_idle_router())
     with pytest.raises(AgentError, match="tools list is empty"):
         await adapter.run(
             "executor-route",
@@ -557,10 +628,7 @@ async def test_empty_allow_list_with_tools_hint_raises(monkeypatch: pytest.Monke
 
 @pytest.mark.asyncio
 async def test_budget_max_tool_calls_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = _adapter(
-        _client([], monkeypatch=monkeypatch),
-        router=FakeToolRouter(tools={"dataset_overview": {"ok": True}}),
-    )
+    adapter = _adapter(_client([], monkeypatch=monkeypatch), router=_idle_router())
     with pytest.raises(AgentError, match="max_tool_calls"):
         await adapter.run(
             "executor-route",
@@ -628,30 +696,26 @@ async def test_budget_max_tokens_exceeded_raises(monkeypatch: pytest.MonkeyPatch
 
 @pytest.mark.asyncio
 async def test_tool_result_not_json_serializable_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _BadRouter(FakeToolRouter):
-        async def call(
-            self,
-            tool_name: str,
-            args: Mapping[str, Any],
-            *,
-            study_id: str,
-            task_key: str,
-            attempt_id: str,
-        ) -> Mapping[str, Any]:
-            del tool_name, args, study_id, task_key, attempt_id
-            return {"x": object()}
+    async with _bound_router() as router:
 
-    adapter = _adapter(
-        _client([], monkeypatch=monkeypatch),
-        router=_BadRouter(tools={"dataset_overview": {"ok": True}}),
-    )
-    with pytest.raises(AgentError, match="JSON-serializable"):
-        await adapter.run(
-            "executor-route",
-            _route_in(),
-            _named_tools("dataset_overview"),
-            _budget(),
-        )
+        async def _bad_call(
+            server_name: str,
+            tool_name: str,
+            args: dict[str, Any],
+            ctx: CallCtx,
+        ) -> ToolOutput:
+            del server_name, tool_name, args, ctx
+            return ToolOutput(data={"x": object()})
+
+        monkeypatch.setattr(router, "call", _bad_call)
+        adapter = _adapter(_client([], monkeypatch=monkeypatch), router=router)
+        with pytest.raises(AgentError, match="JSON-serializable"):
+            await adapter.run(
+                "executor-route",
+                _route_in(),
+                _named_tools("dataset_overview"),
+                _budget(),
+            )
 
 
 def test_executor_route_out_schema_is_strict_closed() -> None:

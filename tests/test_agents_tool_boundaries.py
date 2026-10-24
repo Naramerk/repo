@@ -152,10 +152,10 @@ def test_fetch_capability_mint_only_in_effects():
 
 
 def test_agents_forbid_registry_and_direct_tool_call():
-    """``coscientist.agents`` must not import registry/contract or call ``*.call``.
+    """``coscientist.agents`` must not import registry/contract or call ``Tool.call``.
 
-    Tool routing uses ``call_via_router`` (imported function), not attribute ``.call``
-    and not name-based allowlists. ``invoke_tool`` name-calls remain allowed.
+    Tool routing uses concrete ``ToolRouter.call(server, tool, args, ctx)`` (#139).
+    Direct ``Tool.call`` / non-router ``.call`` remains forbidden; ``invoke_tool`` OK.
     """
     agents = COSI / "agents"
     assert agents.is_dir(), "coscientist.agents package required for agent wiring"
@@ -171,12 +171,24 @@ def test_agents_forbid_registry_and_direct_tool_call():
             offenders.append(f"{path.name}: imports Tool from contract")
         if _imports_name(tree, module_suffix="tools.contract", name="Tool"):
             offenders.append(f"{path.name}: imports tools.contract.Tool")
+        if _imports_name(tree, module_suffix="tools.contract", name="*"):
+            offenders.append(f"{path.name}: imports tools.contract")
+        if _imports_name(tree, module_suffix="contract", name="CallCtx"):
+            offenders.append(f"{path.name}: imports CallCtx from contract (use tools.router)")
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             f = node.func
             if isinstance(f, ast.Attribute) and f.attr == "call":
-                offenders.append(f"{path.name}: direct .call() (use call_via_router/invoke_tool)")
+                # Allow ToolRouter only: self._router.call / router.call
+                base = f.value
+                if isinstance(base, ast.Attribute) and base.attr == "_router":
+                    continue
+                if isinstance(base, ast.Name) and base.id in {"router", "_router"}:
+                    continue
+                offenders.append(
+                    f"{path.name}: direct .call() (use ToolRouter.call / invoke_tool)"
+                )
             if isinstance(f, ast.Name) and f.id == "invoke_tool":
                 continue
     assert not offenders, offenders
