@@ -10,6 +10,7 @@ from coscientist.core.claims.graph import (
     GraphSchemaError,
     KindRegistry,
     KindSpec,
+    attr_value_ok,
     parse_attr_type,
     parse_aware_datetime,
     registry_from_mapping,
@@ -25,8 +26,8 @@ _Q = {"kind": "question", "prefix": "Q", "text_ru": "q", "fields": _QF}
 _ST = {"kind": "study", "prefix": "ST", "text_ru": "s", "fields": _SF}
 _ASKS = {"name": "asks", "pairs": [["study", "question"]], "card": {"out": "1..n", "in": "1..1"}, "attrs": []}
 def _s(**kw):
-    nodes, edges = kw.pop("nodes", [_ST, _Q]), kw.pop("edges", [_ASKS])
-    return {"version": kw.pop("version", GRAPH_SCHEMA_VERSION), "nodes": nodes, "edges": edges, **kw}
+    n, e = kw.pop("nodes", [_ST, _Q]), kw.pop("edges", [_ASKS])
+    return {"version": kw.pop("version", GRAPH_SCHEMA_VERSION), "nodes": n, "edges": e, **kw}
 def _f(**kw): return {"name": "a", "type": "str", "required": True, **kw}
 def _nf(*fields): return _s(nodes=[{**_Q, "fields": list(fields)}, _ST])
 def _pt(s): return parse_attr_type(s, ctx="t")
@@ -81,3 +82,7 @@ def test_refuse(data, match):
 def test_parse_validate_raises(call, match):
     with pytest.raises(GraphSchemaError, match=match):
         call()
+def test_aware_datetime_both_entries():
+    t, s = _pt("datetime"), "2026-01-01T00:00:00Z"
+    assert attr_value_ok(t, s, null_ok=False) and validate_attr_value(t, s, null_ok=False, ctx="c") is None
+

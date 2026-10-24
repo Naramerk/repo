@@ -244,45 +244,40 @@ def parse_aware_datetime(value: Any, *, ctx: str) -> datetime:
         return _AWARE_DT.validate_python(value)
     except ValidationError as e:
         raise GraphSchemaError(f"{ctx}: invalid aware datetime: {value!r}") from e
-def attr_value_ok(t: AttrType, value: Any, *, null_ok: bool) -> bool:
+def _attr_err(t: AttrType, value: Any, *, null_ok: bool, ctx: str) -> str | None:
     if value is None:
-        return null_ok
-    if isinstance(t, AttrSimple):
-        tag = t.tag
-        if tag in ("str", "digest"):
-            return isinstance(value, str)
-        if tag == "int":
-            return type(value) is int
-        if tag == "bool":
-            return type(value) is bool
-        if tag == "float":
-            return type(value) is float
-        return False
-    if isinstance(t, AttrEnum):
-        return isinstance(value, str) and value in t.enum_values
-    if isinstance(t, AttrRef):
-        return isinstance(value, str) and bool(value)
-    if isinstance(t, AttrObj):
-        return type(value) is dict and all(isinstance(k, str) for k in value)
-    return isinstance(t, AttrList) and isinstance(value, list) and all(
-        attr_value_ok(t.list_elem, el, null_ok=False) for el in value
-    )
-def validate_attr_value(t: AttrType, value: Any, *, null_ok: bool, ctx: str) -> None:
-    if value is None:
-        if not null_ok:
-            raise GraphSchemaError(f"{ctx}: null not allowed")
-        return
+        return None if null_ok else f"{ctx}: null not allowed"
     if isinstance(t, AttrSimple) and t.tag == "datetime":
-        parse_aware_datetime(value, ctx=ctx)
-        return
+        err = None
+        try:
+            parse_aware_datetime(value, ctx=ctx)
+        except GraphSchemaError as e:
+            err = e.args[0]
+        return err
     if isinstance(t, AttrList):
         if not isinstance(value, list):
-            raise GraphSchemaError(f"{ctx}: expected list")
+            return f"{ctx}: expected list"
         for i, el in enumerate(value):
-            validate_attr_value(t.list_elem, el, null_ok=False, ctx=f"{ctx}[{i}]")
-        return
-    if not attr_value_ok(t, value, null_ok=null_ok):
-        raise GraphSchemaError(f"{ctx}: incompatible with type")
+            err = _attr_err(t.list_elem, el, null_ok=False, ctx=f"{ctx}[{i}]")
+            if err is not None:
+                return err
+        return None
+    ok = (
+        (isinstance(t, AttrSimple) and (
+            (t.tag in ("str", "digest") and isinstance(value, str))
+            or (t.tag == "int" and type(value) is int)
+            or (t.tag == "bool" and type(value) is bool)
+            or (t.tag == "float" and type(value) is float)))
+        or (isinstance(t, AttrEnum) and isinstance(value, str) and value in t.enum_values)
+        or (isinstance(t, AttrRef) and isinstance(value, str) and value != "")
+        or (isinstance(t, AttrObj) and type(value) is dict and all(isinstance(k, str) for k in value)))
+    return None if ok else f"{ctx}: incompatible with type"
+def attr_value_ok(t: AttrType, value: Any, *, null_ok: bool) -> bool:
+    return _attr_err(t, value, null_ok=null_ok, ctx="value") is None
+def validate_attr_value(t: AttrType, value: Any, *, null_ok: bool, ctx: str) -> None:
+    err = _attr_err(t, value, null_ok=null_ok, ctx=ctx)
+    if err is not None:
+        raise GraphSchemaError(err)
 def _attr_fields(raw: Any, *, ctx: str) -> tuple[AttrFieldSpec, ...]:
     if not isinstance(raw, list):
         raise GraphSchemaError(f"{ctx}: fields/attrs must be a list")
