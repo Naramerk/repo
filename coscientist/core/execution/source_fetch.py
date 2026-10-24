@@ -459,10 +459,9 @@ async def load_source_fetch_index_from_writer(writer: StudyWriter) -> SourceFetc
         events = await store.read_all()
         after = apply_source_fetch_events(idx, events)
     else:
-        read_after = getattr(type(store), "read_after", None)
-        if callable(read_after):
+        try:
             events = await store.read_after(after)
-        else:
+        except AttributeError:
             events = [e for e in await store.read_all() if _event_seq(e) > after]
         n = apply_source_fetch_events(idx, events)
         if n > after:
