@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
@@ -227,10 +227,9 @@ async def test_open_tool_router_requires_fetcher_or_http() -> None:
 
 @pytest.mark.asyncio
 async def test_open_tool_router_aclose_on_any_open_failure() -> None:
-    closed = AsyncMock()
     with (
-        patch.object(ToolRouter, "open", side_effect=RuntimeError("open-boom")),
-        patch.object(ToolRouter, "aclose", closed),
+        patch.object(ToolRouter, "open", side_effect=RuntimeError("open-boom"), autospec=True),
+        patch.object(ToolRouter, "aclose", autospec=True) as closed,
     ):
         with pytest.raises(RuntimeError, match="open-boom"):
             await open_tool_router(
@@ -242,3 +241,62 @@ async def test_open_tool_router_aclose_on_any_open_failure() -> None:
                 http_transport=None,
             )
     closed.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_open_tool_router_preserves_open_error_when_aclose_fails() -> None:
+    with (
+        patch.object(ToolRouter, "open", side_effect=RuntimeError("open-boom"), autospec=True),
+        patch.object(ToolRouter, "aclose", side_effect=OSError("close-boom"), autospec=True),
+    ):
+        with pytest.raises(BaseExceptionGroup, match="open failed and aclose also failed") as ei:
+            await open_tool_router(
+                _bundle(("-u", str(ECHO_STDIO))),
+                clock=SystemClock(),
+                sleep=system_sleep(),
+                wait_for=system_wait_for(),
+                file_fetcher=_NoFetch(),
+                http_transport=None,
+            )
+    group = ei.value
+    assert len(group.exceptions) == 2
+    assert isinstance(group.exceptions[0], RuntimeError)
+    assert str(group.exceptions[0]) == "open-boom"
+    assert isinstance(group.exceptions[1], OSError)
+    assert str(group.exceptions[1]) == "close-boom"
+
+
+@pytest.mark.asyncio
+async def test_open_tool_router_aclose_on_real_bind_failure() -> None:
+    # Echo stdio lists ``echo``; extra binding → unknown-tools refuse after connect.
+    bundle = McpToolRouterBundle(
+        client=make_config(
+            servers=(
+                StdioServerConfig(
+                    transport="stdio",
+                    name=MCP_SERVER_PAPERS_SEARCH,
+                    command=sys.executable,
+                    args=("-u", str(ECHO_STDIO)),
+                    env_keys=(),
+                ),
+            )
+        ),
+        router=ToolRouterConfig(
+            servers=(
+                McpServerRoute(
+                    server_name=MCP_SERVER_PAPERS_SEARCH,
+                    tools={"echo": _p(), "missing-tool": _p()},
+                ),
+            )
+        ),
+    )
+    with pytest.raises(ToolRouterError, match="failed to bind") as ei:
+        await open_tool_router(
+            bundle,
+            clock=SystemClock(),
+            sleep=system_sleep(),
+            wait_for=system_wait_for(),
+            file_fetcher=_NoFetch(),
+            http_transport=None,
+        )
+    assert "McpToolProfile for unknown tools" in str(ei.value)

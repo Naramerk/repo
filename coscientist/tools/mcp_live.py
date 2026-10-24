@@ -6,6 +6,7 @@ aimclub/CoResearchGraph ``mcp-servers/``). URLs/tools are required — no defaul
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Mapping
 
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -16,7 +17,7 @@ from coscientist.mcp.config import (
     McpClientConfig,
     StreamableHttpServerConfig,
 )
-from coscientist.mcp.errors import McpConfigError
+from coscientist.mcp.errors import McpConfigError, McpError
 from coscientist.mcp.runtime import AsyncSleep, AsyncWaitFor, Clock
 from coscientist.mcp.transport import FileFetcher, HttpTransport
 from coscientist.tools.mcp_adapter import McpToolProfile
@@ -31,7 +32,10 @@ from coscientist.tools.router import (
 MCP_SERVER_PAPERS_SEARCH = "papers-search"
 MCP_SERVER_PAPER_ANALYSIS = "paper-analysis"
 
-# Exact tool names from legacy mcp-servers/* (fail-closed).
+# Exact tool names from aimclub/CoResearchGraph (outside this repo; fail-closed):
+# papers-search → mcp-servers/papers-search-mcp-server (CAP #3 «MCP papers_search»);
+# paper-analysis → mcp-servers/paper-analysis-mcp-server/paper_analysis_server.py:18-32
+# (docs/CAPABILITIES.md #3).
 PAPERS_SEARCH_TOOLS = frozenset({"search_entity", "search_papers", "download_papers_from_search"})
 PAPER_ANALYSIS_TOOLS = frozenset(
     {
@@ -147,4 +151,14 @@ async def open_tool_router(
         return client, router
     finally:
         if not opened:
-            await router.aclose()
+            # Preserve the open failure if aclose also fails (no broad except).
+            open_error = sys.exc_info()[1]
+            try:
+                await router.aclose()
+            except (ToolRouterError, McpError, OSError, TimeoutError) as close_error:
+                if open_error is not None:
+                    raise BaseExceptionGroup(
+                        "open_tool_router: open failed and aclose also failed",
+                        [open_error, close_error],
+                    ) from close_error
+                raise
