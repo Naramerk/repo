@@ -726,14 +726,18 @@ class LifecycleMixin:
                 params = getattr(ref, "params", None)
                 if isinstance(params, dict):
                     for pk in ("metric", "op", "target"):
-                        if pk in params and params[pk] is not None:
-                            cattrs[pk] = (
-                                str(params[pk]) if pk != "op" else params[pk]
-                            )
+                        if pk not in params or params[pk] is None:
+                            continue
+                        if pk == "op":
+                            cattrs[pk] = params[pk]
+                        else:
+                            cattrs[pk] = str(params[pk])
                 tmpl = None
                 if catalog is not None:
-                    by_id = {t.id: t for t in getattr(catalog, "templates", []) or []}
-                    tmpl = by_id.get(key)
+                    raw_tmpls = getattr(catalog, "templates", None)
+                    if isinstance(raw_tmpls, list):
+                        by_id = {t.id: t for t in raw_tmpls}
+                        tmpl = by_id.get(key)
                 if tmpl is not None:
                     raw_check = getattr(tmpl, "check", None)
                     # CodeCheck → criterion.check "code"; ReviewCheck → "review".
@@ -743,17 +747,22 @@ class LifecycleMixin:
                         if isinstance(raw_check, ReviewCheck):
                             cattrs["check"] = "review"
                         elif isinstance(raw_check, CodeCheck):
-                            cattrs["check"] = (
-                                "rubric" if raw_check.kind == "rubric" else "code"
-                            )
+                            if raw_check.kind == "rubric":
+                                cattrs["check"] = "rubric"
+                            else:
+                                cattrs["check"] = "code"
                         else:
                             continue  # unknown check type — refuse inventing layer
                         for pk in ("metric", "op", "target"):
                             if pk in cattrs:
                                 continue
                             cv = getattr(raw_check, pk, None)
-                            if cv is not None:
-                                cattrs[pk] = str(cv) if pk != "op" else cv
+                            if cv is None:
+                                continue
+                            if pk == "op":
+                                cattrs[pk] = cv
+                            else:
+                                cattrs[pk] = str(cv)
                     if getattr(tmpl, "uses_sesoi", False) and tmpl.sesoi is not None:
                         cattrs["uses_sesoi"] = True
                         cattrs["sesoi"] = float(tmpl.sesoi)
