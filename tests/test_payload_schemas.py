@@ -167,8 +167,8 @@ def test_task_created_omits_expand_keys() -> None:
     assert out is raw
 
 
-def test_attempt_started_legacy_without_data_refuses() -> None:
-    """Gaps belong in upcasters; schema must not invent n/study_id/dispatch_id."""
+def test_attempt_started_legacy_without_data_refuses_at_schema() -> None:
+    """Schema must not invent; sparse raw (pre-upcast) refuses."""
     raw = {
         "attempt_id": "st/SPEC#1",
         "task_id": "st/SPEC",
@@ -179,7 +179,45 @@ def test_attempt_started_legacy_without_data_refuses() -> None:
         AttemptStartedPayload.model_validate(raw)
 
 
-def test_graph_attrs_use_attr_type_bag() -> None:
+def test_attempt_started_v11_unrecorded_upcast() -> None:
+    """v10→v11: absent forever-fields → AttemptUnrecorded; task_key dropped.
+
+    Provenance is required at v10 (R16a) — supply it; other forever-fields Unrecorded.
+    """
+    from coscientist.core.events.schema_gate import upcast_strict
+    from coscientist.core.events.upcasters import ATTEMPT_STARTED_UNRECORDED_SINCE
+
+    version, out = upcast_strict(
+        "AttemptStarted",
+        1,
+        {
+            "attempt_id": "att_lit",
+            "task_id": "st_reclass_old/E1",
+            "task_key": "E1",
+            "inputs": [],
+            "tainted_context": False,
+            "provenance": "real",
+        },
+    )
+    assert version == 11
+    assert "task_key" not in out
+    assert out["provenance"] == "real"
+    for field in (
+        "n",
+        "dispatch_id",
+        "route_returned",
+        "closed",
+        "study_id",
+    ):
+        assert out[field] == {
+            "kind": "unrecorded",
+            "source_schema_version": ATTEMPT_STARTED_UNRECORDED_SINCE,
+        }
+    assert out["attempt_role"] == "agent"
+    assert out["limitations"] == []
+
+
+def test_graph_attrs_registry_attr_type() -> None:
     from coscientist.core.events.payload_schemas import GraphNodeUpsertedPayload
 
     GraphNodeUpsertedPayload.model_validate(
@@ -187,19 +225,37 @@ def test_graph_attrs_use_attr_type_bag() -> None:
             "node_id": "n1",
             "kind": "claim",
             "study_id": "s",
-            "attrs": {"effect": {"delta": 1}, "target": "H1"},
+            "attrs": {
+                "target": "H1",
+                "checked_against": "CR1",
+                "stance": "supports",
+            },
             "ref_id": None,
             "parent_id": None,
             "created_at": None,
         }
     )
+    # KindSpec field with wrong AttrType → refuse
     with pytest.raises(ValidationError):
         GraphNodeUpsertedPayload.model_validate(
             {
                 "node_id": "n1",
                 "kind": "claim",
                 "study_id": "s",
-                "attrs": ["not", "a", "map"],
+                "attrs": {"stance": 1},
+                "ref_id": None,
+                "parent_id": None,
+                "created_at": None,
+            }
+        )
+    # Unknown kind → refuse
+    with pytest.raises(ValidationError):
+        GraphNodeUpsertedPayload.model_validate(
+            {
+                "node_id": "n1",
+                "kind": "not_a_kind",
+                "study_id": "s",
+                "attrs": {},
                 "ref_id": None,
                 "parent_id": None,
                 "created_at": None,

@@ -891,8 +891,8 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
         for e in await rt.store.read_all()
         if e.type == "AttemptStarted" and e.entity_key == aid
     )
-    # #23 v8 inputs_digest; PR20 v9 attempt_role; R16a v10 provenance.
-    assert started.schema_version == 10
+    # #23 v8 inputs_digest; PR20 v9 role; R16a v10 provenance; v11 Unrecorded.
+    assert started.schema_version == 11
     assert started.payload.get("inputs_digest")
     assert isinstance(started.payload["inputs_digest"], str)
     assert len(started.payload["inputs_digest"]) == 64
@@ -1035,8 +1035,8 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
             "inputs_digest": "deadbeef" * 8,
         },
     )
-    # #23 v7→v8 inputs_digest; PR20 v8→v9 role; R16a v9→v10 provenance.
-    assert v == 10
+    # #23 v8; PR20 v9; R16a v10 provenance; v11 Unrecorded.
+    assert v == 11
     assert payload["inputs"][0].get("digest") is None
     assert payload.get("attempt_role") == "agent"
     assert payload.get("provenance") == "real"
@@ -1188,7 +1188,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
 
 
 def test_upcast_attempt_started_v7_to_v8():
-    """#23 v7→v8 inputs_digest; PR20 v9 role; R16a v10 provenance required."""
+    """#23 v8; PR20 v9; R16a v10 provenance; v11 AttemptUnrecorded."""
     v, p = upcast(
         "AttemptStarted",
         7,

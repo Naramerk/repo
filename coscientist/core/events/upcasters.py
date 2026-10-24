@@ -905,6 +905,38 @@ def _attempt_started_v9_to_v10_provenance(payload: dict[str, Any]) -> dict[str, 
     return out
 
 
+# Forever-fields that early journals may omit; v11 marks them AttemptUnrecorded.
+# Provenance is required at v10 (R16a) — not in this set. Not filled by earlier
+# inventing upcasters (inputs/limitations/role/…).
+_ATTEMPT_STARTED_UNRECORDED_FIELDS = (
+    "n",
+    "dispatch_id",
+    "route_returned",
+    "closed",
+    "study_id",
+)
+# source_schema_version stamped on Unrecorded (= last version before this bridge).
+ATTEMPT_STARTED_UNRECORDED_SINCE = 10
+
+
+def _attempt_started_v10_to_v11_unrecorded(payload: dict[str, Any]) -> dict[str, Any]:
+    """Carry only journalled forever-fields; absent → AttemptUnrecorded (no invent).
+
+    Also drops legacy ``task_key`` (never a writer AttemptStarted field).
+    """
+    out = dict(payload)
+    if "task_key" in out:
+        del out["task_key"]
+    pad = {
+        "kind": "unrecorded",
+        "source_schema_version": ATTEMPT_STARTED_UNRECORDED_SINCE,
+    }
+    for field in _ATTEMPT_STARTED_UNRECORDED_FIELDS:
+        if field not in out:
+            out[field] = dict(pad)
+    return out
+
+
 def _task_created_v13_to_v14_sandbox_freeze(payload: dict[str, Any]) -> dict[str, Any]:
     """#41: v14 TaskCreated must carry a complete typed sandbox freeze map.
 
@@ -1036,6 +1068,7 @@ register_upcaster("AttemptStarted", 6, _attempt_started_v6_to_v7_tainted)
 register_upcaster("AttemptStarted", 7, _attempt_started_v7_to_v8_inputs_digest)
 register_upcaster("AttemptStarted", 8, _attempt_started_v8_to_v9_role)
 register_upcaster("AttemptStarted", 9, _attempt_started_v9_to_v10_provenance)
+register_upcaster("AttemptStarted", 10, _attempt_started_v10_to_v11_unrecorded)
 
 
 def _result_recorded_v2_to_v3_output_kinds(payload: dict[str, Any]) -> dict[str, Any]:

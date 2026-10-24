@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, assert_never
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     StrictInt,
     ValidationError,
-    field_validator,
     model_validator,
 )
 
 from coscientist.core.claims.graph import (
-    AttrType,
     GraphSchemaError,
-    parse_attr_type,
+    KindSpec,
+    registry_from_schema,
     validate_attr_value,
 )
 from coscientist.core.events.errors import JournalPayloadError
@@ -38,21 +37,66 @@ from coscientist.core.execution.domain import (
     ToolCallRef,
 )
 
-# Open string-keyed attr bag (claim effect rows, schema obj(*) leaves).
-_ATTRS_BAG: AttrType = parse_attr_type("obj(Wire)", ctx="payload.attrs")
-
-
-def _validate_attrs_bag(value: object) -> dict[str, Any]:
-    """Refuse non-maps; values stay opaque bags checked as AttrObj."""
-    try:
-        validate_attr_value(_ATTRS_BAG, value, null_ok=False, ctx="attrs")
-    except GraphSchemaError as e:
-        raise ValueError(str(e)) from e
-    assert isinstance(value, dict)
-    return value
-
 _WIRE = ConfigDict(frozen=True, extra="forbid", strict=True)
 
+
+def _field_null_ok(default: object) -> bool:
+    """Null only when schema default is explicitly null (same as graph_writer)."""
+    if default is None:
+        return False
+    value = getattr(default, "value", default)
+    return value is None
+
+
+def _validate_registry_attrs(
+    *,
+    kind: object,
+    attrs: object,
+    layer: Literal["node", "edge"],
+) -> dict[str, object]:
+    """Validate attrs via KindRegistry field AttrTypes.
+
+    Kind must exist. For each attr key that is a KindSpec field, run
+    ``validate_attr_value``. Historical dumps may carry extra keys or omit
+    required fields; ``graph_writer`` enforces the full gate on new writes.
+    """
+    if not isinstance(kind, str) or not kind:
+        raise ValueError(f"{layer} kind must be a non-empty str")
+    if type(attrs) is not dict:
+        raise ValueError("attrs must be a mapping")
+    typed: dict[str, object] = {}
+    for key, value in attrs.items():
+        if type(key) is not str:
+            raise ValueError("attrs keys must be str")
+        typed[key] = value
+    reg = registry_from_schema()
+    if layer == "node":
+        if kind not in reg.node_kinds():
+            raise ValueError(f"unknown node kind: {kind}")
+        spec: KindSpec = reg.require_node_kind(kind)
+    elif layer == "edge":
+        if kind not in reg.edge_kinds():
+            raise ValueError(f"unknown edge kind: {kind}")
+        spec = reg.require_edge_kind(kind)
+    else:
+        assert_never(layer)
+    known = {f.name: f for f in spec.fields}
+    for fname, value in typed.items():
+        if fname not in known:
+            continue
+        field = known[fname]
+        try:
+            validate_attr_value(
+                field.type,
+                value,
+                null_ok=_field_null_ok(field.default),
+                ctx=fname,
+            )
+        except GraphSchemaError as e:
+            raise ValueError(
+                f"{fname}: expected type {field.type.text}, got {type(value).__name__}"
+            ) from e
+    return typed
 
 def _refuse(event_type: str, exc: ValidationError) -> None:
     first = exc.errors()[0]
@@ -104,6 +148,13 @@ class WireModel(BaseModel):
     @classmethod
     def _before_writer_omitted(cls, data: object) -> object:
         return _apply_writer_omitted(data, cls._writer_omitted)
+
+
+class AttemptUnrecorded(WireModel):
+    """Legacy AttemptStarted omitted this field — not a writer value."""
+
+    kind: Literal["unrecorded"]
+    source_schema_version: StrictInt
 
 
 class LimitationRow(WireModel):
@@ -527,7 +578,10 @@ class TaskInheritedPayload(TaskCreatedPayload):
 
 
 class AttemptStartedPayload(WireModel):
-    """Writer wire shape (DESIGN §6.3). Legacy gaps → upcasters only; else refuse."""
+    """Writer wire shape (DESIGN §6.3).
+
+    Legacy gaps → AttemptUnrecorded via upcasters (never invent values here).
+    """
 
     _writer_omitted = frozenset(
         {
@@ -542,15 +596,15 @@ class AttemptStartedPayload(WireModel):
     )
 
     attempt_id: str
-    n: StrictInt
-    dispatch_id: str
-    route_returned: bool
-    closed: bool
+    n: StrictInt | AttemptUnrecorded
+    dispatch_id: str | AttemptUnrecorded
+    route_returned: bool | AttemptUnrecorded
+    closed: bool | AttemptUnrecorded
     close_reason: str | None
-    provenance: str
+    provenance: str | AttemptUnrecorded
     agent_output_digest: str | None
     task_id: str
-    study_id: str
+    study_id: str | AttemptUnrecorded
     inputs: list[InputBinding]
     inputs_digest: str | None
     tainted_context: bool
@@ -1073,26 +1127,26 @@ class VerdictSnapshotsRecordedPayload(WireModel):
 
 
 class GraphNodeUpsertedPayload(WireModel):
-    """GraphNode wire dump; attrs via AttrType obj(Wire) + validate_attr_value."""
+    """GraphNode wire dump; attrs via KindRegistry AttrType / validate_attr_value."""
 
     _writer_omitted = frozenset({"created_at", "parent_id", "ref_id"})
 
     node_id: str
     kind: str
     study_id: str
-    attrs: dict[str, Any]
+    attrs: dict[str, object]
     ref_id: str | None
     parent_id: str | None
     created_at: str | None
 
-    @field_validator("attrs")
-    @classmethod
-    def _attrs_attr_type(cls, value: object) -> dict[str, Any]:
-        return _validate_attrs_bag(value)
+    @model_validator(mode="after")
+    def _attrs_registry(self) -> GraphNodeUpsertedPayload:
+        _validate_registry_attrs(kind=self.kind, attrs=self.attrs, layer="node")
+        return self
 
 
 class GraphEdgeAddedPayload(WireModel):
-    """GraphEdge wire dump; attrs via AttrType obj(Wire) + validate_attr_value."""
+    """GraphEdge wire dump; attrs via KindRegistry AttrType / validate_attr_value."""
 
     _writer_omitted = frozenset({"created_at"})
 
@@ -1101,13 +1155,13 @@ class GraphEdgeAddedPayload(WireModel):
     study_id: str
     src_id: str
     dst_id: str
-    attrs: dict[str, Any]
+    attrs: dict[str, object]
     created_at: str | None
 
-    @field_validator("attrs")
-    @classmethod
-    def _attrs_attr_type(cls, value: object) -> dict[str, Any]:
-        return _validate_attrs_bag(value)
+    @model_validator(mode="after")
+    def _attrs_registry(self) -> GraphEdgeAddedPayload:
+        _validate_registry_attrs(kind=self.kind, attrs=self.attrs, layer="edge")
+        return self
 
 
 class EffectIntendedPayload(WireModel):

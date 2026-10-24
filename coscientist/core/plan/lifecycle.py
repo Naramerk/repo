@@ -321,7 +321,12 @@ class LifecycleMixin:
                     kind="study",
                     study_id=sid,
                     ref_id=sid,
-                    attrs={"profile": profile},
+                    attrs={
+                        "request": study.request,
+                        "goal": {"statement": study.request},
+                        "profile": profile,
+                        "catalog_version": str(study.catalog_version),
+                    },
                     created_at=now,
                 ).model_dump(mode="json"),
                 ts=now, schema_version=writer_schema_version("GraphNodeUpserted"),

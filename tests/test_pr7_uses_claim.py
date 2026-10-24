@@ -145,8 +145,8 @@ def test_upcast_attempt_started_inputs_default():
             "deadline": "2026-01-01T00:00:00+00:00",
         },
     )
-    # …v7 tainted → …v9 attempt_role → v10 provenance.
-    assert v == 10
+    # …v9 attempt_role → v10 provenance → v11 Unrecorded.
+    assert v == 11
     assert p["inputs"] == []
     assert p["limitations"] == []
     assert p["allocated_budget_rub"] is None

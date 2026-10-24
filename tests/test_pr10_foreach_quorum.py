@@ -1561,8 +1561,8 @@ def test_upcast_attempt_limitations():
         3,
         {"attempt_id": "a", "inputs": [], "provenance": "real"},
     )
-    # …v7 tainted → …v9 attempt_role → v10 provenance required.
-    assert v == 10
+    # …v9 attempt_role → v10 provenance → v11 Unrecorded.
+    assert v == 11
     assert p["provenance"] == "real"
     assert p["limitations"] == []
     assert p["allocated_budget_rub"] is None

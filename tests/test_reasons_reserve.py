@@ -168,8 +168,8 @@ async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
 
 def test_upcast_attempt_started_simulated_to_stub():
     v, p = upcast("AttemptStarted", 1, {"provenance": "simulated", "attempt_id": "a"})
-    # …v7 tainted → …v9 attempt_role → v10 provenance required (already set).
-    assert v == 10
+    # …v9 attempt_role → v10 provenance → v11 AttemptUnrecorded for omitted forever-fields.
+    assert v == 11
     assert p["provenance"] == "stub"
     assert p["inputs"] == []
     assert p["limitations"] == []
@@ -178,6 +178,7 @@ def test_upcast_attempt_started_simulated_to_stub():
     assert p["tainted_context"] is False
     assert p["attempt_role"] == "agent"
     assert p.get("inputs_digest") is None
+    assert p["n"] == {"kind": "unrecorded", "source_schema_version": 10}
 
 
 def test_upcast_result_recorded_simulated_to_stub():
@@ -199,14 +200,15 @@ def test_upcast_result_recorded_simulated_to_stub():
 
 
 def test_upcast_attempt_started_v9_to_v10_keeps_partial():
-    """v9→v10: explicit partial provenance is preserved (no invent real)."""
+    """v9→v10: explicit partial provenance is preserved (no invent real); v11 Unrecorded."""
     v, p = upcast(
         "AttemptStarted",
         9,
         {"attempt_id": "a", "provenance": "partial"},
     )
-    assert v == 10
+    assert v == 11
     assert p["provenance"] == "partial"
+    assert p["n"] == {"kind": "unrecorded", "source_schema_version": 10}
 
 
 @pytest.mark.parametrize(
