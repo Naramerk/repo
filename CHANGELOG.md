@@ -12,12 +12,9 @@
   [`docs/plan/quality-hitl.md`](docs/plan/quality-hitl.md).
 
 ### G4 — Need + Plan.hypotheses/literature + Study.require_hypotheses
-- Domain `Need` (strict `needed`/`reason`); `Plan.hypotheses` / `Plan.literature` required;
-  `Study.require_hypotheses` required on Study + `create_study` (**no** construct default).
-  Omit Need → `PlanNeedRefuse`.
-- Legacy journals: [upcasters](coscientist/core/events/upcasters.py)
-  `_study_created_v13_to_v14_require_hypotheses` inserts `False` when the key is
-  missing — documented in [DESIGN §2](docs/DESIGN.md) (migration only).
+- Domain `Need`; `Plan.hypotheses`/`literature` required; `Study.require_hypotheses`
+  required on Study + `create_study` (**no** construct default). Omit Need → `PlanNeedRefuse`.
+- Legacy journals: upcasters v13→v14 insert `False` ([DESIGN §2](docs/DESIGN.md)).
 - Parity: [CAPABILITIES #2](docs/CAPABILITIES.md), [DESIGN §2](docs/DESIGN.md).
 
 ### Benchmark harness — typed errors (plan item 2)

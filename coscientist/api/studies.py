@@ -547,13 +547,9 @@ async def post_studies(
                 use_inputs = [] if force_refuse is not None else list(body.inputs or [])
                 user_cap = mint_user_put_capability() if use_inputs else None
                 try:
-                    # D3: create_study requires require_hypotheses (no default).
-                    # Profile→flag wiring later; API passes False unless caller overrides.
+                    # D3: required (no default). Profile wiring later; else False.
                     _ck = dict(create_kwargs)
-                    if "require_hypotheses" in _ck:
-                        rh = bool(_ck.pop("require_hypotheses"))
-                    else:
-                        rh = False
+                    rh = bool(_ck.pop("require_hypotheses")) if "require_hypotheses" in _ck else False
                     created_id = await rt.create_study(
                         profile=body.profile,
                         request=body.request.strip(),

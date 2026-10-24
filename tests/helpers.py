@@ -26,12 +26,7 @@ TEST_NEED_KW = {"hypotheses": TEST_NEED, "literature": TEST_NEED}
 
 
 def _bind_create_study_test_default(rt: Any) -> Any:
-    """Production ``create_study`` requires ``require_hypotheses`` (no default).
-
-    Tests opened via helpers may omit it; bind False on the instance only.
-    Callers that pass ``require_hypotheses=`` keep their value. Not used in
-    production (``runtime_factory.open_runtime`` never imports this module).
-    """
+    """Bind ``require_hypotheses=False`` on test runtimes only (prod has no default)."""
     if not hasattr(rt, "create_study"):
         return rt
     orig = rt.create_study
