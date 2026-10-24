@@ -10,6 +10,7 @@ from typing import Any, Literal
 from coscientist.core.claims.graph import GraphStore
 from coscientist.core.claims.rules import priority_refuted_support_note
 from coscientist.core.claims.stance import DEFAULT_TESTS_INTENT, TestsIntent, claim_stance
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.ids import (
     claim_node_id,
     experiment_node_id,
@@ -842,14 +843,15 @@ def compute_verdict_snapshots(
     When ``refs`` is set, only those logical ids are computed (scoped bind).
     Output keys are the caller's refs (logical ids), not kind-prefixed.
     """
-    k_ref = study.refutations_needed if study is not None else 1
-    priority = study.refutation_priority if study is not None else False
-    conf_k = (
-        k
-        if k is not None
-        else (study.confirmations_needed if study is not None else 1)
-    )
-    supp_k = study.supported_needed if study is not None else 2
+    if study is None:
+        raise JournalFormatError(
+            "verdict snapshots require study for verdict caps",
+            field="study",
+        )
+    k_ref = study.refutations_needed
+    priority = study.refutation_priority
+    conf_k = k if k is not None else study.confirmations_needed
+    supp_k = study.supported_needed
     by_target = filtered_claims_by_target(
         graph, study_id=study_id, results=results
     )

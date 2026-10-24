@@ -207,20 +207,23 @@ def hypothesis_verdict_scoped(
 ) -> str:
     """Verdict for one scope hypothesis using only this loop's claims."""
     study: Study | None = getattr(runtime, "study", None)
+    if study is None:
+        from coscientist.core.events.errors import JournalFormatError
+
+        raise JournalFormatError(
+            "loop hypothesis_verdict_scoped requires study for verdict caps",
+            field="study",
+        )
     scoped = _claims_for_loop_scope(runtime, loop, upto_iter=upto_iter)
     claims = scoped.get(hid) or []
     any_exp = bool(loop_task_keys(runtime, loop.loop_id, upto_iter=upto_iter))
-    k_ref = study.refutations_needed if study is not None else 1
-    priority = study.refutation_priority if study is not None else False
-    conf_k = study.confirmations_needed if study is not None else 1
-    supp_k = study.supported_needed if study is not None else 2
     v, _ = verdict_fn(
         claims,
         any_exp,
-        conf_k,
-        refutations_needed=k_ref,
-        refutation_priority=priority,
-        supported_needed=supp_k,
+        study.confirmations_needed,
+        refutations_needed=study.refutations_needed,
+        refutation_priority=study.refutation_priority,
+        supported_needed=study.supported_needed,
     )
     return str(v)
 
@@ -234,23 +237,26 @@ def question_disposition_scoped(
 ) -> str:
     """Disposition value for one scope question using loop-scoped claims."""
     study: Study | None = getattr(runtime, "study", None)
+    if study is None:
+        from coscientist.core.events.errors import JournalFormatError
+
+        raise JournalFormatError(
+            "loop question_disposition_scoped requires study for verdict caps",
+            field="study",
+        )
     scoped = _claims_for_loop_scope(runtime, loop, upto_iter=upto_iter)
     claims = scoped.get(qid) or []
     counting = [c for c in claims if c.counts()]
     if not counting:
         return Disposition.NOT_ATTEMPTED.value
     any_exp = bool(loop_task_keys(runtime, loop.loop_id, upto_iter=upto_iter))
-    k_ref = study.refutations_needed if study is not None else 1
-    priority = study.refutation_priority if study is not None else False
-    conf_k = study.confirmations_needed if study is not None else 1
-    supp_k = study.supported_needed if study is not None else 2
     v, _ = verdict_fn(
         claims,
         any_exp,
-        conf_k,
-        refutations_needed=k_ref,
-        refutation_priority=priority,
-        supported_needed=supp_k,
+        study.confirmations_needed,
+        refutations_needed=study.refutations_needed,
+        refutation_priority=study.refutation_priority,
+        supported_needed=study.supported_needed,
     )
     return disposition_for_question(
         hypothesis_verdicts={},

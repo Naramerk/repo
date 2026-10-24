@@ -912,6 +912,7 @@ def _seed_refute_claim_on_graph(rt, *, hid: str, exp_key: str, claim_suffix: str
                     "trusted": False,
                     "core_evaluated": True,
                     "countable": True,
+                    "attempt_id": aid,
                     "produced_by_call_id": f"{aid}:1",
                 },
             },

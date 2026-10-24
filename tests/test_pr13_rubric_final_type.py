@@ -1171,8 +1171,26 @@ def test_both_rubric_pending_own_reason(clock):
         target="Q1",
         target_kind="question",
         validity_ok=True,
+        independence_key="E0",
+        experiment_id="E0",
     )
     assert claim.counts()
+    from datetime import datetime, timezone
+
+    from coscientist.core.execution.domain import HitlPolicy, Study
+    from tests.helpers import REQUIRED_STUDY_CAPS
+
+    now = datetime.now(timezone.utc)
+    study = Study(
+        study_id="s",
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        hitl_policy=HitlPolicy(),
+        deadline=now,
+        created_at=now,
+        **REQUIRED_STUDY_CAPS,
+    )
     with (
         patch(
             "coscientist.core.claims.dispositions.filtered_claims_by_target",
@@ -1187,7 +1205,7 @@ def test_both_rubric_pending_own_reason(clock):
             tasks={"s/E0": task},
             plans=plans,
             graph=None,
-            study=None,
+            study=study,
             results=results,
         )
     row = disp["Q1"]

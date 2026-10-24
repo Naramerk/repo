@@ -175,12 +175,15 @@ def _effect_provenance_fields(
             field="producer",
         )
     producer = str(meta.producer)
-    # Fail-closed: unknown / future producers collapse to agent (untrusted).
+    # Fail-closed: unknown / future producers raise (never collapse to agent).
     # ``user`` is explicit — never trusted, never countable via this helper alone.
     if producer == "user":
         pass
     elif producer not in ("agent", "core", "sandbox", "tool"):
-        producer = "agent"
+        raise JournalFormatError(
+            f"unknown artifact producer: {producer!r}",
+            field="producer",
+        )
     produced = getattr(meta, "produced_by", None) if meta is not None else None
     call_id = str(getattr(produced, "call_id", "") or "")
     belongs = artifact_belongs_to_attempt(meta, attempt_id)

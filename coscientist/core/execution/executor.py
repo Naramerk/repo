@@ -435,6 +435,40 @@ def _derive_claim_core_attrs(
 
     frozen = _criterion_is_frozen(graph, study_id, key)
     crit = _criterion_freeze_attrs(graph, study_id, key)
+    # Unfrozen / missing freeze stamps: fill from catalog template only
+    # (never invent boolean defaults at the derive site).
+    if "uses_sesoi" not in crit:
+        if catalog is None:
+            raise JournalFormatError(
+                "catalog required to derive uses_sesoi when criterion unfrozen",
+                field="catalog",
+            )
+        templates = getattr(catalog, "templates", None)
+        if templates is None:
+            raise JournalFormatError(
+                "catalog.templates required to derive uses_sesoi",
+                field="templates",
+            )
+        by_id = {t.id: t for t in templates}
+        tmpl = by_id.get(key)
+        if tmpl is None:
+            raise JournalFormatError(
+                f"unknown criterion template {key!r}",
+                field="template_id",
+            )
+        crit["uses_sesoi"] = bool(tmpl.uses_sesoi)
+        if "predicts_null" not in crit:
+            crit["predicts_null"] = bool(tmpl.predicts_null)
+        if "predicted_direction" not in crit:
+            crit["predicted_direction"] = str(tmpl.predicted_direction)
+        if bool(tmpl.uses_sesoi):
+            if tmpl.sesoi is None:
+                raise JournalFormatError(
+                    f"template {key!r} uses_sesoi but sesoi is unset",
+                    field="sesoi",
+                )
+            if "sesoi" not in crit:
+                crit["sesoi"] = float(tmpl.sesoi)
     sesoi = crit.get("sesoi")
 
     uses_sesoi = bool(require_journal_field(crit, "uses_sesoi", ctx=str(key)))
@@ -1394,8 +1428,8 @@ class Executor:
                         "review_key": key,
                         "attempt_id": attempt_id,
                         "task_id": task_id,
-                        "check_id": parent_check,
-                        "item_id": item,
+                        "check_id": check_id,
+                        "item_id": str(item_id),
                         "output_digest": output_digest,
                         "status": wait_status.value,
                         "failure_kind": fk,

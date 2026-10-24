@@ -1644,3 +1644,132 @@ def test_refute_intent_requires_sesoi_fields():
     with pytest.raises(JournalFormatError, match="sesoi") as ei:
         refute_intent_counts(claim)
     assert ei.value.field == "sesoi"
+
+
+# --- Re-applied refuse-path pins (record_review / producer / study / belonging) ---
+
+
+def test_record_review_payload_uses_check_id_item_id_not_parent_check():
+    """ReviewRecorded payload must use check_id/item_id params (no parent_check NameError)."""
+    import inspect
+
+    from coscientist.core.execution import executor as ex_mod
+
+    src = inspect.getsource(ex_mod.Executor.record_review)
+    assert '"check_id": check_id' in src
+    assert '"item_id": str(item_id)' in src
+    assert "parent_check" not in src
+    assert '"item_id": item,' not in src
+
+
+def test_effect_provenance_unknown_producer_raises():
+    """Unknown artifact producer must raise — never collapse to agent."""
+    from types import SimpleNamespace
+
+    from coscientist.checks.evaluate import _effect_provenance_fields
+
+    class Arts:
+        def get_meta(self, _aid: str):
+            return SimpleNamespace(
+                producer="weird",
+                produced_by=SimpleNamespace(call_id="st/E1#1:1", attempt_id="st/E1#1"),
+            )
+
+    with pytest.raises(JournalFormatError, match="unknown artifact producer") as ei:
+        _effect_provenance_fields(Arts(), "art1", attempt_id="st/E1#1")
+    assert ei.value.field == "producer"
+
+
+def test_effect_provenance_missing_producer_raises():
+    """Missing meta.producer stays fail-closed (no getattr default to agent)."""
+    import inspect
+    from types import SimpleNamespace
+
+    from coscientist.checks import evaluate as ev_mod
+    from coscientist.checks.evaluate import _effect_provenance_fields
+
+    src = inspect.getsource(ev_mod._effect_provenance_fields)
+    assert 'getattr(meta, "producer", "agent")' not in src
+
+    class Arts:
+        def get_meta(self, _aid: str):
+            return SimpleNamespace(producer=None, produced_by=None)
+
+    with pytest.raises(JournalFormatError, match="producer") as ei:
+        _effect_provenance_fields(Arts(), "art1", attempt_id="st/E1#1")
+    assert ei.value.field == "producer"
+
+
+def test_verdict_snapshots_require_study():
+    from coscientist.core.claims.claims import compute_verdict_snapshots
+    from coscientist.core.claims.graph import GraphStore, default_execution_registry
+
+    with pytest.raises(JournalFormatError, match="study") as ei:
+        compute_verdict_snapshots(
+            GraphStore(default_execution_registry()),
+            study_id="st",
+            study=None,
+        )
+    assert ei.value.field == "study"
+
+
+def test_loop_predicates_require_study_for_verdict_caps():
+    from types import SimpleNamespace
+
+    from coscientist.core.execution.domain import LoopPredicate, LoopSpec, TaskSpec
+    from coscientist.core.plan.loop_predicates import (
+        hypothesis_verdict_scoped,
+        question_disposition_scoped,
+    )
+
+    loop = LoopSpec(
+        loop_id="L1",
+        body=[
+            TaskSpec(
+                task_key="E0",
+                title="e",
+                goal="g",
+                route="experiment",
+            )
+        ],
+        until=LoopPredicate(name="survivors_le", params={"n": 0}),
+        max_iter=1,
+        scope_hypotheses=["H1"],
+        scope_questions=["Q1"],
+    )
+    rt = SimpleNamespace(study=None, plans={}, tasks={}, results={}, graph=None)
+    with pytest.raises(JournalFormatError, match="study") as ei:
+        hypothesis_verdict_scoped(rt, loop, "H1", upto_iter=0)
+    assert ei.value.field == "study"
+    with pytest.raises(JournalFormatError, match="study") as ei2:
+        question_disposition_scoped(rt, loop, "Q1", upto_iter=0)
+    assert ei2.value.field == "study"
+
+
+def test_artifact_belongs_to_attempt_no_startswith():
+    """Belonging uses structural attempt_id — never call_id startswith."""
+    import inspect
+    from types import SimpleNamespace
+
+    from coscientist.checks import evaluate as ev_mod
+    from coscientist.checks.evaluate import artifact_belongs_to_attempt
+
+    src = inspect.getsource(ev_mod.artifact_belongs_to_attempt)
+    assert "startswith" not in src
+
+    aid = "st/E1#1"
+    # Suffix-only call_id without stamped attempt_id is not authority.
+    meta_suffix = SimpleNamespace(
+        produced_by=SimpleNamespace(call_id=f"{aid}:sandbox:c")
+    )
+    assert not artifact_belongs_to_attempt(meta_suffix, aid)
+    # Structural stamp wins.
+    meta_ok = SimpleNamespace(
+        produced_by=SimpleNamespace(call_id=f"{aid}:sandbox:c", attempt_id=aid)
+    )
+    assert artifact_belongs_to_attempt(meta_ok, aid)
+    # Wrong stamp refuses even when call_id looks like a prefix match.
+    meta_wrong = SimpleNamespace(
+        produced_by=SimpleNamespace(call_id=f"{aid}:1", attempt_id="other")
+    )
+    assert not artifact_belongs_to_attempt(meta_wrong, aid)
