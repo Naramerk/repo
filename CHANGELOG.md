@@ -11,6 +11,8 @@
   [CAPABILITIES](docs/CAPABILITIES.md) (B1/B2/R1–R5 / §12).
 - Review fix: `TaskSetManifest.tasks` refuse absolute paths and ``..`` segments;
   `ruff format` clean under `ruff.toml`.
+- Alligator fix: tests use `model_validate` / `setattr` (no `# type: ignore`);
+  reject cases parametrized with `ids` + `match=`.
 
 ### Graph schema parse (G7 split 1/2) [M1] — AttrType; `GRAPH_SCHEMA_VERSION`; required attrs; explicit `null_ok`. [DESIGN §2](docs/DESIGN.md#2-доменная-модель), [CAP #14](docs/CAPABILITIES.md?plain=1#L23).
 
