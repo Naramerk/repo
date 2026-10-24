@@ -11,12 +11,24 @@ from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.schema_versions import TASK_DONE_SCHEMA_VERSION
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import HitlRequest, Task, TaskOutcome, TaskState
+from enum import Enum
+
 from coscientist.experimental.costly import (
-    CostlyEffect,
     DelegatedBudget,
     costly_gate,
     settle,
 )
+
+
+class CostlyEffect(str, Enum):
+    """Structured gate outcome — callers match on this, not string prefixes."""
+
+    RUN = "RUN"
+    WAIT = "WAIT"
+    FAILED_HUMAN_TIMEOUT = "FAILED(human_timeout)"
+    SKIPPED_BUDGET = "SKIPPED(budget)"
+    SKIPPED_HUMAN_REJECTED = "SKIPPED(human_rejected)"
+    SKIPPED_CRITIC_REJECTED = "SKIPPED(critic_rejected)"
 
 
 class _StudyBudgetEmitter(Protocol):
@@ -161,15 +173,19 @@ class CostlyHitlMixin:
         mode = gate.on_timeout
         cost = _require_float(h.cost_rub, what="HitlRequest.cost_rub")
         budget = self._ensure_delegated_budget()
-        effect, ev = costly_gate(
+        effect_raw, ev = costly_gate(
             mode,
             answer,
             cost_estimate_rub=cost,
             budget=budget,
             critic_accepts=critic_accepts,
         )
-        if not isinstance(effect, CostlyEffect):
-            raise TypeError(f"costly_gate must return CostlyEffect, got {type(effect)!r}")
+        if isinstance(effect_raw, CostlyEffect):
+            effect = effect_raw
+        elif isinstance(effect_raw, str):
+            effect = CostlyEffect(effect_raw)
+        else:
+            raise TypeError(f"costly_gate must return CostlyEffect|str, got {type(effect_raw)!r}")
         now = self.clock.now()
         effect_s = effect.value
         if not isinstance(effect_s, str):

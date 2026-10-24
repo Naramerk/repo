@@ -29,13 +29,8 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.plan.expand_critic import (
-    PLAN_N_CRITIC_CRITERIA,
-    next_plan_n_key,
-    task_is_plan_n,
-)
+from coscientist.core.plan.expand_critic import PLAN_N_CRITIC_CRITERIA
 from coscientist.core.plan.expand_validate import (
-    MaxDepthExceeded,
     active_plan_blob,
     assign_core_keys,
     validate_expansion,
@@ -47,6 +42,43 @@ def _coerce_model(cls, value):
     if isinstance(value, dict):
         return cls.model_validate(value)
     return value
+
+class MaxDepthExceeded(ValueError):
+    """Plan / expansion exceeds Study.max_depth — maps to ExpansionRefused(expansion_limit)."""
+
+    def __init__(self, max_depth: int) -> None:
+        self.max_depth = max_depth
+        super().__init__(f"max_depth:{max_depth}")
+
+
+def next_plan_n_key(*, expansions: int, existing_plan_n: int) -> str:
+    """Single PLAN-n id allocator (catalog markers + expand_trigger share this)."""
+    if type(expansions) is not int or type(existing_plan_n) is not int:
+        raise TypeError("expansions and existing_plan_n must be exact int")
+    if expansions < 0 or existing_plan_n < 0:
+        raise ValueError("expansions/existing_plan_n must be >= 0")
+    return f"PLAN-{expansions + existing_plan_n + 1}"
+
+
+def task_is_plan_n(task: Any) -> bool:
+    """True when ``Task.plan_role == PLAN_N`` (sole wire signal)."""
+    try:
+        role = task.plan_role
+    except AttributeError as e:
+        raise JournalFormatError("task missing required plan_role") from e
+    if role is None:
+        raise JournalFormatError("task.plan_role must not be null")
+    if isinstance(role, PlanRole):
+        return role == PlanRole.PLAN_N
+    if isinstance(role, str):
+        try:
+            return PlanRole(role) == PlanRole.PLAN_N
+        except ValueError as e:
+            raise JournalFormatError(f"task.plan_role invalid: {role!r}") from e
+    raise JournalFormatError(
+        f"task.plan_role must be PlanRole|str, got {type(role).__name__}"
+    )
+
 
 
 def _dump_or_none(pending):

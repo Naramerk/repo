@@ -453,7 +453,7 @@ async def materialize_foreach(
         )
     )
     from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
-    from coscientist.core.plan.expand_validate import task_kind_for_route
+    from coscientist.core.plan.expand import task_kind_for_route
 
     catalog = runtime.catalog
     existing_keys = {t.spec.task_key for t in runtime.tasks.values()}

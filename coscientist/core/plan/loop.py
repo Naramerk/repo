@@ -497,7 +497,7 @@ async def materialize_loop_iter(
         )
         return None
 
-    from coscientist.core.plan.expand_validate import task_kind_for_route
+    from coscientist.core.plan.expand import task_kind_for_route
 
     prev = active_plan_blob(runtime)
     if prev is None:

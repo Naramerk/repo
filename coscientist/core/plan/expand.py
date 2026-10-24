@@ -41,11 +41,10 @@ from coscientist.core.plan.expand_graph import (
     skip_superseded_task_events,
 )
 from coscientist.core.plan.expand_trigger import refuse_expansion
+from coscientist.core.plan.expand_trigger import MaxDepthExceeded
 from coscientist.core.plan.expand_validate import (
-    MaxDepthExceeded,
     active_plan_blob,
     assign_core_keys,
-    task_kind_for_route,
     task_produced_countable_claims,
     validate_expansion,
 )
@@ -66,6 +65,19 @@ def _coerce_model(cls, value):
     if isinstance(value, dict):
         return cls.model_validate(value)
     return value
+
+def task_kind_for_route(route: object):
+    from coscientist.core.execution.domain import Route, UnknownRouteError, parse_route
+
+    if isinstance(route, Route):
+        raw = route.value
+    else:
+        raw = route
+    try:
+        return parse_route(raw).task_kind
+    except UnknownRouteError:
+        raise
+
 
 Origin = Literal["plan", "emergent"]
 DelegatedBy = Literal["human", "timeout"] | None

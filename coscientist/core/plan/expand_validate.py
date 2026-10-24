@@ -18,14 +18,6 @@ if TYPE_CHECKING:
 _KIND_KEY = re.compile(r"^(EXP|LIT|HYP|PLAN)-(\d+)$")
 
 
-class MaxDepthExceeded(ValueError):
-    """Plan / expansion exceeds Study.max_depth — maps to ExpansionRefused(expansion_limit)."""
-
-    def __init__(self, max_depth: int) -> None:
-        self.max_depth = max_depth
-        super().__init__(f"max_depth:{max_depth}")
-
-
 def _prefix_for_route(route: str) -> str:
     r = (route or "").lower()
     if r in ("literature", "lit"):
