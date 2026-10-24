@@ -116,6 +116,13 @@ def test_review_round_trip_json() -> None:
     assert v.model_validate_json(v.model_dump_json()) == v
 
 
+def test_review_evidence_requires_json_pointer_key() -> None:
+    with pytest.raises(ValidationError, match="json_pointer"):
+        ReviewEvidenceRef.model_validate(
+            {"artifact_id": "art_1", "digest": "a" * 64}
+        )
+
+
 def test_review_rejects_extra_field() -> None:
     with pytest.raises(ValidationError, match="extra_forbidden") as ei:
         ReviewVerdict.model_validate(

@@ -8,6 +8,8 @@
   require issues; `pass` requires non-empty evidence. Types only — no Protocol / adapter.
 - Built-in prompts via `prompts.builtin` (import directly; no `__getattr__` re-export);
   template `prompt_id`/`version` taken from `*_PROMPT_REF` (single source).
+- `ReviewEvidenceRef.json_pointer`: required `str | None` (explicit `None`, no
+  `audit-ok` / field default).
 - Parity: [DESIGN §7.1](docs/DESIGN.md#71-роли-тонкие-агенты-typed-io) /
   [§5.1](docs/DESIGN.md#51-типы); [CAP #5](docs/CAPABILITIES.md) / [#27](docs/CAPABILITIES.md#cap-27).
 

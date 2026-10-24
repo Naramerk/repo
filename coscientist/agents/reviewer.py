@@ -27,11 +27,15 @@ class ReviewerModel(BaseModel):
 
 
 class ReviewEvidenceRef(ReviewerModel):
-    """Evidence pointer in a ReviewVerdict (DESIGN §5.1 EvidenceRef shape)."""
+    """Evidence pointer in a ReviewVerdict (DESIGN §5.1 EvidenceRef shape).
+
+    ``json_pointer`` is required on the wire (pass ``None`` explicitly for a
+    whole-artifact ref) — no field default / silent invent.
+    """
 
     artifact_id: str = Field(pattern=_NONBLANK)
     digest: str = Field(pattern=_NONBLANK)
-    json_pointer: str | None = None  # audit-ok[field_default]: EvidenceRef.json_pointer optional
+    json_pointer: str | None
 
 
 class ReviewVerdict(ReviewerModel):
