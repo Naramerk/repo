@@ -10,6 +10,11 @@ from pathlib import Path
 import pytest
 
 from coscientist.agents.adapter import LlmAgentAdapter
+from coscientist.agents.prompts.roles import (
+    ROLE_EXECUTOR_REF,
+    ROLE_PLANNER_REF,
+    role_prompt_registry,
+)
 from coscientist.checks.catalog import CATALOG_VERSION
 from coscientist.cli.run import run_study
 from coscientist.core.events.clock import FakeClock
@@ -70,6 +75,11 @@ async def test_run_study_writes_usage_and_closes(tmp_path: Path, monkeypatch: py
         client,
         role_models={"planner": "test-model", "executor-route": "test-model"},
         tool_router=router,
+        prompts=role_prompt_registry(),
+        role_prompts={
+            "planner": ROLE_PLANNER_REF,
+            "executor-route": ROLE_EXECUTOR_REF,
+        },
     )
     out = io.StringIO()
     code = await run_study(
@@ -91,4 +101,7 @@ async def test_run_study_writes_usage_and_closes(tmp_path: Path, monkeypatch: py
     assert summary["usage"][0]["prompt_tokens"] == 10
     assert summary["usage"][0]["completion_tokens"] == 20
     assert any(u["role"] == "executor-route" for u in summary["usage"])
-    assert router.calls == ["dataset_overview", "chemical_space_clustering"]
+    assert [name for name, _args in router.calls] == [
+        "dataset_overview",
+        "chemical_space_clustering",
+    ]

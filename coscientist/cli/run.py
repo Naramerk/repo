@@ -9,12 +9,19 @@ import random
 import sys
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, TextIO, cast
 
 from coscientist.agents.adapter import LlmAgentAdapter
+from coscientist.agents.prompts.roles import (
+    ROLE_EXECUTOR_REF,
+    ROLE_PLANNER_REF,
+    role_prompt_registry,
+)
 from coscientist.agents.schemas import (
     AgentRun,
     ExecutorRouteIn,
+    PlannedToolCall,
     PlanOut,
     StudyContext,
     TaskSpecDraft,
@@ -27,6 +34,7 @@ from coscientist.cli.static_router import StaticToolRouter
 from coscientist.core.claims.graph import default_execution_registry
 from coscientist.core.events.clock import SystemClock
 from coscientist.core.execution.domain import (
+    Budget,
     OutputSpec,
     QuestionSpec,
     RequirementRef,
@@ -52,11 +60,20 @@ def main(argv: list[str] | None = None) -> int:
     run_p.add_argument("--llm-config", type=Path, required=True, help="LlmConfig JSON")
     run_p.add_argument("--planner-model", type=str, required=True)
     run_p.add_argument("--executor-model", type=str, required=True)
+    run_p.add_argument(
+        "--tools-json",
+        type=Path,
+        required=True,
+        help="JSON object tool_name → result payload for StaticToolRouter (MCP = G7)",
+    )
     args = parser.parse_args(argv)
     if args.command != "run":
         parser.error(f"unknown command {args.command!r}")
     catalog = load_catalog(args.catalog, kind_registry=default_execution_registry())
     llm_config = LlmConfig.model_validate_json(args.llm_config.read_text(encoding="utf-8"))
+    tools_payload = json.loads(args.tools_json.read_text(encoding="utf-8"))
+    if not isinstance(tools_payload, dict):
+        raise TypeError("--tools-json must be a JSON object")
     llm_clock = WallLlmClock()
     client = LlmClient(
         llm_config,
@@ -66,8 +83,8 @@ def main(argv: list[str] | None = None) -> int:
         wait_for=wall_wait_for,
         rng=random.Random(0),
     )
-    # MCP ToolRouter is G7; CLI ships an explicit empty static map (no silent MCP).
-    router: ToolRouter = StaticToolRouter(tools={})
+    # MCP ToolRouter is G7; CLI uses an explicit static map from --tools-json.
+    router: ToolRouter = StaticToolRouter(tools=tools_payload)
     adapter = LlmAgentAdapter(
         client,
         role_models={
@@ -75,6 +92,11 @@ def main(argv: list[str] | None = None) -> int:
             "executor-route": args.executor_model,
         },
         tool_router=router,
+        prompts=role_prompt_registry(),
+        role_prompts={
+            "planner": ROLE_PLANNER_REF,
+            "executor-route": ROLE_EXECUTOR_REF,
+        },
     )
     return asyncio.run(
         run_study(
@@ -144,12 +166,21 @@ async def run_study(
         )
         await rt.ensure_lease(ttl_s=max(30.0, float(deadline_s)))
 
+        role_budget = Budget(
+            max_llm_calls=100,
+            max_tokens=1_000_000,
+            max_cost_rub=None,
+            max_tool_calls=50,
+            deadline=deadline,
+        )
         plan_run = await adapter.run(
             "planner",
             StudyContext(study_id=study_id, request=request_text, profile=profile),
             [],
-            None,
+            role_budget,
         )
+        if plan_run.error is not None:
+            raise RuntimeError(f"planner error: {plan_run.error}")
         usages.append(_usage_row("planner", plan_run))
         plan_out = plan_run.output
         if not isinstance(plan_out, PlanOut):
@@ -172,15 +203,20 @@ async def run_study(
             aid = await rt.start_attempt(draft.task_key)
             if aid is None:
                 continue
+            tools = [SimpleNamespace(spec=SimpleNamespace(name=h)) for h in draft.tools_hint]
             exec_run = await adapter.run(
                 "executor-route",
                 ExecutorRouteIn(
                     task=draft,
-                    dependency_context={"study_id": study_id, "attempt_id": aid},
+                    study_id=study_id,
+                    attempt_id=aid,
+                    tool_args=tuple(PlannedToolCall(tool_name=h, args=()) for h in draft.tools_hint),
                 ),
-                [],
-                None,
+                tools,
+                role_budget,
             )
+            if exec_run.error is not None:
+                raise RuntimeError(f"executor-route error: {exec_run.error}")
             usages.append(_usage_row("executor-route", exec_run, task_key=draft.task_key))
 
         # Close by deadline: injectable clocks jump once; wall clocks tick until due.
