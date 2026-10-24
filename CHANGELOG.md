@@ -16,13 +16,8 @@
   [`docs/plan/quality-hitl.md`](docs/plan/quality-hitl.md).
 
 ### M2: versioned prompt registry (`coscientist/agents/prompts`)
-<<<<<<< HEAD
 - In-memory registry ([DESIGN §7](docs/DESIGN.md#7-агентный-слой),
   [§11](docs/DESIGN.md#11-структура-пакетов-и-бюджет-размера),
-=======
-- In-memory registry ([DESIGN §7](docs/DESIGN.md#7-агентный-слой);
-  [§11](docs/DESIGN.md#11-структура-пакетов-и-бюджет-размера);
->>>>>>> 191d8c6 (M2: restore isinstance/str refuse; wrap ValidationError)
   [CAP #27](docs/CAPABILITIES.md#cap-27)).
 
 ### Benchmark harness — typed errors (plan item 2)

@@ -10,6 +10,17 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 _VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
+__all__ = [
+    "PromptConfigError",
+    "PromptError",
+    "PromptNotFoundError",
+    "PromptRef",
+    "PromptRegistry",
+    "PromptRenderError",
+    "PromptTemplate",
+    "render_template",
+]
+
 
 class PromptError(Exception):
     """Base prompt registry failure."""
@@ -28,8 +39,6 @@ class PromptRenderError(PromptError):
 
 
 class _PromptModel(BaseModel):
-    """Frozen strict model; pydantic ValidationError → PromptConfigError."""
-
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     def __init__(self, **data: object) -> None:
@@ -49,12 +58,7 @@ class _PromptModel(BaseModel):
     def model_construct(cls, _fields_set: set[str] | None = None, **values: Any) -> Self:
         return cls.model_validate(values)
 
-    def model_copy(
-        self,
-        *,
-        update: Mapping[str, Any] | None = None,
-        deep: bool = False,
-    ) -> Self:
+    def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> Self:
         data = self.model_dump()
         if update:
             data.update(dict(update))
@@ -111,13 +115,12 @@ class PromptRegistry:
                 raise PromptConfigError(
                     f"registry value for {key!r} must be PromptTemplate, got {got}",
                 )
-            checked = PromptTemplate.model_validate(tmpl.model_dump())
-            expected = (checked.prompt_id, checked.version)
+            expected = (tmpl.prompt_id, tmpl.version)
             if key != expected:
                 raise PromptConfigError(
                     f"registry key {key!r} does not match template {expected!r}",
                 )
-            out[key] = checked
+            out[key] = tmpl
         self._templates = out
 
     def get(self, ref: PromptRef) -> PromptTemplate:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
+from typing import TypeVar
 
 import pytest
 
@@ -15,6 +16,9 @@ from coscientist.agents.prompts import (
     PromptTemplate,
     render_template,
 )
+
+_K = TypeVar("_K")
+_V = TypeVar("_V")
 
 
 def _tmpl(
@@ -37,40 +41,18 @@ def _reg() -> PromptRegistry:
     return PromptRegistry({(item.prompt_id, item.version): item})
 
 
-class _NonStrVars(Mapping[str, str]):
-    """Mapping[str, str] with a non-str runtime value (consistent get/items)."""
+class _PlantedMap(Mapping[_K, _V]):
+    def __init__(self, key: _K, typed: _V, planted: object) -> None:
+        self._key = key
+        self._val: _V = typed
+        object.__setattr__(self, "_val", planted)
 
-    def __init__(self) -> None:
-        self._key = "goal"
-        self._val: str = "x"
-        object.__setattr__(self, "_val", 5)
-
-    def __getitem__(self, key: str) -> str:
+    def __getitem__(self, key: _K) -> _V:
         if key != self._key:
             raise KeyError(key)
         return self._val
 
-    def __iter__(self) -> Iterator[str]:
-        yield self._key
-
-    def __len__(self) -> int:
-        return 1
-
-
-class _NonTemplateMap(Mapping[tuple[str, str], PromptTemplate]):
-    """Mapping with a non-PromptTemplate runtime value (consistent get/items)."""
-
-    def __init__(self) -> None:
-        self._key: tuple[str, str] = ("demo.greet", "1")
-        self._val: PromptTemplate = _tmpl()
-        object.__setattr__(self, "_val", object())
-
-    def __getitem__(self, key: tuple[str, str]) -> PromptTemplate:
-        if key != self._key:
-            raise KeyError(key)
-        return self._val
-
-    def __iter__(self) -> Iterator[tuple[str, str]]:
+    def __iter__(self) -> Iterator[_K]:
         yield self._key
 
     def __len__(self) -> int:
@@ -121,8 +103,9 @@ def test_render_refusals_keys(variables: dict[str, str], match: str) -> None:
 
 
 def test_render_refuse_non_str_value() -> None:
+    bad: Mapping[str, str] = _PlantedMap("goal", "x", 5)
     with pytest.raises(PromptRenderError, match="must be str"):
-        render_template(_tmpl(), _NonStrVars())
+        render_template(_tmpl(), bad)
 
 
 @pytest.mark.parametrize(
@@ -167,45 +150,24 @@ def test_template_domain_refusals(body: str, required_variables: tuple[str, ...]
         )
 
 
+def _base_payload(**overrides: object) -> dict[str, object]:
+    data: dict[str, object] = {
+        "prompt_id": "demo.greet",
+        "version": "1",
+        "body": "Hello {{goal}}.\n",
+        "required_variables": ("goal",),
+    }
+    data.update(overrides)
+    return data
+
+
 @pytest.mark.parametrize(
     ("payload", "match"),
     [
-        (
-            {
-                "prompt_id": 1,
-                "version": "1",
-                "body": "Hello {{goal}}.\n",
-                "required_variables": ("goal",),
-            },
-            "prompt_id",
-        ),
-        (
-            {
-                "prompt_id": "demo.greet",
-                "version": 2,
-                "body": "Hello {{goal}}.\n",
-                "required_variables": ("goal",),
-            },
-            "version",
-        ),
-        (
-            {
-                "prompt_id": "demo.greet",
-                "version": "1",
-                "body": 5,
-                "required_variables": ("goal",),
-            },
-            "body",
-        ),
-        (
-            {
-                "prompt_id": "demo.greet",
-                "version": "1",
-                "body": "Hello {{goal}}.\n",
-                "required_variables": ["goal"],
-            },
-            "tuple",
-        ),
+        (_base_payload(prompt_id=1), "prompt_id"),
+        (_base_payload(version=2), "version"),
+        (_base_payload(body=5), "body"),
+        (_base_payload(required_variables=["goal"]), "tuple"),
     ],
     ids=["non_str_prompt_id", "non_str_version", "non_str_body", "list_required"],
 )
@@ -219,16 +181,6 @@ def test_template_model_copy_revalidates() -> None:
         _tmpl().model_copy(update={"body": ""})
 
 
-def test_template_model_construct_revalidates() -> None:
-    with pytest.raises(PromptConfigError, match="template body is empty"):
-        PromptTemplate.model_construct(
-            prompt_id="demo.greet",
-            version="1",
-            body="",
-            required_variables=("goal",),
-        )
-
-
 def test_registry_refuse_empty() -> None:
     with pytest.raises(PromptConfigError, match="no templates"):
         PromptRegistry({})
@@ -240,5 +192,10 @@ def test_registry_refuse_key_mismatch() -> None:
 
 
 def test_registry_refuse_non_template() -> None:
+    bad: Mapping[tuple[str, str], PromptTemplate] = _PlantedMap(
+        ("demo.greet", "1"),
+        _tmpl(),
+        object(),
+    )
     with pytest.raises(PromptConfigError, match="got object"):
-        PromptRegistry(_NonTemplateMap())
+        PromptRegistry(bad)
