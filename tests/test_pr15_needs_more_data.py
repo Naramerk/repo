@@ -409,8 +409,8 @@ def test_honest_terminals_stamp_verdict_for_rollup():
     plans = {
         "p": {
             "questions": [
-                {"id": "Q_nmd", "text": "nmd?"},
-                {"id": "Q_inf", "text": "inf?"},
+                {"id": "Q_nmd", "text": "nmd?", "final_type": "verdict"},
+                {"id": "Q_inf", "text": "inf?", "final_type": "verdict"},
             ],
             "tasks": [
                 {"task_key": "E_nmd", "addresses": ["Q_nmd"]},
@@ -445,7 +445,7 @@ def test_honest_terminals_stamp_verdict_for_rollup():
     assert got["Q_inf"].get("verdict") is None
     bad = dispositions(
         tasks={},
-        plans={"p": {"questions": [{"id": "Q", "text": "q"}], "tasks": []}},
+        plans={"p": {"questions": [{"id": "Q", "text": "q", "final_type": "verdict"}], "tasks": []}},
         question_disposals={
             "Q": {
                 "disposition": "needs_more_data",

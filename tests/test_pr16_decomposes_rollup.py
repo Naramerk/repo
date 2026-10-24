@@ -284,9 +284,9 @@ def test_rollup_rule():
             "revision": 1,
             "rollup": "all",
             "questions": [
-                {"id": "Q", "text": "root", "parent_id": None},
-                {"id": "Q.a", "text": "a", "parent_id": "Q"},
-                {"id": "Q.b", "text": "b", "parent_id": "Q"},
+                {"id": "Q", "text": "root", "parent_id": None, "final_type": "verdict"},
+                {"id": "Q.a", "text": "a", "parent_id": "Q", "final_type": "verdict"},
+                {"id": "Q.b", "text": "b", "parent_id": "Q", "final_type": "verdict"},
             ],
             "tasks": [
                 {"task_key": "Ea", "addresses": ["Q.a"]},
@@ -331,7 +331,7 @@ def test_rollup_rule():
     }
     plans_maj["p1"] = {
         **plans_maj["p1"],
-        "questions": plans_maj["p1"]["questions"] + [{"id": "Q.c", "text": "c", "parent_id": "Q"}],
+        "questions": plans_maj["p1"]["questions"] + [{"id": "Q.c", "text": "c", "parent_id": "Q", "final_type": "verdict"}],
     }
     rolled_maj = apply_rollup(leaves_maj, plans=plans_maj)
     assert rolled_maj["Q"]["disposition"] == Disposition.REFUTED.value
@@ -348,9 +348,9 @@ def test_majority_ties_do_not_win():
     from coscientist.core.claims.rollup import apply_rollup
 
     base_q = [
-        {"id": "Q", "text": "root", "parent_id": None},
-        {"id": "Q.a", "text": "a", "parent_id": "Q"},
-        {"id": "Q.b", "text": "b", "parent_id": "Q"},
+        {"id": "Q", "text": "root", "parent_id": None, "final_type": "verdict"},
+        {"id": "Q.a", "text": "a", "parent_id": "Q", "final_type": "verdict"},
+        {"id": "Q.b", "text": "b", "parent_id": "Q", "final_type": "verdict"},
     ]
     plans_11 = {
         "p1": {
@@ -377,8 +377,8 @@ def test_majority_ties_do_not_win():
             "rollup": "majority",
             "questions": base_q
             + [
-                {"id": "Q.c", "text": "c", "parent_id": "Q"},
-                {"id": "Q.d", "text": "d", "parent_id": "Q"},
+                {"id": "Q.c", "text": "c", "parent_id": "Q", "final_type": "verdict"},
+                {"id": "Q.d", "text": "d", "parent_id": "Q", "final_type": "verdict"},
             ],
             "tasks": [],
         }
@@ -397,9 +397,9 @@ def test_majority_ties_do_not_win():
 
 def _tree_plans(rollup: str, *, extra_q: list[dict] | None = None) -> dict:
     qs = [
-        {"id": "Q", "text": "root", "parent_id": None},
-        {"id": "Q.a", "text": "a", "parent_id": "Q"},
-        {"id": "Q.b", "text": "b", "parent_id": "Q"},
+        {"id": "Q", "text": "root", "parent_id": None, "final_type": "verdict"},
+        {"id": "Q.a", "text": "a", "parent_id": "Q", "final_type": "verdict"},
+        {"id": "Q.b", "text": "b", "parent_id": "Q", "final_type": "verdict"},
     ]
     if extra_q:
         qs = qs + list(extra_q)
@@ -526,10 +526,10 @@ def test_rollup_cycle_localized_not_study_wide():
             "revision": 1,
             "rollup": "all",
             "questions": [
-                {"id": "A", "text": "a", "parent_id": "B"},
-                {"id": "B", "text": "b", "parent_id": "A"},
-                {"id": "Q", "text": "root", "parent_id": None},
-                {"id": "Q.a", "text": "child", "parent_id": "Q"},
+                {"id": "A", "text": "a", "parent_id": "B", "final_type": "verdict"},
+                {"id": "B", "text": "b", "parent_id": "A", "final_type": "verdict"},
+                {"id": "Q", "text": "root", "parent_id": None, "final_type": "verdict"},
+                {"id": "Q.a", "text": "child", "parent_id": "Q", "final_type": "verdict"},
             ],
             "tasks": [],
         }
@@ -575,8 +575,8 @@ def test_rollup_cycle_keeps_own_terminal_like_incomplete():
             "revision": 1,
             "rollup": "all",
             "questions": [
-                {"id": "A", "text": "a", "parent_id": "B"},
-                {"id": "B", "text": "b", "parent_id": "A"},
+                {"id": "A", "text": "a", "parent_id": "B", "final_type": "verdict"},
+                {"id": "B", "text": "b", "parent_id": "A", "final_type": "verdict"},
             ],
             "tasks": [],
         }
@@ -668,13 +668,13 @@ def test_loop_cap_skips_decomposes_parent_so_rollup_wins():
             "revision": 1,
             "rollup": "all",
             "questions": [
-                {"id": "Q", "text": "root"},
+                {"id": "Q", "text": "root", "final_type": "verdict"},
                 {"id": "Q.a", "text": "a", "parent_id": "Q", "final_type": "artifact"},
                 {"id": "Q.b", "text": "b", "parent_id": "Q", "final_type": "artifact"},
             ],
             "subquestions": [
-                {"id": "Q.a", "text": "a", "parent_id": "Q"},
-                {"id": "Q.b", "text": "b", "parent_id": "Q"},
+                {"id": "Q.a", "text": "a", "parent_id": "Q", "final_type": "verdict"},
+                {"id": "Q.b", "text": "b", "parent_id": "Q", "final_type": "verdict"},
             ],
             "tasks": [
                 {"task_key": "E0", "addresses": ["Q.a"]},
@@ -714,13 +714,13 @@ def test_loop_cap_keeps_parent_with_own_task_despite_answered_children():
             "revision": 1,
             "rollup": "all",
             "questions": [
-                {"id": "Q", "text": "root"},
+                {"id": "Q", "text": "root", "final_type": "verdict"},
                 {"id": "Q.a", "text": "a", "parent_id": "Q", "final_type": "artifact"},
                 {"id": "Q.b", "text": "b", "parent_id": "Q", "final_type": "artifact"},
             ],
             "subquestions": [
-                {"id": "Q.a", "text": "a", "parent_id": "Q"},
-                {"id": "Q.b", "text": "b", "parent_id": "Q"},
+                {"id": "Q.a", "text": "a", "parent_id": "Q", "final_type": "verdict"},
+                {"id": "Q.b", "text": "b", "parent_id": "Q", "final_type": "verdict"},
             ],
             "tasks": [
                 {"task_key": "E_ROOT", "addresses": ["Q"]},
@@ -797,10 +797,10 @@ def test_loop_cap_preserves_iteration_cap_when_children_incomplete_or_rubric():
                 "revision": 1,
                 "rollup": "all",
                 "questions": [
-                    {"id": "Q", "text": "root"},
-                    {"id": "Q.a", "text": "a", "parent_id": "Q"},
+                    {"id": "Q", "text": "root", "final_type": "verdict"},
+                    {"id": "Q.a", "text": "a", "parent_id": "Q", "final_type": "verdict"},
                 ],
-                "subquestions": [{"id": "Q.a", "text": "a", "parent_id": "Q"}],
+                "subquestions": [{"id": "Q.a", "text": "a", "parent_id": "Q", "final_type": "verdict"}],
                 "tasks": [
                     {"task_key": "E_ROOT", "addresses": ["Q"]},
                     {"task_key": "E0", "addresses": ["Q.a"]},
@@ -824,10 +824,10 @@ def test_loop_cap_preserves_iteration_cap_when_children_incomplete_or_rubric():
                 "revision": 1,
                 "rollup": "rubric",
                 "questions": [
-                    {"id": "Q", "text": "root"},
+                    {"id": "Q", "text": "root", "final_type": "verdict"},
                     {"id": "Q.a", "text": "a", "parent_id": "Q", "final_type": "artifact"},
                 ],
-                "subquestions": [{"id": "Q.a", "text": "a", "parent_id": "Q"}],
+                "subquestions": [{"id": "Q.a", "text": "a", "parent_id": "Q", "final_type": "verdict"}],
                 "tasks": [
                     {"task_key": "E_ROOT", "addresses": ["Q"]},
                     {"task_key": "E0", "addresses": ["Q.a"]},
@@ -1021,15 +1021,15 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
     for _pid, blob in plans_ft.items():
         qs = list(blob.get("questions") or [])
         by_id = {str(q.get("id")): dict(q) for q in qs if isinstance(q, dict)}
-        by_id.setdefault("Q", {"id": "Q", "text": "root"})
+        by_id.setdefault("Q", {"id": "Q", "text": "root", "final_type": "verdict"})
         by_id["Q.a"] = {
-            **by_id.get("Q.a", {"id": "Q.a", "text": "child", "parent_id": "Q"}),
+            **by_id.get("Q.a", {"id": "Q.a", "text": "child", "parent_id": "Q", "final_type": "verdict"}),
             "final_type": "artifact",
             "parent_id": "Q",
         }
         blob["questions"] = list(by_id.values())
         blob["subquestions"] = [
-            {"id": "Q.a", "text": "child", "parent_id": "Q"},
+            {"id": "Q.a", "text": "child", "parent_id": "Q", "final_type": "verdict"},
         ]
         # Strip any parent-covering tasks from the plan blob (keep only Q.a).
         blob["tasks"] = [
@@ -1068,7 +1068,7 @@ def test_cover_excludes_cancelled_superseded_yields_no_task():
         "p1": {
             "plan_id": "p1",
             "revision": 1,
-            "questions": [{"id": "Q", "text": "root"}],
+            "questions": [{"id": "Q", "text": "root", "final_type": "verdict"}],
             "tasks": [{"task_key": "E_DEAD", "addresses": ["Q"]}],
         }
     }
@@ -1100,7 +1100,7 @@ def test_cover_excludes_cancelled_superseded_yields_no_task():
         "p1": {
             "plan_id": "p1",
             "revision": 1,
-            "questions": [{"id": "Q", "text": "root"}],
+            "questions": [{"id": "Q", "text": "root", "final_type": "verdict"}],
             "tasks": [],
         }
     }
@@ -1131,13 +1131,13 @@ def test_superseded_only_parent_cover_skips_loop_cap():
             "revision": 1,
             "rollup": "all",
             "questions": [
-                {"id": "Q", "text": "root"},
-                {"id": "Q.a", "text": "a", "parent_id": "Q"},
-                {"id": "Q.b", "text": "b", "parent_id": "Q"},
+                {"id": "Q", "text": "root", "final_type": "verdict"},
+                {"id": "Q.a", "text": "a", "parent_id": "Q", "final_type": "verdict"},
+                {"id": "Q.b", "text": "b", "parent_id": "Q", "final_type": "verdict"},
             ],
             "subquestions": [
-                {"id": "Q.a", "text": "a", "parent_id": "Q"},
-                {"id": "Q.b", "text": "b", "parent_id": "Q"},
+                {"id": "Q.a", "text": "a", "parent_id": "Q", "final_type": "verdict"},
+                {"id": "Q.b", "text": "b", "parent_id": "Q", "final_type": "verdict"},
             ],
             "tasks": [
                 {"task_key": "E_SUPER", "addresses": ["Q"]},
@@ -1422,12 +1422,12 @@ def test_question_origin_implicit_vs_explicit():
                 "plan_id": "p1",
                 "revision": 1,
                 "questions": [
-                    {"id": "Q", "text": "root"},
+                    {"id": "Q", "text": "root", "final_type": "verdict"},
                     # parent_id set but not listed in subquestions → implicit
-                    {"id": "Q.inferred", "text": "inferred", "parent_id": "Q"},
+                    {"id": "Q.inferred", "text": "inferred", "parent_id": "Q", "final_type": "verdict"},
                 ],
                 "subquestions": [
-                    {"id": "Q.named", "text": "named", "parent_id": "Q"},
+                    {"id": "Q.named", "text": "named", "parent_id": "Q", "final_type": "verdict"},
                 ],
             }
         }
@@ -1543,7 +1543,7 @@ def test_upcaster_planaccepted_v9_to_v10_decomposes():
     v, p = upcast(
         "PlanAccepted",
         9,
-        {"plan_id": "p", "tasks": [], "questions": [{"id": "Q", "text": "t"}], "loops": []},
+        {"plan_id": "p", "tasks": [], "questions": [{"id": "Q", "text": "t", "final_type": "verdict"}], "loops": []},
     )
     assert v == 11
     assert p["rollup"] == "all"
@@ -1556,7 +1556,7 @@ def test_upcaster_planexpanded_v3_to_v4_decomposes():
     v, p = upcast(
         "PlanExpanded",
         3,
-        {"plan_id": "p", "added_questions": [{"id": "Q.a", "text": "a", "parent_id": "Q"}]},
+        {"plan_id": "p", "added_questions": [{"id": "Q.a", "text": "a", "parent_id": "Q", "final_type": "verdict"}]},
     )
     assert v == 5
     assert p["rollup"] == "all"

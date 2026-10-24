@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from coscientist.core.claims.verdict import recompute_effect_provenance
-from coscientist.core.execution.artifacts import LocalArtifactStore, output_kind_from_spec
-from coscientist.core.execution.domain import (
-    HitlPolicy,
-    InputSpec,
-    OutputSpec,
-    QuestionSpec,
-    TaskKind,
+from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.execution.artifacts import (
+    LocalArtifactStore,
+    make_tool_ref,
+    output_kind_from_spec,
 )
+from coscientist.core.execution.domain import HitlPolicy, InputSpec, OutputSpec, QuestionSpec, TaskKind
 from coscientist.core.execution.executor import (
     _check_role,
     _criterion_key_for_claim,
@@ -22,17 +22,17 @@ from coscientist.core.plan.foreach import _nat_key
 
 
 def test_output_spec_role_required():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         OutputSpec(name="main", media_type="application/json")
 
 
 def test_question_spec_final_type_required():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         QuestionSpec(id="Q1", text="q")
 
 
 def test_input_spec_quorum_rejects_zero():
-    with pytest.raises(ValueError, match="quorum"):
+    with pytest.raises(ValidationError, match="quorum"):
         InputSpec(from_task="E0", output="main", quorum=0)
 
 
@@ -72,18 +72,15 @@ def test_output_kind_from_spec_requires_role():
         output_kind_from_spec()  # type: ignore[call-arg]
 
 
-def test_task_kind_from_route_rejects_alias(tmp_path):
-    """foreach/loop use TaskKind(route); unknown route raises."""
+def test_task_kind_from_route_rejects_alias():
+    """foreach uses TaskKind(route); unknown route raises (no lit/hyp aliases)."""
     with pytest.raises(ValueError):
-        TaskKind("lit")  # old alias — must not silently map to LITERATURE
+        TaskKind("lit")
     with pytest.raises(ValueError):
         TaskKind("hyp")
 
 
 def test_artifact_put_requires_role(tmp_path):
-    from coscientist.core.execution.artifacts import make_tool_ref
-    from coscientist.core.events.errors import ArtifactRejected
-
     store = LocalArtifactStore(tmp_path)
     with pytest.raises((TypeError, ArtifactRejected)):
         store.put(b"x", make_tool_ref("c1"), name="main", media_type="text/plain")  # type: ignore[call-arg]

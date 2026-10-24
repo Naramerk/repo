@@ -571,7 +571,7 @@ def effective_outcome(claim: Any) -> ClaimOutcome | None:
         return stored  # type: ignore[return-value]
     if getattr(claim, "validity_ok", True) is False:
         return None
-    return status_to_outcome(str(getattr(claim, "criterion_status")))
+    return status_to_outcome(str(claim.criterion_status))
 
 
 def effective_validity(claim: Any) -> ClaimValidity:
@@ -834,7 +834,7 @@ def refute_intent_counts(claim: Any) -> bool:
         return False
     if not bool(getattr(claim, "frozen", False)):
         return False
-    if getattr(claim, "check_role") != "prediction":
+    if claim.check_role != "prediction":
         return False
     uses = getattr(claim, "uses_sesoi", None)
     if uses is not True:
@@ -905,13 +905,11 @@ def exclusion_reason(claim: Any) -> ExclusionReason | None:
         "unapproved_check",
     ):
         return stored  # type: ignore[return-value]
-    if getattr(claim, "check_role") == "unknown" and not getattr(
-        claim, "validity_ok", True
-    ):
+    if claim.check_role == "unknown" and not getattr(claim, "validity_ok", True):
         return "unknown_role"
     if effective_validity(claim) == "invalid":
         return "validity_failed"
-    prov = getattr(claim, "provenance", "stub")
+    prov = claim.provenance
     if prov == "stub":
         return "stub"
     if prov == "partial":
@@ -945,7 +943,7 @@ def claim_counts_for_verdict(claim: Any) -> bool:
             return False
     else:
         return False
-    stance = claim_stance(str(getattr(claim, "criterion_status")))
+    stance = claim_stance(str(claim.criterion_status))
     if stance == "refutes":
         return True
     frozen_at = getattr(claim, "criterion_frozen_at_seq", None)
@@ -1142,7 +1140,7 @@ def excluded_confirmations_note(
         if getattr(c, "provenance", "") not in ("stub", "partial"):
             continue
         oc = effective_outcome(c)
-        stance = claim_stance(str(getattr(c, "criterion_status")))
+        stance = claim_stance(str(c.criterion_status))
         if oc == "consistent" or stance == "supports":
             stub_partial.append(c)
     if not stub_partial:
