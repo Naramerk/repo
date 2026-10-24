@@ -35,6 +35,9 @@
   drop unused `RunnerRawResult`; tests via `model_validate`/`setattr` (no
   `# type: ignore`); reject cases parametrized with `ids` + exact `match=`
   (no `if "unique" in match` heuristics).
+- Crocodile fix: drop tautological `hasattr`/`"estimated" not in` asserts;
+  usage.jsonl objects compared to independent expected dicts; split empty
+  `token_total` / `llm_call_count` cases into separate tests.
 
 ### Benchmark harness — task + quality models (plan item 3) [M1]
 - Add `bench/models.py`: `EvidenceOutcomeCount`, `QualityExpectation` (status,

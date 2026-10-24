@@ -48,15 +48,25 @@ def test_write_usage_jsonl_one_object_per_call(tmp_path: Path) -> None:
     lines = path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2
     first = json.loads(lines[0])
-    assert first["role"] == "planner"
-    assert first["prompt_tokens"] == 100
-    assert first["completion_tokens"] == 20
-    assert first["latency_ms"] == 12.0
-    assert first["task_id"] == "two_tasks"
-    assert first["attempt_id"] == "a1"
     second = json.loads(lines[1])
-    assert second["attempt_id"] is None
-    assert "estimated" not in first
+    assert first == {
+        "attempt_id": "a1",
+        "completion_tokens": 20,
+        "latency_ms": 12.0,
+        "prompt_tokens": 100,
+        "role": "planner",
+        "study_id": "s1",
+        "task_id": "two_tasks",
+    }
+    assert second == {
+        "attempt_id": None,
+        "completion_tokens": 5,
+        "latency_ms": 3.0,
+        "prompt_tokens": 5,
+        "role": "executor",
+        "study_id": "s1",
+        "task_id": "two_tasks",
+    }
 
 
 def test_write_usage_jsonl_empty_writes_empty_file(tmp_path: Path) -> None:
@@ -129,7 +139,7 @@ def test_write_result_json_refused(tmp_path: Path) -> None:
 
 
 def test_write_result_json_refuses_directory_path(tmp_path: Path) -> None:
-    with pytest.raises(BenchConfigError, match="directory"):
+    with pytest.raises(BenchConfigError, match=r"path is a directory"):
         write_result_json(
             tmp_path,
             TimedRunRefused(

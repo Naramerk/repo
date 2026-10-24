@@ -95,10 +95,13 @@ def test_token_total_sums_provider_prompt_and_completion() -> None:
 
 def test_token_total_empty_is_zero() -> None:
     assert token_total(()) == 0
+
+
+def test_llm_call_count_empty_is_zero() -> None:
     assert llm_call_count(()) == 0
 
 
-def test_runner_success_carries_usage_recorded_not_call_counts() -> None:
+def test_runner_success_carries_usage_recorded() -> None:
     ok = RunnerSuccess(
         kind="success",
         usage_recorded=(_record(), _record(role="executor")),
@@ -106,7 +109,6 @@ def test_runner_success_carries_usage_recorded_not_call_counts() -> None:
     )
     assert ok.kind == "success"
     assert llm_call_count(ok.usage_recorded) == 2
-    assert not hasattr(ok, "calls")
 
 
 @pytest.mark.parametrize(
