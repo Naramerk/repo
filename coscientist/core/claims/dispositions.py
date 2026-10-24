@@ -305,9 +305,7 @@ def _dispositions_inner(
                 continue
             # PR15: needs_more_data is an honest artifact-path final (design report).
             explicit_art = (question_disposals or {}).get(qid)
-            if explicit_art and str(explicit_art.get("disposition") or "") == (
-                Disposition.NEEDS_MORE_DATA.value
-            ):
+            if explicit_art and str(explicit_art.get("disposition") or "") == (Disposition.NEEDS_MORE_DATA.value):
                 from coscientist.core.claims.experiment_design import (
                     MISSING_DESIGN_REASON,
                     design_artifact_ok,
@@ -397,10 +395,12 @@ def _dispositions_inner(
                         if excluded:
                             result[qid]["excluded_claims"] = excluded
                         continue
+                # Schema: on the verdict path, ``reason`` is the typed verdict
+                # string ``v`` from ``hypothesis_verdict`` (already ``str``) —
+                # same value as ``verdict``, no coercion.
                 row: dict[str, Any] = {
                     "disposition": disp,
-                    # Verdict path: reason is the question verdict that drove disp.
-                    "reason": str(v),
+                    "reason": v,
                     "reason_detail": [],
                     "formulation": text,
                     "verdict": v,
@@ -534,11 +534,7 @@ def _dispositions_inner(
 
     parent_ids = set(children_map(parent_map_from_plans(plans)))
     skip_cap = {qid for qid in parent_ids if not cover.get(qid)}
-    scoped_capped = {
-        qid: meta
-        for qid, meta in (loop_capped_questions or {}).items()
-        if qid not in skip_cap
-    }
+    scoped_capped = {qid: meta for qid, meta in (loop_capped_questions or {}).items() if qid not in skip_cap}
     apply_loop_cap_dispositions(result, scoped_capped)
     _stamp_honest_terminals(result)
     return apply_rollup(result, plans=plans)

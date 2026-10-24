@@ -16,6 +16,7 @@ from coscientist.core.claims.reasons import (
     TerminalReason,
     intake,
 )
+from coscientist.core.events.errors import CatalogError
 from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION
 from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.domain import (
@@ -139,16 +140,21 @@ async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
     await close_runtime(rt)
 
 
-def test_upcast_provenance_simulated_to_stub():
+def test_upcast_attempt_started_simulated_to_stub():
     v, p = upcast("AttemptStarted", 1, {"provenance": "simulated", "attempt_id": "a"})
     # …v7 tainted → …v9 attempt_role → v10 provenance required (already set).
-    assert v == 10 and p["provenance"] == "stub" and p["inputs"] == []
+    assert v == 10
+    assert p["provenance"] == "stub"
+    assert p["inputs"] == []
     assert p["limitations"] == []
     assert p["allocated_budget_rub"] is None
     assert p["budget_limit_rub"] is None
     assert p["tainted_context"] is False
     assert p["attempt_role"] == "agent"
     assert p.get("inputs_digest") is None
+
+
+def test_upcast_result_recorded_simulated_to_stub():
     v, p = upcast(
         "ResultRecorded",
         1,
@@ -166,27 +172,26 @@ def test_upcast_provenance_simulated_to_stub():
     assert p["output_kinds"] == {}
 
 
-def test_upcast_attempt_started_v9_to_v10_provenance_required():
+@pytest.mark.parametrize(
+    ("from_version", "payload", "match"),
+    [
+        (9, {"attempt_id": "a", "provenance": "partial"}, None),
+        (9, {"attempt_id": "a"}, "provenance_required"),
+        (9, {"attempt_id": "a", "provenance": None}, "provenance_required"),
+        (9, {"attempt_id": "a", "provenance": "simulated"}, "provenance_unknown"),
+        (1, {"attempt_id": "legacy"}, "provenance_required"),
+    ],
+    ids=["ok-partial", "absent", "null", "unknown", "legacy-chain"],
+)
+def test_upcast_attempt_started_v9_to_v10_provenance_required(from_version, payload, match):
     """v9→v10: absent / null / unknown provenance → CatalogError (no invent real)."""
-    from coscientist.core.events.errors import CatalogError
-    from coscientist.core.events.upcasters import _attempt_started_v9_to_v10_provenance
-
-    ok = _attempt_started_v9_to_v10_provenance(
-        {"attempt_id": "a", "provenance": "partial"}
-    )
-    assert ok["provenance"] == "partial"
-    with pytest.raises(CatalogError, match="provenance_required"):
-        _attempt_started_v9_to_v10_provenance({"attempt_id": "a"})
-    with pytest.raises(CatalogError, match="provenance_required"):
-        _attempt_started_v9_to_v10_provenance(
-            {"attempt_id": "a", "provenance": None}
-        )
-    with pytest.raises(CatalogError, match="provenance_unknown"):
-        _attempt_started_v9_to_v10_provenance(
-            {"attempt_id": "a", "provenance": "simulated"}
-        )
-    with pytest.raises(CatalogError, match="provenance_required"):
-        upcast("AttemptStarted", 1, {"attempt_id": "legacy"})
+    if match is None:
+        v, p = upcast("AttemptStarted", from_version, payload)
+        assert v == 10
+        assert p["provenance"] == "partial"
+        return
+    with pytest.raises(CatalogError, match=match):
+        upcast("AttemptStarted", from_version, payload)
 
 
 def _task(
@@ -386,16 +391,15 @@ def test_upcast_study_created_sets_reserve_zero():
     assert p["max_proposals"] == 3
     # Explicit value must not be overwritten
     v2, p2 = upcast(
-        "StudyCreated", 1,
+        "StudyCreated",
+        1,
         {"catalog_version": 3, **p, "finalize_reserve_s": 30, "require_hypotheses": False},
     )
     assert p2["finalize_reserve_s"] == 30
 
 
 @pytest.mark.asyncio
-async def test_old_journal_replay_keeps_deadlines_and_tick(
-    tmp_path: Path, clock, runtime_cls
-):
+async def test_old_journal_replay_keeps_deadlines_and_tick(tmp_path: Path, clock, runtime_cls):
     """StudyCreated v1 without finalize_reserve_s → reserve=0; deadlines unchanged; tick works."""
     from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.events.store import SqliteEventStore
@@ -450,7 +454,9 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
         "attempts": [],
         "inherited_from": None,
     }
-    await seed_legacy_journal(store, [
+    await seed_legacy_journal(
+        store,
+        [
             EventEnvelope(
                 study_id=sid,
                 type="StudyCreated",
@@ -469,7 +475,8 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
                 ts=now,
                 schema_version=1,
             ),
-        ])
+        ],
+    )
     await store.release_lease("seeder", store.epoch)
     await store.close()
 

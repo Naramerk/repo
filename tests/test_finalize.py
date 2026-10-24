@@ -30,6 +30,7 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
+    parse_provenance,
 )
 from coscientist.core.finalize.finalize import (
     contributing_reasons_ordered,
@@ -558,131 +559,66 @@ def test_minimal_report_schema_valid():
     assert md.startswith("# Study report `st_md`\n")
 
 
-def test_assemble_refuses_missing_question_fields():
-    with pytest.raises(MinimalReportRefuse, match="formulation/disposition/reason"):
-        assemble_minimal_report(
-            study_id="st",
-            terminal_reason="completed",
-            trigger="all_done",
-            contributing_reasons=[],
-            verdict="partial",
-            tasks={},
-            attempts={},
-            question_dispositions={"Q1": {"disposition": "not_attempted", "reason": "no_task"}},
-            fallback_reason=None,
-            refusal=None,
-            hypotheses={},
-            hypotheses_unavailable=None,
-            custom_checks=[],
-            observations=[],
-        )
-    with pytest.raises(MinimalReportRefuse, match="non-null"):
-        assemble_minimal_report(
-            study_id="st",
-            terminal_reason="completed",
-            trigger="all_done",
-            contributing_reasons=[],
-            verdict="partial",
-            tasks={},
-            attempts={},
-            question_dispositions={
+_ASSEMBLE_EMPTY = dict(
+    study_id="st",
+    terminal_reason="completed",
+    trigger="all_done",
+    contributing_reasons=[],
+    verdict="partial",
+    tasks={},
+    attempts={},
+    question_dispositions={},
+    fallback_reason=None,
+    refusal=None,
+    hypotheses={},
+    hypotheses_unavailable=None,
+    custom_checks=[],
+    observations=[],
+)
+
+
+@pytest.mark.parametrize(
+    ("qdisp", "match"),
+    [
+        (
+            {"Q1": {"disposition": "not_attempted", "reason": "no_task"}},
+            "formulation/disposition/reason",
+        ),
+        (
+            {
                 "Q1": {
                     "disposition": "answered",
                     "reason": None,
                     "formulation": "q",
                 }
             },
-            fallback_reason=None,
-            refusal=None,
-            hypotheses={},
-            hypotheses_unavailable=None,
-            custom_checks=[],
-            observations=[],
-        )
-
-
-def test_assemble_refuses_hypothesis_id_mismatch_and_missing():
-    base = dict(
-        study_id="st",
-        terminal_reason="completed",
-        trigger="all_done",
-        contributing_reasons=[],
-        verdict="partial",
-        tasks={},
-        attempts={},
-        question_dispositions={},
-        fallback_reason=None,
-        refusal=None,
-        hypotheses_unavailable=None,
-        custom_checks=[],
-        observations=[],
-    )
-    with pytest.raises(MinimalReportRefuse, match="hypothesis_id required"):
-        assemble_minimal_report(
-            **base,
-            hypotheses={"H1": {"verdict": "untested"}},
-        )
-    with pytest.raises(MinimalReportRefuse, match="!="):
-        assemble_minimal_report(
-            **base,
-            hypotheses={"H1": {"hypothesis_id": "H2", "verdict": "untested"}},
-        )
-    with pytest.raises(MinimalReportRefuse, match="expected mapping row"):
-        assemble_minimal_report(
-            **base,
-            hypotheses={"H1": "not-a-mapping"},
-        )
-
-
-def test_assemble_refuses_minimal_report_validation_error():
-    """ValidationError from model_validate → MinimalReportRefuse(match=MinimalReport:)."""
-    with pytest.raises(MinimalReportRefuse, match="MinimalReport:"):
-        assemble_minimal_report(
-            study_id="st",
-            terminal_reason="completed",
-            trigger="all_done",
-            contributing_reasons=[],
-            verdict="partial",
-            tasks={},
-            attempts={},
-            question_dispositions={},
-            fallback_reason=None,
-            # int is not StrictStr | dict → pydantic ValidationError
-            observations=[42],
-            refusal=None,
-            hypotheses={},
-            hypotheses_unavailable=None,
-            custom_checks=[],
-        )
-
-
-@pytest.mark.parametrize(
-    ("snap", "match"),
-    [
-        ({}, "provenance required"),
-        ({"provenance": None}, "provenance required"),
-        ({"provenance": "bogus"}, "unknown provenance"),
-        ({"provenance": 1}, "unknown provenance"),
+            "non-null",
+        ),
     ],
-    ids=["absent", "null", "unknown-str", "non-str"],
+    ids=["missing-formulation", "null-reason"],
 )
-def test_snap_provenance_fail_closed(snap, match):
-    """dispositions: never invent real — absent/null/unknown → ValueError."""
-    from coscientist.core.claims.dispositions import _snap_provenance
-
-    with pytest.raises(ValueError, match=match):
-        _snap_provenance(snap, "H1")
+def test_assemble_refuses_bad_question_fields(qdisp, match):
+    with pytest.raises(MinimalReportRefuse, match=match):
+        assemble_minimal_report(**{**_ASSEMBLE_EMPTY, "question_dispositions": qdisp})
 
 
 @pytest.mark.parametrize(
-    "raw",
-    ["real", "partial", "stub"],
-    ids=["real", "partial", "stub"],
+    ("hypotheses", "match"),
+    [
+        ({"H1": {"verdict": "untested"}}, "hypothesis_id required"),
+        ({"H1": {"hypothesis_id": "H2", "verdict": "untested"}}, "!="),
+        ({"H1": "not-a-mapping"}, "expected mapping row"),
+    ],
+    ids=["missing-id", "key-mismatch", "non-mapping"],
 )
-def test_snap_provenance_accepts_valid(raw):
-    from coscientist.core.claims.dispositions import _snap_provenance
+def test_assemble_refuses_bad_hypothesis_rows(hypotheses, match):
+    with pytest.raises(MinimalReportRefuse, match=match):
+        assemble_minimal_report(**{**_ASSEMBLE_EMPTY, "hypotheses": hypotheses})
 
-    assert _snap_provenance({"provenance": raw}, "H1") == raw
+
+def test_assemble_refuses_non_str_observation():
+    with pytest.raises(MinimalReportRefuse, match=r"observation must be str\|mapping"):
+        assemble_minimal_report(**{**_ASSEMBLE_EMPTY, "observations": [42]})
 
 
 def test_assemble_refuses_done_task_without_outcome():
@@ -697,20 +633,7 @@ def test_assemble_refuses_done_task_without_outcome():
     )
     with pytest.raises(MinimalReportRefuse, match="outcome required"):
         assemble_minimal_report(
-            study_id="st",
-            terminal_reason="completed",
-            trigger="all_done",
-            contributing_reasons=[],
-            verdict="partial",
-            tasks={"st/A": t},
-            attempts={},
-            question_dispositions={},
-            fallback_reason=None,
-            refusal=None,
-            hypotheses={},
-            hypotheses_unavailable=None,
-            custom_checks=[],
-            observations=[],
+            **{**_ASSEMBLE_EMPTY, "tasks": {"st/A": t}},
         )
 
 
@@ -744,77 +667,60 @@ def test_render_markdown_note_and_single_tasks_path():
     assert "`A` [experiment] SUCCESS" in md
     # Runtime tasks must not invent a second Tasks section path.
     assert md.count("## Tasks") == 1
-    assert "/PENDING" not in md and "TaskState" not in md
+    assert "/PENDING" not in md
+    assert "TaskState" not in md
 
 
-def test_assemble_refuses_unknown_disposition_and_provenance():
-    from coscientist.core.finalize.minimal_report import _task_provenance
-
-    with pytest.raises(MinimalReportRefuse, match="unknown disposition"):
-        assemble_minimal_report(
-            study_id="st",
-            terminal_reason="completed",
-            trigger="all_done",
-            contributing_reasons=[],
-            verdict="partial",
-            tasks={},
-            attempts={},
-            question_dispositions={
+@pytest.mark.parametrize(
+    ("qdisp", "tasks", "attempts", "match"),
+    [
+        (
+            {
                 "Q1": {
                     "disposition": "not_a_disposition",
                     "reason": "x",
                     "formulation": "q",
                 }
             },
-            fallback_reason=None,
-            refusal=None,
-            hypotheses={},
-            hypotheses_unavailable=None,
-            custom_checks=[],
-            observations=[],
-        )
-    tasks, attempts = _closed_attempts("A", provenance="bogus")
-    with pytest.raises(MinimalReportRefuse, match="unknown provenance"):
+            {},
+            {},
+            "unknown disposition",
+        ),
+        (
+            {},
+            *_closed_attempts("A", provenance="bogus"),
+            "unknown provenance",
+        ),
+        (
+            {},
+            {"st/A": _task("A", attempts=["st/A/a0"])},
+            {"st/A/a0": {"closed": True, "task_id": "st/A"}},
+            "provenance required",
+        ),
+        (
+            {},
+            {"st/A": _task("A", attempts=["st/A/a0"])},
+            {},
+            "missing from attempts map",
+        ),
+    ],
+    ids=[
+        "unknown-disposition",
+        "unknown-provenance",
+        "closed-missing-provenance",
+        "attempt-id-absent-from-map",
+    ],
+)
+def test_assemble_refuses_disposition_or_provenance(qdisp, tasks, attempts, match):
+    with pytest.raises(MinimalReportRefuse, match=match):
         assemble_minimal_report(
-            study_id="st",
-            terminal_reason="completed",
-            trigger="all_done",
-            contributing_reasons=[],
-            verdict="partial",
-            tasks=tasks,
-            attempts=attempts,
-            question_dispositions={},
-            fallback_reason=None,
-            refusal=None,
-            hypotheses={},
-            hypotheses_unavailable=None,
-            custom_checks=[],
-            observations=[],
+            **{
+                **_ASSEMBLE_EMPTY,
+                "question_dispositions": qdisp,
+                "tasks": tasks,
+                "attempts": attempts,
+            },
         )
-    tasks_miss, _ = _closed_attempts("A", provenance="real")
-    attempts_miss = {
-        "st/A/a0": {"closed": True, "task_id": "st/A"}  # provenance absent
-    }
-    with pytest.raises(MinimalReportRefuse, match="provenance required"):
-        assemble_minimal_report(
-            study_id="st",
-            terminal_reason="completed",
-            trigger="all_done",
-            contributing_reasons=[],
-            verdict="partial",
-            tasks=tasks_miss,
-            attempts=attempts_miss,
-            question_dispositions={},
-            fallback_reason=None,
-            refusal=None,
-            hypotheses={},
-            hypotheses_unavailable=None,
-            custom_checks=[],
-            observations=[],
-        )
-    # No closed attempt at all → refuse (never invent real).
-    with pytest.raises(MinimalReportRefuse, match="closed attempt provenance required"):
-        _task_provenance(_task("A"), {})
 
 
 @pytest.mark.parametrize(
@@ -827,8 +733,6 @@ def test_assemble_refuses_unknown_disposition_and_provenance():
     ids=["null", "unknown-str", "non-str"],
 )
 def test_parse_provenance_fail_closed(raw, match):
-    from coscientist.core.execution.domain import parse_provenance
-
     with pytest.raises(ValueError, match=match):
         parse_provenance(raw, owner="probe")
 
@@ -839,49 +743,28 @@ def test_parse_provenance_fail_closed(raw, match):
     ids=["real", "partial", "stub"],
 )
 def test_parse_provenance_accepts_valid(raw):
-    from coscientist.core.execution.domain import parse_provenance
-
     assert parse_provenance(raw, owner="probe") == raw
 
 
 def test_assemble_refuses_list_hypothesis_without_id():
     with pytest.raises(MinimalReportRefuse, match="hypothesis_id required"):
         assemble_minimal_report(
-            study_id="st",
-            terminal_reason="completed",
-            trigger="all_done",
-            contributing_reasons=[],
-            verdict="partial",
-            tasks={},
-            attempts={},
-            question_dispositions={},
-            fallback_reason=None,
-            refusal=None,
-            hypotheses=[{"verdict": "untested"}],
-            hypotheses_unavailable=None,
-            custom_checks=[],
-            observations=[],
+            **{
+                **_ASSEMBLE_EMPTY,
+                "hypotheses": [{"verdict": "untested"}],
+            },
         )
 
 
 @pytest.mark.asyncio
-async def test_build_finalized_payload_reads_public_observations(tmp_path, clock):
-    """Public StudyRuntime.observations — no cast/SimpleNamespace, no _observations."""
-    from coscientist.core.finalize.finalize import _build_finalized_payload
-
+async def test_finalize_includes_public_observations(tmp_path, clock):
+    """Public StudyRuntime.observations land on StudyFinalized via finalize()."""
     rt = await _boot(tmp_path, clock, "st_obs")
     rt.observations.append({"text": "seen-in-field"})
-    payload = await _build_finalized_payload(
-        rt,
-        sid="st_obs",
-        trigger="all_done",
-        term=TerminalReason.COMPLETED,
-        contrib=[],
-        verdict="failed",
-        qdisp={},
-        hypothesis_verdicts={},
-        hypotheses_unavailable=None,
-    )
+    await _skip_all(rt)
+    await rt.finalize(trigger="all_done")
+    fin = _fin(await rt.store.read_all())
+    payload = fin.payload if isinstance(fin.payload, dict) else {}
     assert payload["observations"] == [{"text": "seen-in-field"}]
     await close_runtime(rt)
 

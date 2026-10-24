@@ -34,10 +34,12 @@ def _task_provenance(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> P
     Missing / null / unknown provenance on a closed attempt, or no closed
     attempt at all → ``MinimalReportRefuse`` (DESIGN_M1 §6.7: legacy rename
     is an upcaster job; the report layer does not guess).
+    Attempt id on the task but absent from ``attempts`` → refuse (projection
+    desync; never treat as «no closed attempt»).
     """
     for aid in reversed(task.attempts):
         if aid not in attempts:
-            continue
+            raise MinimalReportRefuse(f"task {task.spec.task_key!r}: attempt {aid!r} missing from attempts map")
         att = attempts[aid]
         if not att.get("closed"):
             continue
@@ -52,7 +54,7 @@ def _task_provenance(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> P
 def _has_closed_attempt(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> bool:
     for aid in task.attempts:
         if aid not in attempts:
-            continue
+            raise MinimalReportRefuse(f"task {task.spec.task_key!r}: attempt {aid!r} missing from attempts map")
         if attempts[aid].get("closed"):
             return True
     return False
@@ -119,6 +121,8 @@ def assemble_minimal_report(
     task_list = sorted(tasks.values(), key=lambda t: t.spec.task_key)
     q_rows: list[dict[str, Any]] = []
     for qid, d in sorted(question_dispositions.items()):
+        if not isinstance(qid, str):
+            raise MinimalReportRefuse(f"question key must be str, got {type(qid).__name__}")
         if "formulation" not in d or "disposition" not in d or "reason" not in d:
             raise MinimalReportRefuse(f"question {qid!r}: formulation/disposition/reason required")
         formulation = d["formulation"]
@@ -126,32 +130,46 @@ def assemble_minimal_report(
         reason = d["reason"]
         if formulation is None or disposition is None or reason is None:
             raise MinimalReportRefuse(f"question {qid!r}: formulation/disposition/reason must be non-null")
+        if not isinstance(formulation, str):
+            raise MinimalReportRefuse(f"question {qid!r}: formulation must be str, got {type(formulation).__name__}")
+        if not isinstance(reason, str):
+            raise MinimalReportRefuse(f"question {qid!r}: reason must be str, got {type(reason).__name__}")
         if isinstance(disposition, Disposition):
             disp = disposition
-        else:
+        elif isinstance(disposition, str):
             try:
-                disp = Disposition(str(disposition))
+                disp = Disposition(disposition)
             except ValueError as e:
                 raise MinimalReportRefuse(f"question {qid!r}: unknown disposition {disposition!r}") from e
+        else:
+            raise MinimalReportRefuse(
+                f"question {qid!r}: disposition must be Disposition|str, got {type(disposition).__name__}"
+            )
         note_raw = d.get("note")
+        if note_raw is not None and not isinstance(note_raw, str):
+            raise MinimalReportRefuse(f"question {qid!r}: note must be str|None, got {type(note_raw).__name__}")
         row: dict[str, Any] = {
-            "question_id": str(qid),
-            "formulation": str(formulation)[:500],
+            "question_id": qid,
+            "formulation": formulation[:500],
             "disposition": disp,
-            "reason": str(reason)[:200],
-            "note": None if note_raw is None else str(note_raw),
+            "reason": reason[:200],
+            "note": note_raw,
         }
         q_rows.append(row)
     if isinstance(hypotheses, Mapping):
         h_rows: list[dict[str, object]] = []
         for hid, v in sorted(hypotheses.items()):
+            if not isinstance(hid, str):
+                raise MinimalReportRefuse(f"hypothesis key must be str, got {type(hid).__name__}")
             if not isinstance(v, Mapping):
                 raise MinimalReportRefuse(f"hypothesis {hid!r}: expected mapping row, got {type(v).__name__}")
             row_h = dict(v)
             rid = row_h.get("hypothesis_id")
             if rid is None:
                 raise MinimalReportRefuse(f"hypothesis {hid!r}: hypothesis_id required in row")
-            if str(rid) != str(hid):
+            if not isinstance(rid, str):
+                raise MinimalReportRefuse(f"hypothesis {hid!r}: hypothesis_id must be str, got {type(rid).__name__}")
+            if rid != hid:
                 raise MinimalReportRefuse(f"hypothesis key {hid!r} != row hypothesis_id {rid!r}")
             h_rows.append(row_h)
     else:
@@ -161,6 +179,8 @@ def assemble_minimal_report(
             rid = row_h.get("hypothesis_id")
             if rid is None:
                 raise MinimalReportRefuse("hypothesis list row: hypothesis_id required")
+            if not isinstance(rid, str):
+                raise MinimalReportRefuse(f"hypothesis list row: hypothesis_id must be str, got {type(rid).__name__}")
             h_rows.append(row_h)
     t_rows: list[dict[str, Any]] = []
     for t in task_list:
@@ -169,12 +189,19 @@ def assemble_minimal_report(
         if t.outcome is None:
             raise MinimalReportRefuse(f"task {t.spec.task_key!r}: outcome required")
         reason_s: str | None
-        if isinstance(t.reason, TaskReason):
-            reason_s = t.reason.value
-        elif t.reason:
-            reason_s = str(t.reason)
-        else:
+        if t.reason is None:
             reason_s = None
+        elif isinstance(t.reason, TaskReason):
+            reason_s = t.reason.value
+        elif isinstance(t.reason, str):
+            try:
+                reason_s = TaskReason(t.reason).value
+            except ValueError as e:
+                raise MinimalReportRefuse(f"task {t.spec.task_key!r}: unknown reason {t.reason!r}") from e
+        else:
+            raise MinimalReportRefuse(
+                f"task {t.spec.task_key!r}: reason must be TaskReason|str|None, got {type(t.reason).__name__}"
+            )
         # No closed attempt → explicit provenance=null (not invent real, not omit).
         if _has_closed_attempt(t, attempts):
             prov: Provenance | None = _task_provenance(t, attempts)
@@ -196,8 +223,10 @@ def assemble_minimal_report(
     for obs in observations:
         if isinstance(obs, Mapping):
             obs_list.append(dict(obs))
-        else:
+        elif isinstance(obs, str):
             obs_list.append(obs)
+        else:
+            raise MinimalReportRefuse(f"observation must be str|mapping, got {type(obs).__name__}")
     raw: dict[str, object] = {
         "study_id": study_id,
         "terminal_reason": terminal_reason,
