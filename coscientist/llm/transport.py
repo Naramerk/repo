@@ -11,7 +11,7 @@ class TransportResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     status_code: int = Field(ge=100, le=599)
-    headers: Mapping[str, str] = Field(default_factory=dict)
+    headers: Mapping[str, str]
     body: bytes
 
 

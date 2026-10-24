@@ -104,7 +104,7 @@ def api_key(monkeypatch: pytest.MonkeyPatch) -> str:
 @pytest.mark.asyncio
 async def test_complete_returns_usage_and_content(api_key: str) -> None:
     transport = FakeTransport(
-        [TransportResponse(status_code=200, body=_ok_body(content="typed-out"))]
+        [TransportResponse(status_code=200, headers={}, body=_ok_body(content="typed-out"))]
     )
     client = LlmClient(_config(), transport)
     req = LlmRequest(
@@ -134,7 +134,7 @@ async def test_missing_api_key_env_is_config_error(monkeypatch: pytest.MonkeyPat
     monkeypatch.delenv("COSCI_TEST_LLM_KEY", raising=False)
     client = LlmClient(
         _config(),
-        FakeTransport([TransportResponse(status_code=200, body=_ok_body())]),
+        FakeTransport([TransportResponse(status_code=200, headers={}, body=_ok_body())]),
     )
     with pytest.raises(LlmConfigError):
         await client.complete(
@@ -146,8 +146,8 @@ async def test_missing_api_key_env_is_config_error(monkeypatch: pytest.MonkeyPat
 async def test_provider_error_not_retryable_by_default(api_key: str) -> None:
     transport = FakeTransport(
         [
-            TransportResponse(status_code=500, body=b'{"error":"no"}'),
-            TransportResponse(status_code=200, body=_ok_body()),
+            TransportResponse(status_code=500, headers={}, body=b'{"error":"no"}'),
+            TransportResponse(status_code=200, headers={}, body=_ok_body()),
         ]
     )
     client = LlmClient(_config(max_retries=2, retryable_status_codes=(503,)), transport)
@@ -163,8 +163,8 @@ async def test_provider_error_not_retryable_by_default(api_key: str) -> None:
 async def test_retries_only_configured_status_codes(api_key: str) -> None:
     transport = FakeTransport(
         [
-            TransportResponse(status_code=503, body=b"busy"),
-            TransportResponse(status_code=200, body=_ok_body(content="after-retry")),
+            TransportResponse(status_code=503, headers={}, body=b"busy"),
+            TransportResponse(status_code=200, headers={}, body=_ok_body(content="after-retry")),
         ]
     )
     client = LlmClient(
@@ -183,7 +183,7 @@ async def test_transport_retryable_flag_respected(api_key: str) -> None:
     transport = FakeTransport(
         [
             LlmTransportError("conn reset", retryable=True),
-            TransportResponse(status_code=200, body=_ok_body(content="ok")),
+            TransportResponse(status_code=200, headers={}, body=_ok_body(content="ok")),
         ]
     )
     client = LlmClient(_config(max_retries=1, retry_backoff_s=0.0), transport)
@@ -221,7 +221,7 @@ async def test_timeout_retries_when_enabled(api_key: str) -> None:
     transport = FakeTransport(
         [
             LlmTimeoutError("slow"),
-            TransportResponse(status_code=200, body=_ok_body(content="late")),
+            TransportResponse(status_code=200, headers={}, body=_ok_body(content="late")),
         ]
     )
     client = LlmClient(
@@ -236,7 +236,9 @@ async def test_timeout_retries_when_enabled(api_key: str) -> None:
 
 @pytest.mark.asyncio
 async def test_malformed_response_is_typed_error(api_key: str) -> None:
-    transport = FakeTransport([TransportResponse(status_code=200, body=b'{"choices":[]}')])
+    transport = FakeTransport(
+        [TransportResponse(status_code=200, headers={}, body=b'{"choices":[]}')]
+    )
     client = LlmClient(_config(), transport)
     with pytest.raises(LlmResponseError):
         await client.complete(
@@ -252,7 +254,11 @@ async def test_missing_usage_tokens_rejected(api_key: str) -> None:
         "usage": {"prompt_tokens": 1},
     }
     transport = FakeTransport(
-        [TransportResponse(status_code=200, body=json.dumps(body).encode("utf-8"))]
+        [
+            TransportResponse(
+                status_code=200, headers={}, body=json.dumps(body).encode("utf-8")
+            )
+        ]
     )
     client = LlmClient(_config(), transport)
     with pytest.raises(LlmResponseError):
@@ -289,7 +295,9 @@ def test_request_requires_model_and_messages() -> None:
 @pytest.mark.asyncio
 async def test_provider_error_detail_does_not_echo_body(api_key: str) -> None:
     secret_body = b'{"error":"sk-leak-me"}'
-    transport = FakeTransport([TransportResponse(status_code=401, body=secret_body)])
+    transport = FakeTransport(
+        [TransportResponse(status_code=401, headers={}, body=secret_body)]
+    )
     client = LlmClient(_config(), transport)
     with pytest.raises(LlmProviderError) as ei:
         await client.complete(
