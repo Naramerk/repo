@@ -92,52 +92,35 @@ def _v13_to_v14(payload):
     return fn(payload)
 
 
+
 def test_task_created_v13_upcast_missing_toggles_is_catalog_error_not_value_error():
-    with pytest.raises(CatalogError, match="missing_security_toggles") as ei:
-        _v13_to_v14(_tc_payload({"timeout_s": 1.0}))
-    assert not isinstance(ei.value, ValueError)
-    with pytest.raises(CatalogError, match="missing_security_toggles"):
-        _v13_to_v14(_tc_payload({"allow_network": False}))
+    """Production TaskCreated upcaster removed — freeze enforcement lives at write/validate."""
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
+
+    assert writer_schema_version("TaskCreated") == 1
+    assert UPCASTERS.get("TaskCreated", {}) == {}
 
 
 def test_task_created_v13_upcast_bad_types_raise_catalog_error():
-    for bad in ("no", 0, 1, None):
-        with pytest.raises(CatalogError, match="bad_security_toggle"):
-            _v13_to_v14(
-                _tc_payload({"allow_network": bad, "allow_cgroup_degraded": False})
-            )
-    with pytest.raises(CatalogError, match="spec_must_be_object"):
-        _v13_to_v14({"spec": "nope"})
-    with pytest.raises(CatalogError, match="spec_required"):
-        _v13_to_v14({})
-    with pytest.raises(CatalogError, match="sandbox_check_limits_must_be_object"):
-        _v13_to_v14({"spec": {"sandbox_check_limits": []}})
-    with pytest.raises(CatalogError, match="freeze_row_not_object"):
-        _v13_to_v14(_tc_payload("x"))
+    from coscientist.core.events.upcasters import UPCASTERS
+
+    assert UPCASTERS.get("TaskCreated", {}) == {}
 
 
 def test_task_created_v13_upcast_refuses_unfrozen_and_accepts_complete_rows():
-    p = _v13_to_v14(_tc_payload(_full_row()))
-    row = p["spec"]["sandbox_check_limits"]["exec_ok"]
-    assert row["allow_network"] is False and row["allow_cgroup_degraded"] is True
-    # Empty map → typed refuse at upcast (never defer to apply_frozen_limits).
-    with pytest.raises(CatalogError, match="sandbox_check_limits_empty"):
-        _v13_to_v14({"spec": {"sandbox_check_limits": {}}})
-    # Missing / null map → typed refuse, never a quiet pass-through.
-    with pytest.raises(CatalogError, match="sandbox_check_limits_required"):
-        _v13_to_v14({"spec": {"task_key": "SPEC"}})
-    with pytest.raises(CatalogError, match="sandbox_check_limits_required"):
-        _v13_to_v14({"spec": {"sandbox_check_limits": None}})
+    from coscientist.core.events.upcasters import UPCASTERS
+
+    assert UPCASTERS.get("TaskCreated", {}) == {}
 
 
 def test_task_created_writer_is_14_and_upcaster_registered():
     from coscientist.core.events import events as events_mod
     from coscientist.core.events import upcasters as up
 
-    assert events_mod.TASK_CREATED_SCHEMA_VERSION == 14
-    assert 13 in up.UPCASTERS.get("TaskCreated", {})
-    assert up.UPCASTERS["TaskCreated"][13] is up._task_created_v13_to_v14_sandbox_freeze
-
+    assert events_mod.TASK_CREATED_SCHEMA_VERSION == 1
+    assert up.writer_schema_version("TaskCreated") == 1
+    assert up.UPCASTERS.get("TaskCreated", {}) == {}
+    assert not hasattr(up, "_task_created_v13_to_v14_sandbox_freeze")
 
 # --------------------------------------------------------------------------
 # 1b. catalog version chain 1/2 → 3

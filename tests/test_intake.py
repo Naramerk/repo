@@ -170,10 +170,13 @@ def test_study_refused_schema_valid():
     assert "catalog_version" in schema["required"]
 
 
-def test_study_refused_v1_upcast_sets_catalog_version_null():
-    """v1 had no catalog_version field — upcast records that fact as null."""
-    from coscientist.core.events.upcasters import upcast
 
+def test_study_refused_v1_upcast_sets_catalog_version_null():
+    """Collapse: no StudyRefused upcaster — writers emit catalog_version themselves."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+
+    assert writer_schema_version("StudyRefused") == 1
+    assert UPCASTERS.get("StudyRefused", {}) == {}
     version, payload = upcast(
         "StudyRefused",
         1,
@@ -181,12 +184,11 @@ def test_study_refused_v1_upcast_sets_catalog_version_null():
             "kind": "empty_request",
             "reason": "empty request",
             "classifier_error": False,
+            "catalog_version": None,
         },
     )
-    assert version == 2
-    assert "catalog_version" in payload
+    assert version == 1
     assert payload["catalog_version"] is None
-
 
 @pytest.mark.asyncio
 async def test_real_replay_study_refused_v1_gets_null_catalog_version(tmp_path, clock):
@@ -216,7 +218,8 @@ async def test_real_replay_study_refused_v1_gets_null_catalog_version(tmp_path, 
         assert row is not None
         seq, payload_raw = row
         payload = json.loads(payload_raw)
-        payload.pop("catalog_version", None)
+        # Collapse: no upcast fills catalog_version — keep explicit null for v1 writers.
+        payload["catalog_version"] = None
         new_raw = canonical_json(payload)
         conn.execute(
             "UPDATE events SET schema_version=1, payload=?, payload_digest=? WHERE seq=?",
@@ -231,21 +234,22 @@ async def test_real_replay_study_refused_v1_gets_null_catalog_version(tmp_path, 
         events = await rt2.store.read_all()
         refused = [e for e in events if e.type == "StudyRefused"]
         assert len(refused) == 1
-        assert refused[0].schema_version == 2
+        assert refused[0].schema_version == 1
         assert refused[0].payload.get("catalog_version") is None
     finally:
         await close_runtime(rt2)
+
 
 
 @pytest.mark.asyncio
 async def test_real_replay_study_refused_v2_missing_catalog_version_refused(
     tmp_path, clock
 ):
-    """Native v2 StudyRefused without catalog_version key → CatalogError on fold."""
+    """schema_version ahead of writer v1 is refused on read (no migration path)."""
     import sqlite3
 
     from coscientist.core.events.digest import canonical_json, sha256_hex
-    from coscientist.core.events.errors import CatalogError
+    from coscientist.core.events.errors import JournalFormatError
 
     sid = "st_refused_v2_missing"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
@@ -278,7 +282,7 @@ async def test_real_replay_study_refused_v2_missing_catalog_version_refused(
     finally:
         conn.close()
 
-    with pytest.raises(CatalogError, match="StudyRefused.v2:catalog_version_required"):
+    with pytest.raises(JournalFormatError, match="ahead of writer"):
         await open_runtime(tmp_path, sid, clock=clock, owner="t2")
 
 

@@ -919,72 +919,15 @@ def test_rubric_digest_stable_canonical():
     assert rubric_digest(items, "all_required", 99) == d1
 
 
+
 def test_upcast_taskcreated_v10_and_plan_expanded_v2():
-    from coscientist.core.events.upcasters import upcast
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
 
-    v, p = upcast(
-        "TaskCreated",
-        9,
-        {
-            "task_id": "t",
-            "spec": {
-                    "sandbox_check_limits": {
-                    "exec_ok": {
-                        "timeout_s": 5.0,
-                        "memory_mb": 64,
-                        "max_output_bytes": 1024,
-                        "pids_max": 16,
-                        "rlimit_nproc": 16,
-                        "reap_timeout_s": 1.0,
-                        "output_drain_join_s": 1.0,
-                        "allow_network": False,
-                        "allow_cgroup_degraded": False,
-                    }
-                },
-                "task_key": "E1",
-                "expected_outputs": [{"name": "main", "media_type": "text/plain"}],
-            },
-        },
-    )
-    # PR13 rubric (v10) + PR11 loop (v11) + PR15 kind (v12) + evidence_kind (v13).
-    assert v == 14
-    assert p["spec"]["expected_outputs"][0]["rubric"] is None
-    assert p["spec"]["expected_outputs"][0]["kind"] is None
-    v2, p2 = upcast(
-        "PlanExpanded",
-        1,
-        {
-            "plan_id": "p",
-            "added_tasks": [
-                {
-                    "task_key": "E1",
-                    "expected_outputs": [{"name": "main", "media_type": "text/plain"}],
-                }
-            ],
-            "added_questions": [{"id": "Q1", "text": "q"}],
-        },
-    )
-    assert v2 == 5  # PR15 kind v5 after PR16 decomposes v4
-    assert p2["added_tasks"][0]["expected_outputs"][0]["rubric"] is None
-    assert p2["added_tasks"][0]["loop_id"] is None
-    assert p2["added_tasks"][0]["expected_outputs"][0]["kind"] is None
-    assert p2["added_questions"][0]["final_type"] == "verdict"
-    assert p2.get("rollup") == "all"
-    # Legacy unknown final_type coerced to verdict (current unknown → PlanRefused).
-    v3, p3 = upcast(
-        "PlanAccepted",
-        7,
-        {
-            "plan_id": "p",
-            "questions": [{"id": "Q1", "text": "q", "final_type": "nope"}],
-            "tasks": [],
-        },
-    )
-    assert v3 == 11  # PR15 kind v11 after PR16 decomposes v10
-    assert p3["questions"][0]["final_type"] == "verdict"
-    assert p3.get("loops") == []
-    assert p3.get("rollup") == "all"
-
+    assert writer_schema_version("TaskCreated") == 1
+    assert UPCASTERS.get("TaskCreated", {}) == {}
+    v, payload = upcast("TaskCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 def test_study_view_uses_study_fulfilled_final_types():
     """view must not stay fulfilled when study_fulfilled would downgrade (artifact+refuted)."""

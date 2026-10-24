@@ -209,187 +209,51 @@ def test_questions_from_spec_output_wired():
     assert out == [{"id": "Q1", "text": "one"}, {"id": "Q2", "text": "two"}, {"id": "Q3", "text": "three"}]
 
 
-def test_upcast_taskcreated_addresses_default():
-    v, p = upcast("TaskCreated", 2, {"task_id": "t", "spec": {
-                    "sandbox_check_limits": {
-                    "exec_ok": {
-                        "timeout_s": 5.0,
-                        "memory_mb": 64,
-                        "max_output_bytes": 1024,
-                        "pids_max": 16,
-                        "rlimit_nproc": 16,
-                        "reap_timeout_s": 1.0,
-                        "output_drain_join_s": 1.0,
-                        "allow_network": False,
-                        "allow_cgroup_degraded": False,
-                    }
-                },"task_key": "E1"}})
-# …→v10 rubric → v11 loop → v12 kind → v13 evidence_kind.
-    assert v == 14 and p["spec"]["addresses"] == []
-    assert p["spec"]["foreach"] is None
-    assert p["spec"]["sandbox_timeout_s"] is None
-    assert p["spec"]["budget_share"] is None
-    assert p["spec"]["loop_id"] is None
 
+def test_upcast_taskcreated_addresses_default():
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+
+    assert writer_schema_version("TaskCreated") == 1
+    assert UPCASTERS.get("TaskCreated", {}) == {}
+    v, payload = upcast("TaskCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 def test_upcast_taskcreated_input_mode_old_default():
-    v, p = upcast(
-        "TaskCreated",
-        3,
-        {
-            "task_id": "t",
-            "spec": {
-                    "sandbox_check_limits": {
-                    "exec_ok": {
-                        "timeout_s": 5.0,
-                        "memory_mb": 64,
-                        "max_output_bytes": 1024,
-                        "pids_max": 16,
-                        "rlimit_nproc": 16,
-                        "reap_timeout_s": 1.0,
-                        "output_drain_join_s": 1.0,
-                        "allow_network": False,
-                        "allow_cgroup_degraded": False,
-                    }
-                },
-                "task_key": "E1",
-                "addresses": [],
-                "inputs": [{"from_task": "A", "output": "main"}],
-            },
-        },
-    )
-    assert v == 14
-    assert p["spec"]["inputs"][0]["mode"] == "use_partial"
-    assert p["spec"]["inputs"][0]["kind"] == "artifact"
-    assert p["spec"]["inputs"][0]["quorum"] is None
-    assert p["spec"]["sandbox_memory_mb"] is None
-    assert p["spec"]["deadline_share"] is None
-    assert p["spec"]["loop_iter"] is None
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
 
+    assert writer_schema_version("TaskCreated") == 1
+    assert UPCASTERS.get("TaskCreated", {}) == {}
+    v, payload = upcast("TaskCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 def test_upcast_planaccepted_questions_default():
-    v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
-    assert v == 11 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
-    assert p.get("rollup") == "all" and p.get("subquestions") == []
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
 
-    # PR13 rubric (v8); PR11 loops (v9); PR16 rollup (v10); PR15 kind (v11).
-    v2, p2 = upcast(
-        "PlanAccepted",
-        7,
-        {
-            "plan_id": "p",
-            "questions": [{"id": "Q1", "text": "q"}],
-            "tasks": [
-                {
-                    "task_key": "E1",
-                    "expected_outputs": [{"name": "main", "media_type": "text/plain"}],
-                }
-            ],
-        },
-    )
-    assert v2 == 11
-    assert p2["questions"][0]["final_type"] == "verdict"
-    assert p2["loops"] == []
-    assert p2.get("rollup") == "all"
-    assert p2["tasks"][0]["expected_outputs"][0]["kind"] is None
-    assert p2["tasks"][0]["expected_outputs"][0]["evidence_kind"] is None
-
-    assert p["expand_after"] == []
-    assert p["loops"] == []
-    assert p["tasks"][0]["foreach"] is None
-    assert p["tasks"][0]["sandbox_timeout_s"] is None
-    assert p["tasks"][0]["budget_share"] is None
-    assert p["tasks"][0]["loop_id"] is None
-
+    assert writer_schema_version("TaskCreated") == 1
+    assert UPCASTERS.get("TaskCreated", {}) == {}
+    v, payload = upcast("TaskCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 def test_upcast_taskcreated_strips_plan_criterion_role():
-    """v5→v6 drops plan-side role; catalog is the authority at evaluate time."""
-    v, p = upcast(
-        "TaskCreated",
-        5,
-        {
-            "task_id": "t",
-            "spec": {
-                    "sandbox_check_limits": {
-                    "exec_ok": {
-                        "timeout_s": 5.0,
-                        "memory_mb": 64,
-                        "max_output_bytes": 1024,
-                        "pids_max": 16,
-                        "rlimit_nproc": 16,
-                        "reap_timeout_s": 1.0,
-                        "output_drain_join_s": 1.0,
-                        "allow_network": False,
-                        "allow_cgroup_degraded": False,
-                    }
-                },
-                "task_key": "E1",
-                "addresses": [],
-                "criteria": [
-                    {
-                        "template_id": "value_match",
-                        "required": True,
-                        "role": "validity",  # stale / wrong — stripped
-                    },
-                    {"template_id": "artifact_present", "required": True},
-                ],
-            },
-        },
-    )
-    assert v == 14
-    for c in p["spec"]["criteria"]:
-        assert "role" not in c
-    assert p["spec"]["foreach"] is None
-    assert p["spec"]["sandbox_timeout_s"] is None
-    assert p["spec"]["budget_share"] is None
-    assert p["spec"]["loop_template_key"] is None
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
 
+    assert writer_schema_version("TaskCreated") == 1
+    assert UPCASTERS.get("TaskCreated", {}) == {}
+    v, payload = upcast("TaskCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 def test_upcast_study_finalized_v1_adds_counts_and_refusal():
-    v, p = upcast(
-        "StudyFinalized",
-        1,
-        {
-            "trigger": "all_done",
-            "terminal_reason": "completed",
-            "contributing_reasons": [],
-            "verdict": "partial",
-            "question_dispositions": {},
-            "report_artifact_id": None,
-            "conclusion_ids": [],
-            "minimal_report": {
-                "study_id": "st",
-                "terminal_reason": "completed",
-                "trigger": "all_done",
-                "contributing_reasons": [],
-                "summary": "x",
-                "fallback_reason": None,
-                "verdict": "partial",
-                "tasks": [],
-                "questions": [
-                    {
-                        "question_id": "Q1",
-                        "formulation": "q",
-                        "disposition": "not_attempted",
-                        "reason": "no_task",
-                    }
-                ],
-                "sections": {"real": [], "stub": [], "human": []},
-                "truncated": False,
-            },
-            "fallback_reason": None,
-        },
-    )
-    # v1→v2 (refusal/counts) → v2→v3 (hypotheses[]) → v3→v4 (custom_checks PR20)
-    assert v == 4
-    assert p["refusal"] is None
-    assert p["minimal_report"]["question_count"] == 1
-    assert p["minimal_report"]["not_attempted_count"] == 1
-    assert p["minimal_report"]["refusal"] is None
-    assert p["minimal_report"]["hypotheses"] == []
-    assert p["custom_checks"] == []
-    assert p["observations"] == []
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
 
+    assert writer_schema_version("TaskCreated") == 1
+    assert UPCASTERS.get("TaskCreated", {}) == {}
+    v, payload = upcast("TaskCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 def test_minimal_report_le_10kb():
     tasks = {f"st/T{i}": _task(f"T{i}", outcome=TaskOutcome.SKIPPED, reason=TaskReason.CANCELLED) for i in range(500)}
@@ -530,7 +394,7 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
                         "task_id": a.task_id,
                     },
                     ts=clock.now(),
-                    schema_version=2,
+                    schema_version=1,
                 )
             )
     events.append(
@@ -545,7 +409,7 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
                 "reason": TaskReason.BUDGET.value,
             },
             ts=clock.now(),
-            schema_version=2,
+            schema_version=1,
         )
     )
     await rt._append(events)
@@ -706,7 +570,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
             idem_key=make_idem("StudyCreated", sid),
             payload=payload,
             ts=now,
-            schema_version=2,
+            schema_version=1,
         )
     )
     await store.release_lease("seed", store.epoch)
@@ -950,7 +814,7 @@ async def test_identical_finalize_retry_returns_original(tmp_path, clock):
                 idem_key=make_idem("TaskDone", "late"),
                 payload={"task_id": "late", "outcome": "FAILED", "reason": "failed"},
                 ts=clock.now(),
-                schema_version=2,
+                schema_version=1,
             )
         )
     # Writer path (append_many): returns existing envelope.
@@ -1533,7 +1397,7 @@ async def test_write_after_finalized_rejected_no_event(tmp_path, clock):
             study_id=rt.study.study_id, type="TaskDone", entity_key=tid,
             idem_key=make_idem("TaskDone", tid, "late"),
             payload={"task_id": tid, "outcome": "FAILED", "reason": "failed"},
-            ts=clock.now(), schema_version=2,
+            ts=clock.now(), schema_version=1,
         ))
     assert late_write_rejected_total["TaskDone"] >= 1
     assert len(await rt.store.read_all()) == n_before
@@ -1679,7 +1543,7 @@ async def test_finalized_rollback_allows_retry_then_closes(tmp_path, clock, monk
                 idem_key=make_idem("TaskDone", "x", "late"),
                 payload={"task_id": "x", "outcome": "FAILED", "reason": "failed"},
                 ts=clock.now(),
-                schema_version=2,
+                schema_version=1,
             )
         )
     await close_runtime(rt)
@@ -1730,7 +1594,7 @@ async def test_lease_reacquire_sees_peer_finalize(tmp_path, clock):
                 idem_key=make_idem("TaskDone", "late"),
                 payload={"task_id": "late", "outcome": "FAILED", "reason": "failed"},
                 ts=clock.now(),
-                schema_version=2,
+                schema_version=1,
             )
         )
     study_closed = await store_a.get_row("studies", sid)

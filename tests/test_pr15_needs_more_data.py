@@ -849,8 +849,9 @@ def test_executable_check_met_excludes_presence_and_waived():
     assert executable_check_met([real], bound_key="x") is True
 
 
+
 def test_upcaster_chains_continuous_and_no_overwrite():
-    """Checklist: chains 1..N-1 continuous vs writer versions; no registry mutate."""
+    """Production collapsed to v1: empty buckets; duplicate guard on synthetic type."""
     for et in (
         "TaskCreated",
         "PlanAccepted",
@@ -865,45 +866,20 @@ def test_upcaster_chains_continuous_and_no_overwrite():
         "QuestionDisposeRejected",
     ):
         w = writer_schema_version(et)
+        assert w == 1
         assert_upcaster_chain_continuous(et, w)
-    # Writers for plan events match registered chain ends (PR15 OutputSpec.kind).
-    assert writer_schema_version("TaskCreated") == TASK_CREATED_SCHEMA_VERSION == 14
-    assert writer_schema_version("PlanAccepted") == PLAN_ACCEPTED_SCHEMA_VERSION == 11
-    assert writer_schema_version("PlanExpanded") == PLAN_EXPANDED_SCHEMA_VERSION == 5
+    assert writer_schema_version("TaskCreated") == TASK_CREATED_SCHEMA_VERSION == 1
+    assert writer_schema_version("PlanAccepted") == PLAN_ACCEPTED_SCHEMA_VERSION == 1
+    assert writer_schema_version("PlanExpanded") == PLAN_EXPANDED_SCHEMA_VERSION == 1
     assert writer_schema_version("QuestionDisposed") == 1
     assert writer_schema_version("QuestionDisposeRejected") == 1
-    v, p = upcast(
-        "TaskCreated",
-        12,
-        {
-            "task_id": "t",
-            "spec": {
-                    "sandbox_check_limits": {
-                    "exec_ok": {
-                        "timeout_s": 5.0,
-                        "memory_mb": 64,
-                        "max_output_bytes": 1024,
-                        "pids_max": 16,
-                        "rlimit_nproc": 16,
-                        "reap_timeout_s": 1.0,
-                        "output_drain_join_s": 1.0,
-                        "allow_network": False,
-                        "allow_cgroup_degraded": False,
-                    }
-                },
-                "task_key": "E0",
-                "expected_outputs": [{"name": "main", "media_type": "text/plain"}],
-            },
-        },
-    )
-    assert v == 14
-    assert p["spec"]["expected_outputs"][0].get("evidence_kind") is None
-    # Duplicate guard without mutating production event registries.
-    register_upcaster("_pr15_dup_guard", 1, lambda p: p)
+    v, p = upcast("TaskCreated", 1, {"task_id": "t", "spec": {}})
+    assert v == 1
+    assert p["task_id"] == "t"
+    register_upcaster("_pr15_dup_guard", 1, lambda payload: payload)
     with pytest.raises(ValueError, match="duplicate upcaster"):
-        register_upcaster("_pr15_dup_guard", 1, lambda p: p)
+        register_upcaster("_pr15_dup_guard", 1, lambda payload: payload)
     UPCASTERS.pop("_pr15_dup_guard", None)
-
 
 @pytest.mark.asyncio
 async def test_impossible_task_still_closes_with_report(tmp_path, clock):

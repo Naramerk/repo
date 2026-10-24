@@ -2114,9 +2114,9 @@ _RECLASS_FIXTURE = (
 
 # Raw schema_version values committed in events.db (before upcast on open).
 _RECLASS_RAW_SCHEMA_VERSIONS = (
-    ("StudyCreated", 2),
+    ("StudyCreated", 1),
     ("PlanAccepted", 1),
-    ("TaskCreated", 2),
+    ("TaskCreated", 1),
     ("AttemptStarted", 1),
     ("AttemptTainted", 1),
     ("SourceFetched", 1),
@@ -2241,9 +2241,11 @@ def _complete_legacy_freeze_fields(db_path: Path) -> None:
             patch(payload)
             new_raw = canonical_json(payload)
             conn.execute(
-                "UPDATE events SET payload=?, payload_digest=? WHERE seq=?",
+                "UPDATE events SET payload=?, payload_digest=?, schema_version=1 WHERE seq=?",
                 (new_raw, sha256_hex(new_raw), row[0]),
             )
+        # Collapse: fixture mid-chain versions are rewritten to writer v1 (no upcast).
+        conn.execute("UPDATE events SET schema_version=1")
         conn.commit()
     finally:
         conn.close()
@@ -2272,7 +2274,7 @@ async def test_reclassified_tool_study_opens_finalizes_uncounted(
     # Upcasters applied on read (StudyCreated lands at current schema).
     events_open = await rt.store.read_all()
     sc = next(e for e in events_open if e.type == "StudyCreated")
-    assert sc.schema_version >= 9
+    assert sc.schema_version == 1
     assert any(e.type == "FetchIntegrityRaised" for e in events_open)
 
     folded = fold_events(events_open)

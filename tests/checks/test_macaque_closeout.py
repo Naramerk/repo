@@ -222,190 +222,149 @@ async def _seed_study_with_v13_task(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("spec_patch", "match"),
-    [
-        ({}, "sandbox_check_limits_required"),
-        ({"sandbox_check_limits": None}, "sandbox_check_limits_required"),
-        ({"sandbox_check_limits": {}}, "sandbox_check_limits_empty"),
-        ({"sandbox_check_limits": []}, "sandbox_check_limits_must_be_object"),
-        (
-            {"sandbox_check_limits": {"exec_ok": {"timeout_s": 1.0}}},
-            "missing_security_toggles",
-        ),
-        (
-            {
-                "sandbox_check_limits": {
-                    "exec_ok": {"allow_network": "false", "allow_cgroup_degraded": False}
-                }
-            },
-            "bad_security_toggle",
-        ),
-        (
-            {
-                "sandbox_check_limits": {
-                    "exec_ok": {"allow_network": False, "allow_cgroup_degraded": True}
-                }
-            },
-            "freeze_row_invalid",
-        ),
-    ],
-)
-async def test_real_replay_v13_task_created_refused_with_catalog_error(
-    tmp_path, clock, spec_patch, match
-):
+async def test_real_replay_v13_task_created_refused_with_catalog_error(tmp_path, clock):
+    """Mid-chain TaskCreated seeds are refused: writer v1, no production upcasters."""
+    from coscientist.core.events.errors import JournalFormatError
+    from coscientist.core.events.events import make_idem
+    from coscientist.core.events.store import SqliteEventStore
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
+
+    assert writer_schema_version("TaskCreated") == 1
+    assert UPCASTERS.get("TaskCreated", {}) == {}
     sid = "st_v13_bad"
-    await _seed_study_with_v13_task(tmp_path, clock, sid, spec_patch)
-    with pytest.raises(CatalogError, match=match):
-        await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    db = tmp_path / sid / "events.db"
+    db.parent.mkdir(parents=True)
+    store = SqliteEventStore(sid, db, clock=clock)
+    await store.acquire_lease("seeder")
+    with pytest.raises(JournalFormatError, match="ahead of writer"):
+        await store.append(
+            UnstampedEvent(
+                study_id=sid,
+                type="TaskCreated",
+                entity_key=f"{sid}/E9",
+                idem_key=make_idem("TaskCreated", f"{sid}/E9"),
+                payload={"task_id": f"{sid}/E9", "spec": {}},
+                ts=clock.now(),
+                schema_version=13,
+            )
+        )
+    await store.release_lease("seeder", store.epoch)
+    await store.close()
+
 
 
 @pytest.mark.asyncio
 async def test_real_replay_v13_task_created_complete_freeze_opens_typed(tmp_path, clock):
+    """schema_version>1 TaskCreated cannot be stamped after collapse."""
+    from coscientist.core.events.errors import JournalFormatError
+    from coscientist.core.events.events import make_idem
+    from coscientist.core.events.store import SqliteEventStore
+
     sid = "st_v13_ok"
-    await _seed_study_with_v13_task(
-        tmp_path, clock, sid, {"sandbox_check_limits": {"exec_ok": _row()}}
-    )
-    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
-    try:
-        row = rt.tasks[f"{sid}/E9"].spec.sandbox_check_limits["exec_ok"]  # type: ignore[index]
-        assert isinstance(row, FrozenCheckLimits)
-        assert row.pids_max == 16
-    finally:
-        await close_runtime(rt)
+    db = tmp_path / sid / "events.db"
+    db.parent.mkdir(parents=True)
+    store = SqliteEventStore(sid, db, clock=clock)
+    await store.acquire_lease("seeder")
+    with pytest.raises(JournalFormatError, match="ahead of writer"):
+        await store.append(
+            UnstampedEvent(
+                study_id=sid,
+                type="TaskCreated",
+                entity_key=f"{sid}/E9",
+                idem_key=make_idem("TaskCreated", f"{sid}/E9"),
+                payload={"task_id": f"{sid}/E9", "spec": {"sandbox_check_limits": {"exec_ok": _row()}}},
+                ts=clock.now(),
+                schema_version=13,
+            )
+        )
+    await store.release_lease("seeder", store.epoch)
+    await store.close()
 
 
 @pytest.mark.asyncio
 async def test_real_replay_v13_empty_freeze_map_refused_at_upcast(tmp_path, clock):
-    """Empty {} on a v13 journal is refused at v14 upcast (not later at apply)."""
-    sid = "st_v13_empty"
-    await _seed_study_with_v13_task(tmp_path, clock, sid, {"sandbox_check_limits": {}})
-    with pytest.raises(CatalogError, match="sandbox_check_limits_empty"):
-        await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    from coscientist.core.events.errors import JournalFormatError
+    from coscientist.core.events.events import make_idem
+    from coscientist.core.events.store import SqliteEventStore
 
+    sid = "st_v13_empty"
+    db = tmp_path / sid / "events.db"
+    db.parent.mkdir(parents=True)
+    store = SqliteEventStore(sid, db, clock=clock)
+    await store.acquire_lease("seeder")
+    with pytest.raises(JournalFormatError, match="ahead of writer"):
+        await store.append(
+            UnstampedEvent(
+                study_id=sid,
+                type="TaskCreated",
+                entity_key=f"{sid}/E9",
+                idem_key=make_idem("TaskCreated", f"{sid}/E9"),
+                payload={"task_id": f"{sid}/E9", "spec": {"sandbox_check_limits": {}}},
+                ts=clock.now(),
+                schema_version=13,
+            )
+        )
+    await store.release_lease("seeder", store.epoch)
+    await store.close()
 
 def test_empty_freeze_map_refused_on_replay_to_v14():
-    """Empty ``{}`` is refused when replaying into the v14 TaskCreated contract."""
-    from coscientist.core.events.upcasters import upcast
-    from tests.checks.sandbox_test_limits import exec_ok_freeze_map
+    """No TaskCreated upcaster — empty freeze maps are a write-time concern."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
 
-    with pytest.raises(CatalogError, match="sandbox_check_limits_empty"):
-        upcast(
-            "TaskCreated",
-            13,
-            {
-                "task_id": "t",
-                "kind": "experiment",
-                "spec": {
-                    "task_key": "E0",
-                    "title": "t",
-                    "goal": "g",
-                    "route": "experiment",
-                    "sandbox_check_limits": {},
-                },
-                "state": "PENDING",
-                "deadline": "2020-01-01T00:00:00+00:00",
-            },
-        )
-    version, payload = upcast(
+    assert writer_schema_version("TaskCreated") == 1
+    assert UPCASTERS.get("TaskCreated", {}) == {}
+    v, payload = upcast(
         "TaskCreated",
-        13,
-        {
-            "task_id": "t",
-            "kind": "experiment",
-            "spec": {
-                "task_key": "E0",
-                "title": "t",
-                "goal": "g",
-                "route": "experiment",
-                "sandbox_check_limits": exec_ok_freeze_map(),
-            },
-            "state": "PENDING",
-            "deadline": "2020-01-01T00:00:00+00:00",
-        },
+        1,
+        {"task_id": "t", "spec": {"sandbox_check_limits": {}}},
     )
-    assert version == 14
-    assert "exec_ok" in payload["spec"]["sandbox_check_limits"]
+    assert v == 1
+    assert payload["spec"]["sandbox_check_limits"] == {}
 
 
 def test_writer_constant_and_upcaster_registration_are_unconditional():
     from coscientist.core.events import upcasters as up
 
-    assert TASK_CREATED_SCHEMA_VERSION == 14
-    assert 13 in up.UPCASTERS["TaskCreated"]
+    assert TASK_CREATED_SCHEMA_VERSION == 1
+    assert up.writer_schema_version("TaskCreated") == 1
+    assert up.UPCASTERS.get("TaskCreated", {}) == {}
     src = inspect.getsource(up)
-    assert "TASK_CREATED_SCHEMA_VERSION" not in src
-    assert 'register_upcaster("TaskCreated", 13, ' in src
+    assert 'register_upcaster("TaskCreated"' not in src
 
 
 @pytest.mark.asyncio
 async def test_real_replay_v12_task_created_without_limits_refused(tmp_path, clock):
-    """≤v12 TaskCreated lacking sandbox_check_limits → typed CatalogError at open."""
+    from coscientist.core.events.errors import JournalFormatError
+    from coscientist.core.events.events import make_idem
+    from coscientist.core.events.store import SqliteEventStore
+
     sid = "st_v12_nolim"
-    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
-    await rt.create_study(
-        profile="research",
-        request="q",
-        catalog_version=CATALOG_VERSION,
-        deadline=clock.now() + timedelta(seconds=120),
-        sid=sid,
-        finalize_reserve_s=5,
-    )
-    await close_runtime(rt)
     db = tmp_path / sid / "events.db"
-    conn = sqlite3.connect(db)
-    try:
-        row = conn.execute(
-            "SELECT payload FROM events WHERE type='TaskCreated' ORDER BY seq"
-        ).fetchone()
-    finally:
-        conn.close()
-    payload = json.loads(row[0])
-    payload["task_id"] = f"{sid}/E12"
-    payload["kind"] = "experiment"
-    payload["spec"].update(
-        {
-            "task_key": "E12",
-            "title": "e12",
-            "goal": "g",
-            "route": "experiment",
-            "depends_on": [],
-        }
-    )
-    payload["spec"].pop("sandbox_check_limits", None)
+    db.parent.mkdir(parents=True)
     store = SqliteEventStore(sid, db, clock=clock)
     await store.acquire_lease("seeder")
-    await store.append(
-        UnstampedEvent(
-            study_id=sid,
-            type="TaskCreated",
-            entity_key=f"{sid}/E12",
-            idem_key=make_idem("TaskCreated", f"{sid}/E12"),
-            payload=payload,
-            ts=clock.now(),
-            schema_version=12,
+    with pytest.raises(JournalFormatError, match="ahead of writer"):
+        await store.append(
+            UnstampedEvent(
+                study_id=sid,
+                type="TaskCreated",
+                entity_key=f"{sid}/E12",
+                idem_key=make_idem("TaskCreated", f"{sid}/E12"),
+                payload={"task_id": f"{sid}/E12", "spec": {"task_key": "E12"}},
+                ts=clock.now(),
+                schema_version=12,
+            )
         )
-    )
     await store.release_lease("seeder", store.epoch)
     await store.close()
-    with pytest.raises(CatalogError, match="sandbox_check_limits_required"):
-        await open_runtime(tmp_path, sid, clock=clock, owner="t2")
-
 
 def test_study_created_v12_upcaster_refuses_missing_and_non_int():
-    from coscientist.core.events.upcasters import _study_created_v12_to_v13_catalog_version
+    from coscientist.core.events import upcasters as up
 
-    with pytest.raises(CatalogError, match="catalog_version_required"):
-        _study_created_v12_to_v13_catalog_version({})
-    with pytest.raises(CatalogError, match="catalog_version_required"):
-        _study_created_v12_to_v13_catalog_version({"catalog_version": None})
-    with pytest.raises(CatalogError, match="catalog_version_must_be_strict_int_got_str"):
-        _study_created_v12_to_v13_catalog_version({"catalog_version": "0.1.0"})
-    assert _study_created_v12_to_v13_catalog_version({"catalog_version": 3})[
-        "catalog_version"
-    ] == 3
-    assert STUDY_CREATED_SCHEMA_VERSION == 13
-
+    assert STUDY_CREATED_SCHEMA_VERSION == 1
+    assert up.writer_schema_version("StudyCreated") == 1
+    assert up.UPCASTERS.get("StudyCreated", {}) == {}
+    assert not hasattr(up, "_study_created_v12_to_v13_catalog_version")
 
 def test_create_study_body_requires_strict_int_catalog_version():
     from coscientist.api.studies import CreateStudyBody

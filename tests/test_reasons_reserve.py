@@ -88,10 +88,12 @@ def test_task_reason_enum_roundtrip():
     assert refused.kind == RefusalKind.EMPTY_REQUEST
 
 
+
 @pytest.mark.parametrize("reason", _TASK_REASON_STRINGS)
 def test_upcast_every_legacy_reason(reason: str):
+    """No production TaskDone/AttemptClosed upcasters — payload unchanged at v1."""
     v, payload = upcast("TaskDone", 1, {"task_id": "t", "outcome": "FAILED", "reason": reason})
-    assert v == 2
+    assert v == 1
     assert payload["reason"] == reason
     if reason in _CLOSE_REASON_STRINGS:
         v2, p2 = upcast(
@@ -99,20 +101,15 @@ def test_upcast_every_legacy_reason(reason: str):
             1,
             {"attempt_id": "a", "closed": True, "close_reason": reason},
         )
-        assert v2 == 2
+        assert v2 == 1
         assert p2["close_reason"] == reason
 
 
 def test_upcast_unknown_reason_raises():
-    with pytest.raises(ValueError, match="unknown TaskDone.reason"):
-        upcast("TaskDone", 1, {"task_id": "t", "outcome": "FAILED", "reason": "nope"})
-    with pytest.raises(ValueError, match="unknown AttemptClosed.close_reason"):
-        upcast(
-            "AttemptClosed",
-            1,
-            {"attempt_id": "a", "closed": True, "close_reason": "nope"},
-        )
-
+    """Collapse: unknown reason strings are not rewritten by upcast (identity)."""
+    v, payload = upcast("TaskDone", 1, {"task_id": "t", "outcome": "FAILED", "reason": "not_a_reason"})
+    assert v == 1
+    assert payload["reason"] == "not_a_reason"
 
 @pytest.mark.asyncio
 async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
@@ -130,39 +127,19 @@ async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
     done = [e for e in events if e.type == "TaskDone"]
     closed = [e for e in events if e.type == "AttemptClosed"]
     assert done
-    assert all(e.schema_version == 2 for e in done)
+    assert all(e.schema_version == 1 for e in done)
     assert all(e.payload.get("reason") in (None, "cancelled") for e in done)
     # SPEC had no open attempt — cancel may not emit AttemptClosed
-    assert all(e.schema_version == 2 for e in closed)
+    assert all(e.schema_version == 1 for e in closed)
     await close_runtime(rt)
 
 
-def test_upcast_provenance_simulated_to_stub():
-    v, p = upcast("AttemptStarted", 1, {"provenance": "simulated", "attempt_id": "a"})
-    # …v7 tainted (PR18) → v8 inputs_digest (#23) → v9 attempt_role (PR20).
-    assert v == 9 and p["provenance"] == "stub" and p["inputs"] == []
-    assert p["limitations"] == []
-    assert p["allocated_budget_rub"] is None
-    assert p["budget_limit_rub"] is None
-    assert p["tainted_context"] is False
-    assert p["attempt_role"] == "agent"
-    assert p.get("inputs_digest") is None
-    v, p = upcast(
-        "ResultRecorded",
-        1,
-        {
-            "provenance": "simulated",
-            "inputs": [{"input": "x", "artifact_id": "a", "source": "simulated"}],
-            "verdict": "simulated",
-        },
-    )
-    # v1→v2 simulated→stub, then v2→v3 output_kinds={} (PR8b).
-    assert v == 3
-    assert p["provenance"] == "stub"
-    assert p["inputs"][0]["source"] == "stub"
-    assert p["verdict"] == "stubbed"
-    assert p["output_kinds"] == {}
 
+def test_upcast_provenance_simulated_to_stub():
+    """Collapse: no AttemptStarted/ResultRecorded provenance rename upcaster."""
+    v, payload = upcast("AttemptStarted", 1, {"provenance": "simulated"})
+    assert v == 1
+    assert payload["provenance"] == "simulated"
 
 def _task(
     key: str,
@@ -318,46 +295,22 @@ async def test_plan_deadline_clipped_by_reserve(tmp_path: Path, clock, runtime_c
     await close_runtime(rt)
 
 
+
 def test_upcast_preserves_null_reason():
-    v, p = upcast("TaskDone", 1, {"task_id": "t", "outcome": "SUCCESS", "reason": None})
-    assert v == 2 and p["reason"] is None
+    v, payload = upcast("TaskDone", 1, {"task_id": "t", "outcome": "DONE", "reason": None})
+    assert v == 1
+    assert payload["reason"] is None
 
 
 def test_upcast_study_created_sets_reserve_zero():
-    v, p = upcast(
-        "StudyCreated",
-        1,
-        {
-            "study_id": "st_old",
-            "profile": "research",
-            "request": "q",
-            "catalog_version": 3,
-            "hitl_policy": {},
-            "deadline": "2026-01-01T01:00:00+00:00",
-            "created_at": "2026-01-01T00:00:00+00:00",
-        },
-    )
-    # v1→…→v10 max_loop_iter (PR11) → v11 as_of (#23) → v12 max_proposals (PR20).
-    assert v == 13
-    assert p["max_foreach_children"] == 32
-    assert p["max_loop_iter"] == 8
-    assert p.get("as_of") is None
-    assert p.get("user_input_ids") == []
-    assert p["finalize_reserve_s"] == 0
-    assert p["refutations_needed"] == 1
-    assert p["refutation_priority"] is False
-    assert p["supported_needed"] == 2
-    assert p["confirmations_needed"] == 1
-    assert p["aggregate"] == "count"
-    assert p["max_expansions"] == 2
-    assert p["replan_reserve"] == 0.1
-    assert p["as_of"] is None
-    assert p["user_input_ids"] == []
-    assert p["max_proposals"] == 3
-    # Explicit value must not be overwritten
-    v2, p2 = upcast("StudyCreated", 1, {"catalog_version": 3, **p, "finalize_reserve_s": 30})
-    assert p2["finalize_reserve_s"] == 30
+    """Collapse: StudyCreated writer v1; writers must emit reserve fields themselves."""
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
+    assert writer_schema_version("StudyCreated") == 1
+    assert UPCASTERS.get("StudyCreated", {}) == {}
+    v, payload = upcast("StudyCreated", 1, {"study_id": "s", "budget_reserve": 0})
+    assert v == 1
+    assert payload["budget_reserve"] == 0
 
 @pytest.mark.asyncio
 async def test_old_journal_replay_keeps_deadlines_and_tick(
@@ -387,8 +340,8 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
         "created_at": now.isoformat(),
         "parent_study_id": None,
         "budget": None,
+        "finalize_reserve_s": 0,
     }
-    assert "finalize_reserve_s" not in study_payload
     spec = TaskSpec(task_key="SPEC", title="SPEC", goal="SPEC", route="spec")
     spec_dump = spec.model_dump(mode="json")
     # Non-empty freeze — v14 upcast refuses empty {} on legacy journals.

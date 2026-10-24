@@ -92,69 +92,25 @@ def test_claim_unknown_provenance_defaults_to_stub():
     assert prov == "stub"
 
 
+
 def test_upcast_task_created_input_kind_defaults():
-    v, p = upcast(
-        "TaskCreated",
-        4,
-        {
-            "task_id": "st/E1",
-            "kind": "experiment",
-            "spec": {
-                "sandbox_check_limits": {
-                    "exec_ok": {
-                        "timeout_s": 5.0,
-                        "memory_mb": 64,
-                        "max_output_bytes": 1024,
-                        "pids_max": 16,
-                        "rlimit_nproc": 16,
-                        "reap_timeout_s": 1.0,
-                        "output_drain_join_s": 1.0,
-                        "allow_network": False,
-                        "allow_cgroup_degraded": False,
-                    }
-                },
-                "task_key": "E1",
-                "title": "e",
-                "goal": "g",
-                "route": "experiment",
-                "inputs": [{"from_task": "A", "output": "main", "mode": "forbid"}],
-            },
-            "state": "PENDING",
-            "deadline": "2026-01-01T00:00:00+00:00",
-        },
-    )
-    assert v == 14
-    inp = p["spec"]["inputs"][0]
-    assert inp["kind"] == "artifact"
-    assert inp["ref"] is None
-    assert inp["quorum"] is None
-    assert p["spec"]["sandbox_timeout_s"] is None
-    assert p["spec"]["budget_share"] is None
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+
+    assert writer_schema_version("TaskCreated") == 1
+    assert UPCASTERS.get("TaskCreated", {}) == {}
+    v, payload = upcast("TaskCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 
 def test_upcast_attempt_started_inputs_default():
-    v, p = upcast(
-        "AttemptStarted",
-        2,
-        {
-            "attempt_id": "st/E1#1",
-            "n": 1,
-            "task_id": "st/E1",
-            "study_id": "st",
-            "provenance": "real",
-            "deadline": "2026-01-01T00:00:00+00:00",
-        },
-    )
-    # …v7 tainted (PR18) → v8 inputs_digest (#23) → v9 attempt_role (PR20).
-    assert v == 9
-    assert p["inputs"] == []
-    assert p["limitations"] == []
-    assert p["allocated_budget_rub"] is None
-    assert p["budget_limit_rub"] is None
-    assert p["tainted_context"] is False
-    assert p.get("inputs_digest") is None
-    assert p["attempt_role"] == "agent"
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
 
+    assert writer_schema_version("TaskCreated") == 1
+    assert UPCASTERS.get("TaskCreated", {}) == {}
+    v, payload = upcast("TaskCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 @pytest.mark.asyncio
 async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cls):
@@ -316,7 +272,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
     edges = [e for e in rt.graph.edges_from(exp_id) if e.kind == "uses_claim"]
     assert len(edges) == 1 and edges[0].dst_id == claim_id
     started = next(e for e in await rt.store.read_all() if e.type == "AttemptStarted" and e.entity_key == aid)
-    assert started.schema_version == 9
+    assert started.schema_version == 1
     assert started.payload.get("tainted_context") is False
     assert started.payload.get("inputs_digest")
     assert started.payload.get("attempt_role") == "agent"
@@ -450,9 +406,10 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
     await close_runtime(rt)
 
 
+
 @pytest.mark.asyncio
 async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
-    """Old TaskCreated schema_version=4 (no kind) upcasts on reopen."""
+    """v1 TaskCreated with explicit InputSpec.kind survives reopen (no upcast)."""
     from datetime import UTC, datetime
 
     from coscientist.core.execution.domain import Task, TaskKind, TaskState
@@ -469,7 +426,6 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
     )
-    # Inject a v4 TaskCreated as written before PR7 (no InputSpec.kind).
     tid = f"{sid}/LEGACY"
     legacy = Task(
         task_id=tid,
@@ -479,18 +435,12 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
             title="l",
             goal="g",
             route="experiment",
-            inputs=[InputSpec(from_task="A", output="main", mode="forbid")],
+            inputs=[InputSpec(from_task="A", output="main", mode="forbid", kind="artifact")],
         ),
         state=TaskState.PENDING,
         deadline=datetime(2026, 1, 1, tzinfo=UTC),
     )
     payload = legacy.model_dump(mode="json")
-    # Strip kind/ref as an old writer would have omitted them after dump defaults —
-    # simulate pre-PR7 payload shape.
-    for inp in payload["spec"]["inputs"]:
-        inp.pop("kind", None)
-        inp.pop("ref", None)
-    # Explicit non-empty freeze so v14 accepts the journal (empty {} refused).
     payload["spec"]["sandbox_check_limits"] = {
         "exec_ok": {
             "timeout_s": 5.0,
@@ -513,7 +463,7 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
                 idem_key=make_idem("TaskCreated", tid),
                 payload=payload,
                 ts=clock.now(),
-                schema_version=4,
+                schema_version=1,
             )
         ]
     )
@@ -530,7 +480,7 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
-    """Old AttemptStarted schema_version=2 (no inputs) upcasts to [] on reopen."""
+    """v1 AttemptStarted must include inputs=[] explicitly (no upcast default)."""
     sid = "st_as_v2"
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
@@ -543,7 +493,6 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
     )
-    # Seed a task, then inject a pre-PR7 AttemptStarted (v2, no inputs field).
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
@@ -580,9 +529,10 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
                     "deadline": (clock.now() + timedelta(seconds=30)).isoformat(),
                     "task_id": tid,
                     "study_id": sid,
+                    "inputs": [],
                 },
                 ts=clock.now(),
-                schema_version=2,
+                schema_version=1,
             )
         ]
     )
@@ -594,3 +544,4 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
     assert "inputs" in rt2.attempts[aid]
     assert rt2.attempts[aid]["inputs"] == []
     await close_runtime(rt2)
+

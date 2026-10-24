@@ -493,7 +493,7 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
                     "finalize_reserve_s": 5,
                 },
                 ts=now,
-                schema_version=2,
+                schema_version=1,
             ),
             UnstampedEvent(
                 study_id=sid,
@@ -514,7 +514,8 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
                             "depends_on": ["PLAN"],
                         }
                     ],
-                    # no questions / addresses → upcast v1→v2
+                    "questions": [],
+                    "addresses": [],
                 },
                 ts=now,
                 schema_version=1,
@@ -533,7 +534,7 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
                         "goal": "g",
                         "route": "experiment",
                         "depends_on": ["PLAN"],
-                        # Explicit empty freeze — v14 refuses missing/null (no upcaster pin).
+                        "addresses": [],
                         "sandbox_check_limits": {
                     "exec_ok": {
                         "timeout_s": 5.0,
@@ -556,7 +557,7 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
                     "inherited_from": None,
                 },
                 ts=now,
-                schema_version=2,  # upcast → addresses=[]
+                schema_version=1,  # upcast → addresses=[]
             ),
         ]
     )

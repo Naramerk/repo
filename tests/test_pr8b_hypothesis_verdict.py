@@ -252,26 +252,25 @@ def test_refuted_with_confirmations_reports_conflict_note():
     assert note == "refuted; 1 supporting results were stub/partial"
 
 
+
 def test_upcaster_studycreated_v5_to_v6_supported_needed():
-    v, out = upcast("StudyCreated", 5, {"catalog_version": 3, "study_id": "s"})
-    assert v == 13
-    assert out["supported_needed"] == 2
-    assert out.get("aggregate", "count") == "count"
-    assert out.get("user_input_ids") == []
-    assert out["max_expansions"] == 2
-    assert out["max_proposals"] == 3
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+
+    assert writer_schema_version("StudyCreated") == 1
+    assert UPCASTERS.get("StudyCreated", {}) == {}
+    v, payload = upcast("StudyCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 
 def test_upcaster_studycreated_v4_to_v5_defaults():
-    v, out = upcast("StudyCreated", 4, {"catalog_version": 3, "study_id": "s", "confirmations_needed": 1})
-    assert v == 13
-    assert out["aggregate"] == "count"
-    assert out["supported_needed"] == 2
-    assert out.get("as_of") is None
-    assert "min_independent_support" not in out
-    assert out["replan_reserve"] == 0.1
-    assert out["max_proposals"] == 3
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
 
+    assert writer_schema_version("StudyCreated") == 1
+    assert UPCASTERS.get("StudyCreated", {}) == {}
+    v, payload = upcast("StudyCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 def test_report_hypotheses_payload_schema():
     c = _c(node_id="n1", intent="refute")

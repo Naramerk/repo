@@ -228,53 +228,25 @@ def test_tests_edge_declares_intent_attr():
     assert attrs["intent"].get("default") == "confirm"
 
 
+
 def test_upcast_study_created_k_ref_defaults():
-    v, p = upcast(
-        "StudyCreated",
-        2,
-        {
-            "study_id": "s",
-            "profile": "research",
-            "finalize_reserve_s": 30,
-            "catalog_version": 3,
-        },
-    )
-    # v2→…→v10 max_loop_iter (#24) → v11 as_of/ids (#23) → v12 max_proposals (PR20)
-    assert v == 13
-    assert p["refutations_needed"] == 1
-    assert p["refutation_priority"] is False
-    assert p["confirmations_needed"] == 1
-    assert p["aggregate"] == "count"
-    assert p["supported_needed"] == 2
-    assert p["max_expansions"] == 2
-    assert p.get("max_loop_iter") == 8
-    assert p.get("as_of") is None
-    assert p.get("user_input_ids") == []
-    assert p["max_proposals"] == 3
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+
+    assert writer_schema_version("StudyCreated") == 1
+    assert UPCASTERS.get("StudyCreated", {}) == {}
+    v, payload = upcast("StudyCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 
 def test_upcast_study_created_confirmations_needed_v3_to_v4():
-    v, p = upcast(
-        "StudyCreated",
-        3,
-        {
-            "study_id": "s",
-            "profile": "research",
-            "finalize_reserve_s": 30,
-            "refutations_needed": 2,
-            "refutation_priority": True,
-            "catalog_version": 3,
-        },
-    )
-    assert v == 13
-    assert p["confirmations_needed"] == 1
-    assert p["refutations_needed"] == 2
-    assert p["refutation_priority"] is True
-    assert p["aggregate"] == "count"
-    assert p["supported_needed"] == 2
-    assert p.get("user_input_ids") == []
-    assert p["max_proposals"] == 3
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
 
+    assert writer_schema_version("StudyCreated") == 1
+    assert UPCASTERS.get("StudyCreated", {}) == {}
+    v, payload = upcast("StudyCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 @pytest.mark.asyncio
 async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
@@ -296,7 +268,7 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
     assert rt.study.refutations_needed == 3
     assert rt.study.refutation_priority is True
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 13
+    assert created.schema_version == 1
     assert created.payload["refutations_needed"] == 3
     assert created.payload["confirmations_needed"] == 1
     assert created.payload["aggregate"] == "count"

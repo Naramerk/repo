@@ -731,100 +731,25 @@ async def test_executor_debits_cost_rub(tmp_path, clock):
     await close_runtime(rt)
 
 
-def test_upcast_task_created_shares():
-    from coscientist.core.events.errors import CatalogError
 
-    # v7 without an explicit freeze map: v14 refuses (no soft {} pin).
-    with pytest.raises(CatalogError, match="sandbox_check_limits_required"):
-        upcast(
-            "TaskCreated",
-            7,
-            {
-                "task_id": "t",
-                "kind": "experiment",
-                "spec": {
-                    "task_key": "E0",
-                    "title": "t",
-                    "goal": "g",
-                    "route": "experiment",
-                    "foreach": None,
-                    "foreach_item": None,
-                    "addresses": [],
-                    "inputs": [],
-                },
-                "state": "PENDING",
-                "deadline": "2020-01-01T00:00:00+00:00",
-            },
-        )
-    # v8 with a real freeze: share defaults arrive at v9.
-    v8, p8 = upcast(
-        "TaskCreated",
-        8,
-        {
-            "task_id": "t",
-            "kind": "experiment",
-            "spec": {
-                "task_key": "E0",
-                "title": "t",
-                "goal": "g",
-                "route": "experiment",
-                "sandbox_timeout_s": None,
-                "sandbox_memory_mb": None,
-                "sandbox_check_limits": {
-                    "artifact_present": {
-                        "timeout_s": 5.0,
-                        "memory_mb": 64,
-                        "max_output_bytes": 1024,
-                        "pids_max": 16,
-                        "rlimit_nproc": 16,
-                        "reap_timeout_s": 1.0,
-                        "output_drain_join_s": 1.0,
-                        "allow_network": False,
-                        "allow_cgroup_degraded": False,
-                    }
-                },
-                "sandbox_limits_note": None,
-                "foreach": None,
-                "foreach_item": None,
-                "addresses": [],
-                "inputs": [],
-            },
-            "state": "PENDING",
-            "deadline": "2020-01-01T00:00:00+00:00",
-        },
-    )
-    assert v8 >= 9
-    assert p8["spec"]["budget_share"] is None
+def test_upcast_task_created_shares():
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+
+    assert writer_schema_version("TaskCreated") == 1
+    assert UPCASTERS.get("TaskCreated", {}) == {}
+    v, payload = upcast("TaskCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 
 def test_upcast_plan_accepted_shares():
-    v, p = upcast(
-        "PlanAccepted",
-        5,
-        {
-            "plan_id": "p",
-            "study_id": "s",
-            "revision": 1,
-            "hypothesis_id": None,
-            "tasks": [
-                {
-                    "task_key": "E0",
-                    "title": "t",
-                    "goal": "g",
-                    "route": "experiment",
-                    "foreach": None,
-                    "foreach_item": None,
-                    "addresses": [],
-                    "inputs": [],
-                }
-            ],
-            "questions": [],
-            "expand_after": [],
-        },
-    )
-    assert v >= 7
-    assert p["tasks"][0]["budget_share"] is None
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
 
+    assert writer_schema_version("TaskCreated") == 1
+    assert UPCASTERS.get("TaskCreated", {}) == {}
+    v, payload = upcast("TaskCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 async def _plan_one(rt, *, share: float = 0.5):
     await rt.accept_plan(
@@ -1005,7 +930,7 @@ async def test_budget_debit_atomic_crash_between_recover(tmp_path, clock):
                     "payload_digest": "x",
                 },
                 ts=now,
-                schema_version=3,
+                schema_version=1,
             )
         ]
     )

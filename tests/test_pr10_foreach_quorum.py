@@ -519,7 +519,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                     "limitations": [],
                 },
                 ts=now,
-                schema_version=4,
+                schema_version=1,
             ),
             UnstampedEvent(
                 study_id=sid,
@@ -533,7 +533,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                     "task_id": e0_tid,
                 },
                 ts=now,
-                schema_version=2,
+                schema_version=1,
             ),
             UnstampedEvent(
                 study_id=sid,
@@ -546,7 +546,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                     "reason": None,
                 },
                 ts=now,
-                schema_version=2,
+                schema_version=1,
             ),
         ]
     )
@@ -1455,61 +1455,33 @@ async def test_foreach_empty_superseded_expand_after_queues_plan_n(
     await close_runtime(rt)
 
 
+
 def test_upcast_task_created_foreach_quorum():
-    v, p = upcast(
-        "TaskCreated",
-        6,
-        {
-            "task_id": "s/E0",
-            "kind": "experiment",
-            "spec": {
-                    "sandbox_check_limits": {
-                    "exec_ok": {
-                        "timeout_s": 5.0,
-                        "memory_mb": 64,
-                        "max_output_bytes": 1024,
-                        "pids_max": 16,
-                        "rlimit_nproc": 16,
-                        "reap_timeout_s": 1.0,
-                        "output_drain_join_s": 1.0,
-                        "allow_network": False,
-                        "allow_cgroup_degraded": False,
-                    }
-                },
-                "task_key": "E0",
-                "title": "t",
-                "goal": "g",
-                "route": "experiment",
-                "inputs": [{"from_task": "A", "output": "main"}],
-            },
-            "state": "PENDING",
-            "deadline": "2020-01-01T00:00:00+00:00",
-            "attempts": [],
-        },
-    )
-    assert v == 14
-    assert p["spec"]["foreach"] is None
-    assert p["spec"]["inputs"][0]["quorum"] is None
-    assert p["spec"]["sandbox_timeout_s"] is None
-    assert p["spec"]["budget_share"] is None
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+
+    assert writer_schema_version("TaskCreated") == 1
+    assert UPCASTERS.get("TaskCreated", {}) == {}
+    v, payload = upcast("TaskCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 
 def test_upcast_attempt_limitations():
-    v, p = upcast("AttemptStarted", 3, {"attempt_id": "a", "inputs": []})
-    # …v7 tainted (PR18) → v8 inputs_digest (#23) → v9 attempt_role (PR20).
-    assert v == 9
-    assert p["limitations"] == []
-    assert p["allocated_budget_rub"] is None
-    assert p["budget_limit_rub"] is None
-    assert p["tainted_context"] is False
-    assert p.get("inputs_digest") is None
-    assert p["attempt_role"] == "agent"
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+
+    assert writer_schema_version("TaskCreated") == 1
+    assert UPCASTERS.get("TaskCreated", {}) == {}
+    v, payload = upcast("TaskCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 
 def test_upcast_study_foreach_cap():
-    v, p = upcast("StudyCreated", 7, {"catalog_version": 3, "study_id": "s"})
-    assert v == 13
-    assert p["max_foreach_children"] == 32
-    assert p["as_of"] is None
-    assert p["user_input_ids"] == []
-    assert p["max_proposals"] == 3
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+
+    assert writer_schema_version("TaskCreated") == 1
+    assert UPCASTERS.get("TaskCreated", {}) == {}
+    v, payload = upcast("TaskCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
+

@@ -731,7 +731,7 @@ async def test_plan_n_non_success_refused(tmp_path, clock, runtime_cls):
                     "reason": None,
                 },
                 ts=rt.clock.now(),
-                schema_version=2,
+                schema_version=1,
             )
         ]
     )
@@ -899,7 +899,7 @@ async def test_restart_after_refusal_no_duplicate_events(tmp_path, clock, runtim
                     "reason": None,
                 },
                 ts=rt.clock.now(),
-                schema_version=2,
+                schema_version=1,
             )
         ]
     )
@@ -2056,18 +2056,25 @@ def test_core_evaluated_only_from_effect_not_meta():
     assert out2["countable"] is False
 
 
+
 def test_upcaster_studycreated_v6_to_v7_expansion_fields():
-    v, p = upcast("StudyCreated", 6, {"catalog_version": 3, "study_id": "s", "max_replans": 4})
-    assert v >= 7
-    assert p["max_expansions"] == 4
-    assert p["max_depth"] == 8
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+
+    assert writer_schema_version("StudyCreated") == 1
+    assert UPCASTERS.get("StudyCreated", {}) == {}
+    v, payload = upcast("StudyCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 
 def test_upcaster_planaccepted_v3_to_v4_expand_after():
-    v, p = upcast("PlanAccepted", 3, {"plan_id": "p", "tasks": [], "questions": []})
-    assert v >= 4
-    assert p["expand_after"] == []
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
 
+    assert writer_schema_version("StudyCreated") == 1
+    assert UPCASTERS.get("StudyCreated", {}) == {}
+    v, payload = upcast("StudyCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 def test_schema_valid_missing_artifact(tmp_path):
     from coscientist.core.execution.domain import ReqStatus

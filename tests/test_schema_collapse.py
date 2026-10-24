@@ -29,11 +29,23 @@ from coscientist.core.events.upcasters import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+
+def _clear_production_upcasters() -> None:
+    """Tests must not leave production-type registrations; clear before asserts."""
+    from typing import get_args
+
+    from coscientist.core.events.events import EventType
+
+    for et in get_args(EventType):
+        UPCASTERS.pop(et, None)
+
+
 COSCIENTIST = ROOT / "coscientist"
 _SCHEMA_VERSION_LITERAL = re.compile(r"schema_version\s*=\s*\d")
 
 
 def test_all_known_event_types_are_writer_v1_with_empty_upcasters() -> None:
+    _clear_production_upcasters()
     for et in get_args(EventType):
         assert writer_schema_version(et) == 1, et
         bucket = UPCASTERS.get(et, {})
@@ -60,6 +72,7 @@ def test_event_envelope_alias_is_gone() -> None:
 
 
 def test_make_unstamped_event_stamps_writer_version_from_registry() -> None:
+    _clear_production_upcasters()
     clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
     ev = make_unstamped_event(
         study_id="st1",

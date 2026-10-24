@@ -120,7 +120,7 @@ async def test_expand_trigger_prod_catalog_plan_n_and_resume(tmp_path, clock):
                         "reason": None,
                     },
                     ts=clock.now(),
-                    schema_version=2,
+                    schema_version=1,
                 )
             ]
         )

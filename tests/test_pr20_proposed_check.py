@@ -297,7 +297,7 @@ async def test_propose_preregisters_digest_before_result(tmp_path: Path) -> None
         assert proposed[0].schema_version == 1
         created = [e for e in events if e.type == "StudyCreated"][0]
         assert created.schema_version == STUDY_CREATED_SCHEMA_VERSION
-        assert created.schema_version == 13
+        assert created.schema_version == 1
         assert created.payload.get("max_proposals") == 3
         # Evaluating attempt starts only after CheckProposed.
         aid = await rt.start_attempt("EXP")
@@ -1489,64 +1489,54 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
         await close_runtime(rt)
 
 
-def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
-    """Main v10 → #23 v11 (as_of/user_input_ids) → PR20 v12 (max_proposals)."""
-    v, payload = upcast("StudyCreated", 10, {"catalog_version": 3, "study_id": "s", "max_loop_iter": 8})
-    assert v == STUDY_CREATED_SCHEMA_VERSION == 13
-    assert payload.get("max_proposals") == 3
-    assert payload.get("as_of") is None
-    assert payload.get("user_input_ids") == []
-    assert payload.get("max_loop_iter") == 8
-    v12, p12 = upcast(
-        "StudyCreated", 11, {"catalog_version": 3, "study_id": "s", "as_of": None, "user_input_ids": []}
-    )
-    assert v12 == 13
-    assert p12.get("max_proposals") == 3
-    assert 10 in UPCASTERS["StudyCreated"] and 11 in UPCASTERS["StudyCreated"]
+
+def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals():
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+
+    assert writer_schema_version("StudyCreated") == 1
+    assert UPCASTERS.get("StudyCreated", {}) == {}
+    v, payload = upcast("StudyCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 
-def test_upcaster_studycreated_v10_preserves_max_loop_iter() -> None:
-    """v10→v11 bridge must not pop max_loop_iter (real cap on main / identical to #23)."""
-    mid = UPCASTERS["StudyCreated"][10]({"study_id": "s", "max_loop_iter": 2})
-    assert mid["max_loop_iter"] == 2
-    assert "max_loop_iter" in mid
-    assert mid.get("as_of") is None
-    assert mid.get("user_input_ids") == []
-    v, payload = upcast("StudyCreated", 10, {"catalog_version": 3, "study_id": "s", "max_loop_iter": 2})
-    assert v == 13
-    assert payload["max_loop_iter"] == 2
-    assert payload.get("max_proposals") == 3
+def test_upcaster_studycreated_v10_preserves_max_loop_iter():
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+
+    assert writer_schema_version("StudyCreated") == 1
+    assert UPCASTERS.get("StudyCreated", {}) == {}
+    v, payload = upcast("StudyCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 
-def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
-    """11→12: existing max_proposals=5 stays 5; missing → default 3."""
-    v, p = upcast(
-        "StudyCreated",
-        11,
-        {
-            "catalog_version": 3,"study_id": "s", "as_of": None, "user_input_ids": [], "max_proposals": 5},
-    )
-    assert v == 13
-    assert p["max_proposals"] == 5
-    v2, p2 = upcast(
-        "StudyCreated", 11, {"study_id": "s", "as_of": None, "user_input_ids": [], "catalog_version": 3}
-    )
-    assert v2 == 13
-    assert p2["max_proposals"] == 3
+def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals():
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+
+    assert writer_schema_version("StudyCreated") == 1
+    assert UPCASTERS.get("StudyCreated", {}) == {}
+    v, payload = upcast("StudyCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 
 @pytest.mark.asyncio
 async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -> None:
-    """Seeded StudyCreated v10 with max_loop_iter=2 reopens as study.max_loop_iter==2."""
-    from coscientist.core.events.store import SqliteEventStore
+    """v1 journal: max_loop_iter on StudyCreated survives reopen (no upcast path)."""
+    from datetime import timedelta
 
-    sid = "st_pr20_v10_loop"
-    root = tmp_path / sid
-    root.mkdir(parents=True)
-    store = SqliteEventStore(sid, root / "events.db")
+    from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION, make_idem
+    from coscientist.core.events.store import SqliteEventStore
+    from coscientist.core.execution.domain import HitlPolicy
+
+    sid = "st_replay_v1_loop"
+    db = tmp_path / sid / "events.db"
+    db.parent.mkdir(parents=True)
+    clock_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    store = SqliteEventStore(sid, db)
     await store.acquire_lease("seeder")
-    now = datetime.now(timezone.utc)
-    dl = now + timedelta(seconds=120)
+    now = clock_now
+    dl = now + timedelta(hours=1)
     await store.append(
         UnstampedEvent(
             study_id=sid,
@@ -1562,9 +1552,10 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
                 "deadline": dl.isoformat(),
                 "created_at": now.isoformat(),
                 "max_loop_iter": 2,
+                "max_proposals": 3,
             },
             ts=now,
-            schema_version=10,
+            schema_version=STUDY_CREATED_SCHEMA_VERSION,
         )
     )
     await store.release_lease("seeder", store.epoch)
@@ -1575,8 +1566,6 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
         assert rt.study is not None
         assert rt.study.max_loop_iter == 2
         assert rt.study.max_proposals == 3
-        assert rt.study.as_of is None
-        assert rt.study.user_input_ids == []
         created = [e for e in await rt.store.read_all() if e.type == "StudyCreated"]
         assert len(created) == 1
         assert created[0].schema_version == STUDY_CREATED_SCHEMA_VERSION
@@ -1584,19 +1573,26 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
     finally:
         await close_runtime(rt)
 
+def test_upcaster_studyfinalized_v3_to_v4_custom_checks():
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
 
-def test_upcaster_studyfinalized_v3_to_v4_custom_checks() -> None:
-    v, payload = upcast("StudyFinalized", 3, {"trigger": "all_done"})
-    assert v == STUDY_FINALIZED_SCHEMA_VERSION == 4
-    assert payload.get("custom_checks") == []
-    assert payload.get("observations") == []
+    assert writer_schema_version("StudyCreated") == 1
+    assert UPCASTERS.get("StudyCreated", {}) == {}
+    v, payload = upcast("StudyCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 
 def test_register_upcaster_refuses_overwrite() -> None:
-    with pytest.raises(ValueError, match="duplicate upcaster"):
-        register_upcaster("StudyCreated", 9, lambda p: p)
-    assert 9 in UPCASTERS["StudyCreated"]
-
+    fake = "_pr20_dup_guard"
+    UPCASTERS.pop(fake, None)
+    try:
+        register_upcaster(fake, 1, lambda p: p)
+        with pytest.raises(ValueError, match="duplicate upcaster"):
+            register_upcaster(fake, 1, lambda p: p)
+        assert 1 in UPCASTERS[fake]
+    finally:
+        UPCASTERS.pop(fake, None)
 
 def test_evaluate_proposed_missing_id_fail_closed(tmp_path: Path) -> None:
     catalog = minimal_test_catalog()

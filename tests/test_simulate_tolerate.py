@@ -55,39 +55,15 @@ def test_default_forbid_no_stubs():
         )
 
 
-def test_upcast_input_mode_keeps_old_default():
-    """TaskCreated v3 without mode → use_partial (pre-PR5 default), not forbid."""
-    v, p = upcast(
-        "TaskCreated",
-        3,
-        {
-            "task_id": "t",
-            "spec": {
-                "sandbox_check_limits": {
-                    "exec_ok": {
-                        "timeout_s": 5.0,
-                        "memory_mb": 64,
-                        "max_output_bytes": 1024,
-                        "pids_max": 16,
-                        "rlimit_nproc": 16,
-                        "reap_timeout_s": 1.0,
-                        "output_drain_join_s": 1.0,
-                        "allow_network": False,
-                        "allow_cgroup_degraded": False,
-                    }
-                },
-                "task_key": "E1",
-                "inputs": [{"from_task": "A", "output": "main"}],
-            },
-        },
-    )
-    assert v == 14
-    assert p["spec"]["inputs"][0]["mode"] == "use_partial"
-    assert p["spec"]["inputs"][0]["kind"] == "artifact"
-    assert p["spec"]["sandbox_memory_mb"] is None
-    assert p["spec"]["budget_share"] is None
-    assert p["spec"]["budget_share"] is None
 
+def test_upcast_input_mode_keeps_old_default():
+    """Production upcasters collapsed to v1."""
+    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+
+    assert writer_schema_version("TaskCreated") == 1
+    assert UPCASTERS.get("TaskCreated", {}) == {}
+    v, payload = upcast("TaskCreated", 1, {"x": 1})
+    assert v == 1 and payload == {"x": 1}
 
 def test_experiment_method_enum_matches_graph():
     from coscientist.core.claims.graph import load_schema
