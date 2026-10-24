@@ -28,10 +28,12 @@ class DataRootStudyService:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(self._study_view_async(study_id))
-        raise RuntimeError(
-            "DataRootStudyService.study_view requires no running event loop"
-        )
+            pass  # audit-ok[except_silent_pass]: probe — no running loop is the sync path
+        else:
+            raise RuntimeError(
+                "DataRootStudyService.study_view requires no running event loop"
+            )
+        return asyncio.run(self._study_view_async(study_id))
 
     async def _study_view_async(self, study_id: str) -> StudyView:
         db_path = self._root / study_id / "events.db"
