@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -29,6 +30,14 @@ class LlmConfig(BaseModel):
     max_completion_tokens: int = Field(ge=1)
     accepted_finish_reasons: tuple[str, ...]
     unexpected_transport_retryable: bool
+
+    @field_validator("retryable_status_codes", "accepted_finish_reasons", mode="before")
+    @classmethod
+    def _list_to_tuple(cls, v: Any) -> Any:
+        """YAML/JSON lists coerce to tuples; other types stay for strict checking."""
+        if isinstance(v, list):
+            return tuple(v)
+        return v
 
     @field_validator("base_url")
     @classmethod

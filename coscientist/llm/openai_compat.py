@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import json
-import math
 import os
-from datetime import timezone
-from email.utils import parsedate_to_datetime
+from datetime import datetime
 from typing import Any, Mapping
 from urllib.parse import urljoin
 
@@ -20,6 +18,7 @@ from coscientist.llm.errors import (
     LlmRetryAfterError,
     LlmTransportError,
 )
+from coscientist.llm.imf_fixdate import parse_imf_fixdate
 from coscientist.llm.runtime import Clock
 from coscientist.llm.transport import Transport, TransportResponse
 from coscientist.llm.types import LlmRequest, LlmResponse, Usage
@@ -67,7 +66,7 @@ class OpenAICompatibleProvider:
         return _parse_response(
             response,
             latency_ms=latency_ms,
-            accepted_finish_reasons=self._config.accepted_finish_reasons,
+            config=self._config,
             clock=self._clock,
         )
 
@@ -102,15 +101,20 @@ def _parse_response(
     response: TransportResponse,
     *,
     latency_ms: float,
-    accepted_finish_reasons: tuple[str, ...],
+    config: LlmConfig,
     clock: Clock,
 ) -> LlmResponse:
     # Success is HTTP 200 only (DESIGN §7.2); any other status is LlmProviderError.
     if response.status_code != 200:
+        retry_after_s = _maybe_retry_after_s(
+            response,
+            config=config,
+            clock=clock,
+        )
         raise LlmProviderError(
             response.status_code,
             _safe_error_detail(response),
-            retry_after_s=_retry_after_s(response.headers, clock),
+            retry_after_s=retry_after_s,
         )
     try:
         text = response.body.decode("utf-8")
@@ -125,7 +129,7 @@ def _parse_response(
     choice = _first_choice(data)
     content = _content_from_choice(choice)
     finish_reason = _finish_reason_from_choice(choice)
-    if finish_reason not in accepted_finish_reasons:
+    if finish_reason not in config.accepted_finish_reasons:
         raise LlmFinishReasonError(finish_reason, content)
     return LlmResponse(
         content=content,
@@ -133,6 +137,20 @@ def _parse_response(
         finish_reason=finish_reason,
         usage=_require_usage(data, latency_ms=latency_ms),
     )
+
+
+def _maybe_retry_after_s(
+    response: TransportResponse,
+    *,
+    config: LlmConfig,
+    clock: Clock,
+) -> float | None:
+    """Parse Retry-After only when honored and the status is retryable (DESIGN §7)."""
+    if not config.honor_retry_after:
+        return None
+    if response.status_code not in config.retryable_status_codes:
+        return None
+    return _retry_after_s(response.headers, clock)
 
 
 def _safe_error_detail(response: TransportResponse) -> str:
@@ -151,39 +169,38 @@ def _header_get(headers: Mapping[str, str], name: str) -> str | None:
     return found
 
 
+def _ascii_digit_string(value: str) -> bool:
+    """RFC 7231 ``1*DIGIT``: non-empty ASCII decimal digits only."""
+    return bool(value) and value.isascii() and value.isdigit()
+
+
 def _retry_after_s(headers: Mapping[str, str], clock: Clock) -> float | None:
-    """Parse Retry-After as delta-seconds or HTTP-date. Absent → None; invalid → error."""
+    """Parse Retry-After as delta-seconds (1*DIGIT) or IMF-fixdate. Absent → None."""
     raw = _header_get(headers, "Retry-After")
     if raw is None:
         return None
     stripped = raw.strip()
     if stripped == "":
         raise LlmRetryAfterError("Retry-After header is empty")
-    try:
-        value = float(stripped)
-    except ValueError:
-        return _retry_after_http_date_s(stripped, clock)
-    if not math.isfinite(value):
-        raise LlmRetryAfterError("Retry-After seconds value is not finite")
-    if value < 0.0:
-        raise LlmRetryAfterError("Retry-After seconds value is negative")
-    return value
+    if _ascii_digit_string(stripped):
+        return float(int(stripped))
+    return _retry_after_http_date_s(stripped, clock)
+
+
+def _require_aware_wall_utc(clock: Clock) -> datetime:
+    wall = clock.wall_utc()
+    if wall.tzinfo is None:
+        raise LlmError("clock.wall_utc() must return a timezone-aware datetime")
+    return wall
 
 
 def _retry_after_http_date_s(raw: str, clock: Clock) -> float:
-    try:
-        when = parsedate_to_datetime(raw)
-    except (TypeError, ValueError, IndexError) as exc:
-        raise LlmRetryAfterError("Retry-After HTTP-date is invalid") from exc
-    if when is None:
-        raise LlmRetryAfterError("Retry-After HTTP-date is invalid")
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    delay = (when - clock.wall_utc()).total_seconds()
-    if not math.isfinite(delay):
-        raise LlmRetryAfterError("Retry-After HTTP-date delay is not finite")
+    """IMF-fixdate delay vs clock. Past dates → 0 (RFC 9110 Retry-After)."""
+    when = parse_imf_fixdate(raw)
+    delay = (when - _require_aware_wall_utc(clock)).total_seconds()
     if delay < 0.0:
-        raise LlmRetryAfterError("Retry-After HTTP-date is in the past")
+        # RFC 9110 §10.2.3: a date in the past means a delay of 0.
+        return 0.0
     return delay
 
 

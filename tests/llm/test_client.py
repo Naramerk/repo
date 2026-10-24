@@ -8,7 +8,6 @@ import json
 import random
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
-from email.utils import format_datetime
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -21,6 +20,7 @@ from coscientist.llm import (
     LlmClient,
     LlmConfig,
     LlmConfigError,
+    LlmError,
     LlmFinishReasonError,
     LlmProviderError,
     LlmRequest,
@@ -30,6 +30,33 @@ from coscientist.llm import (
     LlmTransportError,
     TransportResponse,
 )
+
+_DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+_MONTHS = (
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
+
+
+def _imf_fixdate(when: datetime) -> str:
+    """Build a strict IMF-fixdate (GMT) matching coscientist.llm.imf_fixdate."""
+    if when.tzinfo is None:
+        raise AssertionError("test helper requires aware datetime")
+    utc = when.astimezone(timezone.utc)
+    return (
+        f"{_DAY_NAMES[utc.weekday()]}, {utc.day:02d} {_MONTHS[utc.month - 1]} "
+        f"{utc.year:04d} {utc.hour:02d}:{utc.minute:02d}:{utc.second:02d} GMT"
+    )
 
 
 class FakeClock:
@@ -244,8 +271,7 @@ async def test_attempt_timeout_passed_to_transport(api_key: str) -> None:
         LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
     )
     assert transport.calls[0]["timeout_s"] == 1.0
-    # After first attempt advanced 0.4s, remaining budget 0.6s < timeout_s 1.0.
-    assert transport.calls[1]["timeout_s"] == pytest.approx(0.6)
+    assert transport.calls[1]["timeout_s"] == 0.6
 
 
 @pytest.mark.asyncio
@@ -371,7 +397,7 @@ async def test_429_honors_retry_after_seconds(api_key: str) -> None:
         [
             TransportResponse(
                 status_code=429,
-                headers={"Retry-After": "0.25"},
+                headers={"Retry-After": "2"},
                 body=b"rate",
             ),
             TransportResponse(status_code=200, headers={}, body=_ok_body(content="ok")),
@@ -395,7 +421,7 @@ async def test_429_honors_retry_after_seconds(api_key: str) -> None:
         LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
     )
     assert resp.content == "ok"
-    assert sleeps == [0.25]
+    assert sleeps == [2.0]
     assert len(transport.calls) == 2
 
 
@@ -407,7 +433,7 @@ async def test_429_honors_retry_after_http_date(api_key: str) -> None:
         [
             TransportResponse(
                 status_code=429,
-                headers={"Retry-After": format_datetime(when, usegmt=True)},
+                headers={"Retry-After": _imf_fixdate(when)},
                 body=b"rate",
             ),
             TransportResponse(status_code=200, headers={}, body=_ok_body(content="ok")),
@@ -429,9 +455,65 @@ async def test_429_honors_retry_after_http_date(api_key: str) -> None:
         LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
     )
     assert resp.content == "ok"
-    assert len(sleeps) == 1
-    assert sleeps[0] == pytest.approx(3.0)
+    assert sleeps == [3.0]
     assert len(transport.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_after_past_http_date_is_zero_delay(api_key: str) -> None:
+    """RFC 9110 §10.2.3: past Retry-After HTTP-date means delay 0."""
+    clock = FakeClock(wall=datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc))
+    when = clock.wall_utc() - timedelta(seconds=30)
+    transport = FakeTransport(
+        [
+            TransportResponse(
+                status_code=429,
+                headers={"Retry-After": _imf_fixdate(when)},
+                body=b"rate",
+            ),
+            TransportResponse(status_code=200, headers={}, body=_ok_body(content="ok")),
+        ]
+    )
+    client, _, sleeps = _make_client(
+        _config(
+            max_retries=1,
+            retryable_status_codes=(429,),
+            honor_retry_after=True,
+            retry_backoff_s=100.0,
+            retry_backoff_max_s=1000.0,
+        ),
+        transport,
+        clock=clock,
+    )
+    resp = await client.complete(
+        LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+    )
+    assert resp.content == "ok"
+    assert sleeps == []
+    assert len(transport.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_after_http_date_without_timezone_raises(api_key: str) -> None:
+    transport = FakeTransport(
+        [
+            TransportResponse(
+                status_code=429,
+                # Six tokens but zone is not GMT (no silent UTC assumption).
+                headers={"Retry-After": "Thu, 01 Jan 2026 12:00:03 UTC"},
+                body=b"rate",
+            )
+        ]
+    )
+    client, _, _ = _make_client(
+        _config(max_retries=1, retryable_status_codes=(429,), honor_retry_after=True),
+        transport,
+    )
+    with pytest.raises(LlmRetryAfterError, match="GMT"):
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+    assert len(transport.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -456,15 +538,20 @@ async def test_retry_after_invalid_raises(api_key: str) -> None:
     assert len(transport.calls) == 1
 
 
+@pytest.mark.parametrize(
+    "raw",
+    ["0.25", "1e3", "1_000", "١"],  # ASCII non-1*DIGIT + Arabic-Indic digit
+)
 @pytest.mark.asyncio
-async def test_retry_after_negative_raises(api_key: str) -> None:
+async def test_retry_after_rejects_non_digit_delta_seconds(api_key: str, raw: str) -> None:
     transport = FakeTransport(
-        [TransportResponse(status_code=429, headers={"Retry-After": "-1"}, body=b"rate")]
+        [TransportResponse(status_code=429, headers={"Retry-After": raw}, body=b"rate")]
     )
     client, _, _ = _make_client(
-        _config(max_retries=1, retryable_status_codes=(429,)), transport
+        _config(max_retries=1, retryable_status_codes=(429,), honor_retry_after=True),
+        transport,
     )
-    with pytest.raises(LlmRetryAfterError, match="negative"):
+    with pytest.raises(LlmRetryAfterError):
         await client.complete(
             LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
         )
@@ -472,18 +559,58 @@ async def test_retry_after_negative_raises(api_key: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_after_inf_raises(api_key: str) -> None:
+async def test_non_retryable_status_ignores_broken_retry_after(api_key: str) -> None:
     transport = FakeTransport(
-        [TransportResponse(status_code=429, headers={"Retry-After": "inf"}, body=b"rate")]
+        [
+            TransportResponse(
+                status_code=401,
+                headers={"Retry-After": "not-a-date-or-number"},
+                body=b"no",
+            )
+        ]
     )
     client, _, _ = _make_client(
-        _config(max_retries=1, retryable_status_codes=(429,)), transport
+        _config(max_retries=1, retryable_status_codes=(429,), honor_retry_after=True),
+        transport,
     )
-    with pytest.raises(LlmRetryAfterError, match="not finite"):
+    with pytest.raises(LlmProviderError, match="HTTP 401") as ei:
         await client.complete(
             LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
         )
+    assert ei.value.retry_after_s is None
     assert len(transport.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_honor_retry_after_false_ignores_header(api_key: str) -> None:
+    transport = FakeTransport(
+        [
+            TransportResponse(
+                status_code=429,
+                headers={"Retry-After": "99"},
+                body=b"rate",
+            ),
+            TransportResponse(status_code=200, headers={}, body=_ok_body(content="ok")),
+        ]
+    )
+    client, _, sleeps = _make_client(
+        _config(
+            max_retries=1,
+            retryable_status_codes=(429,),
+            honor_retry_after=False,
+            retry_backoff_s=1.0,
+            retry_backoff_multiplier=2.0,
+            retry_backoff_jitter_s=0.0,
+            retry_backoff_max_s=10.0,
+        ),
+        transport,
+    )
+    resp = await client.complete(
+        LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+    )
+    assert resp.content == "ok"
+    assert sleeps == [1.0]
+    assert len(transport.calls) == 2
 
 
 @pytest.mark.asyncio
@@ -608,7 +735,36 @@ async def test_jitter_with_fixed_seed(api_key: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_deadline_exhausted_during_backoff(api_key: str) -> None:
+async def test_jitter_hits_backoff_max_ceiling(api_key: str) -> None:
+    transport = FakeTransport(
+        [
+            TransportResponse(status_code=503, headers={}, body=b"1"),
+            TransportResponse(status_code=200, headers={}, body=_ok_body()),
+        ]
+    )
+    # seed=0 → uniform(0, 2) ≈ 1.688 → 3 + 1.688 > 4 → capped to 4.0
+    client, _, sleeps = _make_client(
+        _config(
+            max_retries=1,
+            retryable_status_codes=(503,),
+            honor_retry_after=False,
+            retry_backoff_s=3.0,
+            retry_backoff_multiplier=2.0,
+            retry_backoff_jitter_s=2.0,
+            retry_backoff_max_s=4.0,
+        ),
+        transport,
+        rng=random.Random(0),
+    )
+    await client.complete(
+        LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+    )
+    assert sleeps == [4.0]
+    assert len(transport.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_deadline_exhausted_when_backoff_exceeds_remaining(api_key: str) -> None:
     transport = FakeTransport(
         [TransportResponse(status_code=503, headers={}, body=b"busy")]
     )
@@ -633,6 +789,65 @@ async def test_deadline_exhausted_during_backoff(api_key: str) -> None:
     assert isinstance(ei.value.__cause__, LlmProviderError)
     assert len(transport.calls) == 1
     assert sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_deadline_exhausted_before_next_attempt(api_key: str) -> None:
+    """client.py remaining<=0 at loop start after a prior retryable failure."""
+    clock = FakeClock()
+    transport = FakeTransport(
+        [
+            TransportResponse(status_code=503, headers={}, body=b"a"),
+            TransportResponse(status_code=503, headers={}, body=b"b"),
+        ],
+        clock=clock,
+        advance_s=0.9,
+    )
+    client, _, sleeps = _make_client(
+        _config(
+            max_retries=2,
+            retryable_status_codes=(503,),
+            honor_retry_after=False,
+            retry_backoff_s=0.0,
+            timeout_s=1.0,
+            total_deadline_s=1.0,
+        ),
+        transport,
+        clock=clock,
+    )
+    with pytest.raises(LlmTimeoutError, match="total_deadline_s") as ei:
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+    assert isinstance(ei.value.__cause__, LlmProviderError)
+    # Two attempts consume 0.9+0.9; third loop iteration hits remaining<=0.
+    assert len(transport.calls) == 2
+    assert sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_naive_wall_utc_rejected(api_key: str) -> None:
+    clock = FakeClock(wall=datetime(2026, 1, 1, 12, 0, 0))  # naive
+    when = datetime(2026, 1, 1, 12, 0, 3, tzinfo=timezone.utc)
+    transport = FakeTransport(
+        [
+            TransportResponse(
+                status_code=429,
+                headers={"Retry-After": _imf_fixdate(when)},
+                body=b"rate",
+            )
+        ]
+    )
+    client, _, _ = _make_client(
+        _config(max_retries=1, retryable_status_codes=(429,), honor_retry_after=True),
+        transport,
+        clock=clock,
+    )
+    with pytest.raises(LlmError, match="timezone-aware"):
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+    assert len(transport.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -893,15 +1108,34 @@ def test_config_rejects_duplicate_retryable_codes() -> None:
         _config(retryable_status_codes=(503, 503))
 
 
+def test_config_rejects_duplicate_accepted_finish_reasons() -> None:
+    with pytest.raises(ValidationError, match="duplicates"):
+        _config(accepted_finish_reasons=("stop", "stop"))
+
+
 def test_config_rejects_2xx_retryable() -> None:
     with pytest.raises(ValidationError, match="2xx"):
         _config(retryable_status_codes=(200, 503))
 
 
+def test_config_accepts_list_for_tuple_fields() -> None:
+    cfg = _config(
+        retryable_status_codes=[503, 429],
+        accepted_finish_reasons=["stop"],
+    )
+    assert cfg.retryable_status_codes == (503, 429)
+    assert cfg.accepted_finish_reasons == ("stop",)
+
+
+def test_config_strict_rejects_string_for_float_timeout() -> None:
+    with pytest.raises(ValidationError):
+        _config(timeout_s="1.0")  # str, not float — strict=True
+
+
 def test_request_requires_model_and_messages() -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="model"):
         LlmRequest(model="", messages=[ChatMessage(role="user", content="x")])
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="messages"):
         LlmRequest(model="m", messages=[])
 
 
