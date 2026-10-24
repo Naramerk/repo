@@ -193,10 +193,11 @@ async def _refuse_and_skip_foreach(
     *,
     after: str,
     detail: str,
+    reason: str = "invalid",
 ) -> None:
     """ExpansionRefused + TaskDone SKIPPED so the template is never dispatched."""
     await refuse_expansion(
-        runtime, after, reason="invalid", detail=detail[:200]
+        runtime, after, reason=reason, detail=detail[:200]
     )
     if template.state != TaskState.DONE:
         await runtime.cancel_task(  # type: ignore[attr-defined]
@@ -294,7 +295,11 @@ async def materialize_foreach(
         hyp_need, lit_need = recorded_plan_needs(prev)
     except PlanNeedRefuse as e:
         await _refuse_and_skip_foreach(
-            runtime, template, after=after, detail=str(e)
+            runtime,
+            template,
+            after=after,
+            detail=str(e),
+            reason="plan_need_unrecorded",
         )
         return None  # audit-ok[except_silent_return]: PlanNeedRefuse → ExpansionRefused
     plan = Plan(

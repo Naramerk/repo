@@ -23,7 +23,7 @@ from coscientist.core.execution.runtime_factory import open_runtime as _open_run
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 
 # Test Need (needed=False). Pass hypotheses=/literature= explicitly.
-NEED_OFF = Need(needed=False, reason="test")
+NEED_OFF = Need(kind="need", needed=False, reason="test")
 NEED_UNRECORDED = {"kind": "unrecorded", "source_schema_version": PLAN_ACCEPTED_NEED_SINCE}
 
 

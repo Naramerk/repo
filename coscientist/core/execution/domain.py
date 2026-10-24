@@ -504,7 +504,8 @@ class Need(Frozen):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    kind: Literal["need"] = "need"  # audit-ok[field_default]: pydantic discriminator tag
+    # No default: dict without kind must fail; construct with kind="need" or parse_plan_need.
+    kind: Literal["need"]
     needed: bool
     reason: str = Field(min_length=1)
 
@@ -520,7 +521,8 @@ class NeedUnrecorded(Frozen):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    kind: Literal["unrecorded"] = "unrecorded"  # audit-ok[field_default]: pydantic discriminator tag
+    # No default: dict without kind must fail; construct with kind="unrecorded" or parse_plan_need.
+    kind: Literal["unrecorded"]
     source_schema_version: StrictInt
 
 

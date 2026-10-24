@@ -5,12 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from pydantic import ValidationError
-
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import PLAN_ACCEPTED_NEED_SINCE
-from coscientist.core.plan.need import parse_plan_need
 
 Upcaster = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -950,6 +947,10 @@ register_upcaster("TaskCreated", 12, _task_created_v12_to_v13_evidence_kind)
 register_upcaster("TaskCreated", 13, _task_created_v13_to_v14_sandbox_freeze)
 def _plan_accepted_v11_to_v12_need(payload: dict[str, Any]) -> dict[str, Any]:
     """G4: absent Need → NeedUnrecorded; present → strict discriminated union."""
+    from pydantic import ValidationError
+
+    from coscientist.core.plan.need import parse_plan_need
+
     out = dict(payload)
     pad = {"kind": "unrecorded", "source_schema_version": PLAN_ACCEPTED_NEED_SINCE}
     for field in ("hypotheses", "literature"):

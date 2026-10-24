@@ -33,8 +33,7 @@ from coscientist.core.plan.need import (
 from tests.helpers import NEED_OFF, NEED_UNRECORDED, close_runtime, open_runtime
 
 _OFF = {"kind": "need", "needed": False, "reason": "x"}
-_DETAIL = f"plan_need_unrecorded:source_schema_version={PLAN_ACCEPTED_NEED_SINCE}"
-_MATCH = rf"plan_need_unrecorded:source_schema_version={PLAN_ACCEPTED_NEED_SINCE}"
+_UNRECORDED_DETAIL = f"plan_need_unrecorded:source_schema_version={PLAN_ACCEPTED_NEED_SINCE}"
 _EXP = TaskSpec(task_key="EXP-1", title="e", goal="e", route="experiment")
 _E0 = TaskSpec(task_key="E0", title="e", goal="e", route="experiment")
 _FE = TaskSpec(
@@ -53,6 +52,7 @@ _LOOP = LoopSpec(
     scope_questions=["Q1"],
 )
 _Q1 = [QuestionSpec(id="Q1", text="q")]
+_NEED_X = Need(kind="need", needed=False, reason="x")
 
 
 def _unrec(rt: Any) -> None:
@@ -73,12 +73,18 @@ def _unrec(rt: Any) -> None:
 )
 def test_need_rejects_bad_shape(kwargs: dict, match: str) -> None:
     with pytest.raises(ValidationError, match=match):
-        Need.model_validate(kwargs)
+        Need.model_validate({"kind": "need", **kwargs})
+
+
+def test_need_rejects_missing_kind() -> None:
+    with pytest.raises(ValidationError, match="kind"):
+        Need.model_validate({"needed": False, "reason": "x"})
 
 
 @pytest.mark.parametrize(
     ("prev", "field", "match"),
     [
+        (None, "hypotheses", "plan_need_corrupt:missing_hypotheses"),
         ({}, "hypotheses", "plan_need_corrupt:missing_hypotheses"),
         ({"hypotheses": None}, "hypotheses", "plan_need_corrupt:missing_hypotheses"),
         ({"hypotheses": _OFF}, "literature", "plan_need_corrupt:missing_literature"),
@@ -89,7 +95,7 @@ def test_need_rejects_bad_shape(kwargs: dict, match: str) -> None:
             "plan_need_corrupt:bad_shape_hypotheses",
         ),
     ],
-    ids=["key_absent", "value_null", "lit_missing", "not_mapping", "du_invalid"],
+    ids=["prev_none", "key_absent", "value_null", "lit_missing", "not_mapping", "du_invalid"],
 )
 def test_need_from_plan_blob_corrupt(
     prev: dict[str, Any] | None, field: NeedKind, match: str
@@ -101,8 +107,8 @@ def test_need_from_plan_blob_corrupt(
 @pytest.mark.parametrize(
     ("hypotheses", "literature", "match"),
     [
-        (None, Need(needed=False, reason="x"), "plan_need_required:hypotheses"),
-        (Need(needed=False, reason="x"), None, "plan_need_required:literature"),
+        (None, _NEED_X, "plan_need_required:hypotheses"),
+        (_NEED_X, None, "plan_need_required:literature"),
     ],
     ids=["hyp_omit", "lit_omit"],
 )
@@ -154,19 +160,26 @@ def test_plan_accepted_v11_need_corrupt(blob: Any, match: str) -> None:
 
 
 def test_require_need_refuses_need_unrecorded_model() -> None:
-    with pytest.raises(PlanNeedRefuse, match=_MATCH):
-        require_need(NeedUnrecorded(source_schema_version=PLAN_ACCEPTED_NEED_SINCE))
+    with pytest.raises(PlanNeedRefuse, match=_UNRECORDED_DETAIL):
+        require_need(
+            NeedUnrecorded(kind="unrecorded", source_schema_version=PLAN_ACCEPTED_NEED_SINCE)
+        )
 
 
 def test_require_need_refuses_parsed_unrecorded() -> None:
-    with pytest.raises(PlanNeedRefuse, match=_MATCH):
+    with pytest.raises(PlanNeedRefuse, match=_UNRECORDED_DETAIL):
         require_need(parse_plan_need(NEED_UNRECORDED))
+
+
+def test_require_need_accepts_need() -> None:
+    assert require_need(_NEED_X).needed is False
 
 
 async def _assert_one_refuse(rt: Any, etype: str) -> None:
     refused = [e for e in await rt.store.read_all() if e.type == etype]
     assert len(refused) == 1
-    assert refused[0].payload["detail"] == _DETAIL
+    assert refused[0].payload["detail"] == _UNRECORDED_DETAIL
+    assert refused[0].payload["reason"] == "plan_need_unrecorded"
 
 
 @pytest.mark.asyncio
@@ -214,7 +227,9 @@ async def test_loop_refuses_need_unrecorded(tmp_path) -> None:
         )
         _unrec(rt)
         assert await materialize_loop_iter(rt, _LOOP, iter_n=1) is None
-        await _assert_one_refuse(rt, "LoopRefused")
+        refused = [e for e in await rt.store.read_all() if e.type == "LoopRefused"]
+        assert len(refused) == 1
+        assert refused[0].payload["detail"] == _UNRECORDED_DETAIL
     finally:
         await close_runtime(rt)
 

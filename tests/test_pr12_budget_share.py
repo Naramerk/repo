@@ -10,7 +10,7 @@ import pytest
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.errors import CoreBugError, SandboxInfraError
-from coscientist.core.events.events import PLAN_ACCEPTED_NEED_SINCE, EventEnvelope, make_idem
+from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hypothesis_node_id, task_id
 from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref
@@ -43,7 +43,14 @@ from coscientist.core.plan.shares import (
     validate_deadline_shares,
     validate_plan_shares,
 )
-from tests.helpers import NEED_OFF, attach_executor, close_runtime, open_runtime, open_runtime_experimental
+from tests.helpers import (
+    NEED_OFF,
+    NEED_UNRECORDED,
+    attach_executor,
+    close_runtime,
+    open_runtime,
+    open_runtime_experimental,
+)
 
 
 def _exp(key: str, *, depends_on: list[str] | None = None, **kw) -> TaskSpec:
@@ -824,7 +831,7 @@ def test_upcast_plan_accepted_shares():
     )
     assert v >= 7
     assert p["tasks"][0]["budget_share"] is None
-    assert p["hypotheses"] == {"kind": "unrecorded", "source_schema_version": PLAN_ACCEPTED_NEED_SINCE}
+    assert p["hypotheses"] == NEED_UNRECORDED
 
 
 async def _plan_one(rt, *, share: float = 0.5):

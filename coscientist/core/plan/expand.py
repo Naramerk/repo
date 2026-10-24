@@ -373,7 +373,10 @@ async def _expand_plan(
         hyp_need, lit_need = recorded_plan_needs(prev)
     except PlanNeedRefuse as e:
         await refuse_expansion(
-            runtime, after_task, reason="invalid", detail=str(e)[:200]
+            runtime,
+            after_task,
+            reason="plan_need_unrecorded",
+            detail=str(e)[:200],
         )
         return None  # audit-ok[except_silent_return]: PlanNeedRefuse → ExpansionRefused
     plan = Plan(
