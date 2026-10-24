@@ -1391,16 +1391,13 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "CheckProposed": CheckProposedPayload,
     "CheckApproved": CheckApprovedPayload,
     "CheckRejected": CheckRejectedPayload,
-<<<<<<< HEAD
     "JobSubmitted": JobSubmittedPayload,
     "JobStatusChanged": JobStatusChangedPayload,
     "JobTimedOut": JobTimedOutPayload,
     "JobCancelled": JobCancelledPayload,
     "JobCancelFailed": JobCancelFailedPayload,
-=======
     # G3: model authored in tool_resolved.py (writer + MatchInfo); single registry path.
     "ToolResolved": ToolResolvedPayload,
->>>>>>> 93462c9 (fix(tools): register ToolResolved in PAYLOAD_MODELS (one path))
 }
 
 
