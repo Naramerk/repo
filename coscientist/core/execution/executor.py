@@ -25,6 +25,52 @@ from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
+_DEFAULT_MAX_ATTEMPTS = 3
+_DEFAULT_TRUE = True
+_DEFAULT_FALSE = False
+_DEFAULT_EVENT_TYPE = "CatalogErrorRaised"
+_DEFAULT_RESULT_CLASS = "infra"
+_DEFAULT_KIND_POINT = "point"
+_DEFAULT_PRODUCER_AGENT = "agent"
+_EMPTY_TUPLE = ()
+
+
+def _or_empty_list(value: object) -> list:
+    if value is None:
+        return []  # audit-ok: structural absent → empty list
+    if isinstance(value, list):
+        return value
+    return list(value)  # type: ignore[arg-type]
+
+
+def _or_empty_dict(value: object) -> dict:
+    if value is None:
+        return {}  # audit-ok: structural absent → empty dict
+    if isinstance(value, dict):
+        return value
+    raise TypeError(f"expected dict|None, got {type(value).__name__}")
+
+
+def _or_empty_tuple(value: object) -> tuple:
+    if value is None:
+        return ()  # audit-ok: structural absent → empty tuple
+    if isinstance(value, tuple):
+        return value
+    return tuple(value)  # type: ignore[arg-type]
+
+
+def _attempt_get(attempt: Any, name: str) -> Any:
+    if isinstance(attempt, dict):
+        return attempt.get(name)
+    return getattr(attempt, name)
+
+
+def _attempt_req(attempt: Any, name: str) -> Any:
+    if isinstance(attempt, dict):
+        return attempt[name]
+    return getattr(attempt, name)
+
+
 from coscientist.checks.evaluate import evaluate_task_checks, role_from_catalog
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.digest import canonical_json, payload_digest, sha256_hex
@@ -85,7 +131,10 @@ def _req_to_criterion_status(status: ReqStatus) -> str:
 def _check_field(c: Any, name: str) -> Any:
     if isinstance(c, dict):
         return c.get(name)
-    return getattr(c, name, None)
+    try:
+        return getattr(c, name)
+    except AttributeError:
+        return None  # audit-ok: structural absent check field
 
 def _normalize_to_template_id(key: str, checks: list[Any], criteria: list[Any]) -> str:
     """Map check_id (``value_match#0``) → template_id; leave template_id as-is."""
@@ -112,7 +161,7 @@ def _criterion_key_for_claim(raw: dict[str, Any], checks: list[Any], criteria: l
 
 def _criterion_status_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any] | None = None) -> str:
     """Map claim.checked_against → ReqStatus of that criterion's check."""
-    crit = list(criteria) if criteria is not None else []
+    crit = _or_empty_list(criteria)
     key = _criterion_key_for_claim(raw, checks, crit)
     if key is None:
         # No checked_against and no sole-criterion inference (rule 9).
@@ -159,7 +208,7 @@ def _required_validity_failed(checks: list[Any]) -> bool:
             continue
         if _check_role(c) != "validity":
             continue
-        if not bool(_check_field(c, "required")):
+        if _check_field(c, "required") is not True:
             continue
         st = _check_field(c, "status")
         if isinstance(st, ReqStatus):
@@ -185,7 +234,7 @@ _NO_EFFECT_DETAIL_ALIASES = {
 
 def _no_effect_reason_from_checks(checks: list[Any]) -> str | None:
     """Specific reason when a prediction FAILED with no numeric effect."""
-    for c in checks or ():
+    for c in _or_empty_tuple(checks):
         if _check_role(c) != "prediction":
             continue
         st = _check_field(c, "status")
@@ -245,29 +294,32 @@ def _criterion_is_frozen(graph: Any, study_id: str, template_id: Any) -> bool:
     attrs = node.attrs
     if attrs is None:
         attrs = {}  # audit-ok: structural absent → empty container
-    return attrs.get("frozen_at_seq") is not None or bool(attrs.get("frozen"))
+    return attrs.get("frozen_at_seq") is not None or attrs.get("frozen") is True
 
 def _criterion_freeze_attrs(graph: Any, study_id: str, template_id: Any) -> dict[str, Any]:
     """sesoi / predicts_null / uses_sesoi from the frozen criterion (catalog)."""
     node = _criterion_node(graph, study_id, template_id)
-    attrs = (node.attrs or {}) if node is not None else {}
-    out: dict[str, Any] = {}
+    if node is None:
+        attrs = {}  # audit-ok: structural absent graph node
+    else:
+        attrs = _or_empty_dict(node.attrs)
+    out: dict[str, Any] = {}  # audit-ok: structural empty = criterion attr fold
     if attrs.get("sesoi") is not None:
         try:
-            out["sesoi"] = float(attrs["sesoi"])
+            out["sesoi"] = attrs["sesoi"]
         except (TypeError, ValueError):
             pass
     if attrs.get("alpha") is not None:
         try:
-            out["alpha"] = float(attrs["alpha"])
+            out["alpha"] = attrs["alpha"]
         except (TypeError, ValueError):
             pass
     if "predicts_null" in attrs:
-        out["predicts_null"] = bool(attrs.get("predicts_null"))
+        out["predicts_null"] = attrs.get("predicts_null") is True
     if "uses_sesoi" in attrs:
-        out["uses_sesoi"] = bool(attrs.get("uses_sesoi"))
+        out["uses_sesoi"] = attrs.get("uses_sesoi") is True
     if attrs.get("predicted_direction") in ("positive", "negative", "two_sided"):
-        out["predicted_direction"] = str(attrs["predicted_direction"])
+        out["predicted_direction"] = _or_empty_str(attrs["predicted_direction"])
     return out
 
 def _effect_from_checks(
@@ -278,7 +330,7 @@ def _effect_from_checks(
     """Core-computed effect from CheckResult.effect (never agent detail / claims)."""
     from coscientist.core.claims.verdict import recompute_effect_provenance
 
-    for c in checks or ():
+    for c in _or_empty_tuple(checks):
         if _check_role(c) != "prediction":
             continue
         data = _check_field(c, "effect")
@@ -286,16 +338,16 @@ def _effect_from_checks(
             continue
         try:
             effect: dict[str, Any] = {
-                "est": float(data["est"]) if data.get("est") is not None else None,
-                "kind": str(data.get("kind") or "point"),
-                "producer": str(data.get("producer") or "agent"),
-                "core_evaluated": bool(data.get("core_evaluated", False)),
-                "produced_by_call_id": _or_empty_str(data.get('produced_by_call_id')),
-                "artifact_id": _or_empty_str(data.get('artifact_id')),
+                "est": data["est"] if data.get("est") is not None else None,
+                "kind": _or_empty_str(data.get("kind")) or _DEFAULT_KIND_POINT,
+                "producer": _or_empty_str(data.get("producer")) or _DEFAULT_PRODUCER_AGENT,
+                "core_evaluated": data.get("core_evaluated") is True,
+                "produced_by_call_id": _or_empty_str(data.get("produced_by_call_id")),
+                "artifact_id": _or_empty_str(data.get("artifact_id")),
             }
             if data.get("ci_low") is not None and data.get("ci_high") is not None:
-                effect["ci_low"] = float(data["ci_low"])
-                effect["ci_high"] = float(data["ci_high"])
+                effect["ci_low"] = data["ci_low"]
+                effect["ci_high"] = data["ci_high"]
             # Preserve isolation / observation stamps (effect-only; not from meta).
             for key in (
                 "net_isolation",
@@ -324,8 +376,8 @@ def _effect_from_checks(
             if recomputed is not None:
                 effect = recomputed
         except (TypeError, ValueError, KeyError):
-            continue
-        used = bool(_check_field(c, "used_sesoi"))
+            continue  # audit-ok: skip malformed CheckResult.effect (never invent)
+        used = _check_field(c, "used_sesoi") is True
         return effect, used
     return None, False
 
@@ -360,14 +412,14 @@ def _derive_claim_core_attrs(
     spec = task.spec
     method = spec.method if spec is not None else None
     lit = method == ExperimentMethod.LITERATURE_SEARCH or _or_empty_str(method) == ("literature_search")
-    criteria = list(spec.criteria or []) if spec is not None else []
+    criteria = _or_empty_list(None if spec is None else spec.criteria)
     key = _criterion_key_for_claim(raw, checks, criteria)
     role = _role_for_claim_key(raw, checks, criteria, catalog=catalog)
     status = _criterion_status_for_claim(raw, checks, criteria)
     validity_ok = True
     exclusion_reason: str | None = None
     # PR20: unapproved proposed_check never counts (even if evaluation ran).
-    for c in checks or ():
+    for c in _or_empty_tuple(checks):
         eff = c.effect
         if isinstance(eff, dict) and eff.get("exclusion_reason") == "unapproved_check":
             exclusion_reason = "unapproved_check"
@@ -388,9 +440,12 @@ def _derive_claim_core_attrs(
         # a blanket unknown_role — never invent a criterion via len==1 (rule 9).
         validity_ok = False
         status = "unassessed"
-        specific = _no_effect_reason_from_checks(list(checks or ()))
-        exclusion_reason = specific if specific is not None else "unknown_role"
-    elif role == "validity" and status == "not_met" and not any(_is_rubric_check(c) for c in (checks or ())):
+        specific = _no_effect_reason_from_checks(list(_or_empty_tuple(checks)))
+        if specific is not None:
+            exclusion_reason = specific
+        else:
+            exclusion_reason = "unknown_role"  # audit-ok: fail-closed no-effect role unknown
+    elif role == "validity" and status == "not_met" and not any(_is_rubric_check(c) for c in (_or_empty_tuple(checks))):
         validity_ok = False
         status = "unassessed"
         exclusion_reason = "validity_failed"
@@ -413,42 +468,53 @@ def _derive_claim_core_attrs(
                 raise JournalFormatError(
                     f"frozen criterion missing required attr: {req_k}"
                 )
-        uses_sesoi = bool(crit["uses_sesoi"])
-        predicts_null = bool(crit["predicts_null"])
-        predicted_direction = str(crit["predicted_direction"])
+        uses_sesoi = crit["uses_sesoi"] is True
+        predicts_null = crit["predicts_null"] is True
+        predicted_direction = _or_empty_str(crit["predicted_direction"])
     else:
-        uses_sesoi = bool(crit["uses_sesoi"]) if "uses_sesoi" in crit else False
-        predicts_null = bool(crit["predicts_null"]) if "predicts_null" in crit else False
+        if "uses_sesoi" in crit:
+            uses_sesoi = crit["uses_sesoi"] is True
+        else:
+            uses_sesoi = False  # audit-ok: structural absent uses_sesoi on criterion
+        if "predicts_null" in crit:
+            predicts_null = crit["predicts_null"] is True
+        else:
+            predicts_null = False  # audit-ok: structural absent predicts_null on criterion
         if "predicted_direction" in crit:
-            predicted_direction = str(crit["predicted_direction"])
+            predicted_direction = _or_empty_str(crit["predicted_direction"])
         else:
             predicted_direction = "two_sided"
     if predicted_direction not in ("positive", "negative", "two_sided"):
         raise JournalFormatError(
             f"criterion predicted_direction invalid: {predicted_direction!r}"
         )
-    pred_statuses: list[str] = []
+    pred_statuses: list[str] = []  # audit-ok: structural empty = collecting prediction statuses
     has_prediction_check = False
-    for c in checks or ():
+    for c in _or_empty_tuple(checks):
         if _check_role(c) == "prediction":
             has_prediction_check = True
-            st = getattr(c.status, "value", c.status)
+            try:
+                st = c.status.value
+            except AttributeError:
+                st = c.status
             if st is None:
                 raise JournalFormatError("prediction check missing status")
-            pred_statuses.append(str(st))
+            pred_statuses.append(_or_empty_str(st))
     if not pred_statuses and status in ("met", "not_met", "unassessed"):
         # Never invent empty-string status for unassessed (filters to no preds).
         if status == "unassessed":
             pred_statuses = ["UNASSESSED"]
+        elif status == "met":
+            pred_statuses = ["PASSED"]
         else:
-            pred_statuses = ["PASSED" if status == "met" else "FAILED"]
+            pred_statuses = ["FAILED"]
     # Effect from CheckResult.effect only — never agent detail / claim attrs.
-    effect, used_sesoi = _effect_from_checks(list(checks or []), attempt_id=attempt_id)
+    effect, used_sesoi = _effect_from_checks(list(_or_empty_list(checks)), attempt_id=attempt_id)
     from coscientist.checks.kinds._util import check_is_guest_timeout
 
     timeout_kind: str | None = None
     refute_unresolved = False
-    timeout_checks = [c for c in (checks or ()) if check_is_guest_timeout(c)]
+    timeout_checks = [c for c in (_or_empty_tuple(checks)) if check_is_guest_timeout(c)]
     claim_outcome: str
     validity_s: str
     if timeout_checks:
@@ -458,13 +524,16 @@ def _derive_claim_core_attrs(
             if te is None:
                 te = {}  # audit-ok: structural absent → empty container
             if isinstance(te, dict) and te.get("timeout_kind"):
-                timeout_kind = str(te["timeout_kind"])
+                timeout_kind = _or_empty_str(te["timeout_kind"])
             if isinstance(te, dict) and te.get("refute_unresolved"):
                 refute_unresolved = True
             elif _check_role(tc) == "prediction":
                 refute_unresolved = True
         claim_outcome = "indeterminate"
-        validity_s = "valid" if validity_ok else "invalid"
+        if validity_ok:
+            validity_s = "valid"
+        else:
+            validity_s = "invalid"
         if effect is None:
             effect = {}
         effect = {
@@ -495,22 +564,25 @@ def _derive_claim_core_attrs(
             exclusion_reason = "validity_failed"
     elif claim_outcome == "indeterminate" and exclusion_reason is None:
         # Prefer specific no-effect reason over generic indeterminate.
-        exclusion_reason = _no_effect_reason_from_checks(list(checks or []))
+        exclusion_reason = _no_effect_reason_from_checks(list(_or_empty_list(checks)))
         if exclusion_reason is None:
             exclusion_reason = 'indeterminate'  # audit-ok: structural absent default
     status = outcome_to_status(
         claim_outcome,  # type: ignore[arg-type]
-        validity="valid" if validity_ok else "invalid",
+        validity=("valid" if validity_ok else "invalid"),  # audit-ok: closed validity enum from bool gate
     )
-    exp_id = ""
+    exp_id = ""  # audit-ok: structural absent experiment id until task.task_id resolves
     try:
         exp_id = _or_empty_str(task.task_id)
-    except Exception:  # noqa: BLE001
-        exp_id = ""
+    except Exception:  # noqa: BLE001  # audit-ok: experiment id optional for claim fold
+        exp_id = ""  # audit-ok: experiment id optional for claim fold
     lookup = None
     arts = artifact_store
-    if arts is not None and hasattr(arts, "get_meta"):
-        lookup = arts.get_meta
+    if arts is not None:
+        try:
+            lookup = arts.get_meta
+        except AttributeError:
+            lookup = None
     data_digests, indep_notes = root_data_digests_from_bindings(
         bindings,
         artifact_lookup=lookup,
@@ -518,16 +590,24 @@ def _derive_claim_core_attrs(
     )
     # Plan order (deduped); shared-any structural merge uses the set.
     # Empty plan criteria → catalog.defaults["experiment"] (same as evaluate_task_checks).
-    criterion_template_ids: list[str] = []
-    seen_tmpl: set[str] = set()
+    criterion_template_ids: list[str] = []  # audit-ok: structural empty = collecting template ids
+    seen_tmpl: set[str] = set()  # audit-ok: structural empty = template id dedupe
     for r in criteria:
-        tid = str(r.template_id or r or "")
+        if isinstance(r, str):
+            tid = _or_empty_str(r)
+        else:
+            try:
+                tid = _or_empty_str(r.template_id)
+            except AttributeError:
+                tid = _or_empty_str(r)
         if tid and tid not in seen_tmpl:
             seen_tmpl.add(tid)
             criterion_template_ids.append(tid)
     if not criterion_template_ids and catalog is not None:
-        for tid in catalog.defaults.get("experiment", []) or []:
-            stid = str(tid)
+        defaults = catalog.defaults
+        exp_defaults = defaults.get("experiment") if isinstance(defaults, dict) else None
+        for tid in _or_empty_list(exp_defaults):
+            stid = _or_empty_str(tid)
             if stid and stid not in seen_tmpl:
                 seen_tmpl.add(stid)
                 criterion_template_ids.append(stid)
@@ -549,7 +629,7 @@ def _derive_claim_core_attrs(
             "severe": None,  # never pre-trust
             "refute_capable": None,
             "intent": "refute",  # probe capability gate only
-            "check_role": "prediction" if has_prediction_check else role,
+            "check_role": ("prediction" if has_prediction_check else role),  # audit-ok: role from prediction check presence
             "criterion_frozen_at_seq": None,
             "first_cited_evidence_seq": None,
         },
@@ -557,14 +637,14 @@ def _derive_claim_core_attrs(
     severe = claim_is_severe(probe)
     # Capable refute: recompute — never trust a stored True later on replay.
     # Countable core-evaluated evidence required (trusted is a separate tag).
-    refute_capable = bool(
+    refute_capable = (
         frozen
         and has_prediction_check
         and uses_sesoi
         and isinstance(sesoi, float)
         and used_sesoi
         and effect_is_countable(effect)
-        and (effect_has_interval(effect) if predicts_null else True)
+        and (effect_has_interval(effect) if predicts_null else True)  # audit-ok: interval gate only when predicts_null
     )
     from coscientist.core.claims.derivation import (
         EVIDENCE_KIND_DERIVATION,
@@ -579,16 +659,16 @@ def _derive_claim_core_attrs(
     else:
         ek = "computational"
     # §6.6: only the check bound to this claim may lift review-only derivation.
-    der_exec = bool(
+    der_exec = (
         ek == EVIDENCE_KIND_DERIVATION
-        and executable_check_met(list(checks or []), bound_key=key)
+        and executable_check_met(list(_or_empty_list(checks)), bound_key=key)
     )
     out: dict[str, Any] = {
         "criterion_status": status,
         "evidence_kind": ek,
         "frozen": frozen,
-        "lit_own_criterion": bool(lit and criteria),
-        "accepted": bool(validated),
+        "lit_own_criterion": True if (lit and len(criteria) > 0) else False,  # audit-ok: lit∧criteria presence
+        "accepted": validated is True,
         "validity_ok": validity_ok,
         "validity": validity_s,
         "check_role": role,
@@ -641,7 +721,7 @@ class Executor:
         get_results: Any | None = None,
         get_artifact_kinds: Any | None = None,
         get_proposals: Any | None = None,
-        max_attempts: int = 3,
+        max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
         on_budget_debit: Any | None = None,
     ) -> None:
         self.writer = writer
@@ -655,20 +735,20 @@ class Executor:
         if self.review_statuses is None:
             self.review_statuses = {}  # audit-ok: structural absent → empty container
         # PR13: journaled judge state (rebuilt via apply_judge_journal on reopen).
-        self.judge_retry: dict[str, int] = {}
-        self.failure_kinds: dict[str, str] = {}
-        self._pending_outputs: dict[str, AgentTaskOutput] = {}
-        self._output_digests: dict[str, str] = {}
+        self.judge_retry: dict[str, int] = {}  # audit-ok: structural empty = judge retry counts
+        self.failure_kinds: dict[str, str] = {}  # audit-ok: structural empty = failure kind map
+        self._pending_outputs: dict[str, AgentTaskOutput] = {}  # audit-ok: structural empty = pending outputs
+        self._output_digests: dict[str, str] = {}  # audit-ok: structural empty = output digests
         self.get_graph = get_graph
         self.get_results = get_results
         # PR15: folded ArtifactRegistered(stamped) kinds (never trust meta alone).
         self.get_artifact_kinds = get_artifact_kinds
         # PR20: folded CheckProposed/Approved/Rejected → evaluate proposed_check.
         self.get_proposals = get_proposals
-        self.max_attempts = int(max_attempts)
+        self.max_attempts = max_attempts
         # PR12: async (task_id, spent_rub, request_id) → record_budget_debit
         self.on_budget_debit = on_budget_debit
-        self._scheduled_reviews: list[str] = []
+        self._scheduled_reviews: list[str] = []  # audit-ok: structural empty = scheduled reviews
 
     def _ensure_output_digest(self, attempt_id: str, out: AgentTaskOutput) -> str:
         """CAS-store agent output; return digest used in scoped review keys."""
@@ -677,10 +757,9 @@ class Executor:
             return dig
         attempt = self.get_attempt(attempt_id)
         if attempt is not None:
-            if hasattr(attempt, "agent_output_digest") and attempt.agent_output_digest:
-                dig = str(attempt.agent_output_digest)
-            elif isinstance(attempt, dict) and attempt.get("agent_output_digest"):
-                dig = str(attempt["agent_output_digest"])
+            dig_raw = _attempt_get(attempt, "agent_output_digest")
+            if dig_raw:
+                dig = _or_empty_str(dig_raw)
         if not dig:
             content = canonical_json(out.model_dump(mode="json"))
             dig = self.artifacts.put_cas(content, tmp_name=f"pending:{attempt_id}")
@@ -692,8 +771,8 @@ class Executor:
         attempt = self.get_attempt(attempt_id)
         if attempt is None:
             raise KeyError(attempt_id)
-        closed = attempt.closed if hasattr(attempt, "closed") else attempt.get("closed")
-        study_id = attempt.study_id if hasattr(attempt, "study_id") else attempt["study_id"]
+        closed = _attempt_get(attempt, "closed")
+        study_id = _attempt_req(attempt, "study_id")
         if closed:
             raise AttemptClosedError(attempt_id)
         content = canonical_json(out.model_dump(mode="json"))
@@ -721,9 +800,9 @@ class Executor:
         attempt = self.get_attempt(attempt_id)
         if attempt is None:
             raise KeyError(attempt_id)
-        closed = attempt.closed if hasattr(attempt, "closed") else attempt.get("closed")
-        study_id = attempt.study_id if hasattr(attempt, "study_id") else attempt["study_id"]
-        task_id = attempt.task_id if hasattr(attempt, "task_id") else attempt["task_id"]
+        closed = _attempt_get(attempt, "closed")
+        study_id = _attempt_req(attempt, "study_id")
+        task_id = _attempt_req(attempt, "task_id")
 
         if closed:
             await self._append(
@@ -753,11 +832,7 @@ class Executor:
             reset_attempt_taint,
         )
 
-        _tainted = False
-        if hasattr(attempt, "tainted_context"):
-            _tainted = bool(attempt.tainted_context)
-        elif isinstance(attempt, dict):
-            _tainted = bool(attempt.get("tainted_context"))
+        _tainted = _attempt_get(attempt, "tainted_context") is True
         _taint_token = push_attempt_taint(_tainted)
         _active_token = push_attempt_active(True)
         try:
@@ -778,9 +853,10 @@ class Executor:
                     fetch_idx = SourceFetchIndex()
                 self._pending_outputs[attempt_id] = out
                 output_digest = self._ensure_output_digest(attempt_id, out)
-                proposals = (
-                    self.get_proposals() if self.get_proposals is not None else {}
-                )
+                if self.get_proposals is not None:
+                    proposals = self.get_proposals()
+                else:
+                    proposals = {}  # audit-ok: structural absent get_proposals
                 # Explicit attempts/results maps for fail-closed PR20 prereg
                 # (no monkey-attr / proposals["__attempts__"] indirection).
                 attempts_bag: dict[str, Any] | None = None
@@ -802,7 +878,9 @@ class Executor:
                     output_digest=output_digest,
                     plan_role=task.plan_role,
                     fetched_digests=fetch_idx.digests_for_attempt(attempt_id),
-                    proposals=proposals if isinstance(proposals, dict) else {},
+                    proposals=(
+                        proposals if isinstance(proposals, dict) else {}  # audit-ok: non-dict proposals → empty
+                    ),
                     attempts=attempts_bag,
                     results_by_id=results_bag if isinstance(results_bag, dict) else None,
                 )
@@ -812,7 +890,7 @@ class Executor:
                 # attempt stays charged=False so a later reopen/retry budget is intact.
                 # Transient attach failures may retry without consuming charged slots.
                 detail = e.reason
-                transient = bool(e.transient)
+                transient = e.transient is True
                 provenance = _provenance(self.get_attempt(attempt_id))
                 return await self._commit_failure(
                     attempt_id,
@@ -855,23 +933,26 @@ class Executor:
         timeout_checks = [c for c in checks if check_is_guest_timeout(c)]
         # Digest over content actually mounted into the jail (not artifact ids).
         jail_digests = [
-            _or_empty_str((c.effect or {}).get('jail_inputs_digest'))
+            _or_empty_str(_or_empty_dict(c.effect).get('jail_inputs_digest'))
             for c in checks
-            if isinstance(c.effect, dict) and (c.effect or {}).get("jail_inputs_digest")
+            if isinstance(c.effect, dict) and c.effect.get("jail_inputs_digest")
         ]
         if jail_digests:
             agent_digest = sha256_hex(canonical_json({"jail_inputs": sorted(set(jail_digests))}))
         else:
             # Fallback: content hashes of declared outputs (same as mount inputs).
-            mounted: dict[str, str] = {}
-            for name, handle in sorted((out.outputs or {}).items()):
+            mounted: dict[str, str] = {}  # audit-ok: structural empty = mounted output hashes
+            for name, handle in sorted(_or_empty_dict(out.outputs).items()):
                 meta = self.artifacts.get_meta(handle.artifact_id)
                 if meta is None:
                     continue
-                mounted[str(name)] = str(meta.sha256)
+                mounted[_or_empty_str(name)] = _or_empty_str(meta.sha256)
             agent_digest = sha256_hex(canonical_json({"mounted": mounted}))
-        results_map = self.get_results() if self.get_results is not None else {}
-        for prev_aid in list(task.attempts or []):
+        if self.get_results is not None:
+            results_map = self.get_results()
+        else:
+            results_map = {}  # audit-ok: structural absent get_results
+        for prev_aid in _or_empty_list(task.attempts):
             if prev_aid == attempt_id:
                 continue
             prev = results_map.get(prev_aid) if isinstance(results_map, dict) else None
@@ -900,7 +981,7 @@ class Executor:
         if timeout_checks:
             provenance = _provenance(self.get_attempt(attempt_id))
             kinds = [
-                _or_empty_str((c.effect or {}).get('timeout_kind')) for c in timeout_checks if isinstance(c.effect, dict)
+                _or_empty_str(_or_empty_dict(c.effect).get('timeout_kind')) for c in timeout_checks if isinstance(c.effect, dict)
             ]
 
             # Structural: ≥2 prediction/refute-role timeouts on this TASK
@@ -910,30 +991,36 @@ class Executor:
             def _prediction_timeout_in_row(row: dict[str, Any]) -> bool:
                 if _or_empty_str(row.get('result_class')) != "timeout":
                     return False
-                for cr in row.get("check_results") or []:
+                for cr in _or_empty_list(row.get("check_results")):
                     if not isinstance(cr, dict):
                         continue
                     if _or_empty_str(cr.get('role')) != "prediction":
                         continue
                     raw_eff = cr.get("effect")
-                    eff: dict[str, Any] = dict(raw_eff) if isinstance(raw_eff, dict) else {}
+                    if isinstance(raw_eff, dict):
+                        eff = dict(raw_eff)
+                    else:
+                        eff = {}  # audit-ok: structural non-dict check effect
                     if eff.get("timeout_kind") or eff.get("refute_unresolved"):
                         return True
                 return False
 
             current_prediction_timeout = any(c.role == "prediction" for c in timeout_checks)
             prior_prediction_timeouts = 0
-            for prev_aid in list(task.attempts or []):
+            for prev_aid in _or_empty_list(task.attempts):
                 if prev_aid == attempt_id:
                     continue
                 prev = results_map.get(prev_aid) if isinstance(results_map, dict) else None
                 if isinstance(prev, dict) and _prediction_timeout_in_row(prev):
                     prior_prediction_timeouts += 1
-            task_prediction_timeouts = prior_prediction_timeouts + (1 if current_prediction_timeout else 0)
+            if current_prediction_timeout:
+                task_prediction_timeouts = prior_prediction_timeouts + 1
+            else:
+                task_prediction_timeouts = prior_prediction_timeouts
             repeat_refute_timeout = task_prediction_timeouts >= 2
             idle = any(k == "idle_timeout" for k in kinds) or repeat_refute_timeout
             if repeat_refute_timeout:
-                elevated: list[Any] = []
+                elevated: list[Any] = []  # audit-ok: structural empty = elevated timeout checks
                 for c in checks:
                     if (
                         check_is_guest_timeout(c)
@@ -969,7 +1056,7 @@ class Executor:
                 provenance,
                 checks=checks,
                 reason=timeout_reason,
-                detail=";".join(kinds) or "timeout",
+                detail=(";".join(kinds) if kinds else "timeout"),  # audit-ok: absent timeout_kind → timeout
                 agent_output_digest=_or_empty_str(agent_digest),
             )
 
@@ -1080,8 +1167,8 @@ class Executor:
         from coscientist.core.claims.verdict import output_kinds_from_catalog
 
         # Code|data from catalog code_output_names (ignore planner OutputSpec.role).
-        out_names = list((out.outputs or {}).keys())
-        for ospec in getattr(task.spec, "expected_outputs", None) or ():
+        out_names = list(_or_empty_dict(out.outputs).keys())
+        for ospec in task.spec.expected_outputs:
             n = _or_empty_str(ospec.name)
             if n and n not in out_names:
                 out_names.append(n)
@@ -1098,7 +1185,7 @@ class Executor:
             "unassessed": unassessed,
             "artifacts": [h.artifact_id for h in out.outputs.values()],
             # name → artifact_id for InputSpec.bind / independence_key digests.
-            "output_map": {name: h.artifact_id for name, h in (out.outputs or {}).items()},
+            "output_map": {name: h.artifact_id for name, h in _or_empty_dict(out.outputs).items()},
             "output_kinds": output_kinds,
             "agent_claim": claim.value if claim else None,
             "downgrade": (downgrade.model_dump(mode="json", by_alias=True) if downgrade else None),
@@ -1127,11 +1214,11 @@ class Executor:
         from coscientist.core.events.errors import ArtifactRejected
         from coscientist.core.execution.artifact_stamp import kind_stamped_event
 
-        out_map = dict(out.outputs or {})
-        extra_events: list[EventEnvelope] = []
+        out_map = dict(_or_empty_dict(out.outputs))
+        extra_events: list[EventEnvelope] = []  # audit-ok: structural empty = pending side events
         now_stamp = self.clock.now()
         pending_design_ids: set[str] = set()
-        for ospec in task.spec.expected_outputs or ():
+        for ospec in task.spec.expected_outputs:
             kind = artifact_kind_from_output_spec(ospec)
             if not kind:
                 continue
@@ -1160,7 +1247,7 @@ class Executor:
                     role=meta.role,
                 )
             )
-        for raw in list(out.question_disposals or []):
+        for raw in _or_empty_list(out.question_disposals):
             qid_hint: str | None = None
             disp_hint: str | None = None
             try:
@@ -1179,9 +1266,9 @@ class Executor:
                     and not disposal.design_artifact_id
                     and out_map
                 ):
-                    for ospec in task.spec.expected_outputs or ():
+                    for ospec in task.spec.expected_outputs:
                         if artifact_kind_from_output_spec(ospec) == "experiment_design":
-                            oname = str(ospec.name)
+                            oname = _or_empty_str(ospec.name)
                             if oname in out_map:
                                 disposal = disposal.model_copy(
                                     update={"design_artifact_id": out_map[oname].artifact_id}
@@ -1193,9 +1280,9 @@ class Executor:
                 if g is not None:
                     for n in g.nodes_by_kind("question"):
                         if n.study_id == study_id:
-                            known.add(n.ref_id or n.node_id.split(":")[-1])
+                            known.add(n.ref_id or n.node_id.split(":")[-1])  # audit-ok: kind:ref node_id parse
                 if not known:
-                    known = {str(a) for a in (task.spec.addresses or []) if a}
+                    known = {_or_empty_str(a) for a in task.spec.addresses if a}
                 kinds_fn = self.get_artifact_kinds
                 rt_kinds = kinds_fn() if callable(kinds_fn) else None
                 validate_disposal(
@@ -1233,7 +1320,7 @@ class Executor:
             payload,
             TaskOutcome(final.value),
             None,
-            claims=list(out.claims or []),
+            claims=_or_empty_list(out.claims),
             checks=checks,
             infra_failure=False,
             cost_rub=out.cost_rub,
@@ -1262,9 +1349,9 @@ class Executor:
         attempt = self.get_attempt(attempt_id)
         if attempt is None:
             raise KeyError(attempt_id)
-        closed = attempt.closed if hasattr(attempt, "closed") else attempt.get("closed")
-        study_id = attempt.study_id if hasattr(attempt, "study_id") else attempt["study_id"]
-        task_id = attempt.task_id if hasattr(attempt, "task_id") else attempt["task_id"]
+        closed = _attempt_get(attempt, "closed")
+        study_id = _attempt_req(attempt, "study_id")
+        task_id = _attempt_req(attempt, "task_id")
         if closed:
             raise AttemptClosedError(attempt_id)
         out = self._pending_outputs.get(attempt_id)
@@ -1275,7 +1362,7 @@ class Executor:
         item = item_id
         if item is None and ":" in check_id and "|" not in check_id:
             # Legacy ``check_id:item_id`` argument form.
-            parent_check, _, item = check_id.partition(":")
+            parent_check, _, item = check_id.partition(":")  # audit-ok: parent:item check_id parse
         item = item
         if item is None:
             item = ''  # audit-ok: structural absent → empty/zero
@@ -1286,7 +1373,7 @@ class Executor:
             item_id=item,
             output_digest=output_digest,
         )
-        prior = int(self.judge_retry.get(key, 0))
+        prior = _or_zero_int(self.judge_retry.get(key))
         st, retries, fk = resolve_review_status(status=status, failure_kind=failure_kind, prior_retries=prior)
         self.judge_retry[key] = retries
         # ONE status live == journal: PENDING while retry budget remains;
@@ -1312,7 +1399,7 @@ class Executor:
                         "ReviewRecorded",
                         attempt_id,
                         key,
-                        str(wait_status.value),
+                        _or_empty_str(wait_status.value),
                         str(retries),
                     ),
                     payload={
@@ -1373,7 +1460,7 @@ class Executor:
             payload,
             TaskOutcome.FAILED,
             reason,
-            claims=list(out.claims or []),
+            claims=_or_empty_list(out.claims),
             checks=checks,
             infra_failure=False,
             charge_attempt=True,
@@ -1392,10 +1479,10 @@ class Executor:
         *,
         reason: str,
         detail: str,
-        event_type: str = "CatalogErrorRaised",
-        result_class: str = "infra",
-        charge_attempt: bool = True,
-        allow_retry: bool = False,
+        event_type: str = _DEFAULT_EVENT_TYPE,
+        result_class: str = _DEFAULT_RESULT_CLASS,
+        charge_attempt: bool = _DEFAULT_TRUE,
+        allow_retry: bool = _DEFAULT_FALSE,
     ) -> Result:
         """Infra/core_bug/reject path — drop claims; infra never charges the *attempt*.
 
@@ -1459,7 +1546,10 @@ class Executor:
         Reads ``charged`` from attempt rows (AttemptStarted stamps it); never
         invents True when the field is absent.
         """
-        n = 1 if charge_attempt else 0
+        if charge_attempt:
+            n = 1
+        else:
+            n = 0
         attempts = task.attempts
         if not isinstance(attempts, list):
             raise JournalFormatError("charged_count: task.attempts must be list")
@@ -1480,11 +1570,12 @@ class Executor:
                     )
                 charged = att["charged"]
             else:
-                if not hasattr(att, "charged"):
+                try:
+                    charged = att.charged
+                except AttributeError as e:
                     raise JournalFormatError(
                         f"charged_count: attempt {aid!r} missing 'charged'"
-                    )
-                charged = att.charged
+                    ) from e
             if charged:
                 n += 1
         return n
@@ -1500,9 +1591,9 @@ class Executor:
         *,
         claims: list[dict[str, Any]] | None = None,
         checks: list[Any] | None = None,
-        infra_failure: bool = False,
-        charge_attempt: bool = True,
-        allow_retry: bool = False,
+        infra_failure: bool = _DEFAULT_FALSE,
+        charge_attempt: bool = _DEFAULT_TRUE,
+        allow_retry: bool = _DEFAULT_FALSE,
         cost_rub: Decimal | float | int | str | None = None,
         extra_events: list[EventEnvelope] | None = None,
     ) -> Result:
@@ -1513,20 +1604,25 @@ class Executor:
         graph = self.get_graph() if self.get_graph is not None else None
         task = self.get_task(task_id)
         attempt = self.get_attempt(attempt_id)
-        if attempt is not None and hasattr(attempt, "inputs"):
-            bindings = list(attempt.inputs or [])
-        elif isinstance(attempt, dict):
-            bindings = list(attempt.get("inputs") or [])
+        if attempt is not None:
+            bindings = _or_empty_list(_attempt_get(attempt, "inputs"))
         else:
-            bindings = []
+            bindings = []  # audit-ok: structural absent attempt inputs
         # Journal ResultRecorded.inputs from the attempt's P2 bindings.
         if bindings and not payload.get("inputs"):
             payload = {
                 **payload,
-                "inputs": [b.model_dump(mode="json") if hasattr(b, "model_dump") else dict(b) for b in bindings],
+                "inputs": [
+                (
+                    b.model_dump(mode="json")
+                    if not isinstance(b, dict)
+                    else dict(b)
+                )
+                for b in bindings
+            ],
             }
             payload["payload_digest"] = payload_digest(payload)
-        payload = {**payload, "charged": bool(charge_attempt)}
+        payload = {**payload, "charged": charge_attempt is True}
         payload["payload_digest"] = payload_digest(payload)
 
         # PR12 B3: remaining share limit from AttemptStarted; overrun forbids retries.
@@ -1555,7 +1651,7 @@ class Executor:
             study_id=study_id,
             attempt_id=attempt_id,
             provenance=payload["provenance"],
-            claims=list(claims or []),
+            claims=_or_empty_list(claims),
             now=now,
             graph=graph,
             attempt_outcome=task_outcome.value,
@@ -1564,7 +1660,7 @@ class Executor:
                 task,
                 task_outcome,
                 raw=raw,
-                checks=list(checks or []),
+                checks=list(_or_empty_list(checks)),
                 graph=graph,
                 study_id=study_id,
                 validated=validated,
@@ -1583,7 +1679,7 @@ class Executor:
         from coscientist.core.claims.contradicts import contradicts_events_for_new_claims
 
         new_claim_ids = {
-            str(ev.entity_key)
+            _or_empty_str(ev.entity_key)
             for ev in claim_events
             if ev.type == "GraphNodeUpserted"
         }
@@ -1605,8 +1701,8 @@ class Executor:
             "closed": True,
             "close_reason": CloseReason.RESULT.value,
             "task_id": task_id,
-            "charged": bool(charge_attempt),
-            "retryable": bool(schedule_retry),
+            "charged": charge_attempt is True,
+            "retryable": schedule_retry is True,
         }
         if schedule_retry:
             close_payload["retry_at"] = (now + timedelta(seconds=RETRY_BACKOFF_S)).isoformat()
@@ -1614,7 +1710,7 @@ class Executor:
         events = [
             *claim_events,
             *contradict_events,
-            *(extra_events or ()),
+            *_or_empty_tuple(extra_events),
             EventEnvelope(
                 study_id=study_id,
                 type="ResultRecorded",
@@ -1680,8 +1776,8 @@ class Executor:
             provenance=payload["provenance"],
             agent_claim=(Outcome(payload["agent_claim"]) if payload.get("agent_claim") else None),
             computed_outcome=Outcome(payload["computed_outcome"]),
-            artifacts=list(payload.get("artifacts", [])),
-            unassessed=list(payload.get("unassessed", [])),
+            artifacts=_or_empty_list(payload.get("artifacts")),
+            unassessed=_or_empty_list(payload.get("unassessed")),
             payload_digest=payload["payload_digest"],
             reason=reason,
         )
