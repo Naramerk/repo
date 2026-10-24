@@ -1072,7 +1072,7 @@ async def test_append_many_study_finalized_then_other_rejects(tmp_path, clock):
             "deadline": clock.now().isoformat(),
         },
         ts=clock.now(),
-        schema_version=1,
+        schema_version=writer_schema_version("TaskCreated"),
     )
     with pytest.raises(StudyClosedError):
         await rt.store.append_many([sf, late])
