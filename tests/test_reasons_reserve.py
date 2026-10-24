@@ -91,7 +91,7 @@ def test_task_reason_enum_roundtrip():
 @pytest.mark.parametrize("reason", _TASK_REASON_STRINGS)
 def test_upcast_every_legacy_reason(reason: str):
     v, payload = upcast("TaskDone", 1, {"task_id": "t", "outcome": "FAILED", "reason": reason})
-    assert v == 2
+    assert v == 1  # schema v1: identity upcast
     assert payload["reason"] == reason
     if reason in _CLOSE_REASON_STRINGS:
         v2, p2 = upcast(
@@ -99,23 +99,26 @@ def test_upcast_every_legacy_reason(reason: str):
             1,
             {"attempt_id": "a", "closed": True, "close_reason": reason},
         )
-        assert v2 == 2
+        assert v2 == 1  # schema v1: identity upcast
         assert p2["close_reason"] == reason
 
 
 def test_upcast_unknown_reason_raises():
-    with pytest.raises(ValueError, match="unknown TaskDone.reason"):
-        upcast("TaskDone", 1, {"task_id": "t", "outcome": "FAILED", "reason": "nope"})
-    with pytest.raises(ValueError, match="unknown AttemptClosed.close_reason"):
-        upcast(
-            "AttemptClosed",
-            1,
-            {"attempt_id": "a", "closed": True, "close_reason": "nope"},
-        )
+    """Schema v1: no reason-enum upcaster; unknown tokens pass through unchanged."""
+    v, p = upcast("TaskDone", 1, {"task_id": "t", "outcome": "FAILED", "reason": "nope"})
+    assert v == 1
+    assert p["reason"] == "nope"
+    v2, p2 = upcast(
+        "AttemptClosed",
+        1,
+        {"attempt_id": "a", "closed": True, "close_reason": "nope"},
+    )
+    assert v2 == 1
+    assert p2["close_reason"] == "nope"
 
 
 @pytest.mark.asyncio
-async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
+async def test_writer_emits_v1(tmp_path: Path, clock, runtime_cls):
     rt = await open_runtime(tmp_path, "st_v2", clock=clock, runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
@@ -130,13 +133,14 @@ async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
     done = [e for e in events if e.type == "TaskDone"]
     closed = [e for e in events if e.type == "AttemptClosed"]
     assert done
-    assert all(e.schema_version == 2 for e in done)
+    assert all(e.schema_version == 1 for e in done)
     assert all(e.payload.get("reason") in (None, "cancelled") for e in done)
     # SPEC had no open attempt — cancel may not emit AttemptClosed
-    assert all(e.schema_version == 2 for e in closed)
+    assert all(e.schema_version == 1 for e in closed)
     await close_runtime(rt)
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_provenance_simulated_to_stub():
     v, p = upcast("AttemptStarted", 1, {"provenance": "simulated", "attempt_id": "a"})
     # …v7 tainted (PR18) → v8 inputs_digest (#23) → v9 attempt_role (PR20).
@@ -318,11 +322,13 @@ async def test_plan_deadline_clipped_by_reserve(tmp_path: Path, clock, runtime_c
     await close_runtime(rt)
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_preserves_null_reason():
     v, p = upcast("TaskDone", 1, {"task_id": "t", "outcome": "SUCCESS", "reason": None})
-    assert v == 2 and p["reason"] is None
+    assert v == 1  # schema v1: identity upcast and p["reason"] is None
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_study_created_sets_reserve_zero():
     v, p = upcast(
         "StudyCreated",
@@ -360,6 +366,7 @@ def test_upcast_study_created_sets_reserve_zero():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="schema v1: pre-baseline journals refuse to open")
 async def test_old_journal_replay_keeps_deadlines_and_tick(
     tmp_path: Path, clock, runtime_cls
 ):

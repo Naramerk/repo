@@ -505,15 +505,15 @@ async def propose_check(
     rejected_templates: list[RejectedTemplateNote | Mapping[str, Any]],
     task_id: str,
     attempt_id: str,
-    target_kind: Literal["question", "hypothesis"],
+    target_kind: Literal["question", "hypothesis"] | None = None,
     check: CodeCheck | Mapping[str, Any] | None = None,
     rubric: Rubric | Mapping[str, Any] | None = None,
     threshold: Any = None,
     sesoi: float | None = None,
-    uses_sesoi: bool,
-    predicts_null: bool,
-    predicted_direction: str,
-    open_hitl: bool,
+    uses_sesoi: bool | None = None,
+    predicts_null: bool | None = None,
+    predicted_direction: str | None = None,
+    open_hitl: bool | None = None,
     timeout_s: int | None = None,
 ) -> str | None:
     """Preregister a proposed check. Returns proposal_id, or None if quota closed the task.
@@ -522,6 +522,16 @@ async def propose_check(
     Must run before the evaluating attempt starts and before any result for task/target.
     Exceeding ``max_proposals`` closes the proposing task with ``PROPOSAL_QUOTA``.
     """
+    if target_kind is None:
+        target_kind = "question"
+    if uses_sesoi is None:
+        uses_sesoi = False
+    if predicts_null is None:
+        predicts_null = False
+    if predicted_direction is None:
+        predicted_direction = "two_sided"
+    if open_hitl is None:
+        open_hitl = True
     study = runtime.study
     if study is None:
         raise ValueError("propose_check requires an open study")
