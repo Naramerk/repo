@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import jsonschema
@@ -43,6 +43,8 @@ from tests.helpers import (
     open_runtime,
     record_success,
 )
+
+_TS = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
 
 
 async def _boot(

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from coscientist.core.events.digest import payload_digest as _payload_digest
 from coscientist.core.events.errors import JournalFormatError
+from coscientist.core.events.schema_gate import require_writer_schema_version
 
 # Writer schema version constants (kept for call sites; must match upcasters).
 PLAN_EXPANDED_SCHEMA_VERSION = 5
@@ -103,8 +104,6 @@ EventEnvelope = UnstampedEvent
 
 def stamp_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
     """Stamp lease epoch + digest; refuse schema_version behind or ahead of writer."""
-    from coscientist.core.events.schema_gate import require_writer_schema_version
-
     if type(epoch) is not int or isinstance(epoch, bool):
         raise TypeError(f"epoch must be exact int, got {epoch!r}")
     digest = _payload_digest(unstamped.payload)
