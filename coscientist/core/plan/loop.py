@@ -52,6 +52,16 @@ LOOP_DEP_PREFIX = "loop:"
 LOOP_REASON_ITERATION_CAP = "iteration_cap"
 LOOP_REASON_ERROR = "error"
 LOOP_REASON_REFUSED = "refused"
+_LOOP_STATUS_REASONS = frozenset(
+    {LOOP_REASON_ERROR, LOOP_REASON_REFUSED, LOOP_REASON_ITERATION_CAP}
+)
+
+
+def _expansion_refuse_reason(loop_reason: str) -> str:
+    """ExpansionRefused.reason: loop-status codes → invalid; PlanNeedRefuse codes pass."""
+    if loop_reason in _LOOP_STATUS_REASONS:
+        return "invalid"
+    return loop_reason
 
 
 def normalize_loop_id(raw: str) -> str:
@@ -644,16 +654,7 @@ async def _emit_loop_refused(
             payload={
                 "after_task": after,
                 # Loop status codes stay "invalid"; PlanNeedRefuse codes pass through.
-                "reason": (
-                    "invalid"
-                    if reason
-                    in (
-                        LOOP_REASON_ERROR,
-                        LOOP_REASON_REFUSED,
-                        LOOP_REASON_ITERATION_CAP,
-                    )
-                    else reason
-                ),
+                "reason": _expansion_refuse_reason(reason),
                 "detail": detail_s,
                 "plan_key": None,
                 "loop_id": loop.loop_id,

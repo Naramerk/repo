@@ -17,9 +17,7 @@ PlanNeedField = Annotated[
 _PLAN_NEED_ADAPTER: TypeAdapter[Need | NeedUnrecorded] = TypeAdapter(PlanNeedField)
 
 # Discriminator tags for Need | NeedUnrecorded (upcaster + adapter).
-PLAN_NEED_KIND_NEED: Literal["need"] = "need"
-PLAN_NEED_KIND_UNRECORDED: Literal["unrecorded"] = "unrecorded"
-PLAN_NEED_KINDS: frozenset[str] = frozenset({PLAN_NEED_KIND_NEED, PLAN_NEED_KIND_UNRECORDED})
+PLAN_NEED_KINDS: frozenset[str] = frozenset({"need", "unrecorded"})
 
 PlanNeedRefuseReason = Literal[
     "plan_need_unrecorded",
