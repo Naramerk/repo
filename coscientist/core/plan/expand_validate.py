@@ -8,9 +8,12 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
+from coscientist.core.claims.rubric_types import VALID_FINAL_TYPES, FinalType
 from coscientist.core.events.ids import task_id
+from coscientist.core.events.upcasters import require_exact_int
 from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskSpec
 from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
+from coscientist.core.plan.decomposes import VALID_ROLLUP_RULES, RollupRule
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
@@ -26,15 +29,46 @@ class MaxDepthExceeded(ValueError):
         super().__init__(f"max_depth:{max_depth}")
 
 
+def _require_final_type(raw: object, *, qid: str) -> FinalType:
+    if not isinstance(raw, str) or raw not in VALID_FINAL_TYPES:
+        raise ValueError(f"invalid_final_type:{qid}:{raw!r}")
+    return raw  # type: ignore[return-value]
+
+
+def _require_rollup(raw: object) -> RollupRule:
+    if not isinstance(raw, str) or raw not in VALID_ROLLUP_RULES:
+        raise ValueError(f"invalid_rollup:{raw!r}")
+    return raw  # type: ignore[return-value]
+
+
+def _rollup_from_plans(plan_rows: list[Any]) -> RollupRule | str:
+    """Return typed rollup from the latest plan, or an error detail string."""
+    if not plan_rows:
+        return "missing_plan_rollup"
+    last = plan_rows[-1]
+    try:
+        if isinstance(last, dict):
+            if "rollup" not in last:
+                return "missing_plan_rollup"
+            return _require_rollup(last["rollup"])
+        return _require_rollup(last.rollup)
+    except ValueError as e:
+        return str(e)
+
+
 def _prefix_for_route(route: str) -> str:
-    r = (route or "").lower()
+    if not isinstance(route, str) or not route:
+        raise ValueError(f"invalid_route:{route!r}")
+    r = route.lower()
     if r in ("literature", "lit"):
         return "LIT"
     if r in ("hypotheses", "hypothesis", "hyp"):
         return "HYP"
     if r in ("planner", "plan"):
         return "PLAN"
-    return "EXP"
+    if r in ("experiment", "exp"):
+        return "EXP"
+    raise ValueError(f"unknown_route:{route!r}")
 
 
 def next_kind_index(runtime: StudyRuntime, prefix: str, tasks: list[TaskSpec]) -> int:
@@ -58,7 +92,10 @@ def assign_core_keys(runtime: StudyRuntime, added: list[TaskSpec]) -> list[TaskS
     counters: dict[str, int] = {}
     seen: set[str] = {t.spec.task_key for t in runtime.tasks.values()}
     for spec in added:
-        prefix = _prefix_for_route(spec.route)
+        try:
+            prefix = _prefix_for_route(spec.route)
+        except ValueError as e:
+            return str(e)
         if prefix not in counters:
             counters[prefix] = next_kind_index(runtime, prefix, [])
         key = f"{prefix}-{counters[prefix]}"
@@ -183,9 +220,10 @@ def _validate(
     share_err = critic_plan_shares(merged, study=study)
     if share_err is not None:
         return share_err
-    catalog = getattr(runtime, "catalog", None) or getattr(
-        getattr(runtime, "executor", None), "catalog", None
-    )
+    catalog = runtime.catalog
+    if catalog is None:
+        executor = runtime.executor
+        catalog = executor.catalog if executor is not None else None
     validate_plan_criteria(merged, catalog)
     # M1 PR13: final_type + rubric immutability (change only via supersede).
     from coscientist.core.plan.plan_validate import validate_plan_final_types_or_err
@@ -193,28 +231,47 @@ def _validate(
     # Active questions after supersede (H-f: only new / non-disposed need coverage).
     superseded_q_old = {s.old_id for s in superseded_questions}
     active_qs = (set(active_q_ids) | {q.id for q in added_questions}) - superseded_q_old
-    prev_final: dict[str, str] = {}
-    store_plans = getattr(runtime, "plans", None)
-    plan_rows: list[Any] = []
-    if isinstance(store_plans, dict):
-        plan_rows = list(store_plans.values())
+    prev_final: dict[str, FinalType] = {}
+    plan_rows: list[Any] = list(runtime.plans.values()) if runtime.plans else []
     for plan in plan_rows:
-        qs = plan.get("questions") if isinstance(plan, dict) else getattr(plan, "questions", None)
+        qs = plan["questions"] if isinstance(plan, dict) else plan.questions
         for q in qs or []:
-            if isinstance(q, dict) and q.get("id"):
-                prev_final[str(q["id"])] = str(q.get("final_type") or "verdict")
-            elif hasattr(q, "id"):
-                prev_final[str(q.id)] = str(getattr(q, "final_type", None) or "verdict")
+            if isinstance(q, dict):
+                if "id" not in q:
+                    return "plan_question_missing_id"
+                qid = str(q["id"])
+                if "final_type" not in q:
+                    return f"missing_final_type:{qid}"
+                try:
+                    prev_final[qid] = _require_final_type(q["final_type"], qid=qid)
+                except ValueError as e:
+                    return str(e)
+            else:
+                qid = str(q.id)
+                try:
+                    prev_final[qid] = _require_final_type(q.final_type, qid=qid)
+                except ValueError as e:
+                    return str(e)
     q_for_validate: list[QuestionSpec] = list(added_questions)
     seen_q = {q.id for q in q_for_validate}
     for qid, text in texts.items():
         if qid in seen_q or qid not in active_qs:
             continue
-        ft = prev_final.get(qid, "verdict")
+        if qid not in prev_final:
+            return f"missing_final_type:{qid}"
         q_for_validate.append(
-            QuestionSpec(id=qid, text=text, final_type=ft)  # type: ignore[arg-type]
+            QuestionSpec(id=qid, text=text, final_type=prev_final[qid])
         )
         seen_q.add(qid)
+    max_depth = int(study.max_depth)
+    max_tasks = int(study.max_tasks)
+    needs_decomposes = any(q.parent_id is not None for q in q_for_validate)
+    rollup: RollupRule | None = None
+    if needs_decomposes:
+        resolved = _rollup_from_plans(plan_rows)
+        if isinstance(resolved, str):
+            return resolved
+        rollup = resolved
     ft_err = validate_plan_final_types_or_err(
         merged,
         q_for_validate,
@@ -222,30 +279,30 @@ def _validate(
         prev_tasks=prev_tasks,
         superseded_tasks=set(superseded_tasks),
         catalog=catalog,
+        rollup=rollup if rollup is not None else "all",
+        max_depth=max_depth,
+        max_tasks=max_tasks,
     )
     if ft_err is not None:
         return ft_err
     # max_depth + acyclicity: decomposes via parent_id ∪ graph (DESIGN_M1 §10).
     from coscientist.core.plan.decomposes import assert_decomposes_acyclic, max_decomposes_depth
     from coscientist.core.plan.plan_validate import validate_decomposes
-
-    max_depth = int(study.max_depth)
-    max_tasks = int(study.max_tasks)
-    parent_of: dict[str, str | None] = {
-        q.id: getattr(q, "parent_id", None) for q in added_questions
-    }
+    parent_of: dict[str, str | None] = {q.id: q.parent_id for q in added_questions}
     # Prior plan questions may already carry parent_id.
     for plan in plan_rows:
-        qs = plan.get("questions") if isinstance(plan, dict) else getattr(plan, "questions", None)
+        qs = plan["questions"] if isinstance(plan, dict) else plan.questions
         for q in qs or []:
-            if isinstance(q, dict) and q.get("id"):
+            if isinstance(q, dict):
+                if "id" not in q:
+                    return "plan_question_missing_id"
                 qid = str(q["id"])
                 parent = q.get("parent_id")
                 if qid not in parent_of or parent_of[qid] is None:
                     parent_of[qid] = str(parent) if parent else parent_of.get(qid)
-            elif hasattr(q, "id"):
+            else:
                 qid = str(q.id)
-                parent = getattr(q, "parent_id", None)
+                parent = q.parent_id
                 if qid not in parent_of or parent_of[qid] is None:
                     parent_of[qid] = str(parent) if parent else parent_of.get(qid)
     for qid in texts:
@@ -274,24 +331,28 @@ def _validate(
         for qid, parent in parent_of.items():
             existing = by_id.get(qid)
             if existing is not None:
-                if parent and not getattr(existing, "parent_id", None):
+                if parent and existing.parent_id is None:
                     q_all.append(existing.model_copy(update={"parent_id": parent}))
                 else:
                     q_all.append(existing)
             else:
+                if qid not in prev_final:
+                    return f"missing_final_type:{qid}"
+                if qid not in texts:
+                    return f"missing_question_text:{qid}"
                 q_all.append(
                     QuestionSpec(
                         id=qid,
-                        text=texts.get(qid, ""),
+                        text=texts[qid],
                         parent_id=parent,
-                        final_type=prev_final.get(qid, "verdict"),  # type: ignore[arg-type]
+                        final_type=prev_final[qid],
                     )
                 )
-        rollup = "all"
-        if plan_rows:
-            last = plan_rows[-1] if isinstance(plan_rows[-1], dict) else None
-            if isinstance(last, dict) and last.get("rollup") in ("all", "any", "majority", "rubric"):
-                rollup = str(last["rollup"])
+        if rollup is None:
+            resolved = _rollup_from_plans(plan_rows)
+            if isinstance(resolved, str):
+                return resolved
+            rollup = resolved
         validate_decomposes(
             merged,
             q_all,
@@ -310,11 +371,9 @@ def _validate(
 def _parent_from_graph(runtime: StudyRuntime, sid: str, qid: str) -> str | None:
     from coscientist.core.events.ids import question_node_id
 
-    graph = getattr(runtime, "graph", None)
-    if graph is None:
-        return None
+    graph = runtime.graph
     nid = question_node_id(sid, qid)
-    for e in graph.edges_from(nid) if hasattr(graph, "edges_from") else []:
+    for e in graph.edges_from(nid):
         if e.kind == "decomposes":
             dst = graph.get_node(e.dst_id)
             if dst is not None and dst.kind == "question":
@@ -341,13 +400,11 @@ def task_produced_countable_claims(runtime: StudyRuntime, tkey: str) -> bool:
         return False
     from coscientist.core.claims.claims import filtered_claims_by_target
 
-    graph = getattr(runtime, "graph", None)
-    if graph is None:
-        return False
-    by = filtered_claims_by_target(graph, study_id=sid, results=runtime.results)
+    by = filtered_claims_by_target(runtime.graph, study_id=sid, results=runtime.results)
     for claims in by.values():
         for c in claims:
-            if getattr(c, "attempt_id", "").startswith(tid) and c.counts():
+            aid = c.attempt_id if isinstance(getattr(c, "attempt_id", None), str) else ""
+            if aid.startswith(tid) and c.counts():
                 return True
     return False
 
@@ -355,4 +412,7 @@ def task_produced_countable_claims(runtime: StudyRuntime, tkey: str) -> bool:
 def active_plan_blob(runtime: StudyRuntime) -> dict[str, Any] | None:
     if not runtime.plans:
         return None
-    return max(runtime.plans.values(), key=lambda p: int(p.get("revision") or 0))
+    return max(
+        runtime.plans.values(),
+        key=lambda p: require_exact_int(p["revision"], what="plan.revision"),
+    )

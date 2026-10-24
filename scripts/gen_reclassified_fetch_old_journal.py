@@ -2,13 +2,13 @@
 """Build ``tests/fixtures/journals/reclassified_fetch_old/events.db`` from JSON.
 
 Source of truth: ``tests/fixtures/journals/reclassified_fetch_old.json``.
-Re-run after editing the JSON::
+Re-run after editing the JSON (repo root on ``PYTHONPATH``)::
 
-    python scripts/gen_reclassified_fetch_old_journal.py
+    PYTHONPATH=. python scripts/gen_reclassified_fetch_old_journal.py
 
 Verify the committed DB matches the generator::
 
-    python scripts/gen_reclassified_fetch_old_journal.py --check
+    PYTHONPATH=. python scripts/gen_reclassified_fetch_old_journal.py --check
 
 The DB is written with ``JOURNAL_STORE_FORMAT`` so ``SqliteEventStore`` will open it.
 """
@@ -24,11 +24,6 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-# ``python scripts/...`` puts ``scripts/`` on sys.path[0], not the repo root — so
-# ``import coscientist`` fails in CI unless we add ROOT (or set PYTHONPATH=.).
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
 JSON_PATH = ROOT / "tests/fixtures/journals/reclassified_fetch_old.json"
 OUT_DIR = ROOT / "tests/fixtures/journals/reclassified_fetch_old"
 OUT_DB = OUT_DIR / "events.db"

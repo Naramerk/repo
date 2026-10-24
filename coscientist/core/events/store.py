@@ -56,23 +56,18 @@ T = TypeVar("T")
 
 
 def _map_sqlite_open_error(exc: sqlite3.Error) -> Exception:
-    """Map sqlite open failures to typed errors (lock ≠ truncated)."""
-    msg = str(exc).lower()
-    if isinstance(exc, sqlite3.OperationalError) and (
-        "locked" in msg or "busy" in msg
-    ):
+    """Map sqlite open failures by ``sqlite_errorcode`` (never by message text).
+
+    - ``SQLITE_BUSY`` / ``SQLITE_LOCKED`` → ``JournalLockedError``
+    - ``SQLITE_CORRUPT`` / ``SQLITE_NOTADB`` → ``JournalFormatError`` (truncated/corrupt)
+    - any other / missing code → ``JournalUnavailableError`` (never "truncated")
+    """
+    code = getattr(exc, "sqlite_errorcode", None)
+    if code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
         return JournalLockedError(f"journal locked: {exc}")
-    if isinstance(exc, sqlite3.DatabaseError) and (
-        "not a database" in msg
-        or "malformed" in msg
-        or "disk image" in msg
-        or "file is encrypted" in msg
-        or "truncated" in msg
-    ):
+    if code in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
         return JournalFormatError(f"truncated or unreadable journal: {exc}")
-    if isinstance(exc, sqlite3.OperationalError):
-        return JournalUnavailableError(f"journal unavailable: {exc}")
-    return JournalFormatError(f"truncated or unreadable journal: {exc}")
+    return JournalUnavailableError(f"journal unavailable: {exc}")
 
 
 class SqliteEventStore:

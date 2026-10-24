@@ -27,6 +27,21 @@ JUDGE_CAS_CORRUPT_LINE = "не выполнено: внутренняя ошиб
 class JudgePendingCorrupt(Exception):
     """Pending agent output CAS missing/corrupt on rebuild — fail closed."""
 
+
+def _require_nonempty_str(payload: dict[str, Any], key: str, *, event_type: str) -> str:
+    """Require ``payload[key]`` to be a non-empty ``str`` (reject ``None`` before ``str()``)."""
+    if key not in payload:
+        raise JournalFormatError(f"{event_type}: missing {key!r}")
+    raw = payload[key]
+    if not isinstance(raw, str):
+        raise JournalFormatError(
+            f"{event_type}: {key} must be str, got {type(raw).__name__}"
+        )
+    if not raw:
+        raise JournalFormatError(f"{event_type}: {key} must be non-empty")
+    return raw
+
+
 def review_key(
     *,
     task_id: str,
@@ -231,28 +246,27 @@ def rebuild_judge_state(
             )
         p = ev.payload
         if t == "ResultPending":
-            try:
-                aid = str(p["attempt_id"])
-                dig = str(p["agent_output_digest"])
-            except KeyError as e:
-                raise JournalFormatError(
-                    f"ResultPending: missing {e.args[0]!r}"
-                ) from e
-            if not aid or not dig:
-                raise JournalFormatError(
-                    "ResultPending: attempt_id and agent_output_digest must be non-empty"
-                )
+            aid = _require_nonempty_str(p, "attempt_id", event_type=t)
+            dig = _require_nonempty_str(p, "agent_output_digest", event_type=t)
             pending_digests[aid] = dig
         elif t == "ReviewRecorded":
-            key = str(p.get("review_key") or "")
-            if not key:
-                continue
+            key = _require_nonempty_str(p, "review_key", event_type=t)
             st_raw = p.get("status")
             if st_raw is not None:
-                try:
-                    review_statuses[key] = st_raw if isinstance(st_raw, ReqStatus) else ReqStatus(str(st_raw))
-                except ValueError:
-                    pass
+                if isinstance(st_raw, ReqStatus):
+                    review_statuses[key] = st_raw
+                elif isinstance(st_raw, str):
+                    try:
+                        review_statuses[key] = ReqStatus(st_raw)
+                    except ValueError as e:
+                        raise JournalFormatError(
+                            f"ReviewRecorded: invalid status={st_raw!r}"
+                        ) from e
+                else:
+                    raise JournalFormatError(
+                        f"ReviewRecorded: status must be str|ReqStatus, "
+                        f"got {type(st_raw).__name__}"
+                    )
             retry = p.get("retry")
             if retry is not None:
                 try:
@@ -260,15 +274,19 @@ def rebuild_judge_state(
                 except (TypeError, ValueError) as e:
                     raise JudgePendingCorrupt(f"retry_corrupt:{key}:{retry!r}") from e
             fk = p.get("failure_kind")
-            if fk:
-                failure_kinds[key] = str(fk)
+            if fk is not None:
+                if not isinstance(fk, str) or not fk:
+                    raise JournalFormatError(
+                        f"ReviewRecorded: failure_kind must be non-empty str, "
+                        f"got {fk!r}"
+                    )
+                failure_kinds[key] = fk
             else:
                 failure_kinds.pop(key, None)
         elif t in ("ResultRecorded", "AttemptClosed"):
-            aid = str(p.get("attempt_id") or ev.entity_key or "")
-            if aid:
-                closed.add(aid)
-                pending_digests.pop(aid, None)
+            aid = _require_nonempty_str(p, "attempt_id", event_type=t)
+            closed.add(aid)
+            pending_digests.pop(aid, None)
 
     pending_outputs: dict[str, AgentTaskOutput] = {}
     digests: dict[str, str] = {}

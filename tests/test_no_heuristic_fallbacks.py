@@ -680,6 +680,7 @@ def test_critic_gate_propagates_max_depth_exceeded(monkeypatch):
     rt.study = SimpleNamespace(max_expansions=2)
     rt.catalog = SimpleNamespace(templates=[])
     rt.plans = {}
+    rt._agent_expansions = 0
     req = SimpleNamespace(
         tasks=[],
         questions=[],
@@ -687,7 +688,7 @@ def test_critic_gate_propagates_max_depth_exceeded(monkeypatch):
         superseded_questions=[],
     )
     monkeypatch.setattr(ec, "assign_core_keys", lambda *_a, **_k: [])
-    monkeypatch.setattr(ec, "active_plan_blob", lambda *_a, **_k: {})
+    monkeypatch.setattr(ec, "active_plan_blob", lambda *_a, **_k: None)
     monkeypatch.setattr(shares_mod, "agent_raises_budget_share", lambda **_k: None)
     with pytest.raises(MaxDepthExceeded):
         ec.critic_gate(rt, req, after_task="E0")
@@ -760,6 +761,10 @@ async def test_prevalidate_max_depth_refused_as_expansion_limit(monkeypatch):
     rt = _RT()
     rt.study = SimpleNamespace(study_id="s")
     rt._finalized = False
+    rt._expand_requests = {}
+    rt._expansion_refusals = []
+    rt._agent_expansions = 0
+    rt.plans = {}
     rt.tasks = {"s/E0": task}
     rt.results = {}
 
@@ -770,42 +775,93 @@ async def test_prevalidate_max_depth_refused_as_expansion_limit(monkeypatch):
     assert refused[0]["after"] == "E0"
 
 
-def test_result_pending_requires_attempt_id_and_digest():
+def _envelope(etype: str, payload: dict, *, entity_key: str = "a1"):
     from datetime import UTC, datetime
 
-    from coscientist.core.claims.reviews import rebuild_judge_state
     from coscientist.core.events.events import EventEnvelope
 
-    ev = EventEnvelope(
+    return EventEnvelope(
         study_id="s",
-        type="ResultPending",
-        entity_key="a1",
-        idem_key="ResultPending:a1",
-        payload={},  # missing required fields
+        type=etype,
+        entity_key=entity_key,
+        idem_key=f"{etype}:{entity_key}",
+        payload=payload,
         ts=datetime(2024, 1, 1, tzinfo=UTC),
         schema_version=1,
     )
-    with pytest.raises(JournalFormatError, match="attempt_id|agent_output_digest"):
-        rebuild_judge_state([ev], artifacts=None)
+
+
+def test_result_pending_requires_attempt_id_and_digest():
+    from coscientist.core.claims.reviews import rebuild_judge_state
+
+    with pytest.raises(JournalFormatError, match="attempt_id"):
+        rebuild_judge_state([_envelope("ResultPending", {})], artifacts=None)
+
+
+def test_result_pending_rejects_none_before_str():
+    """str(None) == 'None' must not pass the non-empty check."""
+    from coscientist.core.claims.reviews import rebuild_judge_state
+
+    with pytest.raises(JournalFormatError, match="must be str"):
+        rebuild_judge_state(
+            [
+                _envelope(
+                    "ResultPending",
+                    {"attempt_id": None, "agent_output_digest": "abc"},
+                )
+            ],
+            artifacts=None,
+        )
 
 
 def test_result_pending_rejects_empty_attempt_id_or_digest():
-    from datetime import UTC, datetime
-
     from coscientist.core.claims.reviews import rebuild_judge_state
-    from coscientist.core.events.events import EventEnvelope
 
-    ev = EventEnvelope(
-        study_id="s",
-        type="ResultPending",
-        entity_key="a1",
-        idem_key="ResultPending:a1",
-        payload={"attempt_id": "", "agent_output_digest": "abc"},
-        ts=datetime(2024, 1, 1, tzinfo=UTC),
-        schema_version=1,
-    )
     with pytest.raises(JournalFormatError, match="non-empty"):
-        rebuild_judge_state([ev], artifacts=None)
+        rebuild_judge_state(
+            [
+                _envelope(
+                    "ResultPending",
+                    {"attempt_id": "", "agent_output_digest": "abc"},
+                )
+            ],
+            artifacts=None,
+        )
+
+
+def test_review_recorded_requires_review_key():
+    from coscientist.core.claims.reviews import rebuild_judge_state
+
+    with pytest.raises(JournalFormatError, match="review_key"):
+        rebuild_judge_state(
+            [_envelope("ReviewRecorded", {"status": "MET"})],
+            artifacts=None,
+        )
+
+
+def test_review_recorded_invalid_status_is_journal_format_error():
+    from coscientist.core.claims.reviews import rebuild_judge_state
+
+    with pytest.raises(JournalFormatError, match="invalid status"):
+        rebuild_judge_state(
+            [
+                _envelope(
+                    "ReviewRecorded",
+                    {"review_key": '["t","a","c","i","d"]', "status": "not_a_status"},
+                )
+            ],
+            artifacts=None,
+        )
+
+
+def test_result_recorded_requires_attempt_id_not_entity_key():
+    from coscientist.core.claims.reviews import rebuild_judge_state
+
+    with pytest.raises(JournalFormatError, match="attempt_id"):
+        rebuild_judge_state(
+            [_envelope("ResultRecorded", {}, entity_key="fallback-aid")],
+            artifacts=None,
+        )
 
 
 def test_expand_validate_requires_study_max_tasks():
@@ -813,7 +869,14 @@ def test_expand_validate_requires_study_max_tasks():
     from coscientist.core.plan.expand_validate import _validate
 
     study = SimpleNamespace(study_id="s")  # missing max_tasks / max_depth
-    rt = SimpleNamespace(study=study, study_id="s", plans={}, graph=None, catalog=None)
+    rt = SimpleNamespace(
+        study=study,
+        study_id="s",
+        plans={},
+        graph=SimpleNamespace(edges_from=lambda *_a, **_k: []),
+        catalog=None,
+        executor=None,
+    )
     with pytest.raises(AttributeError, match="max_tasks"):
         _validate(
             rt,
@@ -827,27 +890,148 @@ def test_expand_validate_requires_study_max_tasks():
         )
 
 
+def test_expand_validate_refuses_missing_final_type(monkeypatch):
+    from coscientist.core.plan import expand_validate as ev
+
+    monkeypatch.setattr(ev, "validate_plan_criteria", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "coscientist.core.plan.foreach.validate_foreach_specs", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        "coscientist.core.plan.shares.critic_plan_shares", lambda *_a, **_k: None
+    )
+    study = SimpleNamespace(study_id="s", max_tasks=64, max_depth=8)
+    rt = SimpleNamespace(
+        study=study,
+        study_id="s",
+        plans={
+            "p1": {
+                "revision": 1,
+                "questions": [{"id": "Q1", "text": "why"}],  # missing final_type
+                "rollup": "all",
+            }
+        },
+        graph=SimpleNamespace(edges_from=lambda *_a, **_k: []),
+        catalog=SimpleNamespace(templates=[]),
+        executor=None,
+        tasks={},
+    )
+    err = ev._validate(
+        rt,
+        added_tasks=[],
+        added_questions=[],
+        superseded_tasks=[],
+        superseded_questions=[],
+        known_texts={"Q1": "why"},
+        prev_tasks=[],
+        active_q_ids={"Q1"},
+    )
+    assert err == "missing_final_type:Q1"
+
+
+def test_expand_validate_refuses_unknown_rollup(monkeypatch):
+    from coscientist.core.execution.domain import QuestionSpec
+    from coscientist.core.plan import expand_validate as ev
+
+    monkeypatch.setattr(ev, "validate_plan_criteria", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "coscientist.core.plan.foreach.validate_foreach_specs", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        "coscientist.core.plan.shares.critic_plan_shares", lambda *_a, **_k: None
+    )
+    child = QuestionSpec(id="Q1.a", text="a", parent_id="Q1", final_type="verdict")
+    study = SimpleNamespace(study_id="s", max_tasks=64, max_depth=8)
+    rt = SimpleNamespace(
+        study=study,
+        study_id="s",
+        plans={
+            "p1": {
+                "revision": 1,
+                "questions": [
+                    {"id": "Q1", "text": "why", "final_type": "verdict"},
+                    {
+                        "id": "Q1.a",
+                        "text": "a",
+                        "final_type": "verdict",
+                        "parent_id": "Q1",
+                    },
+                ],
+                "rollup": "nope",
+            }
+        },
+        graph=SimpleNamespace(edges_from=lambda *_a, **_k: []),
+        catalog=SimpleNamespace(templates=[]),
+        executor=None,
+        tasks={},
+    )
+    err = ev._validate(
+        rt,
+        added_tasks=[],
+        added_questions=[child],
+        superseded_tasks=[],
+        superseded_questions=[],
+        known_texts={"Q1": "why", "Q1.a": "a"},
+        prev_tasks=[],
+        active_q_ids={"Q1", "Q1.a"},
+    )
+    assert err is not None and "invalid_rollup" in err
+
+
+def _sqlite_err(cls, msg: str, code: int):
+    import sqlite3
+
+    exc = cls(msg)
+    exc.sqlite_errorcode = code
+    exc.sqlite_errorname = {
+        sqlite3.SQLITE_BUSY: "SQLITE_BUSY",
+        sqlite3.SQLITE_LOCKED: "SQLITE_LOCKED",
+        sqlite3.SQLITE_CORRUPT: "SQLITE_CORRUPT",
+        sqlite3.SQLITE_NOTADB: "SQLITE_NOTADB",
+        sqlite3.SQLITE_IOERR: "SQLITE_IOERR",
+    }.get(code, "SQLITE_UNKNOWN")
+    return exc
+
+
 def test_map_sqlite_locked_is_not_truncated():
-    """'database is locked' → JournalLockedError, never JournalFormatError(truncated)."""
+    """SQLITE_BUSY/LOCKED → JournalLockedError via sqlite_errorcode, not message text."""
     import sqlite3
 
     from coscientist.core.events.store import _map_sqlite_open_error
 
-    locked = _map_sqlite_open_error(sqlite3.OperationalError("database is locked"))
+    locked = _map_sqlite_open_error(
+        _sqlite_err(sqlite3.OperationalError, "x", sqlite3.SQLITE_BUSY)
+    )
     assert isinstance(locked, JournalLockedError)
     assert not isinstance(locked, JournalFormatError)
 
-    busy = _map_sqlite_open_error(sqlite3.OperationalError("database is busy"))
+    busy = _map_sqlite_open_error(
+        _sqlite_err(sqlite3.OperationalError, "x", sqlite3.SQLITE_LOCKED)
+    )
     assert isinstance(busy, JournalLockedError)
 
 
-def test_map_sqlite_other_operational_is_unavailable():
+def test_map_sqlite_other_code_is_unavailable_not_truncated():
     import sqlite3
 
     from coscientist.core.events.store import _map_sqlite_open_error
 
-    mapped = _map_sqlite_open_error(sqlite3.OperationalError("disk I/O error"))
+    mapped = _map_sqlite_open_error(
+        _sqlite_err(sqlite3.OperationalError, "disk I/O error", sqlite3.SQLITE_IOERR)
+    )
     assert isinstance(mapped, JournalUnavailableError)
+    assert "truncated" not in str(mapped).lower()
+
+
+def test_map_sqlite_unknown_error_is_unavailable_not_truncated():
+    """Bare sqlite3.Error without a known code must not become 'truncated'."""
+    import sqlite3
+
+    from coscientist.core.events.store import _map_sqlite_open_error
+
+    mapped = _map_sqlite_open_error(sqlite3.Error("mystery"))
+    assert isinstance(mapped, JournalUnavailableError)
+    assert "truncated" not in str(mapped).lower()
 
 
 def test_map_sqlite_corrupt_stays_format_error():
@@ -855,20 +1039,22 @@ def test_map_sqlite_corrupt_stays_format_error():
 
     from coscientist.core.events.store import _map_sqlite_open_error
 
-    mapped = _map_sqlite_open_error(sqlite3.DatabaseError("file is not a database"))
+    mapped = _map_sqlite_open_error(
+        _sqlite_err(sqlite3.DatabaseError, "file is not a database", sqlite3.SQLITE_NOTADB)
+    )
     assert isinstance(mapped, JournalFormatError)
     assert "truncated" in str(mapped).lower() or "unreadable" in str(mapped).lower()
 
 
 @pytest.mark.asyncio
 async def test_store_open_locked_raises_journal_locked(tmp_path, monkeypatch):
-    """SqliteEventStore open maps sqlite lock to JournalLockedError (not truncated)."""
+    """SqliteEventStore open maps SQLITE_BUSY to JournalLockedError (not truncated)."""
     import sqlite3
 
     from coscientist.core.events import store as store_mod
 
     def boom(*_a, **_k):
-        raise sqlite3.OperationalError("database is locked")
+        raise _sqlite_err(sqlite3.OperationalError, "database is locked", sqlite3.SQLITE_BUSY)
 
     monkeypatch.setattr(store_mod, "_open_conn", boom)
     with pytest.raises(JournalLockedError, match="locked"):

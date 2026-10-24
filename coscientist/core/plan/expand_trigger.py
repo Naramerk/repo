@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
+from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import task_id
@@ -26,14 +27,32 @@ from coscientist.core.execution.domain import (
     TaskState,
 )
 from coscientist.core.plan.expand_critic import PLAN_N_CRITIC_CRITERIA
+from coscientist.core.plan.expand_validate import (
+    MaxDepthExceeded,
+    active_plan_blob,
+    assign_core_keys,
+    validate_expansion,
+)
+from coscientist.core.plan.loop import DETAIL_MAX_LEN
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
+
+def _outcome_token(outcome: TaskOutcome | str | None) -> str:
+    if isinstance(outcome, TaskOutcome):
+        return outcome.value
+    if isinstance(outcome, str) and outcome:
+        return outcome
+    raise ValueError(f"missing_task_outcome:{outcome!r}")
+
+
 def expand_after_keys(runtime: StudyRuntime) -> set[str]:
     keys: set[str] = set()
     for plan in runtime.plans.values():
-        for k in plan.get("expand_after") or []:
+        if "expand_after" not in plan:
+            continue
+        for k in plan["expand_after"]:
             if k:
                 keys.add(str(k))
     return keys
@@ -45,7 +64,12 @@ def _final_attempt_id(runtime: StudyRuntime, tid: str) -> str | None:
     return task.attempts[-1]
 
 def _result_row_for_attempt(runtime: StudyRuntime, aid: str) -> dict[str, Any]:
-    return dict(runtime.results.get(aid) or runtime.results.get(f"result:{aid}") or {})
+    row = runtime.results.get(aid)
+    if row is None:
+        row = runtime.results.get(f"result:{aid}")
+    if row is None:
+        return {}
+    return dict(row)
 
 def result_expansion_request(runtime: StudyRuntime, tid: str) -> ExpansionRequest | None:
     """Read ExpansionRequest from the FINAL attempt only (MJ3)."""
@@ -90,16 +114,14 @@ def _final_result_class(runtime: StudyRuntime, tid: str) -> str | None:
 def expansion_already_handled(runtime: StudyRuntime, after_task: str) -> bool:
     """True when PlanExpanded / ExpansionRefused / pending PLAN-n exists for after_task."""
     for p in runtime.plans.values():
-        if str(p.get("after_task") or "") == after_task:
+        if p.get("after_task") == after_task:
             return True
-    for r in getattr(runtime, "_expansion_refusals", []) or []:
-        if str(r.get("after_task") or "") == after_task:
+    for r in runtime._expansion_refusals:
+        if r.get("after_task") == after_task:
             return True
-    pending = getattr(runtime, "_expand_requests", None) or {}
-    if isinstance(pending, dict):
-        for meta in pending.values():
-            if isinstance(meta, dict) and str(meta.get("after_task") or "") == after_task:
-                return True
+    for meta in runtime._expand_requests.values():
+        if isinstance(meta, dict) and meta.get("after_task") == after_task:
+            return True
     return False
 
 async def refuse_expansion(
@@ -110,7 +132,7 @@ async def refuse_expansion(
     detail: str,
     plan_key: str | None = None,
 ) -> None:
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime._finalized:
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
@@ -144,14 +166,14 @@ def _agent_quota_ok(runtime: StudyRuntime) -> bool:
     study = runtime.study
     if study is None:
         return False
-    return int(getattr(runtime, "_agent_expansions", 0)) < int(study.max_expansions)
+    return int(runtime._agent_expansions) < int(study.max_expansions)
 
 def _replan_allocate_s(runtime: StudyRuntime) -> float:
     study = runtime.study
     if study is None:
         return 0.0
     now = runtime.clock.now()
-    used = float(getattr(runtime, "_replan_used_s", 0.0))
+    used = float(runtime._replan_used_s)
     budget = study.replan_budget_s() - used
     ed = study.effective_deadline()
     return min(
@@ -182,7 +204,7 @@ async def ensure_plan_n_task(
         for t in runtime.tasks.values()
         if t.kind == TaskKind.PLAN and str(t.spec.task_key).startswith("PLAN-")
     )
-    n = int(getattr(runtime, "_agent_expansions", 0)) + existing_plan_n + 1
+    n = int(runtime._agent_expansions) + existing_plan_n + 1
     key = f"PLAN-{n}"
     tid = task_id(sid, key)
     if tid in runtime.tasks:
@@ -191,8 +213,6 @@ async def ensure_plan_n_task(
     study = runtime.study
     ed = study.effective_deadline()
     deadline = min(now + timedelta(seconds=allocate), ed)
-    from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
-
     spec = freeze_task_sandbox_limits(
         TaskSpec(
             task_key=key,
@@ -203,7 +223,7 @@ async def ensure_plan_n_task(
             depends_on=[after_task],
             criteria=list(PLAN_N_CRITIC_CRITERIA),
         ),
-        getattr(runtime, "catalog", None),
+        runtime.catalog,
     )
     task = Task(
         task_id=tid,
@@ -231,20 +251,13 @@ async def ensure_plan_n_task(
         ]
     )
     # replan_allocated_s is folded from TaskCreated in local_project (B3 / minor).
-    reqs = getattr(runtime, "_expand_requests", None)
-    if not isinstance(reqs, dict):
-        runtime._expand_requests = {}  # noqa: SLF001
-        reqs = runtime._expand_requests
+    reqs = runtime._expand_requests
     reqs[key] = {
         "after_task": after_task,
         "pending": pending.model_dump(mode="json") if pending is not None else None,
         "replan_allocated_s": allocate,
     }
-    pending_set = getattr(runtime, "_expand_pending", None)
-    if isinstance(pending_set, set):
-        pending_set.add(after_task)
-    else:
-        runtime._expand_pending = {after_task}  # noqa: SLF001
+    runtime._expand_pending.add(after_task)
     return key
 
 async def maybe_expand_after_task_done(runtime: StudyRuntime, task_id_full: str) -> str | None:
@@ -262,12 +275,12 @@ async def maybe_expand_after_task_done(runtime: StudyRuntime, task_id_full: str)
             runtime,
             after,
             reason="invalid",
-            detail=f"expand_exception:{type(e).__name__}"[:200],
+            detail=f"expand_exception:{type(e).__name__}"[:DETAIL_MAX_LEN],
         )
         return None
 
 async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime._finalized:
         return None
     task = runtime.tasks.get(task_id_full)
     if task is None or task.state != TaskState.DONE:
@@ -282,9 +295,9 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
 
             return await apply_pending_expansion(runtime, plan_key)
         # MJ-c: non-SUCCESS PLAN-n must not vanish.
-        meta = (getattr(runtime, "_expand_requests", None) or {}).get(plan_key)
-        after = str((meta or {}).get("after_task") or plan_key)
-        oc = getattr(task.outcome, "value", task.outcome) or "unknown"
+        meta = runtime._expand_requests.get(plan_key)
+        after = str(meta["after_task"]) if isinstance(meta, dict) and "after_task" in meta else plan_key
+        oc = _outcome_token(task.outcome)
         await refuse_expansion(
             runtime,
             after,
@@ -309,9 +322,6 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
             TaskOutcome.FAILED,
         ):
             return None
-        from coscientist.core.plan.expand_validate import MaxDepthExceeded
-        from coscientist.core.plan.loop import DETAIL_MAX_LEN
-
         try:
             err = await _prevalidate_request(runtime, req)
         except MaxDepthExceeded as e:
@@ -331,24 +341,30 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
     return None
 
 async def _prevalidate_request(runtime: StudyRuntime, req: ExpansionRequest) -> str | None:
-    from coscientist.core.execution.domain import TaskSpec
-    from coscientist.core.plan.expand_validate import (
-        active_plan_blob,
-        assign_core_keys,
-        validate_expansion,
-    )
-
     keyed = assign_core_keys(runtime, list(req.tasks))
     if isinstance(keyed, str):
         return keyed
-    prev = active_plan_blob(runtime) or {}
-    prev_tasks = [
-        TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in (prev.get("tasks") or [])
-    ]
+    prev = active_plan_blob(runtime)
+    prev_tasks = (
+        [
+            TaskSpec.model_validate(t) if isinstance(t, dict) else t
+            for t in prev["tasks"]
+        ]
+        if prev is not None
+        else []
+    )
     known: dict[str, str] = {}
-    for q in prev.get("questions") or []:
-        if isinstance(q, dict) and q.get("id"):
-            known[str(q["id"])] = str(q.get("text") or "")
+    if prev is not None:
+        for q in prev["questions"]:
+            if isinstance(q, dict):
+                if "id" not in q:
+                    return "plan_question_missing_id"
+                qid = str(q["id"])
+                if "text" not in q or not isinstance(q["text"], str):
+                    return f"missing_question_text:{qid}"
+                known[qid] = q["text"]
+            else:
+                known[str(q.id)] = q.text
     known.update({q.id: q.text for q in req.questions})
     # Propagate MaxDepthExceeded — caller maps to ExpansionRefused(expansion_limit).
     return validate_expansion(
@@ -368,19 +384,19 @@ def plan_n_already_closed(runtime: StudyRuntime, plan_key: str) -> bool:
     Pending meta in ``_expand_requests`` means still open (do not treat the
     pending entry itself as «handled»).
     """
-    for r in getattr(runtime, "_expansion_refusals", []) or []:
-        if str(r.get("plan_key") or "") == plan_key:
+    for r in runtime._expansion_refusals:
+        if r.get("plan_key") == plan_key:
             return True
     for p in runtime.plans.values():
-        if str(p.get("plan_key") or "") == plan_key:
+        if p.get("plan_key") == plan_key:
             return True
-    meta = (getattr(runtime, "_expand_requests", None) or {}).get(plan_key)
+    meta = runtime._expand_requests.get(plan_key)
     # Fold clears meta on expand/refuse. Meta still present → still open.
     return meta is None
 
 async def resume_pending_expansions(runtime: StudyRuntime) -> int:
     """Re-run H-g after crash; skip PLAN-n already closed by expand/refuse."""
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime._finalized:
         return 0
     n = 0
     for tid, task in list(runtime.tasks.items()):
@@ -391,17 +407,17 @@ async def resume_pending_expansions(runtime: StudyRuntime) -> int:
             plan_key = task.spec.task_key
             if plan_n_already_closed(runtime, plan_key):
                 continue
-            meta = (getattr(runtime, "_expand_requests", None) or {}).get(plan_key)
+            meta = runtime._expand_requests.get(plan_key)
             if not isinstance(meta, dict):
                 continue
-            after = str(meta.get("after_task") or plan_key)
+            after = str(meta["after_task"]) if "after_task" in meta else plan_key
             if task.outcome == TaskOutcome.SUCCESS:
                 from coscientist.core.plan.expand import apply_pending_expansion
 
                 await apply_pending_expansion(runtime, plan_key)
                 n += 1
             else:
-                oc = getattr(task.outcome, "value", task.outcome) or "unknown"
+                oc = _outcome_token(task.outcome)
                 await refuse_expansion(
                     runtime,
                     after,
@@ -411,8 +427,13 @@ async def resume_pending_expansions(runtime: StudyRuntime) -> int:
                 )
                 n += 1
             continue
-        reason = getattr(task, "reason", None)
-        rv = getattr(reason, "value", reason)
+        reason = task.reason
+        if reason is None:
+            rv = None
+        elif isinstance(reason, str):
+            rv = reason
+        else:
+            rv = reason.value
         if rv == "superseded":
             continue
         tkey = task.spec.task_key

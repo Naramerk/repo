@@ -47,30 +47,46 @@ def critic_gate(
     study = runtime.study
     if study is None:
         return "no_study"
-    catalog = getattr(runtime, "catalog", None)
-    by_id = {t.id: t for t in getattr(catalog, "templates", []) or []} if catalog else {}
+    catalog = runtime.catalog
+    templates = list(catalog.templates) if catalog is not None else []
+    by_id = {t.id: t for t in templates}
     keyed = assign_core_keys(runtime, list(req.tasks))
     if isinstance(keyed, str):
         return keyed
     # Forbid plan_expansion_* / require catalog criteria before schema validate.
     for spec in keyed:
-        crits = list(spec.criteria or [])
+        crits = list(spec.criteria)
         if not crits:
             return f"missing_criteria:{spec.task_key}"
         for ref in crits:
-            tmpl_id = str(getattr(ref, "template_id", "") or "")
+            tmpl_id = ref.template_id
+            if not isinstance(tmpl_id, str) or not tmpl_id:
+                return f"missing_template_id:{spec.task_key}"
             if tmpl_id.startswith("plan_expansion_"):
                 return f"forbidden_plan_expansion_marker:{spec.task_key}"
-        if not any(str(getattr(r, "template_id", "") or "") in by_id for r in crits):
+        if not any(r.template_id in by_id for r in crits):
             return f"missing_catalog_criteria:{spec.task_key}"
-    prev = active_plan_blob(runtime) or {}
-    prev_tasks = [
-        TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in (prev.get("tasks") or [])
-    ]
+    prev = active_plan_blob(runtime)
+    prev_tasks = (
+        [
+            TaskSpec.model_validate(t) if isinstance(t, dict) else t
+            for t in prev["tasks"]
+        ]
+        if prev is not None
+        else []
+    )
     known: dict[str, str] = {}
-    for q in prev.get("questions") or []:
-        if isinstance(q, dict) and q.get("id"):
-            known[str(q["id"])] = str(q.get("text") or "")
+    if prev is not None:
+        for q in prev["questions"]:
+            if isinstance(q, dict):
+                if "id" not in q:
+                    return "plan_question_missing_id"
+                qid = str(q["id"])
+                if "text" not in q or not isinstance(q["text"], str):
+                    return f"missing_question_text:{qid}"
+                known[qid] = q["text"]
+            else:
+                known[str(q.id)] = q.text
     known.update({q.id: q.text for q in req.questions})
     # PR12: agents cannot raise their own budget_share (before Σ validation).
     from coscientist.core.plan.shares import agent_raises_budget_share
@@ -95,7 +111,7 @@ def critic_gate(
     )
     if err is not None:
         return err
-    if int(getattr(runtime, "_agent_expansions", 0)) >= int(study.max_expansions):
+    if int(runtime._agent_expansions) >= int(study.max_expansions):
         return "agent_quota"
     # No refutation escape (MJ-b).
     for s in req.superseded_questions:
@@ -112,7 +128,7 @@ def critic_gate(
             continue
         if rt_task.state != TaskState.DONE and task_protected_from_agent_skip(runtime, rt_task):
             return f"refutation_escape:{tkey}:open_refute_task"
-        for qid in rt_task.spec.addresses or []:
+        for qid in rt_task.spec.addresses:
             block = target_blocks_agent_supersede(runtime, qid)
             if block:
                 return f"refutation_escape:{qid}:{block}"
@@ -132,8 +148,8 @@ def _same_task_shape(a: TaskSpec, b: TaskSpec) -> bool:
     return (
         a.goal == b.goal
         and a.route == b.route
-        and sorted(a.addresses or []) == sorted(b.addresses or [])
-        and sorted(a.depends_on or []) == sorted(b.depends_on or [])
+        and sorted(a.addresses) == sorted(b.addresses)
+        and sorted(a.depends_on) == sorted(b.depends_on)
         and a.title == b.title
     )
 

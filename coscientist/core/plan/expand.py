@@ -22,6 +22,7 @@ from coscientist.core.events.schema_versions import (
     PLAN_EXPANDED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
 )
+from coscientist.core.events.upcasters import require_exact_int
 from coscientist.core.execution.domain import (
     ExpansionRequest,
     Plan,
@@ -32,6 +33,7 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
+from coscientist.core.plan.decomposes import VALID_ROLLUP_RULES
 from coscientist.core.plan.expand_critic import critic_gate, prepare_request_for_apply
 from coscientist.core.plan.expand_graph import (
     plan_graph_events,
@@ -81,38 +83,36 @@ def _delegated_by_from_hitl(
     ``after_task`` (or PLAN-n key). Kind is not renamed; GateConfig stays on
     the original kind.
     """
-    used = getattr(runtime, "_hitl_expand_used", None)
-    if isinstance(used, set) and hitl_request_id in used:
+    if hitl_request_id in runtime._hitl_expand_used:
         return "hitl_already_used"
-    decisions = getattr(runtime, "_hitl_decisions", None)
-    row: dict | None = None
-    if isinstance(decisions, dict):
-        row = decisions.get(hitl_request_id)
+    row = runtime._hitl_decisions.get(hitl_request_id)
     if row is None:
         return "missing_hitl_decided"
-    opened = getattr(runtime, "_hitl_requests", None) or {}
-    req = opened.get(hitl_request_id) if isinstance(opened, dict) else None
+    req = runtime._hitl_requests.get(hitl_request_id)
     if req is None:
-        hitl = getattr(runtime, "hitl", None) or {}
+        hitl = getattr(runtime, "hitl", None)
         h = hitl.get(hitl_request_id) if isinstance(hitl, dict) else None
         if h is not None:
             req = {
-                "kind": getattr(h, "kind", None),
-                "task_id": getattr(h, "task_id", None),
-                "expand_after_task": getattr(h, "expand_after_task", None)
-                if hasattr(h, "expand_after_task")
-                else (getattr(h, "__dict__", {}) or {}).get("expand_after_task"),
+                "kind": h.kind,
+                "task_id": h.task_id,
+                "expand_after_task": h.expand_after_task,
             }
     if req is None:
         return "missing_hitl_opened"
-    kind = str(req.get("kind") or "")
+    kind = req.get("kind")
+    if not isinstance(kind, str) or not kind:
+        return "hitl_missing_kind"
     if kind not in _PLAN_EXPAND_HITL_KINDS:
-        return f"hitl_wrong_kind:{kind or 'unknown'}"
+        return f"hitl_wrong_kind:{kind}"
     # Expansion only when expand_after_task is explicitly set (no task_key fallback).
-    bound = str(req.get("expand_after_task") or "")
-    if not bound:
+    bound = req.get("expand_after_task")
+    if not isinstance(bound, str) or not bound:
         return "hitl_unbound"
-    if bound not in {after_task, plan_key or ""}:
+    allowed = {after_task}
+    if plan_key is not None:
+        allowed.add(plan_key)
+    if bound not in allowed:
         return f"hitl_wrong_target:{bound}"
     db = row.get("delegated_by")
     if db in ("human", "timeout"):
@@ -183,7 +183,7 @@ async def _expand_plan(
     replan_allocated_s: float | None,
     plan_key: str | None,
 ) -> str | None:
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime._finalized:
         return None
     study = runtime.study
     sid = study.study_id
@@ -271,19 +271,44 @@ async def _expand_plan(
                     return None
 
     prev = active_plan_blob(runtime)
-    prev_rev = int(prev.get("revision") or 0) if prev else 0
-    prev_pid = str(prev.get("plan_id") or "") if prev else ""
-    new_rev = prev_rev + 1
-    prev_tasks = [
-        TaskSpec.model_validate(t) if isinstance(t, dict) else t
-        for t in (prev.get("tasks") if prev else []) or []
-    ]
+    prev_tasks: list[TaskSpec] = []
     known_texts: dict[str, str] = {}
-    for q in (prev.get("questions") if prev else []) or []:
-        if isinstance(q, dict) and q.get("id"):
-            known_texts[str(q["id"])] = str(q.get("text") or "")
-        elif hasattr(q, "id"):
-            known_texts[str(q.id)] = str(q.text)
+    if prev is None:
+        prev_rev = 0
+        prev_pid = ""
+    else:
+        prev_rev = require_exact_int(prev["revision"], what="plan.revision")
+        raw_pid = prev["plan_id"]
+        if not isinstance(raw_pid, str) or not raw_pid:
+            await refuse_expansion(
+                runtime, after_task, reason="invalid", detail="missing_plan_id"
+            )
+            return None
+        prev_pid = raw_pid
+        prev_tasks = [
+            TaskSpec.model_validate(t) if isinstance(t, dict) else t
+            for t in prev["tasks"]
+        ]
+        for q in prev["questions"]:
+            if isinstance(q, dict):
+                if "id" not in q:
+                    await refuse_expansion(
+                        runtime, after_task, reason="invalid", detail="plan_question_missing_id"
+                    )
+                    return None
+                qid = str(q["id"])
+                if "text" not in q or not isinstance(q["text"], str):
+                    await refuse_expansion(
+                        runtime,
+                        after_task,
+                        reason="invalid",
+                        detail=f"missing_question_text:{qid}"[:DETAIL_MAX_LEN],
+                    )
+                    return None
+                known_texts[qid] = q["text"]
+            else:
+                known_texts[str(q.id)] = q.text
+    new_rev = prev_rev + 1
     known_texts.update({q.id: q.text for q in added_questions})
 
     superseded_old = {s.old_id for s in superseded_questions}
@@ -350,16 +375,20 @@ async def _expand_plan(
     superseded_tasks = sorted(skip_keys)
     merged_tasks = still_kept + list(added_tasks)
 
-    prev_questions = [
-        QuestionSpec.model_validate(q) if isinstance(q, dict) else q
-        for q in (prev.get("questions") if prev else []) or []
-    ]
+    prev_questions = (
+        [
+            QuestionSpec.model_validate(q) if isinstance(q, dict) else q
+            for q in prev["questions"]
+        ]
+        if prev is not None
+        else []
+    )
     all_questions = [q for q in prev_questions if q.id not in superseded_old] + added_questions
     # Stamp expansion origin onto new child questions when unset (PR16).
     from coscientist.core.plan.decomposes import stamp_question_origins
 
     added_ids = {aq.id for aq in added_questions}
-    named_added = {aq.id for aq in added_questions if getattr(aq, "parent_id", None)}
+    named_added = {aq.id for aq in added_questions if aq.parent_id is not None}
     stamped_new = stamp_question_origins(
         [q for q in all_questions if q.id in added_ids],
         named_sub_ids=named_added,
@@ -367,17 +396,37 @@ async def _expand_plan(
     )
     by_new = {q.id: q for q in stamped_new}
     all_questions = [by_new.get(q.id, q) for q in all_questions]
-    prev_rollup = (prev or {}).get("rollup") if prev else None
-    rollup = prev_rollup if prev_rollup in ("all", "any", "majority", "rubric") else "all"
-    named_subs = [q for q in all_questions if getattr(q, "parent_id", None)]
+    if prev is None:
+        rollup = "all"
+    else:
+        if "rollup" not in prev:
+            await refuse_expansion(
+                runtime, after_task, reason="invalid", detail="missing_plan_rollup"
+            )
+            return None
+        prev_rollup = prev["rollup"]
+        if prev_rollup not in VALID_ROLLUP_RULES:
+            await refuse_expansion(
+                runtime,
+                after_task,
+                reason="invalid",
+                detail=f"invalid_rollup:{prev_rollup!r}"[:DETAIL_MAX_LEN],
+            )
+            return None
+        rollup = prev_rollup
+    named_subs = [q for q in all_questions if q.parent_id is not None]
 
     pid = plan_id()
     from coscientist.core.execution.domain import LoopSpec
 
-    prev_loops = [
-        LoopSpec.model_validate(x) if isinstance(x, dict) else x
-        for x in ((prev.get("loops") if prev else None) or [])
-    ]
+    prev_loops = (
+        [
+            LoopSpec.model_validate(x) if isinstance(x, dict) else x
+            for x in prev["loops"]
+        ]
+        if prev is not None and "loops" in prev
+        else []
+    )
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -418,7 +467,7 @@ async def _expand_plan(
     events.extend(skip_superseded_task_events(runtime, sid=sid, superseded_tasks=superseded_tasks, now=now))
     from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 
-    catalog = getattr(runtime, "catalog", None)
+    catalog = runtime.catalog
     existing_keys = {t.spec.task_key for t in runtime.tasks.values()}
     for spec in added_tasks:
         if spec.task_key in existing_keys and spec.task_key not in skip_keys:
@@ -426,7 +475,7 @@ async def _expand_plan(
         frozen_spec = freeze_task_sandbox_limits(spec, catalog)
         tid = task_id(sid, frozen_spec.task_key)
         kind = TaskKind.EXPERIMENT
-        route = (frozen_spec.route or "").lower()
+        route = frozen_spec.route.lower()
         if route in ("literature", "lit"):
             kind = TaskKind.LITERATURE
         elif route in ("hypotheses", "hypothesis", "hyp"):
@@ -522,7 +571,7 @@ async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str |
 
     Planner final-attempt ``expansion_request`` is the sole input (DESIGN_M1 §4).
     """
-    reqs = getattr(runtime, "_expand_requests", None) or {}
+    reqs = runtime._expand_requests
     meta = reqs.get(plan_key) if isinstance(reqs, dict) else None
     if not isinstance(meta, dict):
         return None
@@ -568,7 +617,16 @@ async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str |
         )
         return None
     # PLAN-n already reserved replan time — do not double-count on PlanExpanded.
-    already = float(meta.get("replan_allocated_s") or 0.0)
+    if "replan_allocated_s" not in meta:
+        await refuse_expansion(
+            runtime,
+            after,
+            reason="invalid",
+            detail="missing_replan_allocated_s",
+            plan_key=plan_key,
+        )
+        return None
+    already = float(meta["replan_allocated_s"])
     pid = await expand_plan(
         runtime,
         after_task=after,
