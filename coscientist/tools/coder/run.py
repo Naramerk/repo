@@ -12,6 +12,7 @@ import os
 import signal
 import threading
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
@@ -41,6 +42,29 @@ class KillableProcess(Protocol):
     def terminate(self) -> None: ...
 
     def kill(self) -> None: ...
+
+
+class GuestPgidSlot(Protocol):
+    """Shared int slot published by ``on_guest_started`` (mp.Value satisfies this)."""
+
+    value: int
+
+    def get_lock(self) -> AbstractContextManager[object]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessGroupGone(Exception):
+    """Typed outcome: process group already reaped (ESRCH / ProcessLookupError)."""
+
+    pgid: int
+    op: Literal["probe", "killpg"]
+    sig_name: str | None
+
+    def __str__(self) -> str:
+        base = f"process group gone: pgid={self.pgid} op={self.op}"
+        if self.sig_name is None:
+            return base
+        return f"{base} sig={self.sig_name}"
 
 
 @dataclass(frozen=True)
@@ -126,7 +150,11 @@ def _limits_to_spec(limits: SandboxLimits) -> dict[str, Any]:
 
 def _request_spec(request: CoderRequest) -> dict[str, Any]:
     outputs = [
-        {"name": o.name, "source": o.source, "media_type": o.media_type}
+        {
+            "name": o.name,
+            "source": o.source,
+            "media_type": o.media_type,
+        }
         for o in request.outputs
     ]
     return {
@@ -185,12 +213,12 @@ def _require_positive_seconds(name: str, value: float) -> float:
     return value
 
 
-def _pg_state(pgid: int) -> Literal["alive", "gone"]:
-    """Probe process group; ProcessLookupError → gone; other OSError → ToolError."""
+def _pg_state(pgid: int) -> Literal["alive"]:
+    """Probe process group; ESRCH → ``ProcessGroupGone``; other OSError → ToolError."""
     try:
         os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return "gone"  # audit-ok[except_silent_return]: ESRCH — group already reaped (probe)
+    except ProcessLookupError as e:
+        raise ProcessGroupGone(pgid=pgid, op="probe", sig_name=None) from e
     except OSError as e:
         raise ToolError(
             "local",
@@ -200,21 +228,48 @@ def _pg_state(pgid: int) -> Literal["alive", "gone"]:
 
 
 def _pg_alive(pgid: int) -> bool:
-    return _pg_state(pgid) == "alive"
+    """True if process group responds to signal 0; ``ProcessGroupGone`` → False."""
+    try:
+        _pg_state(pgid)
+    except ProcessGroupGone as gone:
+        if gone.pgid != pgid:
+            raise
+    else:
+        return True
+    return False
 
 
-def _killpg(pgid: int, sig: signal.Signals) -> Literal["signaled", "gone"]:
-    """Signal process group; ProcessLookupError → gone; other OSError → ToolError."""
+def _killpg(pgid: int, sig: signal.Signals) -> Literal["signaled"]:
+    """Signal process group; ESRCH → ``ProcessGroupGone``; other OSError → ToolError."""
     try:
         os.killpg(pgid, sig)
-    except ProcessLookupError:
-        return "gone"  # audit-ok[except_silent_return]: ESRCH — group already reaped (killpg)
+    except ProcessLookupError as e:
+        raise ProcessGroupGone(pgid=pgid, op="killpg", sig_name=sig.name) from e
     except OSError as e:
         raise ToolError("local", f"killpg({sig.name}) failed: {e}") from e
     return "signaled"
 
 
-def _set_guest_pgid(slot: Any, pgid: object) -> None:
+def _signal_guest_pg(
+    pgid: int,
+    sig: signal.Signals,
+) -> Literal["signaled"] | ProcessGroupGone:
+    """``killpg``; ESRCH yields the typed ``ProcessGroupGone`` record (journalable)."""
+    try:
+        _killpg(pgid, sig)
+    except ProcessGroupGone as gone:
+        if (
+            gone.pgid != pgid
+            or gone.op != "killpg"
+            or gone.sig_name != sig.name
+        ):
+            raise
+    else:
+        return "signaled"
+    return ProcessGroupGone(pgid=pgid, op="killpg", sig_name=sig.name)
+
+
+def _set_guest_pgid(slot: GuestPgidSlot, pgid: object) -> None:
     """Dependency injected into ``run_sandbox(on_guest_started=...)`` (spawn-safe)."""
     if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 0:
         raise ToolError("local", f"on_guest_started pgid must be positive int, got {pgid!r}")
@@ -229,7 +284,7 @@ def _sandbox_worker(
     limits: SandboxLimits,
     inputs: dict[str, bytes],
     env: dict[str, str],
-    guest_pgid: Any,
+    guest_pgid: GuestPgidSlot,
 ) -> None:
     """Child entry: run_sandbox; unexpected raises exit the process (parent → ToolError)."""
     try:
@@ -258,7 +313,7 @@ async def _wait_event(event: asyncio.Event, *, timeout_s: float) -> bool:
 
 
 async def _await_guest_pgid(
-    slot: Any,
+    slot: GuestPgidSlot,
     *,
     timeout_s: float,
     poll_interval_s: float,
@@ -301,12 +356,12 @@ async def _kill_sandbox_guest(
                 await _wait_event(guest_done, timeout_s=reap_timeout_s)
         return False
 
-    _killpg(guest_pgid, signal.SIGTERM)
+    _signal_guest_pg(guest_pgid, signal.SIGTERM)
     if proc.is_alive():
         proc.terminate()
     if not await _wait_event(guest_done, timeout_s=term_grace_s):
         if _pg_alive(guest_pgid):
-            _killpg(guest_pgid, signal.SIGKILL)
+            _signal_guest_pg(guest_pgid, signal.SIGKILL)
         if not guest_done.is_set() and proc.is_alive():
             proc.kill()
         await _wait_event(guest_done, timeout_s=reap_timeout_s)
@@ -370,7 +425,7 @@ async def _stop_guest_or_record(
     jobs: InMemoryJobStore,
     jid: str,
     proc: BaseProcess,
-    guest_pgid_slot: Any,
+    guest_pgid_slot: GuestPgidSlot,
     guest_done: asyncio.Event,
     *,
     limits: SandboxLimits,

@@ -10,7 +10,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from multiprocessing.process import BaseProcess
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -124,7 +123,7 @@ def _worker_publish_pgid_no_result(
     limits: SandboxLimits,
     inputs: dict[str, bytes],
     env: dict[str, str],
-    guest_pgid: Any,
+    guest_pgid: coder_run.GuestPgidSlot,
 ) -> None:
     """Publish a fake pgid then exit without a result (finally-cleanup test)."""
     with guest_pgid.get_lock():
@@ -480,12 +479,26 @@ def test_pg_state_alive(monkeypatch: pytest.MonkeyPatch) -> None:
     assert coder_run._pg_state(4242) == "alive"
 
 
-def test_pg_state_process_lookup_is_gone(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pg_state_process_lookup_raises_gone_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def _gone(_pgid: int, _sig: int) -> None:
         raise ProcessLookupError()
 
     monkeypatch.setattr(os, "killpg", _gone)
-    assert coder_run._pg_state(4242) == "gone"
+    with pytest.raises(coder_run.ProcessGroupGone, match=r"pgid=4242.*op=probe") as ei:
+        coder_run._pg_state(4242)
+    assert ei.value.pgid == 4242
+    assert ei.value.op == "probe"
+    assert ei.value.sig_name is None
+
+
+def test_pg_alive_maps_gone_record_to_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _gone(_pgid: int, _sig: int) -> None:
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(os, "killpg", _gone)
+    assert coder_run._pg_alive(4242) is False
 
 
 def test_pg_state_permission_error_is_tool_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -502,12 +515,36 @@ def test_killpg_signaled(monkeypatch: pytest.MonkeyPatch) -> None:
     assert coder_run._killpg(4242, signal.SIGTERM) == "signaled"
 
 
-def test_killpg_process_lookup_is_gone(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_killpg_process_lookup_raises_gone_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def _gone(_pgid: int, _sig: signal.Signals) -> None:
         raise ProcessLookupError()
 
     monkeypatch.setattr(os, "killpg", _gone)
-    assert coder_run._killpg(4242, signal.SIGKILL) == "gone"
+    with pytest.raises(
+        coder_run.ProcessGroupGone,
+        match=r"pgid=4242.*op=killpg.*sig=SIGKILL",
+    ) as ei:
+        coder_run._killpg(4242, signal.SIGKILL)
+    assert ei.value.pgid == 4242
+    assert ei.value.op == "killpg"
+    assert ei.value.sig_name == "SIGKILL"
+
+
+def test_signal_guest_pg_maps_gone_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _gone(_pgid: int, _sig: signal.Signals) -> None:
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(os, "killpg", _gone)
+    outcome = coder_run._signal_guest_pg(4242, signal.SIGTERM)
+    assert outcome == coder_run.ProcessGroupGone(
+        pgid=4242,
+        op="killpg",
+        sig_name="SIGTERM",
+    )
 
 
 def test_killpg_oserror_is_tool_error(monkeypatch: pytest.MonkeyPatch) -> None:
