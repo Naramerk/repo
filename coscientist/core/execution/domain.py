@@ -321,7 +321,7 @@ class QuestionSpec(Frozen):
     # M1 PR16: decomposes edge attrs.origin (explicit|implicit|emergent).
     origin: DecomposeOrigin | None = None
     # M1 PR13: verdict (claims) | artifact (rubric) | both (DESIGN_M1 §6.1).
-    final_type: FinalType
+    final_type: FinalType = "verdict"  # audit-ok[field_default]: domain.py QuestionSpec.final_type wire default
 
 
 class ExperimentMethod(StrEnum):
@@ -340,7 +340,7 @@ class TaskSpec(Frozen):
     title: str
     goal: str
     route: Route
-    required: bool
+    required: bool = True  # audit-ok[field_default]: domain.py TaskSpec.required wire default
     tools_hint: list[str] = Field(default_factory=list)
     expected_outputs: list[OutputSpec] = Field(default_factory=list)
     criteria: list[RequirementRef] = Field(default_factory=list)
@@ -350,7 +350,7 @@ class TaskSpec(Frozen):
     # Plan-side tests.intent (graph edge materializes later); PENDING refute protection.
     tests_intent: Literal["confirm", "refute"] | None = None
     # H-c: allow start when a depends_on parent is FAILED/SKIPPED (no InputSpec).
-    tolerate_failed_dep: bool
+    tolerate_failed_dep: bool = False  # audit-ok[field_default]: domain.py TaskSpec.tolerate_failed_dep wire default
     # Scientific method; simulation does not upgrade stub/partial input provenance.
     method: ExperimentMethod | None = None
     # M1 PR10: template expanded at of_task DONE (selector → N concrete tasks).

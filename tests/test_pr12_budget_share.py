@@ -540,7 +540,7 @@ async def test_agent_cannot_raise_own_budget_share(tmp_path, clock):
                 addresses=["Q1"],
                 criteria=[RequirementRef(template_id="value_match")],
                 budget_share=0.9,
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
         superseded_tasks=[],
@@ -559,7 +559,7 @@ async def test_agent_cannot_raise_own_budget_share(tmp_path, clock):
                 addresses=["Q1"],
                 criteria=[RequirementRef(template_id="value_match")],
                 budget_share=None,
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
         superseded_tasks=[],

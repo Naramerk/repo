@@ -111,9 +111,9 @@ def _exp(
         route="experiment",
         depends_on=depends_on or ["PLAN"],
         addresses=addresses or [],
-        expected_outputs=outs,
+        expected_expected_outputs=outs,
         criteria=criteria if criteria is not None else ([RequirementRef(template_id="rubric_check")] if rubric else []),
-    )
+        required=True, tolerate_failed_dep=False)
 
 
 async def _boot(tmp_path, clock, sid: str, *, cancel_stages: bool = True):
@@ -228,8 +228,8 @@ def test_plan_validator_verdict_requires_criterion():
         depends_on=["PLAN"],
         addresses=["Q1"],
         criteria=[],
-        expected_outputs=[],
-    )
+        expected_expected_outputs=[],
+        required=True, tolerate_failed_dep=False)
     with pytest.raises(ValueError, match="criterion"):
         validate_final_types([bad], [q], catalog=None)
     ok = bad.model_copy(update={"criteria": [RequirementRef(template_id="value_match")]})
@@ -779,8 +779,8 @@ async def test_plan_refused_invalid_rubric_still_finalizes(tmp_path, clock):
         depends_on=["PLAN"],
         addresses=["Q1"],
         criteria=[],
-        expected_outputs=[OutputSpec(name="main", media_type="text/markdown", role="report")],
-    )
+        expected_expected_outputs=[OutputSpec(name="main", media_type="text/markdown", role="report")],
+        required=True, tolerate_failed_dep=False)
     pid = await rt.accept_plan([bad], questions=[q])
     assert pid == ""
     events = await rt.store.read_all()

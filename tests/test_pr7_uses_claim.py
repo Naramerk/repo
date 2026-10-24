@@ -168,7 +168,7 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
                 route="experiment",
                 depends_on=["PLAN"],
                 inputs=[InputSpec(kind="verdict")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -204,7 +204,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
                 route="experiment",
                 depends_on=["PLAN"],
                 inputs=[InputSpec(kind="artifact")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -236,7 +236,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
                 route="experiment",
                 depends_on=["PLAN"],
                 inputs=[InputSpec(kind="claim")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -293,7 +293,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
                 route="experiment",
                 depends_on=["PLAN"],
                 inputs=[InputSpec(kind="claim", ref=claim_id)],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -363,7 +363,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E1",
                 title="consumer",
@@ -371,7 +371,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
                 route="experiment",
                 depends_on=["E0"],
                 inputs=[InputSpec(kind="claim", ref=claim_id)],
-            ),
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -467,7 +467,7 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
             goal="g",
             route="experiment",
             inputs=[InputSpec(from_task="A", output="main", mode="forbid")],
-        ),
+        required=True, tolerate_failed_dep=False),
         state=TaskState.PENDING,
         deadline=datetime(2026, 1, 1, tzinfo=UTC),
     )
@@ -528,7 +528,7 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )

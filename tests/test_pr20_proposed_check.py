@@ -124,8 +124,8 @@ def _exp_spec(**kwargs) -> TaskSpec:
         criteria=kwargs.get(
             "criteria", [RequirementRef(template_id="artifact_present")]
         ),
-        expected_outputs=kwargs.get("expected_outputs", []),
-    )
+        expected_expected_outputs=kwargs.get("expected_outputs", []),
+        required=True, tolerate_failed_dep=False)
 
 
 async def _create(rt, request: str = "pr20", **kwargs):
@@ -1612,7 +1612,7 @@ def test_evaluate_proposed_missing_id_fail_closed(tmp_path: Path) -> None:
         criteria=[
             RequirementRef(template_id=PROPOSED_CHECK_TEMPLATE_ID, params={}),
         ],
-    )
+        required=True, tolerate_failed_dep=False)
     results = evaluate_task_checks(catalog, spec, out, arts, proposals={})
     assert results[0].status == ReqStatus.FAILED
     assert "unapproved_check" in (results[0].detail or "")

@@ -89,7 +89,7 @@ def _exp_design(key: str, *, addresses: list[str]) -> TaskSpec:
         route="experiment",
         depends_on=["PLAN"],
         addresses=addresses,
-        expected_outputs=[
+        expected_expected_outputs=[
             OutputSpec(
                 name="main",
                 media_type="text/markdown",
@@ -99,7 +99,7 @@ def _exp_design(key: str, *, addresses: list[str]) -> TaskSpec:
             )
         ],
         criteria=[RequirementRef(template_id="rubric_check")],
-    )
+        required=True, tolerate_failed_dep=False)
 
 
 async def _boot(tmp_path, clock, sid: str):
@@ -163,7 +163,7 @@ def test_output_spec_kind_enforced_by_plan_validator():
         route="experiment",
         depends_on=["PLAN"],
         addresses=["Q1"],
-        expected_outputs=[
+        expected_expected_outputs=[
             OutputSpec(
                 name="main",
                 media_type="text/markdown",
@@ -292,10 +292,10 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
         route="experiment",
         depends_on=["PLAN"],
         addresses=["Q1"],
-        expected_outputs=[
+        expected_expected_outputs=[
             OutputSpec(name="main", media_type="text/plain", role="code", rubric=rub)
         ],
-    )
+        required=True, tolerate_failed_dep=False)
     assert is_derivation_task_spec(spoof) is False
     with pytest.raises(ValidationError):
         OutputSpec(
@@ -311,7 +311,7 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
         route="experiment",
         depends_on=["PLAN"],
         addresses=["Q1"],
-        expected_outputs=[
+        expected_expected_outputs=[
             OutputSpec(
                 name="main",
                 media_type="text/plain",
@@ -319,7 +319,7 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
                 evidence_kind="derivation",
             )
         ],
-    )
+        required=True, tolerate_failed_dep=False)
     with pytest.raises(ValueError, match="derivation"):
         validate_evidence_kinds([bad_role])
     ok = TaskSpec(
@@ -329,7 +329,7 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
         route="experiment",
         depends_on=["PLAN"],
         addresses=["Q1"],
-        expected_outputs=[
+        expected_expected_outputs=[
             OutputSpec(
                 name="main",
                 media_type="text/plain",
@@ -337,7 +337,7 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
                 evidence_kind="derivation",
             )
         ],
-    )
+        required=True, tolerate_failed_dep=False)
     validate_evidence_kinds([ok])
     assert is_derivation_task_spec(ok) is True
 

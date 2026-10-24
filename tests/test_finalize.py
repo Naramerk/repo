@@ -100,7 +100,7 @@ def _spec(key, addresses=None, deps=None):
         depends_on=deps or ["PLAN"], addresses=addresses or [],
     # Explicit criterion — PlanValidator does not credit catalog defaults.
     criteria=[RequirementRef(template_id="artifact_present")] if addresses else [],
-    )
+        required=True, tolerate_failed_dep=False)
 
 
 def test_same_tick_tiebreak():
@@ -464,11 +464,11 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="A", title="a", goal="g", route="experiment", depends_on=["PLAN"]
-            ),
+                task_key="A", title="a", goal="g", route="experiment", depends_on=["PLAN"],
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
-                task_key="B", title="b", goal="g", route="experiment", depends_on=["PLAN"]
-            ),
+                task_key="B", title="b", goal="g", route="experiment", depends_on=["PLAN"],
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[],
     )
@@ -727,7 +727,7 @@ async def test_report_task_failed_still_report(tmp_path, clock):
     for key in ("SPEC", "HYP", "LIT"):
         await record_success(rt, await rt.start_attempt(key), arts)
     await rt.accept_plan([])
-    await rt.fail_attempt(await rt.start_attempt("REPORT"), retryable=False)
+    await rt.fail_attempt(await rt.start_attempt("REPORT"), retryable=False, close_reason="failed")
     await rt.tick()
     ev = _fin(await rt.store.read_all())
     assert ev.payload.get("report_artifact_id") or ev.payload.get("minimal_report")

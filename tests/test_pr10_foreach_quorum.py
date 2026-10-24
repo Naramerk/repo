@@ -599,7 +599,7 @@ async def test_fanin_quorum(tmp_path, clock, runtime_cls):
             InputSpec(from_task="B", output="main", quorum=2),
             InputSpec(from_task="C", output="main", quorum=2),
         ],
-    )
+        required=True, tolerate_failed_dep=False)
     await rt.accept_plan(
         [a, b, c, summary],
         questions=[QuestionSpec(id="Q1", text="why")],
@@ -653,7 +653,7 @@ async def test_quorum_all_fail(tmp_path, clock, runtime_cls):
             InputSpec(from_task="A", output="main", quorum=1),
             InputSpec(from_task="B", output="main", quorum=1),
         ],
-    )
+        required=True, tolerate_failed_dep=False)
     await rt.accept_plan([a, b, summary], questions=[QuestionSpec(id="Q1", text="why")])
     for key in ("A", "B"):
         aid = await rt.start_attempt(key)
@@ -701,7 +701,7 @@ async def test_quorum_required_not_softened(tmp_path, clock, runtime_cls):
             InputSpec(from_task="A", output="main", quorum=1),  # pool
             InputSpec(from_task="B", output="main"),  # required, no quorum
         ],
-    )
+        required=True, tolerate_failed_dep=False)
     await rt.accept_plan([a, b, summary], questions=[QuestionSpec(id="Q1", text="why")])
     aid = await rt.start_attempt("A")
     await _ok(rt, arts, aid)
@@ -743,7 +743,7 @@ async def test_quorum_tie_exact(tmp_path, clock, runtime_cls):
         criteria=[RequirementRef(template_id="artifact_present")],
         tolerate_failed_dep=True,
         inputs=[InputSpec(from_task=k, output="main", quorum=2) for k in ("A", "B", "C")],
-    )
+        required=True, tolerate_failed_dep=False)
     await rt.accept_plan(tasks + [summary], questions=[QuestionSpec(id="Q1", text="why")])
     for key in ("A", "B"):
         aid = await rt.start_attempt(key)
@@ -790,7 +790,7 @@ async def test_quorum_partial_infra_failures(tmp_path, clock, runtime_cls):
             InputSpec(from_task="A", output="main", quorum=1),
             InputSpec(from_task="B", output="main", quorum=1),
         ],
-    )
+        required=True, tolerate_failed_dep=False)
     await rt.accept_plan([a, b, summary], questions=[QuestionSpec(id="Q1", text="why")])
     aid_a = await rt.start_attempt("A")
     await rt.fail_attempt(aid_a, retryable=False, close_reason="crashed")
@@ -852,7 +852,7 @@ async def test_quorum_xy_not_pooled_by_value(tmp_path, clock, runtime_cls):
             InputSpec(from_task="FX", output="main", quorum=2),
             InputSpec(from_task="FY", output="main", quorum=2),
         ],
-    )
+        required=True, tolerate_failed_dep=False)
     await rt.accept_plan(
         [src_x, src_y, fx, fy, summary],
         questions=[QuestionSpec(id="Q1", text="why")],
@@ -916,7 +916,7 @@ async def test_foreach_plus_quorum_fanin(tmp_path, clock, runtime_cls):
         criteria=[RequirementRef(template_id="artifact_present")],
         tolerate_failed_dep=True,
         inputs=[InputSpec(from_task="FE", output="main", quorum=2)],
-    )
+        required=True, tolerate_failed_dep=False)
     await rt.accept_plan(
         [e0, fe, summary],
         questions=[QuestionSpec(id="Q1", text="why")],
@@ -975,7 +975,7 @@ async def test_quorum_zero_inputs_edge(tmp_path, clock, runtime_cls):
         addresses=["Q1"],
         criteria=[RequirementRef(template_id="artifact_present")],
         inputs=[InputSpec(from_task="FE", output="main", quorum=1)],
-    )
+        required=True, tolerate_failed_dep=False)
     await rt.accept_plan([e0, fe, summary], questions=[QuestionSpec(id="Q1", text="why")])
     aid = await rt.start_attempt("E0")
     await _ok(rt, arts, aid)
@@ -1310,7 +1310,7 @@ def test_quorum_rejects_zero():
                     goal="g",
                     route="experiment",
                     inputs=[InputSpec(from_task="A", output="main", quorum=0)],
-                )
+        required=True, tolerate_failed_dep=False)
             ]
         )
 
@@ -1330,7 +1330,7 @@ def test_quorum_rejects_gt_static_pool():
                         InputSpec(from_task="A", output="main", quorum=3),
                         InputSpec(from_task="B", output="main", quorum=3),
                     ],
-                )
+        required=True, tolerate_failed_dep=False)
             ]
         )
 
@@ -1351,7 +1351,7 @@ def test_quorum_rejects_mix_all_and_int():
                         InputSpec(from_task="A", output="main", quorum="all"),
                         InputSpec(from_task="B", output="main", quorum=1),
                     ],
-                )
+        required=True, tolerate_failed_dep=False)
             ]
         )
 
@@ -1389,7 +1389,7 @@ async def test_foreach_quorum_gt_children_misses(tmp_path, clock, runtime_cls):
         criteria=[RequirementRef(template_id="artifact_present")],
         tolerate_failed_dep=True,
         inputs=[InputSpec(from_task="FE", output="main", quorum=3)],
-    )
+        required=True, tolerate_failed_dep=False)
     await rt.accept_plan([e0, fe, summary], questions=[QuestionSpec(id="Q1", text="why")])
     await _upsert_selected_hypotheses(rt, of_task="E0", n=2)  # only 2 children
     aid = await rt.start_attempt("E0")

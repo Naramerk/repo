@@ -33,7 +33,7 @@ def _task(key: str, outcome: TaskOutcome | None, *, inputs=None, **spec_kw):
             route="experiment",
             inputs=inputs or [],
             **spec_kw,
-        ),
+        required=True, tolerate_failed_dep=False),
         state=TaskState.DONE if outcome else TaskState.PENDING,
         outcome=outcome,
         deadline=datetime(2026, 1, 1, tzinfo=UTC),
@@ -109,15 +109,15 @@ async def test_depends_on_failed_parent_skipped(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"]
-            ),
+                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"],
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
-                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"]
-            ),
+                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"],
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[],
     )
-    await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
+    await rt.fail_attempt(await rt.start_attempt("P"), retryable=False, close_reason="failed")
     await rt.tick()
     child = rt.tasks[f"{sid}/C"]
     assert child.state == TaskState.DONE
@@ -147,11 +147,11 @@ async def test_cancel_task_cascades_via_hc(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"]
-            ),
+                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"],
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
-                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"]
-            ),
+                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"],
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[],
     )
@@ -192,15 +192,15 @@ async def test_hc_skipped_when_budget_exceeded(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"]
-            ),
+                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"],
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
-                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"]
-            ),
+                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"],
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[],
     )
-    await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
+    await rt.fail_attempt(await rt.start_attempt("P"), retryable=False, close_reason="failed")
     await rt.record_budget_debit(spent_rub=Decimal("25"), request_id="debit-hc")
     await rt.tick()
     child = rt.tasks[f"{sid}/C"]
@@ -234,15 +234,15 @@ async def test_hc_skipped_when_study_cancelled(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"]
-            ),
+                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"],
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
-                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"]
-            ),
+                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"],
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[],
     )
-    await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
+    await rt.fail_attempt(await rt.start_attempt("P"), retryable=False, close_reason="failed")
     await rt._append(
         [
             EventEnvelope(
@@ -285,8 +285,8 @@ async def test_tolerate_failed_dep(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"]
-            ),
+                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"],
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="C",
                 title="c",
@@ -294,11 +294,11 @@ async def test_tolerate_failed_dep(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["P"],
                 tolerate_failed_dep=True,
-            ),
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[],
     )
-    await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
+    await rt.fail_attempt(await rt.start_attempt("P"), retryable=False, close_reason="failed")
     await rt.tick()
     child = rt.tasks[f"{sid}/C"]
     assert child.state != TaskState.DONE
@@ -324,7 +324,7 @@ async def test_failed_spec_plan_still_runs_and_report(tmp_path, clock, runtime_c
         finalize_reserve_s=5,
     )
     _, arts = attach_executor(rt, tmp_path)
-    await rt.fail_attempt(await rt.start_attempt("SPEC"), retryable=False)
+    await rt.fail_attempt(await rt.start_attempt("SPEC"), retryable=False, close_reason="failed")
     await rt.tick()
     for key in ("HYP", "LIT", "PLAN", "REPORT"):
         t = rt.tasks[f"{sid}/{key}"]
@@ -377,7 +377,7 @@ async def test_method_simulation_real_provenance(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 method=ExperimentMethod.SIMULATION,
-            ),
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[],
     )
@@ -414,10 +414,10 @@ async def test_method_simulation_keeps_stub_input_provenance(
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                expected_outputs=[
+                expected_expected_outputs=[
                     OutputSpec(name="main", media_type="application/json")
                 ],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="S",
                 title="sim",
@@ -428,11 +428,11 @@ async def test_method_simulation_keeps_stub_input_provenance(
                 inputs=[
                     InputSpec(from_task="P", output="main", mode="simulate"),
                 ],
-            ),
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[],
     )
-    await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
+    await rt.fail_attempt(await rt.start_attempt("P"), retryable=False, close_reason="failed")
     aid = await rt.start_attempt("S")
     assert rt.attempts[aid]["provenance"] == "stub"
     await close_runtime(rt)

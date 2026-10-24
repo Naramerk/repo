@@ -115,7 +115,7 @@ def test_question_disposition_computed_from_verdict():
             goal="g",
             route="experiment",
             addresses=["Q1"],
-        ),
+        required=True, tolerate_failed_dep=False),
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=now,

@@ -380,13 +380,13 @@ def _criterion_freeze_attrs(graph: Any, study_id: str, template_id: Any) -> dict
     if optional_item(attrs, "sesoi") is not None:
         try:
             out["sesoi"] = attrs["sesoi"]
-        except (TypeError, ValueError):
-            pass  # audit-ok[except_pass]: executor.py:384 except_pass
+        except (TypeError, ValueError) as e:
+            raise JournalFormatError(f"criterion sesoi invalid: {attrs['sesoi']!r}") from e
     if optional_item(attrs, "alpha") is not None:
         try:
             out["alpha"] = attrs["alpha"]
-        except (TypeError, ValueError):
-            pass  # audit-ok[except_pass]: executor.py:389 except_pass
+        except (TypeError, ValueError) as e:
+            raise JournalFormatError(f"criterion alpha invalid: {attrs['alpha']!r}") from e
     if "predicts_null" in attrs:
         out["predicts_null"] = optional_item(attrs, "predicts_null") is True
     if "uses_sesoi" in attrs:

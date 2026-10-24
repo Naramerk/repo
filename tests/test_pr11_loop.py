@@ -53,7 +53,7 @@ def _body(key: str = "BODY", *, depends_on: list[str] | None = None) -> list[Tas
             depends_on=list(depends_on or []),
             addresses=["Q1"],
             criteria=[RequirementRef(template_id="value_match")],
-        )
+        required=True, tolerate_failed_dep=False)
     ]
 
 
@@ -254,7 +254,7 @@ async def test_loop_max_iter_missing_honest_refusal(tmp_path, clock, runtime_cls
                 depends_on=["PLAN"],
                 addresses=["Q1"],
                 criteria=[RequirementRef(template_id="value_match")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[QuestionSpec(id="Q1", text="q")],
         loops=[
@@ -761,7 +761,7 @@ def test_pred_criterion_met_reads_check_results():
                         route="experiment",
                         loop_id="L1",
                         loop_iter=1,
-                    ),
+        required=True, tolerate_failed_dep=False),
                     state=TaskState.DONE,
                     deadline=datetime.now(timezone.utc),
                 )
@@ -977,7 +977,7 @@ def test_survivors_le_real_graph_scope_filter():
                         route="experiment",
                         loop_id="L1",
                         loop_iter=1,
-                    ),
+        required=True, tolerate_failed_dep=False),
                     state=TaskState.DONE,
                     deadline=now,
                 ),
@@ -989,7 +989,7 @@ def test_survivors_le_real_graph_scope_filter():
                         title="out",
                         goal="g",
                         route="experiment",
-                    ),
+        required=True, tolerate_failed_dep=False),
                     state=TaskState.DONE,
                     deadline=now,
                 ),

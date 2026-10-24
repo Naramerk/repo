@@ -535,7 +535,7 @@ def test_apply_frozen_limits_rejects_coercible_host_budget_strings():
         sandbox_check_limits={
             "exec_busy": {"reap_timeout_s": "5", "output_drain_join_s": True}
         },
-    )
+        required=True, tolerate_failed_dep=False)
     with pytest.raises(ValidationError, match="host budget"):
         apply_frozen_limits(check, spec, template_id="exec_busy")
 

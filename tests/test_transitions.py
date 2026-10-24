@@ -57,7 +57,7 @@ async def test_p3_retry_then_done(tmp_path, clock, runtime_cls):
     rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
     _, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
-    await rt.fail_attempt(aid, retryable=True)
+    await rt.fail_attempt(aid, retryable=True, close_reason="failed")
     # P3: PENDING with retry_at — never RUNNING without an open attempt
     assert rt.tasks["st_tr/SPEC"].state == TaskState.PENDING
     assert rt.tasks["st_tr/SPEC"].reason == "retry_scheduled"
@@ -94,7 +94,7 @@ async def test_p3_retry_survives_crash_then_recover(tmp_path, clock, runtime_cls
     rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
     attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
-    await rt.fail_attempt(aid, retryable=True)
+    await rt.fail_attempt(aid, retryable=True, close_reason="failed")
     retry_at = rt._retry_at["st_tr/SPEC"]
     assert rt.tasks["st_tr/SPEC"].state == TaskState.PENDING
     await close_runtime(rt)
@@ -130,7 +130,7 @@ async def test_p3_retry_fires_exactly_once(tmp_path, clock, runtime_cls):
     rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
     attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
-    await rt.fail_attempt(aid, retryable=True)
+    await rt.fail_attempt(aid, retryable=True, close_reason="failed")
     clock.advance(timedelta(seconds=RETRY_BACKOFF_S))
     await rt.tick()
     assert "st_tr/SPEC" not in rt._retry_at

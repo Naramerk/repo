@@ -97,8 +97,9 @@ async def open_runtime(
                 # Wait for the worker thread; it may have committed before cancel.
                 try:
                     await task
-                except BaseException:  # audit-ok[broad_except]: runtime_factory.py:100 broad_except
-                    pass  # audit-ok[except_pass]: runtime_factory.py:101 except_pass
+                except BaseException as drain_err:  # audit-ok[broad_except]: runtime_factory.py await-task drain
+                    acquired_here = store.owner == owner and store.owner_nonce is not None
+                    raise asyncio.CancelledError from drain_err
                 acquired_here = store.owner == owner and store.owner_nonce is not None
                 raise
 

@@ -734,7 +734,7 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
                 route="literature",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="quote_ok")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -793,7 +793,7 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
         ),
     )
     assert result.outcome == Outcome.SUCCESS
-    await rt.fail_attempt(await rt.start_attempt("REPORT"), retryable=False)
+    await rt.fail_attempt(await rt.start_attempt("REPORT"), retryable=False, close_reason="failed")
     await rt.tick()
     assert rt.view().phase == "closed"
     await close_runtime(rt)
@@ -864,7 +864,7 @@ async def test_store_fetched_source_journals_and_matches(
                 route="literature",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="quote_ok")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -914,7 +914,7 @@ async def test_store_fetched_source_journals_and_matches(
     if "REPORT" in {t.spec.task_key for t in rt.tasks.values()}:
         rid = await rt.start_attempt("REPORT")
         if rid:
-            await rt.fail_attempt(rid, retryable=False)
+            await rt.fail_attempt(rid, retryable=False, close_reason="failed")
     await rt.tick()
     assert rt.view().phase == "closed"
     fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
@@ -959,7 +959,7 @@ async def test_source_fetched_survives_crash_reopen(
                 route="literature",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="quote_ok")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1021,7 +1021,7 @@ async def test_source_fetched_survives_crash_reopen(
         ),
     )
     assert result.outcome == Outcome.SUCCESS
-    await rt2.fail_attempt(await rt2.start_attempt("REPORT"), retryable=False)
+    await rt2.fail_attempt(await rt2.start_attempt("REPORT"), retryable=False, close_reason="failed")
     await rt2.tick()
     assert rt2.view().phase == "closed"
     await close_runtime(rt2)
@@ -1053,7 +1053,7 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
                 route="literature",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="quote_ok")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1096,7 +1096,7 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
     assert met.get("effect", {}).get("countable") is True
     assert met.get("effect", {}).get("source_fetched") is True
     assert met.get("effect", {}).get("trusted") is False
-    await rt.fail_attempt(await rt.start_attempt("REPORT"), retryable=False)
+    await rt.fail_attempt(await rt.start_attempt("REPORT"), retryable=False, close_reason="failed")
     await rt.tick()
     assert rt.view().phase == "closed"
     await close_runtime(rt)
@@ -1151,7 +1151,7 @@ def test_evaluate_task_checks_passes_fetched(tmp_path: Path):
             goal="g",
             route="literature",
             criteria=[RequirementRef(template_id="quote_ok")],
-        ),
+        required=True, tolerate_failed_dep=False),
         AgentTaskOutput(
             outputs={
                 "quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")
@@ -1195,7 +1195,7 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
                 route="literature",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="quote_ok")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1337,7 +1337,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
                 route="literature",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="quote_ok")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1519,7 +1519,7 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
                 route="literature",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="quote_ok")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1669,7 +1669,7 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
                 route="literature",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="quote_ok")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1762,7 +1762,7 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
                 route="literature",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="quote_ok")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1873,7 +1873,7 @@ async def test_append_failure_on_second_digest_clears_permits(
                 route="literature",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="quote_ok")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )

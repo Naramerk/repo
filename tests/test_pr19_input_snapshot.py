@@ -876,7 +876,7 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -926,10 +926,10 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                expected_outputs=[
+                expected_expected_outputs=[
                     OutputSpec(name="main", media_type="application/json")
                 ],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E1",
                 title="e",
@@ -937,7 +937,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["P1"],
                 inputs=[InputSpec(from_task="P1", output="main", mode="forbid")],
-            ),
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[],
     )
@@ -947,7 +947,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
     aid1 = await rt.start_attempt("E1")
     dig1 = rt.attempts[aid1]["inputs_digest"]
     assert dig1
-    await rt.fail_attempt(aid1, retryable=True)
+    await rt.fail_attempt(aid1, retryable=True, close_reason="failed")
     new_art = arts.put_core(
         b'{"count": 999, "drift": true}',
         make_tool_ref(f"{aid_p}:v2", "core", "main"),
@@ -1003,7 +1003,7 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1452,7 +1452,7 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1687,7 +1687,7 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )

@@ -586,7 +586,8 @@ def test_terminal_reason_for(impl):
     t = Task(
         task_id="st/A",
         kind=TaskKind.EXPERIMENT,
-        spec=TaskSpec(task_key="A", title="a", goal="g", route="experiment"),
+        spec=TaskSpec(task_key="A", title="a", goal="g", route="experiment",
+        required=True, tolerate_failed_dep=False),
         state=TaskState.DONE,
         outcome=TaskOutcome.FAILED,
         reason=TaskReason.HUMAN_TIMEOUT,

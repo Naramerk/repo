@@ -120,7 +120,7 @@ def _task(*, key, addresses, depends_on, criteria=True, **kw):
         depends_on=depends_on,
         addresses=addresses,
         criteria=[RequirementRef(template_id="value_match")] if criteria else [],
-    )
+        required=True, tolerate_failed_dep=False)
 
 
 @pytest.mark.asyncio
@@ -1007,7 +1007,7 @@ async def test_pending_refute_without_experiment_node(tmp_path, clock, runtime_c
                 # validity-only criteria — no prediction role; refute still ADDS protection.
                 criteria=[RequirementRef(template_id="artifact_present")],
                 tests_intent="refute",
-            ),
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[QuestionSpec(id="Q1", text="old")],
     )
@@ -1204,7 +1204,7 @@ async def test_empty_address_refute_not_skippable(tmp_path, clock, runtime_cls):
                 addresses=[],
                 criteria=[RequirementRef(template_id="value_match")],
                 tests_intent="refute",
-            ),
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[QuestionSpec(id="Q1", text="old")],
     )
@@ -1253,7 +1253,7 @@ async def test_timeout_counts_toward_agent_quota(tmp_path, clock, runtime_cls):
                 addresses=["Q1"],
                 criteria=[RequirementRef(template_id="value_match")],
                 tests_intent="refute",
-            ),
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -1642,7 +1642,7 @@ async def test_plan_expansion_marker_not_met_on_exp(tmp_path, clock, runtime_cls
         depends_on=["PLAN"],
         addresses=["Q1"],
         criteria=[RequirementRef(template_id="plan_expansion_schema")],
-    )
+        required=True, tolerate_failed_dep=False)
     checks = evaluate_task_checks(
         rt.catalog,
         forged,
@@ -1698,7 +1698,7 @@ async def test_critic_rejects_plan_expansion_marker_on_added(tmp_path, clock, ru
                 depends_on=["E0"],
                 addresses=["Q1"],
                 criteria=[RequirementRef(template_id="plan_expansion_schema")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         reason="forge",
     )
@@ -1715,7 +1715,7 @@ async def test_critic_rejects_plan_expansion_marker_on_added(tmp_path, clock, ru
                 depends_on=["E0"],
                 addresses=["Q1"],
                 criteria=[RequirementRef(template_id="not_in_catalog_xyz")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         reason="forge",
     )
@@ -1750,8 +1750,8 @@ async def test_false_confirm_cannot_unprotect_prediction_task(tmp_path, clock, r
                 depends_on=["E0"],
                 addresses=["Q1"],
                 criteria=[RequirementRef(template_id="value_match")],  # prediction
-                tests_intent="confirm",  # false confirm — must not unprotect
-            ),
+                tests_intent="confirm",  # false confirm — must not unprotect,
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[QuestionSpec(id="Q1", text="old")],
     )
@@ -1850,7 +1850,7 @@ async def test_superseded_question_claims_not_counted(tmp_path, clock, runtime_c
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[QuestionSpec(id="Q1", text="old")],
     )

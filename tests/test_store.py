@@ -274,7 +274,7 @@ async def test_attempt_closed_tasks_projection_is_strict_json(
     )
     attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
-    await rt.fail_attempt(aid, retryable=True)
+    await rt.fail_attempt(aid, retryable=True, close_reason="failed")
     task_row = await rt.store.get_row("tasks", "st_json_p3/SPEC")
     assert task_row is not None
     assert task_row.get("reason") == "retry_scheduled"

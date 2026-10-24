@@ -271,7 +271,7 @@ def test_garbage_attrs_dropped_not_raised():
             goal="g",
             route="experiment",
             addresses=["Q1"],
-        ),
+        required=True, tolerate_failed_dep=False),
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=datetime(2026, 1, 1, tzinfo=UTC),
@@ -366,7 +366,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="value_match")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -427,7 +427,7 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
                 # Explicit criterion (PlanValidator ignores catalog defaults).
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -595,7 +595,7 @@ async def test_accept_plan_allows_verdict_kind(tmp_path, clock, runtime_cls):
                 depends_on=["PLAN"],
                 inputs=[InputSpec(kind="verdict", ref="Q1")],
                 addresses=["Q1"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -633,7 +633,7 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E1",
                 title="consumer",
@@ -642,7 +642,7 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
                 depends_on=["E0"],
                 inputs=[InputSpec(kind="verdict", ref="Q1")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -703,7 +703,7 @@ def test_dispositions_from_verdict_counting_claims():
             goal="g",
             route="experiment",
             addresses=["Q1"],
-        ),
+        required=True, tolerate_failed_dep=False),
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=now,
@@ -771,7 +771,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -889,7 +889,7 @@ def test_criterion_status_not_met_from_failed_check():
             goal="g",
             route="experiment",
             criteria=[],
-        ),
+        required=True, tolerate_failed_dep=False),
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=now,
@@ -957,7 +957,7 @@ def test_frozen_normalizes_check_id_to_template_id():
             goal="g",
             route="experiment",
             criteria=[],
-        ),
+        required=True, tolerate_failed_dep=False),
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=now,
@@ -995,8 +995,8 @@ def test_criterion_match_is_exact_not_endswith():
         task_id="st/E0",
         kind=TaskKind.EXPERIMENT,
         spec=TaskSpec(
-            task_key="E0", title="e", goal="g", route="experiment", criteria=[]
-        ),
+            task_key="E0", title="e", goal="g", route="experiment", criteria=[],
+        required=True, tolerate_failed_dep=False),
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=now,
@@ -1321,7 +1321,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
                 depends_on=["E_ref"],
                 criteria=[],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -1672,7 +1672,7 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
                     depends_on=["PLAN"],
                     criteria=[RequirementRef(template_id="value_match")],
                     addresses=["Q1"],
-                )
+        required=True, tolerate_failed_dep=False)
             ],
             questions=[QuestionSpec(id="Q1", text="why")],
         )
@@ -1900,7 +1900,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E1",
                 title="consumer",
@@ -1909,7 +1909,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
                 depends_on=["E0"],
                 inputs=[InputSpec(kind="verdict", ref="Q1")],
                 addresses=["Q1"],
-            ),
+        required=True, tolerate_failed_dep=False),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -2012,7 +2012,7 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )

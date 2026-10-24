@@ -389,7 +389,8 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
         "budget": None,
     }
     assert "finalize_reserve_s" not in study_payload
-    spec = TaskSpec(task_key="SPEC", title="SPEC", goal="SPEC", route="spec")
+    spec = TaskSpec(task_key="SPEC", title="SPEC", goal="SPEC", route="spec",
+        required=True, tolerate_failed_dep=False)
     task_payload = {
         "task_id": f"{sid}/SPEC",
         "kind": TaskKind.SPEC.value,

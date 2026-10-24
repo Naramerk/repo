@@ -90,11 +90,11 @@ def _exp(
         route="experiment",
         depends_on=["PLAN"],
         addresses=addresses or [],
-        expected_outputs=outs,
+        expected_expected_outputs=outs,
         criteria=criteria
         if criteria is not None
         else ([RequirementRef(template_id="rubric_check")] if rubric else []),
-    )
+        required=True, tolerate_failed_dep=False)
 
 
 def _q(qid: str, text: str, *, parent: str | None = None, origin: str | None = None) -> QuestionSpec:
@@ -141,7 +141,7 @@ def _task(
             goal="g",
             route="experiment",
             addresses=addresses or [],
-        ),
+        required=True, tolerate_failed_dep=False),
         state=TaskState.DONE,
         outcome=outcome,
         reason=reason,
@@ -779,7 +779,7 @@ def test_loop_cap_preserves_iteration_cap_when_children_incomplete_or_rubric():
                 goal="g",
                 route="experiment",
                 addresses=addresses,
-            ),
+        required=True, tolerate_failed_dep=False),
             state=TaskState.PENDING,
             outcome=None,
             reason=None,
@@ -959,7 +959,7 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
                 route="experiment",
                 depends_on=["E0"],
                 addresses=["Q"],
-                expected_outputs=[
+                expected_expected_outputs=[
                     OutputSpec(
                         name="main",
                         media_type="text/markdown",
@@ -968,7 +968,7 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
                     )
                 ],
                 criteria=[RequirementRef(template_id="rubric_check")],
-            )
+        required=True, tolerate_failed_dep=False)
         ],
         added_questions=[],
         superseded_tasks=["E1"],
@@ -1210,7 +1210,7 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
         addresses=["Q1"],
         criteria=[RequirementRef(template_id="value_match")],
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
-    )
+        required=True, tolerate_failed_dep=False)
     await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")])
     now = rt.clock.now()
     for i, hid in enumerate(("H0", "H1")):
@@ -1329,7 +1329,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
             depends_on=[],
             addresses=["Q1"],
             criteria=[RequirementRef(template_id="value_match")],
-        )
+        required=True, tolerate_failed_dep=False)
     ]
     await rt.accept_plan(
         [
@@ -1893,7 +1893,7 @@ async def test_foreach_after_task_done_reraise_lease_lost(tmp_path, clock, monke
         addresses=["Q.a"],
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
         criteria=[],
-    )
+        required=True, tolerate_failed_dep=False)
     await rt.accept_plan(
         [e0, fe],
         questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
@@ -1941,7 +1941,7 @@ async def test_materialize_ready_foreach_reraise_lease_lost(tmp_path, clock, mon
         addresses=["Q.a"],
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
         criteria=[],
-    )
+        required=True, tolerate_failed_dep=False)
     await rt.accept_plan(
         [e0, fe],
         questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],

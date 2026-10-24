@@ -699,7 +699,7 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="exec_ok")],
-            )
+        required=True, tolerate_failed_dep=False)
         ]
     )
     aid = await rt.start_attempt("E1")
@@ -776,7 +776,7 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="exec_ok")],
-            )
+        required=True, tolerate_failed_dep=False)
         ]
     )
     aid = await rt.start_attempt("E1")
@@ -1643,7 +1643,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="exec_sleep")],
-            )
+        required=True, tolerate_failed_dep=False)
         ]
     )
     from coscientist.core.finalize.finalize import IDLE_TIMEOUT_RU, TIMEOUT_BUDGET_RU
@@ -1790,7 +1790,7 @@ async def test_timeout_with_stuck_drain_charges_attempt(
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="exec_busy_hold")],
-            )
+        required=True, tolerate_failed_dep=False)
         ]
     )
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
@@ -1990,7 +1990,7 @@ async def test_infra_failure_does_not_charge_attempt(
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="exec_ok")],
-            )
+        required=True, tolerate_failed_dep=False)
         ]
     )
     aid = await rt.start_attempt("E1")
@@ -2080,7 +2080,7 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="exec_sleep")],
-            )
+        required=True, tolerate_failed_dep=False)
         ]
     )
     empty = AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
@@ -2145,7 +2145,7 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
                 # Agent tries to override — must be stripped.
                 sandbox_timeout_s=0.05,
                 sandbox_memory_mb=1,
-            )
+        required=True, tolerate_failed_dep=False)
         ]
     )
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
@@ -2192,7 +2192,7 @@ def test_freeze_strips_agent_timeout_zero_point_oh_five():
             sandbox_timeout_s=0.05,
             sandbox_memory_mb=1,
             sandbox_check_limits={"exec_ok": {"timeout_s": 0.05}},
-        ),
+        required=True, tolerate_failed_dep=False),
         cat,
     )
     assert frozen.sandbox_timeout_s is None
@@ -2369,7 +2369,7 @@ def test_freeze_shared_helper_used_by_all_task_create_paths():
             route="experiment",
             criteria=[RequirementRef(template_id="exec_ok")],
             sandbox_timeout_s=0.05,
-        ),
+        required=True, tolerate_failed_dep=False),
         cat,
     )
     assert out.sandbox_check_limits["exec_ok"]["timeout_s"] == 12.0
@@ -2431,7 +2431,7 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
                     RequirementRef(template_id="pred_a"),
                     RequirementRef(template_id="pred_b"),
                 ],
-            )
+        required=True, tolerate_failed_dep=False)
         ]
     )
 
@@ -2550,7 +2550,7 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="pred_only")],
-            )
+        required=True, tolerate_failed_dep=False)
         ]
     )
 
