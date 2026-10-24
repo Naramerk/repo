@@ -13,7 +13,7 @@ from coscientist.core.claims.reviews import review_key
 from coscientist.core.claims.rubric import freeze_rubric, rubric_digest
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.stance import claim_stance
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import EventEnvelope, make_idem, PLAN_ACCEPTED_SCHEMA_VERSION
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
@@ -32,7 +32,7 @@ from coscientist.core.plan.plan_validate import (
     validate_final_types,
     validate_rubric_immutable,
 )
-from tests.helpers import NEED_OFF, attach_executor, close_runtime, open_runtime, record_success
+from tests.helpers import NEED_OFF, NEED_UNRECORDED, attach_executor, close_runtime, open_runtime, record_success
 
 _SCOPE = dict(task_id="t1", attempt_id="a1", output_digest="deadbeef")
 
@@ -981,10 +981,10 @@ def test_upcast_taskcreated_v10_and_plan_expanded_v2():
             "tasks": [],
         },
     )
-    assert v3 == 12  # G4 Need after PR15 kind v11
+    assert v3 == PLAN_ACCEPTED_SCHEMA_VERSION  # G4 Need after PR15 kind v11
     assert p3["questions"][0]["final_type"] == "verdict"
     assert p3.get("loops") == []
-    assert p3["hypotheses"] == {"source_schema_version": 11}
+    assert p3["hypotheses"] == NEED_UNRECORDED
     assert p3.get("rollup") == "all"
 
 

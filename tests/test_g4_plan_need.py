@@ -2,23 +2,32 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from pydantic import ValidationError
 
-from coscientist.core.events.events import PLAN_ACCEPTED_SCHEMA_VERSION
+from coscientist.core.events.events import PLAN_ACCEPTED_NEED_SINCE, PLAN_ACCEPTED_SCHEMA_VERSION
 from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.domain import Need, NeedUnrecorded, TaskSpec
+from coscientist.core.plan import expand, foreach, loop
 from coscientist.core.plan.need import (
     PlanNeedRefuse,
     need_from_plan_blob,
     parse_plan_need,
+    recorded_plan_needs,
     require_need,
     resolve_plan_needs,
-    validate_need,
 )
-from tests.helpers import NEED_OFF, close_runtime, open_runtime
+from tests.helpers import NEED_OFF, NEED_UNRECORDED, close_runtime, open_runtime
 
-_UNRECORDED = {"source_schema_version": 11}
+_UNRECORDED_PREV: dict[str, Any] = {
+    "hypotheses": dict(NEED_UNRECORDED),
+    "literature": dict(NEED_UNRECORDED),
+}
+_NEED_OFF_DUMP = {"kind": "need", "needed": False, "reason": "x"}
+_NEED_ON_DUMP = {"kind": "need", "needed": True, "reason": "y"}
+_UNRECORDED_MATCH = rf"plan_need_unrecorded:source_schema_version={PLAN_ACCEPTED_NEED_SINCE}"
 
 
 @pytest.mark.parametrize(
@@ -30,7 +39,7 @@ _UNRECORDED = {"source_schema_version": 11}
         ({"needed": 1, "reason": "x"}, "valid boolean"),
     ],
 )
-def test_need_rejects_bad_shape(kwargs: dict, match: str) -> None:
+def test_need_rejects_bad_shape(kwargs, match) -> None:
     with pytest.raises(ValidationError, match=match):
         Need.model_validate(kwargs)
 
@@ -46,7 +55,7 @@ def test_need_off_ok() -> None:
         ({}, "hypotheses", "plan_need_corrupt:missing_hypotheses"),
         ({"hypotheses": None}, "hypotheses", "plan_need_corrupt:missing_hypotheses"),
         (
-            {"hypotheses": {"needed": False, "reason": "x"}},
+            {"hypotheses": {"kind": "need", "needed": False, "reason": "x"}},
             "literature",
             "plan_need_corrupt:missing_literature",
         ),
@@ -69,23 +78,18 @@ def test_resolve_omit_refuses(hypotheses, literature, match) -> None:
         resolve_plan_needs(hypotheses=hypotheses, literature=literature)
 
 
-def test_validate_need_rejects_dict() -> None:
-    with pytest.raises(PlanNeedRefuse, match="plan_need_type:expected_Need"):
-        validate_need({"needed": False, "reason": "x"})  # type: ignore[arg-type]
-
-
 @pytest.mark.parametrize(
     ("payload", "hyp", "lit"),
     [
-        ({"plan_id": "p", "tasks": []}, _UNRECORDED, _UNRECORDED),
+        ({"plan_id": "p", "tasks": []}, NEED_UNRECORDED, NEED_UNRECORDED),
         (
             {
                 "plan_id": "p",
                 "tasks": [],
                 "hypotheses": {"needed": False, "reason": "x"},
             },
-            {"needed": False, "reason": "x"},
-            _UNRECORDED,
+            _NEED_OFF_DUMP,
+            NEED_UNRECORDED,
         ),
         (
             {
@@ -94,14 +98,15 @@ def test_validate_need_rejects_dict() -> None:
                 "hypotheses": None,
                 "literature": {"needed": True, "reason": "y"},
             },
-            _UNRECORDED,
-            {"needed": True, "reason": "y"},
+            NEED_UNRECORDED,
+            _NEED_ON_DUMP,
         ),
     ],
+    ids=["both_absent", "lit_absent", "hyp_null"],
 )
 def test_plan_accepted_v11_fills_need_unrecorded(payload, hyp, lit) -> None:
     """Real v11 omit/null → NeedUnrecorded (no invent, no upcast refuse)."""
-    v, out = upcast("PlanAccepted", 11, payload)
+    v, out = upcast("PlanAccepted", PLAN_ACCEPTED_NEED_SINCE, payload)
     assert v == PLAN_ACCEPTED_SCHEMA_VERSION
     assert out["hypotheses"] == hyp
     assert out["literature"] == lit
@@ -110,18 +115,40 @@ def test_plan_accepted_v11_fills_need_unrecorded(payload, hyp, lit) -> None:
 def test_plan_accepted_v11_keeps_explicit_need() -> None:
     hyp = {"needed": False, "reason": "x"}
     lit = {"needed": True, "reason": "y"}
-    v, out = upcast("PlanAccepted", 11, {"plan_id": "p", "tasks": [], "hypotheses": hyp, "literature": lit})
+    v, out = upcast(
+        "PlanAccepted",
+        PLAN_ACCEPTED_NEED_SINCE,
+        {"plan_id": "p", "tasks": [], "hypotheses": hyp, "literature": lit},
+    )
     assert v == PLAN_ACCEPTED_SCHEMA_VERSION
-    assert out["hypotheses"] == hyp
-    assert out["literature"] == lit
+    assert out["hypotheses"] == _NEED_OFF_DUMP
+    assert out["literature"] == _NEED_ON_DUMP
 
 
-def test_require_need_refuses_unrecorded() -> None:
-    with pytest.raises(PlanNeedRefuse, match=r"plan_need_unrecorded:source_schema_version=11"):
-        require_need(NeedUnrecorded(source_schema_version=11))
-    with pytest.raises(PlanNeedRefuse, match=r"plan_need_unrecorded:source_schema_version=11"):
-        require_need(parse_plan_need(_UNRECORDED))
+def test_require_need_refuses_need_unrecorded_model() -> None:
+    with pytest.raises(PlanNeedRefuse, match=_UNRECORDED_MATCH):
+        require_need(NeedUnrecorded(source_schema_version=PLAN_ACCEPTED_NEED_SINCE))
+
+
+def test_require_need_refuses_parsed_unrecorded() -> None:
+    with pytest.raises(PlanNeedRefuse, match=_UNRECORDED_MATCH):
+        require_need(parse_plan_need(NEED_UNRECORDED))
+
+
+def test_require_need_accepts_need() -> None:
     assert require_need(Need(needed=False, reason="x")).needed is False
+
+
+@pytest.mark.parametrize(
+    "mod",
+    [expand, foreach, loop],
+    ids=["expand", "foreach", "loop"],
+)
+def test_prod_plan_consumer_refuses_need_unrecorded(mod) -> None:
+    """expand / foreach / loop bind recorded_plan_needs → typed refuse at use."""
+    assert mod.recorded_plan_needs is recorded_plan_needs
+    with pytest.raises(PlanNeedRefuse, match=_UNRECORDED_MATCH):
+        mod.recorded_plan_needs(_UNRECORDED_PREV)
 
 
 @pytest.mark.asyncio
@@ -133,7 +160,7 @@ async def test_accept_plan_omit_refuses(tmp_path) -> None:
         assert pid == ""
         refused = [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
         assert len(refused) == 1
-        assert refused[0].payload["detail"].startswith("plan_need_required")
+        assert refused[0].payload["detail"] == "plan_need_required:hypotheses"
     finally:
         await close_runtime(rt)
 

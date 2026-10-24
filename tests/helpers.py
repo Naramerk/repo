@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
-from coscientist.core.events.events import UnstampedEvent
+from coscientist.core.events.events import PLAN_ACCEPTED_NEED_SINCE, UnstampedEvent
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
@@ -24,6 +24,10 @@ from tests.checks.minimal_test_catalog import minimal_test_catalog
 
 # Test Need (needed=False). Pass hypotheses=/literature= explicitly.
 NEED_OFF = Need(needed=False, reason="test")
+NEED_UNRECORDED = {
+    "kind": "unrecorded",
+    "source_schema_version": PLAN_ACCEPTED_NEED_SINCE,
+}
 
 
 async def seed_legacy_journal(

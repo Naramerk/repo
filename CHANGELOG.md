@@ -7,7 +7,7 @@
 =======
 ### G4 Need
 
-- `Need` (strict) + `NeedUnrecorded`; PlanAccepted v12 fills missing/null with `NeedUnrecorded` (no invent); use-site → `PlanNeedRefuse`; accept omit → `PlanNeedRefuse`. No `Study.require_hypotheses` here. [CAP #2](docs/CAPABILITIES.md); [DESIGN §2](docs/DESIGN.md#2-доменная-модель).
+- `Need` (strict, `kind` discriminator) + `NeedUnrecorded`; PlanAccepted v12 fills missing/null with `NeedUnrecorded` (no invent); expand/foreach/loop → `require_need` / `PlanNeedRefuse`; accept omit → `PlanNeedRefuse`. No `Study.require_hypotheses` here. [CAP #2](docs/CAPABILITIES.md); [DESIGN §2](docs/DESIGN.md#2-доменная-модель).
 
 >>>>>>> 1c0a4e2 (fix(G4): Need + omit→PlanNeedRefuse + NEED_OFF call sites)
 ### Docs — #16/#17 handoff ([report-s3.md](docs/handoff/report-s3.md))

@@ -13,7 +13,7 @@ from coscientist.core.claims.dispositions import dispositions
 from coscientist.core.claims.reasons import NotAttemptedReason, TaskReason, TerminalReason
 from coscientist.core.events.digest import canonical_json
 from coscientist.core.events.errors import Conflict, Idempotent, StudyClosedError
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import PLAN_ACCEPTED_SCHEMA_VERSION, EventEnvelope, make_idem
 from coscientist.core.events.metrics import late_write_rejected_total
 from coscientist.core.events.projections import fold_events
 from coscientist.core.events.upcasters import upcast, writer_schema_version
@@ -38,6 +38,7 @@ from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.question_tasks import question_tasks, questions_from_spec_output
 from tests.helpers import (
     NEED_OFF,
+    NEED_UNRECORDED,
     attach_executor,
     close_runtime,
     open_runtime,
@@ -276,14 +277,14 @@ def test_upcast_taskcreated_input_mode_old_default():
 
 
 def test_upcast_planaccepted_questions_default():
-    from coscientist.core.events.events import PLAN_ACCEPTED_SCHEMA_VERSION
-
     v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
     assert v == PLAN_ACCEPTED_SCHEMA_VERSION
-    assert p["questions"] == [] and p["tasks"][0]["addresses"] == []
-    assert p.get("rollup") == "all" and p.get("subquestions") == []
-    assert p["hypotheses"] == {"source_schema_version": 11}
-    assert p["literature"] == {"source_schema_version": 11}
+    assert p["questions"] == []
+    assert p["tasks"][0]["addresses"] == []
+    assert p.get("rollup") == "all"
+    assert p.get("subquestions") == []
+    assert p["hypotheses"] == NEED_UNRECORDED
+    assert p["literature"] == NEED_UNRECORDED
 
     # PR13 rubric (v8); PR11 loops (v9); PR16 rollup (v10); PR15 kind (v11).
     v2, p2 = upcast(
@@ -306,7 +307,7 @@ def test_upcast_planaccepted_questions_default():
     assert p2.get("rollup") == "all"
     assert p2["tasks"][0]["expected_outputs"][0]["kind"] is None
     assert p2["tasks"][0]["expected_outputs"][0]["evidence_kind"] is None
-    assert p2["hypotheses"] == {"source_schema_version": 11}
+    assert p2["hypotheses"] == NEED_UNRECORDED
 
     assert p["expand_after"] == []
     assert p["loops"] == []

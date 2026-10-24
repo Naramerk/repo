@@ -43,7 +43,7 @@ from coscientist.core.plan.shares import (
     validate_deadline_shares,
     validate_plan_shares,
 )
-from tests.helpers import NEED_OFF, attach_executor, close_runtime, open_runtime, open_runtime_experimental
+from tests.helpers import NEED_OFF, NEED_UNRECORDED, attach_executor, close_runtime, open_runtime, open_runtime_experimental
 
 
 def _exp(key: str, *, depends_on: list[str] | None = None, **kw) -> TaskSpec:
@@ -824,7 +824,7 @@ def test_upcast_plan_accepted_shares():
     )
     assert v >= 7
     assert p["tasks"][0]["budget_share"] is None
-    assert p["hypotheses"] == {"source_schema_version": 11}
+    assert p["hypotheses"] == NEED_UNRECORDED
 
 
 async def _plan_one(rt, *, share: float = 0.5):

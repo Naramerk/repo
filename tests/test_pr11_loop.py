@@ -9,6 +9,7 @@ import pytest
 
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import Disposition, TaskReason, TerminalReason
+from coscientist.core.events.events import PLAN_ACCEPTED_SCHEMA_VERSION
 from coscientist.core.events.ids import hypothesis_node_id
 from coscientist.core.events.upcasters import (
     UPCASTERS,
@@ -40,7 +41,7 @@ from coscientist.core.plan.loop_predicates import (
     scope_fingerprint,
     validate_loop_predicate,
 )
-from tests.helpers import NEED_OFF, attach_executor, close_runtime, open_runtime
+from tests.helpers import NEED_OFF, NEED_UNRECORDED, attach_executor, close_runtime, open_runtime
 
 
 def _body(key: str = "BODY", *, depends_on: list[str] | None = None) -> list[TaskSpec]:
@@ -1198,10 +1199,10 @@ def test_upcast_plan_accepted_loops_default():
             "hypothesis_id": None, "tasks": [],
         },
     )
-    assert v == 12  # G4 Need after PR15 kind v11
+    assert v == PLAN_ACCEPTED_SCHEMA_VERSION  # G4 Need after PR15 kind v11
     assert p["loops"] == []
     assert p.get("rollup") == "all"
-    assert p["hypotheses"] == {"source_schema_version": 11}
+    assert p["hypotheses"] == NEED_UNRECORDED
 
 
 def test_upcast_task_created_loop_fields():

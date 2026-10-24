@@ -504,6 +504,7 @@ class Need(Frozen):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
+    kind: Literal["need"] = "need"
     needed: bool
     reason: str = Field(min_length=1)
 
@@ -519,6 +520,7 @@ class NeedUnrecorded(Frozen):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
+    kind: Literal["unrecorded"] = "unrecorded"
     source_schema_version: StrictInt
 
 

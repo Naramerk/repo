@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from coscientist.core.claims.reasons import CloseReason, TaskReason
+from coscientist.core.events.events import PLAN_ACCEPTED_NEED_SINCE
 
 Upcaster = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -946,10 +947,17 @@ register_upcaster("TaskCreated", 13, _task_created_v13_to_v14_sandbox_freeze)
 def _plan_accepted_v11_to_v12_need(payload: dict[str, Any]) -> dict[str, Any]:
     """G4: missing/null Need → NeedUnrecorded (no invent, no refuse at upcast)."""
     out = dict(payload)
-    unrecorded = {"source_schema_version": 11}
+    unrecorded = {
+        "kind": "unrecorded",
+        "source_schema_version": PLAN_ACCEPTED_NEED_SINCE,
+    }
     for field in ("hypotheses", "literature"):
         if field not in out or out[field] is None:
             out[field] = dict(unrecorded)
+            continue
+        blob = out[field]
+        if isinstance(blob, dict) and blob.get("kind") is None:
+            out[field] = {**blob, "kind": "need"}
     return out
 
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)
@@ -962,7 +970,7 @@ register_upcaster("PlanAccepted", 7, _plan_accepted_v7_to_v8_rubric)
 register_upcaster("PlanAccepted", 8, _plan_accepted_v8_to_v9_loops)
 register_upcaster("PlanAccepted", 9, _plan_accepted_v9_to_v10_decomposes)
 register_upcaster("PlanAccepted", 10, _plan_accepted_v10_to_v11_pr15_kinds)
-register_upcaster("PlanAccepted", 11, _plan_accepted_v11_to_v12_need)
+register_upcaster("PlanAccepted", PLAN_ACCEPTED_NEED_SINCE, _plan_accepted_v11_to_v12_need)
 register_upcaster("PlanExpanded", 1, _plan_expanded_v1_to_v2_rubric)
 register_upcaster("PlanExpanded", 2, _plan_expanded_v2_to_v3_loop)
 register_upcaster("PlanExpanded", 3, _plan_expanded_v3_to_v4_decomposes)

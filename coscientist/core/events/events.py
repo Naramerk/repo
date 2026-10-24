@@ -16,6 +16,8 @@ PLAN_EXPANDED_SCHEMA_VERSION = 5
 STUDY_CREATED_SCHEMA_VERSION = 13  # #41: catalog_version StrictInt
 STUDY_REFUSED_SCHEMA_VERSION = 2  # #41: required nullable catalog_version
 PLAN_ACCEPTED_SCHEMA_VERSION = 12
+# PlanAccepted schema that lacked Need fields; v12 upcaster fills NeedUnrecorded.
+PLAN_ACCEPTED_NEED_SINCE = PLAN_ACCEPTED_SCHEMA_VERSION - 1
 TASK_CREATED_SCHEMA_VERSION = 14
 STUDY_FINALIZED_SCHEMA_VERSION = 4  # PR20: custom_checks / observations
 

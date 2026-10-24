@@ -29,7 +29,7 @@ from coscientist.core.execution.domain import (
 from coscientist.core.plan.expand import apply_pending_expansion
 from coscientist.core.plan.expand_trigger import maybe_expand_after_task_done, refuse_expansion
 from coscientist.core.plan.supersede import question_is_superseded
-from tests.helpers import NEED_OFF, attach_executor, close_runtime, open_runtime
+from tests.helpers import NEED_OFF, NEED_UNRECORDED, attach_executor, close_runtime, open_runtime
 
 
 async def _boot_plan(rt, *, tasks, questions, expand_after=None):
@@ -2069,8 +2069,8 @@ def test_upcaster_planaccepted_v3_to_v4_expand_after():
     v, p = upcast("PlanAccepted", 3, {"plan_id": "p", "tasks": [], "questions": []})
     assert v >= 4
     assert p["expand_after"] == []
-    assert p["hypotheses"] == {"source_schema_version": 11}
-    assert p["literature"] == {"source_schema_version": 11}
+    assert p["hypotheses"] == NEED_UNRECORDED
+    assert p["literature"] == NEED_UNRECORDED
 
 
 def test_schema_valid_missing_artifact(tmp_path):

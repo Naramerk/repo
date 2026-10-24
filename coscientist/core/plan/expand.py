@@ -40,7 +40,7 @@ from coscientist.core.plan.expand_validate import (
     task_produced_countable_claims,
     validate_expansion,
 )
-from coscientist.core.plan.need import need_from_plan_blob
+from coscientist.core.plan.need import PlanNeedRefuse, recorded_plan_needs
 from coscientist.core.plan.supersede import (
     should_skip_for_question_supersede,
     target_blocks_agent_supersede,
@@ -369,6 +369,13 @@ async def _expand_plan(
         LoopSpec.model_validate(x) if isinstance(x, dict) else x
         for x in ((prev.get("loops") if prev else None) or [])
     ]
+    try:
+        hyp_need, lit_need = recorded_plan_needs(prev)
+    except PlanNeedRefuse as e:
+        await refuse_expansion(
+            runtime, after_task, reason="invalid", detail=str(e)[:200]
+        )
+        return None
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -380,8 +387,8 @@ async def _expand_plan(
         loops=prev_loops,
         subquestions=named_subs,
         rollup=rollup,  # type: ignore[arg-type]
-        hypotheses=need_from_plan_blob(prev, "hypotheses"),
-        literature=need_from_plan_blob(prev, "literature"),
+        hypotheses=hyp_need,
+        literature=lit_need,
     )
     events: list[EventEnvelope] = []
     events.extend(

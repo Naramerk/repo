@@ -32,7 +32,7 @@ from coscientist.core.plan.expand_graph import (
 )
 from coscientist.core.plan.expand_trigger import refuse_expansion
 from coscientist.core.plan.expand_validate import active_plan_blob, assign_core_keys
-from coscientist.core.plan.need import need_from_plan_blob
+from coscientist.core.plan.need import PlanNeedRefuse, recorded_plan_needs
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
@@ -290,6 +290,13 @@ async def materialize_foreach(
         LoopSpec.model_validate(x) if isinstance(x, dict) else x
         for x in (prev.get("loops") or [])
     ]
+    try:
+        hyp_need, lit_need = recorded_plan_needs(prev)
+    except PlanNeedRefuse as e:
+        await _refuse_and_skip_foreach(
+            runtime, template, after=after, detail=str(e)
+        )
+        return None
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -299,8 +306,8 @@ async def materialize_foreach(
         questions=list(prev_questions),
         expand_after=list(prev.get("expand_after") or []),
         loops=prev_loops,
-        hypotheses=need_from_plan_blob(prev, "hypotheses"),
-        literature=need_from_plan_blob(prev, "literature"),
+        hypotheses=hyp_need,
+        literature=lit_need,
     )
     ed = study.effective_deadline()
     events: list[EventEnvelope] = []

@@ -45,7 +45,7 @@ from coscientist.core.plan.decomposes import (
 )
 from coscientist.core.plan.loop import capped_scope_questions, loop_status
 from coscientist.core.plan.plan_validate import validate_decomposes
-from tests.helpers import NEED_OFF, attach_executor, close_runtime, open_runtime
+from tests.helpers import NEED_OFF, NEED_UNRECORDED, attach_executor, close_runtime, open_runtime
 
 # --- helpers -----------------------------------------------------------------
 
@@ -1546,10 +1546,10 @@ def test_upcaster_planaccepted_v9_to_v10_decomposes():
             "questions": [{"id": "Q", "text": "t"}],
         },
     )
-    assert v == 12
+    assert v == PLAN_ACCEPTED_SCHEMA_VERSION
     assert p["rollup"] == "all"
     assert p["subquestions"] == []
-    assert p["hypotheses"] == {"source_schema_version": 11}
+    assert p["hypotheses"] == NEED_UNRECORDED
     assert p["questions"][0].get("origin") is None
     assert p["questions"][0].get("parent_id") is None
 
