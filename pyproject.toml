@@ -78,6 +78,7 @@ forbidden_modules = [
   "coscientist.api",
   "coscientist.tools",
   "coscientist.agents",
+  "coscientist.llm",
   "web",
 ]
 # experimental composes API StudyRuntime (lifecycle) — not a web/ADK edge.
@@ -91,6 +92,12 @@ name = "core must not import experimental"
 type = "forbidden"
 source_modules = ["coscientist.core"]
 forbidden_modules = ["coscientist.experimental"]
+
+[[tool.importlinter.contracts]]
+name = "llm must not import coscientist.core"
+type = "forbidden"
+source_modules = ["coscientist.llm"]
+forbidden_modules = ["coscientist.core"]
 
 [[tool.importlinter.contracts]]
 name = "agents must not import api"
@@ -253,6 +260,14 @@ source_modules = [
   "coscientist.experimental.report",
   "coscientist.experimental.runtime",
   "coscientist.experimental.runtime_factory",
+  "coscientist.llm",
+  "coscientist.llm.client",
+  "coscientist.llm.config",
+  "coscientist.llm.errors",
+  "coscientist.llm.openai_compat",
+  "coscientist.llm.provider",
+  "coscientist.llm.transport",
+  "coscientist.llm.types",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",
@@ -377,6 +392,14 @@ source_modules = [
   "coscientist.experimental.report",
   "coscientist.experimental.runtime",
   "coscientist.experimental.runtime_factory",
+  "coscientist.llm",
+  "coscientist.llm.client",
+  "coscientist.llm.config",
+  "coscientist.llm.errors",
+  "coscientist.llm.openai_compat",
+  "coscientist.llm.provider",
+  "coscientist.llm.transport",
+  "coscientist.llm.types",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",
@@ -495,6 +518,14 @@ source_modules = [
   "coscientist.experimental.report",
   "coscientist.experimental.runtime",
   "coscientist.experimental.runtime_factory",
+  "coscientist.llm",
+  "coscientist.llm.client",
+  "coscientist.llm.config",
+  "coscientist.llm.errors",
+  "coscientist.llm.openai_compat",
+  "coscientist.llm.provider",
+  "coscientist.llm.transport",
+  "coscientist.llm.types",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",

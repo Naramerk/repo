@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### M2 PR A1 — thin LLM client
+- New package `coscientist/llm/`: typed `LlmRequest`/`LlmResponse`/`Usage`, `ProviderAdapter` + OpenAI-compatible provider, `LlmClient` with timeout/retry/limits from required `LlmConfig` fields (no guessed defaults), typed errors, API key only from env named in config; no logging/printing of secrets or bodies.
+- Transport is injected (`Transport` protocol); unit tests use a fake transport (no network).
+- import-linter: `coscientist.llm` must not import `coscientist.core`; `core`/`checks`/`experimental` must not import `coscientist.llm`.
+- `docs/DESIGN.md` §7 rewritten: no ADK; thin client; all agent state in the event journal.
+
 ### Core layout
 - Move flat `coscientist/core/*.py` into subpackages `events/`, `plan/`, `claims/`, `execution/`, `finalize/` (`git mv`); update imports, import-linter contracts, and tests. No logic changes.
 
