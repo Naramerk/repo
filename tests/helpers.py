@@ -25,6 +25,24 @@ TEST_NEED = Need(needed=False, reason="test")
 TEST_NEED_KW = {"hypotheses": TEST_NEED, "literature": TEST_NEED}
 
 
+def _bind_create_study_test_default(rt: Any) -> Any:
+    """Production ``create_study`` requires ``require_hypotheses`` (no default).
+
+    Tests opened via helpers may omit it; bind False on the instance only.
+    Callers that pass ``require_hypotheses=`` keep their value. Not used in
+    production (``runtime_factory.open_runtime`` never imports this module).
+    """
+    if not hasattr(rt, "create_study"):
+        return rt
+    orig = rt.create_study
+
+    async def create_study(*, require_hypotheses: bool = False, **kw: Any) -> Any:
+        return await orig(require_hypotheses=require_hypotheses, **kw)
+
+    rt.create_study = create_study  # type: ignore[method-assign]
+    return rt
+
+
 async def open_runtime(
     data_root: Path | str,
     study_id: str,
@@ -41,12 +59,13 @@ async def open_runtime(
     """
     if kwargs.get("runtime_cls") is None:
         kwargs["runtime_cls"] = ApiStudyRuntime
-    return await _open_runtime_core(
+    rt = await _open_runtime_core(
         data_root,
         study_id,
         catalog=catalog if catalog is not None else minimal_test_catalog(),
         **kwargs,
     )
+    return _bind_create_study_test_default(rt)
 
 
 async def open_runtime_experimental(
@@ -61,12 +80,13 @@ async def open_runtime_experimental(
         open_runtime as _open_exp,
     )
 
-    return await _open_exp(
+    rt = await _open_exp(
         data_root,
         study_id,
         catalog=catalog if catalog is not None else minimal_test_catalog(),
         **kwargs,
     )
+    return _bind_create_study_test_default(rt)
 
 
 class RuntimeLike(Protocol):

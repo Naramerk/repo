@@ -13,11 +13,11 @@
 
 ### G4 — Need + Plan.hypotheses/literature + Study.require_hypotheses
 - Domain `Need` (strict `needed`/`reason`); `Plan.hypotheses` / `Plan.literature` required;
-  `Study.require_hypotheses` from profile. Omit Need → `PlanNeedRefuse`.
-- **DESIGN confirm:** [DESIGN §2](docs/DESIGN.md) / research-cycle D3 target:
-  `require_hypotheses: bool` is **required (no default)**. Code still has
-  `domain.Study.require_hypotheses: bool = False` and `lifecycle.create_study(..., False)` —
-  follow-up to drop (align with D3/RC3t; do not invent in upcasters).
+  `Study.require_hypotheses` required on Study + `create_study` (**no** construct default).
+  Omit Need → `PlanNeedRefuse`.
+- Legacy journals: [upcasters](coscientist/core/events/upcasters.py)
+  `_study_created_v13_to_v14_require_hypotheses` inserts `False` when the key is
+  missing — documented in [DESIGN §2](docs/DESIGN.md) (migration only).
 - Parity: [CAPABILITIES #2](docs/CAPABILITIES.md), [DESIGN §2](docs/DESIGN.md).
 
 ### Benchmark harness — typed errors (plan item 2)

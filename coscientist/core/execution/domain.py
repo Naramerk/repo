@@ -488,8 +488,9 @@ class Study(Frozen):
     user_input_ids: list[str] = Field(default_factory=list)
     # PR20: max agent CheckProposed per study (default 3); excess → proposal_quota.
     max_proposals: int = Field(default=3, ge=0)
-    # G4 / CAPABILITIES #2: profile may force plan.hypotheses.needed (frozen at create).
-    require_hypotheses: bool = False  # audit-ok[field_default]: Study.require_hypotheses profile default False
+    # G4 / CAPABILITIES #2 / D3: required at construct (no default). Legacy journals:
+    # upcasters StudyCreated v13→v14 insert False (DESIGN §2).
+    require_hypotheses: bool
 
     def effective_deadline(self) -> datetime:
         """Last instant usable by tasks/attempts/HITL (deadline − finalize reserve)."""

@@ -49,6 +49,11 @@ class Study(BaseModel):
     constraints: list[Constraint] = []   # узел constraint — только для проверяемых
     confirmations_needed: int = 1        # профиль; k для вердикта (RESEARCH_MODEL §4.1)
     max_replans: int = 2                 # профиль; перепланирования PLAN-1..n
+    # CAPABILITIES #2 / D3 / G4: required on Study + create_study (no field/arg default).
+    # Legacy StudyCreated missing the key: upcasters v13→v14 insert False
+    # (`_study_created_v13_to_v14_require_hypotheses`) — journal migration only,
+    # not a construct-time default.
+    require_hypotheses: bool
     # статуса нет: study_view() выводится из задач (§3.2)
 
 class Hypothesis(BaseModel):
@@ -60,11 +65,13 @@ class Hypothesis(BaseModel):
     verdict: Literal["supported","survived","refuted","inconclusive","untested"] | None = None
 
 class Need(BaseModel):
+    # Planner decision (CAPABILITIES #2). reason required non-empty (incl. needed=False).
+    # Strict bool/str — no coerce. Upcasters must not invent Need; legacy missing → typed refuse.
     needed: bool; reason: str
 
 class Plan(BaseModel):
     plan_id: str; study_id: str; revision: int        # новая ревизия = новая запись
-    hypotheses: Need; literature: Need                 # решения planner (профиль может обязать)
+    hypotheses: Need; literature: Need                 # planner; Study.require_hypotheses may force hypotheses.needed
     critic_decision: Literal["accept","revise","reject"] | None = None
     supersedes: str | None = None                      # предыдущая ревизия (PLAN-n или правка HITL)
     approved_by: Literal["human","critic"] | None = None; delegated_by: Literal["human","timeout"] | None = None

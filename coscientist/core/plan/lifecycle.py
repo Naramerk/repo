@@ -133,7 +133,7 @@ class LifecycleMixin:
         max_loop_iter: int = 8,
         max_task_budget_share: float = 1.0,
         max_proposals: int = 3,
-        require_hypotheses: bool = False,
+        require_hypotheses: bool,
         inputs: list[Any] | None = None,
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,

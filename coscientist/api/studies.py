@@ -547,6 +547,10 @@ async def post_studies(
                 use_inputs = [] if force_refuse is not None else list(body.inputs or [])
                 user_cap = mint_user_put_capability() if use_inputs else None
                 try:
+                    # D3: create_study requires require_hypotheses (no default).
+                    # Profile→flag wiring later; API default False unless caller overrides.
+                    _ck = dict(create_kwargs)
+                    rh = _ck.pop("require_hypotheses", False)
                     created_id = await rt.create_study(
                         profile=body.profile,
                         request=body.request.strip(),
@@ -556,6 +560,7 @@ async def post_studies(
                         budget=body.budget,
                         finalize_reserve_s=body.finalize_reserve_s,
                         sid=sid,
+                        require_hypotheses=rh,
                         inputs=use_inputs,
                         as_of=body.as_of,
                         input_limits=profile_limits,
@@ -564,7 +569,7 @@ async def post_studies(
                         ),
                         intake_refuse=force_refuse,
                         user_put_capability=user_cap,
-                        **create_kwargs,
+                        **_ck,
                     )
                 finally:
                     release_user_put_capability(user_cap)

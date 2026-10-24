@@ -690,6 +690,9 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
             "delegated_costly": "999",
         },
         "finalize_reserve_s": 5,
+        # G4: Study.require_hypotheses required on model; upcasters insert False
+        # for legacy journals — pin fold path with the post-upcast shape.
+        "require_hypotheses": False,
     }
     # Pin: fold path uses the same Study.model_validate as local_project.
     folded = Study.model_validate(payload)
