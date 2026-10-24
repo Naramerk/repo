@@ -157,7 +157,7 @@ def test_question_disposition_explicit_infeasible():
 
     plan = {
         "plan_id": "pl",
-        "questions": [{"id": "Q1", "text": "why"}],
+        "questions": [{"id": "Q1", "text": "why", "final_type": "verdict"}],
         "tasks": [],
     }
     d = dispositions(tasks={}, plans={"pl": plan})
