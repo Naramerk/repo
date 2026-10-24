@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import unicodedata
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
@@ -153,7 +154,7 @@ def current_iter(runtime: StudyRuntime, loop_id: str) -> int:
 
 
 def validate_loop_specs(
-    loops: list[LoopSpec] | list[dict[str, Any]] | None,
+    loops: Sequence[LoopSpec | dict[str, object]] | None,
     *,
     known_keys: set[str],
     max_loop_iter: int,

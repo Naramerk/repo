@@ -592,7 +592,7 @@ class LifecycleMixin:
         revision: int = 1,
         spec_output: dict[str, object] | None = None,
         expand_after: Sequence[str] = (),
-        loops: Sequence[object] = (),
+        loops: Sequence[LoopSpec | dict[str, object]] = (),
         hypotheses: Need | None = None,
         literature: Need | None = None,
     ) -> str:
@@ -939,7 +939,7 @@ class LifecycleMixin:
 
     async def _known_question_texts(self) -> dict[str, str]:
         texts: dict[str, str] = {}
-        plans: list[object] = list(self.plans.values())
+        plans: Sequence[object] = list(self.plans.values())
         if not plans:
             plans = await self.store.get_projection("plans")
         for plan in plans:
