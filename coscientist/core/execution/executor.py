@@ -20,6 +20,7 @@ from coscientist.core.events.errors import (
 )
 from coscientist.core.events.events import EventEnvelope, EventType, make_idem
 from coscientist.core.events.ids import criterion_node_id, result_id
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.attempts import RETRY_BACKOFF_S
@@ -672,7 +673,7 @@ class Executor:
                         "attempt_id": attempt_id,
                         "agent_output_digest": digest,
                     },
-                    ts=self.clock.now(),
+                    ts=self.clock.now(), schema_version=writer_schema_version("RouteReturned"),
                 )
             ],
             require_open_attempt=attempt_id,
@@ -696,7 +697,7 @@ class Executor:
                         entity_key=attempt_id,
                         idem_key=make_idem("LateWriteRejected", attempt_id, str(self.clock.now())),
                         payload={"attempt_id": attempt_id, "reason": "attempt_closed"},
-                        ts=self.clock.now(),
+                        ts=self.clock.now(), schema_version=writer_schema_version("LateWriteRejected"),
                     )
                 ]
             )
@@ -950,7 +951,7 @@ class Executor:
                                 "attempt_id": attempt_id,
                                 "reason": "downgrade requires reason and refs",
                             },
-                            ts=self.clock.now(),
+                            ts=self.clock.now(), schema_version=writer_schema_version("DowngradeRejected"),
                         )
                     ]
                 )
@@ -994,7 +995,7 @@ class Executor:
                         "reason": "required_checks_pending",
                         "check_results": [c.model_dump(mode="json") for c in checks],
                     },
-                    ts=self.clock.now(),
+                    ts=self.clock.now(), schema_version=writer_schema_version("ResultPending"),
                 )
             ]
             pending_events.extend(
@@ -1284,7 +1285,7 @@ class Executor:
                         "failure_kind": fk,
                         "retry": retries,
                     },
-                    ts=self.clock.now(),
+                    ts=self.clock.now(), schema_version=writer_schema_version("ReviewRecorded"),
                 )
             ]
         )
@@ -1390,7 +1391,7 @@ class Executor:
                     entity_key=attempt_id,
                     idem_key=make_idem(event_type, attempt_id),
                     payload={"error": detail, "reason": reason},
-                    ts=self.clock.now(),
+                    ts=self.clock.now(), schema_version=writer_schema_version(event_type),
                 )
             ]
         )

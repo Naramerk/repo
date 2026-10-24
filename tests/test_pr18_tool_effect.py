@@ -26,6 +26,7 @@ from coscientist.api.studies import (
 )
 from coscientist.core.events.errors import Conflict
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import Artifact, HitlPolicy
 from coscientist.core.execution.taint import (
@@ -190,7 +191,7 @@ async def _journal_attempt(
                 "limitations": [],
             },
             ts=datetime.now(UTC),
-            schema_version=5,
+            schema_version=writer_schema_version("AttemptStarted"),
         )
     )
 

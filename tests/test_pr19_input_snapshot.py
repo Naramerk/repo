@@ -13,7 +13,7 @@ import pytest
 
 from coscientist.core.claims.reasons import RefusalKind, TerminalReason
 from coscientist.core.events.errors import ArtifactRejected
-from coscientist.core.events.upcasters import upcast
+from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution._ingest_gate import (
     mint_user_put_capability,
     put_user,
@@ -1498,9 +1498,7 @@ async def test_post_studies_conflict_requires_same_request_study_created(
     key = "conflict-other-req"
     sid = study_id_from_idempotency_key(key)
     rt = await open_runtime(tmp_path, sid, catalog=catalog)
-    await rt._append(
-        [
-            EventEnvelope(
+    await rt.writer.append(EventEnvelope(
                 study_id=sid,
                 type="StudyCreated",
                 entity_key=sid,
@@ -1516,10 +1514,8 @@ async def test_post_studies_conflict_requires_same_request_study_created(
                     "created_at": "2026-01-01T00:00:00+00:00",
                 },
                 ts=rt.clock.now(),
-                schema_version=13,
-            )
-        ]
-    )
+                schema_version=writer_schema_version("StudyCreated"),
+            ))
     await close_runtime(rt)
 
     with pytest.raises(Conflict, match="peer payload clock"):
@@ -1688,8 +1684,8 @@ async def test_api_corrupt_deflate_study_finalized_not_500(tmp_path, catalog):
 
 
 @pytest.mark.asyncio
-async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls):
-    """Persist AttemptStarted schema_version=7, reopen (upcast), next attempt unknown."""
+async def test_prior_attempt_missing_digest_version_drift_unknown(tmp_path, clock, runtime_cls):
+    """Prior attempt missing digest_version → input_drift_unknown (writer seed; #116)."""
     from coscientist.core.claims.reasons import CloseReason
     from coscientist.core.events.events import EventEnvelope, make_idem
 
@@ -1723,7 +1719,7 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
     # Write a raw v7 journal row (pre-PR19) then close it.
-    await rt.store.append(
+    await rt.writer.append_many([
         EventEnvelope(
             study_id=sid,
             type="AttemptStarted",
@@ -1743,10 +1739,10 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
                 "tainted_context": False,
             },
             ts=clock.now(),
-            schema_version=7,
+            schema_version=writer_schema_version("AttemptStarted"),
         )
-    )
-    await rt.store.append(
+    ])
+    await rt.writer.append(
         EventEnvelope(
             study_id=sid,
             type="AttemptClosed",
@@ -1788,7 +1784,6 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
 def test_study_created_writer_is_v11_after_loopspec():
     """#24 owns max_loop_iter (v10); #23 writer was v11; PR20 stacks v12."""
     from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION
-    from coscientist.core.events.upcasters import writer_schema_version
     from coscientist.core.execution.domain import Study
 
     assert "max_loop_iter" in Study.model_fields
@@ -1903,10 +1898,10 @@ def test_stale_digest_version_garbage_fails_closed():
 
 
 @pytest.mark.asyncio
-async def test_old_study_created_v9_with_digest_drift_unknown(
+async def test_prior_attempt_legacy_digest_drift_unknown(
     tmp_path, clock, runtime_cls
 ):
-    """Real pre-PR19 StudyCreated v9 + AttemptStarted with non-empty old digest.
+    """Prior attempt with digest, no digest_version → input_drift_unknown (#116).
 
     Absent digest_version → input_drift_unknown without partial (not empty digest).
     """
@@ -1958,7 +1953,7 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
     old_digest = "a" * 64  # non-empty legacy formula digest, no digest_version
-    await rt.store.append(
+    await rt.writer.append_many([
         EventEnvelope(
             study_id=sid,
             type="AttemptStarted",
@@ -1983,10 +1978,10 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
                 "tainted_context": False,
             },
             ts=clock.now(),
-            schema_version=7,
+            schema_version=writer_schema_version("AttemptStarted"),
         )
-    )
-    await rt.store.append(
+    ])
+    await rt.writer.append(
         EventEnvelope(
             study_id=sid,
             type="AttemptClosed",
@@ -3167,7 +3162,7 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
         entity_key=f"{sid}:late",
         idem_key=make_idem("GraphNodeUpserted", f"{sid}:late"),
         payload={"node_id": f"{sid}:late", "kind": "study", "study_id": sid},
-        ts=clock.now(),
+        ts=clock.now(), schema_version=writer_schema_version("GraphNodeUpserted"), 
     )
     with pytest.raises(StudyClosedError):
         await rt.store.append(late)

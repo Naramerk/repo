@@ -25,7 +25,7 @@ from coscientist.core.events.errors import (
     LeaseLost,
     StudyClosedError,
 )
-from coscientist.core.events.events import StoredEvent, UnstampedEvent, stamp_envelope
+from coscientist.core.events.events import StoredEvent, UnstampedEvent, stamp_envelope, stamp_fixture_envelope
 from coscientist.core.events.metrics import bump_late_write_rejected
 from coscientist.core.events.schema_gate import upcast_strict
 
@@ -385,6 +385,12 @@ class SqliteEventStore:
             )
         )
 
+    async def append_fixtures(self, events: list[UnstampedEvent]) -> list[StoredEvent]:
+        """Fixture append: writer gates; behind-writer schema allowed."""
+        return await self._to_thread(
+            lambda: self._append_many_sync(events, stamp=stamp_fixture_envelope)
+        )
+
     def _fetch_by_idem(self, idem_key: str) -> StoredEvent:
         cur = self._conn.execute(
             "SELECT * FROM events WHERE idem_key=?", (idem_key,)
@@ -400,6 +406,7 @@ class SqliteEventStore:
         *,
         require_open_attempt: str | None = None,
         source_fetched_cap_id: str | None = None,
+        stamp: Callable[..., StoredEvent] = stamp_envelope,
     ) -> list[StoredEvent]:
         out: list[StoredEvent] = []
         mutated = False
@@ -416,7 +423,7 @@ class SqliteEventStore:
                 if row is None or row.get("closed"):
                     raise AttemptClosedError(require_open_attempt)
             for ev in events:
-                stamped = stamp_envelope(ev, epoch=self.epoch)
+                stamped = stamp(ev, epoch=self.epoch)
                 # First StudyFinalized is allowed; after that only identical retry.
                 self._ensure_append_allowed(
                     ev, digest=stamped.payload_digest, batch_finalized=batch_finalized

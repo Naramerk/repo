@@ -37,6 +37,7 @@ from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import AttemptClosedError, StudyClosedError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hitl_request_id, proposal_id
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     PROPOSED_CHECK_TEMPLATE_ID,
     CheckProposal,
@@ -1053,7 +1054,7 @@ async def reject_check(
                         "proposal_id": str(proposal_id_s),
                         "spent_rub": 0.0,
                     },
-                    ts=now,
+                    ts=now, schema_version=writer_schema_version("HitlTimedOut"),
                 )
             )
         # Human reject: HitlDecided(by=human, decision=reject) must already be journaled

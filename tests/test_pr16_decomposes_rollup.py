@@ -19,7 +19,7 @@ from coscientist.core.events.events import (
     make_idem,
 )
 from coscientist.core.events.ids import hypothesis_node_id, task_id
-from coscientist.core.events.upcasters import upcast
+from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -1234,7 +1234,7 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
                         },
                         created_at=now,
                     ).model_dump(mode="json"),
-                    ts=now,
+                    ts=now, schema_version=writer_schema_version("GraphNodeUpserted"), 
                 )
             ]
         )
@@ -1474,7 +1474,7 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
                     "open": True,
                     "cost_rub": 0.0,
                 },
-                ts=rt.clock.now(),
+                ts=rt.clock.now(), schema_version=writer_schema_version("HitlOpened"), 
             ),
             EventEnvelope(
                 study_id=rt.study.study_id,
@@ -1490,7 +1490,7 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
                     "reason": "answered",
                     "spent_rub": 0.0,
                 },
-                ts=rt.clock.now(),
+                ts=rt.clock.now(), schema_version=writer_schema_version("HitlDecided"), 
             ),
         ]
     )

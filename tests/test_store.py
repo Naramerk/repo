@@ -13,6 +13,7 @@ from coscientist.core.events.errors import Conflict, Idempotent, LeaseLost
 from coscientist.core.events.events import EventEnvelope
 from coscientist.core.events.projections import fold_events
 from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.events.upcasters import writer_schema_version
 from tests.helpers import close_runtime, open_runtime
 
 
@@ -32,7 +33,7 @@ async def test_idempotent_same_payload(tmp_path: Path, clock: FakeClock):
         entity_key="st1",
         idem_key="StudyCreated:st1",
         payload=payload,
-        ts=clock.now(),
+        ts=clock.now(), schema_version=writer_schema_version("StudyCreated"), 
     )
     first = await store.append(ev)
     assert first.seq == 1
@@ -80,7 +81,7 @@ async def test_writer_idempotent_append_returns_existing(
         entity_key="st1",
         idem_key="StudyCreated:st1",
         payload=payload,
-        ts=clock.now(),
+        ts=clock.now(), schema_version=writer_schema_version("StudyCreated"), 
     )
     a = await writer.append(ev)
     b = await writer.append(ev)
@@ -99,7 +100,7 @@ async def test_conflict_different_payload(tmp_path: Path, clock: FakeClock):
         entity_key="st1",
         idem_key="StudyCreated:st1",
         payload={"a": 1},
-        ts=clock.now(),
+        ts=clock.now(), schema_version=writer_schema_version("StudyCreated"), 
     )
     await store.append(ev1)
     ev2 = ev1.model_copy(update={"payload": {"a": 2}})
@@ -132,7 +133,7 @@ async def test_lease_epoch_fencing(tmp_path: Path, clock: FakeClock):
                 entity_key="st1",
                 idem_key="StudyCreated:st1",
                 payload={},
-                ts=clock.now(),
+                ts=clock.now(), schema_version=writer_schema_version("StudyCreated"), 
             )
         )
     await store.close()
@@ -154,7 +155,7 @@ async def test_seeded_owner_epoch_without_nonce_cannot_write(
                 entity_key="st1",
                 idem_key="StudyCreated:st1",
                 payload={},
-                ts=clock.now(),
+                ts=clock.now(), schema_version=writer_schema_version("StudyCreated"), 
             )
         )
     await store.close()
@@ -337,7 +338,7 @@ async def test_event_loop_progresses_during_slow_write(
                         "study_id": "st_slow",
                         "ref_id": "st_slow",
                     },
-                    ts=clock.now(),
+                    ts=clock.now(), schema_version=writer_schema_version("GraphNodeUpserted"), 
                 )
             ]
         )
@@ -401,7 +402,7 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(
                         "study_id": "st_rd",
                         "ref_id": "st_rd",
                     },
-                    ts=clock.now(),
+                    ts=clock.now(), schema_version=writer_schema_version("GraphNodeUpserted"), 
                 )
             ]
         )
@@ -431,7 +432,7 @@ async def test_append_rejects_datetime_in_payload(tmp_path: Path, clock: FakeClo
                 entity_key="st_json2",
                 idem_key="StudyCreated:st_json2",
                 payload={"study_id": "st_json2", "created_at": clock.now()},
-                ts=clock.now(),
+                ts=clock.now(), schema_version=writer_schema_version("StudyCreated"), 
             )
         )
     await store.close()

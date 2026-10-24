@@ -20,6 +20,7 @@ from coscientist.core.events.events import (
 )
 from coscientist.core.events.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
 from coscientist.core.events.ports import EventStore
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     Budget,
     HitlPolicy,
@@ -319,7 +320,7 @@ class LifecycleMixin:
                     attrs={"profile": profile},
                     created_at=now,
                 ).model_dump(mode="json"),
-                ts=now,
+                ts=now, schema_version=writer_schema_version("GraphNodeUpserted"),
             ),
         ]
         events.extend(user_events)

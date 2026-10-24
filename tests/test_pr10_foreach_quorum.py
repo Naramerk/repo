@@ -10,7 +10,7 @@ from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hypothesis_node_id, task_id
-from coscientist.core.events.upcasters import upcast
+from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -25,7 +25,11 @@ from coscientist.core.execution.domain import (
 )
 from coscientist.core.execution.inputs import InputUnavailable
 from coscientist.core.execution.recover import recover
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import (
+    attach_executor,
+    close_runtime,
+    open_runtime,
+)
 
 
 def _exp(key: str, *, depends_on: list[str], **kw) -> TaskSpec:
@@ -191,7 +195,7 @@ async def _upsert_selected_hypotheses(
                     entity_key=nid,
                     idem_key=make_idem("GraphNodeUpserted", nid, "pr10"),
                     payload=node.model_dump(mode="json"),
-                    ts=now,
+                    ts=now, schema_version=writer_schema_version("GraphNodeUpserted"), 
                 )
             ]
         )
@@ -369,7 +373,7 @@ async def test_foreach_natural_sort_and_source_task_required(tmp_path, clock, ru
                     attrs={"statement": "x", "prediction": "y", "selected": True, "rank": 0},
                     created_at=rt.clock.now(),
                 ).model_dump(mode="json"),
-                ts=rt.clock.now(),
+                ts=rt.clock.now(), schema_version=writer_schema_version("GraphNodeUpserted"), 
             )
         ]
     )
@@ -496,8 +500,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
     e0_tid = task_id(sid, "E0")
     aid = f"{e0_tid}#1"
     now = rt.clock.now()
-    await rt.writer.append_many(
-        [
+    await rt.writer.append_many([
             EventEnvelope(
                 study_id=sid,
                 type="AttemptStarted",
@@ -519,8 +522,10 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                     "limitations": [],
                 },
                 ts=now,
-                schema_version=4,
-            ),
+                schema_version=writer_schema_version("AttemptStarted"),
+            )
+        ])
+    await rt.writer.append_many([
             EventEnvelope(
                 study_id=sid,
                 type="AttemptClosed",
@@ -533,7 +538,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                     "task_id": e0_tid,
                 },
                 ts=now,
-                schema_version=2,
+                schema_version=writer_schema_version("AttemptClosed"),
             ),
             EventEnvelope(
                 study_id=sid,
@@ -546,10 +551,9 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                     "reason": None,
                 },
                 ts=now,
-                schema_version=2,
+                schema_version=writer_schema_version("TaskDone"),
             ),
-        ]
-    )
+        ])
     await close_runtime(rt)
     rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
     attach_executor(rt2, tmp_path)
@@ -1231,7 +1235,7 @@ async def test_foreach_missing_and_non_numeric_rank(tmp_path, clock, runtime_cls
                         attrs=attrs,
                         created_at=now,
                     ).model_dump(mode="json"),
-                    ts=now,
+                    ts=now, schema_version=writer_schema_version("GraphNodeUpserted"), 
                 )
             ]
         )

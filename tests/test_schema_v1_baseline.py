@@ -46,7 +46,7 @@ def _unstamped(clock: FakeClock, **overrides: object) -> UnstampedEvent:
         idem_key="StudyCreated:st1",
         payload={"study_id": "st1"},
         ts=clock.now(),
-        schema_version=1,
+        schema_version=writer_schema_version("StudyCreated"),
     )
     base.update(overrides)
     return UnstampedEvent(**base)  # type: ignore[arg-type]
@@ -61,7 +61,7 @@ def test_unstamped_event_rejects_epoch_and_digest_fields(clock: FakeClock) -> No
             idem_key="k",
             payload={},
             ts=clock.now(),
-            schema_version=1,
+            schema_version=writer_schema_version("StudyCreated"),
             epoch=0,
         )
     with pytest.raises(ValidationError):
@@ -72,7 +72,7 @@ def test_unstamped_event_rejects_epoch_and_digest_fields(clock: FakeClock) -> No
             idem_key="k",
             payload={},
             ts=clock.now(),
-            schema_version=1,
+            schema_version=writer_schema_version("StudyCreated"),
             payload_digest="",
         )
 
@@ -104,10 +104,21 @@ def test_stamp_envelope_sets_epoch_and_digest(clock: FakeClock) -> None:
     assert stored.schema_version == u.schema_version
 
 
-def test_stamp_envelope_preserves_writer_schema_version(clock: FakeClock) -> None:
-    u = _unstamped(clock, schema_version=1)
-    stored = stamp_envelope(u, epoch=1)
-    assert stored.schema_version == 1
+def test_stamp_envelope_refuses_behind(clock: FakeClock) -> None:
+    w = writer_schema_version("StudyCreated")
+    with pytest.raises(JournalFormatError, match="behind writer"):
+        stamp_envelope(_unstamped(clock, schema_version=w - 1), epoch=1)
+
+def test_stamp_envelope_refuses_ahead(clock: FakeClock) -> None:
+    w = writer_schema_version("StudyCreated")
+    with pytest.raises(JournalFormatError, match="ahead of writer"):
+        stamp_envelope(_unstamped(clock, schema_version=w + 1), epoch=1)
+
+def test_stamp_envelope_refuses_naive_ts(clock: FakeClock) -> None:
+    w = writer_schema_version("StudyCreated")
+    with pytest.raises(JournalFormatError, match="naive datetime refused"):
+        stamp_envelope(_unstamped(clock, schema_version=w, ts=datetime(2026, 1, 1)), epoch=1)
+
 
 
 @pytest.mark.asyncio

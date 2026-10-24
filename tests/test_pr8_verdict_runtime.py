@@ -17,6 +17,7 @@ from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore, defa
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import claim_node_id, question_node_id
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     HitlPolicy,
     InputSpec,
@@ -496,7 +497,7 @@ async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime
                         "evidence_kind": "computational",
                     },
                 ).model_dump(mode="json"),
-                ts=clock.now(),
+                ts=clock.now(), schema_version=writer_schema_version("GraphNodeUpserted"), 
             )
         ]
     )

@@ -9,6 +9,7 @@ import pytest
 
 from coscientist.core.events.errors import HitlUnsupported
 from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import GateConfig, HitlPolicy
 from coscientist.core.execution.machine import StudyRuntime as CoreStudyRuntime
 from coscientist.core.execution.recover import recover
@@ -204,7 +205,7 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
                         entity_key=rid,
                         idem_key=make_idem("HitlOpened", rid),
                         payload=hitl_payload,
-                        ts=now,
+                        ts=now, schema_version=writer_schema_version("HitlOpened"), 
                     ),
                     EventEnvelope(
                         study_id="st_race",

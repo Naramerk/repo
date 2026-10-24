@@ -9,9 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from coscientist.core.events.digest import payload_digest as _payload_digest
 from coscientist.core.events.errors import JournalFormatError
-
-# Wire default when writers omit schema_version; stamp_envelope overwrites it.
-SCHEMA_VERSION_WIRE_DEFAULT = 1
+from coscientist.core.events.schema_gate import require_writer_schema_version
 
 # Writer schema version constants (kept for call sites; must match upcasters).
 PLAN_EXPANDED_SCHEMA_VERSION = 5
@@ -90,11 +88,7 @@ class UnstampedEvent(BaseModel):
     idem_key: str
     payload: dict[str, Any]
     ts: datetime
-    # Default for legacy writers that omit the kwarg; store re-stamps via
-    # writer_schema_version(type) so this never becomes the persisted version.
-    schema_version: StrictInt = (  # audit-ok[named_default]: wire default; stamp_envelope overwrites from registry
-        SCHEMA_VERSION_WIRE_DEFAULT
-    )
+    schema_version: StrictInt
 
 
 class StoredEvent(UnstampedEvent):
@@ -104,21 +98,31 @@ class StoredEvent(UnstampedEvent):
     payload_digest: str = Field(min_length=1)
 
 
-# Compat alias: writers still construct ``EventEnvelope(...)`` without stamp fields.
+# Compat alias — delete after rename; see https://github.com/Naramerk/repo/issues/114
 EventEnvelope = UnstampedEvent
 
 
 def stamp_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
-    """Stamp lease epoch + digest of ``unstamped.payload`` (single compute site).
+    """Stamp lease epoch + digest; refuse naive ts; refuse ahead/behind (exact writer)."""
+    return _stamp_envelope(unstamped, epoch=epoch, allow_behind=False)
 
-    Preserves the writer's ``schema_version`` (needed for legacy-journal fixtures
-    and intentional old-version seeds). Refuses versions ahead of the current
-    writer line; reads still chain through ``upcast_strict``.
-    """
-    from coscientist.core.events.schema_gate import require_writer_schema_version
 
+def stamp_fixture_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
+    """Like stamp_envelope; behind-writer schema_version allowed (fixtures)."""
+    return _stamp_envelope(unstamped, epoch=epoch, allow_behind=True)
+
+
+def _stamp_envelope(
+    unstamped: UnstampedEvent, *, epoch: int, allow_behind: bool
+) -> StoredEvent:
     if type(epoch) is not int or isinstance(epoch, bool):
         raise TypeError(f"epoch must be exact int, got {epoch!r}")
+    if unstamped.ts.tzinfo is None:
+        raise JournalFormatError(
+            f"{unstamped.type}: naive datetime refused: {unstamped.ts!r}",
+            expected_store_format=None,
+            found_store_format=None,
+        )
     digest = _payload_digest(unstamped.payload)
     if not digest:
         raise JournalFormatError(
@@ -127,10 +131,16 @@ def stamp_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
             found_store_format=None,
         )
     writer_v = require_writer_schema_version(unstamped.type)
-    version = int(unstamped.schema_version)
+    version = unstamped.schema_version
     if version > writer_v:
         raise JournalFormatError(
             f"{unstamped.type}: schema_version {version} ahead of writer v{writer_v}",
+            expected_store_format=None,
+            found_store_format=None,
+        )
+    if version < writer_v and not allow_behind:
+        raise JournalFormatError(
+            f"{unstamped.type}: schema_version {version} behind writer v{writer_v}",
             expected_store_format=None,
             found_store_format=None,
         )

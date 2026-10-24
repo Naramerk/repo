@@ -7,6 +7,7 @@ from typing import Any
 
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.projections import _DIRTY_KEYS, _put, apply_event, apply_to_map
+from coscientist.core.events.upcasters import writer_schema_version
 
 
 def test_put_records_dirty_keys_when_tracking():
@@ -71,7 +72,7 @@ def test_apply_to_map_without_tracking_leaves_context_clean():
         idem_key=make_idem("StudyCreated", "st"),
         payload={"study_id": "st"},
         ts=datetime.now(UTC),
-        schema_version=1,
+        schema_version=writer_schema_version("StudyCreated"),
     )
     apply_to_map(proj, ev)
     assert _DIRTY_KEYS.get() is None
