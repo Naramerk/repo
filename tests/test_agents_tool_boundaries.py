@@ -108,11 +108,7 @@ def test_test_only_registry_helpers_banned_outside_tests():
             if _calls_name(tree, name):
                 offenders.append(f"{path.relative_to(ROOT)}: {name}")
                 continue
-            mod = (
-                "tool_registry"
-                if name in ("_reset_registry_for_tests", "_register_tool_for_tests")
-                else "effects"
-            )
+            mod = "tool_registry" if name in ("_reset_registry_for_tests", "_register_tool_for_tests") else "effects"
             if _imports_name(tree, module_suffix=mod, name=name):
                 offenders.append(f"{path.relative_to(ROOT)}: {name}")
     assert not offenders, f"test-only registry helpers in production: {offenders}"
@@ -155,23 +151,11 @@ def test_fetch_capability_mint_only_in_effects():
     assert not offenders, f"fetch mint/bypass leaked: {offenders}"
 
 
-def _is_tool_router_call(func: ast.AST) -> bool:
-    """True for ``ToolRouter.call`` receivers (``router`` / ``_router`` / ``tool_router``)."""
-    if not isinstance(func, ast.Attribute) or func.attr != "call":
-        return False
-    value = func.value
-    if isinstance(value, ast.Name) and value.id in {"router", "_router", "tool_router"}:
-        return True
-    if isinstance(value, ast.Attribute) and value.attr in {"router", "_router", "tool_router"}:
-        return True
-    return False
-
-
 def test_agents_forbid_registry_and_direct_tool_call():
-    """``coscientist.agents`` must not import registry/contract or call Tool.call.
+    """``coscientist.agents`` must not import registry/contract or call ``*.call``.
 
-    ``ToolRouter.call`` (DESIGN §6.3 / §13 D) is the allowed agent path; direct
-    ``Tool.call`` remains forbidden. ``invoke_tool`` stays allowed for other roles.
+    Tool routing uses ``call_via_router`` (imported function), not attribute ``.call``
+    and not name-based allowlists. ``invoke_tool`` name-calls remain allowed.
     """
     agents = COSI / "agents"
     assert agents.is_dir(), "coscientist.agents package required for agent wiring"
@@ -192,11 +176,9 @@ def test_agents_forbid_registry_and_direct_tool_call():
                 continue
             f = node.func
             if isinstance(f, ast.Attribute) and f.attr == "call":
-                if isinstance(f.value, ast.Name) and f.value.id == "invoke_tool":
-                    continue
-                if _is_tool_router_call(f):
-                    continue
-                offenders.append(f"{path.name}: direct .call() (use ToolRouter/invoke_tool)")
+                offenders.append(f"{path.name}: direct .call() (use call_via_router/invoke_tool)")
+            if isinstance(f, ast.Name) and f.id == "invoke_tool":
+                continue
     assert not offenders, offenders
 
 
@@ -209,8 +191,5 @@ def test_import_linter_contracts_run():
         capture_output=True,
         text=True,
     )
-    assert proc.returncode == 0, (
-        f"lint-imports failed (rc={proc.returncode}):\n"
-        f"{proc.stdout}\n{proc.stderr}"
-    )
+    assert proc.returncode == 0, f"lint-imports failed (rc={proc.returncode}):\n{proc.stdout}\n{proc.stderr}"
     assert "0 broken" in proc.stdout

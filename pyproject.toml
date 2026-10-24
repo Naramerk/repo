@@ -265,6 +265,7 @@ source_modules = [
   "coscientist.agents.prompts",
   "coscientist.agents.prompts.builtin",
   "coscientist.agents.prompts.registry",
+  "coscientist.agents.prompts.roles",
   "coscientist.agents.research_spec",
   "coscientist.agents.reviewer",
   "coscientist.agents.schemas",
@@ -413,6 +414,7 @@ source_modules = [
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.mcp_live",
   "coscientist.tools.propose_check_tool",
+  "coscientist.tools.resolve",
   "coscientist.tools.router",
   "coscientist.tools.taint",
 ]
@@ -440,6 +442,7 @@ source_modules = [
   "coscientist.agents.prompts",
   "coscientist.agents.prompts.builtin",
   "coscientist.agents.prompts.registry",
+  "coscientist.agents.prompts.roles",
   "coscientist.agents.research_spec",
   "coscientist.agents.reviewer",
   "coscientist.agents.schemas",
@@ -588,6 +591,7 @@ source_modules = [
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.mcp_live",
   "coscientist.tools.propose_check_tool",
+  "coscientist.tools.resolve",
   "coscientist.tools.router",
   "coscientist.tools.taint",
 ]
@@ -607,6 +611,7 @@ source_modules = [
   "coscientist.agents.prompts",
   "coscientist.agents.prompts.builtin",
   "coscientist.agents.prompts.registry",
+  "coscientist.agents.prompts.roles",
   "coscientist.agents.research_spec",
   "coscientist.agents.reviewer",
   "coscientist.agents.schemas",
@@ -757,6 +762,7 @@ source_modules = [
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.mcp_live",
   "coscientist.tools.propose_check_tool",
+  "coscientist.tools.resolve",
   "coscientist.tools.router",
   "coscientist.tools.taint",
 ]

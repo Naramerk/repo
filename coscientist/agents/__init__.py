@@ -1,7 +1,7 @@
 """Agent wiring package (DESIGN §7 / §13 D).
 
-Agents must call tools only via ``ToolRouter`` (MCP impl = G7) or
-``coscientist.tools.invoke_tool``. Direct ``Tool.call``, ``register_tool``, and
+Agents call tools via ``coscientist.tools.resolve.call_via_router`` (MCP impl = G7)
+or ``coscientist.tools.invoke_tool``. Direct ``Tool.call``, ``register_tool``, and
 imports of ``tools.contract`` / ``core.tool_registry`` are forbidden.
 """
 

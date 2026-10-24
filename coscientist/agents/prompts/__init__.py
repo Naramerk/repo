@@ -18,6 +18,11 @@ from coscientist.agents.prompts.registry import (
     render_template,
     render_untrusted,
 )
+from coscientist.agents.prompts.roles import (
+    ROLE_EXECUTOR_REF,
+    ROLE_PLANNER_REF,
+    role_prompt_registry,
+)
 
 __all__ = [
     "PromptConfigError",
@@ -27,6 +32,9 @@ __all__ = [
     "PromptRegistry",
     "PromptRenderError",
     "PromptTemplate",
+    "ROLE_EXECUTOR_REF",
+    "ROLE_PLANNER_REF",
     "render_template",
     "render_untrusted",
+    "role_prompt_registry",
 ]
