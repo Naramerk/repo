@@ -24,10 +24,7 @@ from tests.checks.minimal_test_catalog import minimal_test_catalog
 
 # Test Need (needed=False). Pass hypotheses=/literature= explicitly.
 NEED_OFF = Need(needed=False, reason="test")
-NEED_UNRECORDED = {
-    "kind": "unrecorded",
-    "source_schema_version": PLAN_ACCEPTED_NEED_SINCE,
-}
+NEED_UNRECORDED = {"kind": "unrecorded", "source_schema_version": PLAN_ACCEPTED_NEED_SINCE}
 
 
 async def seed_legacy_journal(

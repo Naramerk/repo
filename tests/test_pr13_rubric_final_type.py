@@ -13,7 +13,7 @@ from coscientist.core.claims.reviews import review_key
 from coscientist.core.claims.rubric import freeze_rubric, rubric_digest
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.stance import claim_stance
-from coscientist.core.events.events import EventEnvelope, make_idem, PLAN_ACCEPTED_SCHEMA_VERSION
+from coscientist.core.events.events import PLAN_ACCEPTED_SCHEMA_VERSION, EventEnvelope, make_idem
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
