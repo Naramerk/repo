@@ -301,10 +301,15 @@ class InMemoryJobStore:
         if not reason or reason.strip() != reason:
             raise ToolError("local", "cancel-failed reason must be non-empty bare")
         job = self.get(job_id)
+        payload = JobCancelFailedPayload(
+            job_id=job_id,
+            attempt_id=job.attempt_id,
+            reason=reason,
+        ).model_dump(mode="json")
         self._emit(
             "JobCancelFailed",
             job_id,
-            JobCancelFailedPayload(job_id=job_id, attempt_id=job.attempt_id, reason=reason).model_dump(mode="json"),
+            payload,
             make_idem("JobCancelFailed", job_id, reason),
         )
 

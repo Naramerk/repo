@@ -126,11 +126,15 @@ def _limits_to_spec(limits: SandboxLimits) -> dict[str, Any]:
 
 
 def _request_spec(request: CoderRequest) -> dict[str, Any]:
+    outputs = [
+        {"name": o.name, "source": o.source, "media_type": o.media_type}
+        for o in request.outputs
+    ]
     return {
         "argv": list(request.argv),
         "inputs": {k: sha256_hex(v) for k, v in sorted(request.inputs.items())},
         "env": dict(sorted(request.env.items())),
-        "outputs": [{"name": o.name, "source": o.source, "media_type": o.media_type} for o in request.outputs],
+        "outputs": outputs,
         "limits": _limits_to_spec(request.limits),
         "call_id": request.call_id,
     }
@@ -355,7 +359,11 @@ def _ensure_terminal(jobs: InMemoryJobStore, job_id: str, *, detail: str) -> Non
         raise ToolError("local", f"job not terminal after ensure: {job.status} ({detail})")
 
 
-def _start_join_watcher(proc: BaseProcess, loop: asyncio.AbstractEventLoop, done: asyncio.Event) -> None:
+def _start_join_watcher(
+    proc: BaseProcess,
+    loop: asyncio.AbstractEventLoop,
+    done: asyncio.Event,
+) -> None:
     """Single joiner thread — avoids racing ``Process.join`` with kill."""
 
     def _watch() -> None:
